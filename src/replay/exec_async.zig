@@ -431,7 +431,7 @@ const ReplayBatchTask = struct {
 test "TransactionScheduler: happy path" {
     const allocator = std.testing.allocator;
 
-    var rng = std.Random.DefaultPrng.init(123);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -478,7 +478,7 @@ test "TransactionScheduler: happy path" {
 test "TransactionScheduler: duplicate batch passes through to svm" {
     const allocator = std.testing.allocator;
 
-    var rng = std.Random.DefaultPrng.init(123);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -530,7 +530,7 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
 test "TransactionScheduler: failed account locks" {
     const allocator = std.testing.allocator;
 
-    var rng = std.Random.DefaultPrng.init(0);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -571,7 +571,7 @@ test "TransactionScheduler: failed account locks" {
 test "TransactionScheduler: signature verification failure" {
     const allocator = std.testing.allocator;
 
-    var rng = std.Random.DefaultPrng.init(0);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -628,7 +628,7 @@ test "TransactionScheduler: does not send replay vote for failed execution" {
     const vote_program = sig.runtime.program.vote;
     const vote_instruction = vote_program.vote_instruction;
 
-    var rng = std.Random.DefaultPrng.init(7);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -712,7 +712,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
     const vote_program = sig.runtime.program.vote;
     const vote_instruction = vote_program.vote_instruction;
 
-    var rng = std.Random.DefaultPrng.init(9);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
@@ -736,6 +736,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
         var account = sig.runtime.AccountSharedData.NEW;
         account.owner = sig.runtime.program.vote.ID;
         account.data = try allocator.alloc(u8, vote_program.state.VoteState.MAX_VOTE_STATE_SIZE);
+        defer allocator.free(account.data);
         @memset(account.data, 0);
 
         var vote_state = try vote_program.state.createTestVoteState(
@@ -745,6 +746,8 @@ test "TransactionScheduler: sends replay vote after successful execution" {
             node_pubkey,
             0,
         );
+        defer vote_state.deinit(allocator);
+
         // Seed the vote state with a prior slot so lastVotedSlot() can be non-null after process
         try vote_program.state.processSlotVoteUnchecked(allocator, &vote_state, 1);
 
@@ -754,14 +757,11 @@ test "TransactionScheduler: sends replay vote after successful execution" {
             .{},
         );
         // Ensure rent-exempt balance
-        const rent = sig.runtime.sysvar.Rent.DEFAULT;
+        const rent = sig.runtime.sysvar.Rent.INIT;
         account.lamports = rent.minimumBalance(account.data.len);
 
         // Insert account into the test map so committer can update stakes
         try state.account_map.put(state.slot, vote_pubkey, account);
-        // Cleanup local allocations
-        vote_state.deinit();
-        allocator.free(account.data);
     }
 
     // 2) Make a Vote instruction (includes SlotHashes and Clock accounts)
@@ -781,22 +781,21 @@ test "TransactionScheduler: sends replay vote after successful execution" {
     defer vote_ix.deinit(allocator);
 
     // 3) Ensure SlotHashes contains the voted slot so vote processor accepts it
-    var slot_hashes = try sig.runtime.sysvar.SlotHashes.init(allocator);
-    defer slot_hashes.deinit(allocator);
+    var slot_hashes: SlotHashes = .INIT;
     slot_hashes.add(1, sig.core.Hash.initRandom(rng.random()));
     slot_hashes.add(2, vote_hash);
 
     // Insert SlotHashes sysvar account so SVM's sysvar_cache sees these entries
     {
-        const sysvar_len = sig.runtime.sysvar.SlotHashes.STORAGE_SIZE;
+        const sysvar_len = SlotHashes.STORAGE_SIZE;
         var sysvar_account = sig.runtime.AccountSharedData.NEW;
         sysvar_account.data = try allocator.alloc(u8, sysvar_len);
         @memset(sysvar_account.data, 0);
         _ = try sig.bincode.writeToSlice(sysvar_account.data, slot_hashes, .{});
-        const rent = sig.runtime.sysvar.Rent.DEFAULT;
+        const rent = sig.runtime.sysvar.Rent.INIT;
         sysvar_account.lamports = rent.minimumBalance(sysvar_account.data.len);
         sysvar_account.owner = sig.runtime.sysvar.OWNER_ID;
-        try state.account_map.put(state.slot, sig.runtime.sysvar.SlotHashes.ID, sysvar_account);
+        try state.account_map.put(state.slot, SlotHashes.ID, sysvar_account);
         allocator.free(sysvar_account.data);
     }
 
@@ -814,7 +813,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
         sysvar_account.data = try allocator.alloc(u8, sysvar_len);
         @memset(sysvar_account.data, 0);
         _ = try sig.bincode.writeToSlice(sysvar_account.data, clock, .{});
-        const rent = sig.runtime.sysvar.Rent.DEFAULT;
+        const rent = sig.runtime.sysvar.Rent.INIT;
         sysvar_account.lamports = rent.minimumBalance(sysvar_account.data.len);
         sysvar_account.owner = sig.runtime.sysvar.OWNER_ID;
         try state.account_map.put(state.slot, sig.runtime.sysvar.Clock.ID, sysvar_account);
@@ -838,7 +837,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
 
     // Insert Rent sysvar account
     {
-        const rent = sig.runtime.sysvar.Rent.DEFAULT;
+        const rent = sig.runtime.sysvar.Rent.INIT;
         const sysvar_len = sig.runtime.sysvar.Rent.STORAGE_SIZE;
         var sysvar_account = sig.runtime.AccountSharedData.NEW;
         sysvar_account.data = try allocator.alloc(u8, sysvar_len);
@@ -898,9 +897,6 @@ fn resolveForTest(
     account_reader: sig.accounts_db.SlotAccountReader,
     batches: []const []const Transaction,
 ) ![]const ResolvedBatch {
-    const slot_hashes = try SlotHashes.init(allocator);
-    defer slot_hashes.deinit(allocator);
-
     const entries = try allocator.alloc(Entry, batches.len);
     defer allocator.free(entries);
 
@@ -916,6 +912,6 @@ fn resolveForTest(
         .slot = 0,
         .account_reader = account_reader,
         .reserved_accounts = &.empty,
-        .slot_hashes = slot_hashes,
+        .slot_hashes = .INIT,
     });
 }

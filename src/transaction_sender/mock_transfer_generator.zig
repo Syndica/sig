@@ -84,7 +84,7 @@ pub const MockTransferService = struct {
     pub fn run(self: *MockTransferService, n_transactions: u64, n_lamports_per_tx: u64) !void {
         errdefer self.exit.store(true, .monotonic);
 
-        var prng = std.Random.DefaultPrng.init(19);
+        var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
         const random = prng.random();
 
         if (n_lamports_per_tx < MIN_LAMPORTS_FOR_RENT) {
@@ -136,7 +136,7 @@ pub const MockTransferService = struct {
     /// Wait for a signature to be confirmed, return true if confirmed, false if failed
     pub fn waitForSignatureConfirmation(self: *MockTransferService, signature: Signature, max_wait: Duration, log: bool) !bool {
         const start = sig.time.Instant.now();
-        var log_timer = try sig.time.Timer.start();
+        var log_timer = sig.time.Timer.start();
         while (start.elapsed().asNanos() < max_wait.asNanos()) {
             if (log_timer.read().asSecs() > 10) {
                 const time_remaining = max_wait.asSecs() - start.elapsed().asSecs();

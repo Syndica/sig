@@ -489,7 +489,7 @@ pub fn streamReader(
     measure_rate: ?sig.time.Duration,
 ) !void {
     var bytes_read: usize = 0;
-    var timer = try sig.time.Timer.start();
+    var timer = sig.time.Timer.start();
 
     while (!exit.load(.acquire)) {
         const n, const payload = reader.readPayload() catch |err| {
@@ -525,7 +525,7 @@ test "streaming accounts" {
     const allocator = std.testing.allocator;
     const batch_len = 2;
 
-    var prng = std.Random.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // generate some data
@@ -624,7 +624,7 @@ test "buf resizing" {
     const allocator = std.testing.allocator;
     const batch_len = 2;
 
-    var prng = std.Random.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // generate some data

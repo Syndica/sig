@@ -148,12 +148,12 @@ fn executeTxnContext(
         allocator,
         EpochSchedule,
         &accounts_map,
-    ) orelse EpochSchedule.DEFAULT;
+    ) orelse EpochSchedule.INIT;
     genesis_config.rent = getSysvarFromAccounts(
         allocator,
         Rent,
         &accounts_map,
-    ) orelse Rent.DEFAULT;
+    ) orelse Rent.INIT;
     try genesis_config.accounts.put(program.address_lookup_table.ID, .{
         .lamports = 1,
         .data = .initEmpty(0),
@@ -176,6 +176,7 @@ fn executeTxnContext(
     var accounts_db, var tmp_dir_root = try sig.accounts_db.AccountsDB.initForTest(allocator);
     defer tmp_dir_root.cleanup();
     defer accounts_db.deinit();
+    const account_store = accounts_db.accountStore();
 
     var slot: Slot = 0;
     var epoch: Epoch = 0;
@@ -200,7 +201,7 @@ fn executeTxnContext(
     var hard_forks: HardForks = .{};
     defer hard_forks.deinit(allocator);
 
-    var stakes_cache = try StakesCache.init(allocator);
+    var stakes_cache: StakesCache = .EMPTY;
     defer stakes_cache.deinit(allocator);
 
     var vm_environment: vm.Environment = .{};
@@ -229,7 +230,7 @@ fn executeTxnContext(
             while (genesis_account_iterator.next()) |kv| {
                 const account = try accountSharedDataFromAccount(allocator, kv.value_ptr);
                 defer account.deinit(allocator);
-                try accounts_db.putAccount(
+                try account_store.put(
                     slot,
                     kv.key_ptr.*,
                     account,
@@ -282,7 +283,7 @@ fn executeTxnContext(
                 allocator,
                 slot,
                 &feature_set,
-                &accounts_db,
+                account_store,
                 false,
             );
 
@@ -305,6 +306,7 @@ fn executeTxnContext(
             //     @panic("background account hasher not implemented");
             // }
 
+            const account_reader_for_ancestors = account_store.reader().forSlot(&ancestors);
             // Add builtin programs
             for (builtins.BUILTINS) |builtin_program| {
                 // If the feature id is not null, and the builtin program is not migrated, add
@@ -312,21 +314,21 @@ fn executeTxnContext(
                 // have an entry in accounts db with owner bpf_loader.v3.ID (i.e. it is now a BPF program).
                 // For fuzzing purposes, accounts db is currently empty so we do not need to check if
                 // the builtin program is migrated or not.
-                const builtin_is_bpf_program = if (try accounts_db.getAccountWithAncestors(
-                    allocator,
-                    &builtin_program.program_id,
-                    &ancestors,
-                )) |account| blk: {
+                const builtin_is_bpf_program: bool = blk: {
+                    const account = try account_reader_for_ancestors.get(
+                        allocator,
+                        builtin_program.program_id,
+                    ) orelse break :blk false;
                     defer account.deinit(allocator);
                     break :blk account.owner.equals(&program.bpf_loader.v3.ID);
-                } else false;
+                };
 
                 if (builtin_program.enable_feature_id != null or builtin_is_bpf_program) continue;
 
                 const data = try allocator.dupe(u8, builtin_program.data);
                 defer allocator.free(data);
 
-                try accounts_db.putAccount(
+                try account_store.put(
                     slot,
                     builtin_program.program_id,
                     .{
@@ -342,7 +344,7 @@ fn executeTxnContext(
             // Add precompiles
             for (program.precompiles.PRECOMPILES) |precompile| {
                 if (precompile.required_feature != null) continue;
-                try accounts_db.putAccount(slot, precompile.program_id, .{
+                try account_store.put(slot, precompile.program_id, .{
                     .lamports = 1,
                     .data = &.{},
                     .executable = true,
@@ -364,11 +366,11 @@ fn executeTxnContext(
         // Add epoch stakes for all epochs up to the banks slot using banks stakes cache
         // The bank slot is 0 and stakes cache is empty, so we add default epoch stakes.
         for (0..epoch_schedule.getLeaderScheduleEpoch(epoch)) |e| {
-            try epoch_stakes_map.put(allocator, e, try .init(allocator));
+            try epoch_stakes_map.put(allocator, e, .EMPTY);
         }
 
         const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
-            .account_store = accounts_db.accountStore(),
+            .account_store = account_store,
             .capitalization = &capitalization,
             .ancestors = &ancestors,
             .rent = &genesis_config.rent,
@@ -434,7 +436,7 @@ fn executeTxnContext(
         allocator,
         blockhash_queue.last_hash.?,
         &feature_set,
-        accounts_db.accountReader(),
+        account_store.reader(),
     );
 
     parent_slot = slot;
@@ -514,7 +516,7 @@ fn executeTxnContext(
                     allocator,
                     slot,
                     &feature_set,
-                    &accounts_db,
+                    account_store,
                     true,
                 );
 
@@ -523,8 +525,7 @@ fn executeTxnContext(
                 // an entry for the parent epoch with zero stakes.
                 // https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/stakes.rs#L297
                 {
-                    const stakes: *StakesCache.T(), //
-                    var stakes_guard = stakes_cache.stakes.writeWithLock();
+                    const stakes, var stakes_guard = stakes_cache.stakes.writeWithLock();
                     defer stakes_guard.unlock();
                     stakes.epoch = epoch;
                     std.debug.assert(stakes.stake_history.entries.len == 0);
@@ -546,7 +547,7 @@ fn executeTxnContext(
                     try epoch_stakes_map.put(
                         allocator,
                         leader_schedule_epoch,
-                        try .init(allocator),
+                        .EMPTY,
                     );
 
                 // Bank::begin_partitioned_epoch_rewards(...)
@@ -563,7 +564,7 @@ fn executeTxnContext(
                     .active = true,
                 };
                 try update_sysvar.updateSysvarAccount(EpochRewards, allocator, epoch_rewards, .{
-                    .account_store = accounts_db.accountStore(),
+                    .account_store = account_store,
                     .ancestors = &ancestors,
                     .capitalization = &capitalization,
                     .rent = &genesis_config.rent,
@@ -574,12 +575,9 @@ fn executeTxnContext(
                 // Since stakes cache is empty, we just need to insert an empty stakes entry
                 // into the epoch stakes map at the leader schedule epoch stakes map if it is not present
                 // updateEpochStakes(leader_schedule_epoch);
-                if (!epoch_stakes_map.contains(leader_schedule_epoch))
-                    try epoch_stakes_map.put(
-                        allocator,
-                        leader_schedule_epoch,
-                        try .init(allocator),
-                    );
+                if (!epoch_stakes_map.contains(leader_schedule_epoch)) {
+                    try epoch_stakes_map.put(allocator, leader_schedule_epoch, .EMPTY);
+                }
             }
 
             // Bank::distribute_partitioned_epoch_rewards(...)
@@ -592,7 +590,7 @@ fn executeTxnContext(
             // Update sysvars
             {
                 const update_sysvar_deps: update_sysvar.UpdateSysvarAccountDeps = .{
-                    .account_store = accounts_db.accountStore(),
+                    .account_store = account_store,
                     .capitalization = &capitalization,
                     .ancestors = &ancestors,
                     .rent = &genesis_config.rent,
@@ -666,13 +664,13 @@ fn executeTxnContext(
     // });
 
     // Remove address lookup table, stake, and config program accounts by inserting empty accounts (zero-lamports)
-    try accounts_db.putAccount(slot, program.address_lookup_table.ID, .EMPTY);
-    try accounts_db.putAccount(slot, program.config.ID, .EMPTY);
-    try accounts_db.putAccount(slot, program.stake.ID, .EMPTY);
+    try account_store.put(slot, program.address_lookup_table.ID, .EMPTY);
+    try account_store.put(slot, program.config.ID, .EMPTY);
+    try account_store.put(slot, program.stake.ID, .EMPTY);
 
     // Load accounts into accounts db
     for (accounts_map.keys(), accounts_map.values()) |pubkey, account| {
-        try accounts_db.putAccount(slot, pubkey, .{
+        try account_store.put(slot, pubkey, .{
             .lamports = account.lamports,
             .data = account.data,
             .owner = account.owner,
@@ -684,7 +682,7 @@ fn executeTxnContext(
     // Update epoch schedule and rent to minimum rent exempt balance
     {
         const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
-            .account_store = accounts_db.accountStore(),
+            .account_store = account_store,
             .capitalization = &capitalization,
             .ancestors = &ancestors,
             .rent = &genesis_config.rent,
@@ -697,10 +695,9 @@ fn executeTxnContext(
 
     // Get lamports per signature from first entry in recent blockhashes
     const lamports_per_signature = blk: {
-        const account = try accounts_db.getAccountWithAncestors(
+        const account = try account_store.reader().forSlot(&ancestors).get(
             allocator,
-            &RecentBlockhashes.ID,
-            &ancestors,
+            RecentBlockhashes.ID,
         ) orelse break :blk null;
         defer account.deinit(allocator);
 
@@ -724,7 +721,7 @@ fn executeTxnContext(
         try blockhash_queue.insertHash(allocator, blockhash, lamports_per_signature);
     }
     const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
-        .account_store = accounts_db.accountStore(),
+        .account_store = account_store,
         .capitalization = &capitalization,
         .ancestors = &ancestors,
         .rent = &genesis_config.rent,
@@ -754,7 +751,7 @@ fn executeTxnContext(
     defer sysvar_cache.deinit(allocator);
     try update_sysvar.fillMissingSysvarCacheEntries(
         allocator,
-        accounts_db.accountReader().forSlot(&ancestors),
+        account_store.reader().forSlot(&ancestors),
         &sysvar_cache,
     );
 
@@ -806,7 +803,7 @@ fn executeTxnContext(
         .slots_per_year = genesis_config.slotsPerYear(),
     };
 
-    const current_epoch_stakes = try EpochStakes.init(allocator);
+    const current_epoch_stakes: EpochStakes = .EMPTY;
     defer current_epoch_stakes.deinit(allocator);
 
     var status_cache: StatusCache = .DEFAULT;

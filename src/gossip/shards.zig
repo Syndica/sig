@@ -108,7 +108,7 @@ test "GossipTableShards" {
     var shards = try GossipTableShards.init(std.testing.allocator);
     defer shards.deinit();
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const v = Hash.initRandom(random);
@@ -158,7 +158,7 @@ test "gossip.gossip_shards: test shard find" {
     var values = try std.ArrayList(GossipVersionedData).initCapacity(std.testing.allocator, 1000);
     defer values.deinit();
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     while (values.items.len < 50) {

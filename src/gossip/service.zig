@@ -25,7 +25,6 @@ const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
 const Histogram = sig.prometheus.Histogram;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
-const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const ThreadPool = sig.sync.ThreadPool;
 const Task = sig.sync.ThreadPool.Task;
 const Batch = sig.sync.ThreadPool.Batch;
@@ -523,9 +522,12 @@ pub const GossipService = struct {
             self.logger.debug().log("verifyPackets loop closed");
         }
 
-        var pool = try HomogeneousThreadPool(VerifyMessageTask)
-            .initBorrowed(self.allocator, &self.thread_pool, VERIFY_PACKET_PARALLEL_TASKS);
-        defer pool.deinit(self.allocator);
+        var task = VerifyMessageTask{
+            .gossip_data_allocator = self.gossip_data_allocator,
+            .verified_incoming_channel = self.verified_incoming_channel,
+            .packet = undefined, // set inside the loop below.
+            .logger = .from(self.logger),
+        };
 
         // loop until the previous service closes and triggers us to close
         while (true) {
@@ -534,22 +536,14 @@ pub const GossipService = struct {
             const zone_inner = tracy.Zone.init(@src(), .{ .name = "gossip verifyPackets: receiving" });
             defer zone_inner.deinit();
 
-            // verify in parallel using the threadpool
-            // PERF: investigate CPU pinning
+            // TODO: investigate doing verifyPacket in parallel using self.thread_pool.
             while (self.packet_incoming_channel.tryReceive()) |packet| {
                 defer self.metrics.gossip_packets_received_total.inc();
 
-                try pool.schedule(self.allocator, .{
-                    .gossip_data_allocator = self.gossip_data_allocator,
-                    .verified_incoming_channel = self.verified_incoming_channel,
-                    .packet = packet,
-                    .logger = .from(self.logger),
-                });
+                task.packet = packet;
+                try task.run();
             }
         }
-
-        pool.joinFallible() catch |err|
-            self.logger.err().logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
     }
 
     // structs used in process_messages loop
@@ -620,7 +614,10 @@ pub const GossipService = struct {
         var prune_messages = try ArrayList(PruneData).initCapacity(self.allocator, init_capacity);
         defer prune_messages.deinit();
 
-        var trim_table_timer = try sig.time.Timer.start();
+        var received_messages = std.SegmentedList(GossipMessageWithEndpoint, 0){};
+        defer received_messages.deinit(self.allocator);
+
+        var trim_table_timer = sig.time.Timer.start();
 
         // keep waiting for new data until,
         // - `exit` isn't set,
@@ -629,8 +626,14 @@ pub const GossipService = struct {
             self.verified_incoming_channel.waitToReceive(exit_condition) catch break;
 
             var msg_count: usize = 0;
-            while (self.verified_incoming_channel.tryReceive()) |message| {
+            while (self.verified_incoming_channel.tryReceive()) |msg| {
                 msg_count += 1;
+
+                // references to the message are stored in ArrayLists that escape this while loop
+                // so store the message in a local list with stable pointers across append()s.
+                const message = try received_messages.addOne(self.allocator);
+                message.* = msg;
+
                 switch (message.message) {
                     .PushMessage => |*push| {
                         try push_messages.append(.{
@@ -765,7 +768,7 @@ pub const GossipService = struct {
             batch_handle_zone.value(msg_count);
 
             if (push_messages.items.len > 0) {
-                var x_timer = try sig.time.Timer.start();
+                var x_timer = sig.time.Timer.start();
                 self.handleBatchPushMessages(&push_messages) catch |err| {
                     self.logger.err().logf("handleBatchPushMessages failed: {}", .{err});
                 };
@@ -781,7 +784,7 @@ pub const GossipService = struct {
             }
 
             if (prune_messages.items.len > 0) {
-                var x_timer = try sig.time.Timer.start();
+                var x_timer = sig.time.Timer.start();
                 self.handleBatchPruneMessages(&prune_messages);
                 const elapsed = x_timer.read().asMillis();
                 self.metrics.handle_batch_prune_time.observe(elapsed);
@@ -793,7 +796,7 @@ pub const GossipService = struct {
             }
 
             if (pull_requests.items.len > 0) {
-                var x_timer = try sig.time.Timer.start();
+                var x_timer = sig.time.Timer.start();
                 self.handleBatchPullRequest(seed + msg_count, pull_requests.items) catch |err| {
                     self.logger.err().logf("handleBatchPullRequest failed: {}", .{err});
                 };
@@ -809,7 +812,7 @@ pub const GossipService = struct {
             }
 
             if (pull_responses.items.len > 0) {
-                var x_timer = try sig.time.Timer.start();
+                var x_timer = sig.time.Timer.start();
                 self.handleBatchPullResponses(pull_responses.items) catch |err| {
                     self.logger.err().logf("handleBatchPullResponses failed: {}", .{err});
                 };
@@ -825,7 +828,7 @@ pub const GossipService = struct {
             }
 
             if (ping_messages.items.len > 0) {
-                var x_timer = try sig.time.Timer.start();
+                var x_timer = sig.time.Timer.start();
                 self.handleBatchPingMessages(&ping_messages) catch |err| {
                     self.logger.err().logf("handleBatchPingMessages failed: {}", .{err});
                 };
@@ -836,12 +839,16 @@ pub const GossipService = struct {
             }
 
             if (pong_messages.items.len > 0) {
-                var x_timer = try sig.time.Timer.start();
+                var x_timer = sig.time.Timer.start();
                 self.handleBatchPongMessages(&pong_messages);
                 const elapsed = x_timer.read().asMillis();
                 self.metrics.handle_batch_pong_time.observe(elapsed);
 
                 pong_messages.clearRetainingCapacity();
+            }
+
+            if (received_messages.count() > 0) {
+                received_messages.clearRetainingCapacity();
             }
 
             // TRIM gossip-table
@@ -871,7 +878,7 @@ pub const GossipService = struct {
             var gossip_table, var gossip_table_lock = self.gossip_table_rw.writeWithLock();
             defer gossip_table_lock.unlock();
 
-            var x_timer = sig.time.Timer.start() catch unreachable;
+            var x_timer = sig.time.Timer.start();
             const now = getWallclockMs();
             const n_pubkeys_dropped = gossip_table.attemptTrim(now, UNIQUE_PUBKEY_CAPACITY) catch |err| err_blk: {
                 self.logger.err().logf("gossip_table.attemptTrim failed: {s}", .{@errorName(err)});
@@ -898,11 +905,11 @@ pub const GossipService = struct {
             self.logger.info().log("buildMessages loop closed");
         }
 
-        var loop_timer = try sig.time.Timer.start();
-        var active_set_timer = try sig.time.Timer.start();
-        var pull_req_timer = try sig.time.Timer.start();
-        var stats_publish_timer = try sig.time.Timer.start();
-        var trim_memory_timer = try sig.time.Timer.start();
+        var loop_timer = sig.time.Timer.start();
+        var active_set_timer = sig.time.Timer.start();
+        var pull_req_timer = sig.time.Timer.start();
+        var stats_publish_timer = sig.time.Timer.start();
+        var trim_memory_timer = sig.time.Timer.start();
 
         var prng = std.Random.DefaultPrng.init(seed);
         const random = prng.random();
@@ -1702,7 +1709,7 @@ pub const GossipService = struct {
 
         // insert values and track the failed origins per pubkey
         {
-            var timer = try sig.time.Timer.start();
+            var timer = sig.time.Timer.start();
             defer {
                 const elapsed = timer.read().asMillis();
                 self.metrics.push_messages_time_to_insert.observe(elapsed);
@@ -1806,7 +1813,7 @@ pub const GossipService = struct {
 
         // build prune packets
         const now = getWallclockMs();
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         defer {
             const elapsed = timer.read().asMillis();
             self.metrics.push_messages_time_build_prune.observe(elapsed);
@@ -2443,7 +2450,7 @@ test "build messages startup and shutdown" {
 }
 
 test "handling prune messages" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const allocator = std.testing.allocator;
     var my_keypair = try KeyPair.generateDeterministic(@splat(1));
@@ -2519,7 +2526,7 @@ test "handling prune messages" {
 test "handling pull responses" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var my_keypair = try KeyPair.generateDeterministic(@splat(1));
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2581,7 +2588,7 @@ test "handling pull responses" {
 test "handle old prune & pull request message" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var my_keypair = try KeyPair.generateDeterministic(@splat(1));
@@ -2679,7 +2686,7 @@ test "handle pull request" {
 
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var my_keypair = try KeyPair.generateDeterministic(@splat(1));
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2790,7 +2797,7 @@ test "handle pull request" {
 
 test "test build prune messages and handle push messages" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var my_keypair = try KeyPair.generateDeterministic(@splat(1));
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -2869,7 +2876,7 @@ test "test build prune messages and handle push messages" {
 }
 
 test testBuildPullRequests {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const my_keypair = try KeyPair.generateDeterministic(.{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
@@ -2952,7 +2959,7 @@ fn testBuildPullRequests(
 
 test "test build push messages" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var my_keypair = try KeyPair.generateDeterministic(@splat(1));
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
@@ -3027,13 +3034,11 @@ test "test build push messages" {
 test "large push messages" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(91);
-    var my_keypair = try KeyPair.generateDeterministic(@splat(1));
+
+    const my_keypair = KeyPair.generate();
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+
     const contact_info = try localhostTestContactInfo(my_pubkey);
-
-    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-
-    const logger = test_logger.logger("gossip.test");
 
     var gossip_service = try GossipService.create(
         allocator,
@@ -3041,7 +3046,7 @@ test "large push messages" {
         contact_info,
         my_keypair,
         null,
-        .from(logger),
+        .noop,
     );
     defer {
         gossip_service.shutdown();
@@ -3050,19 +3055,18 @@ test "large push messages" {
     }
 
     // add some peers
-    var peers = ArrayList(ThreadSafeContactInfo).init(allocator);
-    defer {
-        peers.deinit();
-    }
+    var peers: std.ArrayListUnmanaged(ThreadSafeContactInfo) = .empty;
+    defer peers.deinit(allocator);
     {
         var lock_guard = gossip_service.gossip_table_rw.write();
         defer lock_guard.unlock();
+
         const count = if (sig.build_options.long_tests) 2_000 else 20;
         for (0..count) |_| {
             var keypair = KeyPair.generate();
             const value = try SignedGossipData.randomWithIndex(prng.random(), &keypair, 0); // contact info
             _ = try lock_guard.mut().insert(value, getWallclockMs());
-            try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
+            try peers.append(allocator, .fromLegacyContactInfo(value.data.LegacyContactInfo));
         }
     }
 
@@ -3115,7 +3119,7 @@ test "test packet verification" {
         packet_verifier_handle.join();
     }
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var data = GossipData.randomFromIndex(prng.random(), 0);
     data.LegacyContactInfo.id = id;
     data.LegacyContactInfo.wallclock = 0;
@@ -3309,7 +3313,7 @@ test "process contact info push packet" {
 test "init, exit, and deinit" {
     const gossip_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
     const my_keypair = KeyPair.generate();
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var contact_info = try LegacyContactInfo.initRandom(prng.random()).toContactInfo(std.testing.allocator);
     try contact_info.setSocket(.gossip, gossip_address);
@@ -3437,7 +3441,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         const outgoing_channel = gossip_service.packet_incoming_channel;
 
         // generate messages
-        var prng = std.Random.DefaultPrng.init(19);
+        var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
         const random = prng.random();
 
         var msg_sent: usize = 0;
@@ -3485,7 +3489,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         });
 
         // wait for all messages to be processed
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
 
         gossip_service.shutdown();
         packet_handle.join();
@@ -3557,7 +3561,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
         });
 
         const now = getWallclockMs();
-        var prng = std.Random.DefaultPrng.init(19);
+        var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
         const random = prng.random();
 
         {
@@ -3599,7 +3603,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
             },
         });
 
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
 
         // wait for all messages to be processed
         gossip_service.shutdown();
@@ -3610,7 +3614,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
 };
 
 fn localhostTestContactInfo(id: Pubkey) !ContactInfo {
-    comptime std.debug.assert(@import("builtin").is_test); // should only be used for testin
+    if (!@import("builtin").is_test) @compileError("only for testing");
     var contact_info = try LegacyContactInfo.default(id).toContactInfo(std.testing.allocator);
     errdefer contact_info.deinit();
     try contact_info.setSocket(.gossip, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0));

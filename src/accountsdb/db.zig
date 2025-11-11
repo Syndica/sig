@@ -383,7 +383,7 @@ pub const AccountsDB = struct {
         errdefer collapsed_manifest.deinit(self.allocator);
 
         {
-            var load_timer = try sig.time.Timer.start();
+            var load_timer = sig.time.Timer.start();
             try self.loadFromSnapshot(
                 collapsed_manifest.accounts_db_fields,
                 n_threads,
@@ -400,7 +400,7 @@ pub const AccountsDB = struct {
             else
                 null;
 
-            var validate_timer = try sig.time.Timer.start();
+            var validate_timer = sig.time.Timer.start();
             try self.validateLoadFromSnapshot(.{
                 .full_slot = full_man.bank_fields.slot,
                 .expected_full = .{
@@ -440,7 +440,7 @@ pub const AccountsDB = struct {
         errdefer collapsed_manifest.deinit(self.allocator);
 
         {
-            var load_timer = try sig.time.Timer.start();
+            var load_timer = sig.time.Timer.start();
             try self.loadFromSnapshot(
                 collapsed_manifest.accounts_db_fields,
                 n_threads,
@@ -453,7 +453,7 @@ pub const AccountsDB = struct {
         {
             const full_man = full_inc_manifest.full;
 
-            var validate_timer = try sig.time.Timer.start();
+            var validate_timer = sig.time.Timer.start();
             try self.validateLoadFromSnapshot(.{
                 .full_slot = full_man.bank_fields.slot,
                 .expected_full = .{
@@ -541,7 +541,7 @@ pub const AccountsDB = struct {
             try geyser_writer.writePayloadToPipe(end_of_snapshot);
         }
 
-        var merge_timer = try sig.time.Timer.start();
+        var merge_timer = sig.time.Timer.start();
         try self.mergeMultipleDBs(loading_threads, n_combine_threads);
         self.logger.debug().logf("mergeMultipleDBs: total time: {}", .{merge_timer.read()});
     }
@@ -674,8 +674,8 @@ pub const AccountsDB = struct {
 
         try reference_manager.expandCapacity(n_accounts_estimate);
 
-        var timer = try sig.time.Timer.start();
-        var progress_timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
+        var progress_timer = sig.time.Timer.start();
 
         if (n_account_files > std.math.maxInt(AccountIndex.SlotRefMap.Size)) {
             return error.FileMapTooBig;
@@ -1018,8 +1018,8 @@ pub const AccountsDB = struct {
         const shard_end_index = task.end_index;
 
         const total_shards = shard_end_index - shard_start_index;
-        var timer = try sig.time.Timer.start();
-        var progress_timer = try std.time.Timer.start();
+        var timer = sig.time.Timer.start();
+        var progress_timer = sig.time.Timer.start();
         const print_progress = task.thread_id == 0;
 
         for (shard_start_index..shard_end_index, 1..) |shard_index, iteration_count| {
@@ -1056,7 +1056,7 @@ pub const AccountsDB = struct {
                 }
             }
 
-            if (print_progress and progress_timer.read() > DB_LOG_RATE.asNanos()) {
+            if (print_progress and progress_timer.read().gt(DB_LOG_RATE)) {
                 printTimeEstimate(
                     logger,
                     &timer,
@@ -1120,7 +1120,7 @@ pub const AccountsDB = struct {
         });
         defer zone.deinit();
 
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
 
         // going higher will only lead to more contention in the buffer pool reads
         const n_threads = @min(6, @as(u32, @truncate(try std.Thread.getCpuCount())));
@@ -1389,8 +1389,8 @@ pub const AccountsDB = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb getHashesFromIndex" });
         defer zone.deinit();
 
-        var timer = try sig.time.Timer.start();
-        var progress_timer = try std.time.Timer.start();
+        var timer = sig.time.Timer.start();
+        var progress_timer = sig.time.Timer.start();
 
         var arena = std.heap.ArenaAllocator.init(tmp_allocator);
         defer arena.deinit();
@@ -1457,7 +1457,7 @@ pub const AccountsDB = struct {
                 .subtract = total_subtracted,
             };
 
-            if (print_progress and progress_timer.read() > DB_LOG_RATE.asNanos()) {
+            if (print_progress and progress_timer.read().gt(DB_LOG_RATE)) {
                 printTimeEstimate(
                     self.logger,
                     &timer,
@@ -1828,7 +1828,7 @@ pub const AccountsDB = struct {
 
     /// index and validate an account file.
     /// NOTE: should only be called in tests/benchmarks
-    pub fn putAccountFile(
+    fn putAccountFile(
         self: *AccountsDB,
         account_file: *AccountFile,
         n_accounts: usize,
@@ -2392,198 +2392,199 @@ pub const AccountsDB = struct {
         capitalization: u64,
     };
 
-    pub fn generateFullSnapshot(
-        self: *AccountsDB,
-        params: FullSnapshotGenParams,
-    ) !GenerateFullSnapshotResult {
-        const zstd_compressor = try zstd.Compressor.init(.{});
-        defer zstd_compressor.deinit();
+    // NOTE: we don't store the information needed to create snapshots currently
+    // pub fn generateFullSnapshot(
+    //     self: *AccountsDB,
+    //     params: FullSnapshotGenParams,
+    // ) !GenerateFullSnapshotResult {
+    //     const zstd_compressor = try zstd.Compressor.init(.{});
+    //     defer zstd_compressor.deinit();
 
-        var zstd_sfba_state = std.heap.stackFallback(4096 * 4, self.allocator);
-        const zstd_sfba = zstd_sfba_state.get();
-        const zstd_buffer = try zstd_sfba.alloc(u8, zstd.Compressor.recommOutSize());
-        defer zstd_sfba.free(zstd_buffer);
+    //     var zstd_sfba_state = std.heap.stackFallback(4096 * 4, self.allocator);
+    //     const zstd_sfba = zstd_sfba_state.get();
+    //     const zstd_buffer = try zstd_sfba.alloc(u8, zstd.Compressor.recommOutSize());
+    //     defer zstd_sfba.free(zstd_buffer);
 
-        return self.generateFullSnapshotWithCompressor(zstd_compressor, zstd_buffer, params);
-    }
+    //     return self.generateFullSnapshotWithCompressor(zstd_compressor, zstd_buffer, params);
+    // }
 
-    pub fn generateFullSnapshotWithCompressor(
-        self: *AccountsDB,
-        zstd_compressor: zstd.Compressor,
-        zstd_buffer: []u8,
-        params: FullSnapshotGenParams,
-    ) !GenerateFullSnapshotResult {
-        const zone = tracy.Zone.init(@src(), .{ .name = "generateFullSnapshotWithCompressor" });
-        defer zone.deinit();
+    // pub fn generateFullSnapshotWithCompressor(
+    //     self: *AccountsDB,
+    //     zstd_compressor: zstd.Compressor,
+    //     zstd_buffer: []u8,
+    //     params: FullSnapshotGenParams,
+    // ) !GenerateFullSnapshotResult {
+    //     const zone = tracy.Zone.init(@src(), .{ .name = "generateFullSnapshotWithCompressor" });
+    //     defer zone.deinit();
 
-        // NOTE: we hold the lock for the rest of the duration of the procedure to ensure
-        // flush and clean do not create files while generating a snapshot.
-        self.file_map_fd_rw.lockShared();
-        defer self.file_map_fd_rw.unlockShared();
+    //     // NOTE: we hold the lock for the rest of the duration of the procedure to ensure
+    //     // flush and clean do not create files while generating a snapshot.
+    //     self.file_map_fd_rw.lockShared();
+    //     defer self.file_map_fd_rw.unlockShared();
 
-        const file_map, var file_map_lg = self.file_map.readWithLock();
-        defer file_map_lg.unlock();
+    //     const file_map, var file_map_lg = self.file_map.readWithLock();
+    //     defer file_map_lg.unlock();
 
-        // lock this now such that, if under any circumstance this method was invoked twice in parallel
-        // on separate threads, there wouldn't be any overlapping work being done.
-        const maybe_latest_snapshot_info: *?SnapshotGenerationInfo, //
-        var latest_snapshot_info_lg //
-        = self.latest_snapshot_gen_info.writeWithLock();
-        defer latest_snapshot_info_lg.unlock();
+    //     // lock this now such that, if under any circumstance this method was invoked twice in parallel
+    //     // on separate threads, there wouldn't be any overlapping work being done.
+    //     const maybe_latest_snapshot_info: *?SnapshotGenerationInfo, //
+    //     var latest_snapshot_info_lg //
+    //     = self.latest_snapshot_gen_info.writeWithLock();
+    //     defer latest_snapshot_info_lg.unlock();
 
-        std.debug.assert(zstd_buffer.len != 0);
-        std.debug.assert(params.target_slot <= self.getLargestRootedSlot() orelse 0);
+    //     std.debug.assert(zstd_buffer.len != 0);
+    //     std.debug.assert(params.target_slot <= self.getLargestRootedSlot() orelse 0);
 
-        const full_lt_hash, const full_capitalization = compute: {
-            check_first: {
-                const maybe_first_snapshot_info, var first_snapshot_info_lg =
-                    self.first_snapshot_load_info.readWithLock();
-                defer first_snapshot_info_lg.unlock();
+    //     const full_lt_hash, const full_capitalization = compute: {
+    //         check_first: {
+    //             const maybe_first_snapshot_info, var first_snapshot_info_lg =
+    //                 self.first_snapshot_load_info.readWithLock();
+    //             defer first_snapshot_info_lg.unlock();
 
-                const first = maybe_first_snapshot_info.* orelse break :check_first;
-                if (first.full.slot != params.target_slot) break :check_first;
+    //             const first = maybe_first_snapshot_info.* orelse break :check_first;
+    //             if (first.full.slot != params.target_slot) break :check_first;
 
-                break :compute .{ first.full.hash, first.full.capitalization };
-            }
+    //             break :compute .{ first.full.hash, first.full.capitalization };
+    //         }
 
-            break :compute try self.computeAccountHashesAndLamports(.{
-                .FullAccountHash = .{
-                    .max_slot = params.target_slot,
-                },
-            });
-        };
+    //         break :compute try self.computeAccountHashesAndLamports(.{
+    //             .FullAccountHash = .{
+    //                 .max_slot = params.target_slot,
+    //             },
+    //         });
+    //     };
 
-        const full_hash = full_lt_hash.checksum();
+    //     const full_hash = full_lt_hash.checksum();
 
-        const archive_file = blk: {
-            const archive_info: FullSnapshotFileInfo = .{
-                .slot = params.target_slot,
-                .hash = full_hash,
-            };
-            const archive_file_name_bounded = archive_info.snapshotArchiveName();
-            const archive_file_name = archive_file_name_bounded.constSlice();
-            self.logger.info().logf("Generating full snapshot '{s}' (full path: {1s}/{0s}).", .{
-                archive_file_name, sig.utils.fmt.tryRealPath(self.snapshot_dir, "."),
-            });
-            break :blk try self.snapshot_dir.createFile(archive_file_name, .{ .read = true });
-        };
-        defer archive_file.close();
+    //     const archive_file = blk: {
+    //         const archive_info: FullSnapshotFileInfo = .{
+    //             .slot = params.target_slot,
+    //             .hash = full_hash,
+    //         };
+    //         const archive_file_name_bounded = archive_info.snapshotArchiveName();
+    //         const archive_file_name = archive_file_name_bounded.constSlice();
+    //         self.logger.info().logf("Generating full snapshot '{s}' (full path: {1s}/{0s}).", .{
+    //             archive_file_name, sig.utils.fmt.tryRealPath(self.snapshot_dir, "."),
+    //         });
+    //         break :blk try self.snapshot_dir.createFile(archive_file_name, .{ .read = true });
+    //     };
+    //     defer archive_file.close();
 
-        const SerializableFileMap = AccountsDbFields.FileMap;
+    //     const SerializableFileMap = AccountsDbFields.FileMap;
 
-        var serializable_file_map: SerializableFileMap = .{};
-        defer serializable_file_map.deinit(self.allocator);
-        var bank_hash_stats = BankHashStats.zero_init;
+    //     var serializable_file_map: SerializableFileMap = .{};
+    //     defer serializable_file_map.deinit(self.allocator);
+    //     var bank_hash_stats = BankHashStats.zero_init;
 
-        // collect account files into serializable_file_map and compute bank_hash_stats
-        try serializable_file_map.ensureTotalCapacity(self.allocator, file_map.count());
-        for (file_map.values()) |account_file| {
-            if (account_file.slot > params.target_slot) continue;
+    //     // collect account files into serializable_file_map and compute bank_hash_stats
+    //     try serializable_file_map.ensureTotalCapacity(self.allocator, file_map.count());
+    //     for (file_map.values()) |account_file| {
+    //         if (account_file.slot > params.target_slot) continue;
 
-            const bank_hash_stats_map, var bank_hash_stats_map_lg =
-                self.bank_hash_stats.readWithLock();
-            defer bank_hash_stats_map_lg.unlock();
+    //         const bank_hash_stats_map, var bank_hash_stats_map_lg =
+    //             self.bank_hash_stats.readWithLock();
+    //         defer bank_hash_stats_map_lg.unlock();
 
-            if (bank_hash_stats_map.get(account_file.slot)) |other_stats| {
-                bank_hash_stats.accumulate(other_stats);
-            }
+    //         if (bank_hash_stats_map.get(account_file.slot)) |other_stats| {
+    //             bank_hash_stats.accumulate(other_stats);
+    //         }
 
-            serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
-                .id = account_file.id,
-                .length = account_file.length,
-            });
-        }
+    //         serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
+    //             .id = account_file.id,
+    //             .length = account_file.length,
+    //         });
+    //     }
 
-        params.bank_fields.slot = params.target_slot; // !
-        params.bank_fields.capitalization = full_capitalization; // !
+    //     params.bank_fields.slot = params.target_slot; // !
+    //     params.bank_fields.capitalization = full_capitalization; // !
 
-        const manifest: SnapshotManifest = .{
-            .bank_fields = params.bank_fields.*,
-            .accounts_db_fields = .{
-                .file_map = serializable_file_map,
-                .stored_meta_write_version = params.deprecated_stored_meta_write_version,
-                .slot = params.target_slot,
-                .bank_hash_info = .{
-                    .stats = bank_hash_stats,
-                },
-                .rooted_slots = &.{},
-                .rooted_slot_hashes = &.{},
-            },
-            .bank_extra = .{
-                .lamports_per_signature = params.lamports_per_signature,
-                // default to null for full snapshot,
-                .snapshot_persistence = null,
-                .epoch_accounts_hash = null,
-                .versioned_epoch_stakes = .{},
-                .accounts_lt_hash = full_lt_hash,
-            },
-        };
+    //     const manifest: SnapshotManifest = .{
+    //         .bank_fields = params.bank_fields.*,
+    //         .accounts_db_fields = .{
+    //             .file_map = serializable_file_map,
+    //             .stored_meta_write_version = params.deprecated_stored_meta_write_version,
+    //             .slot = params.target_slot,
+    //             .bank_hash_info = .{
+    //                 .stats = bank_hash_stats,
+    //             },
+    //             .rooted_slots = &.{},
+    //             .rooted_slot_hashes = &.{},
+    //         },
+    //         .bank_extra = .{
+    //             .lamports_per_signature = params.lamports_per_signature,
+    //             // default to null for full snapshot,
+    //             .snapshot_persistence = null,
+    //             .epoch_accounts_hash = null,
+    //             .versioned_epoch_stakes = .{},
+    //             .accounts_lt_hash = full_lt_hash,
+    //         },
+    //     };
 
-        // main snapshot writing logic
-        // writer() data flow: tar -> zstd -> archive_file
-        const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
-        try writeSnapshotTarWithFields(
-            zstd_write_ctx.writer(),
-            .CURRENT,
-            StatusCache.EMPTY,
-            &manifest,
-            file_map,
-        );
-        try zstd_write_ctx.finish();
+    //     // main snapshot writing logic
+    //     // writer() data flow: tar -> zstd -> archive_file
+    //     const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
+    //     try writeSnapshotTarWithFields(
+    //         zstd_write_ctx.writer(),
+    //         .CURRENT,
+    //         StatusCache.EMPTY,
+    //         &manifest,
+    //         file_map,
+    //     );
+    //     try zstd_write_ctx.finish();
 
-        if (self.gossip_view) |gossip_view| { // advertise new snapshot via gossip
-            const push_msg_queue, var push_msg_queue_lg =
-                gossip_view.push_msg_queue.writeWithLock();
-            defer push_msg_queue_lg.unlock();
+    //     if (self.gossip_view) |gossip_view| { // advertise new snapshot via gossip
+    //         const push_msg_queue, var push_msg_queue_lg =
+    //             gossip_view.push_msg_queue.writeWithLock();
+    //         defer push_msg_queue_lg.unlock();
 
-            try push_msg_queue.queue.append(.{
-                .SnapshotHashes = .{
-                    .from = gossip_view.my_pubkey,
-                    .full = .{ .slot = params.target_slot, .hash = full_hash },
-                    .incremental = sig.gossip.data.SnapshotHashes.IncrementalSnapshotsList.EMPTY,
-                    .wallclock = 0, // the wallclock will be set when it's processed in the queue
-                },
-            });
-        }
+    //         try push_msg_queue.queue.append(.{
+    //             .SnapshotHashes = .{
+    //                 .from = gossip_view.my_pubkey,
+    //                 .full = .{ .slot = params.target_slot, .hash = full_hash },
+    //                 .incremental = sig.gossip.data.SnapshotHashes.IncrementalSnapshotsList.EMPTY,
+    //                 .wallclock = 0, // the wallclock will be set when it's processed in the queue
+    //             },
+    //         });
+    //     }
 
-        // update tracking for new snapshot
+    //     // update tracking for new snapshot
 
-        if (maybe_latest_snapshot_info.*) |old_snapshot_info| {
-            std.debug.assert(old_snapshot_info.full.slot <= params.target_slot);
+    //     if (maybe_latest_snapshot_info.*) |old_snapshot_info| {
+    //         std.debug.assert(old_snapshot_info.full.slot <= params.target_slot);
 
-            switch (params.old_snapshot_action) {
-                .ignore_old => {},
-                .delete_old => {
-                    const full = old_snapshot_info.full;
-                    try self.deleteOldSnapshotFile(.full, .{
-                        .slot = full.slot,
-                        .hash = full.hash.checksum(),
-                    });
-                    if (old_snapshot_info.inc) |inc| {
-                        try self.deleteOldSnapshotFile(.incremental, .{
-                            .base_slot = old_snapshot_info.full.slot,
-                            .slot = inc.slot,
-                            .hash = inc.hash.checksum(),
-                        });
-                    }
-                },
-            }
-        }
+    //         switch (params.old_snapshot_action) {
+    //             .ignore_old => {},
+    //             .delete_old => {
+    //                 const full = old_snapshot_info.full;
+    //                 try self.deleteOldSnapshotFile(.full, .{
+    //                     .slot = full.slot,
+    //                     .hash = full.hash.checksum(),
+    //                 });
+    //                 if (old_snapshot_info.inc) |inc| {
+    //                     try self.deleteOldSnapshotFile(.incremental, .{
+    //                         .base_slot = old_snapshot_info.full.slot,
+    //                         .slot = inc.slot,
+    //                         .hash = inc.hash.checksum(),
+    //                     });
+    //                 }
+    //             },
+    //         }
+    //     }
 
-        maybe_latest_snapshot_info.* = .{
-            .full = .{
-                .slot = params.target_slot,
-                .hash = full_lt_hash,
-                .capitalization = full_capitalization,
-            },
-            .inc = null,
-        };
+    //     maybe_latest_snapshot_info.* = .{
+    //         .full = .{
+    //             .slot = params.target_slot,
+    //             .hash = full_lt_hash,
+    //             .capitalization = full_capitalization,
+    //         },
+    //         .inc = null,
+    //     };
 
-        return .{
-            .hash = full_lt_hash,
-            .capitalization = full_capitalization,
-        };
-    }
+    //     return .{
+    //         .hash = full_lt_hash,
+    //         .capitalization = full_capitalization,
+    //     };
+    // }
 
     pub const IncSnapshotGenParams = struct {
         /// The slot to generate a snapshot for.
@@ -2619,217 +2620,217 @@ pub const AccountsDB = struct {
         }
     };
 
-    pub fn generateIncrementalSnapshot(
-        self: *AccountsDB,
-        params: IncSnapshotGenParams,
-    ) !GenerateIncSnapshotResult {
-        const zstd_compressor = try zstd.Compressor.init(.{});
-        defer zstd_compressor.deinit();
+    // pub fn generateIncrementalSnapshot(
+    //     self: *AccountsDB,
+    //     params: IncSnapshotGenParams,
+    // ) !GenerateIncSnapshotResult {
+    //     const zstd_compressor = try zstd.Compressor.init(.{});
+    //     defer zstd_compressor.deinit();
 
-        var zstd_sfba_state = std.heap.stackFallback(4096 * 4, self.allocator);
-        const zstd_sfba = zstd_sfba_state.get();
-        const zstd_buffer = try zstd_sfba.alloc(u8, zstd.Compressor.recommOutSize());
-        defer zstd_sfba.free(zstd_buffer);
+    //     var zstd_sfba_state = std.heap.stackFallback(4096 * 4, self.allocator);
+    //     const zstd_sfba = zstd_sfba_state.get();
+    //     const zstd_buffer = try zstd_sfba.alloc(u8, zstd.Compressor.recommOutSize());
+    //     defer zstd_sfba.free(zstd_buffer);
 
-        return self.generateIncrementalSnapshotWithCompressor(zstd_compressor, zstd_buffer, params);
-    }
+    //     return self.generateIncrementalSnapshotWithCompressor(zstd_compressor, zstd_buffer, params);
+    // }
 
-    pub fn generateIncrementalSnapshotWithCompressor(
-        self: *AccountsDB,
-        zstd_compressor: zstd.Compressor,
-        zstd_buffer: []u8,
-        params: IncSnapshotGenParams,
-    ) !GenerateIncSnapshotResult {
-        // NOTE: we hold the lock for the rest of the duration of the procedure to ensure
-        // flush and clean do not create files while generating a snapshot.
-        self.file_map_fd_rw.lockShared();
-        defer self.file_map_fd_rw.unlockShared();
+    // pub fn generateIncrementalSnapshotWithCompressor(
+    //     self: *AccountsDB,
+    //     zstd_compressor: zstd.Compressor,
+    //     zstd_buffer: []u8,
+    //     params: IncSnapshotGenParams,
+    // ) !GenerateIncSnapshotResult {
+    //     // NOTE: we hold the lock for the rest of the duration of the procedure to ensure
+    //     // flush and clean do not create files while generating a snapshot.
+    //     self.file_map_fd_rw.lockShared();
+    //     defer self.file_map_fd_rw.unlockShared();
 
-        const file_map, var file_map_lg = self.file_map.readWithLock();
-        defer file_map_lg.unlock();
+    //     const file_map, var file_map_lg = self.file_map.readWithLock();
+    //     defer file_map_lg.unlock();
 
-        // we need to hold a lock on the full & incremental snapshot for the duration of the function
-        // to ensure we could never race if this method was invoked in parallel on different threads.
-        const latest_snapshot_info: *SnapshotGenerationInfo, //
-        var latest_snapshot_info_lg //
-        = blk: {
-            const maybe_latest_snapshot_info, var latest_snapshot_info_lg =
-                self.latest_snapshot_gen_info.writeWithLock();
-            errdefer latest_snapshot_info_lg.unlock();
-            const latest_snapshot_info: *SnapshotGenerationInfo =
-                &(maybe_latest_snapshot_info.* orelse return error.NoFullSnapshotExists);
-            break :blk .{ latest_snapshot_info, latest_snapshot_info_lg };
-        };
-        defer latest_snapshot_info_lg.unlock();
+    //     // we need to hold a lock on the full & incremental snapshot for the duration of the function
+    //     // to ensure we could never race if this method was invoked in parallel on different threads.
+    //     const latest_snapshot_info: *SnapshotGenerationInfo, //
+    //     var latest_snapshot_info_lg //
+    //     = blk: {
+    //         const maybe_latest_snapshot_info, var latest_snapshot_info_lg =
+    //             self.latest_snapshot_gen_info.writeWithLock();
+    //         errdefer latest_snapshot_info_lg.unlock();
+    //         const latest_snapshot_info: *SnapshotGenerationInfo =
+    //             &(maybe_latest_snapshot_info.* orelse return error.NoFullSnapshotExists);
+    //         break :blk .{ latest_snapshot_info, latest_snapshot_info_lg };
+    //     };
+    //     defer latest_snapshot_info_lg.unlock();
 
-        const full_snapshot_info: SnapshotGenerationInfo.Full = latest_snapshot_info.full;
+    //     const full_snapshot_info: SnapshotGenerationInfo.Full = latest_snapshot_info.full;
 
-        const incremental_hash = compute: {
-            check_first: {
-                const maybe_first_snapshot_info, var first_snapshot_info_lg =
-                    self.first_snapshot_load_info.readWithLock();
-                defer first_snapshot_info_lg.unlock();
+    //     const incremental_hash = compute: {
+    //         check_first: {
+    //             const maybe_first_snapshot_info, var first_snapshot_info_lg =
+    //                 self.first_snapshot_load_info.readWithLock();
+    //             defer first_snapshot_info_lg.unlock();
 
-                const first = maybe_first_snapshot_info.* orelse break :check_first;
-                const first_inc = first.inc orelse break :check_first;
-                if (first.full.slot != full_snapshot_info.slot) break :check_first;
-                if (first_inc.slot != params.target_slot) break :check_first;
+    //             const first = maybe_first_snapshot_info.* orelse break :check_first;
+    //             const first_inc = first.inc orelse break :check_first;
+    //             if (first.full.slot != full_snapshot_info.slot) break :check_first;
+    //             if (first_inc.slot != params.target_slot) break :check_first;
 
-                break :compute first_inc.hash;
-            }
+    //             break :compute first_inc.hash;
+    //         }
 
-            var hash = full_snapshot_info.hash;
-            const incremental = (try self.computeAccountHashesAndLamports(.{
-                .IncrementalAccountHash = .{
-                    .min_slot = full_snapshot_info.slot,
-                    .max_slot = params.target_slot,
-                },
-            }))[0];
-            hash.mixIn(incremental);
+    //         var hash = full_snapshot_info.hash;
+    //         const incremental = (try self.computeAccountHashesAndLamports(.{
+    //             .IncrementalAccountHash = .{
+    //                 .min_slot = full_snapshot_info.slot,
+    //                 .max_slot = params.target_slot,
+    //             },
+    //         }))[0];
+    //         hash.mixIn(incremental);
 
-            break :compute hash;
-        };
+    //         break :compute hash;
+    //     };
 
-        const archive_file = blk: {
-            const archive_info: IncrementalSnapshotFileInfo = .{
-                .base_slot = full_snapshot_info.slot,
-                .slot = params.target_slot,
-                .hash = incremental_hash.checksum(),
-            };
-            const archive_file_name_bounded = archive_info.snapshotArchiveName();
-            const archive_file_name = archive_file_name_bounded.constSlice();
-            self.logger.info().logf(
-                "Generating incremental snapshot '{0s}' (full path: {1s}/{0s}).",
-                .{
-                    archive_file_name,
-                    sig.utils.fmt.tryRealPath(self.snapshot_dir, "."),
-                },
-            );
-            break :blk try self.snapshot_dir.createFile(archive_file_name, .{ .read = true });
-        };
-        defer archive_file.close();
+    //     const archive_file = blk: {
+    //         const archive_info: IncrementalSnapshotFileInfo = .{
+    //             .base_slot = full_snapshot_info.slot,
+    //             .slot = params.target_slot,
+    //             .hash = incremental_hash.checksum(),
+    //         };
+    //         const archive_file_name_bounded = archive_info.snapshotArchiveName();
+    //         const archive_file_name = archive_file_name_bounded.constSlice();
+    //         self.logger.info().logf(
+    //             "Generating incremental snapshot '{0s}' (full path: {1s}/{0s}).",
+    //             .{
+    //                 archive_file_name,
+    //                 sig.utils.fmt.tryRealPath(self.snapshot_dir, "."),
+    //             },
+    //         );
+    //         break :blk try self.snapshot_dir.createFile(archive_file_name, .{ .read = true });
+    //     };
+    //     defer archive_file.close();
 
-        const SerializableFileMap = AccountsDbFields.FileMap;
+    //     const SerializableFileMap = AccountsDbFields.FileMap;
 
-        var serializable_file_map: SerializableFileMap, //
-        const bank_hash_stats: BankHashStats //
-        = blk: {
-            var serializable_file_map: SerializableFileMap = .{};
-            errdefer serializable_file_map.deinit(self.allocator);
-            try serializable_file_map.ensureTotalCapacity(self.allocator, file_map.count());
+    //     var serializable_file_map: SerializableFileMap, //
+    //     const bank_hash_stats: BankHashStats //
+    //     = blk: {
+    //         var serializable_file_map: SerializableFileMap = .{};
+    //         errdefer serializable_file_map.deinit(self.allocator);
+    //         try serializable_file_map.ensureTotalCapacity(self.allocator, file_map.count());
 
-            var bank_hash_stats = BankHashStats.zero_init;
-            for (file_map.values()) |account_file| {
-                if (account_file.slot <= full_snapshot_info.slot) continue;
-                if (account_file.slot > params.target_slot) continue;
+    //         var bank_hash_stats = BankHashStats.zero_init;
+    //         for (file_map.values()) |account_file| {
+    //             if (account_file.slot <= full_snapshot_info.slot) continue;
+    //             if (account_file.slot > params.target_slot) continue;
 
-                const bank_hash_stats_map, var bank_hash_stats_map_lg =
-                    self.bank_hash_stats.readWithLock();
-                defer bank_hash_stats_map_lg.unlock();
+    //             const bank_hash_stats_map, var bank_hash_stats_map_lg =
+    //                 self.bank_hash_stats.readWithLock();
+    //             defer bank_hash_stats_map_lg.unlock();
 
-                if (bank_hash_stats_map.get(account_file.slot)) |other_stats| {
-                    bank_hash_stats.accumulate(other_stats);
-                }
+    //             if (bank_hash_stats_map.get(account_file.slot)) |other_stats| {
+    //                 bank_hash_stats.accumulate(other_stats);
+    //             }
 
-                serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
-                    .id = account_file.id,
-                    .length = account_file.length,
-                });
-            }
+    //             serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
+    //                 .id = account_file.id,
+    //                 .length = account_file.length,
+    //             });
+    //         }
 
-            break :blk .{ serializable_file_map, bank_hash_stats };
-        };
-        defer serializable_file_map.deinit(self.allocator);
+    //         break :blk .{ serializable_file_map, bank_hash_stats };
+    //     };
+    //     defer serializable_file_map.deinit(self.allocator);
 
-        const snap_persistence: GenerateIncSnapshotResult = .{
-            .full_slot = full_snapshot_info.slot,
-            .full_hash = full_snapshot_info.hash,
-            .full_capitalization = full_snapshot_info.capitalization,
-            .incremental_hash = incremental_hash,
-        };
+    //     const snap_persistence: GenerateIncSnapshotResult = .{
+    //         .full_slot = full_snapshot_info.slot,
+    //         .full_hash = full_snapshot_info.hash,
+    //         .full_capitalization = full_snapshot_info.capitalization,
+    //         .incremental_hash = incremental_hash,
+    //     };
 
-        params.bank_fields.slot = params.target_slot; // !
+    //     params.bank_fields.slot = params.target_slot; // !
 
-        const manifest: SnapshotManifest = .{
-            .bank_fields = params.bank_fields.*,
-            .accounts_db_fields = .{
-                .file_map = serializable_file_map,
-                .stored_meta_write_version = params.deprecated_stored_meta_write_version,
-                .slot = params.target_slot,
-                .bank_hash_info = .{
-                    .stats = bank_hash_stats,
-                },
-                .rooted_slots = &.{},
-                .rooted_slot_hashes = &.{},
-            },
-            .bank_extra = .{
-                .lamports_per_signature = params.lamports_per_signature,
-                .snapshot_persistence = snap_persistence.intoSnapshotPersistence(),
-                // TODO: the other fields default to empty/null, but this may not always be correct.
-                .epoch_accounts_hash = null,
-                .versioned_epoch_stakes = .{},
-                .accounts_lt_hash = latest_snapshot_info.full.hash,
-            },
-        };
+    //     const manifest: SnapshotManifest = .{
+    //         .bank_fields = params.bank_fields.*,
+    //         .accounts_db_fields = .{
+    //             .file_map = serializable_file_map,
+    //             .stored_meta_write_version = params.deprecated_stored_meta_write_version,
+    //             .slot = params.target_slot,
+    //             .bank_hash_info = .{
+    //                 .stats = bank_hash_stats,
+    //             },
+    //             .rooted_slots = &.{},
+    //             .rooted_slot_hashes = &.{},
+    //         },
+    //         .bank_extra = .{
+    //             .lamports_per_signature = params.lamports_per_signature,
+    //             .snapshot_persistence = snap_persistence.intoSnapshotPersistence(),
+    //             // TODO: the other fields default to empty/null, but this may not always be correct.
+    //             .epoch_accounts_hash = null,
+    //             .versioned_epoch_stakes = .{},
+    //             .accounts_lt_hash = latest_snapshot_info.full.hash,
+    //         },
+    //     };
 
-        // main snapshot writing logic
-        // writer() data flow: tar -> zstd -> archive_file
-        const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
-        try writeSnapshotTarWithFields(
-            zstd_write_ctx.writer(),
-            .CURRENT,
-            StatusCache.EMPTY,
-            &manifest,
-            file_map,
-        );
-        try zstd_write_ctx.finish();
+    //     // main snapshot writing logic
+    //     // writer() data flow: tar -> zstd -> archive_file
+    //     const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
+    //     try writeSnapshotTarWithFields(
+    //         zstd_write_ctx.writer(),
+    //         .CURRENT,
+    //         StatusCache.EMPTY,
+    //         &manifest,
+    //         file_map,
+    //     );
+    //     try zstd_write_ctx.finish();
 
-        if (self.gossip_view) |gossip_view| { // advertise new snapshot via gossip
-            const push_msg_queue, var push_msg_queue_lg =
-                gossip_view.push_msg_queue.writeWithLock();
-            defer push_msg_queue_lg.unlock();
+    //     if (self.gossip_view) |gossip_view| { // advertise new snapshot via gossip
+    //         const push_msg_queue, var push_msg_queue_lg =
+    //             gossip_view.push_msg_queue.writeWithLock();
+    //         defer push_msg_queue_lg.unlock();
 
-            const IncrementalSnapshotsList =
-                sig.gossip.data.SnapshotHashes.IncrementalSnapshotsList;
-            const incremental = IncrementalSnapshotsList.initSingle(.{
-                .slot = params.target_slot,
-                .hash = incremental_hash.checksum(),
-            });
-            try push_msg_queue.queue.append(.{
-                .SnapshotHashes = .{
-                    .from = gossip_view.my_pubkey,
-                    .full = .{
-                        .slot = full_snapshot_info.slot,
-                        .hash = full_snapshot_info.hash.checksum(),
-                    },
-                    .incremental = incremental,
-                    .wallclock = 0, // the wallclock will be set when it's processed in the queue
-                },
-            });
-        }
+    //         const IncrementalSnapshotsList =
+    //             sig.gossip.data.SnapshotHashes.IncrementalSnapshotsList;
+    //         const incremental = IncrementalSnapshotsList.initSingle(.{
+    //             .slot = params.target_slot,
+    //             .hash = incremental_hash.checksum(),
+    //         });
+    //         try push_msg_queue.queue.append(.{
+    //             .SnapshotHashes = .{
+    //                 .from = gossip_view.my_pubkey,
+    //                 .full = .{
+    //                     .slot = full_snapshot_info.slot,
+    //                     .hash = full_snapshot_info.hash.checksum(),
+    //                 },
+    //                 .incremental = incremental,
+    //                 .wallclock = 0, // the wallclock will be set when it's processed in the queue
+    //             },
+    //         });
+    //     }
 
-        // update tracking for new snapshot
+    //     // update tracking for new snapshot
 
-        if (latest_snapshot_info.inc) |old_inc_snapshot_info| {
-            std.debug.assert(old_inc_snapshot_info.slot <= params.target_slot);
+    //     if (latest_snapshot_info.inc) |old_inc_snapshot_info| {
+    //         std.debug.assert(old_inc_snapshot_info.slot <= params.target_slot);
 
-            switch (params.old_snapshot_action) {
-                .ignore_old => {},
-                .delete_old => try self.deleteOldSnapshotFile(.incremental, .{
-                    .base_slot = full_snapshot_info.slot,
-                    .slot = old_inc_snapshot_info.slot,
-                    .hash = old_inc_snapshot_info.hash.checksum(),
-                }),
-            }
-        }
+    //         switch (params.old_snapshot_action) {
+    //             .ignore_old => {},
+    //             .delete_old => try self.deleteOldSnapshotFile(.incremental, .{
+    //                 .base_slot = full_snapshot_info.slot,
+    //                 .slot = old_inc_snapshot_info.slot,
+    //                 .hash = old_inc_snapshot_info.hash.checksum(),
+    //             }),
+    //         }
+    //     }
 
-        latest_snapshot_info.inc = .{
-            .slot = params.target_slot,
-            .hash = incremental_hash,
-        };
+    //     latest_snapshot_info.inc = .{
+    //         .slot = params.target_slot,
+    //         .hash = incremental_hash,
+    //     };
 
-        return snap_persistence;
-    }
+    //     return snap_persistence;
+    // }
 
     /// If this is being called using the `latest_snapshot_info`, it is assumed the caller
     /// has a write lock in order to do so.
@@ -2867,6 +2868,234 @@ pub const AccountsDB = struct {
     /// This is exclusive of the min and inclusive of the max
     inline fn slotInRange(slot: Slot, min_slot: ?Slot, max_slot: ?Slot) bool {
         return slotSatisfiesMax(slot, max_slot) and slotSatisfiesMin(slot, min_slot);
+    }
+
+    pub fn registerRPCHooks(self: *AccountsDB, rpc_hooks: *sig.rpc.Hooks) !void {
+        try rpc_hooks.set(self.allocator, struct {
+            accountsdb: *AccountsDB,
+
+            pub fn getAccountInfo(
+                this: @This(),
+                allocator: std.mem.Allocator,
+                params: sig.rpc.methods.GetAccountInfo,
+            ) !sig.rpc.methods.GetAccountInfo.Response {
+                const config: sig.rpc.methods.GetAccountInfo.Config = params.config orelse .{};
+                const encoding = config.encoding orelse .base64;
+                if (config.commitment) |commitment| {
+                    std.debug.panic("TODO: handle commitment={s}", .{@tagName(commitment)});
+                }
+
+                const account: sig.accounts_db.AccountsDB.AccountInCacheOrFile, //
+                const account_slot: sig.core.Slot, //
+                var account_lg: sig.accounts_db.AccountsDB.AccountInCacheOrFileLock //
+                = (this.accountsdb.getSlotAndAccountInSlotRangeWithReadLock(
+                    &params.pubkey,
+                    // if it's null, it's null, there's no floor to the query.
+                    config.minContextSlot orelse null,
+                    null,
+                ) catch return error.AccountsDbError) orelse {
+                    return error.InvalidSlotSlot;
+                };
+                defer account_lg.unlock();
+
+                const Facts = struct {
+                    executable: bool,
+                    lamports: u64,
+                    owner: sig.core.Pubkey,
+                    rent_epoch: u64,
+                    space: u64,
+                };
+
+                const data_handle: AccountDataHandle, //
+                const facts: Facts //
+                = switch (account) {
+                    .file => |aif| .{ aif.data, .{
+                        .executable = aif.account_info.executable,
+                        .lamports = aif.account_info.lamports,
+                        .owner = aif.account_info.owner,
+                        .rent_epoch = aif.account_info.rent_epoch,
+                        .space = aif.data.len(),
+                    } },
+                    .unrooted_map => |um| .{ um.data, .{
+                        .executable = um.executable,
+                        .lamports = um.lamports,
+                        .owner = um.owner,
+                        .rent_epoch = um.rent_epoch,
+                        .space = um.data.len(),
+                    } },
+                };
+
+                const account_data_base64 = blk: {
+                    var account_data_base64: std.ArrayListUnmanaged(u8) = .{};
+                    defer account_data_base64.deinit(allocator);
+
+                    const acc_writer = account_data_base64.writer(allocator);
+                    const acc_data_handle = if (config.dataSlice) |ds|
+                        // TODO: handle potental integer overflow properly here
+                        data_handle.slice(
+                            @intCast(ds.offset),
+                            @intCast(ds.offset + ds.length),
+                        )
+                    else
+                        data_handle;
+
+                    var b64_enc_stream =
+                        sig.utils.base64.EncodingStream.init(std.base64.standard.Encoder);
+                    const b64_enc_writer_ctx = b64_enc_stream.writerCtx(acc_writer);
+                    const b64_enc_writer = b64_enc_writer_ctx.writer();
+
+                    var frame_iter = acc_data_handle.iterator();
+                    while (frame_iter.nextFrame()) |frame_bytes| {
+                        try b64_enc_writer.writeAll(frame_bytes);
+                    }
+                    try b64_enc_writer_ctx.flush();
+                    break :blk try account_data_base64.toOwnedSlice(allocator);
+                };
+                errdefer allocator.free(account_data_base64);
+
+                return .{
+                    .context = .{
+                        .slot = account_slot,
+                        .apiVersion = "2.0.15",
+                    },
+                    .value = .{
+                        .data = .{ .encoded = .{
+                            account_data_base64,
+                            encoding,
+                        } },
+                        .executable = facts.executable,
+                        .lamports = facts.lamports,
+                        .owner = facts.owner,
+                        .rentEpoch = facts.rent_epoch,
+                        .space = facts.space,
+                    },
+                };
+            }
+
+            pub fn getSnapshot(
+                this: @This(),
+                _: std.mem.Allocator,
+                params: sig.rpc.methods.GetSnapshot,
+            ) !sig.rpc.methods.GetSnapshot.Response {
+                const snapshot_target = getSnapshotTarget(
+                    this.accountsdb,
+                    params.path,
+                ) orelse return error.NoSnapshotForPathAvaialable;
+
+                switch (snapshot_target) {
+                    inline else => |pair| {
+                        const snap_info, var full_info_lg = pair;
+                        defer full_info_lg.unlock();
+
+                        const archive_name_bounded = snap_info.snapshotArchiveName();
+                        const archive_name = archive_name_bounded.constSlice();
+
+                        switch (params.get) {
+                            .size => {
+                                const stat = try this.accountsdb.snapshot_dir.statFile(archive_name);
+                                return .{ .size = stat.size };
+                            },
+                            .file => {
+                                const archive_file = this.accountsdb.snapshot_dir.openFile(
+                                    archive_name,
+                                    .{},
+                                ) catch |err| {
+                                    switch (err) {
+                                        error.FileNotFound => {
+                                            this.accountsdb.logger.err().logf(
+                                                "not found: {s}\n",
+                                                .{sig.utils.fmt.tryRealPath(
+                                                    this.accountsdb.snapshot_dir,
+                                                    archive_name,
+                                                )},
+                                            );
+                                        },
+                                        else => {},
+                                    }
+                                    return error.SystemIoError;
+                                };
+                                errdefer archive_file.close();
+                                return .{ .file = archive_file };
+                            },
+                        }
+                    },
+                }
+            }
+
+            fn getSnapshotTarget(
+                accounts_db: *AccountsDB,
+                target: []const u8,
+            ) ?union(enum) {
+                const SnapshotReadLock = sig.sync.RwMux(?SnapshotGenerationInfo).RLockGuard;
+                full_snapshot: struct { FullSnapshotFileInfo, SnapshotReadLock },
+                inc_snapshot: struct { IncrementalSnapshotFileInfo, SnapshotReadLock },
+            } {
+                const latest_snapshot_gen_info_rw = &accounts_db.latest_snapshot_gen_info;
+                const is_snapshot_archive_like =
+                    !std.meta.isError(FullSnapshotFileInfo.parseFileNameTarZst(target)) or
+                    !std.meta.isError(IncrementalSnapshotFileInfo.parseFileNameTarZst(target));
+
+                if (is_snapshot_archive_like) check_snapshots: {
+                    const maybe_latest_snapshot_gen_info, //
+                    var latest_snapshot_info_lg //
+                    = latest_snapshot_gen_info_rw.readWithLock();
+                    defer latest_snapshot_info_lg.unlock();
+
+                    const full_info: FullSnapshotFileInfo, //
+                    const inc_info: ?IncrementalSnapshotFileInfo //
+                    = blk: {
+                        const latest_snapshot_gen_info = maybe_latest_snapshot_gen_info.* orelse
+                            break :check_snapshots;
+                        const latest_full = latest_snapshot_gen_info.full;
+                        const full_info: FullSnapshotFileInfo = .{
+                            .slot = latest_full.slot,
+                            .hash = latest_full.hash.checksum(),
+                        };
+                        const latest_incremental = latest_snapshot_gen_info.inc orelse
+                            break :blk .{ full_info, null };
+                        const inc_info: IncrementalSnapshotFileInfo = .{
+                            .base_slot = latest_full.slot,
+                            .slot = latest_incremental.slot,
+                            .hash = latest_incremental.hash.checksum(),
+                        };
+                        break :blk .{ full_info, inc_info };
+                    };
+
+                    accounts_db.logger.debug().logf("Available full: {?s}", .{
+                        full_info.snapshotArchiveName().constSlice(),
+                    });
+                    accounts_db.logger.debug().logf("Available inc: {?s}", .{
+                        if (inc_info) |info| info.snapshotArchiveName().constSlice() else null,
+                    });
+
+                    const full_archive_name_bounded = full_info.snapshotArchiveName();
+                    const full_archive_name = full_archive_name_bounded.constSlice();
+                    if (std.mem.eql(u8, target, full_archive_name)) {
+                        // acquire another lock on the rwmux, since the first one we got is going to unlock after we return.
+                        const latest_snapshot_info_lg_again = latest_snapshot_gen_info_rw.read();
+                        return .{
+                            .full_snapshot = .{
+                                full_info,
+                                latest_snapshot_info_lg_again,
+                            },
+                        };
+                    }
+
+                    if (inc_info) |inc| {
+                        const inc_archive_name_bounded = inc.snapshotArchiveName();
+                        const inc_archive_name = inc_archive_name_bounded.constSlice();
+
+                        if (std.mem.eql(u8, target, inc_archive_name)) {
+                            // acquire another lock on the rwmux, since the first one we got is going to unlock after we return.
+                            const latest_snapshot_info_lg_again = latest_snapshot_gen_info_rw.read();
+                            return .{ .inc_snapshot = .{ inc, latest_snapshot_info_lg_again } };
+                        }
+                    }
+                }
+
+                return null;
+            }
+        }{ .accountsdb = self });
     }
 };
 
@@ -3120,46 +3349,46 @@ pub fn writeSnapshotTarWithFields(
     }
 }
 
-fn testWriteSnapshotFull(
-    allocator: std.mem.Allocator,
-    accounts_db: *AccountsDB,
-    slot: Slot,
-    maybe_expected_hash: ?Hash,
-) !void {
-    const snapshot_dir = accounts_db.snapshot_dir;
+// fn testWriteSnapshotFull(
+//     allocator: std.mem.Allocator,
+//     accounts_db: *AccountsDB,
+//     slot: Slot,
+//     maybe_expected_hash: ?Hash,
+// ) !void {
+//     const snapshot_dir = accounts_db.snapshot_dir;
 
-    const manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{slot});
-    const manifest_file = try snapshot_dir.openFile(manifest_path_bounded.constSlice(), .{});
-    defer manifest_file.close();
+//     const manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{slot});
+//     const manifest_file = try snapshot_dir.openFile(manifest_path_bounded.constSlice(), .{});
+//     defer manifest_file.close();
 
-    var snap_fields = try SnapshotManifest.decodeFromBincode(allocator, manifest_file.reader());
-    defer snap_fields.deinit(allocator);
+//     var snap_fields = try SnapshotManifest.decodeFromBincode(allocator, manifest_file.reader());
+//     defer snap_fields.deinit(allocator);
 
-    try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator, 500);
+//     try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator, 500);
 
-    const deprecated_stored_meta_write_version =
-        snap_fields.accounts_db_fields.stored_meta_write_version;
-    const snapshot_gen_info = try accounts_db.generateFullSnapshot(.{
-        .target_slot = slot,
-        .bank_fields = &snap_fields.bank_fields,
-        .lamports_per_signature = snap_fields.bank_extra.lamports_per_signature,
-        .old_snapshot_action = .ignore_old,
-        .deprecated_stored_meta_write_version = deprecated_stored_meta_write_version,
-    });
+//     const deprecated_stored_meta_write_version =
+//         snap_fields.accounts_db_fields.stored_meta_write_version;
+//     const snapshot_gen_info = try accounts_db.generateFullSnapshot(.{
+//         .target_slot = slot,
+//         .bank_fields = &snap_fields.bank_fields,
+//         .lamports_per_signature = snap_fields.bank_extra.lamports_per_signature,
+//         .old_snapshot_action = .ignore_old,
+//         .deprecated_stored_meta_write_version = deprecated_stored_meta_write_version,
+//     });
 
-    if (maybe_expected_hash) |expected_hash| {
-        try std.testing.expectEqual(expected_hash, snapshot_gen_info.hash);
-    }
+//     if (maybe_expected_hash) |expected_hash| {
+//         try std.testing.expectEqual(expected_hash, snapshot_gen_info.hash);
+//     }
 
-    try accounts_db.validateLoadFromSnapshot(.{
-        .full_slot = slot,
-        .expected_full = .{
-            .capitalization = snapshot_gen_info.capitalization,
-            .accounts_hash = snapshot_gen_info.hash,
-        },
-        .expected_incremental = null,
-    });
-}
+//     try accounts_db.validateLoadFromSnapshot(.{
+//         .full_slot = slot,
+//         .expected_full = .{
+//             .capitalization = snapshot_gen_info.capitalization,
+//             .accounts_hash = snapshot_gen_info.hash,
+//         },
+//         .expected_incremental = null,
+//     });
+// }
 
 fn testWriteSnapshotIncremental(
     allocator: std.mem.Allocator,
@@ -3204,65 +3433,65 @@ fn testWriteSnapshotIncremental(
     });
 }
 
-test "testWriteSnapshot" {
-    // TODO: loading once from the full snapshot, and then a second time from the incremental snapshot,
-    // as is done in this test, isn't properly accounted for in the snapshot loading logic, since the
-    // way loading actually is handled in the validator is collapsing the full and incremental snapshots
-    // before loading.
-    // Either this test must be updated to test using the conventional loading method, or we must add
-    // a way to load from a full and then an incremental snapshot separately.
-    if (true) return error.SkipZigTest;
+// test "testWriteSnapshot" {
+//     // TODO: loading once from the full snapshot, and then a second time from the incremental snapshot,
+//     // as is done in this test, isn't properly accounted for in the snapshot loading logic, since the
+//     // way loading actually is handled in the validator is collapsing the full and incremental snapshots
+//     // before loading.
+//     // Either this test must be updated to test using the conventional loading method, or we must add
+//     // a way to load from a full and then an incremental snapshot separately.
+//     if (true) return error.SkipZigTest;
 
-    const allocator = std.testing.allocator;
-    var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
-    defer test_data_dir.close();
+//     const allocator = std.testing.allocator;
+//     var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
+//     defer test_data_dir.close();
 
-    const snap_files = try SnapshotFiles.find(allocator, test_data_dir);
+//     const snap_files = try SnapshotFiles.find(allocator, test_data_dir);
 
-    var tmp_dir_root = std.testing.tmpDir(.{});
-    defer tmp_dir_root.cleanup();
-    const snapshot_dir = tmp_dir_root.dir;
+//     var tmp_dir_root = std.testing.tmpDir(.{});
+//     defer tmp_dir_root.cleanup();
+//     const snapshot_dir = tmp_dir_root.dir;
 
-    {
-        const archive_file_path_bounded = snap_files.full.snapshotArchiveName();
-        const archive_file_path = archive_file_path_bounded.constSlice();
-        const archive_file = try test_data_dir.openFile(archive_file_path, .{});
-        defer archive_file.close();
-        try parallelUnpackZstdTarBall(allocator, .noop, archive_file, snapshot_dir, 4, true);
-    }
+//     {
+//         const archive_file_path_bounded = snap_files.full.snapshotArchiveName();
+//         const archive_file_path = archive_file_path_bounded.constSlice();
+//         const archive_file = try test_data_dir.openFile(archive_file_path, .{});
+//         defer archive_file.close();
+//         try parallelUnpackZstdTarBall(allocator, .noop, archive_file, snapshot_dir, 4, true);
+//     }
 
-    if (snap_files.incremental()) |inc_snap| {
-        const archive_file_path_bounded = inc_snap.snapshotArchiveName();
-        const archive_file_path = archive_file_path_bounded.constSlice();
-        const archive_file = try test_data_dir.openFile(archive_file_path, .{});
-        defer archive_file.close();
-        try parallelUnpackZstdTarBall(allocator, .noop, archive_file, snapshot_dir, 4, false);
-    }
+//     if (snap_files.incremental()) |inc_snap| {
+//         const archive_file_path_bounded = inc_snap.snapshotArchiveName();
+//         const archive_file_path = archive_file_path_bounded.constSlice();
+//         const archive_file = try test_data_dir.openFile(archive_file_path, .{});
+//         defer archive_file.close();
+//         try parallelUnpackZstdTarBall(allocator, .noop, archive_file, snapshot_dir, 4, false);
+//     }
 
-    var accounts_db = try AccountsDB.init(.{
-        .allocator = allocator,
-        .logger = .noop,
-        .snapshot_dir = snapshot_dir,
-        .geyser_writer = null,
-        .gossip_view = null,
-        .index_allocation = .ram,
-        .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
-    });
-    defer accounts_db.deinit();
+//     var accounts_db = try AccountsDB.init(.{
+//         .allocator = allocator,
+//         .logger = .noop,
+//         .snapshot_dir = snapshot_dir,
+//         .geyser_writer = null,
+//         .gossip_view = null,
+//         .index_allocation = .ram,
+//         .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
+//     });
+//     defer accounts_db.deinit();
 
-    try testWriteSnapshotFull(
-        allocator,
-        &accounts_db,
-        snap_files.full_snapshot.slot,
-        snap_files.full_snapshot.hash,
-    );
-    try testWriteSnapshotIncremental(
-        allocator,
-        &accounts_db,
-        snap_files.incremental_info.?.slot,
-        snap_files.incremental_info.?.hash,
-    );
-}
+//     try testWriteSnapshotFull(
+//         allocator,
+//         &accounts_db,
+//         snap_files.full_snapshot.slot,
+//         snap_files.full_snapshot.hash,
+//     );
+//     try testWriteSnapshotIncremental(
+//         allocator,
+//         &accounts_db,
+//         snap_files.incremental_info.?.slot,
+//         snap_files.incremental_info.?.hash,
+//     );
+// }
 
 /// Unpacks the snapshots from `sig.TEST_DATA_DIR`.
 pub fn findAndUnpackTestSnapshots(
@@ -3456,7 +3685,7 @@ test "write and read an account - basic" {
     defer accounts_db.deinit();
     defer dir.cleanup();
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const pubkey = Pubkey.initRandom(prng.random());
     var data = [_]u8{ 1, 2, 3 };
     const test_account = Account{
@@ -3491,7 +3720,7 @@ test "write and read an account (write single + read with ancestors)" {
     defer accounts_db.deinit();
     defer dir.cleanup();
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const pubkey = Pubkey.initRandom(prng.random());
 
     var data = [_]u8{ 1, 2, 3 };
@@ -3786,154 +4015,154 @@ test "load sysvars" {
     // _ = try accounts_db.getTypeFromAccount(allocator, sysvars.EpochRewards, &sysvars.EpochRewards.ID);
 }
 
-test "generate snapshot & update gossip snapshot hashes" {
-    const GossipDataTag = sig.gossip.data.GossipDataTag;
-    const SnapshotHashes = sig.gossip.data.SnapshotHashes;
+// test "generate snapshot & update gossip snapshot hashes" {
+//     const GossipDataTag = sig.gossip.data.GossipDataTag;
+//     const SnapshotHashes = sig.gossip.data.SnapshotHashes;
 
-    const allocator = std.testing.allocator;
+//     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(123); // TODO: use `std.testing.random_seed` when we update
-    const random = prng.random();
+// var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+// const random = prng.random();
 
-    var tmp_dir_root = std.testing.tmpDir(.{});
-    defer tmp_dir_root.cleanup();
-    const snapshot_dir = tmp_dir_root.dir;
+//     var tmp_dir_root = std.testing.tmpDir(.{});
+//     defer tmp_dir_root.cleanup();
+//     const snapshot_dir = tmp_dir_root.dir;
 
-    const snap_files = try findAndUnpackTestSnapshots(1, snapshot_dir);
+//     const snap_files = try findAndUnpackTestSnapshots(1, snapshot_dir);
 
-    const full_inc_manifest =
-        try FullAndIncrementalManifest.fromFiles(allocator, .noop, snapshot_dir, snap_files);
-    defer full_inc_manifest.deinit(allocator);
+//     const full_inc_manifest =
+//         try FullAndIncrementalManifest.fromFiles(allocator, .noop, snapshot_dir, snap_files);
+//     defer full_inc_manifest.deinit(allocator);
 
-    // mock gossip service
-    var push_msg_queue_mux = sig.gossip.GossipService.PushMessageQueue.init(.{
-        .queue = std.ArrayList(sig.gossip.data.GossipData).init(allocator),
-        .data_allocator = allocator,
-    });
-    defer push_msg_queue_mux.private.v.queue.deinit();
-    const my_keypair = KeyPair.generate();
+//     // mock gossip service
+//     var push_msg_queue_mux = sig.gossip.GossipService.PushMessageQueue.init(.{
+//         .queue = std.ArrayList(sig.gossip.data.GossipData).init(allocator),
+//         .data_allocator = allocator,
+//     });
+//     defer push_msg_queue_mux.private.v.queue.deinit();
+//     const my_keypair = KeyPair.generate();
 
-    var accounts_db = try AccountsDB.init(.{
-        .allocator = allocator,
-        .logger = .noop,
-        .snapshot_dir = snapshot_dir,
-        .gossip_view = .{
-            .my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key),
-            .push_msg_queue = &push_msg_queue_mux,
-        },
-        .geyser_writer = null,
-        .index_allocation = .ram,
-        .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
-    });
-    defer accounts_db.deinit();
+//     var accounts_db = try AccountsDB.init(.{
+//         .allocator = allocator,
+//         .logger = .noop,
+//         .snapshot_dir = snapshot_dir,
+//         .gossip_view = .{
+//             .my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key),
+//             .push_msg_queue = &push_msg_queue_mux,
+//         },
+//         .geyser_writer = null,
+//         .index_allocation = .ram,
+//         .number_of_index_shards = ACCOUNT_INDEX_SHARDS,
+//     });
+//     defer accounts_db.deinit();
 
-    {
-        const loaded = try accounts_db.loadWithDefaults(
-            allocator,
-            full_inc_manifest,
-            1,
-            true,
-            300,
-        );
-        defer loaded.deinit(allocator);
-    }
+//     {
+//         const loaded = try accounts_db.loadWithDefaults(
+//             allocator,
+//             full_inc_manifest,
+//             1,
+//             true,
+//             300,
+//         );
+//         defer loaded.deinit(allocator);
+//     }
 
-    var bank_fields: BankFields = try .initRandom(allocator, random, 128);
-    defer bank_fields.deinit(allocator);
+//     var bank_fields: BankFields = try .initRandom(allocator, random, 128);
+//     defer bank_fields.deinit(allocator);
 
-    const full_slot = full_inc_manifest.full.accounts_db_fields.slot;
-    const full_gen_result = try accounts_db.generateFullSnapshot(.{
-        .target_slot = full_slot,
-        .bank_fields = &bank_fields,
-        .lamports_per_signature = random.int(u64),
-        // make sure we don't delete anything in `sig.TEST_DATA_DIR`
-        .old_snapshot_action = .ignore_old,
-        .deprecated_stored_meta_write_version = blk: {
-            const accounts_db_fields = full_inc_manifest.full.accounts_db_fields;
-            break :blk accounts_db_fields.stored_meta_write_version;
-        },
-    });
-    const full_hash = full_gen_result.hash;
+//     const full_slot = full_inc_manifest.full.accounts_db_fields.slot;
+//     const full_gen_result = try accounts_db.generateFullSnapshot(.{
+//         .target_slot = full_slot,
+//         .bank_fields = &bank_fields,
+//         .lamports_per_signature = random.int(u64),
+//         // make sure we don't delete anything in `sig.TEST_DATA_DIR`
+//         .old_snapshot_action = .ignore_old,
+//         .deprecated_stored_meta_write_version = blk: {
+//             const accounts_db_fields = full_inc_manifest.full.accounts_db_fields;
+//             break :blk accounts_db_fields.stored_meta_write_version;
+//         },
+//     });
+//     const full_hash = full_gen_result.hash;
 
-    try std.testing.expectEqual(
-        full_inc_manifest.full.bank_extra.accounts_lt_hash.checksum(),
-        full_gen_result.hash.checksum(),
-    );
-    try std.testing.expectEqual(
-        full_inc_manifest.full.bank_fields.capitalization,
-        full_gen_result.capitalization,
-    );
+// try std.testing.expectEqual(
+//     full_inc_manifest.full.bank_extra.accounts_lt_hash.checksum(),
+//     full_gen_result.hash.checksum(),
+// );
+// try std.testing.expectEqual(
+//     full_inc_manifest.full.bank_fields.capitalization,
+//     full_gen_result.capitalization,
+// );
 
-    {
-        const queue, var queue_lg = push_msg_queue_mux.readWithLock();
-        defer queue_lg.unlock();
+//     {
+//         const queue, var queue_lg = push_msg_queue_mux.readWithLock();
+//         defer queue_lg.unlock();
 
-        try std.testing.expectEqual(1, queue.queue.items.len);
-        const queue_item_0 = queue.queue.items[0]; // should be from the full generation
-        try std.testing.expectEqual(.SnapshotHashes, @as(GossipDataTag, queue_item_0));
+// try std.testing.expectEqual(1, queue.queue.items.len);
+// const queue_item_0 = queue.queue.items[0]; // should be from the full generation
+// try std.testing.expectEqual(.SnapshotHashes, @as(GossipDataTag, queue_item_0));
 
-        try std.testing.expectEqualDeep(
-            SnapshotHashes{
-                .from = Pubkey.fromPublicKey(&my_keypair.public_key),
-                .full = .{ .slot = full_slot, .hash = full_hash.checksum() },
-                .incremental = SnapshotHashes.IncrementalSnapshotsList.EMPTY,
-                // set to zero when pushed to the queue, because it would be set in `drainPushQueueToGossipTable`.
-                .wallclock = 0,
-            },
-            queue_item_0.SnapshotHashes,
-        );
-    }
+//     try std.testing.expectEqualDeep(
+//         SnapshotHashes{
+//             .from = Pubkey.fromPublicKey(&my_keypair.public_key),
+//             .full = .{ .slot = full_slot, .hash = full_hash.checksum() },
+//             .incremental = SnapshotHashes.IncrementalSnapshotsList.EMPTY,
+//             // set to zero when pushed to the queue, because it would be set in `drainPushQueueToGossipTable`.
+//             .wallclock = 0,
+//         },
+//         queue_item_0.SnapshotHashes,
+//     );
+// }
 
-    if (full_inc_manifest.incremental) |inc_manifest| {
-        const inc_slot = inc_manifest.accounts_db_fields.slot;
-        const inc_gen_result = try accounts_db.generateIncrementalSnapshot(.{
-            .target_slot = inc_slot,
-            .bank_fields = &bank_fields,
-            .lamports_per_signature = random.int(u64),
-            // make sure we don't delete anything in `sig.TEST_DATA_DIR`
-            .old_snapshot_action = .ignore_old,
-            .deprecated_stored_meta_write_version = inc_manifest
-                .accounts_db_fields.stored_meta_write_version,
-        });
-        const inc_hash = inc_gen_result.incremental_hash;
+//     if (full_inc_manifest.incremental) |inc_manifest| {
+//         const inc_slot = inc_manifest.accounts_db_fields.slot;
+//         const inc_gen_result = try accounts_db.generateIncrementalSnapshot(.{
+//             .target_slot = inc_slot,
+//             .bank_fields = &bank_fields,
+//             .lamports_per_signature = random.int(u64),
+//             // make sure we don't delete anything in `sig.TEST_DATA_DIR`
+//             .old_snapshot_action = .ignore_old,
+//             .deprecated_stored_meta_write_version = inc_manifest
+//                 .accounts_db_fields.stored_meta_write_version,
+//         });
+//         const inc_hash = inc_gen_result.incremental_hash;
 
-        try std.testing.expectEqual(
-            full_slot,
-            inc_gen_result.full_slot,
-        );
-        try std.testing.expectEqual(
-            full_gen_result.hash,
-            inc_gen_result.full_hash,
-        );
-        try std.testing.expectEqual(
-            full_gen_result.capitalization,
-            inc_gen_result.full_capitalization,
-        );
+// try std.testing.expectEqual(
+//     full_slot,
+//     inc_gen_result.full_slot,
+// );
+// try std.testing.expectEqual(
+//     full_gen_result.hash,
+//     inc_gen_result.full_hash,
+// );
+// try std.testing.expectEqual(
+//     full_gen_result.capitalization,
+//     inc_gen_result.full_capitalization,
+// );
 
-        {
-            const queue, var queue_lg = push_msg_queue_mux.readWithLock();
-            defer queue_lg.unlock();
+//         {
+//             const queue, var queue_lg = push_msg_queue_mux.readWithLock();
+//             defer queue_lg.unlock();
 
-            try std.testing.expectEqual(2, queue.queue.items.len);
-            const queue_item_1 = queue.queue.items[1]; // should be from the incremental generation
-            try std.testing.expectEqual(.SnapshotHashes, @as(GossipDataTag, queue_item_1));
+// try std.testing.expectEqual(2, queue.queue.items.len);
+// const queue_item_1 = queue.queue.items[1]; // should be from the incremental generation
+// try std.testing.expectEqual(.SnapshotHashes, @as(GossipDataTag, queue_item_1));
 
-            try std.testing.expectEqualDeep(
-                SnapshotHashes{
-                    .from = Pubkey.fromPublicKey(&my_keypair.public_key),
-                    .full = .{ .slot = full_slot, .hash = full_hash.checksum() },
-                    .incremental = SnapshotHashes.IncrementalSnapshotsList.initSingle(.{
-                        .slot = inc_slot,
-                        .hash = inc_hash.checksum(),
-                    }),
-                    // set to zero when pushed to the queue, because it would be set in `drainPushQueueToGossipTable`.
-                    .wallclock = 0,
-                },
-                queue_item_1.SnapshotHashes,
-            );
-        }
-    }
-}
+//         try std.testing.expectEqualDeep(
+//             SnapshotHashes{
+//                 .from = Pubkey.fromPublicKey(&my_keypair.public_key),
+//                 .full = .{ .slot = full_slot, .hash = full_hash.checksum() },
+//                 .incremental = SnapshotHashes.IncrementalSnapshotsList.initSingle(.{
+//                     .slot = inc_slot,
+//                     .hash = inc_hash.checksum(),
+//                 }),
+//                 // set to zero when pushed to the queue, because it would be set in `drainPushQueueToGossipTable`.
+//                 .wallclock = 0,
+//             },
+//             queue_item_1.SnapshotHashes,
+//         );
+//     }
+// }
+// }
 
 pub const BenchmarkAccountsDBSnapshotLoad = struct {
     pub const min_iterations = 1;
@@ -4009,7 +4238,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             });
             defer accounts_db.deinit();
 
-            var load_timer = try sig.time.Timer.start();
+            var load_timer = sig.time.Timer.start();
             try accounts_db.loadFromSnapshot(
                 collapsed_manifest.accounts_db_fields,
                 bench_inputs.n_threads,
@@ -4024,7 +4253,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             else
                 null;
 
-            var validate_timer = try sig.time.Timer.start();
+            var validate_timer = sig.time.Timer.start();
             try accounts_db.validateLoadFromSnapshot(.{
                 .full_slot = full_manifest.bank_fields.slot,
                 .expected_full = .{
@@ -4252,7 +4481,7 @@ pub const BenchmarkAccountsDB = struct {
             std.math.ceilPowerOfTwo(usize, total_n_accounts) catch total_n_accounts,
         );
 
-        var prng = std.Random.DefaultPrng.init(19);
+        var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
         const random = prng.random();
 
         var pubkeys = try allocator.alloc(Pubkey, n_accounts);
@@ -4297,7 +4526,7 @@ pub const BenchmarkAccountsDB = struct {
                         );
                     }
 
-                    var timer = try sig.time.Timer.start();
+                    var timer = sig.time.Timer.start();
                     for (0..slot_list_len) |i| {
                         const start_index = i * n_accounts;
                         const end_index = start_index + n_accounts;
@@ -4377,7 +4606,7 @@ pub const BenchmarkAccountsDB = struct {
                         all_filenames.appendAssumeCapacity(try allocator.dupe(u8, filepath));
                     }
 
-                    var timer = try sig.time.Timer.start();
+                    var timer = sig.time.Timer.start();
                     for (account_files.items) |*account_file| {
                         try accounts_db.putAccountFile(account_file, n_accounts);
                     }
@@ -4408,7 +4637,7 @@ pub const BenchmarkAccountsDB = struct {
             }
         }
 
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
 
         const do_read_count = n_accounts;
         var i: usize = 0;
@@ -4451,7 +4680,7 @@ test "read/write benchmark disk" {
 
 test "insert multiple accounts on same slot" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // Initialize empty accounts db
@@ -4536,7 +4765,7 @@ fn expectedAccountSharedDataEqualsAccount(
 
 test "insert multiple accounts on multiple slots" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
@@ -4579,7 +4808,7 @@ test "insert multiple accounts on multiple slots" {
 
 test "insert account on multiple slots" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
@@ -4632,7 +4861,7 @@ test "insert account on multiple slots" {
 
 test "missing ancestor returns null" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
@@ -4657,7 +4886,7 @@ test "missing ancestor returns null" {
 
 test "overwrite account in same slot" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
@@ -4690,7 +4919,7 @@ test "overwrite account in same slot" {
 
 test "insert many duplicate individual accounts, get latest with ancestors" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     var accounts_db, var tmp_dir = try AccountsDB.initForTest(allocator);
     defer tmp_dir.cleanup();

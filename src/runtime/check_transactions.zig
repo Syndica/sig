@@ -481,7 +481,7 @@ fn getDurableNonce(transaction: *const RuntimeTransaction) ?Pubkey {
 test checkStatusCache {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var ancestors = Ancestors{};
     defer ancestors.deinit(allocator);
@@ -519,7 +519,7 @@ test checkStatusCache {
 test "checkAge: recent blockhash" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const max_age = 5;
     const recent_blockhash = Hash.initRandom(prng.random());
@@ -578,7 +578,7 @@ test "checkAge: recent blockhash" {
 test "checkAge: nonce account" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const nonce_key = Pubkey.initRandom(prng.random());
     const nonce_authority_key = Pubkey.initRandom(prng.random());
@@ -716,7 +716,7 @@ test "checkAge: nonce account" {
 test "checkFeePayer: happy path fee payer only" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const recent_blockhash = Hash.initRandom(prng.random());
 
@@ -772,7 +772,7 @@ test "checkFeePayer: happy path fee payer only" {
 test "checkFeePayer: happy path with same nonce and fee payer" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const recent_blockhash = Hash.initRandom(prng.random());
 
@@ -841,7 +841,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
 test "checkFeePayer: happy path with separate nonce and fee payer" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const recent_blockhash = Hash.initRandom(prng.random());
 

@@ -761,7 +761,7 @@ test serializeParameters {
 
     // const allocator = std.testing.allocator;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     for ([_]Pubkey{
         program.bpf_loader.v1.ID,

@@ -37,11 +37,11 @@ pub const RentCollector = struct {
     slots_per_year: f64,
     rent: Rent,
 
-    pub const DEFAULT = RentCollector{
+    pub const DEFAULT: RentCollector = .{
         .epoch = 0,
-        .epoch_schedule = .DEFAULT,
+        .epoch_schedule = .INIT,
         .slots_per_year = sig.core.GenesisConfig.default(failing_allocator).slotsPerYear(),
-        .rent = .DEFAULT,
+        .rent = .INIT,
     };
     const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
@@ -196,9 +196,9 @@ pub const RentCollector = struct {
         if (!@import("builtin").is_test) @compileError("default for test usage only");
         return .{
             .epoch = epoch,
-            .epoch_schedule = .DEFAULT,
+            .epoch_schedule = .INIT,
             .slots_per_year = 78892314.983999997, // [agave] GenesisConfig::default().slots_per_year()
-            .rent = .DEFAULT,
+            .rent = .INIT,
         };
     }
 };

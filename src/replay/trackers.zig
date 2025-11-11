@@ -45,20 +45,16 @@ pub const SlotTracker = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         root_slot: Slot,
-        /// ownership is transferred to this function
+        /// ownership is transferred to this function, except in the case of an error return
         slot_init: Element,
     ) std.mem.Allocator.Error!SlotTracker {
-        var element = slot_init;
         var self: SlotTracker = .{
             .root = root_slot,
             .slots = .empty,
         };
-        errdefer {
-            self.deinit(allocator);
-            element.constants.deinit(allocator);
-            element.state.deinit(allocator);
-        }
-        try self.put(allocator, root_slot, element);
+        errdefer self.deinit(allocator);
+
+        try self.put(allocator, root_slot, slot_init);
         tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
 
         return self;
@@ -174,6 +170,9 @@ pub const SlotTracker = struct {
         while (self.slots.get(current_slot)) |current| {
             const parent_slot = current.constants.parent_slot;
             parents_list.appendAssumeCapacity(parent_slot);
+
+            // Stop if we've reached the genesis.
+            if (parent_slot == current_slot) break;
 
             current_slot = parent_slot;
         }
@@ -470,21 +469,17 @@ test "SlotTracker.prune removes all slots less than root" {
     const root_slot: Slot = 4;
     var tracker: SlotTracker = try .init(allocator, root_slot, .{
         .constants = testDummySlotConstants(root_slot),
-        .state = try .genesis(allocator),
+        .state = .GENESIS,
     });
     defer tracker.deinit(allocator);
 
     // Add slots 1, 2, 3, 4, 5
     for (1..6) |slot| {
-        var state = try SlotState.genesis(allocator);
         const gop = try tracker.getOrPut(allocator, slot, .{
             .constants = testDummySlotConstants(slot),
-            .state = state,
+            .state = .GENESIS,
         });
-        if (gop.found_existing) {
-            std.debug.assert(slot == root_slot);
-            state.deinit(allocator);
-        }
+        if (gop.found_existing) std.debug.assert(slot == root_slot);
     }
 
     // Prune slots less than root (4)

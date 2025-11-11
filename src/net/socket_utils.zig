@@ -753,7 +753,7 @@ pub const BenchmarkPacketProcessing = struct {
             fn sender(channel: *Channel(Packet), addr: network.EndPoint, e: ExitCondition) !void {
                 var i: usize = 0;
                 var packet: Packet = undefined;
-                var prng = std.Random.DefaultPrng.init(0);
+                var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
                 var timer = try std.time.Timer.start();
 
                 while (e.shouldRun()) {
@@ -798,7 +798,7 @@ pub const BenchmarkPacketProcessing = struct {
 
         // run incoming until received n_packets
         var packets_to_recv = n_packets;
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         while (packets_to_recv > 0) {
             incoming_channel.waitToReceive(exit_condition) catch break;
             while (incoming_channel.tryReceive()) |_| {

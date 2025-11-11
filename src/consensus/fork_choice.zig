@@ -26,19 +26,19 @@ const PubkeyVote = struct {
 };
 
 const UpdateLabel = enum {
-    Aggregate,
-    MarkValid,
-    MarkInvalid,
-    Subtract,
-    Add,
+    add,
+    mark_valid,
+    mark_invalid,
+    subtract,
+    aggregate,
 };
 
-const UpdateOperation = union(enum) {
-    Add: u64,
-    MarkValid: Slot,
-    MarkInvalid: Slot,
-    Subtract: u64,
-    Aggregate,
+const UpdateOperation = union(UpdateLabel) {
+    add: u64,
+    mark_valid: Slot,
+    mark_invalid: Slot,
+    subtract: u64,
+    aggregate,
 };
 
 const SlotAndHashLabel = struct {
@@ -625,7 +625,7 @@ pub const ForkChoice = struct {
         for (children_hash_keys.keys()) |child_hash_key| {
             _ = try doInsertAggregateOperation(
                 &update_operations,
-                UpdateOperation{ .MarkValid = valid_slot_hash_key.slot },
+                UpdateOperation{ .mark_valid = valid_slot_hash_key.slot },
                 child_hash_key,
             );
         }
@@ -662,7 +662,7 @@ pub const ForkChoice = struct {
             for (children_hash_keys.keys()) |child_hash_key| {
                 _ = try doInsertAggregateOperation(
                     &update_operations,
-                    UpdateOperation{ .MarkInvalid = invalid_slot_hash_key.slot },
+                    UpdateOperation{ .mark_invalid = invalid_slot_hash_key.slot },
                     child_hash_key,
                 );
             }
@@ -1092,15 +1092,15 @@ pub const ForkChoice = struct {
                 };
 
                 if (stake_update > 0) {
-                    const subtract_op = UpdateOperation{ .Subtract = stake_update };
-                    const subtract_label = SlotAndHashLabel{
+                    const subtract_op: UpdateOperation = .{ .subtract = stake_update };
+                    const subtract_label: SlotAndHashLabel = .{
                         .slot_hash_key = old_latest_vote,
-                        .label = .Subtract,
+                        .label = .subtract,
                     };
 
                     if (update_operations.getEntry(subtract_label)) |existing_op| {
                         switch (existing_op.value_ptr.*) {
-                            .Subtract => |*stake| stake.* += stake_update,
+                            .subtract => |*stake| stake.* += stake_update,
                             else => {}, // Shouldn't happen for Subtract label
                         }
                     } else {
@@ -1129,16 +1129,16 @@ pub const ForkChoice = struct {
             };
 
             if (stake_update > 0) {
-                const add_op = UpdateOperation{ .Add = stake_update };
-                const add_label = SlotAndHashLabel{
+                const add_op: UpdateOperation = .{ .add = stake_update };
+                const add_label: SlotAndHashLabel = .{
                     .slot_hash_key = new_vote_slot_hash,
-                    .label = .Add,
+                    .label = .add,
                 };
 
                 if (update_operations.getEntry(add_label)) |existing_op| {
                     switch (existing_op.value_ptr.*) {
-                        .Add => |*stake| stake.* += stake_update,
-                        else => {}, // Shouldn't happen for Add label
+                        .add => |*stake| stake.* += stake_update,
+                        else => {}, // Shouldn't happen for add label
                     }
                 } else {
                     try update_operations.put(add_label, add_op);
@@ -1172,11 +1172,11 @@ pub const ForkChoice = struct {
             const slot_hash_key = slot_hash_key_label.slot_hash_key;
             const operation = values[i];
             switch (operation) {
-                .MarkValid => |valid_slot| self.markForkValid(&slot_hash_key, valid_slot),
-                .MarkInvalid => |invalid_slot| self.markForkInvalid(slot_hash_key, invalid_slot),
-                .Aggregate => self.aggregateSlot(slot_hash_key),
-                .Add => |stake| self.addSlotStake(&slot_hash_key, stake),
-                .Subtract => |stake| self.subtractSlotStake(&slot_hash_key, stake),
+                .mark_valid => |valid_slot| self.markForkValid(&slot_hash_key, valid_slot),
+                .mark_invalid => |invalid_slot| self.markForkInvalid(slot_hash_key, invalid_slot),
+                .aggregate => self.aggregateSlot(slot_hash_key),
+                .add => |stake| self.addSlotStake(&slot_hash_key, stake),
+                .subtract => |stake| self.subtractSlotStake(&slot_hash_key, stake),
             }
         }
     }
@@ -1654,9 +1654,9 @@ fn doInsertAggregateOperation(
     modify_fork_validity: ?UpdateOperation,
     slot_hash_key: SlotAndHash,
 ) !bool {
-    const aggregate_label = SlotAndHashLabel{
+    const aggregate_label: SlotAndHashLabel = .{
         .slot_hash_key = slot_hash_key,
-        .label = .Aggregate,
+        .label = .aggregate,
     };
 
     if (update_operations.contains(aggregate_label)) {
@@ -1665,29 +1665,29 @@ fn doInsertAggregateOperation(
 
     if (modify_fork_validity) |mark_fork_validity| {
         switch (mark_fork_validity) {
-            .MarkValid => |slot| {
+            .mark_valid => |slot| {
                 try update_operations.put(
-                    SlotAndHashLabel{
+                    .{
                         .slot_hash_key = slot_hash_key,
-                        .label = .MarkValid,
+                        .label = .mark_valid,
                     },
-                    UpdateOperation{ .MarkValid = slot },
+                    .{ .mark_valid = slot },
                 );
             },
-            .MarkInvalid => |slot| {
+            .mark_invalid => |slot| {
                 try update_operations.put(
-                    SlotAndHashLabel{
+                    .{
                         .slot_hash_key = slot_hash_key,
-                        .label = .MarkInvalid,
+                        .label = .mark_invalid,
                     },
-                    UpdateOperation{ .MarkInvalid = slot },
+                    .{ .mark_invalid = slot },
                 );
             },
             else => {},
         }
     }
 
-    try update_operations.put(aggregate_label, .Aggregate);
+    try update_operations.put(aggregate_label, .aggregate);
     return true;
 }
 
@@ -2104,7 +2104,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
         try std.testing.expectEqual(9, fork_choice.deepestSlot(&item).?.slot);
     }
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
     const vote_pubkeys = [_]Pubkey{
@@ -2133,7 +2133,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     // Leaf slot 9 stops being the `heaviest_slot` at slot 1 because there
@@ -2167,7 +2167,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
         test_allocator,
         &pubkey_votes2,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expectEqual(8, fork_choice.heaviestOverallSlot().slot);
@@ -2246,7 +2246,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf2" {
     try std.testing.expectEqual(2, fork_choice.heaviestOverallSlot().slot);
 
     // Add a vote for slot 4, so leaf 6 should be the best again
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
     const vote_pubkeys = [_]Pubkey{
@@ -2274,7 +2274,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf2" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
     try std.testing.expectEqual(6, fork_choice.heaviestOverallSlot().slot);
 
@@ -2292,7 +2292,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
     const vote_pubkeys = [_]Pubkey{
@@ -2321,7 +2321,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
         test_allocator,
         &pubkey_votes1,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     // Set root to 1, should purge 0 from the tree, but
@@ -2337,7 +2337,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
         test_allocator,
         &pubkey_votes2,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expectEqual(
@@ -2366,7 +2366,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
         test_allocator,
         &pubkey_votes3,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expectEqual(
@@ -2390,7 +2390,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
         test_allocator,
         &pubkey_votes4,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expectEqual(
@@ -2648,7 +2648,7 @@ test "HeaviestSubtreeForkChoice.isHeaviestChild" {
 
 // [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1871
 test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const duplicate_fork = try setupDuplicateForks();
@@ -2977,7 +2977,7 @@ test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_missing_candidate" {
 // Analogous to [test_generate_update_operations](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2312)
 test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake = 100;
     const vote_pubkeys = [_]Pubkey{
@@ -3010,29 +3010,29 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
 
             // Add/remove from new/old forks
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Add },
-                UpdateOperation{ .Add = stake },
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .add },
+                .{ .add = stake },
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Add },
-                UpdateOperation{ .Add = stake },
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .add },
+                .{ .add = stake },
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .Add },
-                UpdateOperation{ .Add = stake },
+                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .add },
+                .{ .add = stake },
             );
             // Aggregate all ancestors of changed slots
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
 
             break :blk operations;
@@ -3043,7 +3043,7 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
             allocator,
             &pubkey_votes,
             &epoch_stakes,
-            &EpochSchedule.DEFAULT,
+            &EpochSchedule.INIT,
         );
         defer generated_update_operations.deinit();
 
@@ -3067,7 +3067,7 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
             allocator,
             &pubkey_votes,
             &epoch_stakes,
-            &EpochSchedule.DEFAULT,
+            &EpochSchedule.INIT,
         );
         defer generated_update_operations.deinit();
         try std.testing.expect(generated_update_operations.count() == 0);
@@ -3090,37 +3090,37 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
 
             // Add/remove from new/old forks
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Add },
-                UpdateOperation{ .Add = stake },
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .add },
+                .{ .add = stake },
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .Add },
-                UpdateOperation{ .Add = stake },
+                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .add },
+                .{ .add = stake },
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Subtract },
-                UpdateOperation{ .Subtract = stake },
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .subtract },
+                .{ .subtract = stake },
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .Subtract },
-                UpdateOperation{ .Subtract = stake },
+                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .subtract },
+                .{ .subtract = stake },
             );
             // Aggregate all ancestors of changed slots
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
 
             break :blk operations;
@@ -3131,7 +3131,7 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
             allocator,
             &pubkey_votes,
             &epoch_stakes,
-            &EpochSchedule.DEFAULT,
+            &EpochSchedule.INIT,
         );
         defer generated_update_operations.deinit();
 
@@ -3160,41 +3160,41 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
 
             // Add/remove from new/old forks
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .Add },
-                UpdateOperation{ .Add = stake },
+                .{ .slot_hash_key = .{ .slot = 4, .hash = Hash.ZEROES }, .label = .add },
+                .{ .add = stake },
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 6, .hash = Hash.ZEROES }, .label = .Add },
-                UpdateOperation{ .Add = stake },
+                .{ .slot_hash_key = .{ .slot = 6, .hash = Hash.ZEROES }, .label = .add },
+                .{ .add = stake },
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Subtract },
-                UpdateOperation{ .Subtract = stake },
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .subtract },
+                .{ .subtract = stake },
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .Subtract },
-                UpdateOperation{ .Subtract = stake },
+                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .subtract },
+                .{ .subtract = stake },
             );
             // Aggregate all ancestors of changed slots
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 0, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 1, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 2, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 3, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
             try operations.put(
-                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .Aggregate },
-                UpdateOperation.Aggregate,
+                .{ .slot_hash_key = .{ .slot = 5, .hash = Hash.ZEROES }, .label = .aggregate },
+                .aggregate,
             );
 
             break :blk operations;
@@ -3205,7 +3205,7 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
             allocator,
             &pubkey_votes,
             &epoch_stakes,
-            &EpochSchedule.DEFAULT,
+            &EpochSchedule.INIT,
         );
         defer generated_update_operations.deinit();
 
@@ -3220,7 +3220,7 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
 
 // Analogous to [add_root_parent](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L426)
 test "HeaviestSubtreeForkChoice.addRootParent" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{Pubkey.initRandom(random)};
     // Build fork structure:
@@ -3267,7 +3267,7 @@ test "HeaviestSubtreeForkChoice.addRootParent" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try fork_choice.addRootParent(.{ .slot = 2, .hash = Hash.ZEROES });
@@ -3314,7 +3314,7 @@ test "HeaviestSubtreeForkChoice.addRootParent" {
 
 // Analogous to [test_add_votes](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2493)
 test "HeaviestSubtreeForkChoice.addVotes" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
     const vote_pubkeys = [_]Pubkey{
@@ -3349,7 +3349,7 @@ test "HeaviestSubtreeForkChoice.addVotes" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expectEqual(
@@ -3365,7 +3365,7 @@ test "HeaviestSubtreeForkChoice.addVotes" {
 
 // Analogous to [test_add_votes_duplicate_greater_hash_ignored](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2616)
 test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -3408,7 +3408,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
     // we tie break the duplicate_leaves_descended_from_6 and pick the smaller one
     // for deepest
@@ -3427,7 +3427,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
         test_allocator,
         &pubkey_votes2,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
     try std.testing.expectEqual(
         expected_deepest_slot_hash,
@@ -3462,7 +3462,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
 
 // Analogous to [test_add_votes_duplicate_smaller_hash_prioritized](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2704)
 test "HeaviestSubtreeForkChoice.addVotesDuplicateSmallerHashPrioritized" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -3505,7 +3505,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateSmallerHashPrioritized" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
     const expected_deepest_slot_hash = duplicate_leaves_descended_from_6[1];
 
@@ -3535,7 +3535,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateSmallerHashPrioritized" {
         test_allocator,
         &pubkey_votes2,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
 
     // AFTER, only one of the validators is voting on this leaf
@@ -3580,7 +3580,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateSmallerHashPrioritized" {
 
 // Analogous to [test_add_votes_duplicate_then_outdated](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2821)
 test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -3623,7 +3623,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
 
     // Create two children for slots greater than the duplicate slot,
@@ -3664,7 +3664,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
         test_allocator,
         &pubkey_votes2,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
 
     // All the stake directly voting on the duplicates have been outdated
@@ -3719,7 +3719,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
 
 // Analogous to [test_add_votes_duplicate_tie](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2518)
 test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -3762,7 +3762,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
     try std.testing.expectEqual(
         expected_best_slot_hash,
@@ -3789,7 +3789,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
         test_allocator,
         &pubkey_votes2,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
 
     try std.testing.expectEqual(
@@ -3823,7 +3823,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
 
 // Analogous to [test_add_votes_duplicate_zero_stake](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2947)
 test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -3876,7 +3876,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
     try std.testing.expectEqual(
         duplicate_leaves_descended_from_4[1],
@@ -3893,7 +3893,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
         test_allocator,
         &pubkey_votes2,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
     try std.testing.expectEqual(
         higher_child_with_duplicate_parent,
@@ -3903,7 +3903,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
 
 // Analogous to [test_is_best_child](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L3015)
 test "HeaviestSubtreeForkChoice.isBestChild" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -3997,7 +3997,7 @@ test "HeaviestSubtreeForkChoice.isBestChild" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expect(
@@ -4013,7 +4013,7 @@ test "HeaviestSubtreeForkChoice.isBestChild" {
 
 // Analogous to [test_mark_invalid_then_add_new_heavier_duplicate_slot](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L3589)
 test "HeaviestSubtreeForkChoice.markInvalidThenAddNewHeavierDuplicateSlot" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -4068,7 +4068,7 @@ test "HeaviestSubtreeForkChoice.markInvalidThenAddNewHeavierDuplicateSlot" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expectEqual(
@@ -4079,7 +4079,7 @@ test "HeaviestSubtreeForkChoice.markInvalidThenAddNewHeavierDuplicateSlot" {
 
 // Analogous to [test_mark_valid_invalid_forks](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L3383)
 test "HeaviestSubtreeForkChoice.markValidInvalidForks" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -4115,7 +4115,7 @@ test "HeaviestSubtreeForkChoice.markValidInvalidForks" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     ));
     try std.testing.expectEqual(
         expected_best_slot,
@@ -4176,7 +4176,7 @@ test "HeaviestSubtreeForkChoice.markValidInvalidForks" {
             test_allocator,
             &pubkey_votes2,
             &epoch_stakes,
-            &EpochSchedule.DEFAULT,
+            &EpochSchedule.INIT,
         ),
     );
 
@@ -4226,7 +4226,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddVotes" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
     const vote_pubkeys = [_]Pubkey{
@@ -4255,7 +4255,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddVotes" {
         test_allocator,
         &pubkey_votes1,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
     try std.testing.expectEqual(4, fork_choice.heaviestOverallSlot().slot);
 
@@ -4272,7 +4272,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddVotes" {
         test_allocator,
         &pubkey_votes2,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expectEqual(6, fork_choice.heaviestOverallSlot().slot);
@@ -4308,7 +4308,7 @@ test "HeaviestSubtreeForkChoice.splitOffOnBestPath" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
 
@@ -4343,7 +4343,7 @@ test "HeaviestSubtreeForkChoice.splitOffOnBestPath" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     try std.testing.expectEqual(6, fork_choice.heaviestOverallSlot().slot);
@@ -4393,7 +4393,7 @@ test "HeaviestSubtreeForkChoice.splitOffSimple" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
 
@@ -4428,7 +4428,7 @@ test "HeaviestSubtreeForkChoice.splitOffSimple" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     var registry = sig.prometheus.Registry(.{}).init(test_allocator);
@@ -4477,7 +4477,7 @@ test "HeaviestSubtreeForkChoice.splitOffSimple" {
 
 // Analogous to [test_split_off_subtree_with_dups](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L4173)
 test "HeaviestSubtreeForkChoice.splitOffSubtreeWithDups" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -4527,7 +4527,7 @@ test "HeaviestSubtreeForkChoice.splitOffSubtreeWithDups" {
             test_allocator,
             &pubkey_votes,
             &epoch_stakes,
-            &EpochSchedule.DEFAULT,
+            &EpochSchedule.INIT,
         ),
     );
 
@@ -4575,7 +4575,7 @@ test "HeaviestSubtreeForkChoice.splitOffUnvoted" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
 
@@ -4610,7 +4610,7 @@ test "HeaviestSubtreeForkChoice.splitOffUnvoted" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     var registry = sig.prometheus.Registry(.{}).init(test_allocator);
@@ -4650,7 +4650,7 @@ test "HeaviestSubtreeForkChoice.splitOffUnvoted" {
 
 // Analogous to [test_split_off_with_dups](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L4118)
 test "HeaviestSubtreeForkChoice.splitOffWithDups" {
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const vote_pubkeys = [_]Pubkey{
         Pubkey.initRandom(random),
@@ -4698,7 +4698,7 @@ test "HeaviestSubtreeForkChoice.splitOffWithDups" {
             test_allocator,
             &pubkey_votes,
             &epoch_stakes,
-            &EpochSchedule.DEFAULT,
+            &EpochSchedule.INIT,
         ),
     );
 
@@ -4744,7 +4744,7 @@ test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const stake: u64 = 100;
 
@@ -4780,7 +4780,7 @@ test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     // Best slot is 4
@@ -4807,7 +4807,7 @@ test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
     try fork_choice.processLatestVotes(
         test_allocator,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
         &latest_validator_votes,
     );
 
@@ -4958,7 +4958,7 @@ pub fn setupDuplicateForks() !struct {
     //             │   └── (10)
     //             ├── (10)
     //             └── (10)
-    var prng = std.Random.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     // Build fork structure
     var fork_choice = try test_allocator.create(ForkChoice);
@@ -5148,7 +5148,7 @@ pub fn testEpochStakes(
             .stake_delegations = .empty,
             .unused = 0,
             .epoch = 0,
-            .stake_history = try .init(allocator),
+            .stake_history = .INIT,
         },
         .epoch_authorized_voters = .empty,
         .node_id_to_vote_accounts = .empty,

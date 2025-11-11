@@ -467,8 +467,8 @@ fn downloadFile(
     var buffered_out = std.io.bufferedWriter(output_file.writer());
 
     var total_bytes_read: u64 = 0;
-    var lap_timer = try sig.time.Timer.start();
-    var full_timer = try sig.time.Timer.start();
+    var lap_timer = sig.time.Timer.start();
+    var full_timer = sig.time.Timer.start();
     var checked_speed = false;
 
     while (true) {
@@ -723,7 +723,7 @@ test "accounts_db.download: test remove untrusted peers" {
     var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const my_shred_version: usize = 19;
@@ -796,7 +796,7 @@ test "accounts_db.download: test finding peers" {
     var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const my_shred_version: usize = 19;

@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 
 const bpf_loader = sig.runtime.program.bpf_loader;
@@ -79,7 +80,10 @@ pub fn loadPrograms(
     enviroment: *const vm.Environment,
     slot: u64,
 ) !ProgramMap {
-    var programs = ProgramMap.empty;
+    const zone = tracy.Zone.init(@src(), .{ .name = "loadPrograms" });
+    defer zone.deinit();
+
+    var programs = ProgramMap{};
     errdefer programs.deinit(allocator);
 
     for (accounts.keys(), accounts.values()) |address, account| {
@@ -236,7 +240,7 @@ fn loadDeploymentSlotAndExecutableBytes(
 
 test "loadPrograms: load v1, v2 program" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const program_elf = try std.fs.cwd().readFileAlloc(
         allocator,
@@ -304,7 +308,7 @@ test "loadPrograms: load v1, v2 program" {
 
 test "loadPrograms: load v3 program" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const program_key = Pubkey.initRandom(prng.random());
     const program_data_key = Pubkey.initRandom(prng.random());
@@ -433,7 +437,7 @@ test "loadPrograms: load v3 program" {
 
 test "loadPrograms: load v4 program" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const program_deployment_slot = 0;
     const program_key = Pubkey.initRandom(prng.random());
@@ -520,7 +524,7 @@ test "loadPrograms: load v4 program" {
 
 test "loadPrograms: bad owner" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
     defer {

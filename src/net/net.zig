@@ -616,7 +616,7 @@ test "valid ipv4 socket parsing" {
 }
 
 test "SocketAddr.initRandom" {
-    var prng = std.Random.DefaultPrng.init(100);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const addr = SocketAddr.initRandom(prng.random());
     _ = addr;
 }
