@@ -145,39 +145,6 @@ pub fn TransactionResult(comptime T: type) type {
 }
 
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L323-L324
-pub fn loadAndExecuteTransactions(
-    allocator: std.mem.Allocator,
-    transactions: []const RuntimeTransaction,
-    account_map: *AccountMap,
-    environment: *const TransactionExecutionEnvironment,
-    config: *const TransactionExecutionConfig,
-) ![]TransactionResult(ProcessedTransaction) {
-    var program_map = try program_loader.loadPrograms(
-        allocator,
-        account_map,
-        environment.vm_environment,
-        environment.slot,
-    );
-    defer program_map.deinit(allocator);
-
-    const transaction_results = try allocator.alloc(
-        TransactionResult(ProcessedTransaction),
-        transactions.len,
-    );
-    for (transactions, 0..) |*transaction, index| {
-        transaction_results[index] = try loadAndExecuteTransaction(
-            allocator,
-            transaction,
-            .{ .asd_map = .{ allocator, account_map } },
-            environment,
-            config,
-            &program_map,
-        );
-    }
-    return transaction_results;
-}
-
-/// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L323-L324
 pub fn loadAndExecuteTransaction(
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
@@ -661,67 +628,7 @@ test getInstructionDatasSliceForPrecompiles {
     }
 }
 
-test "loadAndExecuteTransactions: no transactions" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
-
-    const transactions: []RuntimeTransaction = &.{};
-    var account_map: AccountMap = .{};
-
-    const ancestors: Ancestors = .{};
-    const feature_set: FeatureSet = .ALL_DISABLED;
-    var status_cache: StatusCache = .DEFAULT;
-    const sysvar_cache: SysvarCache = .{};
-    const rent_collector: RentCollector = sig.core.rent_collector.defaultCollector(10);
-    const blockhash_queue: BlockhashQueue = try BlockhashQueue.initRandom(
-        allocator,
-        prng.random(),
-        10,
-    );
-    defer blockhash_queue.deinit(allocator);
-    const epoch_stakes = try EpochStakes.initEmptyWithGenesisStakeHistoryEntry(allocator);
-    defer epoch_stakes.deinit(allocator);
-    const vm_environment = vm.Environment{};
-    defer vm_environment.deinit(allocator);
-
-    const environment: TransactionExecutionEnvironment = .{
-        .ancestors = &ancestors,
-        .feature_set = &feature_set,
-        .status_cache = &status_cache,
-        .sysvar_cache = &sysvar_cache,
-        .rent_collector = &rent_collector,
-        .blockhash_queue = &blockhash_queue,
-        .epoch_stakes = &epoch_stakes,
-        .vm_environment = &vm_environment,
-        .next_vm_environment = null,
-
-        .slot = 0,
-        .max_age = 0,
-        .last_blockhash = Hash.ZEROES,
-        .next_durable_nonce = Hash.ZEROES,
-        .next_lamports_per_signature = 0,
-        .last_lamports_per_signature = 0,
-
-        .lamports_per_signature = 0,
-    };
-
-    const config = TransactionExecutionConfig{
-        .log = false,
-        .log_messages_byte_limit = null,
-    };
-
-    const result = try loadAndExecuteTransactions(
-        allocator,
-        transactions,
-        &account_map,
-        &environment,
-        &config,
-    );
-
-    _ = result;
-}
-
-test "loadAndExecuteTransactions: invalid compute budget instruction" {
+test "preprocessTransaction: invalid compute budget instruction" {
     const Signature = sig.core.Signature;
     var prng = std.Random.DefaultPrng.init(0);
 

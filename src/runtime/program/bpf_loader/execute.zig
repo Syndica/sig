@@ -1426,7 +1426,8 @@ pub fn executeV3Close(
                     clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
 
                     // Remove from the program map if it was deployed.
-                    const old_program = try ic.tc.program_map.fetchPut(allocator, program_key, .failed);
+                    const old_program = try ic.tc.program_map
+                        .fetchPut(allocator, program_key, .failed);
                     if (old_program) |p| p.deinit(allocator);
                 },
                 else => {

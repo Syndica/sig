@@ -799,14 +799,6 @@ fn executeTxnContext(
         compute_budget_instruction_details,
     );
 
-    // Create batch account cache from accounts db
-    var accounts = try sig.runtime.account_preload.initFromAccountsDb(
-        allocator,
-        accounts_db.accountReader().forSlot(&ancestors),
-        &.{runtime_transaction},
-    );
-    defer sig.runtime.account_preload.deinit(accounts, allocator);
-
     const rent_collector = RentCollector{
         .epoch = epoch,
         .epoch_schedule = epoch_schedule,
@@ -852,28 +844,30 @@ fn executeTxnContext(
         .failed_accounts = &failed_accounts,
     };
 
-    var txn_results = try loadAndExecuteTransactions(
+    var program_map = sig.runtime.program_loader.ProgramMap.empty;
+    const txn_result = try sig.runtime.transaction_execution.loadAndExecuteTransaction(
         allocator,
-        &.{runtime_transaction},
-        &accounts,
+        &runtime_transaction,
+        accounts_db.accountStore().forSlot(slot, &ancestors),
         &environment,
         &config,
+        &program_map,
     );
+
     defer {
-        switch (txn_results[0]) {
+        switch (txn_result) {
             .ok => |*r| r.deinit(allocator),
             .err => {},
         }
-        allocator.free(txn_results);
     }
 
     if (emit_logs) {
-        printLogs(txn_results[0]);
+        printLogs(txn_result);
     }
 
     return try serializeOutput(
         allocator,
-        txn_results[0],
+        txn_result,
         runtime_transaction,
         failed_accounts.slice(),
     );
