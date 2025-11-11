@@ -673,13 +673,22 @@ pub const ReplayTower = struct {
         // By this point, we know the `switch_slot` is on a different fork
         // (is neither an ancestor nor descendant of `last_vote`), so a
         // switching proof is necessary
+        self.logger.debug().logf(
+            "switch threshold check: last_voted_slot={}, switch_slot={}, root={}",
+            .{ last_voted_slot, switch_slot, root },
+        );
         const switch_proof = Hash.ZEROES;
         var locked_out_stake: u64 = 0;
 
         var locked_out_vote_accounts: SortedSetUnmanaged(Pubkey) = .empty;
         defer locked_out_vote_accounts.deinit(allocator);
 
+        var candidates_checked: usize = 0;
+        var candidates_skipped: usize = 0;
+        var candidates_processed: usize = 0;
+
         for (descendants.keys(), descendants.values()) |candidate_slot, *candidate_descendants| {
+            candidates_checked += 1;
             // 1) Don't consider any banks that haven't been frozen yet
             //    because the needed stats are unavailable
             // 2) Only consider lockouts at the latest `frozen` bank
@@ -724,8 +733,15 @@ pub const ReplayTower = struct {
                 ).?;
 
             if (skip_candidate) {
+                candidates_skipped += 1;
                 continue;
             }
+
+            candidates_processed += 1;
+            self.logger.debug().logf(
+                "processing candidate slot {} for switch proof",
+                .{candidate_slot},
+            );
 
             // By the time we reach here, any ancestors of the `last_vote`,
             // should have been filtered out, as they all have a descendant,
@@ -839,6 +855,12 @@ pub const ReplayTower = struct {
                 }
             }
         }
+
+        self.logger.debug().logf(
+            "switch threshold result: candidates_checked={}, candidates_skipped={}, candidates_processed={}, locked_out_stake={}, total_stake={}, threshold={}",
+            .{ candidates_checked, candidates_skipped, candidates_processed, locked_out_stake, total_stake, SWITCH_FORK_THRESHOLD },
+        );
+
         // We have not detected sufficient lockout past the last voted slot to generate
         // a switching proof
         return SwitchForkDecision{
