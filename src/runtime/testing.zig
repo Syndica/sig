@@ -112,7 +112,7 @@ pub fn createTransactionContext(
         ptr
     else blk: {
         const program_map = try allocator.create(ProgramMap);
-        program_map.* = ProgramMap{};
+        program_map.* = ProgramMap.empty;
         break :blk program_map;
     };
 
@@ -207,7 +207,6 @@ pub fn deinitTransactionContext(
 
     allocator.destroy(tc.feature_set);
 
-    for (tc.program_map.values()) |*v| v.deinit(allocator);
     tc.program_map.deinit(allocator);
     allocator.destroy(tc.program_map);
 

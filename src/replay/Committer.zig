@@ -30,11 +30,6 @@ status_cache: *sig.core.StatusCache,
 stakes_cache: *sig.core.StakesCache,
 new_rate_activation_epoch: ?sig.core.Epoch,
 replay_votes_sender: *Channel(ParsedVote),
-writes: *Channel(Pubkey),
-
-pub fn deinit(self: Committer) void {
-    self.writes.destroy();
-}
 
 pub fn commitTransactions(
     self: Committer,
@@ -125,8 +120,6 @@ pub fn commitTransactions(
             account.account,
             self.new_rate_activation_epoch,
         );
-        account.deinit(allocator);
-        try self.writes.send(account.pubkey);
     }
 }
 

@@ -19,6 +19,8 @@ const StatusCache = sig.core.StatusCache;
 const Slot = sig.core.Slot;
 const RentState = sig.core.RentCollector.RentState;
 
+const SlotAccountStore = sig.accounts_db.SlotAccountStore;
+
 const AccountMap = sig.runtime.account_preload.AccountMap;
 const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const FeatureSet = sig.core.FeatureSet;
@@ -149,7 +151,7 @@ pub fn loadAndExecuteTransactions(
     account_map: *AccountMap,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
-) error{OutOfMemory}![]TransactionResult(ProcessedTransaction) {
+) ![]TransactionResult(ProcessedTransaction) {
     var program_map = try program_loader.loadPrograms(
         allocator,
         account_map,
@@ -166,7 +168,7 @@ pub fn loadAndExecuteTransactions(
         transaction_results[index] = try loadAndExecuteTransaction(
             allocator,
             transaction,
-            account_map,
+            .{ .asd_map = .{ allocator, account_map } },
             environment,
             config,
             &program_map,
@@ -179,11 +181,11 @@ pub fn loadAndExecuteTransactions(
 pub fn loadAndExecuteTransaction(
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
-    account_map: *AccountMap,
+    account_store: SlotAccountStore,
     env: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
     program_map: *ProgramMap,
-) error{OutOfMemory}!TransactionResult(ProcessedTransaction) {
+) !TransactionResult(ProcessedTransaction) {
     var zone = tracy.Zone.init(@src(), .{ .name = "executeTransaction" });
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
@@ -204,7 +206,7 @@ pub fn loadAndExecuteTransaction(
     const maybe_nonce_info = switch (try sig.runtime.check_transactions.checkAge(
         allocator,
         transaction,
-        account_map,
+        account_store.reader(),
         env.blockhash_queue,
         env.max_age,
         &env.next_durable_nonce,
@@ -236,7 +238,7 @@ pub fn loadAndExecuteTransaction(
     const fees, var rollbacks = switch (try sig.runtime.check_transactions.checkFeePayer(
         allocator,
         transaction,
-        account_map,
+        account_store,
         &compute_budget_limits,
         maybe_nonce_info,
         env.rent_collector,
@@ -250,7 +252,7 @@ pub fn loadAndExecuteTransaction(
     errdefer for (rollbacks.slice()) |r| r.deinit(allocator);
 
     var loaded_accounts = switch (try account_loader.loadTransactionAccounts(
-        account_map,
+        account_store.reader(),
         allocator,
         transaction,
         env.rent_collector,
@@ -265,7 +267,7 @@ pub fn loadAndExecuteTransaction(
             while (rollbacks.pop()) |rollback| {
                 const item = writes.addOne() catch unreachable;
                 item.* = rollback;
-                account_loader.store(account_map, allocator, item);
+                try account_store.put(item.pubkey, item.account);
                 loaded_accounts_data_size += @intCast(rollback.account.data.len);
             }
             return .{ .ok = .{
@@ -279,6 +281,16 @@ pub fn loadAndExecuteTransaction(
         },
     };
     errdefer for (loaded_accounts.accounts.slice()) |acct| acct.deinit(allocator);
+
+    for (loaded_accounts.accounts.slice()) |account| try program_loader.loadIfProgram(
+        allocator,
+        program_map,
+        account.pubkey,
+        &account.account,
+        account_store.reader(),
+        env.vm_environment,
+        env.slot,
+    );
 
     const executed_transaction = try executeTransaction(
         allocator,
@@ -309,7 +321,7 @@ pub fn loadAndExecuteTransaction(
         else for (loaded_accounts.accounts.slice()) |a| a.deinit(allocator);
     }
 
-    for (writes.slice()) |*acct| account_loader.store(account_map, allocator, acct);
+    for (writes.slice()) |*acct| try account_store.put(acct.pubkey, acct.account);
 
     return .{
         .ok = .{
@@ -900,12 +912,12 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     };
 
     { // Okay
-        var program_map = ProgramMap{};
+        var program_map = ProgramMap.empty;
         defer program_map.deinit(allocator);
         const result = try loadAndExecuteTransaction(
             allocator,
             &transaction,
-            &account_map,
+            .{ .asd_map = .{ allocator, &account_map } },
             &environment,
             &config,
             &program_map,
@@ -936,12 +948,12 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     }
 
     { // Insufficient funds
-        var program_map = ProgramMap{};
+        var program_map = ProgramMap.empty;
         defer program_map.deinit(allocator);
         const result = try loadAndExecuteTransaction(
             allocator,
             &transaction,
-            &account_map,
+            .{ .asd_map = .{ allocator, &account_map } },
             &environment,
             &config,
             &program_map,

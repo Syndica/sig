@@ -103,7 +103,7 @@ pub fn createTransactionContext(
     else
         try allocator.create(ProgramMap);
     errdefer if (environment.program_map == null) allocator.destroy(program_map);
-    program_map.* = ProgramMap{};
+    program_map.* = ProgramMap.empty;
 
     const log_collector = try sig.runtime.LogCollector.default(allocator);
     errdefer log_collector.deinit(allocator);

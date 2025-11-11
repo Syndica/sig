@@ -196,7 +196,6 @@ pub const ReplaySlotParams = struct {
         for (self.batches) |batch| batch.deinit(allocator);
         allocator.free(self.batches);
         self.svm_gateway.deinit(allocator);
-        self.committer.deinit();
     }
 };
 
@@ -308,12 +307,6 @@ pub fn replaySlotSync(
             .failure => |err| return .{ .invalid_transaction = err },
             .exit => unreachable,
         }
-    }
-
-    while (params.committer.writes.tryReceive()) |address| {
-        const account = params.svm_gateway.state.accounts.get(address) orelse
-            return error.AccountInconsistency;
-        try params.account_store.put(params.svm_gateway.params.slot, address, account);
     }
 
     return null;
@@ -535,12 +528,12 @@ fn prepareSlot(
         state.allocator.free(resolved_batches);
     }
 
-    var svm_gateway = try SvmGateway.init(state.allocator, resolved_batches, .{
+    var svm_gateway = try SvmGateway.init(state.allocator, .{
         .slot = slot,
         .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
         .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,
         .blockhash_queue = &slot_info.state.blockhash_queue,
-        .account_reader = slot_account_reader,
+        .account_store = state.account_store.forSlot(slot, &slot_info.constants.ancestors),
         .ancestors = &slot_info.constants.ancestors,
         .feature_set = slot_info.constants.feature_set,
         .rent_collector = &epoch_constants.rent_collector,
@@ -549,9 +542,6 @@ fn prepareSlot(
     });
     errdefer svm_gateway.deinit(state.allocator);
 
-    const writes = try sig.sync.Channel(sig.core.Pubkey).create(state.allocator);
-    errdefer writes.destroy(state.allocator);
-
     const committer = replay.Committer{
         .logger = .from(state.logger),
         .slot_state = slot_info.state,
@@ -559,7 +549,6 @@ fn prepareSlot(
         .stakes_cache = &slot_info.state.stakes_cache,
         .new_rate_activation_epoch = new_rate_activation_epoch,
         .replay_votes_sender = state.replay_votes_channel,
-        .writes = writes,
     };
 
     const verify_ticks_params = replay.execution.VerifyTicksParams{
@@ -925,7 +914,7 @@ fn testReplaySlot(
 
         const batches = try replay.resolve_lookup
             .resolveBlock(allocator, entries_copy, state.resolver());
-        const svm_gateway = try SvmGateway.init(allocator, batches, state.svmParams());
+        const svm_gateway = try SvmGateway.init(allocator, state.svmParams());
         const params = ReplaySlotParams{
             .entries = entries_copy,
             .batches = batches,
@@ -956,7 +945,7 @@ fn testReplaySlot(
 
         const batches = try replay.resolve_lookup
             .resolveBlock(allocator, entries_copy, state.resolver());
-        const svm_gateway = try SvmGateway.init(allocator, batches, state.svmParams());
+        const svm_gateway = try SvmGateway.init(allocator, state.svmParams());
         const params = ReplaySlotParams{
             .entries = entries_copy,
             .batches = batches,
@@ -1091,7 +1080,7 @@ pub const TestState = struct {
             .max_age = self.max_age,
             .lamports_per_signature = self.lamports_per_signature,
             .blockhash_queue = &self.blockhash_queue,
-            .account_reader = self.account_map.accountReader().forSlot(&self.ancestors),
+            .account_store = self.account_map.accountStore().forSlot(self.slot, &self.ancestors),
             .ancestors = &self.ancestors,
             .feature_set = self.feature_set,
             .rent_collector = &self.rent_collector,
@@ -1101,8 +1090,7 @@ pub const TestState = struct {
     }
 
     pub fn committer(self: *TestState, allocator: Allocator) !Committer {
-        const writes = try sig.sync.Channel(sig.core.Pubkey).create(allocator);
-        errdefer writes.destroy();
+        _ = allocator; // autofix
         return .{
             .logger = .FOR_TESTS,
             .slot_state = &self.slot_state,
@@ -1110,7 +1098,6 @@ pub const TestState = struct {
             .stakes_cache = &self.stakes_cache,
             .new_rate_activation_epoch = null,
             .replay_votes_sender = self.replay_votes_channel,
-            .writes = writes,
         };
     }
 

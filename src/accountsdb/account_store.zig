@@ -34,6 +34,17 @@ pub const AccountStore = union(enum) {
         };
     }
 
+    pub fn forSlot(self: AccountStore, slot: Slot, ancestors: *const Ancestors) SlotAccountStore {
+        const zone = tracy.Zone.init(@src(), .{ .name = "AccountStore.forSlot" });
+        defer zone.deinit();
+
+        return switch (self) {
+            .accounts_db => |db| .{ .accounts_db = .{ db, slot, ancestors } },
+            .thread_safe_map => |map| .{ .thread_safe_map = .{ map, slot, ancestors } },
+            .noop => .noop,
+        };
+    }
+
     pub fn put(self: AccountStore, slot: Slot, address: Pubkey, account: AccountSharedData) !void {
         const zone = tracy.Zone.init(@src(), .{ .name = "AccountStore.put" });
         defer zone.deinit();
@@ -173,6 +184,45 @@ pub const SlotModifiedIterator = union(enum) {
 /// account from slot 3 because it's the latest version on the current fork
 /// that's less than or equal to slot 6. If the account was modified in slot 6,
 /// then you'll get the version of the account from slot 6.
+pub const SlotAccountStore = union(enum) {
+    accounts_db: struct { *AccountsDB, Slot, *const Ancestors },
+    /// Contains many versions of accounts and becomes fork-aware using
+    /// ancestors, like accountsdb.
+    thread_safe_map: struct { *ThreadSafeAccountMap, Slot, *const Ancestors },
+    asd_map: struct { Allocator, *std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData) },
+    noop,
+
+    pub fn put(self: SlotAccountStore, address: Pubkey, account: AccountSharedData) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "SlotAccountStore.put" });
+        defer zone.deinit();
+
+        return switch (self) {
+            .accounts_db => |tuple| {
+                const db, const slot, _ = tuple;
+                try db.putAccount(slot, address, account);
+            },
+            .thread_safe_map => |tuple| {
+                const map, const slot, _ = tuple;
+                try map.put(slot, address, account);
+            },
+            .asd_map => |tuple| {
+                const allocator, const map = tuple;
+                try map.put(allocator, address, account);
+            },
+            .noop => {},
+        };
+    }
+
+    pub fn reader(self: SlotAccountStore) SlotAccountReader {
+        return switch (self) {
+            .accounts_db => |tuple| .{ .accounts_db = .{ tuple[0], tuple[2] } },
+            .thread_safe_map => |tuple| .{ .thread_safe_map = .{ tuple[0], tuple[2] } },
+            .asd_map => |tuple| .{ .asd_map = tuple[1] },
+            .noop => .noop,
+        };
+    }
+};
+
 pub const SlotAccountReader = union(enum) {
     accounts_db: struct { *AccountsDB, *const Ancestors },
     /// Contains many versions of accounts and becomes fork-aware using
@@ -181,9 +231,11 @@ pub const SlotAccountReader = union(enum) {
     /// Only stores the current slot's version of each account.
     /// Should only store borrowed accounts, or else it will panic on deinit.
     single_version_map: *const std.AutoArrayHashMapUnmanaged(Pubkey, Account),
+    /// same as `single_version_map` but with AccountSharedData
+    /// TODO: consolidate?
+    asd_map: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
     noop,
 
-    /// Deinit all returned accounts using `account_reader.allocator()`
     pub fn get(self: SlotAccountReader, alloc: std.mem.Allocator, address: Pubkey) !?Account {
         return switch (self) {
             .accounts_db => |pair| {
@@ -201,6 +253,16 @@ pub const SlotAccountReader = union(enum) {
             },
             .thread_safe_map => |pair| pair[0].get(address, pair[1]),
             .single_version_map => |pair| pair.get(address),
+            .asd_map => |map| {
+                const asd = map.get(address) orelse return null;
+                return .{
+                    .lamports = asd.lamports,
+                    .data = .{ .unowned_allocation = asd.data },
+                    .owner = asd.owner,
+                    .executable = asd.executable,
+                    .rent_epoch = asd.rent_epoch,
+                };
+            },
             .noop => null,
         };
     }

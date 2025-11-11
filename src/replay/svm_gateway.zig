@@ -13,7 +13,7 @@ const BlockhashQueue = sig.core.BlockhashQueue;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const StatusCache = sig.core.StatusCache;
 
-const SlotAccountReader = sig.accounts_db.SlotAccountReader;
+const SlotAccountStore = sig.accounts_db.SlotAccountStore;
 
 const AccountMap = sig.runtime.account_preload.AccountMap;
 const ComputeBudget = sig.runtime.ComputeBudget;
@@ -42,7 +42,7 @@ pub fn executeTransaction(
     return try sig.runtime.transaction_execution.loadAndExecuteTransaction(
         allocator,
         transaction,
-        &svm_gateway.state.accounts,
+        svm_gateway.params.account_store,
         &environment,
         &.{ .log = true, .log_messages_byte_limit = null },
         &svm_gateway.state.programs,
@@ -61,7 +61,6 @@ pub const SvmGateway = struct {
         sysvar_cache: SysvarCache,
         vm_environment: vm.Environment,
         next_vm_environment: ?vm.Environment,
-        accounts: AccountMap,
         programs: ProgramMap,
 
         /// This is an ugly solution, but it doesn't actually lead to any issues
@@ -77,10 +76,8 @@ pub const SvmGateway = struct {
         max_age: u64,
         lamports_per_signature: u64,
 
-        /// used to initialize the batch account cache and program map
-        account_reader: SlotAccountReader,
-
         // Borrowed values to pass by reference into the SVM.
+        account_store: SlotAccountStore,
         blockhash_queue: *sig.sync.RwMux(BlockhashQueue),
         ancestors: *const Ancestors,
         feature_set: FeatureSet,
@@ -89,28 +86,9 @@ pub const SvmGateway = struct {
         status_cache: *StatusCache,
     };
 
-    pub fn init(
-        allocator: Allocator,
-        batches: []const replay.resolve_lookup.ResolvedBatch,
-        params: Params,
-    ) !SvmGateway {
+    pub fn init(allocator: Allocator, params: Params) !SvmGateway {
         const zone = tracy.Zone.init(@src(), .{ .name = "SvmGateway.init" });
         defer zone.deinit();
-
-        var max_accounts: usize = 0;
-        for (batches) |batch| max_accounts += account_preload.maxAccounts(batch.transactions);
-        var accounts = AccountMap{};
-        try accounts.ensureUnusedCapacity(allocator, max_accounts);
-
-        for (batches) |batch| for (batch.transactions) |transaction| {
-            try account_preload.load(
-                &accounts,
-                allocator,
-                params.account_reader,
-                &transaction.accounts,
-                transaction.instructions,
-            );
-        };
 
         const vm_environment = try vm.Environment.initV1(
             allocator,
@@ -124,17 +102,10 @@ pub const SvmGateway = struct {
             false,
         );
 
-        var programs =
-            try loadPrograms(allocator, &accounts, &vm_environment, params.slot);
-        errdefer {
-            for (programs.values()) |*program| program.deinit(allocator);
-            programs.deinit(allocator);
-        }
-
         var sysvar_cache = SysvarCache{};
         try replay.update_sysvar.fillMissingSysvarCacheEntries(
             allocator,
-            params.account_reader,
+            params.account_store.reader(),
             &sysvar_cache,
         );
 
@@ -144,8 +115,7 @@ pub const SvmGateway = struct {
                 .sysvar_cache = sysvar_cache,
                 .vm_environment = vm_environment,
                 .next_vm_environment = null, // TODO epoch boundary
-                .accounts = accounts,
-                .programs = programs,
+                .programs = .empty,
 
                 // blockhash queue is only written when freezing a slot,
                 // which comes *after* executing all transactions, not
@@ -162,7 +132,6 @@ pub const SvmGateway = struct {
 
         self.state.sysvar_cache.deinit(allocator);
         self.state.vm_environment.deinit(allocator);
-        sig.runtime.account_preload.deinit(self.state.accounts, allocator);
         if (self.state.next_vm_environment) |next_vm| next_vm.deinit(allocator);
 
         var programs = self.state.programs;

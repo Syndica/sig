@@ -180,7 +180,6 @@ pub const ReplaySlotFuture = struct {
                     },
                 };
                 if (!pending) {
-                    try self.onCompletion(self.status_when_done);
                     self.status = .{ .done = self.status_when_done };
                 }
             },
@@ -199,25 +198,6 @@ pub const ReplaySlotFuture = struct {
             },
             try self.scheduler.poll(),
         };
-    }
-
-    /// This future's primary task is to manage work being done on other
-    /// threads. After all that work is done, there are some finalization steps
-    /// that need to occur on the current thread. These steps will block the
-    /// final call to poll. This will run exactly once, when `poll` has a result
-    /// to return for the first time.
-    ///
-    /// Currently, all this does is commit all the accounts to the account store
-    /// as long as the slot finished executing successfully.
-    fn onCompletion(self: *const ReplaySlotFuture, slot_result: ?ReplaySlotError) !void {
-        if (slot_result == null) {
-            const gw = self.scheduler.svm_gateway;
-            while (self.scheduler.committer.writes.tryReceive()) |address| {
-                const account = gw.state.accounts.get(address) orelse
-                    return error.AccountInconsistency;
-                try self.account_store.put(gw.params.slot, address, account);
-            }
-        }
     }
 };
 
@@ -330,7 +310,6 @@ const TransactionScheduler = struct {
         self.svm_gateway.deinit(self.allocator);
         self.thread_pool.deinit(self.allocator);
         self.locks.deinit(self.allocator);
-        self.committer.deinit();
     }
 
     fn collectResults(self: *TransactionScheduler) void {
@@ -481,7 +460,7 @@ test "TransactionScheduler: happy path" {
     });
 
     const svm_params = state.svmParams();
-    const svm_gateway = try SvmGateway.init(allocator, batches, svm_params);
+    const svm_gateway = try SvmGateway.init(allocator, svm_params);
     var scheduler = try TransactionScheduler.init(
         allocator,
         .FOR_TESTS,
@@ -530,7 +509,7 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
     });
 
     const svm_params = state.svmParams();
-    const svm_gateway = try SvmGateway.init(allocator, batches, svm_params);
+    const svm_gateway = try SvmGateway.init(allocator, svm_params);
     var scheduler = try TransactionScheduler.init(
         allocator,
         .noop,
@@ -571,7 +550,7 @@ test "TransactionScheduler: failed account locks" {
     const batches = try resolveForTest(allocator, .noop, &.{&unresolved_batch});
 
     const svm_params = state.svmParams();
-    const svm_gateway = try SvmGateway.init(allocator, batches, svm_params);
+    const svm_gateway = try SvmGateway.init(allocator, svm_params);
     var scheduler = try TransactionScheduler.init(
         allocator,
         .FOR_TESTS,
@@ -626,7 +605,7 @@ test "TransactionScheduler: signature verification failure" {
     });
 
     const svm_params = state.svmParams();
-    const svm_gateway = try SvmGateway.init(allocator, batches, svm_params);
+    const svm_gateway = try SvmGateway.init(allocator, svm_params);
     var scheduler = try TransactionScheduler.init(
         allocator,
         .noop,
@@ -709,7 +688,7 @@ test "TransactionScheduler: does not send replay vote for failed execution" {
     }
 
     const svm_params = state.svmParams();
-    const svm_gateway = try SvmGateway.init(allocator, batches, svm_params);
+    const svm_gateway = try SvmGateway.init(allocator, svm_params);
     var scheduler = try TransactionScheduler.init(
         allocator,
         .FOR_TESTS,
@@ -895,7 +874,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
     const batches = try resolveForTest(allocator, .noop, &.{&txs});
 
     const svm_params = state.svmParams();
-    const svm_gateway = try SvmGateway.init(allocator, batches, svm_params);
+    const svm_gateway = try SvmGateway.init(allocator, svm_params);
     var scheduler = try TransactionScheduler.init(
         allocator,
         .FOR_TESTS,

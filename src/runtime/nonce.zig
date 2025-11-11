@@ -55,6 +55,7 @@ pub const Versions = union(enum) {
         }
     }
 
+    // TODO delete?
     pub fn fromAccountData(account_data: []const u8) ?Versions {
         var buf: [SERIALIZED_SIZE]u8 = undefined;
         var fba = std.heap.FixedBufferAllocator.init(&buf);

@@ -7,6 +7,7 @@ const runtime = sig.runtime;
 
 const Allocator = std.mem.Allocator;
 
+const Account = sig.core.Account;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
@@ -14,7 +15,8 @@ const RENT_EXEMPT_RENT_EPOCH = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH;
 const CollectedInfo = sig.core.rent_collector.CollectedInfo;
 const AccountMeta = sig.core.instruction.InstructionAccount;
 
-const AccountMap = runtime.account_preload.AccountMap;
+const SlotAccountReader = sig.accounts_db.SlotAccountReader;
+const SlotAccountStore = sig.accounts_db.SlotAccountStore;
 const AccountSharedData = runtime.AccountSharedData;
 const ComputeBudgetLimits = runtime.program.compute_budget.ComputeBudgetLimits;
 const RuntimeTransaction = runtime.transaction_execution.RuntimeTransaction;
@@ -93,6 +95,7 @@ pub const LoadedAccount = struct {
 
 const LoadedTransactionAccountsError = error{
     OutOfMemory,
+    AccountsDBError,
     ProgramAccountNotFound,
     InvalidProgramForExecution,
     MaxLoadedAccountsDataSizeExceeded,
@@ -103,7 +106,7 @@ const LoadedTransactionAccountsError = error{
 /// By the time this is called, we have no dependency on accountsdb.
 pub fn loadTransactionAccounts(
     // note: think we make this a *const by moving sysvar instruction account construction into init
-    map: *AccountMap,
+    map: SlotAccountReader,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     rent_collector: *const RentCollector,
@@ -135,28 +138,32 @@ pub fn loadTransactionAccounts(
             compute_budget_limits,
         );
 
-    return .{ .ok = result catch |err| return switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        error.ProgramAccountNotFound => .{ .err = .ProgramAccountNotFound },
-        error.InvalidProgramForExecution => .{ .err = .InvalidProgramForExecution },
-        error.MaxLoadedAccountsDataSizeExceeded => .{
-            .err = .MaxLoadedAccountsDataSizeExceeded,
+    return .{
+        .ok = result catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.ProgramAccountNotFound => .{ .err = .ProgramAccountNotFound },
+            error.InvalidProgramForExecution => .{ .err = .InvalidProgramForExecution },
+            error.MaxLoadedAccountsDataSizeExceeded => .{
+                .err = .MaxLoadedAccountsDataSizeExceeded,
+            },
+            else => error.OutOfMemory, // TODO fix
         },
-    } };
+    };
 }
 
 fn loadTransactionAccountsSimd186(
-    map: *AccountMap,
+    map: SlotAccountReader,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     rent_collector: *const RentCollector,
     feature_set: *const sig.core.FeatureSet,
     slot: sig.core.Slot,
     compute_budget_limits: *const ComputeBudgetLimits,
-) LoadedTransactionAccountsError!LoadedTransactionAccounts {
+) !LoadedTransactionAccounts {
     std.debug.assert(compute_budget_limits.loaded_accounts_bytes != 0);
 
     var loaded = LoadedTransactionAccounts.DEFAULT;
+    errdefer for (loaded.accounts.slice()) |account| account.deinit(allocator);
 
     try loaded.increase(
         transaction.num_lookup_tables *| ADDRESS_LOOKUP_TABLE_BASE_SIZE,
@@ -179,6 +186,7 @@ fn loadTransactionAccountsSimd186(
             &account_key,
             is_writable,
         );
+        errdefer if (loaded_account.is_owned) loaded_account.account.deinit(allocator);
 
         try loaded.increase(
             loaded_account.loaded_size,
@@ -215,10 +223,10 @@ fn loadTransactionAccountsSimd186(
                 }
                 if (additional_loaded_accounts.contains(programdata_address)) break :cont;
                 // ...and the programdata account exists (if it doesn't, it is *not* a load failure)...
-                if (map.get(programdata_address)) |programdata_account| {
+                if (try map.get(allocator, programdata_address)) |programdata_account| {
                     // ...count programdata toward this transaction's total size.
                     try loaded.increase(
-                        TRANSACTION_ACCOUNT_BASE_SIZE +| programdata_account.data.len,
+                        TRANSACTION_ACCOUNT_BASE_SIZE +| programdata_account.data.len(),
                         compute_budget_limits.loaded_accounts_bytes,
                     );
                     additional_loaded_accounts.putAssumeCapacity(programdata_address, {});
@@ -243,6 +251,7 @@ fn loadTransactionAccountsSimd186(
             false,
             feature_set.active(.formalize_loaded_transaction_data_size, slot),
         ) orelse return error.ProgramAccountNotFound;
+        defer program_account.account.deinit(allocator);
 
         if (!feature_set.active(.remove_accounts_executable_flag_checks, slot) and
             !program_account.account.executable)
@@ -269,17 +278,18 @@ fn loadTransactionAccountsSimd186(
 }
 
 fn loadTransactionAccountsOld(
-    map: *AccountMap,
+    map: SlotAccountReader,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     rent_collector: *const RentCollector,
     feature_set: *const sig.core.FeatureSet,
     slot: sig.core.Slot,
     compute_budget_limits: *const ComputeBudgetLimits,
-) LoadedTransactionAccountsError!LoadedTransactionAccounts {
+) !LoadedTransactionAccounts {
     std.debug.assert(compute_budget_limits.loaded_accounts_bytes != 0);
 
     var loaded = LoadedTransactionAccounts.DEFAULT;
+    errdefer for (loaded.accounts.slice()) |account| account.deinit(allocator);
 
     const accounts = transaction.accounts.slice();
     for (accounts.items(.pubkey), accounts.items(.is_writable)) |account_key, is_writable| {
@@ -293,6 +303,7 @@ fn loadTransactionAccountsOld(
             &account_key,
             is_writable,
         );
+        errdefer if (loaded_account.is_owned) loaded_account.account.deinit(allocator);
 
         try loaded.increase(
             loaded_account.loaded_size,
@@ -324,34 +335,27 @@ fn loadTransactionAccountsOld(
     defer validated_loaders.deinit(allocator);
 
     for (transaction.instructions) |instr| {
-        const program_id = &instr.program_meta.pubkey;
-        if (program_id.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
-        const program_account = try loadAccount(
+        if (instr.program_meta.pubkey.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
+        const program_account = (map.get(allocator, instr.program_meta.pubkey) catch
+            return error.AccountsDBError) orelse return error.ProgramAccountNotFound;
+
+        if (!feature_set.active(.remove_accounts_executable_flag_checks, slot) and
+            !program_account.executable) return error.InvalidProgramForExecution;
+
+        const owner_id = program_account.owner;
+
+        if (owner_id.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
+        if (validated_loaders.contains(owner_id)) continue; // only load + count owners once
+
+        const owner_account = try loadAccount(
             map,
             allocator,
             transaction,
-            program_id,
+            &owner_id,
             false,
             feature_set.active(.formalize_loaded_transaction_data_size, slot),
         ) orelse return error.ProgramAccountNotFound;
-
-        if (!feature_set.active(.remove_accounts_executable_flag_checks, slot) and
-            !program_account.account.executable) return error.InvalidProgramForExecution;
-
-        const owner_id = program_account.account.owner;
-        const owner_account = account: {
-            if (owner_id.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
-            if (validated_loaders.contains(owner_id)) continue; // only load + count owners once
-
-            break :account try loadAccount(
-                map,
-                allocator,
-                transaction,
-                &owner_id,
-                false,
-                feature_set.active(.formalize_loaded_transaction_data_size, slot),
-            ) orelse return error.ProgramAccountNotFound;
-        };
+        defer owner_account.account.deinit(allocator);
 
         if (!owner_account.account.owner.equals(&runtime.ids.NATIVE_LOADER_ID)) {
             return error.InvalidProgramForExecution;
@@ -387,7 +391,7 @@ pub const LoadedTransactionAccount = struct {
 };
 
 fn loadTransactionAccount(
-    map: *AccountMap,
+    map: SlotAccountReader,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     rent_collector: *const RentCollector,
@@ -395,11 +399,11 @@ fn loadTransactionAccount(
     slot: sig.core.Slot,
     key: *const Pubkey,
     is_writable: bool,
-) error{OutOfMemory}!LoadedTransactionAccount {
+) !LoadedTransactionAccount {
     if (key.equals(&runtime.sysvar.instruction.ID)) {
         @branchHint(.unlikely);
         return .{
-            .account = try constructInstructionsAccount(allocator, transaction),
+            .account = try constructInstructionsAccountSharedData(allocator, transaction),
             .loaded_size = 0,
             .rent_collected = 0,
             .is_owned = true,
@@ -418,20 +422,24 @@ fn loadTransactionAccount(
         var account = AccountSharedData.EMPTY;
         account.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
 
-        const account_ptr = map.getPtr(key.*).?;
-        allocator.free(account_ptr.data);
-        account_ptr.* = account;
-
         return LoadedTransactionAccount{
-            .account = account_ptr.*,
+            .account = account,
             .loaded_size = 0,
             .rent_collected = 0,
-            .is_owned = is_writable,
+            .is_owned = true,
         };
     };
 
+    var account_shared_data = AccountSharedData{
+        .lamports = account.account.lamports,
+        .data = try account.account.data.toOwned(allocator),
+        .owner = account.account.owner,
+        .executable = account.account.executable,
+        .rent_epoch = account.account.rent_epoch,
+    };
+
     const rent_collected = collectRentFromAccount(
-        &account.account,
+        &account_shared_data,
         key,
         feature_set,
         slot,
@@ -439,60 +447,46 @@ fn loadTransactionAccount(
     );
 
     return .{
-        .account = account.account,
+        .account = account_shared_data,
         .loaded_size = account.loaded_size,
         .rent_collected = rent_collected.rent_amount,
-        .is_owned = account.is_owned,
+        .is_owned = true,
     };
 }
 
 /// null return => account is now dead
-pub fn loadAccount(
-    map: *AccountMap,
+fn loadAccount(
+    map: SlotAccountReader,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     key: *const Pubkey,
-    is_writable: bool,
+    _: bool, // TODO remove
     formalized_loaded_data_size: bool,
-) error{OutOfMemory}!?LoadedTransactionAccount {
+) !?struct {
+    account: Account,
+    loaded_size: usize,
+    rent_collected: u64,
+} {
     const base_account_size: u64 = if (formalized_loaded_data_size)
         TRANSACTION_ACCOUNT_BASE_SIZE
     else
         0;
 
-    var is_owned = false;
-    const maybe_account: ?AccountSharedData =
-        if (key.equals(&runtime.sysvar.instruction.ID)) account: {
-            @branchHint(.unlikely);
-            is_owned = true;
-            break :account try constructInstructionsAccount(allocator, transaction);
-        } else map.get(key.*);
+    const account = if (key.equals(&runtime.sysvar.instruction.ID)) account: {
+        @branchHint(.unlikely);
+        break :account try constructInstructionsAccount(allocator, transaction);
+    } else try map.get(allocator, key.*) orelse return null;
 
-    var account = maybe_account.?;
-    if (account.lamports == 0) return null;
-
-    if (is_writable and !is_owned) {
-        account = try account.clone(allocator);
-        is_owned = true;
+    if (account.lamports == 0) {
+        account.deinit(allocator);
+        return null;
     }
 
     return .{
         .account = account,
-        .loaded_size = base_account_size +| account.data.len,
+        .loaded_size = base_account_size +| account.data.len(),
         .rent_collected = 0,
-        .is_owned = is_owned,
     };
-}
-
-/// This should only be called for writable accounts, which only should have
-/// been loaded as writes. That means the account will have is_owned = true.
-/// Violating this assumption has illegal behavior and may cause a panic.
-pub fn store(map: *AccountMap, allocator: Allocator, modified_account: *LoadedAccount) void {
-    std.debug.assert(modified_account.is_owned);
-    const account = map.getPtr(modified_account.pubkey).?;
-    account.deinit(allocator);
-    account.* = modified_account.account;
-    modified_account.is_owned = false;
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L293
@@ -525,7 +519,7 @@ pub fn collectRentFromAccount(
 fn constructInstructionsAccount(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
-) error{OutOfMemory}!AccountSharedData {
+) error{OutOfMemory}!Account {
     const Instruction = sig.core.Instruction;
     const InstructionAccount = sig.core.instruction.InstructionAccount;
 
@@ -571,11 +565,27 @@ fn constructInstructionsAccount(
     try data.appendSlice(&.{ 0, 0 }); // room for current instruction index
 
     return .{
-        .data = try data.toOwnedSlice(),
+        .data = .{ .owned_allocation = try data.toOwnedSlice() },
         .owner = runtime.sysvar.OWNER_ID,
         .lamports = 0, // a bit weird, but seems correct
         .executable = false,
         .rent_epoch = 0,
+    };
+}
+
+// TODO delete
+// [agave] https://github.com/anza-xyz/agave/blob/996570bcbe7acc4dfd0a6931d024a11a3b4de7a3/svm/src/account_loader.rs#L784
+fn constructInstructionsAccountSharedData(
+    allocator: Allocator,
+    transaction: *const RuntimeTransaction,
+) error{OutOfMemory}!AccountSharedData {
+    const x = try constructInstructionsAccount(allocator, transaction);
+    return .{
+        .data = x.data.owned_allocation,
+        .owner = x.owner,
+        .lamports = x.lamports,
+        .executable = x.executable,
+        .rent_epoch = x.rent_epoch,
     };
 }
 
@@ -647,7 +657,7 @@ test "loadTransactionAccounts empty transaction" {
     };
 
     const tx_accounts = try loadTransactionAccountsOld(
-        &account_map,
+        .{ .asd_map = &account_map },
         allocator,
         &empty_tx,
         &env.rent_collector,
@@ -690,7 +700,7 @@ test "loadTransactionAccounts sysvar instruction" {
     };
 
     const tx_accounts = try loadTransactionAccountsOld(
-        &account_map,
+        .{ .asd_map = &account_map },
         allocator,
         &empty_tx,
         &env.rent_collector,
@@ -823,7 +833,7 @@ test "load accounts rent paid" {
     defer runtime.account_preload.deinit(account_map, allocator);
 
     const loaded_accounts = try loadTransactionAccountsOld(
-        &account_map,
+        .{ .asd_map = &account_map },
         allocator,
         &tx,
         &env.rent_collector,
@@ -831,6 +841,7 @@ test "load accounts rent paid" {
         env.slot,
         &env.compute_budget_limits,
     );
+    defer loaded_accounts.deinit(allocator);
 
     // slots elapsed   slots per year    lamports per year
     //  |               |                 |      data len
@@ -971,7 +982,7 @@ test "load accounts with simd 186 and loaderv3 program" {
     defer runtime.account_preload.deinit(account_map, allocator);
 
     const loaded_accounts = try loadTransactionAccountsSimd186(
-        &account_map,
+        .{ .asd_map = &account_map },
         allocator,
         &tx,
         &env.rent_collector,
@@ -979,6 +990,7 @@ test "load accounts with simd 186 and loaderv3 program" {
         env.slot,
         &env.compute_budget_limits,
     );
+    defer loaded_accounts.deinit(allocator);
 
     try std.testing.expectEqual(2165, loaded_accounts.loaded_accounts_data_size);
 }
@@ -1026,14 +1038,14 @@ test "constructInstructionsAccount" {
 
     const checkFn = struct {
         fn f(alloc: Allocator, txn: *const RuntimeTransaction) !void {
-            const account = try constructInstructionsAccount(alloc, txn);
+            const account = try constructInstructionsAccountSharedData(alloc, txn);
             defer allocator.free(account.data);
         }
     }.f;
 
     try std.testing.checkAllAllocationFailures(allocator, checkFn, .{&empty_tx});
 
-    const account = try constructInstructionsAccount(allocator, &empty_tx);
+    const account = try constructInstructionsAccountSharedData(allocator, &empty_tx);
     defer allocator.free(account.data);
     try std.testing.expectEqual(0, account.lamports);
     try std.testing.expect(account.data.len > 8);
@@ -1066,7 +1078,7 @@ test "loadAccount allocations" {
             defer runtime.account_preload.deinit(account_map, allocator);
 
             const account = try loadAccount(
-                &account_map,
+                .{ .asd_map = &account_map },
                 allocator,
                 &tx,
                 &NATIVE_LOADER_ID,
@@ -1117,7 +1129,7 @@ test "load tx too large" {
     defer runtime.account_preload.deinit(account_map, allocator);
 
     const loaded_accounts_result = loadTransactionAccountsOld(
-        &account_map,
+        .{ .asd_map = &account_map },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1218,7 +1230,7 @@ test "dont double count program owner account data size" {
     defer runtime.account_preload.deinit(account_map, allocator);
 
     const loaded_accounts = try loadTransactionAccountsOld(
-        &account_map,
+        .{ .asd_map = &account_map },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1226,6 +1238,7 @@ test "dont double count program owner account data size" {
         env.slot,
         &env.compute_budget_limits,
     );
+    defer loaded_accounts.deinit(allocator);
 
     try std.testing.expectEqual(
         data1.len + data2.len + data_owner.len, // owner counted once, not twice
@@ -1253,7 +1266,7 @@ test "load, create new account" {
     defer runtime.account_preload.deinit(account_map, allocator);
 
     const loaded_accounts = try loadTransactionAccountsOld(
-        &account_map,
+        .{ .asd_map = &account_map },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1261,6 +1274,7 @@ test "load, create new account" {
         env.slot,
         &env.compute_budget_limits,
     );
+    defer loaded_accounts.deinit(allocator);
 
     try std.testing.expectEqual(1, loaded_accounts.accounts.len);
     try std.testing.expectEqual(0, loaded_accounts.rent_collected);
@@ -1314,7 +1328,7 @@ test "invalid program owner owner" {
     defer runtime.account_preload.deinit(account_map, allocator);
 
     const loaded_accounts_result = loadTransactionAccountsOld(
-        &account_map,
+        .{ .asd_map = &account_map },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1365,7 +1379,7 @@ test "missing program owner account" {
     defer runtime.account_preload.deinit(account_map, allocator);
 
     const loaded_accounts_result = loadTransactionAccountsOld(
-        &account_map,
+        .{ .asd_map = &account_map },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1414,7 +1428,7 @@ test "deallocate account" {
 
     // load with the account being dead
     const loaded_accounts = try loadTransactionAccountsOld(
-        &account_map,
+        .{ .asd_map = &account_map },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1422,6 +1436,7 @@ test "deallocate account" {
         env.slot,
         &env.compute_budget_limits,
     );
+    defer loaded_accounts.deinit(allocator);
 
     // newly created account is returned instead
     try std.testing.expectEqual(1, loaded_accounts.accounts.len);
@@ -1496,7 +1511,7 @@ test "load v3 program" {
     defer runtime.account_preload.deinit(account_map, allocator);
 
     const loaded_accounts = try loadTransactionAccountsOld(
-        &account_map,
+        .{ .asd_map = &account_map },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1504,6 +1519,7 @@ test "load v3 program" {
         env.slot,
         &env.compute_budget_limits,
     );
+    defer loaded_accounts.deinit(allocator);
 
     // only v3 program returned (in account keys)
     try std.testing.expectEqual(1, loaded_accounts.accounts.len);
