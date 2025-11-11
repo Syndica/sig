@@ -703,37 +703,31 @@ pub const ReplayTower = struct {
             // recent frozen bank on this fork to use, so we can ignore this one. Otherwise,
             // even if this bank has descendants, if they have not yet been frozen / stats computed,
             // then use this bank as a representative for the fork.
-            const is_descendant_computed = if (!is_progress_computed) blk: {
-                break :blk for (candidate_descendants.items()) |d| {
-                    if (progress.getForkStats(d)) |stats|
-                        break stats.computed
-                    else
-                        break false;
-                } else false;
-            } else is_progress_computed;
+            const is_descendant_computed = for (candidate_descendants.items()) |d| {
+                if (progress.getForkStats(d)) |stats| {
+                    if (stats.computed) break true;
+                }
+            } else false;
 
-            const is_candidate_eq_last_voted_slot = if (!is_descendant_computed)
-                (candidate_slot == last_voted_slot)
-            else
-                is_descendant_computed;
-
-            const is_candidate_less_eq_root = if (!is_candidate_eq_last_voted_slot)
-                (candidate_slot <= root)
-            else
-                is_candidate_eq_last_voted_slot;
-
-            const is_valid_switch = if (!is_candidate_less_eq_root)
-                self.isValidSwitchingProofVote(
+            // Skip this candidate if any of these conditions are true:
+            // 1) stats not computed yet
+            // 2) any descendant has stats computed (use that descendant instead)
+            // 3) candidate is the last voted slot
+            // 4) candidate is at or before root
+            // 5) candidate is not a valid switching proof vote
+            const skip_candidate = !is_progress_computed or
+                is_descendant_computed or
+                candidate_slot == last_voted_slot or
+                candidate_slot <= root or
+                !self.isValidSwitchingProofVote(
                     candidate_slot,
                     last_voted_slot,
                     switch_slot,
                     ancestors,
                     &last_vote_ancestors,
-                ).?
-            else
-                is_candidate_less_eq_root;
+                ).?;
 
-            if (is_valid_switch) {
+            if (skip_candidate) {
                 continue;
             }
 
