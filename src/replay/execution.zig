@@ -1027,9 +1027,6 @@ pub const TestState = struct {
 
         const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(allocator);
 
-        const slot_hashes = try SlotHashes.init(allocator);
-        errdefer slot_hashes.deinit(allocator);
-
         return .{
             .account_map = sig.accounts_db.ThreadSafeAccountMap.init(allocator),
             .status_cache = .DEFAULT,
@@ -1043,14 +1040,13 @@ pub const TestState = struct {
             .epoch_stakes = epoch_stakes,
             .slot_state = slot_state,
             .stakes_cache = stakes_cache,
-            .slot_hashes = slot_hashes,
+            .slot_hashes = .INIT,
             .replay_votes_channel = replay_votes_channel,
             .exit = .init(false),
         };
     }
 
     pub fn deinit(self: *TestState, allocator: Allocator) void {
-        self.slot_hashes.deinit(allocator);
         self.account_map.deinit();
         self.status_cache.deinit(allocator);
         self.ancestors.deinit(allocator);

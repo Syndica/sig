@@ -83,7 +83,7 @@ pub fn loadPrograms(
     const zone = tracy.Zone.init(@src(), .{ .name = "loadPrograms" });
     defer zone.deinit();
 
-    var programs = ProgramMap{};
+    var programs = ProgramMap.empty;
     errdefer programs.deinit(allocator);
 
     for (accounts.keys(), accounts.values()) |address, account| {
