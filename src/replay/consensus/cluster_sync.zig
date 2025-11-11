@@ -42,6 +42,9 @@ pub fn processClusterSync(
         latest_validator_votes: *LatestValidatorVotes,
         slot_data: *SlotData,
 
+        duplicate_confirmed_slots: []const ThresholdConfirmedSlot,
+        gossip_verified_vote_hashes: []const GossipVerifiedVoteHash,
+
         senders: replay.TowerConsensus.Senders,
         receivers: replay.TowerConsensus.Receivers,
     },
@@ -75,7 +78,7 @@ pub fn processClusterSync(
     try processDuplicateConfirmedSlots(
         allocator,
         logger,
-        params.receivers.duplicate_confirmed_slots,
+        params.duplicate_confirmed_slots,
         params.result_writer,
         &params.slot_data.duplicate_confirmed_slots,
         slot_tracker,
@@ -94,15 +97,11 @@ pub fn processClusterSync(
     timer.reset();
     try processGossipVerifiedVoteHashes(
         allocator,
-        params.receivers.gossip_verified_vote_hash,
+        params.gossip_verified_vote_hashes,
         &params.slot_data.unfrozen_gossip_verified_vote_hashes,
         params.fork_choice,
         params.latest_validator_votes,
     );
-    while (params.receivers.gossip_verified_vote_hash.tryReceive()) |_| {
-        // TODO: what's the point of draining this here exactly? Remove this TODO after
-        // figuring out the reason and documenting it here.
-    }
     const unfrozen_gossip_verified_vote_hashes_time = timer.lap();
 
     // Check for "popular" (52+% stake aggregated across versions/descendants) forks
@@ -547,7 +546,7 @@ fn processAncestorHashesDuplicateSlots(
 fn processDuplicateConfirmedSlots(
     allocator: std.mem.Allocator,
     logger: replay.service.Logger,
-    duplicate_confirmed_slots_receiver: *sig.sync.Channel(ThresholdConfirmedSlot),
+    duplicate_confirmed_slots_received: []const ThresholdConfirmedSlot,
     result_writer: sig.ledger.Ledger.ResultWriter,
     duplicate_confirmed_slots: *SlotData.DuplicateConfirmedSlots,
     slot_tracker: *const SlotTracker,
@@ -558,7 +557,7 @@ fn processDuplicateConfirmedSlots(
     purge_repair_slot_counter: *SlotData.PurgeRepairSlotCounters,
 ) !void {
     const root = slot_tracker.root;
-    while (duplicate_confirmed_slots_receiver.tryReceive()) |new_duplicate_confirmed_slot| {
+    for (duplicate_confirmed_slots_received) |new_duplicate_confirmed_slot| {
         const confirmed_slot, const duplicate_confirmed_hash = new_duplicate_confirmed_slot.tuple();
         if (confirmed_slot <= root) {
             continue;
@@ -609,12 +608,12 @@ fn processDuplicateConfirmedSlots(
 /// Analogous to [process_gossip_verified_vote_hashes](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1917)
 fn processGossipVerifiedVoteHashes(
     allocator: std.mem.Allocator,
-    gossip_verified_vote_hash_receiver: *sig.sync.Channel(GossipVerifiedVoteHash),
+    gossip_verified_vote_hashes: []const GossipVerifiedVoteHash,
     unfrozen_gossip_verified_vote_hashes: *UnfrozenGossipVerifiedVoteHashes,
     heaviest_subtree_fork_choice: *const HeaviestSubtreeForkChoice,
     latest_validator_votes_for_frozen_slots: *LatestValidatorVotes,
 ) !void {
-    while (gossip_verified_vote_hash_receiver.tryReceive()) |pubkey_slot_hash| {
+    for (gossip_verified_vote_hashes) |pubkey_slot_hash| {
         const pubkey, const slot, const hash = pubkey_slot_hash;
         const is_frozen = heaviest_subtree_fork_choice.containsBlock(&.{
             .slot = slot,
@@ -932,7 +931,9 @@ pub const check_slot_agrees_with_cluster = struct {
 
             .dead => {
                 // AKA: `ResultingStateChange::SendAncestorHashesReplayUpdate` in agave.
-                try ancestor_hashes_replay_update_sender.send(.{ .dead_duplicate_confirmed = slot });
+                try ancestor_hashes_replay_update_sender.send(.{
+                    .dead_duplicate_confirmed = slot,
+                });
 
                 // If the cluster duplicate confirmed some version of this slot, then
                 // there's another version of our dead slot
@@ -2658,22 +2659,16 @@ test "processDuplicateConfirmedSlots with dead slot" {
         try .init(allocator);
     defer ancestor_hashes_replay_update_channel.deinit();
 
-    var duplicate_confirmed_slots_channel: sig.sync.Channel(ThresholdConfirmedSlot) =
-        try .init(allocator);
-    defer duplicate_confirmed_slots_channel.deinit();
-
     // Mark slot 2 as dead
     progress.getForkProgress(2).?.is_dead = true;
 
-    // Send duplicate confirmed slot through channel
     const slot2_hash = slot_tracker.get(2).?.state.hash.readCopy().?;
-    try duplicate_confirmed_slots_channel.send(.{ .slot = 2, .hash = slot2_hash });
 
     // Process the duplicate confirmed slot
     try processDuplicateConfirmedSlots(
         allocator,
         .noop,
-        &duplicate_confirmed_slots_channel,
+        &.{.{ .slot = 2, .hash = slot2_hash }},
         ledger.resultWriter(),
         &duplicate_confirmed_slots,
         slot_tracker,
@@ -2720,20 +2715,14 @@ test "processDuplicateConfirmedSlots with non dead slot in tracker" {
         try .init(allocator);
     defer ancestor_hashes_replay_update_channel.deinit();
 
-    var duplicate_confirmed_slots_channel: sig.sync.Channel(ThresholdConfirmedSlot) =
-        try .init(allocator);
-    defer duplicate_confirmed_slots_channel.deinit();
-
-    // Send duplicate confirmed slot through channel
     // Slot 2 is in the tracker and not dead
     const slot2_hash = slot_tracker.get(2).?.state.hash.readCopy().?;
-    try duplicate_confirmed_slots_channel.send(.{ .slot = 2, .hash = slot2_hash });
 
     // Process the duplicate confirmed slot
     try processDuplicateConfirmedSlots(
         allocator,
         .noop,
-        &duplicate_confirmed_slots_channel,
+        &.{.{ .slot = 2, .hash = slot2_hash }},
         ledger.resultWriter(),
         &duplicate_confirmed_slots,
         slot_tracker,
@@ -2780,20 +2769,15 @@ test "processDuplicateConfirmedSlots with slot not in tracker" {
         try .init(allocator);
     defer ancestor_hashes_replay_update_channel.deinit();
 
-    var duplicate_confirmed_slots_channel: sig.sync.Channel(ThresholdConfirmedSlot) =
-        try .init(allocator);
-    defer duplicate_confirmed_slots_channel.deinit();
-
     // Use a slot that doesn't exist in the tracker (slot 100)
     // This slot is not dead and not in tracker
     const unknown_slot_hash: Hash = .initRandom(random);
-    try duplicate_confirmed_slots_channel.send(.{ .slot = 100, .hash = unknown_slot_hash });
 
     // Process the duplicate confirmed slot
     try processDuplicateConfirmedSlots(
         allocator,
         .noop,
-        &duplicate_confirmed_slots_channel,
+        &.{.{ .slot = 100, .hash = unknown_slot_hash }},
         ledger.resultWriter(),
         &duplicate_confirmed_slots,
         slot_tracker,
