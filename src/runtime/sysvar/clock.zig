@@ -30,7 +30,7 @@ pub const Clock = extern struct {
 
     pub const ID: Pubkey = .parse("SysvarC1ock11111111111111111111111111111111");
 
-    pub const DEFAULT = Clock{
+    pub const INIT: Clock = .{
         .slot = 0,
         .epoch_start_timestamp = 0,
         .epoch = 0,

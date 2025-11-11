@@ -4,6 +4,8 @@ const sig = @import("../sig.zig");
 const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 
+const Logger = sig.trace.Logger("optimistic_vote_verifier");
+
 pub const OptimisticVotesTracker = struct {
     map: std.AutoArrayHashMapUnmanaged(Hash, sig.consensus.vote_tracker.VoteStakeTracker),
 
@@ -109,6 +111,7 @@ pub const OptimisticConfirmationVerifier = struct {
         allocator: std.mem.Allocator,
         new_optimistic_slots: []const sig.core.hash.SlotAndHash,
         ledger: *sig.ledger.Ledger,
+        logger: Logger,
     ) !void {
         if (new_optimistic_slots.len == 0) return;
 
@@ -121,7 +124,9 @@ pub const OptimisticConfirmationVerifier = struct {
                     slot_and_hash.slot,
                     slot_and_hash.hash,
                     @intCast(sig.time.getWallclockMs()),
-                ) catch {};
+                ) catch |err| {
+                    logger.err().logf("insertOptimisticSlot: {s}", .{@errorName(err)});
+                };
                 try self.unchecked_slots.put(allocator, slot_and_hash);
             }
         }
@@ -150,6 +155,7 @@ test "OptimisticConfirmationVerifier.addNewOptimisticConfirmedSlots" {
         allocator,
         &.{.{ .slot = (snapshot_start_slot - 1), .hash = slot_hash }},
         &state,
+        .FOR_TESTS,
     );
     {
         var latest = try state.reader().getLatestOptimisticSlots(allocator, 10);
@@ -161,6 +167,7 @@ test "OptimisticConfirmationVerifier.addNewOptimisticConfirmedSlots" {
         allocator,
         &.{.{ .slot = snapshot_start_slot, .hash = slot_hash }},
         &state,
+        .FOR_TESTS,
     );
     {
         var latest = try state.reader().getLatestOptimisticSlots(allocator, 10);
@@ -172,6 +179,7 @@ test "OptimisticConfirmationVerifier.addNewOptimisticConfirmedSlots" {
         allocator,
         &.{.{ .slot = (snapshot_start_slot + 1), .hash = slot_hash }},
         &state,
+        .FOR_TESTS,
     );
     var latest = try state.reader().getLatestOptimisticSlots(allocator, 10);
     defer latest.deinit();
@@ -204,6 +212,7 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: same slot
             .{ .slot = 3, .hash = Hash.ZEROES },
         },
         &state,
+        .FOR_TESTS,
     );
     const latest = try state.reader().getLatestOptimisticSlots(allocator, 10);
     defer latest.deinit();
@@ -254,7 +263,7 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
         .{ .slot = 3, .hash = h3 },
         .{ .slot = 5, .hash = h5 },
     };
-    try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &state);
+    try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &state, .FOR_TESTS);
     {
         var latest = try state.reader().getLatestOptimisticSlots(allocator, 10);
         defer latest.deinit();
@@ -278,7 +287,7 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
     try std.testing.expectEqual(0, verifier.unchecked_slots.count());
 
     // Re-add optimistic slots and check root at 3 (same fork)
-    try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &state);
+    try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &state, .FOR_TESTS);
     var anc3: sig.core.Ancestors = .{ .ancestors = .{} };
     defer anc3.deinit(allocator);
     try anc3.addSlot(allocator, 1);
@@ -295,7 +304,7 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
     try std.testing.expect(verifier.unchecked_slots.contains(.{ .slot = 5, .hash = h5 }));
 
     // Re-add optimistic slots and set a different fork root at slot 4
-    try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &state);
+    try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &state, .FOR_TESTS);
     var anc4: sig.core.Ancestors = .{ .ancestors = .{} };
     defer anc4.deinit(allocator);
     // ancestors for 4 include 1 (but not 3)
@@ -325,6 +334,7 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
         allocator,
         optimistic,
         &state,
+        .FOR_TESTS,
     );
     {
         const unrooted = try verifier.verifyForUnrootedOptimisticSlots(
@@ -354,7 +364,7 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
     try roots_setter.addRoot(3);
     try roots_setter.commit();
 
-    try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &state);
+    try verifier.addNewOptimisticConfirmedSlots(allocator, optimistic, &state, .FOR_TESTS);
     {
         const unrooted = try verifier.verifyForUnrootedOptimisticSlots(
             allocator,

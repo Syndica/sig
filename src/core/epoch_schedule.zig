@@ -38,7 +38,7 @@ pub const EpochSchedule = extern struct {
 
     pub const ID: core.Pubkey = .parse("SysvarEpochSchedu1e111111111111111111111111");
     pub const STORAGE_SIZE: u64 = 33;
-    pub const DEFAULT: EpochSchedule = .custom(.{
+    pub const INIT: EpochSchedule = .custom(.{
         .slots_per_epoch = DEFAULT_SLOTS_PER_EPOCH,
         .leader_schedule_slot_offset = DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET,
         .warmup = true,

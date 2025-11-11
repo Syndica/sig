@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 
 const bpf_loader = sig.runtime.program.bpf_loader;
@@ -37,6 +38,9 @@ pub fn loadPrograms(
     enviroment: *const vm.Environment,
     slot: u64,
 ) error{OutOfMemory}!ProgramMap {
+    const zone = tracy.Zone.init(@src(), .{ .name = "loadPrograms" });
+    defer zone.deinit();
+
     var programs = ProgramMap{};
     errdefer programs.deinit(allocator);
 

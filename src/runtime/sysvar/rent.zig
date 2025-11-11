@@ -33,7 +33,7 @@ pub const Rent = extern struct {
 
     pub const ID: Pubkey = .parse("SysvarRent111111111111111111111111111111111");
 
-    pub const DEFAULT: Rent = .{
+    pub const INIT: Rent = .{
         .lamports_per_byte_year = DEFAULT_LAMPORTS_PER_BYTE_YEAR,
         .exemption_threshold = DEFAULT_EXEMPTION_THRESHOLD,
         .burn_percent = DEFAULT_BURN_PERCENT,

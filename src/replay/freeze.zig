@@ -342,17 +342,17 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
         }
     }.lt);
 
-    // TODO put more thought into the nesting - should there be multiple?
-    // is NestedHashTree the right data structure?
+    // TODO put more thought into how to layout the merkle tree
     const hashes = try allocator.alloc(Hash, pubkey_hashes.len);
     defer allocator.free(hashes);
     for (hashes, pubkey_hashes) |*h, pubkey_hash| {
         h.* = pubkey_hash[1];
     }
-    const hash_tree = sig.utils.merkle_tree.NestedHashTree{ .items = &.{hashes} };
 
-    const hash = try sig.utils.merkle_tree
-        .computeMerkleRoot(&hash_tree, sig.accounts_db.db.MERKLE_FANOUT);
+    const hash = try sig.utils.merkle_tree.computeMerkleRoot(
+        &.{hashes},
+        sig.accounts_db.db.MERKLE_FANOUT,
+    );
 
     return hash;
 }
@@ -364,9 +364,6 @@ pub fn deltaLtHash(
     slot: Slot,
     parent_ancestors: *const Ancestors,
 ) !LtHash {
-    const zone = tracy.Zone.init(@src(), .{ .name = "deltaLtHash" });
-    defer zone.deinit();
-
     assert(!parent_ancestors.containsSlot(slot));
 
     var arena = std.heap.ArenaAllocator.init(tmp_alloc);
@@ -433,13 +430,13 @@ test "freezeSlot: trivial e2e merkle hash test" {
     defer accounts.deinit();
     const account_store = accounts.accountStore();
 
-    const epoch = try EpochConstants.genesis(allocator, .default(allocator));
+    const epoch = EpochConstants.genesis(.default(allocator));
     defer epoch.deinit(allocator);
 
     const constants = try SlotConstants.genesis(allocator, .DEFAULT);
     defer constants.deinit(allocator);
 
-    var state = try SlotState.genesis(allocator);
+    var state: SlotState = .GENESIS;
     defer state.deinit(allocator);
 
     try freezeSlot(
@@ -490,7 +487,7 @@ test "freezeSlot: trivial e2e lattice hash test" {
     }) |account_store| {
         errdefer std.log.err("Failed with implementation '{s}'", .{@tagName(account_store)});
 
-        const epoch = try EpochConstants.genesis(allocator, .default(allocator));
+        const epoch = EpochConstants.genesis(.default(allocator));
         defer epoch.deinit(allocator);
 
         var constants = try SlotConstants.genesis(allocator, .DEFAULT);
@@ -498,7 +495,7 @@ test "freezeSlot: trivial e2e lattice hash test" {
         constants.feature_set.setSlot(.accounts_lt_hash, 0);
         constants.feature_set.setSlot(.remove_accounts_delta_hash, 0);
 
-        var state = try SlotState.genesis(allocator);
+        var state: SlotState = .GENESIS;
         defer state.deinit(allocator);
 
         try freezeSlot(
