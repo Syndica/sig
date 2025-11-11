@@ -335,13 +335,20 @@ fn loadTransactionAccountsOld(
 
     for (transaction.instructions) |instr| {
         if (instr.program_meta.pubkey.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
-        const program_account = (map.get(allocator, instr.program_meta.pubkey) catch
-            return error.AccountsDBError) orelse return error.ProgramAccountNotFound;
+        const program_account = try loadAccount(
+            map,
+            allocator,
+            transaction,
+            &instr.program_meta.pubkey,
+            false,
+            feature_set.active(.formalize_loaded_transaction_data_size, slot),
+        ) orelse return error.ProgramAccountNotFound;
+        defer program_account.account.deinit(allocator);
 
         if (!feature_set.active(.remove_accounts_executable_flag_checks, slot) and
-            !program_account.executable) return error.InvalidProgramForExecution;
+            !program_account.account.executable) return error.InvalidProgramForExecution;
 
-        const owner_id = program_account.owner;
+        const owner_id = program_account.account.owner;
 
         if (owner_id.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
         if (validated_loaders.contains(owner_id)) continue; // only load + count owners once
