@@ -548,10 +548,18 @@ pub const ReplayTower = struct {
         latest_validator_votes: *const LatestValidatorVotes,
         heaviest_subtree_fork_choice: *const HeaviestSubtreeForkChoice,
     ) !SwitchForkDecision {
-        const last_voted = self.lastVotedSlotHash() orelse return SwitchForkDecision.same_fork;
+        const last_voted = self.lastVotedSlotHash() orelse {
+            self.logger.info().logf("switch threshold: no last vote, returning same_fork", .{});
+            return SwitchForkDecision.same_fork;
+        };
         const last_voted_slot = last_voted.slot;
         const last_voted_hash = last_voted.hash;
         const root = try self.tower.getRoot();
+
+        self.logger.info().logf(
+            "switch threshold START: last_voted_slot={}, switch_slot={}, root={}",
+            .{ last_voted_slot, switch_slot, root },
+        );
 
         // `heaviest_subtree_fork_choice` entries are not cleaned by duplicate block purging/rollback logic,
         // so this is safe to check here. We return here if the last voted slot was rolled back/purged due to
@@ -640,6 +648,10 @@ pub const ReplayTower = struct {
         if (switch_slot == last_voted_slot or switch_slot_ancestors.containsSlot(last_voted_slot)) {
             // If the `switch_slot is a descendant of the last vote,
             // no switching proof is necessary
+            self.logger.info().logf(
+                "switch threshold: switch_slot {} is same fork as last_voted_slot {}, returning same_fork",
+                .{ switch_slot, last_voted_slot },
+            );
             return SwitchForkDecision{ .same_fork = {} };
         }
 
@@ -856,9 +868,17 @@ pub const ReplayTower = struct {
             }
         }
 
-        self.logger.debug().logf(
-            "switch threshold result: candidates_checked={}, candidates_skipped={}, candidates_processed={}, locked_out_stake={}, total_stake={}, threshold={}",
-            .{ candidates_checked, candidates_skipped, candidates_processed, locked_out_stake, total_stake, SWITCH_FORK_THRESHOLD },
+        self.logger.info().logf(
+            "switch threshold FAILED: candidates_checked={}, candidates_skipped={}, candidates_processed={}, locked_out_stake={}, total_stake={}, threshold={d:.2}, ratio={d:.4}",
+            .{
+                candidates_checked,
+                candidates_skipped,
+                candidates_processed,
+                locked_out_stake,
+                total_stake,
+                SWITCH_FORK_THRESHOLD,
+                @as(f64, @floatFromInt(locked_out_stake)) / @as(f64, @floatFromInt(total_stake)),
+            },
         );
 
         // We have not detected sufficient lockout past the last voted slot to generate
