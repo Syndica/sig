@@ -923,16 +923,6 @@ pub const ReplayTower = struct {
         var vote_state = self.tower.vote_state;
         try vote_state.processNextVoteSlot(slot);
 
-        std.debug.print("\n=== DEBUG checkVoteStakeThresholds for slot {} ===\n", .{slot});
-        std.debug.print("Tower votes before applying new vote:\n", .{});
-        for (self.tower.vote_state.votes.constSlice(), 0..) |v, i| {
-            std.debug.print("  [{}] slot={}, conf={}\n", .{ i, v.slot, v.confirmation_count });
-        }
-        std.debug.print("Tower votes AFTER simulating vote on slot {}:\n", .{slot});
-        for (vote_state.votes.constSlice(), 0..) |v, i| {
-            std.debug.print("  [{}] slot={}, conf={}\n", .{ i, v.slot, v.confirmation_count });
-        }
-
         // Assemble all the vote thresholds and depths to check.
         const vote_thresholds_and_depths = [threshold_size]struct { depth: usize, size: f64 }{
             // The following two checks are log only and are currently being used for experimentation
@@ -947,16 +937,9 @@ pub const ReplayTower = struct {
         // Check one by one and add any failures to be returned
         var index: usize = 0;
         for (vote_thresholds_and_depths) |threshold| {
-            const maybe_threshold_vote = vote_state.nthRecentLockout(threshold.depth);
-            if (maybe_threshold_vote) |tv| {
-                std.debug.print("Checking depth {}: threshold_vote.slot={}\n", .{ threshold.depth, tv.slot });
-            } else {
-                std.debug.print("Checking depth {}: tower not that deep (no vote at this depth)\n", .{threshold.depth});
-            }
-
             const vote_threshold = checkVoteStakeThreshold(
                 .from(self.logger),
-                maybe_threshold_vote,
+                vote_state.nthRecentLockout(threshold.depth),
                 self.tower.vote_state.votes.constSlice(),
                 threshold.depth,
                 threshold.size,
@@ -964,13 +947,11 @@ pub const ReplayTower = struct {
                 voted_stakes,
                 total_stake,
             );
-            std.debug.print("vote_threshold {any}\n", .{vote_threshold});
             if (std.mem.eql(u8, @tagName(vote_threshold), "failed_threshold")) {
                 threshold_decisions[index] = vote_threshold;
                 index += 1;
             }
         }
-        std.debug.print("=== END checkVoteStakeThresholds ===\n\n", .{});
 
         return allocator.dupe(ThresholdDecision, threshold_decisions[0..index]);
     }
@@ -1427,7 +1408,6 @@ pub const ReplayTower = struct {
         var threshold_passed = true;
         for (vote_thresholds.items) |threshold_failure| {
             if (threshold_failure != .failed_threshold) continue;
-            std.debug.print("foiled here with {any}\n", .{threshold_failure});
             const vote_depth = threshold_failure.failed_threshold.vote_depth;
             const fork_stake = threshold_failure.failed_threshold.observed_stake;
             try failure_reasons.append(allocator, .{ .FailedThreshold = .{
@@ -1438,14 +1418,6 @@ pub const ReplayTower = struct {
             } });
 
             // Ignore shallow checks for voting purposes
-            std.debug.print(
-                "vote_depth: {} and self.threshold_dept {} and raw {}\n",
-                .{
-                    vote_depth,
-                    self.threshold_depth,
-                    threshold_failure.failed_threshold,
-                },
-            );
             if (vote_depth >= self.threshold_depth) {
                 threshold_passed = false;
             }
@@ -1708,27 +1680,6 @@ fn checkVoteStakeThreshold(
     };
 
     const fork_stake = voted_stakes.get(threshold_vote.slot) orelse {
-        // This slot has no observed stake in voted_stakes
-        std.debug.print("\n=== THRESHOLD CHECK FAILED (observed_stake=0) ===\n", .{});
-        std.debug.print("  Checking slot: {}\n", .{threshold_vote.slot});
-        std.debug.print("  Current fork slot: {}\n", .{slot});
-        std.debug.print("  Threshold depth: {}\n", .{threshold_depth});
-        std.debug.print("  voted_stakes has {} entries\n", .{voted_stakes.count()});
-
-        // Show what slots ARE in voted_stakes
-        var it = voted_stakes.iterator();
-        var count: usize = 0;
-        std.debug.print("  Slots IN voted_stakes: ", .{});
-        while (it.next()) |entry| : (count += 1) {
-            if (count < 15) {
-                std.debug.print("{} ", .{entry.key_ptr.*});
-            }
-        }
-        if (voted_stakes.count() > 15) {
-            std.debug.print("... +{} more", .{voted_stakes.count() - 15});
-        }
-        std.debug.print("\n=== END THRESHOLD CHECK ===\n\n", .{});
-
         // We haven't seen any votes on this fork yet, so no stake
         return .{
             .failed_threshold = .{ .vote_depth = threshold_depth, .observed_stake = 0 },
@@ -1760,16 +1711,6 @@ fn checkVoteStakeThreshold(
         return .passed_threshold;
     }
 
-    // Threshold not met even with observed stake
-    std.debug.print("\n=== THRESHOLD CHECK FAILED (insufficient stake) ===\n", .{});
-    std.debug.print("  Checking slot: {}\n", .{threshold_vote.slot});
-    std.debug.print("  Current fork slot: {}\n", .{slot});
-    std.debug.print("  Threshold depth: {}\n", .{threshold_depth});
-    std.debug.print("  Observed stake: {}\n", .{fork_stake});
-    std.debug.print("  Total stake: {}\n", .{total_stake});
-    std.debug.print("  Lockout: {d:.4} (need > {d:.4})\n", .{ lockout, threshold_size });
-    std.debug.print("=== END THRESHOLD CHECK ===\n\n", .{});
-
     return .{
         .failed_threshold = .{
             .vote_depth = threshold_depth,
@@ -1793,12 +1734,6 @@ fn optimisticallyBypassVoteStakeThresholdCheck(
         if (old_vote.slot == threshold_vote.slot and
             old_vote.confirmation_count == threshold_vote.confirmation_count)
         {
-            std
-                .debug
-                .print("Passed optmistic check old_vote.confirmation_count {} threshold_vote.confirmation_count {}\n", .{
-                old_vote.confirmation_count,
-                threshold_vote.confirmation_count,
-            });
             return true;
         }
     }
@@ -1934,33 +1869,12 @@ pub fn collectClusterVoteState(
         total_stake += vote.stake;
     }
 
-    // Simplified debug - only show summary
-    if (voted_stakes.count() == 0) {
-        std.debug.print("[bank_slot={}] Initial voted_stakes empty, ancestors has {} slots\n", .{ bank_slot, ancestors.count() });
-    }
-
     try populateAncestorVotedStakes(
         allocator,
         &voted_stakes,
         vote_slots.items(),
         ancestors,
     );
-
-    // Show what slots are in voted_stakes after population
-    if (voted_stakes.count() < 100) {
-        std.debug.print("[bank_slot={}] voted_stakes now has {} entries: ", .{ bank_slot, voted_stakes.count() });
-        var vs_it = voted_stakes.iterator();
-        var vs_count: usize = 0;
-        while (vs_it.next()) |entry| : (vs_count += 1) {
-            if (vs_count < 20) {
-                std.debug.print("{} ", .{entry.key_ptr.*});
-            }
-        }
-        if (voted_stakes.count() > 20) {
-            std.debug.print("... +{} more", .{voted_stakes.count() - 20});
-        }
-        std.debug.print("\n", .{});
-    }
 
     // As commented above, since the votes at current bank_slot are
     // simulated votes, the voted_stake for `bank_slot` is not populated.
