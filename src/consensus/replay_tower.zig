@@ -1838,10 +1838,10 @@ pub fn collectClusterVoteState(
             continue;
         }
 
-        logger.info().logf(
-            "{} {} with stake {}",
-            .{ vote_account_pubkey, vote_address, vote.stake },
-        );
+        // logger.info().logf(
+        //     "{} {} with stake {}",
+        //     .{ vote_account_pubkey, vote_address, vote.stake },
+        // );
 
         var vote_state = try TowerVoteState.fromAccount(&vote.account);
 
