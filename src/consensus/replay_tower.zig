@@ -1831,10 +1831,10 @@ pub fn collectClusterVoteState(
     for (vote_accounts.keys(), vote_accounts.values()) |vote_address, vote| {
         // Skip accounts with no stake.
         if (vote.stake == 0) {
-            logger.info().logf(
-                "Skipping {} {} with stake {}",
-                .{ vote_account_pubkey, vote_address, vote.stake },
-            );
+            // logger.info().logf(
+            //     "Skipping {} {} with stake {}",
+            //     .{ vote_account_pubkey, vote_address, vote.stake },
+            // );
             continue;
         }
 
