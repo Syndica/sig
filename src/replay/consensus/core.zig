@@ -260,7 +260,7 @@ pub const TowerConsensus = struct {
         );
         errdefer fork_choice.deinit();
 
-        const replay_tower: ReplayTower = try .init(
+        var replay_tower: ReplayTower = try .init(
             allocator,
             .from(deps.logger),
             deps.identity.validator,
@@ -270,6 +270,18 @@ pub const TowerConsensus = struct {
             sig.prometheus.globalRegistry(),
         );
         errdefer replay_tower.deinit(allocator);
+
+        const slot_history = try sig.consensus.replay_tower.getSlotHistory(
+            allocator,
+            deps.account_reader.forSlot(&slot_tracker.get(slot_tracker.root).?.constants.ancestors),
+        );
+        defer slot_history.deinit(allocator);
+
+        try replay_tower.adjustLockoutsAfterReplay(
+            allocator,
+            deps.root_slot,
+            &slot_history,
+        );
 
         const slot_data_provider: sig.consensus.vote_listener.SlotDataProvider = .{
             .slot_tracker_rw = deps.slot_tracker_rw,
