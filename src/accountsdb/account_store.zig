@@ -207,7 +207,9 @@ pub const SlotAccountStore = union(enum) {
             },
             .asd_map => |tuple| {
                 const allocator, const map = tuple;
-                try map.put(allocator, address, account);
+                const account_to_store = try account.clone(allocator);
+                errdefer account_to_store.deinit(allocator);
+                try map.put(allocator, address, account_to_store);
             },
             .noop => {},
         };
