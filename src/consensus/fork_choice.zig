@@ -5056,7 +5056,7 @@ test "HeaviestSubtreeForkChoice.getEffectiveLeafWeight_singleLinearChain" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     // Slot 6 is the leaf of the linear chain
@@ -5117,7 +5117,7 @@ test "HeaviestSubtreeForkChoice.getEffectiveLeafWeight_competingForksAtRoot" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     // Leaf 4 should have its subtree stake (3 votes)
@@ -5173,7 +5173,7 @@ test "HeaviestSubtreeForkChoice.getEffectiveLeafWeight_noVotesOnLeaf" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     // Slot 6 is the leaf with 0 direct votes
@@ -5255,7 +5255,7 @@ test "HeaviestSubtreeForkChoice.getEffectiveLeafWeight_multipleLeaves" {
         test_allocator,
         &pubkey_votes,
         &epoch_stakes,
-        &EpochSchedule.DEFAULT,
+        &EpochSchedule.INIT,
     );
 
     // Check each leaf's effective weight
