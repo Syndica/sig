@@ -4,7 +4,6 @@ const replay = @import("lib.zig");
 const tracy = @import("tracy");
 
 const vm = sig.vm;
-const account_preload = sig.runtime.account_preload;
 
 const Allocator = std.mem.Allocator;
 
@@ -15,7 +14,6 @@ const StatusCache = sig.core.StatusCache;
 
 const SlotAccountStore = sig.accounts_db.SlotAccountStore;
 
-const AccountMap = sig.runtime.account_preload.AccountMap;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const FeatureSet = sig.core.FeatureSet;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
@@ -26,7 +24,6 @@ const TransactionExecutionEnvironment =
     sig.runtime.transaction_execution.TransactionExecutionEnvironment;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 
-const loadPrograms = sig.runtime.program_loader.loadPrograms;
 const initDurableNonceFromHash = sig.runtime.nonce.initDurableNonceFromHash;
 
 pub fn executeTransaction(

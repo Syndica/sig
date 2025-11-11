@@ -16,7 +16,6 @@ const CollectedInfo = sig.core.rent_collector.CollectedInfo;
 const AccountMeta = sig.core.instruction.InstructionAccount;
 
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
-const SlotAccountStore = sig.accounts_db.SlotAccountStore;
 const AccountSharedData = runtime.AccountSharedData;
 const ComputeBudgetLimits = runtime.program.compute_budget.ComputeBudgetLimits;
 const RuntimeTransaction = runtime.transaction_execution.RuntimeTransaction;
