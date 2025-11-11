@@ -21,7 +21,6 @@ const RentState = sig.core.RentCollector.RentState;
 
 const SlotAccountStore = sig.accounts_db.SlotAccountStore;
 
-const AccountMap = sig.runtime.account_preload.AccountMap;
 const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const FeatureSet = sig.core.FeatureSet;
 const FeeDetails = sig.runtime.check_transactions.FeeDetails;
@@ -735,8 +734,8 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     transaction.compute_budget_instruction_details.num_non_compute_budget_instructions = 1;
     transaction.compute_budget_instruction_details.num_non_migratable_builtin_instructions = 1;
 
-    var account_map = AccountMap{};
-    defer sig.runtime.account_preload.deinit(account_map, allocator);
+    var account_map = std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData){};
+    defer sig.runtime.testing.deinitAccountMap(account_map, allocator);
     try account_map.put(
         allocator,
         sender_key,

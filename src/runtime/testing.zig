@@ -20,7 +20,6 @@ const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
-const AccountMap = sig.runtime.account_preload.AccountMap;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 pub const ExecuteContextsParams = struct {
@@ -96,7 +95,10 @@ pub fn createTransactionContext(
     allocator: std.mem.Allocator,
     random: std.Random,
     params: ExecuteContextsParams,
-) !struct { AccountMap, TransactionContext } {
+) !struct {
+    std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData),
+    TransactionContext,
+} {
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
 
@@ -132,8 +134,8 @@ pub fn createTransactionContext(
     );
     errdefer accounts.deinit(allocator);
 
-    var account_map = AccountMap{};
-    errdefer sig.runtime.account_preload.deinit(account_map, allocator);
+    var account_map = std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData){};
+    errdefer sig.runtime.testing.deinitAccountMap(account_map, allocator);
 
     var account_keys = try std.ArrayListUnmanaged(Pubkey).initCapacity(
         allocator,
@@ -455,4 +457,13 @@ pub fn expectTransactionAccountEqual(
 
     if (expected.write_ref != actual.write_ref)
         return error.WriteRefMismatch;
+}
+
+pub fn deinitAccountMap(
+    map: std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData),
+    allocator: std.mem.Allocator,
+) void {
+    for (map.values()) |account| account.deinit(allocator);
+    var mut = map;
+    mut.deinit(allocator);
 }

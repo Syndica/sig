@@ -13,6 +13,8 @@ const Pubkey = sig.core.Pubkey;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionContext = sig.runtime.TransactionContext;
 
+const deinitAccountMap = sig.runtime.testing.deinitAccountMap;
+
 /// Execute an instruction described by the instruction info\
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L462-L479
 pub fn executeInstruction(
@@ -334,7 +336,7 @@ test pushInstruction {
     );
     defer {
         testing.deinitTransactionContext(allocator, tc);
-        sig.runtime.account_preload.deinit(cache, allocator);
+        deinitAccountMap(cache, allocator);
     }
 
     var instruction_info = try testing.createInstructionInfo(
@@ -417,7 +419,7 @@ test "pushInstruction sysvar account data" {
     );
     defer {
         testing.deinitTransactionContext(allocator, tc);
-        sig.runtime.account_preload.deinit(cache, allocator);
+        deinitAccountMap(cache, allocator);
     }
 
     var instruction_info = try testing.createInstructionInfo(
@@ -464,7 +466,7 @@ test "pushInstruction sysvar account too small" {
     );
     defer {
         testing.deinitTransactionContext(allocator, tc);
-        sig.runtime.account_preload.deinit(cache, allocator);
+        deinitAccountMap(cache, allocator);
     }
 
     var instruction_info = try testing.createInstructionInfo(
@@ -509,7 +511,7 @@ test "processNextInstruction" {
     );
     defer {
         testing.deinitTransactionContext(allocator, tc);
-        sig.runtime.account_preload.deinit(cache, allocator);
+        deinitAccountMap(cache, allocator);
     }
 
     var instruction_info = try testing.createInstructionInfo(
@@ -575,7 +577,7 @@ test popInstruction {
     );
     defer {
         testing.deinitTransactionContext(allocator, tc);
-        sig.runtime.account_preload.deinit(cache, allocator);
+        deinitAccountMap(cache, allocator);
     }
 
     var instruction_info = try testing.createInstructionInfo(
@@ -659,7 +661,7 @@ test prepareCpiInstructionInfo {
     );
     defer {
         testing.deinitTransactionContext(allocator, tc);
-        sig.runtime.account_preload.deinit(cache, allocator);
+        deinitAccountMap(cache, allocator);
     }
 
     const caller = try testing.createInstructionInfo(

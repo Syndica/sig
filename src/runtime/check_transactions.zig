@@ -17,7 +17,6 @@ const AccountMeta = sig.core.instruction.InstructionAccount;
 
 const account_loader = sig.runtime.account_loader;
 const AccountSharedData = sig.runtime.AccountSharedData;
-const AccountMap = sig.runtime.account_preload.AccountMap;
 const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
 const FeatureSet = sig.core.FeatureSet;
@@ -28,6 +27,8 @@ const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 
 const TransactionError = sig.ledger.transaction_status.TransactionError;
+
+const deinitAccountMap = sig.runtime.testing.deinitAccountMap;
 
 pub const CheckResult = ?error{ AlreadyProcessed, BlockhashNotFound };
 
@@ -602,8 +603,8 @@ test "checkAge: nonce account" {
         .rent_epoch = 0,
     };
 
-    var account_map = AccountMap{};
-    defer sig.runtime.account_preload.deinit(account_map, allocator);
+    var account_map = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    defer deinitAccountMap(account_map, allocator);
     try account_map.put(allocator, nonce_key, nonce_account);
 
     const instruction_data = try sig.bincode.writeAlloc(
@@ -734,8 +735,8 @@ test "checkFeePayer: happy path fee payer only" {
         .{ .pubkey = transaction.fee_payer, .is_signer = true, .is_writable = true },
     );
 
-    var account_map = AccountMap{};
-    defer sig.runtime.account_preload.deinit(account_map, allocator);
+    var account_map = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    defer deinitAccountMap(account_map, allocator);
 
     try account_map.put(allocator, transaction.fee_payer, .{
         .lamports = 1_000_000,
@@ -790,8 +791,8 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         .{ .pubkey = transaction.fee_payer, .is_signer = true, .is_writable = true },
     );
 
-    var account_map = AccountMap{};
-    defer sig.runtime.account_preload.deinit(account_map, allocator);
+    var account_map = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    defer deinitAccountMap(account_map, allocator);
 
     try account_map.put(allocator, transaction.fee_payer, .{
         .lamports = 1_000_000,
@@ -859,8 +860,8 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         .{ .pubkey = transaction.fee_payer, .is_signer = true, .is_writable = true },
     );
 
-    var account_map = AccountMap{};
-    defer sig.runtime.account_preload.deinit(account_map, allocator);
+    var account_map = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    defer deinitAccountMap(account_map, allocator);
 
     try account_map.put(allocator, transaction.fee_payer, .{
         .lamports = 1_000_000,

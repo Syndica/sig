@@ -646,13 +646,6 @@ test "loadTransactionAccounts empty transaction" {
     const accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
     const env = newTestingEnv();
 
-    var account_map = try runtime.account_preload.initFromAccountsDb(
-        allocator,
-        .{ .single_version_map = &accountsdb },
-        &.{},
-    );
-    defer runtime.account_preload.deinit(account_map, allocator);
-
     const empty_tx = RuntimeTransaction{
         .fee_payer = Pubkey.ZEROES,
         .instructions = &.{},
@@ -663,7 +656,7 @@ test "loadTransactionAccounts empty transaction" {
     };
 
     const tx_accounts = try loadTransactionAccountsOld(
-        .{ .asd_map = &account_map },
+        .{ .single_version_map = &accountsdb },
         allocator,
         &empty_tx,
         &env.rent_collector,
@@ -679,13 +672,6 @@ test "loadTransactionAccounts sysvar instruction" {
     const allocator = std.testing.allocator;
     var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
     const env = newTestingEnv();
-
-    var account_map = try runtime.account_preload.initFromAccountsDb(
-        allocator,
-        .{ .single_version_map = &accountsdb },
-        &.{},
-    );
-    defer runtime.account_preload.deinit(account_map, allocator);
 
     var accounts = std.MultiArrayList(AccountMeta).empty;
     defer accounts.deinit(allocator);
@@ -706,7 +692,7 @@ test "loadTransactionAccounts sysvar instruction" {
     };
 
     const tx_accounts = try loadTransactionAccountsOld(
-        .{ .asd_map = &account_map },
+        .{ .single_version_map = &accountsdb },
         allocator,
         &empty_tx,
         &env.rent_collector,
@@ -831,15 +817,8 @@ test "load accounts rent paid" {
         },
     };
 
-    var account_map = try runtime.account_preload.initFromAccountsDb(
-        allocator,
-        .{ .single_version_map = &accountsdb },
-        &.{tx},
-    );
-    defer runtime.account_preload.deinit(account_map, allocator);
-
     const loaded_accounts = try loadTransactionAccountsOld(
-        .{ .asd_map = &account_map },
+        .{ .single_version_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -980,15 +959,8 @@ test "load accounts with simd 186 and loaderv3 program" {
         },
     };
 
-    var account_map = try runtime.account_preload.initFromAccountsDb(
-        allocator,
-        .{ .single_version_map = &accountsdb },
-        &.{tx},
-    );
-    defer runtime.account_preload.deinit(account_map, allocator);
-
     const loaded_accounts = try loadTransactionAccountsSimd186(
-        .{ .asd_map = &account_map },
+        .{ .single_version_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1076,15 +1048,8 @@ test "loadAccount allocations" {
             var tx = try emptyTxWithKeys(allocator, &.{NATIVE_LOADER_ID});
             defer tx.accounts.deinit(allocator);
 
-            var account_map = try runtime.account_preload.initFromAccountsDb(
-                allocator,
-                .{ .single_version_map = &accountsdb },
-                &.{tx},
-            );
-            defer runtime.account_preload.deinit(account_map, allocator);
-
             const account = try loadAccount(
-                .{ .asd_map = &account_map },
+                .{ .single_version_map = &accountsdb },
                 allocator,
                 &tx,
                 &NATIVE_LOADER_ID,
@@ -1127,15 +1092,8 @@ test "load tx too large" {
     var tx = try emptyTxWithKeys(allocator, &.{address});
     defer tx.accounts.deinit(allocator);
 
-    var account_map = try runtime.account_preload.initFromAccountsDb(
-        allocator,
-        .{ .single_version_map = &accountsdb },
-        &.{tx},
-    );
-    defer runtime.account_preload.deinit(account_map, allocator);
-
     const loaded_accounts_result = loadTransactionAccountsOld(
-        .{ .asd_map = &account_map },
+        .{ .single_version_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1228,15 +1186,8 @@ test "dont double count program owner account data size" {
     };
     defer tx.accounts.deinit(allocator);
 
-    var account_map = try runtime.account_preload.initFromAccountsDb(
-        allocator,
-        .{ .single_version_map = &accountsdb },
-        &.{tx},
-    );
-    defer runtime.account_preload.deinit(account_map, allocator);
-
     const loaded_accounts = try loadTransactionAccountsOld(
-        .{ .asd_map = &account_map },
+        .{ .single_version_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1264,15 +1215,8 @@ test "load, create new account" {
     var tx = try emptyTxWithKeys(allocator, &.{new_account_pk});
     defer tx.accounts.deinit(allocator);
 
-    var account_map = try runtime.account_preload.initFromAccountsDb(
-        allocator,
-        .{ .single_version_map = &accountsdb },
-        &.{tx},
-    );
-    defer runtime.account_preload.deinit(account_map, allocator);
-
     const loaded_accounts = try loadTransactionAccountsOld(
-        .{ .asd_map = &account_map },
+        .{ .single_version_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1326,15 +1270,8 @@ test "invalid program owner owner" {
         },
     };
 
-    var account_map = try runtime.account_preload.initFromAccountsDb(
-        allocator,
-        .{ .single_version_map = &accountsdb },
-        &.{tx},
-    );
-    defer runtime.account_preload.deinit(account_map, allocator);
-
     const loaded_accounts_result = loadTransactionAccountsOld(
-        .{ .asd_map = &account_map },
+        .{ .single_version_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1377,15 +1314,8 @@ test "missing program owner account" {
         },
     };
 
-    var account_map = try runtime.account_preload.initFromAccountsDb(
-        allocator,
-        .{ .single_version_map = &accountsdb },
-        &.{tx},
-    );
-    defer runtime.account_preload.deinit(account_map, allocator);
-
     const loaded_accounts_result = loadTransactionAccountsOld(
-        .{ .asd_map = &account_map },
+        .{ .single_version_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1420,21 +1350,14 @@ test "deallocate account" {
 
     // load with the account being alive
 
-    var account_map = try runtime.account_preload.initFromAccountsDb(
-        allocator,
-        .{ .single_version_map = &accountsdb },
-        &.{tx},
-    );
-    defer runtime.account_preload.deinit(account_map, allocator);
-
-    try std.testing.expect(account_map.get(dying_account).?.data.len > 0);
+    try std.testing.expect(accountsdb.get(dying_account).?.data.len() > 0);
 
     // "previous transaction" makes the account dead
-    account_map.getPtr(dying_account).?.lamports = 0;
+    accountsdb.getPtr(dying_account).?.lamports = 0;
 
     // load with the account being dead
     const loaded_accounts = try loadTransactionAccountsOld(
-        .{ .asd_map = &account_map },
+        .{ .single_version_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1509,15 +1432,8 @@ test "load v3 program" {
         },
     };
 
-    var account_map = try runtime.account_preload.initFromAccountsDb(
-        allocator,
-        .{ .single_version_map = &accountsdb },
-        &.{tx},
-    );
-    defer runtime.account_preload.deinit(account_map, allocator);
-
     const loaded_accounts = try loadTransactionAccountsOld(
-        .{ .asd_map = &account_map },
+        .{ .single_version_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1532,8 +1448,8 @@ test "load v3 program" {
     try std.testing.expectEqual(pk_v3_program, loaded_accounts.accounts.slice()[0].pubkey);
 
     // v3 program + its owner (v3 loader) + v3 programdata
-    try std.testing.expectEqual(3, account_map.count());
-    try std.testing.expect(account_map.contains(pk_v3_program));
-    try std.testing.expect(account_map.contains(pk_programdata));
-    try std.testing.expect(account_map.contains(runtime.program.bpf_loader.v3.ID));
+    try std.testing.expectEqual(3, accountsdb.count());
+    try std.testing.expect(accountsdb.contains(pk_v3_program));
+    try std.testing.expect(accountsdb.contains(pk_programdata));
+    try std.testing.expect(accountsdb.contains(runtime.program.bpf_loader.v3.ID));
 }

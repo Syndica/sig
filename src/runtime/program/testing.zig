@@ -79,7 +79,7 @@ pub fn expectProgramExecuteResult(
             }
         }
         deinitTransactionContext(allocator, initial_tc);
-        sig.runtime.account_preload.deinit(initial_cache, allocator);
+        sig.runtime.testing.deinitAccountMap(initial_cache, allocator);
     }
 
     // Create the expected transaction context
@@ -92,7 +92,7 @@ pub fn expectProgramExecuteResult(
     );
     defer {
         deinitTransactionContext(allocator, expected_tc);
-        sig.runtime.account_preload.deinit(expected_cache, allocator);
+        sig.runtime.testing.deinitAccountMap(expected_cache, allocator);
     }
 
     // Create the instruction info

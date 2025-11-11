@@ -3995,7 +3995,7 @@ test checkProgramAccount {
     });
     defer {
         testing.deinitTransactionContext(allocator, tc);
-        sig.runtime.account_preload.deinit(cache, allocator);
+        sig.runtime.testing.deinitAccountMap(cache, allocator);
     }
 
     var info = try testing.createInstructionInfo(

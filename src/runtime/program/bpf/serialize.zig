@@ -847,7 +847,7 @@ test serializeParameters {
             );
             defer {
                 deinitTransactionContext(allocator, tc);
-                sig.runtime.account_preload.deinit(cache, allocator);
+                sig.runtime.testing.deinitAccountMap(cache, allocator);
             }
 
             const instruction_info = try createInstructionInfo(

@@ -15,7 +15,6 @@ const Instruction = sig.core.Instruction;
 const InstructionAccount = sig.core.instruction.InstructionAccount;
 const InstructionError = sig.core.instruction.InstructionError;
 
-const AccountMap = sig.runtime.account_preload.AccountMap;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const InstructionContext = sig.runtime.InstructionContext;
@@ -1181,7 +1180,7 @@ pub fn invokeSignedRust(
 const testing = sig.runtime.testing;
 
 const TestContext = struct {
-    cache: AccountMap,
+    cache: std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData),
     tc: *TransactionContext,
     ic: InstructionContext,
 
@@ -1211,7 +1210,7 @@ const TestContext = struct {
         });
         errdefer {
             testing.deinitTransactionContext(allocator, tc.*);
-            sig.runtime.account_preload.deinit(cache, allocator);
+            sig.runtime.testing.deinitAccountMap(cache, allocator);
         }
 
         try sig.runtime.executor.pushInstruction(tc, try testing.createInstructionInfo(
@@ -1235,7 +1234,7 @@ const TestContext = struct {
         testing.deinitTransactionContext(allocator, self.tc.*);
         allocator.destroy(self.tc);
         self.ic.deinit(allocator);
-        sig.runtime.account_preload.deinit(self.cache, allocator);
+        sig.runtime.testing.deinitAccountMap(self.cache, allocator);
     }
 
     fn getAccount(self: *const TestContext) TestAccount {
