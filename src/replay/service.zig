@@ -545,7 +545,7 @@ test "getActiveFeatures rejects wrong ownership" {
         acct,
     );
 
-    const features = try getActiveFeatures(allocator, .{ .single_version_map = &accounts }, 0);
+    const features = try getActiveFeatures(allocator, .{ .account_map = &accounts }, 0);
     try std.testing.expect(!features.active(.system_transfer_zero_check, 1));
 
     acct.owner = sig.runtime.ids.FEATURE_PROGRAM_ID;
@@ -555,7 +555,7 @@ test "getActiveFeatures rejects wrong ownership" {
         acct,
     );
 
-    const features2 = try getActiveFeatures(allocator, .{ .single_version_map = &accounts }, 0);
+    const features2 = try getActiveFeatures(allocator, .{ .account_map = &accounts }, 0);
     try std.testing.expect(features2.active(.system_transfer_zero_check, 1));
 }
 

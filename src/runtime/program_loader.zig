@@ -92,7 +92,7 @@ pub fn loadPrograms(
             &programs,
             address,
             &account,
-            .{ .asd_map = accounts },
+            .{ .account_shared_data_map = accounts },
             enviroment,
             slot,
         );

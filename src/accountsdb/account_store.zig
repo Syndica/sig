@@ -189,7 +189,10 @@ pub const SlotAccountStore = union(enum) {
     /// Contains many versions of accounts and becomes fork-aware using
     /// ancestors, like accountsdb.
     thread_safe_map: struct { *ThreadSafeAccountMap, Slot, *const Ancestors },
-    asd_map: struct { Allocator, *std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData) },
+    account_shared_data_map: struct {
+        Allocator,
+        *std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    },
     noop,
 
     pub fn put(self: SlotAccountStore, address: Pubkey, account: AccountSharedData) !void {
@@ -205,7 +208,7 @@ pub const SlotAccountStore = union(enum) {
                 const map, const slot, _ = tuple;
                 try map.put(slot, address, account);
             },
-            .asd_map => |tuple| {
+            .account_shared_data_map => |tuple| {
                 const allocator, const map = tuple;
                 const account_to_store = try account.clone(allocator);
                 errdefer account_to_store.deinit(allocator);
@@ -219,7 +222,7 @@ pub const SlotAccountStore = union(enum) {
         return switch (self) {
             .accounts_db => |tuple| .{ .accounts_db = .{ tuple[0], tuple[2] } },
             .thread_safe_map => |tuple| .{ .thread_safe_map = .{ tuple[0], tuple[2] } },
-            .asd_map => |tuple| .{ .asd_map = tuple[1] },
+            .account_shared_data_map => |tuple| .{ .account_shared_data_map = tuple[1] },
             .noop => .noop,
         };
     }
@@ -232,10 +235,9 @@ pub const SlotAccountReader = union(enum) {
     thread_safe_map: struct { *ThreadSafeAccountMap, *const Ancestors },
     /// Only stores the current slot's version of each account.
     /// Should only store borrowed accounts, or else it will panic on deinit.
-    single_version_map: *const std.AutoArrayHashMapUnmanaged(Pubkey, Account),
-    /// same as `single_version_map` but with AccountSharedData
-    /// TODO: consolidate?
-    asd_map: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    account_map: *const std.AutoArrayHashMapUnmanaged(Pubkey, Account),
+    /// same as `account_map` but stores AccountSharedData
+    account_shared_data_map: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
     noop,
 
     pub fn get(self: SlotAccountReader, alloc: std.mem.Allocator, address: Pubkey) !?Account {
@@ -254,8 +256,8 @@ pub const SlotAccountReader = union(enum) {
                 return account;
             },
             .thread_safe_map => |pair| pair[0].get(address, pair[1]),
-            .single_version_map => |pair| pair.get(address),
-            .asd_map => |map| {
+            .account_map => |pair| pair.get(address),
+            .account_shared_data_map => |map| {
                 const asd = map.get(address) orelse return null;
                 return .{
                     .lamports = asd.lamports,

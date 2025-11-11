@@ -823,7 +823,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         const result = try loadAndExecuteTransaction(
             allocator,
             &transaction,
-            .{ .asd_map = .{ allocator, &account_map } },
+            .{ .account_shared_data_map = .{ allocator, &account_map } },
             &environment,
             &config,
             &program_map,
@@ -859,7 +859,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         const result = try loadAndExecuteTransaction(
             allocator,
             &transaction,
-            .{ .asd_map = .{ allocator, &account_map } },
+            .{ .account_shared_data_map = .{ allocator, &account_map } },
             &environment,
             &config,
             &program_map,

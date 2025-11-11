@@ -656,7 +656,7 @@ test "loadTransactionAccounts empty transaction" {
     };
 
     const tx_accounts = try loadTransactionAccountsOld(
-        .{ .single_version_map = &accountsdb },
+        .{ .account_map = &accountsdb },
         allocator,
         &empty_tx,
         &env.rent_collector,
@@ -692,7 +692,7 @@ test "loadTransactionAccounts sysvar instruction" {
     };
 
     const tx_accounts = try loadTransactionAccountsOld(
-        .{ .single_version_map = &accountsdb },
+        .{ .account_map = &accountsdb },
         allocator,
         &empty_tx,
         &env.rent_collector,
@@ -818,7 +818,7 @@ test "load accounts rent paid" {
     };
 
     const loaded_accounts = try loadTransactionAccountsOld(
-        .{ .single_version_map = &accountsdb },
+        .{ .account_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -960,7 +960,7 @@ test "load accounts with simd 186 and loaderv3 program" {
     };
 
     const loaded_accounts = try loadTransactionAccountsSimd186(
-        .{ .single_version_map = &accountsdb },
+        .{ .account_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1049,7 +1049,7 @@ test "loadAccount allocations" {
             defer tx.accounts.deinit(allocator);
 
             const account = try loadAccount(
-                .{ .single_version_map = &accountsdb },
+                .{ .account_map = &accountsdb },
                 allocator,
                 &tx,
                 &NATIVE_LOADER_ID,
@@ -1093,7 +1093,7 @@ test "load tx too large" {
     defer tx.accounts.deinit(allocator);
 
     const loaded_accounts_result = loadTransactionAccountsOld(
-        .{ .single_version_map = &accountsdb },
+        .{ .account_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1187,7 +1187,7 @@ test "dont double count program owner account data size" {
     defer tx.accounts.deinit(allocator);
 
     const loaded_accounts = try loadTransactionAccountsOld(
-        .{ .single_version_map = &accountsdb },
+        .{ .account_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1216,7 +1216,7 @@ test "load, create new account" {
     defer tx.accounts.deinit(allocator);
 
     const loaded_accounts = try loadTransactionAccountsOld(
-        .{ .single_version_map = &accountsdb },
+        .{ .account_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1271,7 +1271,7 @@ test "invalid program owner owner" {
     };
 
     const loaded_accounts_result = loadTransactionAccountsOld(
-        .{ .single_version_map = &accountsdb },
+        .{ .account_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1315,7 +1315,7 @@ test "missing program owner account" {
     };
 
     const loaded_accounts_result = loadTransactionAccountsOld(
-        .{ .single_version_map = &accountsdb },
+        .{ .account_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1357,7 +1357,7 @@ test "deallocate account" {
 
     // load with the account being dead
     const loaded_accounts = try loadTransactionAccountsOld(
-        .{ .single_version_map = &accountsdb },
+        .{ .account_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,
@@ -1433,7 +1433,7 @@ test "load v3 program" {
     };
 
     const loaded_accounts = try loadTransactionAccountsOld(
-        .{ .single_version_map = &accountsdb },
+        .{ .account_map = &accountsdb },
         allocator,
         &tx,
         &env.rent_collector,

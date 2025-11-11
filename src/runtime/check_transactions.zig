@@ -673,7 +673,7 @@ test "checkAge: nonce account" {
     const result = try checkAge(
         allocator,
         &transaction,
-        .{ .asd_map = &account_map },
+        .{ .account_shared_data_map = &account_map },
         &blockhash_queue,
         0,
         &next_durable_nonce,
@@ -749,7 +749,7 @@ test "checkFeePayer: happy path fee payer only" {
     const result = try checkFeePayer(
         allocator,
         &transaction,
-        .{ .asd_map = .{ allocator, &account_map } },
+        .{ .account_shared_data_map = .{ allocator, &account_map } },
         &ComputeBudgetLimits.DEFAULT,
         null,
         &sig.core.rent_collector.defaultCollector(10),
@@ -813,7 +813,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
     const result = try checkFeePayer(
         allocator,
         &transaction,
-        .{ .asd_map = .{ allocator, &account_map } },
+        .{ .account_shared_data_map = .{ allocator, &account_map } },
         &ComputeBudgetLimits.DEFAULT,
         .{
             .pubkey = transaction.fee_payer,
@@ -882,7 +882,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
     const result = try checkFeePayer(
         allocator,
         &transaction,
-        .{ .asd_map = .{ allocator, &account_map } },
+        .{ .account_shared_data_map = .{ allocator, &account_map } },
         &ComputeBudgetLimits.DEFAULT,
         .{
             .pubkey = Pubkey.initRandom(prng.random()),
