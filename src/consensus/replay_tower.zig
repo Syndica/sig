@@ -1707,26 +1707,33 @@ fn checkVoteStakeThreshold(
         return .passed_threshold;
     };
 
-    std.debug.print("  Checking threshold_vote.slot={} in voted_stakes...\n", .{threshold_vote.slot});
     const fork_stake = voted_stakes.get(threshold_vote.slot) orelse {
-        std.debug.print("  >>> MISSING: slot {} NOT in voted_stakes (returning observed_stake=0)\n", .{threshold_vote.slot});
-        std.debug.print("  >>> voted_stakes has {} total entries\n", .{voted_stakes.count()});
-        // Print some nearby slots that ARE in voted_stakes
+        // This slot has no observed stake in voted_stakes
+        std.debug.print("\n=== THRESHOLD CHECK FAILED (observed_stake=0) ===\n", .{});
+        std.debug.print("  Checking slot: {}\n", .{threshold_vote.slot});
+        std.debug.print("  Current fork slot: {}\n", .{slot});
+        std.debug.print("  Threshold depth: {}\n", .{threshold_depth});
+        std.debug.print("  voted_stakes has {} entries\n", .{voted_stakes.count()});
+
+        // Show what slots ARE in voted_stakes
         var it = voted_stakes.iterator();
         var count: usize = 0;
-        std.debug.print("  >>> Sample of slots IN voted_stakes:\n", .{});
+        std.debug.print("  Slots IN voted_stakes: ", .{});
         while (it.next()) |entry| : (count += 1) {
-            if (count < 10) {
-                std.debug.print("      slot {} => stake {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+            if (count < 15) {
+                std.debug.print("{} ", .{entry.key_ptr.*});
             }
         }
+        if (voted_stakes.count() > 15) {
+            std.debug.print("... +{} more", .{voted_stakes.count() - 15});
+        }
+        std.debug.print("\n=== END THRESHOLD CHECK ===\n\n", .{});
+
         // We haven't seen any votes on this fork yet, so no stake
         return .{
             .failed_threshold = .{ .vote_depth = threshold_depth, .observed_stake = 0 },
         };
     };
-
-    std.debug.print("  FOUND: slot {} has fork_stake={}\n", .{ threshold_vote.slot, fork_stake });
 
     const lockout = @as(f64, @floatFromInt(fork_stake)) / @as(
         f64,
@@ -1753,7 +1760,16 @@ fn checkVoteStakeThreshold(
         return .passed_threshold;
     }
 
-    std.debug.print("foiled here {}\n", .{2});
+    // Threshold not met even with observed stake
+    std.debug.print("\n=== THRESHOLD CHECK FAILED (insufficient stake) ===\n", .{});
+    std.debug.print("  Checking slot: {}\n", .{threshold_vote.slot});
+    std.debug.print("  Current fork slot: {}\n", .{slot});
+    std.debug.print("  Threshold depth: {}\n", .{threshold_depth});
+    std.debug.print("  Observed stake: {}\n", .{fork_stake});
+    std.debug.print("  Total stake: {}\n", .{total_stake});
+    std.debug.print("  Lockout: {d:.4} (need > {d:.4})\n", .{ lockout, threshold_size });
+    std.debug.print("=== END THRESHOLD CHECK ===\n\n", .{});
+
     return .{
         .failed_threshold = .{
             .vote_depth = threshold_depth,
@@ -1918,32 +1934,9 @@ pub fn collectClusterVoteState(
         total_stake += vote.stake;
     }
 
-    std.debug.print("\n=== DEBUG collectClusterVoteState for bank_slot={} ===\n", .{bank_slot});
-    std.debug.print("Collected {} vote_slots from validators:\n", .{vote_slots.count()});
-    const vote_slots_array = vote_slots.items();
-    for (vote_slots_array, 0..) |vs, i| {
-        if (i < 20) {
-            std.debug.print("  vote_slot[{}]: {}\n", .{ i, vs });
-        }
-    }
-    if (vote_slots_array.len > 20) {
-        std.debug.print("  ... and {} more\n", .{vote_slots_array.len - 20});
-    }
-
-    std.debug.print("voted_stakes BEFORE populateAncestorVotedStakes: {} entries\n", .{voted_stakes.count()});
-
-    // DEBUG: Show what's in the ancestors map
-    std.debug.print("DEBUG: ancestors map details:\n", .{});
-    std.debug.print("  Total entries in ancestors map: {}\n", .{ancestors.count()});
-    var anc_it = ancestors.iterator();
-    var anc_count: usize = 0;
-    while (anc_it.next()) |entry| : (anc_count += 1) {
-        if (anc_count < 10) {
-            std.debug.print("  ancestors[{}]: slot={}, has {} ancestors\n", .{ anc_count, entry.key_ptr.*, entry.value_ptr.ancestors.count() });
-        }
-    }
-    if (ancestors.count() > 10) {
-        std.debug.print("  ... and {} more slots in ancestors map\n", .{ancestors.count() - 10});
+    // Simplified debug - only show summary
+    if (voted_stakes.count() == 0) {
+        std.debug.print("[bank_slot={}] Initial voted_stakes empty, ancestors has {} slots\n", .{ bank_slot, ancestors.count() });
     }
 
     try populateAncestorVotedStakes(
@@ -1953,8 +1946,21 @@ pub fn collectClusterVoteState(
         ancestors,
     );
 
-    std.debug.print("voted_stakes AFTER populateAncestorVotedStakes: {} entries\n", .{voted_stakes.count()});
-    std.debug.print("=== END collectClusterVoteState ===\n\n", .{});
+    // Show what slots are in voted_stakes after population
+    if (voted_stakes.count() < 100) {
+        std.debug.print("[bank_slot={}] voted_stakes now has {} entries: ", .{ bank_slot, voted_stakes.count() });
+        var vs_it = voted_stakes.iterator();
+        var vs_count: usize = 0;
+        while (vs_it.next()) |entry| : (vs_count += 1) {
+            if (vs_count < 20) {
+                std.debug.print("{} ", .{entry.key_ptr.*});
+            }
+        }
+        if (voted_stakes.count() > 20) {
+            std.debug.print("... +{} more", .{voted_stakes.count() - 20});
+        }
+        std.debug.print("\n", .{});
+    }
 
     // As commented above, since the votes at current bank_slot are
     // simulated votes, the voted_stake for `bank_slot` is not populated.
@@ -2014,32 +2020,15 @@ pub fn populateAncestorVotedStakes(
     // in which case the lockouts won't be calculated in bank_weight anyways, so ignore
     // this slot
 
-    std.debug.print("=== populateAncestorVotedStakes ===\n", .{});
-    std.debug.print("ancestors map has {} entries\n", .{ancestors.count()});
-    var skipped_count: usize = 0;
-    var added_count: usize = 0;
-
+    // Remove verbose debug logging - it's correct that ancient votes are skipped
     for (vote_slots) |vote_slot| {
         if (ancestors.getPtr(vote_slot)) |slot_ancestors| {
             _ = try voted_stakes.getOrPutValue(allocator, vote_slot, 0);
-            added_count += 1;
-
             for (slot_ancestors.ancestors.keys()) |slot| {
                 _ = try voted_stakes.getOrPutValue(allocator, slot, 0);
             }
-        } else {
-            skipped_count += 1;
-            if (skipped_count <= 10) {
-                std.debug.print("  SKIP: vote_slot {} not in ancestors map\n", .{vote_slot});
-            }
         }
     }
-
-    std.debug.print("Added {} vote_slots, skipped {} (not in ancestors)\n", .{ added_count, skipped_count });
-    if (skipped_count > 10) {
-        std.debug.print("  (only showed first 10 skipped)\n", .{});
-    }
-    std.debug.print("=== END populateAncestorVotedStakes ===\n\n", .{});
 }
 
 fn updateAncestorVotedStakes(
