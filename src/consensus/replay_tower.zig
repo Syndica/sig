@@ -732,20 +732,33 @@ pub const ReplayTower = struct {
             // 3) candidate is the last voted slot
             // 4) candidate is at or before root
             // 5) candidate is not a valid switching proof vote
-            const skip_candidate = !is_progress_computed or
-                is_descendant_computed or
-                candidate_slot == last_voted_slot or
-                candidate_slot <= root or
-                !self.isValidSwitchingProofVote(
-                    candidate_slot,
-                    last_voted_slot,
-                    switch_slot,
-                    ancestors,
-                    &last_vote_ancestors,
-                ).?;
+            const cond_no_progress = !is_progress_computed;
+            const cond_descendant_computed = is_descendant_computed;
+            const cond_is_last_voted = candidate_slot == last_voted_slot;
+            const cond_at_or_below_root = candidate_slot <= root;
+            const cond_not_valid_switch = !self.isValidSwitchingProofVote(
+                candidate_slot,
+                last_voted_slot,
+                switch_slot,
+                ancestors,
+                &last_vote_ancestors,
+            ).?;
+
+            const skip_candidate = cond_no_progress or
+                cond_descendant_computed or
+                cond_is_last_voted or
+                cond_at_or_below_root or
+                cond_not_valid_switch;
 
             if (skip_candidate) {
                 candidates_skipped += 1;
+                // Log the first few skipped candidates with details
+                if (candidates_skipped <= 3) {
+                    self.logger.info().logf(
+                        "switch threshold: skipping candidate {}: no_progress={}, descendant_computed={}, is_last_voted={}, at_or_below_root={}, not_valid_switch={}",
+                        .{ candidate_slot, cond_no_progress, cond_descendant_computed, cond_is_last_voted, cond_at_or_below_root, cond_not_valid_switch },
+                    );
+                }
                 continue;
             }
 
