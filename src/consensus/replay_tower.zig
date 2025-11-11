@@ -1409,7 +1409,7 @@ pub const ReplayTower = struct {
         var threshold_passed = true;
         for (vote_thresholds.items) |threshold_failure| {
             if (threshold_failure != .failed_threshold) continue;
-
+            std.debug.print("foiled here with {any}\n", .{threshold_failure});
             const vote_depth = threshold_failure.failed_threshold.vote_depth;
             const fork_stake = threshold_failure.failed_threshold.observed_stake;
             try failure_reasons.append(allocator, .{ .FailedThreshold = .{
