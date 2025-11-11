@@ -1932,6 +1932,20 @@ pub fn collectClusterVoteState(
 
     std.debug.print("voted_stakes BEFORE populateAncestorVotedStakes: {} entries\n", .{voted_stakes.count()});
 
+    // DEBUG: Show what's in the ancestors map
+    std.debug.print("DEBUG: ancestors map details:\n", .{});
+    std.debug.print("  Total entries in ancestors map: {}\n", .{ancestors.count()});
+    var anc_it = ancestors.iterator();
+    var anc_count: usize = 0;
+    while (anc_it.next()) |entry| : (anc_count += 1) {
+        if (anc_count < 10) {
+            std.debug.print("  ancestors[{}]: slot={}, has {} ancestors\n", .{ anc_count, entry.key_ptr.*, entry.value_ptr.ancestors.count() });
+        }
+    }
+    if (ancestors.count() > 10) {
+        std.debug.print("  ... and {} more slots in ancestors map\n", .{ancestors.count() - 10});
+    }
+
     try populateAncestorVotedStakes(
         allocator,
         &voted_stakes,
