@@ -334,6 +334,8 @@ pub const VoteListenerMetrics = struct {
     replay_votes_received: *sig.prometheus.Counter,
     gossip_votes_processed: *sig.prometheus.Counter,
     replay_votes_processed: *sig.prometheus.Counter,
+    optimistic_confirmed_slot: *sig.prometheus.Gauge(Slot),
+    duplicate_confirmed_slot: *sig.prometheus.Gauge(Slot),
 
     pub const prefix = "vote_listener";
 
@@ -540,6 +542,7 @@ fn filterAndConfirmWithNewVotes(
                 &new_optimistic_confirmed_slots,
                 is_gossip,
                 latest_vote_slot_per_validator,
+                metrics,
             );
             if (is_gossip)
                 metrics.gossip_votes_processed.inc()
@@ -804,6 +807,7 @@ fn trackNewVotesAndNotifyConfirmations(
     new_optimistic_confirmed_slots: *std.ArrayListUnmanaged(ThresholdConfirmedSlot),
     is_gossip_vote: bool,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+    metrics: VoteListenerMetrics,
 ) std.mem.Allocator.Error!void {
     if (vote.isEmpty()) return;
     const root = slot_data_provider.rootSlot();
@@ -900,7 +904,7 @@ fn trackNewVotesAndNotifyConfirmations(
 
             if (reached_threshold_results.isSet(0)) {
                 logger.info().logf(
-                    "slot {} with hash {} reached duplicate confirmation threshold",
+                    "slot {} with hash {f} reached duplicate confirmation threshold",
                     .{ slot, hash },
                 );
                 senders.duplicate_confirmed_slots.append(allocator, .{
@@ -912,13 +916,20 @@ fn trackNewVotesAndNotifyConfirmations(
                         .{ @errorName(err), slot, hash },
                     );
                 };
+                metrics.duplicate_confirmed_slot.set(slot);
             }
 
             if (reached_threshold_results.isSet(1)) {
+                logger.info().logf(
+                    "slot {} with hash {f} optimistic confirmation threshold",
+                    .{ slot, hash },
+                );
                 try new_optimistic_confirmed_slots.append(allocator, .{
                     .slot = slot,
                     .hash = hash,
                 });
+                metrics.optimistic_confirmed_slot.set(slot);
+
                 // Notify subscribers about new optimistic confirmation
                 if (senders.bank_notification) |sender| {
                     sender.send(.{ .optimistically_confirmed = slot }) catch |err| {
