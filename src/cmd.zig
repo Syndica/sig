@@ -1017,34 +1017,20 @@ fn identity(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     logger.info().logf("Identity: {s}\n", .{pubkey});
 }
 
-/// Reads a Solana JSON keypair file and returns its public key as `Pubkey`.
-fn readJsonKeypairPubkey(allocator: std.mem.Allocator, path: []const u8) !Pubkey {
+/// Reads a binary keypair file and returns its public key as `Pubkey`.
+fn readBinaryKeypairPubkey(path: []const u8) !Pubkey {
     var file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
-    const stat = try file.stat();
-    const buf = try allocator.alloc(u8, @intCast(stat.size));
-    defer allocator.free(buf);
-    _ = try file.readAll(buf);
+    var buf: [std.crypto.sign.Ed25519.SecretKey.encoded_length]u8 = undefined;
 
-    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, buf, .{});
-    defer parsed.deinit();
+    const end_pos = try file.getEndPos();
+    if (end_pos != buf.len) return error.InvalidKeypairFile;
 
-    const root = parsed.value;
-    if (root != .array) return error.InvalidKeypairFormat;
-    const arr = root.array;
-    // Solana JSON keypair stores 64-byte secret key
-    if (arr.items.len < 64) return error.InvalidKeypairFormat;
-    var sk_bytes: [64]u8 = undefined;
-    var i: usize = 0;
-    while (i < 64) : (i += 1) {
-        const v = arr.items[i];
-        if (v != .integer) return error.InvalidKeypairFormat;
-        const n = v.integer;
-        if (n < 0 or n > 255) return error.InvalidKeypairFormat;
-        sk_bytes[i] = @intCast(n);
-    }
-    const secret_key = try std.crypto.sign.Ed25519.SecretKey.fromBytes(sk_bytes);
+    const file_len = try file.readAll(&buf);
+    if (file_len != buf.len) return error.InvalidKeypairFile;
+
+    const secret_key = try std.crypto.sign.Ed25519.SecretKey.fromBytes(buf);
     const keypair = try std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key);
     return Pubkey.fromPublicKey(&keypair.public_key);
 }
@@ -1253,9 +1239,13 @@ fn validator(
     else
         null;
 
-    const vote_keypair_path = cfg.vote_account_path orelse "/vote-account-keypair.json";
-    const maybe_vote_pubkey: ?Pubkey = readJsonKeypairPubkey(allocator, vote_keypair_path) catch blk: {
-        app_base.logger.info().logf("vote-account: failed to read {s}; using identity as vote account", .{vote_keypair_path});
+    const vote_keypair_path = cfg.vote_account_path orelse "/vote-account-keypair.key";
+    const maybe_vote_pubkey: ?Pubkey = readBinaryKeypairPubkey(vote_keypair_path) catch |err| blk: {
+        if (cfg.voting_enabled) {
+            app_base.logger.err().logf("vote-account: failed to read {s}: {}", .{ vote_keypair_path, err });
+            return error.VoteAccountRequired;
+        }
+        app_base.logger.info().logf("vote-account: failed to read {s}; voting disabled so continuing without vote account", .{vote_keypair_path});
         break :blk null;
     };
 
@@ -1427,7 +1417,7 @@ fn replayOffline(
         null;
 
     const maybe_vote_pubkey_offline: ?Pubkey = if (cfg.vote_account_path) |p|
-        try readJsonKeypairPubkey(allocator, p)
+        try readBinaryKeypairPubkey(p)
     else
         null;
 
@@ -2138,7 +2128,12 @@ const ReplayAndConsensusServiceState = struct {
                 .logger = .from(params.app_base.logger),
                 .identity = .{
                     .validator = .fromPublicKey(&params.app_base.my_keypair.public_key),
-                    .vote_account = if (params.vote_account_pubkey) |vpk| vpk else .fromPublicKey(&params.app_base.my_keypair.public_key),
+                    .vote_account = params.vote_account_pubkey orelse blk: {
+                        // When voting is enabled, vote_account_pubkey is required and checked earlier
+                        // If we reach here with null, voting must be disabled - use a zeroed pubkey
+                        std.debug.assert(!params.voting_enabled);
+                        break :blk Pubkey.ZEROES;
+                    },
                 },
                 .signing = .{
                     .node = params.app_base.my_keypair,
