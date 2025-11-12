@@ -162,6 +162,7 @@ pub fn createTransactionContext(
     for (account_keys.items) |key| {
         const cached_account = account_map.getPtr(key) orelse unreachable;
         const account = try allocator.create(sig.runtime.AccountSharedData);
+        errdefer allocator.destroy(account);
         account.* = try cached_account.clone(allocator);
         accounts.appendAssumeCapacity(TransactionContextAccount.init(key, account));
     }
