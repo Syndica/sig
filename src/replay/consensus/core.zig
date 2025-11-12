@@ -1477,8 +1477,28 @@ fn checkAndHandleNewRoot(
     // Update the slot tracker.
     // Set new root.
     slot_tracker.root = new_root;
+
+    // Build descendants map for pruning
+    // TODO: Consider caching this or passing it from the caller to avoid rebuilding
+    const SlotSet = SortedSetUnmanaged(Slot);
+    var descendants_map: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
+    defer {
+        for (descendants_map.values()) |*set| set.deinit(allocator);
+        descendants_map.deinit(allocator);
+    }
+
+    // Build descendants from ancestors in slot_tracker
+    for (slot_tracker.slots.keys(), slot_tracker.slots.values()) |slot, info| {
+        const slot_ancestors = &info.constants.ancestors.ancestors;
+        for (slot_ancestors.keys()) |ancestor_slot| {
+            const gop = try descendants_map.getOrPutValue(allocator, ancestor_slot, .empty);
+            try gop.value_ptr.put(allocator, slot);
+        }
+    }
+
     // Prune non rooted slots
-    slot_tracker.pruneNonRooted(allocator);
+    // TODO: Track highest_super_majority_root and pass it here
+    slot_tracker.pruneNonRooted(allocator, &descendants_map, null);
 
     // TODO
     // - Prune program cache bank_forks.read().unwrap().prune_program_cache(new_root);
@@ -1486,7 +1506,7 @@ fn checkAndHandleNewRoot(
     //   - cleare reward cache root_bank.clear_epoch_rewards_cache
     //   - extend banks banks.extend(parents.iter());
     //   - operations around snapshot_controller
-    //   - After setting a new root, prune the banks that are no longer on rooted paths self.prune_non_rooted(root, highest_super_majority_root);
+    //   - Track and pass highest_super_majority_root to pruneNonRooted
 
     // Update the progress map.
     // Remove entries from the progress map no longer in the slot tracker.

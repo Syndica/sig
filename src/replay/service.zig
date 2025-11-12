@@ -519,7 +519,25 @@ fn bypassConsensus(state: *ReplayState) !void {
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root = new_root;
-        slot_tracker.pruneNonRooted(state.allocator);
+
+        // Build descendants map for pruning
+        const SlotSet = sig.utils.collections.SortedSetUnmanaged(Slot);
+        var descendants_map: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
+        defer {
+            for (descendants_map.values()) |*set| set.deinit(state.allocator);
+            descendants_map.deinit(state.allocator);
+        }
+
+        // Build descendants from ancestors in slot_tracker
+        for (slot_tracker.slots.keys(), slot_tracker.slots.values()) |slot, info| {
+            const slot_ancestors = &info.constants.ancestors.ancestors;
+            for (slot_ancestors.keys()) |ancestor_slot| {
+                const gop = try descendants_map.getOrPutValue(state.allocator, ancestor_slot, .empty);
+                try gop.value_ptr.put(state.allocator, slot);
+            }
+        }
+
+        slot_tracker.pruneNonRooted(state.allocator, &descendants_map, null);
 
         try state.account_store.onSlotRooted(
             state.allocator,

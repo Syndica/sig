@@ -181,26 +181,58 @@ pub const SlotTracker = struct {
     }
 
     /// Analogous to [prune_non_rooted](https://github.com/anza-xyz/agave/blob/441258229dfed75e45be8f99c77865f18886d4ba/runtime/src/bank_forks.rs#L591)
-    //  TODO Revisit: Currently this removes all slots less than the rooted slot.
-    // In Agave, only the slots not in the root path are removed.
-    pub fn pruneNonRooted(self: *SlotTracker, allocator: Allocator) void {
+    pub fn pruneNonRooted(
+        self: *SlotTracker,
+        allocator: Allocator,
+        descendants_map: *const std.AutoArrayHashMapUnmanaged(Slot, sig.utils.collections.SortedSetUnmanaged(Slot)),
+        highest_super_majority_root: ?Slot,
+    ) void {
         const zone = tracy.Zone.init(@src(), .{ .name = "SlotTracker.pruneNonRooted" });
         defer zone.deinit();
-
         defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
+
+        const root = self.root;
+        const hsm_root = highest_super_majority_root orelse root;
+
+        // Get descendants of root for checking
+        const root_descendants = descendants_map.get(root);
 
         var slice = self.slots.entries.slice();
         var index: usize = 0;
         while (index < slice.len) {
-            if (slice.items(.key)[index] < self.root) {
+            const slot = slice.items(.key)[index];
+
+            // Determine if we should KEEP this slot
+            const should_keep = blk: {
+                // Condition 1: Keep the root itself
+                if (slot == root) break :blk true;
+
+                // Condition 2: Keep descendants of root (future canonical chain)
+                if (root_descendants) |*desc| {
+                    if (desc.contains(slot)) break :blk true;
+                }
+
+                // Condition 3: Keep ancestors of root on canonical path
+                // (slot < root && slot >= hsm_root && root is a descendant of slot)
+                if (slot < root and slot >= hsm_root) {
+                    if (descendants_map.get(slot)) |*slot_descendants| {
+                        if (slot_descendants.contains(root)) break :blk true;
+                    }
+                }
+
+                break :blk false;
+            };
+
+            if (should_keep) {
+                index += 1;
+            } else {
+                // REMOVE this slot (it's on an abandoned fork)
                 const element = slice.items(.value)[index];
                 element.state.deinit(allocator);
                 element.constants.deinit(allocator);
                 allocator.destroy(element);
                 self.slots.swapRemoveAt(index);
                 slice = self.slots.entries.slice();
-            } else {
-                index += 1;
             }
         }
     }
@@ -464,8 +496,23 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
     };
 }
 
-test "SlotTracker.prune removes all slots less than root" {
+test "SlotTracker.pruneNonRooted removes abandoned forks and old ancestors" {
     const allocator = std.testing.allocator;
+    const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
+
+    // Set up fork structure:
+    //         /-- 10 -- 11 (abandoned fork A)
+    //        /
+    //   0 -- 1 -- 2 -- 3 -- 4 [ROOT] -- 5 -- 6
+    //        \
+    //         \-- 20 -- 21 (abandoned fork B)
+    //
+    // After pruning with root=4, highest_super_majority_root=2:
+    // - Keep: 2, 3, 4 (root and recent ancestors)
+    // - Keep: 5, 6 (descendants of root)
+    // - Remove: 0, 1 (too old - before highest_super_majority_root)
+    // - Remove: 10, 11, 20, 21 (abandoned forks)
+
     const root_slot: Slot = 4;
     var tracker: SlotTracker = try .init(allocator, root_slot, .{
         .constants = testDummySlotConstants(root_slot),
@@ -473,24 +520,92 @@ test "SlotTracker.prune removes all slots less than root" {
     });
     defer tracker.deinit(allocator);
 
-    // Add slots 1, 2, 3, 4, 5
-    for (1..6) |slot| {
-        const gop = try tracker.getOrPut(allocator, slot, .{
-            .constants = testDummySlotConstants(slot),
+    // Add canonical chain slots 0-6
+    for (0..7) |slot_u| {
+        const slot: Slot = @intCast(slot_u);
+        if (slot == root_slot) continue; // already added in init
+
+        var constants = testDummySlotConstants(slot);
+        // Build proper ancestor chain
+        constants.ancestors.deinit(allocator);
+        constants.ancestors = .{};
+        for (0..slot_u) |ancestor_u| {
+            const ancestor: Slot = @intCast(ancestor_u);
+            try constants.ancestors.ancestors.put(allocator, ancestor, {});
+        }
+
+        _ = try tracker.getOrPut(allocator, slot, .{
+            .constants = constants,
             .state = .GENESIS,
         });
-        if (gop.found_existing) std.debug.assert(slot == root_slot);
     }
 
-    // Prune slots less than root (4)
-    tracker.pruneNonRooted(allocator);
+    // Add abandoned fork A (10, 11) branching from slot 1
+    for ([_]Slot{ 10, 11 }) |slot| {
+        var constants = testDummySlotConstants(slot);
+        constants.ancestors.deinit(allocator);
+        constants.ancestors = .{};
+        try constants.ancestors.ancestors.put(allocator, 0, {});
+        try constants.ancestors.ancestors.put(allocator, 1, {});
+        if (slot == 11) try constants.ancestors.ancestors.put(allocator, 10, {});
 
-    // Only slots 4 and 5 should remain
+        _ = try tracker.getOrPut(allocator, slot, .{
+            .constants = constants,
+            .state = .GENESIS,
+        });
+    }
+
+    // Add abandoned fork B (20, 21) branching from slot 1
+    for ([_]Slot{ 20, 21 }) |slot| {
+        var constants = testDummySlotConstants(slot);
+        constants.ancestors.deinit(allocator);
+        constants.ancestors = .{};
+        try constants.ancestors.ancestors.put(allocator, 0, {});
+        try constants.ancestors.ancestors.put(allocator, 1, {});
+        if (slot == 21) try constants.ancestors.ancestors.put(allocator, 20, {});
+
+        _ = try tracker.getOrPut(allocator, slot, .{
+            .constants = constants,
+            .state = .GENESIS,
+        });
+    }
+
+    // Build descendants map
+    var descendants_map: std.AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)) = .empty;
+    defer {
+        for (descendants_map.values()) |*set| set.deinit(allocator);
+        descendants_map.deinit(allocator);
+    }
+
+    for (tracker.slots.keys(), tracker.slots.values()) |slot, info| {
+        const slot_ancestors = &info.constants.ancestors.ancestors;
+        for (slot_ancestors.keys()) |ancestor_slot| {
+            const gop = try descendants_map.getOrPutValue(allocator, ancestor_slot, .empty);
+            try gop.value_ptr.put(allocator, slot);
+        }
+    }
+
+    // Prune with highest_super_majority_root = 2
+    tracker.pruneNonRooted(allocator, &descendants_map, 2);
+
+    // Should keep: 2, 3, 4 (root and recent ancestors)
+    try std.testing.expect(tracker.contains(2));
+    try std.testing.expect(tracker.contains(3));
     try std.testing.expect(tracker.contains(4));
+
+    // Should keep: 5, 6 (descendants of root)
     try std.testing.expect(tracker.contains(5));
+    try std.testing.expect(tracker.contains(6));
+
+    // Should remove: 0, 1 (too old - before highest_super_majority_root)
+    try std.testing.expect(!tracker.contains(0));
     try std.testing.expect(!tracker.contains(1));
-    try std.testing.expect(!tracker.contains(2));
-    try std.testing.expect(!tracker.contains(3));
+
+    // Should remove: 10, 11, 20, 21 (abandoned forks)
+    try std.testing.expect(!tracker.contains(10));
+    try std.testing.expect(!tracker.contains(11));
+    try std.testing.expect(!tracker.contains(20));
+    try std.testing.expect(!tracker.contains(21));
 }
 
 test "SlotTree: if no forks, root follows 32 behind latest" {
