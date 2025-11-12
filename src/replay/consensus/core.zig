@@ -1497,7 +1497,8 @@ fn checkAndHandleNewRoot(
     }
 
     // Prune non rooted slots
-    // TODO: Track highest_super_majority_root and pass it here
+    // Passing null will use a heuristic (root - 32) to keep recent ancestors
+    // TODO: Track actual highest_super_majority_root for optimal memory usage
     slot_tracker.pruneNonRooted(allocator, &descendants_map, null);
 
     // TODO

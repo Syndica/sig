@@ -537,6 +537,7 @@ fn bypassConsensus(state: *ReplayState) !void {
             }
         }
 
+        // Passing null will use a heuristic (root - 32) to keep recent ancestors
         slot_tracker.pruneNonRooted(state.allocator, &descendants_map, null);
 
         try state.account_store.onSlotRooted(

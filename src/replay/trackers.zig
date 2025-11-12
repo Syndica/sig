@@ -181,6 +181,15 @@ pub const SlotTracker = struct {
     }
 
     /// Analogous to [prune_non_rooted](https://github.com/anza-xyz/agave/blob/441258229dfed75e45be8f99c77865f18886d4ba/runtime/src/bank_forks.rs#L591)
+    ///
+    /// Removes slots that are NOT on the canonical chain path.
+    /// Keeps:
+    /// 1. The root slot itself
+    /// 2. Descendants of root (future canonical chain)
+    /// 3. Recent ancestors of root on the canonical path (>= highest_super_majority_root)
+    ///
+    /// If `highest_super_majority_root` is null, uses (root - 32) as a heuristic to keep
+    /// recent ancestors needed for switch threshold calculations.
     pub fn pruneNonRooted(
         self: *SlotTracker,
         allocator: Allocator,
@@ -192,7 +201,10 @@ pub const SlotTracker = struct {
         defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
 
         const root = self.root;
-        const hsm_root = highest_super_majority_root orelse root;
+        // Temporary heuristic: keep a window of recent ancestors (32 slots) when
+        // highest_super_majority_root is not provided.
+        const hsm_root = highest_super_majority_root orelse
+            if (root > 32) root - 32 else 0;
 
         // Get descendants of root for checking
         const root_descendants = descendants_map.get(root);
