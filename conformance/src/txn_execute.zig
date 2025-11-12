@@ -113,7 +113,6 @@ const TransactionExecutionEnvironment = transaction_execution.TransactionExecuti
 const ProcessedTransaction = transaction_execution.ProcessedTransaction;
 const TransactionResult = transaction_execution.TransactionResult;
 
-const loadAndExecuteTransactions = transaction_execution.loadAndExecuteTransactions;
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 
 const resolveTransaction = sig.replay.resolve_lookup.resolveTransaction;
