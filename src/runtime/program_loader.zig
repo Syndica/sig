@@ -17,6 +17,9 @@ const Executable = sig.vm.Executable;
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 const assert = std.debug.assert;
 
+const AccountLoadError = sig.runtime.account_loader.AccountLoadError;
+const wrapDB = sig.runtime.account_loader.wrapDB;
+
 pub const ProgramMap = struct {
     inner: std.AutoArrayHashMapUnmanaged(Pubkey, LoadedProgram),
     lock: std.Thread.RwLock,
@@ -79,7 +82,7 @@ pub fn loadPrograms(
     accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
     enviroment: *const vm.Environment,
     slot: u64,
-) !ProgramMap {
+) AccountLoadError!ProgramMap {
     const zone = tracy.Zone.init(@src(), .{ .name = "loadPrograms" });
     defer zone.deinit();
 
@@ -109,7 +112,7 @@ pub fn loadIfProgram(
     account_reader: SlotAccountReader,
     enviroment: *const vm.Environment,
     slot: u64,
-) !void {
+) AccountLoadError!void {
     // https://github.com/firedancer-io/solfuzz-agave/blob/agave-v3.0.3/src/lib.rs#L771-L800
     if (!account.owner.equals(&bpf_loader.v1.ID) and
         !account.owner.equals(&bpf_loader.v2.ID) and
@@ -132,7 +135,7 @@ fn loadProgram(
     accounts: SlotAccountReader,
     environment: *const vm.Environment,
     slot: u64,
-) !LoadedProgram {
+) AccountLoadError!LoadedProgram {
     const maybe_deployment_slot, var executable_bytes = try loadDeploymentSlotAndExecutableBytes(
         allocator,
         account,
@@ -167,7 +170,7 @@ fn loadDeploymentSlotAndExecutableBytes(
     allocator: Allocator,
     account: *const AccountSharedData,
     accounts: SlotAccountReader,
-) !?struct { ?u64, []u8 } {
+) AccountLoadError!?struct { ?u64, []u8 } {
     if (account.owner.equals(&bpf_loader.v1.ID) or account.owner.equals(&bpf_loader.v2.ID)) {
         return .{ null, try allocator.dupe(u8, account.data) };
     } else if (account.owner.equals(&bpf_loader.v3.ID)) {
@@ -183,7 +186,7 @@ fn loadDeploymentSlotAndExecutableBytes(
             else => return null,
         };
 
-        const program_data_account = try accounts.get(allocator, program_data_key) orelse
+        const program_data_account = try wrapDB(accounts.get(allocator, program_data_key)) orelse
             return null;
 
         const meta_size = bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE;

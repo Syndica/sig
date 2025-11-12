@@ -30,7 +30,8 @@ const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const deinitAccountMap = sig.runtime.testing.deinitAccountMap;
 
-pub const CheckResult = ?error{ AlreadyProcessed, BlockhashNotFound };
+const AccountLoadError = sig.runtime.account_loader.AccountLoadError;
+const wrapDB = sig.runtime.account_loader.wrapDB;
 
 const NONCED_TX_MARKER_IX_INDEX = 0;
 
@@ -59,7 +60,7 @@ pub fn checkAge(
     max_age: u64,
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
-) !TransactionResult(?LoadedAccount) {
+) AccountLoadError!TransactionResult(?LoadedAccount) {
     if (blockhash_queue.getHashInfoIfValid(transaction.recent_blockhash, max_age) != null) {
         return .{ .ok = null };
     }
@@ -98,7 +99,7 @@ pub fn checkFeePayer(
     feature_set: *const FeatureSet,
     slot: sig.core.Slot,
     lamports_per_signature: u64,
-) error{OutOfMemory}!TransactionResult(struct {
+) AccountLoadError!TransactionResult(struct {
     FeeDetails,
     std.BoundedArray(LoadedAccount, 2),
 }) {
@@ -110,7 +111,7 @@ pub fn checkFeePayer(
 
     const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
     const fee_payer_key = transaction.accounts.items(.pubkey)[0];
-    const payer_account = (accounts.reader().get(allocator, fee_payer_key) catch return error.OutOfMemory) orelse // TODO better errors
+    const payer_account = try wrapDB(accounts.reader().get(allocator, fee_payer_key)) orelse
         return .{ .err = .AccountNotFound };
     var payer_shared = AccountSharedData{
         .lamports = payer_account.lamports,
@@ -150,7 +151,7 @@ pub fn checkFeePayer(
 
     // Store the payer back after being charged, since the transaction needs to
     // see it with the fees already collected.
-    accounts.put(fee_payer_key, payer_shared) catch return error.OutOfMemory; // TODO
+    try wrapDB(accounts.put(fee_payer_key, payer_shared));
 
     var rollbacks = std.BoundedArray(LoadedAccount, 2){};
     errdefer for (rollbacks.slice()) |rollback| rollback.deinit(allocator);
@@ -362,7 +363,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
     account_reader: SlotAccountReader,
-) !?struct { LoadedAccount, u64 } {
+) AccountLoadError!?struct { LoadedAccount, u64 } {
     if (transaction.recent_blockhash.eql(next_durable_nonce.*)) return null;
 
     const address, const nonce_account, const nonce_data =
@@ -406,10 +407,10 @@ fn loadMessageNonceAccount(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     account_reader: SlotAccountReader,
-) !?struct { Pubkey, Account, NonceData } {
+) AccountLoadError!?struct { Pubkey, Account, NonceData } {
     const nonce_address = getDurableNonce(transaction) orelse
         return null;
-    const nonce_account = try account_reader.get(allocator, nonce_address) orelse
+    const nonce_account = try wrapDB(account_reader.get(allocator, nonce_address)) orelse
         return null;
     const nonce_data = verifyNonceAccount(nonce_account, &transaction.recent_blockhash) orelse
         return null;

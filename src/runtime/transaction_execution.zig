@@ -39,6 +39,9 @@ const ComputeBudgetLimits = compute_budget_program.ComputeBudgetLimits;
 const ComputeBudgetInstructionDetails = compute_budget_program.ComputeBudgetInstructionDetails;
 const InstructionTrace = TransactionContext.InstructionTrace;
 
+const AccountLoadError = sig.runtime.account_loader.AccountLoadError;
+const wrapDB = sig.runtime.account_loader.wrapDB;
+
 // Transaction execution involves logic and validation which occurs in replay
 // and the svm. The location of key processes in Agave are outlined below:
 //
@@ -151,7 +154,7 @@ pub fn loadAndExecuteTransaction(
     env: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
     program_map: *ProgramMap,
-) !TransactionResult(ProcessedTransaction) {
+) AccountLoadError!TransactionResult(ProcessedTransaction) {
     var zone = tracy.Zone.init(@src(), .{ .name = "executeTransaction" });
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
@@ -233,7 +236,7 @@ pub fn loadAndExecuteTransaction(
             while (rollbacks.pop()) |rollback| {
                 const item = writes.addOne() catch unreachable;
                 item.* = rollback;
-                try account_store.put(item.pubkey, item.account);
+                try wrapDB(account_store.put(item.pubkey, item.account));
                 loaded_accounts_data_size += @intCast(rollback.account.data.len);
             }
             return .{ .ok = .{
@@ -287,7 +290,7 @@ pub fn loadAndExecuteTransaction(
         else for (loaded_accounts.accounts.slice()) |a| a.deinit(allocator);
     }
 
-    for (writes.slice()) |*acct| try account_store.put(acct.pubkey, acct.account);
+    for (writes.slice()) |*acct| try wrapDB(account_store.put(acct.pubkey, acct.account));
 
     return .{
         .ok = .{

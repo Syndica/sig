@@ -92,13 +92,15 @@ pub const LoadedAccount = struct {
     }
 };
 
-const LoadedTransactionAccountsError = error{
-    OutOfMemory,
-    AccountsDBError,
-    ProgramAccountNotFound,
-    InvalidProgramForExecution,
-    MaxLoadedAccountsDataSizeExceeded,
-};
+pub const AccountLoadError = error{ OutOfMemory, AccountsDBError };
+
+/// Wraps calls to AccountsDB and convert all errors except OutOfMemory into AccountsDBError.
+pub fn wrapDB(item: anytype) AccountLoadError!@typeInfo(@TypeOf(item)).error_union.payload {
+    return item catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => error.AccountsDBError,
+    };
+}
 
 /// Assumes `transaction` was in initFromAccountsDb's `transactions` parameter.
 /// Reports account loading errors.
@@ -112,7 +114,7 @@ pub fn loadTransactionAccounts(
     feature_set: *const sig.core.FeatureSet,
     slot: sig.core.Slot,
     compute_budget_limits: *const ComputeBudgetLimits,
-) error{OutOfMemory}!TransactionResult(LoadedTransactionAccounts) {
+) AccountLoadError!TransactionResult(LoadedTransactionAccounts) {
     var zone = tracy.Zone.init(@src(), .{ .name = "loadTransactionAccounts" });
     defer zone.deinit();
 
@@ -139,16 +141,22 @@ pub fn loadTransactionAccounts(
 
     return .{
         .ok = result catch |err| return switch (err) {
-            error.OutOfMemory => error.OutOfMemory,
             error.ProgramAccountNotFound => .{ .err = .ProgramAccountNotFound },
             error.InvalidProgramForExecution => .{ .err = .InvalidProgramForExecution },
             error.MaxLoadedAccountsDataSizeExceeded => .{
                 .err = .MaxLoadedAccountsDataSizeExceeded,
             },
-            else => error.OutOfMemory, // TODO fix
+            error.OutOfMemory => return error.OutOfMemory,
+            error.AccountsDBError => return error.AccountsDBError,
         },
     };
 }
+
+const InternalLoadError = AccountLoadError || error{
+    ProgramAccountNotFound,
+    InvalidProgramForExecution,
+    MaxLoadedAccountsDataSizeExceeded,
+};
 
 fn loadTransactionAccountsSimd186(
     map: SlotAccountReader,
@@ -158,7 +166,7 @@ fn loadTransactionAccountsSimd186(
     feature_set: *const sig.core.FeatureSet,
     slot: sig.core.Slot,
     compute_budget_limits: *const ComputeBudgetLimits,
-) !LoadedTransactionAccounts {
+) InternalLoadError!LoadedTransactionAccounts {
     std.debug.assert(compute_budget_limits.loaded_accounts_bytes != 0);
 
     var loaded = LoadedTransactionAccounts.DEFAULT;
@@ -222,7 +230,7 @@ fn loadTransactionAccountsSimd186(
                 }
                 if (additional_loaded_accounts.contains(programdata_address)) break :cont;
                 // ...and the programdata account exists (if it doesn't, it is *not* a load failure)...
-                if (try map.get(allocator, programdata_address)) |programdata_account| {
+                if (try wrapDB(map.get(allocator, programdata_address))) |programdata_account| {
                     // ...count programdata toward this transaction's total size.
                     try loaded.increase(
                         TRANSACTION_ACCOUNT_BASE_SIZE +| programdata_account.data.len(),
@@ -284,7 +292,7 @@ fn loadTransactionAccountsOld(
     feature_set: *const sig.core.FeatureSet,
     slot: sig.core.Slot,
     compute_budget_limits: *const ComputeBudgetLimits,
-) !LoadedTransactionAccounts {
+) InternalLoadError!LoadedTransactionAccounts {
     std.debug.assert(compute_budget_limits.loaded_accounts_bytes != 0);
 
     var loaded = LoadedTransactionAccounts.DEFAULT;
@@ -405,7 +413,7 @@ fn loadTransactionAccount(
     slot: sig.core.Slot,
     key: *const Pubkey,
     is_writable: bool,
-) !LoadedTransactionAccount {
+) InternalLoadError!LoadedTransactionAccount {
     if (key.equals(&runtime.sysvar.instruction.ID)) {
         @branchHint(.unlikely);
         return .{
@@ -468,7 +476,7 @@ fn loadAccount(
     key: *const Pubkey,
     _: bool, // TODO remove
     formalized_loaded_data_size: bool,
-) !?struct {
+) InternalLoadError!?struct {
     account: Account,
     loaded_size: usize,
     rent_collected: u64,
@@ -481,7 +489,7 @@ fn loadAccount(
     const account = if (key.equals(&runtime.sysvar.instruction.ID)) account: {
         @branchHint(.unlikely);
         break :account try constructInstructionsAccount(allocator, transaction);
-    } else try map.get(allocator, key.*) orelse return null;
+    } else try wrapDB(map.get(allocator, key.*)) orelse return null;
 
     if (account.lamports == 0) {
         account.deinit(allocator);
