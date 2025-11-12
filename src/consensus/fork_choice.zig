@@ -382,9 +382,12 @@ pub const ForkChoice = struct {
                     const debug_slot = entry.key_ptr.slot;
                     const debug_info = entry.value_ptr;
                     self.logger.debug().logf(
-                        "  slot {}: {} children, parent: {?}",
+                        \\  slot: {} stake_for_slot: {}, stake_for_subtree: {},  {} children, parent: {?}
+                    ,
                         .{
                             debug_slot,
+                            debug_info.stake_for_slot,
+                            debug_info.stake_for_subtree,
                             debug_info.children.count(),
                             if (debug_info.parent) |p| p.slot else null,
                         },
