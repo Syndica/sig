@@ -725,10 +725,19 @@ pub const ReplayTower = struct {
             //    `last_vote`
             // 5) Don't consider any banks before the root because
             //    all lockouts must be ancestors of `last_vote`
-            const is_progress_computed = if (progress.getForkStats(candidate_slot)) |stats|
-                stats.computed
-            else
-                false;
+            const is_progress_computed = if (progress.getForkStats(candidate_slot)) |stats| blk: {
+                self.logger.info().logf(
+                    "DADEX Computed: {}",
+                    .{stats.computed},
+                );
+                break :blk stats.computed;
+            } else blk: {
+                self.logger.info().logf(
+                    "DADEY Failed here: {}",
+                    .{false},
+                );
+                break :blk false;
+            };
 
             // If any of the descendants have the `computed` flag set, then there must be a more
             // recent frozen bank on this fork to use, so we can ignore this one. Otherwise,
