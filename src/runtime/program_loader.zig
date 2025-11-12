@@ -519,15 +519,13 @@ pub fn createV3ProgramAccountData(
     return .{ program_bytes, program_data_bytes };
 }
 
-/// helper function to test loading programs from accounts.
+/// helper function to load programs for tests
 pub fn testLoad(
     allocator: std.mem.Allocator,
     accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
     environment: *const vm.Environment,
     slot: u64,
 ) AccountLoadError!ProgramMap {
-    if (!@import("builtin").is_test) @compileError("only for tests");
-
     var programs = ProgramMap.empty;
     errdefer programs.deinit(allocator);
 
