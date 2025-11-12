@@ -1,5 +1,4 @@
 const std = @import("std");
-const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 
 const bpf_loader = sig.runtime.program.bpf_loader;

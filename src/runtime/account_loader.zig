@@ -182,7 +182,7 @@ fn loadTransactionAccountsSimd186(
     try additional_loaded_accounts.ensureUnusedCapacity(allocator, MAX_TX_ACCOUNT_LOCKS);
 
     const accounts = transaction.accounts.slice();
-    for (accounts.items(.pubkey), accounts.items(.is_writable)) |account_key, is_writable| {
+    for (accounts.items(.pubkey)) |account_key| {
         const loaded_account = try loadTransactionAccount(
             map,
             allocator,
@@ -191,7 +191,6 @@ fn loadTransactionAccountsSimd186(
             feature_set,
             slot,
             &account_key,
-            is_writable,
         );
         errdefer if (loaded_account.is_owned) loaded_account.account.deinit(allocator);
 
@@ -255,7 +254,6 @@ fn loadTransactionAccountsSimd186(
             allocator,
             transaction,
             program_id,
-            false,
             feature_set.active(.formalize_loaded_transaction_data_size, slot),
         ) orelse return error.ProgramAccountNotFound;
         defer program_account.account.deinit(allocator);
@@ -299,7 +297,7 @@ fn loadTransactionAccountsOld(
     errdefer for (loaded.accounts.slice()) |account| account.deinit(allocator);
 
     const accounts = transaction.accounts.slice();
-    for (accounts.items(.pubkey), accounts.items(.is_writable)) |account_key, is_writable| {
+    for (accounts.items(.pubkey)) |account_key| {
         const loaded_account = try loadTransactionAccount(
             map,
             allocator,
@@ -308,7 +306,6 @@ fn loadTransactionAccountsOld(
             feature_set,
             slot,
             &account_key,
-            is_writable,
         );
         errdefer if (loaded_account.is_owned) loaded_account.account.deinit(allocator);
 
@@ -348,7 +345,6 @@ fn loadTransactionAccountsOld(
             allocator,
             transaction,
             &instr.program_meta.pubkey,
-            false,
             feature_set.active(.formalize_loaded_transaction_data_size, slot),
         ) orelse return error.ProgramAccountNotFound;
         defer program_account.account.deinit(allocator);
@@ -366,7 +362,6 @@ fn loadTransactionAccountsOld(
             allocator,
             transaction,
             &owner_id,
-            false,
             feature_set.active(.formalize_loaded_transaction_data_size, slot),
         ) orelse return error.ProgramAccountNotFound;
         defer owner_account.account.deinit(allocator);
@@ -412,12 +407,18 @@ fn loadTransactionAccount(
     feature_set: *const sig.core.FeatureSet,
     slot: sig.core.Slot,
     key: *const Pubkey,
-    is_writable: bool,
 ) InternalLoadError!LoadedTransactionAccount {
     if (key.equals(&runtime.sysvar.instruction.ID)) {
         @branchHint(.unlikely);
+        const account = try constructInstructionsAccount(allocator, transaction);
         return .{
-            .account = try constructInstructionsAccountSharedData(allocator, transaction),
+            .account = .{
+                .data = account.data.owned_allocation,
+                .owner = account.owner,
+                .lamports = account.lamports,
+                .executable = account.executable,
+                .rent_epoch = account.rent_epoch,
+            },
             .loaded_size = 0,
             .rent_collected = 0,
             .is_owned = true,
@@ -429,7 +430,6 @@ fn loadTransactionAccount(
         allocator,
         transaction,
         key,
-        is_writable,
         feature_set.active(.formalize_loaded_transaction_data_size, slot),
     )) orelse {
         // a previous instruction deallocated this account, we will make a new one in its place.
@@ -474,7 +474,6 @@ fn loadAccount(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     key: *const Pubkey,
-    _: bool, // TODO remove
     formalized_loaded_data_size: bool,
 ) InternalLoadError!?struct {
     account: Account,
@@ -584,22 +583,6 @@ fn constructInstructionsAccount(
         .lamports = 0, // a bit weird, but seems correct
         .executable = false,
         .rent_epoch = 0,
-    };
-}
-
-// TODO delete
-// [agave] https://github.com/anza-xyz/agave/blob/996570bcbe7acc4dfd0a6931d024a11a3b4de7a3/svm/src/account_loader.rs#L784
-fn constructInstructionsAccountSharedData(
-    allocator: Allocator,
-    transaction: *const RuntimeTransaction,
-) error{OutOfMemory}!AccountSharedData {
-    const x = try constructInstructionsAccount(allocator, transaction);
-    return .{
-        .data = x.data.owned_allocation,
-        .owner = x.owner,
-        .lamports = x.lamports,
-        .executable = x.executable,
-        .rent_epoch = x.rent_epoch,
     };
 }
 
@@ -1024,17 +1007,17 @@ test "constructInstructionsAccount" {
 
     const checkFn = struct {
         fn f(alloc: Allocator, txn: *const RuntimeTransaction) !void {
-            const account = try constructInstructionsAccountSharedData(alloc, txn);
-            defer allocator.free(account.data);
+            const account = try constructInstructionsAccount(alloc, txn);
+            defer account.deinit(allocator);
         }
     }.f;
 
     try std.testing.checkAllAllocationFailures(allocator, checkFn, .{&empty_tx});
 
-    const account = try constructInstructionsAccountSharedData(allocator, &empty_tx);
-    defer allocator.free(account.data);
+    const account = try constructInstructionsAccount(allocator, &empty_tx);
+    defer account.deinit(allocator);
     try std.testing.expectEqual(0, account.lamports);
-    try std.testing.expect(account.data.len > 8);
+    try std.testing.expect(account.data.len() > 8);
 }
 
 test "loadAccount allocations" {
@@ -1061,7 +1044,6 @@ test "loadAccount allocations" {
                 allocator,
                 &tx,
                 &NATIVE_LOADER_ID,
-                false,
                 false,
             ) orelse @panic("account not found");
 
