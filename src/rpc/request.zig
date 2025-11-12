@@ -455,6 +455,13 @@ test "Request parse errors" {
             \\{"unexpected":"foo"}
         , .{}),
     );
+
+    try std.testing.expectError(
+        error.UnexpectedToken, // due to not being implemented
+        std.json.parseFromSliceLeaky(Request, std.testing.allocator,
+            \\{"jsonrpc":"2.0","id":null,"method":"getFeeForMessage","params":[]}
+        , .{}),
+    );
 }
 
 fn testParseCall(
