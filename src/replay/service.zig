@@ -384,7 +384,7 @@ pub fn trackNewSlots(
 ///
 /// For the relevant updates to accountsdb to set sysvars, see
 /// updateSysvarsForNewSlot
-fn newSlotFromParent(
+pub fn newSlotFromParent(
     allocator: Allocator,
     account_reader: AccountReader,
     ticks_in_slot: u64,
