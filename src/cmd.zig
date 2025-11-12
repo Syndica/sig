@@ -1239,7 +1239,7 @@ fn validator(
     else
         null;
 
-    const vote_keypair_path = cfg.vote_account_path orelse "/vote-account-keypair.key";
+    const vote_keypair_path = cfg.vote_account_path orelse "/home/ubuntu/account.key";
     const maybe_vote_pubkey: ?Pubkey = readBinaryKeypairPubkey(vote_keypair_path) catch |err| blk: {
         if (cfg.voting_enabled) {
             app_base.logger.err().logf("vote-account: failed to read {s}: {}", .{ vote_keypair_path, err });
