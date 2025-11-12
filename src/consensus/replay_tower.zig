@@ -660,8 +660,8 @@ pub const ReplayTower = struct {
         // (is neither an ancestor nor descendant of `last_vote`), so a
         // switching proof is necessary
         self.logger.debug().logf(
-            "switch threshold check: last_voted_slot={}, switch_slot={}, root={}",
-            .{ last_voted_slot, switch_slot, root },
+            "switch threshold check: last_voted_slot={}, switch_slot={}, root={}, descendants_count={}",
+            .{ last_voted_slot, switch_slot, root, descendants.count() },
         );
         const switch_proof = Hash.ZEROES;
         var locked_out_stake: u64 = 0;
@@ -669,7 +669,10 @@ pub const ReplayTower = struct {
         var locked_out_vote_accounts: SortedSetUnmanaged(Pubkey) = .empty;
         defer locked_out_vote_accounts.deinit(allocator);
 
+        var candidates_checked: u32 = 0;
+        var candidates_passed: u32 = 0;
         for (descendants.keys(), descendants.values()) |candidate_slot, *candidate_descendants| {
+            candidates_checked += 1;
             // 1) Don't consider any banks that haven't been frozen yet
             //    because the needed stats are unavailable
             // 2) Only consider lockouts at the latest `frozen` bank
@@ -710,6 +713,7 @@ pub const ReplayTower = struct {
                 continue;
             }
 
+            candidates_passed += 1;
             // By the time we reach here, any ancestors of the `last_vote`,
             // should have been filtered out, as they all have a descendant,
             // namely the `last_vote` itself.
@@ -722,21 +726,34 @@ pub const ReplayTower = struct {
             const lockout_intervals =
                 &progress.getForkProgress(candidate_slot).?.fork_stats.lockout_intervals;
 
+            self.logger.debug().logf(
+                "candidate {} passed checks, lockout_intervals.count={}",
+                .{ candidate_slot, lockout_intervals.map.count() },
+            );
+
             if (lockout_intervals.map.count() == 0) {
                 continue;
             }
+            self.logger.debug().logf(
+                "candidate {} has lockout intervals, checking...",
+                .{candidate_slot},
+            );
             // Find any locked out intervals for vote accounts in this bank with
             // `lockout_interval_end` >= `last_vote`, which implies they are locked out at
             // `last_vote` on another fork.
             // Iterate through the lockout intervals map and check each entry
+            var intervals_checked: u32 = 0;
+            var intervals_valid: u32 = 0;
             for (
                 lockout_intervals.map.keys(),
                 lockout_intervals.map.values(),
             ) |lockout_interval_end, *intervals_keyed_by_end| {
+                intervals_checked += 1;
                 // Only consider intervals that expire at or after last_voted_slot
                 if (lockout_interval_end < last_voted_slot) {
                     continue;
                 }
+                intervals_valid += 1;
 
                 for (intervals_keyed_by_end.items) |vote_account| {
                     if (locked_out_vote_accounts.contains(vote_account[1])) {
@@ -760,6 +777,11 @@ pub const ReplayTower = struct {
                                 0;
                         locked_out_stake += stake;
 
+                        self.logger.debug().logf(
+                            "found locked-out validator at candidate {}, voted_slot={}, lockout_end={}, stake={}, total_locked_out={}",
+                            .{ candidate_slot, vote_account[0], lockout_interval_end, stake, locked_out_stake },
+                        );
+
                         if (@as(f64, @floatFromInt(locked_out_stake)) / @as(
                             f64,
                             @floatFromInt(total_stake),
@@ -770,7 +792,17 @@ pub const ReplayTower = struct {
                     }
                 }
             }
+            if (intervals_checked > 0) {
+                self.logger.debug().logf(
+                    "candidate {}: checked {} intervals, {} valid (>= last_voted_slot)",
+                    .{ candidate_slot, intervals_checked, intervals_valid },
+                );
+            }
         }
+        self.logger.debug().logf(
+            "switch check summary: checked {} candidates, {} passed initial filters, final locked_out_stake={}",
+            .{ candidates_checked, candidates_passed, locked_out_stake },
+        );
         // Check the latest votes for potentially gossip votes that haven't landed yet
         var gossip_votes_iter = latest_validator_votes
             .max_gossip_frozen_votes
@@ -833,6 +865,14 @@ pub const ReplayTower = struct {
 
         // We have not detected sufficient lockout past the last voted slot to generate
         // a switching proof
+        self.logger.info().logf(
+            "switch threshold FAILED: locked_out_stake={} ({d:.2}%), total_stake={}, threshold=38%",
+            .{
+                locked_out_stake,
+                @as(f64, @floatFromInt(locked_out_stake)) / @as(f64, @floatFromInt(total_stake)) * 100.0,
+                total_stake,
+            },
+        );
         return SwitchForkDecision{
             .failed_switch_threshold = .{
                 .switch_proof_stake = locked_out_stake,
