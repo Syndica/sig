@@ -916,6 +916,10 @@ fn handleVotableBank(
     // - Sends the vote operation to the voting sender.
     //
     // Analogous to [push_vote](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L2775)
+    logger.info().logf("Attempting to generate vote tx for slot {} with switch_fork_decision: {s}", .{
+        vote_slot,
+        @tagName(switch_fork_decision),
+    });
     const vote_tx_result = try generateVoteTx(
         allocator,
         vote_account_pubkey,
@@ -930,6 +934,8 @@ fn handleVotableBank(
 
     switch (vote_tx_result) {
         .tx => |vote_tx| {
+            logger.info().logf("Successfully generated vote tx for slot {}", .{vote_slot});
+
             // Update the tower's last vote blockhash
             replay_tower.refreshLastVoteTxBlockhash(vote_tx.msg.recent_blockhash);
 
@@ -950,12 +956,17 @@ fn handleVotableBank(
                 sig.time.getWallclockMs(),
                 maybe_sockets,
             );
+            logger.info().logf("Vote sent for slot {}", .{vote_slot});
         },
         .non_voting => {
+            logger.info().logf("Vote tx generation returned non_voting for slot {}", .{vote_slot});
             replay_tower.markLastVoteTxBlockhashNonVoting();
         },
-        else => {
-            // Do nothing
+        .failed => {
+            logger.warn().logf("Vote tx generation FAILED for slot {}", .{vote_slot});
+        },
+        .hot_spare => {
+            logger.info().logf("Vote tx generation returned hot_spare for slot {}", .{vote_slot});
         },
     }
 }
@@ -1263,13 +1274,22 @@ fn generateVoteTx(
     slot_tracker: *const SlotTracker,
     epoch_tracker: *const EpochTracker,
 ) !GenerateVoteTxResult {
+    const logger = replay_tower.logger;
+
     if (authorized_voter_keypairs.len == 0) {
+        logger.debug().log("generateVoteTx: no authorized voter keypairs");
         return .non_voting;
     }
 
-    const node_kp = node_keypair orelse return .non_voting;
+    const node_kp = node_keypair orelse {
+        logger.debug().log("generateVoteTx: no node keypair");
+        return .non_voting;
+    };
 
-    const last_voted_slot = replay_tower.lastVotedSlot() orelse return .failed;
+    const last_voted_slot = replay_tower.lastVotedSlot() orelse {
+        logger.warn().log("generateVoteTx: no last voted slot");
+        return .failed;
+    };
 
     const slot_info = slot_tracker.get(last_voted_slot) orelse return .failed;
 
@@ -1327,7 +1347,12 @@ fn generateVoteTx(
     const maybe_switch_proof_hash: ?Hash = switch (switch_fork_decision) {
         .switch_proof => |hash| hash,
         .same_fork => null,
-        else => return .failed,
+        else => {
+            logger.warn().logf("generateVoteTx: switch_fork_decision is {s}, cannot generate vote tx", .{
+                @tagName(switch_fork_decision),
+            });
+            return .failed;
+        },
     };
 
     const vote_ix = try createVoteInstruction(
