@@ -1131,9 +1131,26 @@ fn validator(
             .gossip_service = gossip_service,
             .geyser_writer = geyser_writer,
             .validate_snapshot = !cfg.accounts_db.skip_snapshot_validation,
+            .metadata_only = true,
         },
     );
     defer loaded_snapshot.deinit();
+
+    const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
+    defer allocator.free(rooted_file);
+
+    var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+    defer accounts_dir.close();
+
+    var rooted_db: sig.accounts_db.Two.Rooted = try .initSnapshot(
+        allocator,
+        rooted_file,
+        accounts_dir,
+    );
+    defer rooted_db.deinit();
+
+    var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
+    defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
     const bank_fields = &collapsed_manifest.bank_fields;
@@ -1274,6 +1291,7 @@ fn validator(
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
+        .account_store = .{ .accounts_db_two = &new_db },
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
         .epoch_context_manager = &epoch_context_manager,
@@ -1369,9 +1387,26 @@ fn replayOffline(
             .gossip_service = null,
             .geyser_writer = null,
             .validate_snapshot = !cfg.accounts_db.skip_snapshot_validation,
+            .metadata_only = true,
         },
     );
     defer loaded_snapshot.deinit();
+
+    const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
+    defer allocator.free(rooted_file);
+
+    var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+    defer accounts_dir.close();
+
+    var rooted_db: sig.accounts_db.Two.Rooted = try .initSnapshot(
+        allocator,
+        rooted_file,
+        accounts_dir,
+    );
+    defer rooted_db.deinit();
+
+    var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
+    defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
     const bank_fields = &collapsed_manifest.bank_fields;
@@ -1440,6 +1475,7 @@ fn replayOffline(
     // Replay-offline does not vote, so we use ZEROES and disable voting
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
+        .account_store = .{ .accounts_db_two = &new_db },
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
         .epoch_context_manager = &epoch_context_manager,
@@ -2096,6 +2132,7 @@ const ReplayAndConsensusServiceState = struct {
         allocator: std.mem.Allocator,
         params: struct {
             app_base: *const AppBase,
+            account_store: sig.accounts_db.AccountStore,
             loaded_snapshot: *sig.accounts_db.snapshot.LoadedSnapshot,
             ledger: *Ledger,
             epoch_context_manager: *sig.adapter.EpochContextManager,
@@ -2107,7 +2144,7 @@ const ReplayAndConsensusServiceState = struct {
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
-            const account_store = params.loaded_snapshot.accounts_db.accountStore();
+            const account_store = params.account_store;
             const manifest = &params.loaded_snapshot.collapsed_manifest;
             const bank_fields = &manifest.bank_fields;
             const epoch = bank_fields.epoch;

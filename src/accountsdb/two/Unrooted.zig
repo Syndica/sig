@@ -57,7 +57,10 @@ pub fn init(allocator: std.mem.Allocator) !Unrooted {
 }
 
 pub fn deinit(self: *Unrooted, allocator: std.mem.Allocator) void {
-    for (self.slots) |*slot| slot.entries.deinit(allocator);
+    for (self.slots) |*slot| {
+        for (slot.entries.values()) |*data| data.deinit(allocator);
+        slot.entries.deinit(allocator);
+    }
     allocator.free(self.slots);
 }
 

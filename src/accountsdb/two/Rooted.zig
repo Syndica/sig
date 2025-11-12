@@ -65,14 +65,61 @@ pub fn init(file_path: [:0]const u8) !Rooted {
     };
 }
 
+pub fn initSnapshot(
+    allocator: std.mem.Allocator,
+    file_path: [:0]const u8,
+    /// Set to directory which contains snapshot account files to pre-load the rooted storage from them.
+    accounts_dir: std.fs.Dir,
+) !Rooted {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.initSnapshot" });
+    defer zone.deinit();
+
+    const db = blk: {
+        var maybe_db: ?*sql.sqlite3 = null;
+        if (sql.sqlite3_open(file_path.ptr, &maybe_db) != OK)
+            return error.FailedToOpenDb;
+        break :blk maybe_db orelse return error.SqliteDbNull;
+    };
+
+    const db_has_entries = blk: {
+        const query = "SELECT count(*) from entries";
+
+        var stmt: ?*sql.sqlite3_stmt = null;
+        defer if (stmt) |st| std.debug.assert(sql.sqlite3_finalize(st) == OK);
+        const prep_err = sql.sqlite3_prepare_v2(db, query, -1, &stmt, null);
+        if (prep_err != OK) break :blk false; // table does not exist
+
+        const rc = sql.sqlite3_step(stmt);
+        if (rc != ROW) break :blk false; // other err
+
+        break :blk sql.sqlite3_column_int64(stmt, 0) > 0;
+    };
+
+    var self: Rooted = try .init(file_path);
+    if (db_has_entries) {
+        std.debug.print("db has entries, skipping load from snapshot\n", .{});
+    } else {
+        std.debug.print("db is empty -  loading from snapshot!\n", .{});
+        try self.insertFromSnapshot(allocator, accounts_dir);
+    }
+
+    return self;
+}
+
 pub fn deinit(self: *Rooted) void {
     _ = sql.sqlite3_close(self.handle);
 }
 
 /// Call this before a thread that accesses Rooted closes. Safe to call multiple times.
 pub fn deinitThreadLocals() void {
-    if (put_stmt) |stmt| _ = sql.sqlite3_finalize(stmt);
-    if (get_stmt) |stmt| _ = sql.sqlite3_finalize(stmt);
+    if (put_stmt) |stmt| {
+        _ = sql.sqlite3_finalize(stmt);
+        put_stmt = null;
+    }
+    if (get_stmt) |stmt| {
+        _ = sql.sqlite3_finalize(stmt);
+        get_stmt = null;
+    }
 }
 
 fn accountsHash(self: *Rooted) !sig.core.LtHash {
@@ -142,7 +189,7 @@ fn accountsHash(self: *Rooted) !sig.core.LtHash {
     return hash;
 }
 
-pub fn insertFromSnapshot(
+fn insertFromSnapshot(
     self: *Rooted,
     allocator: std.mem.Allocator,
     accounts_dir: std.fs.Dir,
