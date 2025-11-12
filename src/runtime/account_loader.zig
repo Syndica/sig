@@ -425,13 +425,13 @@ fn loadTransactionAccount(
         };
     }
 
-    var account = (try loadAccount(
+    var account = try loadAccount(
         map,
         allocator,
         transaction,
         key,
         feature_set.active(.formalize_loaded_transaction_data_size, slot),
-    )) orelse {
+    ) orelse {
         // a previous instruction deallocated this account, we will make a new one in its place.
         var account = AccountSharedData.EMPTY;
         account.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
