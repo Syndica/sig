@@ -71,8 +71,14 @@ pub fn deinit(self: *Rooted) void {
 
 /// Call this before a thread that accesses Rooted closes. Safe to call multiple times.
 pub fn deinitThreadLocals() void {
-    if (put_stmt) |stmt| _ = sql.sqlite3_finalize(stmt);
-    if (get_stmt) |stmt| _ = sql.sqlite3_finalize(stmt);
+    if (put_stmt) |stmt| {
+        _ = sql.sqlite3_finalize(stmt);
+        put_stmt = null;
+    }
+    if (get_stmt) |stmt| {
+        _ = sql.sqlite3_finalize(stmt);
+        get_stmt = null;
+    }
 }
 
 fn accountsHash(self: *Rooted) !sig.core.LtHash {
