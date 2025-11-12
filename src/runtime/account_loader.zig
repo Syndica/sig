@@ -443,6 +443,7 @@ fn loadTransactionAccount(
             .is_owned = true,
         };
     };
+    errdefer account.account.deinit(allocator);
 
     var account_shared_data = AccountSharedData{
         .lamports = account.account.lamports,
