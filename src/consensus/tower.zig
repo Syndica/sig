@@ -110,7 +110,6 @@ pub const Tower = struct {
         const vote_state = try stateFromAccount(
             allocator,
             &vote_account,
-            vote_account_pubkey,
         );
 
         var lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(
@@ -303,7 +302,6 @@ pub fn lastVotedSlotInBank(
     const vote_state = stateFromAccount(
         allocator,
         &vote_account,
-        vote_account_pubkey,
     ) catch return null;
     return vote_state.lastVotedSlot();
 }
@@ -311,11 +309,11 @@ pub fn lastVotedSlotInBank(
 pub fn stateFromAccount(
     allocator: std.mem.Allocator,
     vote_account: *const Account,
-    vote_account_pubkey: *const Pubkey,
 ) (error{BincodeError} || std.mem.Allocator.Error)!VoteState {
-    const buf = try allocator.alloc(u8, vote_account.data.len());
-    // TODO Not sure if this is the way to get the data from the vote account. Review.
-    _ = vote_account.serialize(vote_account_pubkey, buf);
+    const data_len = vote_account.data.len();
+    const buf = try allocator.alloc(u8, data_len);
+    defer allocator.free(buf);
+    vote_account.data.readAll(buf);
     const versioned_state = sig.bincode.readFromSlice(
         allocator,
         VoteStateVersions,
