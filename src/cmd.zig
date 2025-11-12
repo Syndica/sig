@@ -65,16 +65,11 @@ pub fn main() !void {
 
     var gpa_state: GpaOrCAllocator(.{}) = .{};
     // defer _ = gpa_state.deinit();
-
-    var tracing_gpa = tracy.TracingAllocator{
-        .name = "gpa",
-        .parent = gpa_state.allocator(),
-    };
-    const gpa = tracing_gpa.allocator();
+    const gpa = gpa_state.allocator();
 
     var gossip_gpa_state: GpaOrCAllocator(.{ .stack_trace_frames = 100 }) = .{};
     var tracing_gossip_gpa = tracy.TracingAllocator{
-        .name = "gossip gpa",
+        .name = "gossip data",
         .parent = gossip_gpa_state.allocator(),
     };
     // defer _ = gossip_gpa_state.deinit();
@@ -1056,7 +1051,8 @@ fn validator(
     const zone = tracy.Zone.init(@src(), .{ .name = "validator" });
     defer zone.deinit();
 
-    var app_base = try AppBase.init(allocator, cfg);
+    var app_base_gpa = tracy.TracingAllocator{ .name = "AppBase gpa", .parent = allocator };
+    var app_base = try AppBase.init(app_base_gpa.allocator(), cfg);
     defer {
         app_base.shutdown();
         app_base.deinit();
@@ -1071,33 +1067,42 @@ fn validator(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    var gossip_service = try startGossip(allocator, gossip_value_allocator, cfg, &app_base, &.{
-        .{ .tag = .repair, .port = repair_port },
-        .{ .tag = .turbine_recv, .port = turbine_recv_port },
-    });
+    var gossip_gpa = tracy.TracingAllocator{ .name = "gossip gpa", .parent = allocator };
+    var gossip_service = try startGossip(
+        gossip_gpa.allocator(),
+        gossip_value_allocator,
+        cfg,
+        &app_base,
+        &.{
+            .{ .tag = .repair, .port = repair_port },
+            .{ .tag = .turbine_recv, .port = turbine_recv_port },
+        },
+    );
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
-        allocator.destroy(gossip_service);
+        gossip_gpa.allocator().allocator.destroy(gossip_service);
     }
 
+    var geyser_gpa = tracy.TracingAllocator{ .name = "geyser gpa", .parent = allocator };
     const geyser_writer: ?*GeyserWriter = if (!cfg.geyser.enable)
         null
     else
         try createGeyserWriter(
-            allocator,
+            geyser_gpa.allocator(),
             cfg.geyser.pipe_path,
             cfg.geyser.writer_fba_bytes,
         );
     defer if (geyser_writer) |geyser| {
         geyser.deinit();
-        allocator.destroy(geyser.exit);
-        allocator.destroy(geyser);
+        geyser_gpa.allocator().destroy(geyser.exit);
+        geyser_gpa.allocator().destroy(geyser);
     };
 
     // snapshot
+    var snapshot_gpa = tracy.TracingAllocator{ .name = "snapshot gpa", .parent = allocator };
     var loaded_snapshot = try loadSnapshot(
-        allocator,
+        snapshot_gpa.allocator(),
         cfg.accounts_db,
         try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
         .from(app_base.logger),
@@ -1113,8 +1118,9 @@ fn validator(
     const bank_fields = &collapsed_manifest.bank_fields;
 
     // ledger
+    var ledger_gpa = tracy.TracingAllocator{ .name = "ledger gpa", .parent = allocator };
     var ledger = try Ledger.init(
-        allocator,
+        ledger_gpa.allocator(),
         .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
         app_base.metrics_registry,
@@ -1138,8 +1144,11 @@ fn validator(
     const epoch = bank_fields.epoch;
 
     const staked_nodes = try collapsed_manifest.epochStakes(epoch);
-    var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
+    var epoch_ctx_gpa = tracy.TracingAllocator{ .name = "epoch ctx gpa", .parent = allocator };
+    var epoch_context_manager = 
+        try sig.adapter.EpochContextManager.init(epoch_ctx_gpa.allocator(), epoch_schedule);
     defer epoch_context_manager.deinit();
+
     try epoch_context_manager.contexts.realign(epoch);
     {
         var staked_nodes_cloned = try staked_nodes.clone(allocator);
@@ -1194,10 +1203,11 @@ fn validator(
     const turbine_config = cfg.turbine;
 
     // shred network
+    var shred_gpa = tracy.TracingAllocator{ .name = "shred network", .parent = allocator };
     var shred_network_manager = try sig.shred_network.start(
         cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
         .{
-            .allocator = allocator,
+            .allocator = shred_gpa.allocator(),
             .logger = .from(app_base.logger),
             .registry = app_base.metrics_registry,
             .random = prng.random(),
@@ -1219,7 +1229,8 @@ fn validator(
     else
         null;
 
-    var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
+    var replay_gpa = tracy.TracingAllocator{ .name = "replay gpa", .parent = allocator };
+    var replay_service_state: ReplayAndConsensusServiceState = try .init(replay_gpa.allocator(), .{
         .app_base = &app_base,
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
@@ -1228,7 +1239,7 @@ fn validator(
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = cfg.voting_enabled,
     });
-    defer replay_service_state.deinit(allocator);
+    defer replay_service_state.deinit(replay_gpa.allocator());
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
