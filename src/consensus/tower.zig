@@ -310,13 +310,11 @@ pub fn stateFromAccount(
     allocator: std.mem.Allocator,
     vote_account: *const Account,
 ) (error{BincodeError} || std.mem.Allocator.Error)!VoteState {
-    const buf = try allocator.alloc(u8, vote_account.data.len());
-    defer allocator.free(buf);
-    vote_account.data.readAll(buf);
-    const versioned_state = sig.bincode.readFromSlice(
+    var iter = vote_account.data.iterator();
+    const versioned_state = sig.bincode.read(
         allocator,
         VoteStateVersions,
-        buf,
+        iter.reader(),
         .{},
     ) catch return error.BincodeError;
     return try versioned_state.convertToCurrent(allocator);
