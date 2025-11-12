@@ -1291,16 +1291,26 @@ fn generateVoteTx(
         return .failed;
     };
 
-    const slot_info = slot_tracker.get(last_voted_slot) orelse return .failed;
+    const slot_info = slot_tracker.get(last_voted_slot) orelse {
+        logger.warn().logf("generateVoteTx: slot_info not found in slot_tracker for last_voted_slot {}", .{last_voted_slot});
+        return .failed;
+    };
 
     const vote_account_result = account_reader.forSlot(&slot_info.constants.ancestors)
-        .get(allocator, vote_account_pubkey) catch return .failed;
+        .get(allocator, vote_account_pubkey) catch |err| {
+        logger.warn().logf("generateVoteTx: failed to read vote account: {}", .{err});
+        return .failed;
+    };
     const vote_account = vote_account_result orelse {
+        logger.warn().log("generateVoteTx: vote account not found");
         return .failed;
     };
     defer vote_account.deinit(allocator);
 
-    const vote_account_data = vote_account.data.readAllAllocate(allocator) catch return .failed;
+    const vote_account_data = vote_account.data.readAllAllocate(allocator) catch |err| {
+        logger.warn().logf("generateVoteTx: failed to read vote account data: {}", .{err});
+        return .failed;
+    };
     defer allocator.free(vote_account_data);
 
     var vote_state_versions = sig.bincode.readFromSlice(
@@ -1308,10 +1318,16 @@ fn generateVoteTx(
         sig.runtime.program.vote.state.VoteStateVersions,
         vote_account_data,
         .{},
-    ) catch return .failed;
+    ) catch |err| {
+        logger.warn().logf("generateVoteTx: failed to deserialize vote state versions: {}", .{err});
+        return .failed;
+    };
     defer vote_state_versions.deinit(allocator);
 
-    var vote_state = vote_state_versions.convertToCurrent(allocator) catch return .failed;
+    var vote_state = vote_state_versions.convertToCurrent(allocator) catch |err| {
+        logger.warn().logf("generateVoteTx: failed to convert vote state to current: {}", .{err});
+        return .failed;
+    };
     defer vote_state.deinit(allocator);
 
     const node_pubkey = Pubkey.fromPublicKey(&node_kp.public_key);
@@ -1322,6 +1338,7 @@ fn generateVoteTx(
     const current_epoch = epoch_tracker.schedule.getEpoch(last_voted_slot);
 
     const authorized_voter_pubkey = vote_state.voters.getAuthorizedVoter(current_epoch) orelse {
+        logger.warn().logf("generateVoteTx: no authorized voter for epoch {}", .{current_epoch});
         return .failed;
     };
 
@@ -1364,7 +1381,10 @@ fn generateVoteTx(
     );
     defer vote_ix.deinit(allocator);
 
-    const blockhash = slot_info.state.hash.readCopy() orelse return .failed;
+    const blockhash = slot_info.state.hash.readCopy() orelse {
+        logger.warn().logf("generateVoteTx: blockhash is null for slot {}", .{last_voted_slot});
+        return .failed;
+    };
 
     const vote_tx_msg = try sig.core.transaction.Message.initCompile(
         allocator,
