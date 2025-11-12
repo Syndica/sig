@@ -335,7 +335,7 @@ test pushInstruction {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         deinitAccountMap(cache, allocator);
     }
 
@@ -418,7 +418,7 @@ test "pushInstruction sysvar account data" {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         deinitAccountMap(cache, allocator);
     }
 
@@ -465,7 +465,7 @@ test "pushInstruction sysvar account too small" {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         deinitAccountMap(cache, allocator);
     }
 
@@ -510,7 +510,7 @@ test "processNextInstruction" {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         deinitAccountMap(cache, allocator);
     }
 
@@ -576,7 +576,7 @@ test popInstruction {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         deinitAccountMap(cache, allocator);
     }
 
@@ -660,7 +660,7 @@ test prepareCpiInstructionInfo {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         deinitAccountMap(cache, allocator);
     }
 

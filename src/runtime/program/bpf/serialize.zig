@@ -846,7 +846,7 @@ test serializeParameters {
                 },
             );
             defer {
-                deinitTransactionContext(allocator, tc);
+                deinitTransactionContext(allocator, &tc);
                 sig.runtime.testing.deinitAccountMap(cache, allocator);
             }
 

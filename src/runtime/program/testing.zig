@@ -11,7 +11,7 @@ const LogCollector = sig.runtime.LogCollector;
 pub const InstructionContextAccountMetaParams = runtime_testing.InstructionInfoAccountMetaParams;
 pub const ExecuteContextsParams = runtime_testing.ExecuteContextsParams;
 
-const createTransactionContext = runtime_testing.createTransactionContext;
+const createTransactionContextPtr = runtime_testing.createTransactionContextPtr;
 const deinitTransactionContext = runtime_testing.deinitTransactionContext;
 const createInstructionInfo = runtime_testing.createInstructionInfo;
 const expectTransactionContextEqual = runtime_testing.expectTransactionContextEqual;
@@ -63,7 +63,7 @@ pub fn expectProgramExecuteResult(
     // Create the initial transaction context
     var initial_prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const initial_cache, var initial_tc = try createTransactionContext(
+    const initial_cache, var initial_tc = try createTransactionContextPtr(
         allocator,
         initial_prng.random(),
         context_params,
@@ -80,12 +80,13 @@ pub fn expectProgramExecuteResult(
         }
         deinitTransactionContext(allocator, initial_tc);
         sig.runtime.testing.deinitAccountMap(initial_cache, allocator);
+        allocator.destroy(initial_tc);
     }
 
     // Create the expected transaction context
     var expected_prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const expected_cache, const expected_tc = try createTransactionContext(
+    const expected_cache, const expected_tc = try createTransactionContextPtr(
         allocator,
         expected_prng.random(),
         expected_context_params,
@@ -93,11 +94,12 @@ pub fn expectProgramExecuteResult(
     defer {
         deinitTransactionContext(allocator, expected_tc);
         sig.runtime.testing.deinitAccountMap(expected_cache, allocator);
+        allocator.destroy(expected_tc);
     }
 
     // Create the instruction info
     var instruction_info = try createInstructionInfo(
-        &initial_tc,
+        initial_tc,
         program_id,
         instruction,
         instruction_accounts,
@@ -107,7 +109,7 @@ pub fn expectProgramExecuteResult(
     // Execute the instruction
     try executor.executeInstruction(
         allocator,
-        &initial_tc,
+        initial_tc,
         instruction_info,
     );
 

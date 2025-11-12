@@ -99,6 +99,31 @@ pub fn createTransactionContext(
     std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData),
     TransactionContext,
 } {
+    var transaction_context: TransactionContext = undefined;
+    const account_map = try initTransactionContext(allocator, random, params, &transaction_context);
+    return .{ account_map, transaction_context };
+}
+
+pub fn createTransactionContextPtr(
+    allocator: std.mem.Allocator,
+    random: std.Random,
+    params: ExecuteContextsParams,
+) !struct {
+    std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData),
+    *TransactionContext,
+} {
+    const transaction_context = try allocator.create(TransactionContext);
+    errdefer allocator.destroy(transaction_context);
+    const account_map = try initTransactionContext(allocator, random, params, transaction_context);
+    return .{ account_map, transaction_context };
+}
+
+fn initTransactionContext(
+    allocator: std.mem.Allocator,
+    random: std.Random,
+    params: ExecuteContextsParams,
+    transaction_context: *TransactionContext,
+) !std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData) {
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
 
@@ -173,7 +198,7 @@ pub fn createTransactionContext(
     return_data.data.appendSliceAssumeCapacity(params.return_data.data);
 
     // Create Transaction Context
-    const tc: TransactionContext = .{
+    transaction_context.* = .{
         .allocator = allocator,
         .feature_set = feature_set,
         .sysvar_cache = sysvar_cache,
@@ -198,12 +223,12 @@ pub fn createTransactionContext(
         .slot = params.slot,
     };
 
-    return .{ account_map, tc };
+    return account_map;
 }
 
 pub fn deinitTransactionContext(
     allocator: std.mem.Allocator,
-    tc: TransactionContext,
+    tc: *const TransactionContext,
 ) void {
     if (!builtin.is_test)
         @compileError("deinitTransactionContext should only be called in test mode");
@@ -360,8 +385,8 @@ pub const InstructionInfoAccountMetaParams = struct {
 };
 
 pub fn expectTransactionContextEqual(
-    expected: TransactionContext,
-    actual: TransactionContext,
+    expected: *const TransactionContext,
+    actual: *const TransactionContext,
 ) !void {
     if (!builtin.is_test)
         @compileError("expectTransactionContextEqual should only be called in test mode");
