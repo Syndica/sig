@@ -76,34 +76,6 @@ pub const LoadedProgram = union(enum(u8)) {
     }
 };
 
-/// TODO: remove
-pub fn loadPrograms(
-    allocator: std.mem.Allocator,
-    accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
-    enviroment: *const vm.Environment,
-    slot: u64,
-) AccountLoadError!ProgramMap {
-    const zone = tracy.Zone.init(@src(), .{ .name = "loadPrograms" });
-    defer zone.deinit();
-
-    var programs = ProgramMap.empty;
-    errdefer programs.deinit(allocator);
-
-    for (accounts.keys(), accounts.values()) |address, account| {
-        try loadIfProgram(
-            allocator,
-            &programs,
-            address,
-            &account,
-            .{ .account_shared_data_map = accounts },
-            enviroment,
-            slot,
-        );
-    }
-
-    return programs;
-}
-
 pub fn loadIfProgram(
     allocator: std.mem.Allocator,
     programs: *ProgramMap,
@@ -282,19 +254,8 @@ test "loadPrograms: load v1, v2 program" {
         },
     );
 
-    const environment = vm.Environment{
-        .loader = .{},
-        .config = .{},
-    };
-    defer environment.deinit(allocator);
-
     { // Success
-        var loaded_programs = try loadPrograms(
-            allocator,
-            &accounts,
-            &environment,
-            0,
-        );
+        var loaded_programs = try testLoad(allocator, &accounts, &.{}, 0);
         defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_v1_key).?) {
@@ -362,18 +323,8 @@ test "loadPrograms: load v3 program" {
         },
     );
 
-    const environment = vm.Environment{
-        .loader = .{},
-        .config = .{},
-    };
-
     { // Success
-        var loaded_programs = try loadPrograms(
-            allocator,
-            &accounts,
-            &environment,
-            program_deployment_slot + 1,
-        );
+        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot + 1);
         defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
@@ -383,12 +334,7 @@ test "loadPrograms: load v3 program" {
     }
 
     { // Delay visibility failure
-        var loaded_programs = try loadPrograms(
-            allocator,
-            &accounts,
-            &environment,
-            program_deployment_slot,
-        );
+        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot);
         defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
@@ -403,12 +349,7 @@ test "loadPrograms: load v3 program" {
         account.data[0] = 0xFF; // Corrupt the first byte of the metadata
         defer account.data[0] = tmp_byte;
 
-        var loaded_programs = try loadPrograms(
-            allocator,
-            &accounts,
-            &environment,
-            program_deployment_slot + 1,
-        );
+        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot + 1);
         defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
@@ -423,12 +364,7 @@ test "loadPrograms: load v3 program" {
         account.data[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE + 1] = 0xFF; // Corrupt the first byte of the elf
         defer account.data[0] = tmp_byte;
 
-        var loaded_programs = try loadPrograms(
-            allocator,
-            &accounts,
-            &environment,
-            program_deployment_slot + 1,
-        );
+        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot + 1);
         defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
@@ -450,11 +386,6 @@ test "loadPrograms: load v4 program" {
         std.math.maxInt(usize),
     );
     defer allocator.free(program_elf);
-
-    const environment = vm.Environment{
-        .loader = .{},
-        .config = .{},
-    };
 
     var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
     defer {
@@ -493,12 +424,7 @@ test "loadPrograms: load v4 program" {
     );
 
     { // Success
-        var loaded_programs = try loadPrograms(
-            allocator,
-            &accounts,
-            &environment,
-            program_deployment_slot + 1,
-        );
+        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot + 1);
         defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
@@ -510,12 +436,7 @@ test "loadPrograms: load v4 program" {
     { // Bad program data meta
         @memset(program_data[0..bpf_loader.v4.State.PROGRAM_DATA_METADATA_SIZE], 0xaa);
 
-        var loaded_programs = try loadPrograms(
-            allocator,
-            &accounts,
-            &environment,
-            program_deployment_slot + 1,
-        );
+        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot + 1);
         defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
@@ -548,18 +469,8 @@ test "loadPrograms: bad owner" {
         },
     );
 
-    const environment = vm.Environment{
-        .loader = .{},
-        .config = .{},
-    };
-
     { // Failed to load program with bad owner
-        var loaded_programs = try loadPrograms(
-            allocator,
-            &accounts,
-            &environment,
-            prng.random().int(u64),
-        );
+        var loaded_programs = try testLoad(allocator, &accounts, &.{}, prng.random().int(u64));
         defer loaded_programs.deinit(allocator);
 
         if (loaded_programs.get(program_key) != null) return error.TestFailed;
@@ -607,4 +518,31 @@ pub fn createV3ProgramAccountData(
     @memcpy(program_data_bytes[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE..], program_elf_bytes);
 
     return .{ program_bytes, program_data_bytes };
+}
+
+/// helper function to test loading programs from accounts.
+pub fn testLoad(
+    allocator: std.mem.Allocator,
+    accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    environment: *const vm.Environment,
+    slot: u64,
+) AccountLoadError!ProgramMap {
+    if (!@import("builtin").is_test) @compileError("only for tests");
+
+    var programs = ProgramMap.empty;
+    errdefer programs.deinit(allocator);
+
+    for (accounts.keys(), accounts.values()) |address, account| {
+        try loadIfProgram(
+            allocator,
+            &programs,
+            address,
+            &account,
+            .{ .account_shared_data_map = accounts },
+            environment,
+            slot,
+        );
+    }
+
+    return programs;
 }
