@@ -410,15 +410,30 @@ pub const TowerConsensus = struct {
 
             const SlotSet = SortedSetUnmanaged(Slot);
 
+            // Filter: only include slots that are relevant (recent enough to be used in fork choice)
+            // This prevents accumulation of ancient slots that should have been pruned
+            const root = params.slot_tracker.root;
+            const min_slot = if (root > 32) root - 32 else 0;
+
             // arena-allocated
             var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
             var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
             for (params.slot_tracker.slots.keys(), params.slot_tracker.slots.values()) |slot, info| {
+                // Skip ancient slots that should have been pruned
+                // Only include: descendants of root, root itself, and recent ancestors (>= min_slot)
+                const is_relevant = slot >= min_slot or slot == root or
+                    (params.progress_map.getForkProgress(slot) != null and info.constants.ancestors.containsSlot(root));
+
+                if (!is_relevant) continue;
+
                 const slot_ancestors = &info.constants.ancestors.ancestors;
                 const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
                 try ancestor_gop.value_ptr.ancestors
                     .ensureUnusedCapacity(arena, slot_ancestors.count());
                 for (slot_ancestors.keys()) |ancestor_slot| {
+                    // Also filter ancestor slots
+                    if (ancestor_slot < min_slot and ancestor_slot != root) continue;
+
                     try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
                     const descendants_gop =
                         try descendants.getOrPutValue(arena, ancestor_slot, .empty);
