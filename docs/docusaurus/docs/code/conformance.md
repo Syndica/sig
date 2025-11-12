@@ -20,7 +20,4 @@ zig build -Doptimize=ReleaseSafe solfuzz_sig
 
 # for more options
 ./run.py --help
-
-# optional: edit and debug agave's code:
-scripts/vendor-agave.py
 ```
