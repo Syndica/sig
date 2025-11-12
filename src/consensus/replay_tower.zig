@@ -569,6 +569,10 @@ pub const ReplayTower = struct {
                 else
                     true;
 
+                self.logger.info().logf(
+                    "DADE0 {?any} ",
+                    .{progress.getHash(last_voted_slot)},
+                );
                 if (is_switch) {
                     // Our last vote slot was purged because it was on a duplicate fork, don't continue below
                     // where checks may panic. We allow a freebie vote here that may violate switching
@@ -623,6 +627,10 @@ pub const ReplayTower = struct {
         const switch_slot_ancestors = ancestors.get(switch_slot) orelse
             return error.NoAncestorsFoundForSwitchSlot;
 
+        self.logger.info().logf(
+            "DADE1 switch_slot {} last_voted_slot {} witch_slot_ancestors.containsSlot(last_voted_slot) {}",
+            .{ switch_slot, last_voted_slot, switch_slot_ancestors.containsSlot(last_voted_slot) },
+        );
         if (switch_slot == last_voted_slot or switch_slot_ancestors.containsSlot(last_voted_slot)) {
             // If the `switch_slot is a descendant of the last vote,
             // no switching proof is necessary
@@ -659,10 +667,41 @@ pub const ReplayTower = struct {
         // By this point, we know the `switch_slot` is on a different fork
         // (is neither an ancestor nor descendant of `last_vote`), so a
         // switching proof is necessary
-        self.logger.debug().logf(
-            "switch threshold check: last_voted_slot={}, switch_slot={}, root={}, descendants_count={}",
-            .{ last_voted_slot, switch_slot, root, descendants.count() },
+        self.logger.info().logf(
+            "=== SWITCH THRESHOLD CHECK START ===",
+            .{},
         );
+        self.logger.info().logf(
+            "last_voted_slot={}, switch_slot={}, root={}",
+            .{ last_voted_slot, switch_slot, root },
+        );
+        self.logger.info().logf(
+            "last_vote_ancestors.count={}, descendants_count={}, ancestors_count={}",
+            .{ last_vote_ancestors.ancestors.count(), descendants.count(), ancestors.count() },
+        );
+
+        // Log fork structure context
+        const switch_ancestors = ancestors.get(switch_slot);
+        const last_vote_ancestor_set = &last_vote_ancestors;
+        self.logger.info().logf(
+            "switch_slot in ancestors map: {}, last_voted_slot in ancestors map: {}",
+            .{ switch_ancestors != null, ancestors.get(last_voted_slot) != null },
+        );
+
+        if (switch_ancestors) |sa| {
+            self.logger.info().logf(
+                "switch_slot has {} ancestors, last_vote has {} ancestors",
+                .{ sa.ancestors.count(), last_vote_ancestor_set.ancestors.count() },
+            );
+
+            // Log common ancestor
+            const gca = greatestCommonAncestor(ancestors, switch_slot, last_voted_slot);
+            self.logger.info().logf(
+                "greatest_common_ancestor(switch={}, last_voted={}) = {?}",
+                .{ switch_slot, last_voted_slot, gca },
+            );
+        }
+
         const switch_proof = Hash.ZEROES;
         var locked_out_stake: u64 = 0;
 
@@ -671,6 +710,9 @@ pub const ReplayTower = struct {
 
         var candidates_checked: u32 = 0;
         var candidates_passed: u32 = 0;
+        var sample_logged: u8 = 0;
+        const max_samples = 5;
+
         for (descendants.keys(), descendants.values()) |candidate_slot, *candidate_descendants| {
             candidates_checked += 1;
             // 1) Don't consider any banks that haven't been frozen yet
@@ -698,22 +740,68 @@ pub const ReplayTower = struct {
                 }
             } else false;
 
+            const is_valid_switching_vote = self.isValidSwitchingProofVote(
+                candidate_slot,
+                last_voted_slot,
+                switch_slot,
+                ancestors,
+                &last_vote_ancestors,
+            ) orelse false; // Rust uses unwrap_or(false), treating None as false
+
+            // Log detailed failure reasons for first few samples
+            const should_log_sample = sample_logged < max_samples;
+            if (should_log_sample) {
+                if (!is_progress_computed) {
+                    self.logger.info().logf("candidate {}: REJECTED - no progress computed", .{candidate_slot});
+                    sample_logged += 1;
+                } else if (is_descendant_computed) {
+                    self.logger.info().logf("candidate {}: REJECTED - has computed descendant", .{candidate_slot});
+                    sample_logged += 1;
+                } else if (candidate_slot == last_voted_slot) {
+                    self.logger.info().logf("candidate {}: REJECTED - is last_voted_slot", .{candidate_slot});
+                    sample_logged += 1;
+                } else if (candidate_slot <= root) {
+                    self.logger.info().logf("candidate {}: REJECTED - <= root ({})", .{ candidate_slot, root });
+                    sample_logged += 1;
+                } else if (!is_valid_switching_vote) {
+                    // This is the key one - let's understand WHY it's not valid
+                    const is_desc = isDescendantSlot(candidate_slot, last_voted_slot, ancestors);
+                    const gca = greatestCommonAncestor(ancestors, candidate_slot, last_voted_slot);
+                    const switch_desc = if (gca) |anc| isDescendantSlot(switch_slot, anc, ancestors) else null;
+
+                    self.logger.info().logf(
+                        "candidate {}: REJECTED by isValidSwitchingProofVote | " ++
+                            "is_descendant={?}, gca={?}, switch_desc_of_gca={?} | " ++
+                            "last_voted={}, switch={}, root={}",
+                        .{ candidate_slot, is_desc, gca, switch_desc, last_voted_slot, switch_slot, root },
+                    );
+                    sample_logged += 1;
+                }
+            }
+
             if (!is_progress_computed or
                 is_descendant_computed or
                 candidate_slot == last_voted_slot or
                 candidate_slot <= root or
-                !self.isValidSwitchingProofVote(
-                    candidate_slot,
-                    last_voted_slot,
-                    switch_slot,
-                    ancestors,
-                    &last_vote_ancestors,
-                ).?)
+                !is_valid_switching_vote)
             {
                 continue;
             }
 
             candidates_passed += 1;
+
+            if (candidates_passed == 1) {
+                // Log first passing candidate in detail
+                self.logger.info().logf(
+                    "FIRST PASSING CANDIDATE: slot={}, is_desc_of_last_vote={?}, gca_with_last_vote={?}",
+                    .{
+                        candidate_slot,
+                        isDescendantSlot(candidate_slot, last_voted_slot, ancestors),
+                        greatestCommonAncestor(ancestors, candidate_slot, last_voted_slot),
+                    },
+                );
+            }
+
             // By the time we reach here, any ancestors of the `last_vote`,
             // should have been filtered out, as they all have a descendant,
             // namely the `last_vote` itself.
@@ -726,16 +814,20 @@ pub const ReplayTower = struct {
             const lockout_intervals =
                 &progress.getForkProgress(candidate_slot).?.fork_stats.lockout_intervals;
 
-            self.logger.debug().logf(
-                "candidate {} passed checks, lockout_intervals.count={}",
+            self.logger.info().logf(
+                "candidate {} PASSED all filters, lockout_intervals.count={}",
                 .{ candidate_slot, lockout_intervals.map.count() },
             );
 
             if (lockout_intervals.map.count() == 0) {
+                self.logger.info().logf(
+                    "candidate {} has NO lockout intervals, skipping",
+                    .{candidate_slot},
+                );
                 continue;
             }
-            self.logger.debug().logf(
-                "candidate {} has lockout intervals, checking...",
+            self.logger.info().logf(
+                "candidate {} has lockout intervals, checking each one...",
                 .{candidate_slot},
             );
             // Find any locked out intervals for vote accounts in this bank with
@@ -777,9 +869,16 @@ pub const ReplayTower = struct {
                                 0;
                         locked_out_stake += stake;
 
-                        self.logger.debug().logf(
-                            "found locked-out validator at candidate {}, voted_slot={}, lockout_end={}, stake={}, total_locked_out={}",
-                            .{ candidate_slot, vote_account[0], lockout_interval_end, stake, locked_out_stake },
+                        self.logger.info().logf(
+                            "FOUND LOCKED-OUT VALIDATOR at candidate {}, voted_slot={}, lockout_end={}, stake={}, total_locked_out={} ({d:.2}%)",
+                            .{
+                                candidate_slot,
+                                vote_account[0],
+                                lockout_interval_end,
+                                stake,
+                                locked_out_stake,
+                                @as(f64, @floatFromInt(locked_out_stake)) / @as(f64, @floatFromInt(total_stake)) * 100.0,
+                            },
                         );
 
                         if (@as(f64, @floatFromInt(locked_out_stake)) / @as(
@@ -793,14 +892,14 @@ pub const ReplayTower = struct {
                 }
             }
             if (intervals_checked > 0) {
-                self.logger.debug().logf(
-                    "candidate {}: checked {} intervals, {} valid (>= last_voted_slot)",
-                    .{ candidate_slot, intervals_checked, intervals_valid },
+                self.logger.info().logf(
+                    "candidate {}: checked {} intervals, {} valid (>= last_voted_slot={})",
+                    .{ candidate_slot, intervals_checked, intervals_valid, last_voted_slot },
                 );
             }
         }
-        self.logger.debug().logf(
-            "switch check summary: checked {} candidates, {} passed initial filters, final locked_out_stake={}",
+        self.logger.info().logf(
+            "=== CANDIDATE LOOP SUMMARY: checked={}, passed={}, locked_out_stake={} ===",
             .{ candidates_checked, candidates_passed, locked_out_stake },
         );
         // Check the latest votes for potentially gossip votes that haven't landed yet
