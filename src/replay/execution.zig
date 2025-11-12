@@ -911,6 +911,49 @@ test "replaySlot - fail: sigverify" {
     );
 }
 
+test "prepareSlot: empty and dead slots are handled correctly" {
+    const allocator = std.testing.allocator;
+
+    var dep_stubs = try sig.replay.service.DependencyStubs.init(allocator, .FOR_TESTS);
+    defer dep_stubs.deinit(allocator);
+
+    var service = try dep_stubs.stubbedService(allocator, .FOR_TESTS, false);
+    defer service.deinit(allocator);
+
+    const slot_tracker, var lg = service.replay.slot_tracker.writeWithLock();
+    defer lg.unlock();
+    const epoch_tracker, var elg = service.replay.epoch_tracker.writeWithLock();
+    defer elg.unlock();
+
+    const root = slot_tracker.get(0);
+    const epoch = epoch_tracker.getForSlot(0);
+
+    const constants, const state = try sig.replay.service.newSlotFromParent(
+        allocator,
+        dep_stubs.accountsdb.accountReader(),
+        epoch.?.ticks_per_slot,
+        0,
+        root.?.constants,
+        root.?.state,
+        .ZEROES,
+        1,
+    );
+
+    try slot_tracker.put(allocator, 1, .{ .constants = constants, .state = state });
+
+    try std.testing.expectEqual(
+        .empty,
+        try prepareSlot(&service.replay, slot_tracker, epoch_tracker, 1),
+    );
+
+    try dep_stubs.ledger.resultWriter().setDeadSlot(1);
+
+    try std.testing.expectEqual(
+        .dead,
+        try prepareSlot(&service.replay, slot_tracker, epoch_tracker, 1),
+    );
+}
+
 fn testReplaySlot(
     allocator: Allocator,
     expected: ?ReplaySlotError,
