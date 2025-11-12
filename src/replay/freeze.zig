@@ -473,19 +473,19 @@ test "freezeSlot: trivial e2e merkle hash test" {
 test "freezeSlot: trivial e2e lattice hash test" {
     const allocator = std.testing.allocator;
 
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
     var simple_db: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
     defer simple_db.deinit();
 
-    var real_db: sig.accounts_db.AccountsDB =
-        try .init(.minimal(allocator, .noop, tmp_dir.dir, null));
-    defer real_db.deinit();
+    var real_state, var tmp_dir = try sig.accounts_db.Two.initTest(allocator);
+    defer {
+        sig.accounts_db.Two.Rooted.deinitThreadLocals();
+        real_state.deinit();
+        tmp_dir.cleanup();
+    }
 
     for ([_]sig.accounts_db.AccountStore{
         simple_db.accountStore(),
-        real_db.accountStore(),
+        .{ .accounts_db_two = &real_state },
     }) |account_store| {
         errdefer std.log.err("Failed with implementation '{s}'", .{@tagName(account_store)});
 

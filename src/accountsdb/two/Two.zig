@@ -29,6 +29,24 @@ pub fn init(allocator: std.mem.Allocator, rooted: Rooted) !Db {
     };
 }
 
+/// Initializes a temporary empty rooted storage. Call tmp.cleanup() when done with it.
+pub fn initTest(allocator: std.mem.Allocator) !struct { Db, std.testing.TmpDir } {
+    if (!builtin.is_test) @compileError("only used in tests");
+
+    const tmp = std.testing.tmpDir(.{});
+    var tmp_dir_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_path = try tmp.dir.realpath(".", &tmp_dir_buffer);
+
+    var buffer: [std.fs.max_path_bytes + 1]u8 = undefined;
+    const path = try std.fmt.bufPrintZ(&buffer, "{s}/accounts.db", .{tmp_path});
+
+    var rooted: Rooted = try .init(path);
+    errdefer rooted.deinit();
+
+    const db: @This() = try .init(allocator, rooted);
+    return .{ db, tmp };
+}
+
 pub fn deinit(self: *Db) void {
     const allocator = self.allocator;
     self.rooted.deinit();
@@ -37,6 +55,12 @@ pub fn deinit(self: *Db) void {
 
 /// Clones the account shared data.
 pub fn put(self: *Db, slot: Slot, address: Pubkey, data: AccountSharedData) !void {
+    // used for tests, tracking what the largest slot is and
+    // making sure we don't write to something before that.
+    if (builtin.is_test)
+        if (self.rooted.largest_rooted_slot) |lrs|
+            if (lrs >= slot) return error.CannotWriteRootedSlot;
+
     const cloned = try data.clone(self.allocator);
     errdefer cloned.deinit(self.allocator);
     try self.unrooted.put(self.allocator, slot, address, cloned);
