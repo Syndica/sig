@@ -893,15 +893,9 @@ fn trackNewVotesAndNotifyConfirmations(
             });
 
             if (is_gossip_vote and is_new and stake > 0) {
-                senders.gossip_verified_vote_hashes.append(allocator, .{
+                try senders.gossip_verified_vote_hashes.append(allocator, .{
                     vote_pubkey, slot, hash,
-                }) catch |err| {
-                    logger.err().logf(
-                        "{s}: gossip verified vote hash couldn't send: " ++
-                            ".{{ .vote_pubkey = {}, .slot = {}, .hash = {} }}",
-                        .{ @errorName(err), vote_pubkey, slot, hash },
-                    );
-                };
+                });
             }
 
             if (reached_threshold_results.isSet(0)) {
@@ -909,15 +903,10 @@ fn trackNewVotesAndNotifyConfirmations(
                     "slot {} with hash {f} reached duplicate confirmation threshold",
                     .{ slot, hash },
                 );
-                senders.duplicate_confirmed_slots.append(allocator, .{
+                try senders.duplicate_confirmed_slots.append(allocator, .{
                     .slot = slot,
                     .hash = hash,
-                }) catch |err| {
-                    logger.err().logf(
-                        "{s}: duplicate confirmed slot couldn't send: {} (hash: {})",
-                        .{ @errorName(err), slot, hash },
-                    );
-                };
+                });
                 metrics.duplicate_confirmed_slot.set(slot);
             }
 
