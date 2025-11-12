@@ -343,10 +343,13 @@ test hasDuplicates {
 pub fn executeTransaction(
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
+    /// transaction execution modifies accounts, which is implemented by
+    /// directly mutating the data in this slice
     loaded_accounts: []LoadedAccount,
     compute_budget_limits: *const ComputeBudgetLimits,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
+    /// may be mutated by the bpf loader
     program_map: *ProgramMap,
 ) error{OutOfMemory}!ExecutedTransaction {
     var zone = tracy.Zone.init(@src(), .{ .name = "executeTransaction" });
