@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("../../sig.zig");
 
 const IpAddr = sig.net.IpAddr;
 const SocketAddr = sig.net.SocketAddr;

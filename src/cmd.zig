@@ -131,6 +131,7 @@ pub fn main() !void {
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.voting_enabled = params.voting_enabled;
+            current_config.rpc_port = params.rpc_port;
             try validator(gpa, gossip_gpa, current_config);
         },
         .replay_offline => |params| {
@@ -386,6 +387,15 @@ const Cmd = struct {
         .default_value = true,
         .config = {},
         .help = "Enable validator voting. When false, operate as non-voting.",
+    };
+
+    const rpc_port_arg: cli.ArgumentInfo(?u16) = .{
+        .kind = .named,
+        .name_override = "rpc-port",
+        .alias = .none,
+        .default_value = null,
+        .config = {},
+        .help = "Enable the HTTP RPC server on the given TCP port",
     };
 
     const GossipArgumentsCommon = struct {
@@ -726,6 +736,7 @@ const Cmd = struct {
         replay_threads: u16,
         disable_consensus: bool,
         voting_enabled: bool,
+        rpc_port: ?u16,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -747,6 +758,7 @@ const Cmd = struct {
                 .replay_threads = replay_threads_arg,
                 .disable_consensus = disable_consensus_arg,
                 .voting_enabled = voting_enabled_arg,
+                .rpc_port = rpc_port_arg,
             },
         };
     };
@@ -1225,16 +1237,18 @@ fn validator(
         cfg,
     );
 
-    // TODO: start RPC-server service using app_base.rpc_hooks
-    const rpc_server_thread = try std.Thread.spawn(.{}, runRPCServer, .{
-        allocator,
-        app_base.logger,
-        app_base.exit,
-        std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 8899),
-        &app_base.rpc_hooks,
-    });
+    const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
+        try std.Thread.spawn(.{}, runRPCServer, .{
+            allocator,
+            app_base.logger,
+            app_base.exit,
+            std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port),
+            &app_base.rpc_hooks,
+        })
+    else
+        null;
 
-    rpc_server_thread.join();
+    if (rpc_server_thread) |thread| thread.join();
     replay_thread.join();
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
