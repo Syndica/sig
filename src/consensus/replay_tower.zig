@@ -728,9 +728,17 @@ pub const ReplayTower = struct {
             // Find any locked out intervals for vote accounts in this bank with
             // `lockout_interval_end` >= `last_vote`, which implies they are locked out at
             // `last_vote` on another fork.
-            const intervals_keyed_by_end = lockout_intervals.map.values()[last_voted_slot..];
-            for (intervals_keyed_by_end) |interval_keyed_by_end| {
-                for (interval_keyed_by_end.items) |vote_account| {
+            // Iterate through the lockout intervals map and check each entry
+            for (
+                lockout_intervals.map.keys(),
+                lockout_intervals.map.values(),
+            ) |lockout_interval_end, *intervals_keyed_by_end| {
+                // Only consider intervals that expire at or after last_voted_slot
+                if (lockout_interval_end < last_voted_slot) {
+                    continue;
+                }
+
+                for (intervals_keyed_by_end.items) |vote_account| {
                     if (locked_out_vote_accounts.contains(vote_account[1])) {
                         continue;
                     }
