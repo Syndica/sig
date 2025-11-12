@@ -119,6 +119,7 @@ pub fn main() !void {
         .validator => |params| {
             current_config.shred_version = params.shred_version;
             current_config.leader_schedule_path = params.leader_schedule;
+            current_config.vote_account_path = params.vote_account;
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
@@ -136,6 +137,7 @@ pub fn main() !void {
         .replay_offline => |params| {
             current_config.shred_version = params.shred_version;
             current_config.leader_schedule_path = params.leader_schedule;
+            current_config.vote_account_path = params.vote_account;
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
@@ -386,6 +388,15 @@ const Cmd = struct {
         .default_value = true,
         .config = {},
         .help = "Enable validator voting. When false, operate as non-voting.",
+    };
+
+    const vote_account_arg: cli.ArgumentInfo(?[]const u8) = .{
+        .kind = .named,
+        .name_override = "vote-account",
+        .alias = .none,
+        .default_value = null,
+        .config = .string,
+        .help = "Path to vote account keypair file. If not specified, validator identity will be used as vote account.",
     };
 
     const GossipArgumentsCommon = struct {
@@ -714,6 +725,8 @@ const Cmd = struct {
     const Validator = struct {
         shred_version: ?u16,
         leader_schedule: ?[]const u8,
+        /// Optional path to a Solana JSON keypair file for the vote account
+        vote_account: ?[]const u8,
         gossip_base: GossipArgumentsCommon,
         gossip_node: GossipArgumentsNode,
         repair: RepairArgumentsBase,
@@ -735,6 +748,7 @@ const Cmd = struct {
             .sub = .{
                 .shred_version = shred_version_arg,
                 .leader_schedule = leader_schedule_arg,
+                .vote_account = vote_account_arg,
                 .gossip_base = GossipArgumentsCommon.cmd_info,
                 .gossip_node = GossipArgumentsNode.cmd_info,
                 .repair = RepairArgumentsBase.cmd_info,
@@ -1003,6 +1017,38 @@ fn identity(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     logger.info().logf("Identity: {s}\n", .{pubkey});
 }
 
+/// Reads a Solana JSON keypair file and returns its public key as `Pubkey`.
+fn readJsonKeypairPubkey(allocator: std.mem.Allocator, path: []const u8) !Pubkey {
+    var file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    const stat = try file.stat();
+    const buf = try allocator.alloc(u8, @intCast(stat.size));
+    defer allocator.free(buf);
+    _ = try file.readAll(buf);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, buf, .{});
+    defer parsed.deinit();
+
+    const root = parsed.value;
+    if (root != .array) return error.InvalidKeypairFormat;
+    const arr = root.array;
+    // Solana JSON keypair stores 64-byte secret key
+    if (arr.items.len < 64) return error.InvalidKeypairFormat;
+    var sk_bytes: [64]u8 = undefined;
+    var i: usize = 0;
+    while (i < 64) : (i += 1) {
+        const v = arr.items[i];
+        if (v != .integer) return error.InvalidKeypairFormat;
+        const n = v.integer;
+        if (n < 0 or n > 255) return error.InvalidKeypairFormat;
+        sk_bytes[i] = @intCast(n);
+    }
+    const secret_key = try std.crypto.sign.Ed25519.SecretKey.fromBytes(sk_bytes);
+    const keypair = try std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key);
+    return Pubkey.fromPublicKey(&keypair.public_key);
+}
+
 /// entrypoint to run only gossip
 fn gossip(
     allocator: std.mem.Allocator,
@@ -1207,6 +1253,12 @@ fn validator(
     else
         null;
 
+    const vote_keypair_path = cfg.vote_account_path orelse "/vote-account-keypair.json";
+    const maybe_vote_pubkey: ?Pubkey = readJsonKeypairPubkey(allocator, vote_keypair_path) catch blk: {
+        app_base.logger.info().logf("vote-account: failed to read {s}; using identity as vote account", .{vote_keypair_path});
+        break :blk null;
+    };
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .loaded_snapshot = &loaded_snapshot,
@@ -1215,6 +1267,7 @@ fn validator(
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = cfg.voting_enabled,
+        .vote_account_pubkey = maybe_vote_pubkey,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -1373,6 +1426,11 @@ fn replayOffline(
     else
         null;
 
+    const maybe_vote_pubkey_offline: ?Pubkey = if (cfg.vote_account_path) |p|
+        try readJsonKeypairPubkey(allocator, p)
+    else
+        null;
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .loaded_snapshot = &loaded_snapshot,
@@ -1381,6 +1439,7 @@ fn replayOffline(
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = cfg.voting_enabled,
+        .vote_account_pubkey = maybe_vote_pubkey_offline,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -2035,6 +2094,8 @@ const ReplayAndConsensusServiceState = struct {
             replay_threads: u32,
             disable_consensus: bool,
             voting_enabled: bool,
+            /// When provided, overrides the vote account pubkey used by the validator
+            vote_account_pubkey: ?Pubkey,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
@@ -2077,7 +2138,7 @@ const ReplayAndConsensusServiceState = struct {
                 .logger = .from(params.app_base.logger),
                 .identity = .{
                     .validator = .fromPublicKey(&params.app_base.my_keypair.public_key),
-                    .vote_account = .fromPublicKey(&params.app_base.my_keypair.public_key),
+                    .vote_account = if (params.vote_account_pubkey) |vpk| vpk else .fromPublicKey(&params.app_base.my_keypair.public_key),
                 },
                 .signing = .{
                     .node = params.app_base.my_keypair,
