@@ -1935,20 +1935,16 @@ pub const AccountsDB = struct {
             }
         }
 
-        const duplicated: Account = .{
-            .data = .{ .owned_allocation = try self.allocator.dupe(u8, account.data) },
-            .executable = account.executable,
-            .lamports = account.lamports,
-            .owner = account.owner,
-            .rent_epoch = account.rent_epoch,
-        };
-        var inserted_duplicate: bool = false;
-        defer if (!inserted_duplicate) duplicated.deinit(self.allocator);
-
         if (self.geyser_writer) |geyser_writer| {
             geyser_writer.writePayloadToPipe(.{
                 .AccountPayloadV1 = .{
-                    .accounts = &.{duplicated},
+                    .accounts = &.{.{
+                        .data = .{ .unowned_allocation = account.data },
+                        .executable = account.executable,
+                        .lamports = account.lamports,
+                        .owner = account.owner,
+                        .rent_epoch = account.rent_epoch,
+                    }},
                     .pubkeys = &.{pubkey},
                     .slot = slot,
                 },
@@ -2000,8 +1996,13 @@ pub const AccountsDB = struct {
             const slot_accounts: []Account = slot_list.items(.account);
 
             const old_account = slot_accounts[index];
-            slot_accounts[index] = duplicated;
-            inserted_duplicate = true;
+            slot_accounts[index] = .{
+                .data = .{ .owned_allocation = try self.allocator.dupe(u8, account.data) },
+                .executable = account.executable,
+                .lamports = account.lamports,
+                .owner = account.owner,
+                .rent_epoch = account.rent_epoch,
+            };
             old_account.deinit(self.allocator);
 
             // no need to insert/reindex if we were able to overwrite an existing account
@@ -2021,9 +2022,17 @@ pub const AccountsDB = struct {
             };
             try entry.value_ptr.append(
                 self.allocator,
-                .{ .account = duplicated, .pubkey = pubkey },
+                .{
+                    .account = .{
+                        .data = .{ .owned_allocation = try self.allocator.dupe(u8, account.data) },
+                        .executable = account.executable,
+                        .lamports = account.lamports,
+                        .owner = account.owner,
+                        .rent_epoch = account.rent_epoch,
+                    },
+                    .pubkey = pubkey,
+                },
             );
-            inserted_duplicate = true;
         }
 
         // update index

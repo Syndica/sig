@@ -349,8 +349,10 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
         defer unrooted_accounts_lg.unlock();
 
         // remove from cache map
-        const did_remove = unrooted_accounts.remove(slot);
-        std.debug.assert(did_remove);
+        const slices = unrooted_accounts.fetchRemove(slot).?;
+        std.debug.assert(slices.value.bytes == pubkeys_and_accounts.bytes);
+        std.debug.assert(slices.value.len == pubkeys_and_accounts.len);
+        std.debug.assert(slices.value.capacity == pubkeys_and_accounts.capacity);
 
         // free slices
         for (pubkeys_and_accounts.items(.account)) |account| account.data.deinit(db.allocator);

@@ -94,6 +94,8 @@ pub fn advanceReplay(
 
     // run consensus
     if (consensus_params) |consensus| {
+        replay_state.logger.info().log("consensus.tower.process");
+
         var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
         defer gossip_verified_vote_hashes.deinit(allocator);
 
@@ -514,7 +516,10 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
 
 /// bypass the tower bft consensus protocol, simply rooting slots with SlotTree.reRoot
 fn bypassConsensus(state: *ReplayState) !void {
-    if (state.slot_tree.reRoot(state.allocator)) |new_root| {
+    const maybe_root = state.slot_tree.reRoot(state.allocator);
+    state.logger.info().logf("bypass consensus: {any}", .{maybe_root});
+
+    if (maybe_root) |new_root| {
         const slot_tracker = &state.slot_tracker;
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
