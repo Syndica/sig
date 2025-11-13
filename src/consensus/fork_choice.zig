@@ -98,7 +98,7 @@ pub const ForkInfo = struct {
     }
 
     /// Returns true if the fork rooted at this node is included in fork choice
-    fn isCandidate(self: *const ForkInfo) bool {
+    pub fn isCandidate(self: *const ForkInfo) bool {
         return self.latest_duplicate_ancestor == null;
     }
 
@@ -497,9 +497,6 @@ pub const ForkChoice = struct {
 
         // Finalize all updates
         self.processUpdateOperations(&update_ops);
-
-        // Log fork stake distribution after updates
-        self.logForkStakeDistribution();
 
         // Update metrics after processing votes
         self.updateMetrics();
@@ -1410,29 +1407,6 @@ pub const ForkChoice = struct {
         fork_info.height = deepest_child_height + 1;
         fork_info.heaviest_subtree_slot = heaviest_slot_hash_key;
         fork_info.deepest_slot = deepest_slot_hash_key;
-    }
-
-    /// Logs the stake distribution across all candidate forks as percentages of total stake.
-    fn logForkStakeDistribution(self: *ForkChoice) void {
-        const total_stake = self.stakeForSubtree(&self.tree_root) orelse 0;
-        if (total_stake == 0) return;
-
-        self.logger.info().log("candidate fork stake distribution:");
-        var it = self.fork_infos.iterator();
-        while (it.next()) |entry| {
-            const fork_info = entry.value_ptr;
-            // Skip forks with no direct stake or that are not candidates
-            if (fork_info.stake_for_slot == 0 or
-                !fork_info.isCandidate()) continue;
-
-            const percentage = (@as(f64, @floatFromInt(fork_info.stake_for_slot)) /
-                @as(f64, @floatFromInt(total_stake))) * 100.0;
-
-            self.logger.info().logf(
-                "  slot {}: {} stake ({d:.2}%)",
-                .{ entry.key_ptr.slot, fork_info.stake_for_slot, percentage },
-            );
-        }
     }
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1105

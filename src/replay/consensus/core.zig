@@ -1063,7 +1063,10 @@ fn sendVoteToLeaders(
                 vote_slot, voted_hash, @errorName(err),
             });
         };
-        logger.debug().logf("Sent vote (slot: {}, hash: {f}) to leader ({f}).", .{ vote_slot, voted_hash, tpu_vote_socket });
+        logger.debug().logf(
+            "Sent vote (slot: {}, hash: {f}) to leader ({f}).",
+            .{ vote_slot, voted_hash, tpu_vote_socket },
+        );
     } else {
         // Fallback: send to our own TPU address if no leaders were found
         if (maybe_my_pubkey) |my_pubkey| {
@@ -1556,6 +1559,68 @@ fn resetFork(
     _ = last_reset_bank_descendants;
 }
 
+/// Logs the percentage of vote stake distribution across all candidate fork subtrees.
+fn logForkStakeDistribution(
+    logger: Logger,
+    fork_choice: *const ForkChoice,
+) void {
+    var total_stake: u64 = 0;
+    var candidate_count: usize = 0;
+
+    {
+        var count_iter = fork_choice.fork_infos.valueIterator();
+        while (count_iter.next()) |fork_info| {
+            total_stake += fork_info.stake_for_slot;
+            if (fork_info.isCandidate()) {
+                candidate_count += 1;
+            }
+        }
+    }
+
+    if (total_stake == 0) {
+        logger.info().log("Fork stake distribution: no stake found");
+        return;
+    }
+
+    var buffer: [4096]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer);
+    const allocator = fba.allocator();
+
+    var output = std.ArrayList(u8).init(allocator);
+    defer output.deinit();
+
+    output.writer().print(
+        "=== Fork Stake Distribution (by subtree) ===\nRoot: slot={} | {} candidate forks\n",
+        .{ fork_choice.tree_root.slot, candidate_count },
+    ) catch return;
+
+    var iter = fork_choice.fork_infos.iterator();
+    while (iter.next()) |entry| {
+        const slot_hash = entry.key_ptr.*;
+        const fork_info = entry.value_ptr;
+
+        if (!fork_info.isCandidate()) {
+            continue;
+        }
+
+        const is_heaviest = fork_choice.heaviestOverallSlot().equals(slot_hash);
+        const subtree_percentage =
+            @as(f64, @floatFromInt(fork_info.stake_for_subtree)) * 100.0 /
+            @as(f64, @floatFromInt(total_stake));
+
+        const marker = if (is_heaviest) " [HEAVIEST]" else "";
+
+        output.writer().print(
+            "  Slot {}: {d:.2}%{s}\n",
+            .{ slot_hash.slot, subtree_percentage, marker },
+        ) catch return;
+    }
+
+    output.writer().writeAll("============================================") catch return;
+
+    logger.info().logf("{s}", .{output.items});
+}
+
 /// Compute consensus inputs for frozen slots that haven't been processed yet (where fork_stats.computed = false).
 /// The computed consensus inputs are needed for voting decisions and fork selection.
 ///
@@ -1621,6 +1686,10 @@ fn computeConsensusInputs(
                 epoch_schedule,
                 latest_validator_votes,
             );
+
+            // Log vote stake distribution across all candidate forks
+            logForkStakeDistribution(logger, fork_choice);
+
             const fork_stats = progress.getForkStats(slot) orelse return error.MissingForkStats;
             fork_stats.fork_stake = cluster_vote_state.fork_stake;
             fork_stats.total_stake = cluster_vote_state.total_stake;
