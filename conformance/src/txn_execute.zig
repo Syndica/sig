@@ -944,6 +944,8 @@ fn serializeOutput(
         // mistakenly compares them against the is_writable field from a totally
         // different account. This is nonsense, but we need to replicate the bug
         // in order to return a conformant set of accounts.
+        // https://github.com/firedancer-io/solfuzz-agave/blob/dfbb3f36a3866a82db5eed03fde068940297858e/src/txn_fuzzer.rs#L553
+        // https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=139114012
         const writes = result.ok.writes.slice();
         for (writes, sanitized.accounts.items(.is_writable)[0..writes.len]) |account, is_writable| {
             if (is_writable) try acct_states.append(
