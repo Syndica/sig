@@ -1056,12 +1056,13 @@ fn sendVoteToLeaders(
     if (upcoming_leader_sockets.len > 0) {
         for (upcoming_leader_sockets) |tpu_vote_socket| {
             sendVoteTransaction(
-                logger,
                 vote_tx,
                 tpu_vote_socket,
                 sockets,
             ) catch |err| {
-                logger.err().logf("Failed to send vote to leader: {}", .{err});
+                logger.err().logf("Failed to send vote (slot: {}, hash: {f}) to leader (error: {s}).", .{
+                    vote_slot, voted_hash, @errorName(err),
+                });
             };
         }
     } else {
