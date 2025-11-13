@@ -50,6 +50,7 @@ pub const VoteSockets = struct {
 };
 
 const AccountReader = sig.accounts_db.AccountReader;
+const AccountStore = sig.accounts_db.AccountStore;
 
 /// Transaction forwarding, which leader to forward to and how long to hold
 const FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET: u64 = 2;
@@ -334,7 +335,7 @@ pub const TowerConsensus = struct {
         self: *TowerConsensus,
         allocator: Allocator,
         params: struct {
-            account_reader: AccountReader,
+            account_store: AccountStore,
             ledger: *Ledger,
             /// Scanned by the vote collector if provided.
             gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
@@ -437,7 +438,7 @@ pub const TowerConsensus = struct {
             params.slot_tracker,
             params.epoch_tracker,
             params.progress_map,
-            params.account_reader,
+            params.account_store,
             params.slot_leaders,
             params.vote_sockets,
             self.identity.vote_account,
@@ -488,7 +489,7 @@ pub const TowerConsensus = struct {
         epoch_tracker: *const EpochTracker,
         progress_map: *ProgressMap,
         /// For reading the slot history account
-        account_reader: AccountReader,
+        account_store: AccountStore,
         slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
         vote_sockets: ?*const VoteSockets,
         vote_account: Pubkey,
@@ -594,7 +595,7 @@ pub const TowerConsensus = struct {
             &self.latest_validator_votes,
             &self.fork_choice,
             &epoch_stakes_map,
-            account_reader,
+            account_store.reader(),
         );
         defer vote_and_reset_forks.deinit(allocator);
         const maybe_voted_slot = vote_and_reset_forks.vote_slot;
@@ -634,7 +635,7 @@ pub const TowerConsensus = struct {
                 &self.replay_tower,
                 progress_map,
                 &self.fork_choice,
-                account_reader,
+                account_store,
                 self.signing.node,
                 self.signing.authorized_voters,
                 self.identity.vote_account,
@@ -869,7 +870,7 @@ fn handleVotableBank(
     replay_tower: *ReplayTower,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
-    account_reader: AccountReader,
+    account_store: AccountStore,
     node_keypair: ?sig.identity.KeyPair,
     authorized_voter_keypairs: []const sig.identity.KeyPair,
     vote_account_pubkey: Pubkey,
@@ -893,6 +894,7 @@ fn handleVotableBank(
             slot_tracker,
             progress,
             fork_choice,
+            account_store,
             new_root,
         );
     }
@@ -918,7 +920,7 @@ fn handleVotableBank(
         node_keypair,
         switch_fork_decision,
         replay_tower,
-        account_reader,
+        account_store.reader(),
         slot_tracker,
         epoch_tracker,
     );
@@ -1460,6 +1462,7 @@ fn checkAndHandleNewRoot(
     slot_tracker: *SlotTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
+    account_store: AccountStore,
     new_root: Slot,
 ) !void {
     // get the root bank before squash.
@@ -1479,6 +1482,12 @@ fn checkAndHandleNewRoot(
     slot_tracker.root = new_root;
     // Prune non rooted slots
     slot_tracker.pruneNonRooted(allocator);
+    // Tell the account_store about it for its unrooted accounts
+    try account_store.onSlotRooted(
+        allocator,
+        new_root,
+        slot_tracker.get(new_root).?.constants.fee_rate_governor.lamports_per_signature,
+    );
 
     // TODO
     // - Prune program cache bank_forks.read().unwrap().prune_program_cache(new_root);

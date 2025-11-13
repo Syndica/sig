@@ -101,7 +101,7 @@ pub fn advanceReplay(
         defer duplicate_confirmed_slots.deinit(allocator);
 
         try consensus.tower.process(allocator, .{
-            .account_reader = replay_state.account_store.reader(),
+            .account_store = replay_state.account_store,
             .gossip_table = consensus.gossip_table,
             .ledger = replay_state.ledger,
             .slot_tracker = &replay_state.slot_tracker,
