@@ -294,7 +294,8 @@ pub const TowerConsensus = struct {
         /// Sent by WindowService and DuplicateShred handlers
         duplicate_slots: *Channel(Slot),
         /// Sent by `replayActiveSlots`, received by the vote collector.
-        replay_votes: *Channel(ParsedVote),
+        /// Optional - null when consensus is disabled.
+        replay_votes: ?*Channel(ParsedVote),
 
         // Note: replay_votes is owned by ReplayState, not destroyed here
         pub fn destroy(self: Receivers) void {
@@ -305,7 +306,7 @@ pub const TowerConsensus = struct {
 
         pub fn create(
             allocator: std.mem.Allocator,
-            replay_votes: *Channel(ParsedVote),
+            replay_votes: ?*Channel(ParsedVote),
         ) std.mem.Allocator.Error!Receivers {
             const ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair) =
                 try .create(allocator);

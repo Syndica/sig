@@ -2117,7 +2117,7 @@ const ReplayAndConsensusServiceState = struct {
                 .current_epoch_constants = current_epoch_constants,
                 .hard_forks = hard_forks,
                 .replay_threads = params.replay_threads,
-            });
+            }, if (params.disable_consensus) .disabled else .enabled);
         };
         errdefer replay_state.deinit();
 

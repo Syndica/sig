@@ -31,7 +31,7 @@ slot_state: *sig.core.SlotState,
 status_cache: *sig.core.StatusCache,
 stakes_cache: *sig.core.StakesCache,
 new_rate_activation_epoch: ?sig.core.Epoch,
-replay_votes_sender: *Channel(ParsedVote),
+replay_votes_sender: ?*Channel(ParsedVote),
 
 pub fn commitTransactions(
     self: Committer,
@@ -79,17 +79,20 @@ pub fn commitTransactions(
                 transaction_fees += exec.fees.transaction_fee;
                 priority_fees += exec.fees.prioritization_fee;
                 // Skip non successful or non vote transactions.
-                if (exec.executed_transaction.err == null and
-                    isSimpleVoteTransaction(transaction.transaction))
-                {
-                    if (try vote_listener.vote_parser.parseSanitizedVoteTransaction(
-                        allocator,
-                        transaction,
-                    )) |parsed| {
-                        if (parsed.vote.lastVotedSlot() != null) {
-                            self.replay_votes_sender.send(parsed) catch parsed.deinit(allocator);
-                        } else {
-                            parsed.deinit(allocator);
+                // Only send votes if consensus is enabled (sender exists)
+                if (self.replay_votes_sender) |sender| {
+                    if (exec.executed_transaction.err == null and
+                        isSimpleVoteTransaction(transaction.transaction))
+                    {
+                        if (try vote_listener.vote_parser.parseSanitizedVoteTransaction(
+                            allocator,
+                            transaction,
+                        )) |parsed| {
+                            if (parsed.vote.lastVotedSlot() != null) {
+                                sender.send(parsed) catch parsed.deinit(allocator);
+                            } else {
+                                parsed.deinit(allocator);
+                            }
                         }
                     }
                 }

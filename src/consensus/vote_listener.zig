@@ -326,7 +326,7 @@ const DEFAULT_MS_PER_SLOT: u64 =
     sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
 const Receivers = struct {
-    replay_votes: *sig.sync.Channel(vote_parser.ParsedVote),
+    replay_votes: ?*sig.sync.Channel(vote_parser.ParsedVote),
 };
 
 pub const VoteListenerMetrics = struct {
@@ -461,9 +461,11 @@ fn listenAndConfirmVotes(
 
     const replay_votes: []const vote_parser.ParsedVote = blk: {
         replay_votes_buffer.clearRetainingCapacity();
-        while (receivers.replay_votes.tryReceive()) |vote| {
-            replay_votes_buffer.appendAssumeCapacity(vote);
-            if (replay_votes_buffer.unusedCapacitySlice().len == 0) break;
+        if (receivers.replay_votes) |channel| {
+            while (channel.tryReceive()) |vote| {
+                replay_votes_buffer.appendAssumeCapacity(vote);
+                if (replay_votes_buffer.unusedCapacitySlice().len == 0) break;
+            }
         }
         break :blk replay_votes_buffer.items;
     };

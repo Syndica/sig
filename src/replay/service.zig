@@ -155,6 +155,11 @@ pub const Dependencies = struct {
     replay_threads: u32,
 };
 
+pub const ConsensusStatus = enum {
+    enabled,
+    disabled,
+};
+
 pub const ReplayState = struct {
     allocator: Allocator,
     logger: Logger,
@@ -171,7 +176,7 @@ pub const ReplayState = struct {
     ledger: *Ledger,
     status_cache: sig.core.StatusCache,
     execution_log_helper: replay.execution.LogHelper,
-    replay_votes_channel: *Channel(ParsedVote),
+    replay_votes_channel: ?*Channel(ParsedVote),
 
     pub fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
@@ -181,15 +186,17 @@ pub const ReplayState = struct {
         self.epoch_tracker.deinit(self.allocator);
         self.progress_map.deinit(self.allocator);
 
-        while (self.replay_votes_channel.tryReceive()) |item| item.deinit(self.allocator);
-        self.replay_votes_channel.destroy();
+        if (self.replay_votes_channel) |channel| {
+            while (channel.tryReceive()) |item| item.deinit(self.allocator);
+            channel.destroy();
+        }
 
         self.slot_tree.deinit(self.allocator);
         self.status_cache.deinit(self.allocator);
         self.hard_forks.deinit(self.allocator);
     }
 
-    pub fn init(deps: Dependencies) !ReplayState {
+    pub fn init(deps: Dependencies, consensus_status: ConsensusStatus) !ReplayState {
         const zone = tracy.Zone.init(@src(), .{ .name = "ReplayState init" });
         defer zone.deinit();
 
@@ -203,8 +210,11 @@ pub const ReplayState = struct {
             deps.allocator.destroy(slot_tracker.slots.fetchSwapRemove(deps.root.slot).?.value);
         }
 
-        const replay_votes_channel = try Channel(ParsedVote).create(deps.allocator);
-        errdefer replay_votes_channel.destroy();
+        const replay_votes_channel: ?*Channel(ParsedVote) = if (consensus_status == .enabled)
+            try Channel(ParsedVote).create(deps.allocator)
+        else
+            null;
+        errdefer if (replay_votes_channel) |ch| ch.destroy();
 
         var epoch_tracker: EpochTracker = .{ .schedule = deps.epoch_schedule };
         try epoch_tracker.epochs.put(
@@ -1112,7 +1122,7 @@ pub const DependencyStubs = struct {
             .hard_forks = .{},
 
             .replay_threads = 1,
-        });
+        }, .enabled);
     }
 
     // TODO: consider deduplicating with above and similar function in cmd.zig
@@ -1180,7 +1190,7 @@ pub const DependencyStubs = struct {
             .hard_forks = hard_forks,
 
             .replay_threads = num_threads,
-        });
+        }, .enabled);
     }
 };
 
