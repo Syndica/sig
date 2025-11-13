@@ -1027,25 +1027,6 @@ fn identity(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     logger.info().logf("Identity: {s}\n", .{pubkey});
 }
 
-/// Reads a binary keypair file and returns its public key as `Pubkey`.
-/// TODO Better place to put this?
-fn readBinaryKeypairPubkey(path: []const u8) !Pubkey {
-    var file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-
-    var buf: [std.crypto.sign.Ed25519.SecretKey.encoded_length]u8 = undefined;
-
-    const end_pos = try file.getEndPos();
-    if (end_pos != buf.len) return error.InvalidKeypairFile;
-
-    const file_len = try file.readAll(&buf);
-    if (file_len != buf.len) return error.InvalidKeypairFile;
-
-    const secret_key = try std.crypto.sign.Ed25519.SecretKey.fromBytes(buf);
-    const keypair = try std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key);
-    return Pubkey.fromPublicKey(&keypair.public_key);
-}
-
 /// entrypoint to run only gossip
 fn gossip(
     allocator: std.mem.Allocator,
@@ -1257,7 +1238,7 @@ fn validator(
         };
         defer if (cfg.vote_account_path == null) allocator.free(vote_keypair_path);
 
-        break :blk readBinaryKeypairPubkey(vote_keypair_path) catch |err| {
+        break :blk sig.identity.readBinaryKeypairPubkey(vote_keypair_path) catch |err| {
             app_base.logger.warn().logf(
                 "vote-account: failed to read {s}: {}; voting will be disabled",
                 .{ vote_keypair_path, err },
