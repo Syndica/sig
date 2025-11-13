@@ -119,6 +119,7 @@ pub fn main() !void {
         .validator => |params| {
             current_config.shred_version = params.shred_version;
             current_config.leader_schedule_path = params.leader_schedule;
+            current_config.vote_account_path = params.vote_account;
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
@@ -131,6 +132,7 @@ pub fn main() !void {
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.voting_enabled = params.voting_enabled;
+            current_config.rpc_port = params.rpc_port;
             try validator(gpa, gossip_gpa, current_config);
         },
         .replay_offline => |params| {
@@ -386,6 +388,24 @@ const Cmd = struct {
         .default_value = true,
         .config = {},
         .help = "Enable validator voting. When false, operate as non-voting.",
+    };
+
+    const rpc_port_arg: cli.ArgumentInfo(?u16) = .{
+        .kind = .named,
+        .name_override = "rpc-port",
+        .alias = .none,
+        .default_value = null,
+        .config = {},
+        .help = "Enable the HTTP RPC server on the given TCP port",
+    };
+
+    const vote_account_arg: cli.ArgumentInfo(?[]const u8) = .{
+        .kind = .named,
+        .name_override = "vote-account",
+        .alias = .none,
+        .default_value = null,
+        .config = .string,
+        .help = "Path to vote account keypair file. Defaults to $HOME/.sig/vote-account.key",
     };
 
     const GossipArgumentsCommon = struct {
@@ -714,6 +734,7 @@ const Cmd = struct {
     const Validator = struct {
         shred_version: ?u16,
         leader_schedule: ?[]const u8,
+        vote_account: ?[]const u8,
         gossip_base: GossipArgumentsCommon,
         gossip_node: GossipArgumentsNode,
         repair: RepairArgumentsBase,
@@ -726,6 +747,7 @@ const Cmd = struct {
         replay_threads: u16,
         disable_consensus: bool,
         voting_enabled: bool,
+        rpc_port: ?u16,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -735,6 +757,7 @@ const Cmd = struct {
             .sub = .{
                 .shred_version = shred_version_arg,
                 .leader_schedule = leader_schedule_arg,
+                .vote_account = vote_account_arg,
                 .gossip_base = GossipArgumentsCommon.cmd_info,
                 .gossip_node = GossipArgumentsNode.cmd_info,
                 .repair = RepairArgumentsBase.cmd_info,
@@ -747,6 +770,7 @@ const Cmd = struct {
                 .replay_threads = replay_threads_arg,
                 .disable_consensus = disable_consensus_arg,
                 .voting_enabled = voting_enabled_arg,
+                .rpc_port = rpc_port_arg,
             },
         };
     };
@@ -1202,7 +1226,31 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
-    const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (cfg.voting_enabled)
+    // Vote account. if not provided, disable voting
+    const maybe_vote_pubkey: ?Pubkey = if (cfg.voting_enabled) blk: {
+        const vote_keypair_path = cfg.vote_account_path orelse default_path: {
+            const app_data_dir_path = try std.fs.getAppDataDir(allocator, "sig");
+            defer allocator.free(app_data_dir_path);
+            break :default_path try std.fs.path.join(
+                allocator,
+                &.{ app_data_dir_path, "vote-account.key" },
+            );
+        };
+        defer if (cfg.vote_account_path == null) allocator.free(vote_keypair_path);
+
+        break :blk sig.identity.readBinaryKeypairPubkey(vote_keypair_path) catch |err| {
+            app_base.logger.warn().logf(
+                "vote-account: failed to read {s}: {}; voting will be disabled",
+                .{ vote_keypair_path, err },
+            );
+            break :blk null;
+        };
+    } else null;
+
+    // If voting was enabled but no vote account is available, disable voting.
+    const voting_enabled = cfg.voting_enabled and maybe_vote_pubkey != null;
+
+    const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (voting_enabled)
         try replay.consensus.core.VoteSockets.init()
     else
         null;
@@ -1214,7 +1262,8 @@ fn validator(
         .epoch_context_manager = &epoch_context_manager,
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
-        .voting_enabled = cfg.voting_enabled,
+        .voting_enabled = voting_enabled,
+        .vote_account_pubkey = maybe_vote_pubkey,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -1225,16 +1274,18 @@ fn validator(
         cfg,
     );
 
-    // TODO: start RPC-server service using app_base.rpc_hooks
-    const rpc_server_thread = try std.Thread.spawn(.{}, runRPCServer, .{
-        allocator,
-        app_base.logger,
-        app_base.exit,
-        std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 8899),
-        &app_base.rpc_hooks,
-    });
+    const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
+        try std.Thread.spawn(.{}, runRPCServer, .{
+            allocator,
+            app_base.logger,
+            app_base.exit,
+            std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port),
+            &app_base.rpc_hooks,
+        })
+    else
+        null;
 
-    rpc_server_thread.join();
+    if (rpc_server_thread) |thread| thread.join();
     replay_thread.join();
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
@@ -1368,11 +1419,7 @@ fn replayOffline(
         });
     }
 
-    const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (cfg.voting_enabled)
-        try replay.consensus.core.VoteSockets.init()
-    else
-        null;
-
+    // Replay-offline does not vote, so we use ZEROES and disable voting
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .loaded_snapshot = &loaded_snapshot,
@@ -1380,13 +1427,14 @@ fn replayOffline(
         .epoch_context_manager = &epoch_context_manager,
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
-        .voting_enabled = cfg.voting_enabled,
+        .voting_enabled = false,
+        .vote_account_pubkey = Pubkey.ZEROES,
     });
     defer replay_service_state.deinit(allocator);
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
-        if (maybe_vote_sockets) |*vs| vs else null,
+        null,
         null,
         cfg,
     );
@@ -2035,6 +2083,7 @@ const ReplayAndConsensusServiceState = struct {
             replay_threads: u32,
             disable_consensus: bool,
             voting_enabled: bool,
+            vote_account_pubkey: ?Pubkey,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
@@ -2077,7 +2126,7 @@ const ReplayAndConsensusServiceState = struct {
                 .logger = .from(params.app_base.logger),
                 .identity = .{
                     .validator = .fromPublicKey(&params.app_base.my_keypair.public_key),
-                    .vote_account = .fromPublicKey(&params.app_base.my_keypair.public_key),
+                    .vote_account = params.vote_account_pubkey orelse Pubkey.ZEROES,
                 },
                 .signing = .{
                     .node = params.app_base.my_keypair,

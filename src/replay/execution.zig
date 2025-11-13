@@ -483,12 +483,18 @@ fn prepareSlot(
     const previous_last_entry = confirmation_progress.last_entry;
     const entries, const slot_is_full = blk: {
         const entries, const num_shreds, const slot_is_full =
-            try state.ledger.reader().getSlotEntriesWithShredInfo(
+            state.ledger.reader().getSlotEntriesWithShredInfo(
                 state.allocator,
                 slot,
                 confirmation_progress.num_shreds,
                 false,
-            );
+            ) catch |err| switch (err) {
+                error.DeadSlot => {
+                    state.logger.info().logf("slot is dead: {}", .{slot});
+                    return .dead;
+                },
+                else => return err,
+            };
         errdefer {
             for (entries) |entry| entry.deinit(state.allocator);
             state.allocator.free(entries);
@@ -897,6 +903,44 @@ test "replaySlot - fail: sigverify" {
         ReplaySlotError{ .invalid_transaction = .SignatureFailure },
         entries,
         params,
+    );
+}
+
+test "prepareSlot: empty and dead slots are handled correctly" {
+    const allocator = std.testing.allocator;
+
+    var dep_stubs = try sig.replay.service.DependencyStubs.init(allocator, .FOR_TESTS);
+    defer dep_stubs.deinit();
+
+    var state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
+    defer state.deinit();
+
+    const root = state.slot_tracker.get(0);
+    const epoch = state.epoch_tracker.getForSlot(0);
+
+    const constants, const slot_state = try sig.replay.service.newSlotFromParent(
+        allocator,
+        dep_stubs.accountsdb.accountReader(),
+        epoch.?.ticks_per_slot,
+        0,
+        root.?.constants,
+        root.?.state,
+        .ZEROES,
+        1,
+    );
+
+    try state.slot_tracker.put(allocator, 1, .{ .constants = constants, .state = slot_state });
+
+    try std.testing.expectEqual(
+        .empty,
+        try prepareSlot(&state, &state.slot_tracker, &state.epoch_tracker, 1),
+    );
+
+    try dep_stubs.ledger.resultWriter().setDeadSlot(1);
+
+    try std.testing.expectEqual(
+        .dead,
+        try prepareSlot(&state, &state.slot_tracker, &state.epoch_tracker, 1),
     );
 }
 
