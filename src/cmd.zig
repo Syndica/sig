@@ -1081,7 +1081,7 @@ fn validator(
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
-        gossip_gpa.allocator().allocator.destroy(gossip_service);
+        gossip_gpa.allocator().destroy(gossip_service);
     }
 
     var geyser_gpa = tracy.TracingAllocator{ .name = "geyser gpa", .parent = allocator };
@@ -1361,8 +1361,11 @@ fn replayOffline(
     const epoch = bank_fields.epoch;
 
     const staked_nodes = try collapsed_manifest.epochStakes(epoch);
-    var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
+    var epoch_ctx_gpa = tracy.TracingAllocator{ .name = "epoch ctx gpa", .parent = allocator };
+    var epoch_context_manager =
+        try sig.adapter.EpochContextManager.init(epoch_ctx_gpa.allocator(), epoch_schedule);
     defer epoch_context_manager.deinit();
+
     try epoch_context_manager.contexts.realign(epoch);
     {
         var staked_nodes_cloned = try staked_nodes.clone(allocator);
@@ -1398,7 +1401,8 @@ fn replayOffline(
     else
         null;
 
-    var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
+    var replay_gpa = tracy.TracingAllocator{ .name = "replay gpa", .parent = allocator };
+    var replay_service_state: ReplayAndConsensusServiceState = try .init(replay_gpa.allocator(), .{
         .app_base = &app_base,
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
@@ -1407,7 +1411,7 @@ fn replayOffline(
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = cfg.voting_enabled,
     });
-    defer replay_service_state.deinit(allocator);
+    defer replay_service_state.deinit(replay_gpa.allocator());
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
