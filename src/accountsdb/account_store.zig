@@ -35,9 +35,6 @@ pub const AccountStore = union(enum) {
     }
 
     pub fn forSlot(self: AccountStore, slot: Slot, ancestors: *const Ancestors) SlotAccountStore {
-        const zone = tracy.Zone.init(@src(), .{ .name = "AccountStore.forSlot" });
-        defer zone.deinit();
-
         return switch (self) {
             .accounts_db => |db| .{ .accounts_db = .{ db, slot, ancestors } },
             .thread_safe_map => |map| .{ .thread_safe_map = .{ map, slot, ancestors } },
