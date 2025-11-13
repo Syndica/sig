@@ -2136,7 +2136,11 @@ const ReplayAndConsensusServiceState = struct {
         const senders: replay.TowerConsensus.Senders = try .create(allocator);
         errdefer senders.destroy();
 
-        const receivers: replay.TowerConsensus.Receivers = try .create(allocator);
+        // Create receivers, passing the replay_votes channel owned by ReplayState
+        const receivers: replay.TowerConsensus.Receivers = try .create(
+            allocator,
+            replay_state.replay_votes_channel,
+        );
         errdefer receivers.destroy();
 
         const metrics = try params.app_base.metrics_registry.initStruct(replay.service.Metrics);

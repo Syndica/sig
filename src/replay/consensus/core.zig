@@ -296,14 +296,17 @@ pub const TowerConsensus = struct {
         /// Sent by `replayActiveSlots`, received by the vote collector.
         replay_votes: *Channel(ParsedVote),
 
+        // Note: replay_votes is owned by ReplayState, not destroyed here
         pub fn destroy(self: Receivers) void {
             self.ancestor_duplicate_slots.destroy();
             self.popular_pruned_forks.destroy();
             self.duplicate_slots.destroy();
-            self.replay_votes.destroy();
         }
 
-        pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Receivers {
+        pub fn create(
+            allocator: std.mem.Allocator,
+            replay_votes: *Channel(ParsedVote),
+        ) std.mem.Allocator.Error!Receivers {
             const ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair) =
                 try .create(allocator);
             errdefer ancestor_duplicate_slots.destroy();
@@ -313,9 +316,6 @@ pub const TowerConsensus = struct {
 
             const duplicate_slots: *Channel(Slot) = try .create(allocator);
             errdefer duplicate_slots.destroy();
-
-            const replay_votes: *Channel(ParsedVote) = try .create(allocator);
-            errdefer replay_votes.destroy();
 
             return .{
                 .ancestor_duplicate_slots = ancestor_duplicate_slots,
@@ -4380,7 +4380,11 @@ test "edge cases - duplicate slot" {
     const tc_output_channels: TowerConsensus.Senders = try .create(gpa);
     defer tc_output_channels.destroy();
 
-    const tc_input_channels: TowerConsensus.Receivers = try .create(gpa);
+    const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(gpa);
+    defer replay_votes_channel.destroy();
+    defer while (replay_votes_channel.tryReceive()) |pv| pv.deinit(gpa);
+
+    const tc_input_channels: TowerConsensus.Receivers = try .create(gpa, replay_votes_channel);
     defer tc_input_channels.destroy();
 
     var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
@@ -4534,7 +4538,11 @@ test "edge cases - duplicate confirmed slot" {
     const tc_output_channels: TowerConsensus.Senders = try .create(gpa);
     defer tc_output_channels.destroy();
 
-    const tc_input_channels: TowerConsensus.Receivers = try .create(gpa);
+    const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(gpa);
+    defer replay_votes_channel.destroy();
+    defer while (replay_votes_channel.tryReceive()) |pv| pv.deinit(gpa);
+
+    const tc_input_channels: TowerConsensus.Receivers = try .create(gpa, replay_votes_channel);
     defer tc_input_channels.destroy();
 
     var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
@@ -4698,7 +4706,11 @@ test "edge cases - gossip verified vote hashes" {
     const tc_output_channels: TowerConsensus.Senders = try .create(gpa);
     defer tc_output_channels.destroy();
 
-    const tc_input_channels: TowerConsensus.Receivers = try .create(gpa);
+    const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(gpa);
+    defer replay_votes_channel.destroy();
+    defer while (replay_votes_channel.tryReceive()) |pv| pv.deinit(gpa);
+
+    const tc_input_channels: TowerConsensus.Receivers = try .create(gpa, replay_votes_channel);
     defer tc_input_channels.destroy();
 
     var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
