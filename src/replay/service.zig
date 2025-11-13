@@ -795,7 +795,7 @@ test "process runs without error with no replay results" {
     // TODO: run consensus in the tests that actually execute blocks for better
     // coverage. currently consensus panics or hangs if you run it with actual data
     try consensus.process(allocator, .{
-        .account_reader = dep_stubs.accountsdb.accountReader(),
+        .account_store = .{ .thread_safe_map = &dep_stubs.accountsdb },
         .ledger = &dep_stubs.ledger,
         .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,
