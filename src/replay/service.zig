@@ -789,7 +789,12 @@ test "process runs without error with no replay results" {
     const consensus_senders: TowerConsensus.Senders = try .create(allocator);
     defer consensus_senders.destroy();
 
-    const consensus_receivers: TowerConsensus.Receivers = try .create(allocator);
+    const replay_votes_channel: *Channel(ParsedVote) = try .create(allocator);
+    defer replay_votes_channel.destroy();
+    defer while (replay_votes_channel.tryReceive()) |pv| pv.deinit(allocator);
+
+    const consensus_receivers: TowerConsensus.Receivers =
+        try .create(allocator, replay_votes_channel);
     defer consensus_receivers.destroy();
 
     // TODO: run consensus in the tests that actually execute blocks for better
@@ -994,11 +999,13 @@ fn parseBincodeFromGzipFile(
 /// Basic stubs for state that's supposed to be initialized outside replay,
 /// outlive replay, and is used by replay.
 pub const DependencyStubs = struct {
+    allocator: Allocator,
     accountsdb: sig.accounts_db.ThreadSafeAccountMap,
     dir: std.testing.TmpDir,
     ledger: Ledger,
     senders: TowerConsensus.Senders,
     receivers: TowerConsensus.Receivers,
+    replay_votes_channel: *Channel(ParsedVote),
 
     pub fn deinit(self: *DependencyStubs) void {
         self.accountsdb.deinit();
@@ -1006,6 +1013,8 @@ pub const DependencyStubs = struct {
         self.ledger.deinit();
         self.senders.destroy();
         self.receivers.destroy();
+        while (self.replay_votes_channel.tryReceive()) |pv| pv.deinit(self.allocator);
+        self.replay_votes_channel.destroy();
     }
 
     pub fn init(allocator: Allocator, logger: Logger) !DependencyStubs {
@@ -1024,15 +1033,20 @@ pub const DependencyStubs = struct {
         const senders: TowerConsensus.Senders = try .create(allocator);
         errdefer senders.destroy();
 
-        const receivers: TowerConsensus.Receivers = try .create(allocator);
+        const replay_votes_channel: *Channel(ParsedVote) = try .create(allocator);
+        errdefer replay_votes_channel.destroy();
+
+        const receivers: TowerConsensus.Receivers = try .create(allocator, replay_votes_channel);
         errdefer receivers.destroy();
 
         return .{
+            .allocator = allocator,
             .accountsdb = accountsdb,
             .dir = dir,
             .ledger = ledger,
             .senders = senders,
             .receivers = receivers,
+            .replay_votes_channel = replay_votes_channel,
         };
     }
 
