@@ -102,11 +102,8 @@ pub fn wrapDB(item: anytype) AccountLoadError!@typeInfo(@TypeOf(item)).error_uni
     };
 }
 
-/// Assumes `transaction` was in initFromAccountsDb's `transactions` parameter.
-/// Reports account loading errors.
-/// By the time this is called, we have no dependency on accountsdb.
+/// Loads all the accounts for a transaction and reports account loading errors.
 pub fn loadTransactionAccounts(
-    // note: think we make this a *const by moving sysvar instruction account construction into init
     map: SlotAccountReader,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
