@@ -1006,6 +1006,11 @@ test "trackNewVotesAndNotifyConfirmations filter" {
     var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
     const prng = prng_state.random();
 
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
+    const metrics: VoteListenerMetrics = try .init(&registry);
+
     var slot_tracker: SlotTracker = try .init(
         allocator,
         0,
@@ -1084,6 +1089,7 @@ test "trackNewVotesAndNotifyConfirmations filter" {
             &new_optimistic_confirmed_slots,
             is_gossip_vote,
             &latest_vote_slot_per_validator,
+            metrics,
         );
     }
     diff.sortAsc();
@@ -1133,6 +1139,7 @@ test "trackNewVotesAndNotifyConfirmations filter" {
             &new_optimistic_confirmed_slots,
             is_gossip_vote,
             &latest_vote_slot_per_validator,
+            metrics,
         );
     }
     diff.sortAsc();
