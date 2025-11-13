@@ -954,18 +954,23 @@ fn trackNewVotesAndNotifyConfirmations(
 
     if (is_new_vote) {
         senders.subscriptions.notifyVote(vote_pubkey, vote, vote_transaction_signature);
-        const vote_slots_duped = try allocator.dupe(Slot, vote_slots);
         errdefer allocator.free(vote_slots);
-        senders.verified_vote.send(.{
-            .key = vote_pubkey,
-            .slots = vote_slots_duped,
-        }) catch |err| {
-            logger.err().logf(
-                "{s}: verified vote couldn't send: " ++
-                    ".{{ .vote_pubkey = {f}, .vote_slots_duped = {any} }}",
-                .{ @errorName(err), vote_pubkey, vote_slots_duped },
-            );
-        };
+        // TODO: Uncomment when our RepairService implements vote-weighted repair heuristic.
+        //
+        // In Agave, verified votes are sent to RepairService (via verified_vote_receiver)
+        // to prioritize repairing slots that validators are voting on.
+        // See: https://github.com/anza-xyz/agave/blob/a2e0bd9515c50f924ece55cd2793817801c43fca/core/src/repair/repair_service.rs#L529
+        // const vote_slots_duped = try allocator.dupe(Slot, vote_slots);
+        // senders.verified_vote.send(.{
+        //     .key = vote_pubkey,
+        //     .slots = vote_slots_duped,
+        // }) catch |err| {
+        //     logger.err().logf(
+        //         "{s}: verified vote couldn't send: " ++
+        //             ".{{ .vote_pubkey = {f}, .vote_slots_duped = {any} }}",
+        //         .{ @errorName(err), vote_pubkey, vote_slots_duped },
+        //     );
+        // };
     }
 }
 
