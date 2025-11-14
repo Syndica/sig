@@ -6,6 +6,7 @@ const vm = sig.vm;
 
 const Allocator = std.mem.Allocator;
 
+const Account = sig.core.Account;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const Pubkey = sig.core.Pubkey;
@@ -79,7 +80,7 @@ pub fn loadIfProgram(
     allocator: std.mem.Allocator,
     programs: *ProgramMap,
     address: Pubkey,
-    account: *const AccountSharedData,
+    account: *const Account,
     account_reader: SlotAccountReader,
     enviroment: *const vm.Environment,
     slot: u64,
@@ -102,7 +103,7 @@ pub fn loadIfProgram(
 /// Load program requires that the account is executable
 fn loadProgram(
     allocator: std.mem.Allocator,
-    account: *const AccountSharedData,
+    account: *const Account,
     accounts: SlotAccountReader,
     environment: *const vm.Environment,
     slot: u64,
@@ -139,16 +140,18 @@ fn loadProgram(
 /// returned bytes are allocated with the passed allocator and owned by the caller
 fn loadDeploymentSlotAndExecutableBytes(
     allocator: Allocator,
-    account: *const AccountSharedData,
+    account: *const Account,
     accounts: SlotAccountReader,
 ) AccountLoadError!?struct { ?u64, []u8 } {
     if (account.owner.equals(&bpf_loader.v1.ID) or account.owner.equals(&bpf_loader.v2.ID)) {
-        return .{ null, try allocator.dupe(u8, account.data) };
+        const cloned = try account.cloneOwned(allocator);
+        return .{ null, cloned.data.owned_allocation };
     } else if (account.owner.equals(&bpf_loader.v3.ID)) {
+        var account_data = account.data.iterator();
         const program_state = sig.bincode.readFromSlice(
             failing_allocator,
             bpf_loader.v3.State,
-            account.data,
+            account_data.reader(),
             .{},
         ) catch return null;
 
@@ -194,10 +197,11 @@ fn loadDeploymentSlotAndExecutableBytes(
 
         return .{ slot, program_elf_bytes };
     } else if (account.owner.equals(&bpf_loader.v4.ID)) {
-        const program_state = sig.bincode.readFromSlice(
+        const data = account.data.iterator();
+        const program_state = sig.bincode.read(
             failing_allocator,
             bpf_loader.v4.State,
-            account.data,
+            data.reader(),
             .{},
         ) catch return null;
 

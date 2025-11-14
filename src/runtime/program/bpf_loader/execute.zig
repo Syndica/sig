@@ -317,7 +317,7 @@ pub fn executeV4SetProgramLength(
         );
         if (is_initialization) {
             try program_account.setExecutable(true, ic.tc.rent);
-            try program_account.serializeIntoAccountData(V4State{
+            try program_account.serializeIntoAccountData(allocator, V4State{
                 .slot = 0,
                 .status = .retracted,
                 .authority_address_or_next_version = authority_address,
@@ -375,7 +375,7 @@ pub fn executeV4Deploy(
         current_slot,
     );
 
-    try program_account.serializeIntoAccountData(V4State{
+    try program_account.serializeIntoAccountData(allocator, V4State{
         .slot = current_slot,
         .status = .deployed,
         .authority_address_or_next_version = state.authority_address_or_next_version,
@@ -411,7 +411,7 @@ pub fn executeV4Retract(
         return InstructionError.InvalidArgument;
     }
 
-    try program_account.serializeIntoAccountData(V4State{
+    try program_account.serializeIntoAccountData(allocator, V4State{
         .slot = state.slot,
         .status = .retracted,
         .authority_address_or_next_version = state.authority_address_or_next_version,
@@ -459,7 +459,7 @@ pub fn executeV4TransferAuthority(
         return InstructionError.InvalidArgument;
     }
 
-    try program_account.serializeIntoAccountData(V4State{
+    try program_account.serializeIntoAccountData(allocator, V4State{
         .slot = state.slot,
         .status = state.status,
         .authority_address_or_next_version = new_authority_address,
@@ -520,7 +520,7 @@ pub fn executeV4Finalize(
 
     var program_account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
     defer program_account.release();
-    try program_account.serializeIntoAccountData(V4State{
+    try program_account.serializeIntoAccountData(allocator, V4State{
         .slot = state_slot,
         .status = .finalized,
         .authority_address_or_next_version = next_address,
@@ -608,7 +608,7 @@ pub fn executeV3InitializeBuffer(
     }
 
     const authority_key = ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
-    try buffer_account.serializeIntoAccountData(V3State{
+    try buffer_account.serializeIntoAccountData(allocator, V3State{
         .buffer = .{
             .authority_address = authority_key,
         },
@@ -878,7 +878,7 @@ pub fn executeV3DeployWithMaxDataLen(
             @intFromEnum(AccountIndex.program_data),
         );
         defer program_data_account.release();
-        try program_data_account.serializeIntoAccountData(V3State{
+        try program_data_account.serializeIntoAccountData(allocator, V3State{
             .program_data = .{
                 .slot = clock.slot,
                 .upgrade_authority_address = authority_key,
@@ -912,7 +912,7 @@ pub fn executeV3DeployWithMaxDataLen(
             @intFromEnum(AccountIndex.program),
         );
         defer program_account.release();
-        try program_account.serializeIntoAccountData(V3State{ .program = .{
+        try program_account.serializeIntoAccountData(allocator, V3State{ .program = .{
             .programdata_address = program_data_key,
         } });
         try program_account.setExecutable(
@@ -1108,7 +1108,7 @@ pub fn executeV3Upgrade(
     defer programdata.release();
 
     {
-        try programdata.serializeIntoAccountData(V3State{ .program_data = .{
+        try programdata.serializeIntoAccountData(allocator, V3State{ .program_data = .{
             .slot = clock.slot,
             .upgrade_authority_address = authority_key,
         } });
@@ -1196,7 +1196,7 @@ pub fn executeV3SetAuthority(
                 try ic.tc.log("Buffer authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            try account.serializeIntoAccountData(V3State{
+            try account.serializeIntoAccountData(allocator, V3State{
                 .buffer = .{
                     .authority_address = new_authority,
                 },
@@ -1217,7 +1217,7 @@ pub fn executeV3SetAuthority(
                 try ic.tc.log("Upgrade authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            try account.serializeIntoAccountData(V3State{
+            try account.serializeIntoAccountData(allocator, V3State{
                 .program_data = .{
                     .slot = data.slot,
                     .upgrade_authority_address = new_authority,
@@ -1281,7 +1281,7 @@ pub fn executeV3SetAuthorityChecked(
                 try ic.tc.log("New authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            try account.serializeIntoAccountData(V3State{
+            try account.serializeIntoAccountData(allocator, V3State{
                 .buffer = .{
                     .authority_address = new_authority,
                 },
@@ -1308,7 +1308,7 @@ pub fn executeV3SetAuthorityChecked(
                 try ic.tc.log("New authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            try account.serializeIntoAccountData(V3State{
+            try account.serializeIntoAccountData(allocator, V3State{
                 .program_data = .{
                     .slot = data.slot,
                     .upgrade_authority_address = new_authority,
@@ -1480,7 +1480,7 @@ fn commonCloseAccount(
 
     try recipient_account.addLamports(close_account.account.lamports);
     try close_account.setLamports(0);
-    try close_account.serializeIntoAccountData(V3State{ .uninitialized = {} });
+    try close_account.serializeIntoAccountData(allocator, V3State{ .uninitialized = {} });
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/94d70cdf40ab55a3f1c2099037cdb36276ef9032/programs/bpf_loader/src/lib.rs#L1158
@@ -1684,7 +1684,7 @@ fn commonExtendProgram(
     programdata = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.program_data));
     defer programdata.release();
 
-    try programdata.serializeIntoAccountData(V3State{
+    try programdata.serializeIntoAccountData(allocator, V3State{
         .program_data = .{
             .slot = clock_slot,
             .upgrade_authority_address = upgrade_authority_address,

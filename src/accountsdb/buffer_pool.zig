@@ -969,6 +969,7 @@ pub const AccountDataHandle = union(enum) {
         return initAllocatedOwned(data_copy);
     }
 
+    // TODO: check all usages and make sure they make sense
     pub fn toOwned(self: AccountDataHandle, allocator: std.mem.Allocator) ![]u8 {
         return switch (self) {
             .owned_allocation => |data| data,
@@ -976,6 +977,23 @@ pub const AccountDataHandle = union(enum) {
         };
     }
 
+    // TODO: check all usages and make sure they make sense
+    pub fn makeOwned(self: *AccountDataHandle, allocator: std.mem.Allocator) ![]u8 {
+        return switch (self) {
+            .owned_allocation => {},
+            else => self.* = try self.dupeAllocatedOwned(allocator),
+        };
+    }
+
+    // TODO: check all usages and make sure they make sense
+    pub fn makeSlice(self: *AccountDataHandle, allocator: std.mem.Allocator) ![]const u8 {
+        return switch (self) {
+            .unowned_allocation, .owned_allocation => {},
+            else => self.* = try self.dupeAllocatedOwned(allocator),
+        };
+    }
+
+    // TODO: remove?
     pub fn toSlice(self: AccountDataHandle, allocator: std.mem.Allocator) !union(enum) {
         owned: []u8,
         borrowed: []const u8,
@@ -995,6 +1013,37 @@ pub const AccountDataHandle = union(enum) {
             .unowned_allocation => |data| .{ .borrowed = data },
             else => .{ .owned = (try self.dupeAllocatedOwned(allocator)).owned_allocation },
         };
+    }
+
+    /// Copies the data into the account, reallocating if necessary to make the size consistent.
+    /// Only borrows the passed in data.
+    pub fn overwrite(self: *AccountDataHandle, allocator: Allocator, data: []const u8) !void {
+        const new_data = switch (self) {
+            .owned_allocation => |owned_allocation| allocator.realloc(owned_allocation),
+            .buffer_pool_read, .sub_read, .unowned_allocation, .empty => new: {
+                self.deinit(allocator);
+                break :new allocator.alloc(u8, data.len);
+            },
+        };
+        @memcpy(new_data, data);
+        self.* = .{ .owned_allocation = new_data };
+    }
+
+    pub fn resize(self: *AccountDataHandle, allocator: Allocator, new_length: usize) !void {
+        switch (self) {
+            .owned_allocation => |owned_allocation| {
+                const new_data = try allocator.realloc(owned_allocation);
+                if (owned_allocation.len < new_length) {
+                    @memset(new_data[owned_allocation.len..], 0);
+                }
+                self.* = .{ .owned_allocation = new_data };
+            },
+            .buffer_pool_read, .sub_read, .unowned_allocation, .empty => {
+                const new_data = try allocator.alloc(u8, new_length);
+                self.read(0, new_data);
+                self.* = .{ .owned_allocation = new_data };
+            },
+        }
     }
 
     pub fn duplicateBufferPoolRead(
@@ -1064,6 +1113,14 @@ pub const AccountDataHandle = union(enum) {
             if (!std.mem.eql(u8, frame_slice, data[i..][0..frame_slice.len])) return false;
         }
 
+        return true;
+    }
+
+    pub fn isZeroed(self: AccountDataHandle) bool {
+        var iter = self.iterator();
+        while (iter.nextFrame()) |frame_slice| {
+            if (!std.mem.allEqual(u8, frame_slice, 0)) return false;
+        }
         return true;
     }
 

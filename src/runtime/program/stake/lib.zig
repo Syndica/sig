@@ -435,18 +435,18 @@ fn initialize(
     lockup: *const Lockup,
     rent: *const sysvar.Rent,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (stake_account.account.data.len != StakeStateV2.SIZE) {
+    if (stake_account.account.data.len() != StakeStateV2.SIZE) {
         return error.InvalidAccountData;
     }
 
     const stake_state = try stake_account.deserializeFromAccountData(allocator, StakeStateV2);
     switch (stake_state) {
         .uninitialized => {
-            const rent_exempt_reserve = rent.minimumBalance(stake_account.account.data.len);
+            const rent_exempt_reserve = rent.minimumBalance(stake_account.account.data.len());
             if (stake_account.account.lamports < rent_exempt_reserve)
                 return error.InsufficientFunds;
 
-            try stake_account.serializeIntoAccountData(StakeStateV2{
+            try stake_account.serializeIntoAccountData(allocator, StakeStateV2{
                 .initialized = .{
                     .rent_exempt_reserve = rent_exempt_reserve,
                     .authorized = authorized.*,
@@ -486,7 +486,7 @@ fn authorize(
                 return instruction_err;
             }
 
-            try stake_account.serializeIntoAccountData(StakeStateV2{ .stake = .{
+            try stake_account.serializeIntoAccountData(allocator, StakeStateV2{ .stake = .{
                 .meta = stake_args.meta,
                 .stake = stake_args.stake,
                 .flags = stake_args.flags,
@@ -504,7 +504,7 @@ fn authorize(
                 return instruction_err;
             }
 
-            try stake_account.serializeIntoAccountData(StakeStateV2{ .initialized = meta.* });
+            try stake_account.serializeIntoAccountData(allocator, StakeStateV2{ .initialized = meta.* });
         },
         else => error.InvalidAccountData,
     };
@@ -689,7 +689,7 @@ fn delegate(
                 clock.epoch,
             );
 
-            try stake_account.serializeIntoAccountData(StakeStateV2{
+            try stake_account.serializeIntoAccountData(allocator, StakeStateV2{
                 .stake = .{ .flags = .EMPTY, .stake = new_stake, .meta = meta.* },
             });
         },
@@ -718,7 +718,7 @@ fn delegate(
                 ic.tc.custom_error = @intFromEnum(stake_err);
                 return error.Custom;
             }
-            try stake_account.serializeIntoAccountData(StakeStateV2{
+            try stake_account.serializeIntoAccountData(allocator, StakeStateV2{
                 .stake = .{ .flags = args.flags, .stake = args.stake, .meta = args.meta },
             });
         },
@@ -763,7 +763,7 @@ fn validateSplitAmount(
         const destination_account = try ic.borrowInstructionAccount(destination_account_index);
         defer destination_account.release();
         break :blk .{
-            destination_account.account.data.len,
+            destination_account.account.data.len(),
             destination_account.account.lamports,
         };
     };
@@ -813,7 +813,7 @@ fn split(
         defer split_account.release();
 
         if (!split_account.account.owner.equals(&ID)) return error.IncorrectProgramId;
-        if (split_account.account.data.len != StakeStateV2.SIZE) return error.InvalidAccountData;
+        if (split_account.account.data.len() != StakeStateV2.SIZE) return error.InvalidAccountData;
 
         const split_state = try split_account.deserializeFromAccountData(allocator, StakeStateV2);
         if (split_state != .uninitialized) return error.InvalidAccountData;
@@ -883,7 +883,7 @@ fn split(
                 var stake_account = try ic.borrowInstructionAccount(stake_account_index);
                 defer stake_account.release();
 
-                try stake_account.serializeIntoAccountData(StakeStateV2{
+                try stake_account.serializeIntoAccountData(allocator, StakeStateV2{
                     .stake = .{ .meta = args.meta, .stake = args.stake, .flags = args.flags },
                 });
             }
@@ -892,7 +892,7 @@ fn split(
                 var split_account = try ic.borrowInstructionAccount(split_account_index);
                 defer split_account.release();
 
-                try split_account.serializeIntoAccountData(StakeStateV2{
+                try split_account.serializeIntoAccountData(allocator, StakeStateV2{
                     .stake = .{ .meta = split_meta, .stake = split_stake, .flags = args.flags },
                 });
             }
@@ -916,7 +916,7 @@ fn split(
                 var split_account = try ic.borrowInstructionAccount(split_account_index);
                 defer split_account.release();
 
-                try split_account.serializeIntoAccountData(StakeStateV2{
+                try split_account.serializeIntoAccountData(allocator, StakeStateV2{
                     .initialized = split_meta,
                 });
             }
@@ -940,7 +940,7 @@ fn split(
         var stake_account = try ic.borrowInstructionAccount(stake_account_index);
         defer stake_account.release();
         if (lamports == stake_account.account.lamports) {
-            try stake_account.serializeIntoAccountData(StakeStateV2{ .uninitialized = {} });
+            try stake_account.serializeIntoAccountData(allocator, StakeStateV2{ .uninitialized = {} });
         }
     }
 
@@ -1243,10 +1243,10 @@ fn merge(
 
     try ic.tc.log("Merging stake accounts", .{});
     if (try stake_merge_kind.merge(ic, source_merge_kind, clock)) |merged_state| {
-        try stake_account.serializeIntoAccountData(merged_state);
+        try stake_account.serializeIntoAccountData(allocator, merged_state);
     }
 
-    try source_account.serializeIntoAccountData(StakeStateV2.uninitialized);
+    try source_account.serializeIntoAccountData(allocator, StakeStateV2.uninitialized);
 
     const lamports = source_account.account.lamports;
     try source_account.subtractLamports(lamports);
@@ -1337,7 +1337,7 @@ fn withdraw(
         }
 
         if (lamports == stake_account.account.lamports) {
-            try stake_account.serializeIntoAccountData(StakeStateV2.uninitialized);
+            try stake_account.serializeIntoAccountData(allocator, StakeStateV2.uninitialized);
         }
 
         try stake_account.subtractLamports(lamports);
@@ -1365,7 +1365,7 @@ fn deactivate(
         ic.tc.custom_error = @intFromEnum(stake_err);
         return error.Custom;
     }
-    try stake_account.serializeIntoAccountData(StakeStateV2{
+    try stake_account.serializeIntoAccountData(allocator, StakeStateV2{
         .stake = .{
             .meta = stake_state.meta,
             .stake = stake,
@@ -1446,7 +1446,7 @@ fn deactivateDelinquent(
         ic.tc.custom_error = @intFromEnum(err);
         return error.Custom;
     }
-    try stake_account.serializeIntoAccountData(StakeStateV2{
+    try stake_account.serializeIntoAccountData(allocator, StakeStateV2{
         .stake = .{
             .meta = meta,
             .stake = stake,
@@ -1490,12 +1490,12 @@ fn setLockup(
         .initialized => |arg| {
             var meta = arg;
             try meta.setLockup(lockup, signers, clock);
-            try stake_account.serializeIntoAccountData(StakeStateV2{ .initialized = meta });
+            try stake_account.serializeIntoAccountData(allocator, StakeStateV2{ .initialized = meta });
         },
         .stake => |args| {
             var meta = args.meta;
             try meta.setLockup(lockup, signers, clock);
-            try stake_account.serializeIntoAccountData(StakeStateV2{
+            try stake_account.serializeIntoAccountData(allocator, StakeStateV2{
                 .stake = .{
                     .meta = meta,
                     .stake = args.stake,
@@ -1547,8 +1547,8 @@ fn moveStake(
         stake_authority_index,
     );
 
-    if (source_account.account.data.len != StakeStateV2.SIZE or
-        destination_account.account.data.len != StakeStateV2.SIZE)
+    if (source_account.account.data.len() != StakeStateV2.SIZE or
+        destination_account.account.data.len() != StakeStateV2.SIZE)
         return error.InvalidAccountData;
 
     if (source_merge_kind != .fully_active) return error.InvalidAccountData;
@@ -1591,7 +1591,7 @@ fn moveStake(
                 source_stake.credits_observed,
             );
 
-            try destination_account.serializeIntoAccountData(StakeStateV2{
+            try destination_account.serializeIntoAccountData(allocator, StakeStateV2{
                 .stake = .{
                     .flags = .EMPTY,
                     .meta = destination_meta,
@@ -1608,7 +1608,7 @@ fn moveStake(
             var destination_stake = source_stake;
             destination_stake.delegation.stake = lamports;
 
-            try destination_account.serializeIntoAccountData(StakeStateV2{
+            try destination_account.serializeIntoAccountData(allocator, StakeStateV2{
                 .stake = .{
                     .flags = .EMPTY,
                     .meta = destination_meta,
@@ -1622,11 +1622,11 @@ fn moveStake(
     };
 
     if (source_final_stake == 0) {
-        try source_account.serializeIntoAccountData(StakeStateV2{ .initialized = source_meta });
+        try source_account.serializeIntoAccountData(allocator, StakeStateV2{ .initialized = source_meta });
     } else {
         source_stake.delegation.stake = source_final_stake;
 
-        try source_account.serializeIntoAccountData(StakeStateV2{
+        try source_account.serializeIntoAccountData(allocator, StakeStateV2{
             .stake = .{
                 .meta = source_meta,
                 .stake = source_stake,

@@ -1504,15 +1504,15 @@ test "onSlotRooted basic" {
     account.lamports = 1;
 
     // interleave put + root
-    try db.putAccount(149, pk, account);
+    try db.putAccountSharedData(149, pk, account);
     try onSlotRooted(allocator, &db, 149, 5000);
-    try db.putAccount(150, pk, account);
+    try db.putAccountSharedData(150, pk, account);
     try onSlotRooted(allocator, &db, 150, 5000);
 
     // put some + root some
-    try db.putAccount(151, pk, account);
-    try db.putAccount(152, pk, account);
-    try db.putAccount(153, pk, account);
+    try db.putAccountSharedData(151, pk, account);
+    try db.putAccountSharedData(152, pk, account);
+    try db.putAccountSharedData(153, pk, account);
     try onSlotRooted(allocator, &db, 151, 5000);
     try onSlotRooted(allocator, &db, 152, 5000);
     try onSlotRooted(allocator, &db, 153, 5000);
@@ -1564,7 +1564,7 @@ test "onSlotRooted zero_lamports" {
     const account: sig.runtime.AccountSharedData = .EMPTY;
 
     // interleave put + root
-    try db.putAccount(149, pk, account);
+    try db.putAccountSharedData(149, pk, account);
     try onSlotRooted(allocator, &db, 149, 5000);
 
     var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
@@ -1610,7 +1610,7 @@ test "onSlotRooted shrink and delete" {
     // put all accounts
     {
         for (accounts, pubkeys) |account, pubkey| {
-            try db.putAccount(149, pubkey, account);
+            try db.putAccountSharedData(149, pubkey, account);
         }
         try onSlotRooted(allocator, &db, 149, 5000);
     }
@@ -1625,7 +1625,7 @@ test "onSlotRooted shrink and delete" {
     // overwrite 90% of accounts in next slot
     {
         for (accounts[0..9], pubkeys[0..9]) |account, pubkey| {
-            try db.putAccount(150, pubkey, account);
+            try db.putAccountSharedData(150, pubkey, account);
         }
         try onSlotRooted(allocator, &db, 150, 5000);
     }
@@ -1643,7 +1643,7 @@ test "onSlotRooted shrink and delete" {
     // overwrite 100% of accounts in both previous slots
     {
         for (accounts, pubkeys) |account, pubkey| {
-            try db.putAccount(151, pubkey, account);
+            try db.putAccountSharedData(151, pubkey, account);
         }
         try onSlotRooted(allocator, &db, 151, 5000);
     }
@@ -1690,7 +1690,7 @@ test "onSlotRooted shrink and delete" {
 
 //     // put all accounts
 //     for (accounts, pubkeys) |account, pubkey| {
-//         try db.putAccount(149, pubkey, account);
+//         try db.putAccountSharedData(149, pubkey, account);
 //     }
 
 //     // generate full snapshot
@@ -1701,11 +1701,11 @@ test "onSlotRooted shrink and delete" {
 //         5000,
 //     );
 
-//     for (accounts, pubkeys) |account, pubkey| try db.putAccount(150, pubkey, account);
-//     for (accounts, pubkeys) |account, pubkey| try db.putAccount(151, pubkey, account);
-//     for (accounts, pubkeys) |account, pubkey| try db.putAccount(152, pubkey, account);
-//     for (accounts, pubkeys) |account, pubkey| try db.putAccount(153, pubkey, account);
-//     for (accounts, pubkeys) |account, pubkey| try db.putAccount(154, pubkey, account);
+//     for (accounts, pubkeys) |account, pubkey| try db.putAccountSharedData(150, pubkey, account);
+//     for (accounts, pubkeys) |account, pubkey| try db.putAccountSharedData(151, pubkey, account);
+//     for (accounts, pubkeys) |account, pubkey| try db.putAccountSharedData(152, pubkey, account);
+//     for (accounts, pubkeys) |account, pubkey| try db.putAccountSharedData(153, pubkey, account);
+//     for (accounts, pubkeys) |account, pubkey| try db.putAccountSharedData(154, pubkey, account);
 
 //     // generate incremental
 //     db.on_root_config = .{

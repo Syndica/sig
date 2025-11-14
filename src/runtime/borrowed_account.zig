@@ -3,10 +3,12 @@ const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
 
+const Allocator = std.mem.Allocator;
+
 const InstructionError = sig.core.instruction.InstructionError;
 const Pubkey = sig.core.Pubkey;
 
-const AccountSharedData = sig.runtime.AccountSharedData;
+const Account = sig.core.Account;
 const TransactionContext = sig.runtime.TransactionContext;
 const Rent = sig.runtime.sysvar.Rent;
 const WLockGuard = sig.runtime.TransactionContextAccount.WLockGuard;
@@ -47,7 +49,7 @@ pub const BorrowedAccount = struct {
     /// The public key of the account
     pubkey: Pubkey,
     /// mutable reference to the account which has been borrowed
-    account: *AccountSharedData,
+    account: *Account,
     /// write guard for the account which has been borrowed
     account_write_guard: WLockGuard,
     /// the context under which the account was borrowed
@@ -162,7 +164,7 @@ pub const BorrowedAccount = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L885
     pub fn setDataLength(
         self: BorrowedAccount,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         resize_delta: *i64,
         new_length: usize,
     ) (error{OutOfMemory} || InstructionError)!void {
@@ -173,13 +175,13 @@ pub const BorrowedAccount = struct {
         const new_length_signed: i64 = @intCast(new_length);
         resize_delta.* +|= new_length_signed -| old_length_signed;
 
-        try self.account.resize(allocator, new_length);
+        try self.account.data.resize(allocator, new_length);
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L916
     pub fn setDataFromSlice(
         self: BorrowedAccount,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         resize_delta: *i64,
         data: []const u8,
     ) (error{OutOfMemory} || InstructionError)!void {
@@ -189,10 +191,8 @@ pub const BorrowedAccount = struct {
         const new_length_signed: i64 = @intCast(data.len);
         resize_delta.* +|= new_length_signed -| old_length_signed;
 
-        // TODO: Implement account shared data method set data from slice
         // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/account/src/lib.rs#L616
-        try self.account.resize(allocator, data.len);
-        @memcpy(self.account.data[0..data.len], data);
+        try self.account.data.overwrite(allocator, data);
     }
 
     /// Deserialize the account data into a type `T`
@@ -200,13 +200,14 @@ pub const BorrowedAccount = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L968
     pub fn deserializeFromAccountData(
         self: BorrowedAccount,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         comptime T: type,
     ) InstructionError!T {
-        return bincode.readFromSlice(
+        var data = self.account.data.iterator();
+        return bincode.read(
             allocator,
             T,
-            self.account.data,
+            data.reader(),
             .{ .allocation_limit = MAX_PERMITTED_DATA_LENGTH },
         ) catch return InstructionError.InvalidAccountData;
     }
@@ -216,14 +217,19 @@ pub const BorrowedAccount = struct {
     /// `state` must support bincode serialization
     ///
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L976
-    pub fn serializeIntoAccountData(self: BorrowedAccount, state: anytype) InstructionError!void {
+    pub fn serializeIntoAccountData(
+        self: BorrowedAccount,
+        allocator: Allocator,
+        state: anytype,
+    ) InstructionError!void {
         if (self.checkDataIsMutable()) |err| return err;
 
         const serialized_size = bincode.sizeOf(state, .{});
-        if (serialized_size > self.account.data.len)
+        if (serialized_size > self.account.data.len())
             return InstructionError.AccountDataTooSmall;
 
-        const written = bincode.writeToSlice(self.account.data, state, .{}) catch
+        try self.account.data.makeOwned(allocator);
+        const written = bincode.writeToSlice(self.account.data.owned_allocation, state, .{}) catch
             return InstructionError.GenericError;
 
         if (written.len != serialized_size)
@@ -237,7 +243,7 @@ pub const BorrowedAccount = struct {
     ) InstructionError!void {
         if (!self.account.owner.equals(&self.context.program_id) or
             !self.context.is_writable or
-            !self.account.isZeroed())
+            !self.account.data.isZeroed())
         {
             return InstructionError.ModifiedProgramId;
         }
@@ -251,7 +257,7 @@ pub const BorrowedAccount = struct {
         executable: bool,
         rent: Rent,
     ) InstructionError!void {
-        if (!rent.isExempt(self.account.lamports, self.account.data.len))
+        if (!rent.isExempt(self.account.lamports, self.account.data.len()))
             return InstructionError.ExecutableAccountNotRentExempt;
 
         if (!self.account.owner.equals(&self.context.program_id) or

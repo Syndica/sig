@@ -74,7 +74,7 @@ fn createLookupTable(
         defer lookup_table_account.release();
 
         if (!has_relax_authority_signer_check_for_lookup_table_creation and
-            lookup_table_account.account.data.len > 0)
+            lookup_table_account.account.data.len() > 0)
         {
             try ic.tc.log("Table account must not be allocated", .{});
             return error.AccountAlreadyInitialized;
@@ -216,7 +216,7 @@ fn createLookupTable(
         const new_state: state.ProgramState = .{
             .LookupTable = state.LookupTableMeta.new(authority_key),
         };
-        try lookup_table_account.serializeIntoAccountData(new_state);
+        try lookup_table_account.serializeIntoAccountData(allocator, new_state);
     }
 }
 
@@ -260,6 +260,7 @@ fn freezeLookupTable(
     );
     defer lookup_table_account.release();
 
+    
     const lookup_table = try AddressLookupTable.deserialize(
         lookup_table_account.account.data,
     );

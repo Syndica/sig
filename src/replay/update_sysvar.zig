@@ -852,7 +852,7 @@ test "update all sysvars" {
         null,
     );
     defer allocator.free(account.data);
-    try accounts_db.putAccount(slot, SlotHistory.ID, account);
+    try accounts_db.putAccountSharedData(slot, SlotHistory.ID, account);
 
     // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
     slot = slot + 1;

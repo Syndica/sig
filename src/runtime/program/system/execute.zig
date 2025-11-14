@@ -331,6 +331,7 @@ fn executeUpgradeNonceAccount(
     const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
 
     try account.serializeIntoAccountData(
+        allocator,
         versioned_nonce.upgrade() orelse return InstructionError.InvalidArgument,
     );
 }
@@ -556,6 +557,7 @@ fn advanceNonceAccount(
             }
 
             try account.serializeIntoAccountData(
+                allocator,
                 nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
                     data.authority,
                     next_durable_nonce,
@@ -616,6 +618,7 @@ fn withdrawNonceAccount(
                         return InstructionError.Custom;
                     }
                     try from_account.serializeIntoAccountData(
+                        allocator,
                         nonce.Versions{ .current = nonce.State.uninitialized },
                     );
                 } else {
@@ -680,7 +683,7 @@ fn initializeNonceAccount(
                 );
                 return InstructionError.InsufficientFunds;
             }
-            try account.serializeIntoAccountData(nonce.Versions{
+            try account.serializeIntoAccountData(allocator, nonce.Versions{
                 .current = nonce.State{ .initialized = nonce.Data.init(
                     authority,
                     nonce.initDurableNonceFromHash(ic.tc.prev_blockhash),
@@ -741,8 +744,8 @@ pub fn authorizeNonceAccount(
     ) };
 
     switch (versioned_nonce) {
-        .legacy => try account.serializeIntoAccountData(nonce.Versions{ .legacy = nonce_state }),
-        .current => try account.serializeIntoAccountData(nonce.Versions{ .current = nonce_state }),
+        .legacy => try account.serializeIntoAccountData(allocator, nonce.Versions{ .legacy = nonce_state }),
+        .current => try account.serializeIntoAccountData(allocator, nonce.Versions{ .current = nonce_state }),
     }
 }
 

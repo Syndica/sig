@@ -47,7 +47,7 @@ pub const AccountStore = union(enum) {
         defer zone.deinit();
 
         return switch (self) {
-            .accounts_db => |db| db.putAccount(slot, address, account),
+            .accounts_db => |db| db.putAccountSharedData(slot, address, account),
             .thread_safe_map => |map| try map.put(slot, address, account),
             .noop => {},
         };
@@ -192,6 +192,7 @@ pub const SlotAccountStore = union(enum) {
     },
     noop,
 
+    // TODO delete
     pub fn put(self: SlotAccountStore, address: Pubkey, account: AccountSharedData) !void {
         const zone = tracy.Zone.init(@src(), .{ .name = "SlotAccountStore.put" });
         defer zone.deinit();
@@ -199,7 +200,7 @@ pub const SlotAccountStore = union(enum) {
         return switch (self) {
             .accounts_db => |tuple| {
                 const db, const slot, _ = tuple;
-                try db.putAccount(slot, address, account);
+                try db.putAccountSharedData(slot, address, account);
             },
             .thread_safe_map => |tuple| {
                 const map, const slot, _ = tuple;
@@ -210,6 +211,43 @@ pub const SlotAccountStore = union(enum) {
                 const account_to_store = try account.clone(allocator);
                 errdefer account_to_store.deinit(allocator);
                 try map.put(allocator, address, account_to_store);
+            },
+            .noop => {},
+        };
+    }
+
+    // TODO rename to put
+    pub fn putAccount(self: SlotAccountStore, address: Pubkey, account: Account) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "SlotAccountStore.put" });
+        defer zone.deinit();
+
+        return switch (self) {
+            .accounts_db => |tuple| {
+                const db, const slot, _ = tuple;
+                try db.putAccount(slot, address, account);
+            },
+            .thread_safe_map => |tuple| {
+                const map, const slot, _ = tuple;
+                const account_to_store = try account.cloneOwned(map.allocator);
+                try map.put(slot, address, .{
+                    .lamports = account.lamports,
+                    .data = account_to_store.data.owned_allocation,
+                    .owner = account.owner,
+                    .executable = account.executable,
+                    .rent_epoch = account.rent_epoch,
+                });
+            },
+            .account_shared_data_map => |tuple| {
+                const allocator, const map = tuple;
+                const account_to_store = try account.cloneOwned(allocator);
+                errdefer account_to_store.deinit(allocator);
+                try map.put(allocator, address, .{
+                    .lamports = account.lamports,
+                    .data = account_to_store.data.owned_allocation,
+                    .owner = account.owner,
+                    .executable = account.executable,
+                    .rent_epoch = account.rent_epoch,
+                });
             },
             .noop => {},
         };
@@ -572,7 +610,7 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
     const zero_lamport_address = Pubkey.ZEROES;
     const one_lamport_address = Pubkey{ .data = @splat(9) };
 
-    try db.putAccount(0, zero_lamport_address, .{
+    try db.putAccountSharedData(0, zero_lamport_address, .{
         .lamports = 0,
         .data = &.{},
         .owner = .ZEROES,
@@ -580,7 +618,7 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
         .rent_epoch = 0,
     });
 
-    try db.putAccount(0, one_lamport_address, .{
+    try db.putAccountSharedData(0, one_lamport_address, .{
         .lamports = 1,
         .data = &.{},
         .owner = .ZEROES,

@@ -1923,11 +1923,29 @@ pub const AccountsDB = struct {
 
     /// writes one account to storage
     /// intended for use from runtime
+    pub fn putAccountSharedData(
+        self: *AccountsDB,
+        slot: Slot,
+        pubkey: Pubkey,
+        account_shared_data: AccountSharedData,
+    ) PutAccountError!void {
+        const account: Account = .{
+            .data = .{ .unowned_allocation = account_shared_data.data },
+            .executable = account_shared_data.executable,
+            .lamports = account_shared_data.lamports,
+            .owner = account_shared_data.owner,
+            .rent_epoch = account_shared_data.rent_epoch,
+        };
+        return try self.putAccount(slot, pubkey, account);
+    }
+
+    /// writes one account to storage
+    /// intended for use from runtime
     pub fn putAccount(
         self: *AccountsDB,
         slot: Slot,
         pubkey: Pubkey,
-        account: AccountSharedData,
+        account: Account,
     ) PutAccountError!void {
         if (self.getLargestRootedSlot()) |largest_rooted_slot| {
             if (slot <= largest_rooted_slot) {
@@ -1935,20 +1953,10 @@ pub const AccountsDB = struct {
             }
         }
 
-        const duplicated: Account = .{
-            .data = .{ .owned_allocation = try self.allocator.dupe(u8, account.data) },
-            .executable = account.executable,
-            .lamports = account.lamports,
-            .owner = account.owner,
-            .rent_epoch = account.rent_epoch,
-        };
-        var inserted_duplicate: bool = false;
-        defer if (!inserted_duplicate) duplicated.deinit(self.allocator);
-
         if (self.geyser_writer) |geyser_writer| {
             geyser_writer.writePayloadToPipe(.{
                 .AccountPayloadV1 = .{
-                    .accounts = &.{duplicated},
+                    .accounts = &.{account},
                     .pubkeys = &.{pubkey},
                     .slot = slot,
                 },
@@ -1963,7 +1971,7 @@ pub const AccountsDB = struct {
             defer bhs_lg.unlock();
             bhs.update(.{
                 .lamports = account.lamports,
-                .data_len = account.data.len,
+                .data_len = account.data.len(),
                 .executable = account.executable,
             });
         }
@@ -2000,8 +2008,7 @@ pub const AccountsDB = struct {
             const slot_accounts: []Account = slot_list.items(.account);
 
             const old_account = slot_accounts[index];
-            slot_accounts[index] = duplicated;
-            inserted_duplicate = true;
+            slot_accounts[index] = try account.cloneOwned(self.allocator);
             old_account.deinit(self.allocator);
 
             // no need to insert/reindex if we were able to overwrite an existing account
@@ -2019,11 +2026,12 @@ pub const AccountsDB = struct {
                 entry.value_ptr.deinit(self.allocator);
                 unrooted_accounts.removeByPtr(entry.key_ptr);
             };
+            const duplicated = try account.cloneOwned(self.allocator);
+            errdefer duplicated.deinit(self.allocator);
             try entry.value_ptr.append(
                 self.allocator,
                 .{ .account = duplicated, .pubkey = pubkey },
             );
-            inserted_duplicate = true;
         }
 
         // update index
@@ -3740,7 +3748,7 @@ test "write and read an account (write single + read with ancestors)" {
         .rent_epoch = 0,
     };
 
-    try accounts_db.putAccount(5083, pubkey, test_account_shared);
+    try accounts_db.putAccountSharedData(5083, pubkey, test_account_shared);
 
     // normal get
     {
@@ -3792,7 +3800,7 @@ test "write and read an account (write single + read with ancestors)" {
             .rent_epoch = 1,
         };
 
-        try accounts_db.putAccount(5084, pubkey, test_account_2_shared);
+        try accounts_db.putAccountSharedData(5084, pubkey, test_account_2_shared);
 
         // prev slot, get prev account
         {
@@ -4703,7 +4711,7 @@ test "insert multiple accounts on same slot" {
         const expected = try createRandomAccount(allocator, random);
         defer allocator.free(expected.data);
 
-        try accounts_db.putAccount(slot, pubkey, expected);
+        try accounts_db.putAccountSharedData(slot, pubkey, expected);
 
         const maybe_actual = try accounts_db.getAccountWithAncestors(
             allocator,
@@ -4790,7 +4798,7 @@ test "insert multiple accounts on multiple slots" {
         const expected = try createRandomAccount(allocator, random);
         defer allocator.free(expected.data);
 
-        try accounts_db.putAccount(slot, pubkey, expected);
+        try accounts_db.putAccountSharedData(slot, pubkey, expected);
 
         const maybe_actual = try accounts_db.getAccountWithAncestors(
             allocator,
@@ -4842,7 +4850,7 @@ test "insert account on multiple slots" {
             const expected = try createRandomAccount(allocator, random);
             defer allocator.free(expected.data);
 
-            try accounts_db.putAccount(slot, pubkey, expected);
+            try accounts_db.putAccountSharedData(slot, pubkey, expected);
 
             const maybe_actual = try accounts_db.getAccountWithAncestors(
                 allocator,
@@ -4873,7 +4881,7 @@ test "missing ancestor returns null" {
 
     const account = try createRandomAccount(allocator, random);
     defer allocator.free(account.data);
-    try accounts_db.putAccount(slot, pubkey, account);
+    try accounts_db.putAccountSharedData(slot, pubkey, account);
 
     var ancestors = Ancestors{};
     defer ancestors.deinit(allocator);
@@ -4902,11 +4910,11 @@ test "overwrite account in same slot" {
 
     const first = try createRandomAccount(allocator, random);
     defer allocator.free(first.data);
-    try accounts_db.putAccount(slot, pubkey, first);
+    try accounts_db.putAccountSharedData(slot, pubkey, first);
 
     const second = try createRandomAccount(allocator, random);
     defer allocator.free(second.data);
-    try accounts_db.putAccount(slot, pubkey, second);
+    try accounts_db.putAccountSharedData(slot, pubkey, second);
 
     const maybe_actual = try accounts_db.getAccountWithAncestors(allocator, &pubkey, &ancestors);
     defer if (maybe_actual) |actual| actual.deinit(allocator);
@@ -4955,7 +4963,7 @@ test "insert many duplicate individual accounts, get latest with ancestors" {
             const account = try createRandomAccount(allocator, random);
             try allocated_accounts.append(account);
 
-            try accounts_db.putAccount(slot, pubkey, account);
+            try accounts_db.putAccountSharedData(slot, pubkey, account);
 
             std.debug.assert(slot >= max_slot_so_far);
 

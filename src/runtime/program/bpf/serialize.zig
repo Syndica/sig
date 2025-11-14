@@ -604,7 +604,7 @@ fn deserializeParametersUnaligned(
                         pre_len,
                     );
                 if (can_data_be_resized) |err| {
-                    if (!std.mem.eql(u8, data, borrowed_account.account.data)) return err;
+                    if (!borrowed_account.account.data.eqlSlice(data)) return err;
                 } else {
                     try borrowed_account.setDataFromSlice(
                         allocator,
@@ -709,7 +709,7 @@ fn deserializeParametersAligned(
                         post_len,
                     );
                 if (can_data_be_resized) |err| {
-                    if (!std.mem.eql(u8, data, borrowed_account.account.data)) return err;
+                    if (!borrowed_account.account.data.eqlSlice(data)) return err;
                 } else {
                     try borrowed_account.setDataFromSlice(
                         allocator,

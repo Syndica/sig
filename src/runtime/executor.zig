@@ -105,8 +105,8 @@ pub fn pushInstruction(
 
         // store_current_index_checked()
         const data = account.account.data;
-        if (data.len < 2) return InstructionError.AccountDataTooSmall;
-        const last_index = data.len - 2;
+        if (data.len() < 2) return InstructionError.AccountDataTooSmall;
+        const last_index = data.len() - 2;
         std.mem.writeInt(u16, data[last_index..][0..2], tc.top_level_instruction_index, .little);
     }
 }

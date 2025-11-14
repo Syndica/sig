@@ -167,7 +167,6 @@ pub fn checkFeePayer(
                 .executable = maybe_nonce.?.account.executable,
                 .rent_epoch = payer_shared.rent_epoch,
             },
-            .is_owned = true,
         }) catch unreachable;
     } else {
         var rollback_payer = try payer_shared.clone(allocator);
@@ -179,7 +178,6 @@ pub fn checkFeePayer(
         rollbacks.append(.{
             .pubkey = fee_payer_key,
             .account = rollback_payer,
-            .is_owned = true,
         }) catch unreachable;
     }
 
@@ -368,6 +366,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
 
     const address, const nonce_account, const nonce_data =
         try loadMessageNonceAccount(allocator, transaction, account_reader) orelse return null;
+    defer nonce_account.data.deinit(allocator);
 
     const previous_lamports_per_signature = nonce_data.lamports_per_signature;
     const next_nonce_state = NonceVersions{
@@ -389,12 +388,11 @@ fn checkLoadAndAdvanceMessageNonceAccount(
         .pubkey = address,
         .account = .{
             .lamports = nonce_account.lamports,
-            .data = new_data,
+            .data = .{ .owned_allocation = new_data },
             .owner = nonce_account.owner,
             .executable = nonce_account.executable,
             .rent_epoch = nonce_account.rent_epoch,
         },
-        .is_owned = true,
     };
 
     return .{
@@ -819,7 +817,6 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         .{
             .pubkey = transaction.fee_payer,
             .account = nonce_account,
-            .is_owned = true,
         },
         &sig.core.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,
@@ -888,7 +885,6 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         .{
             .pubkey = Pubkey.initRandom(prng.random()),
             .account = nonce_account,
-            .is_owned = true,
         },
         &sig.core.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,

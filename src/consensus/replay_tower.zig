@@ -3898,7 +3898,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
             .executable = false,
             .rent_epoch = 0,
         };
-        try accountsdb.putAccount(slot_to_write, SlotHistory.ID, sh_account);
+        try accountsdb.putAccountSharedData(slot_to_write, SlotHistory.ID, sh_account);
     }
 
     const forks1 = try fixture.select_fork_slots(&replay_tower);

@@ -512,7 +512,7 @@ fn updateCalleeAccount(
                 caller_account.serialized_data.len,
             );
         if (can_data_be_resized) |err| {
-            if (!std.mem.eql(u8, callee_account.account.data, caller_account.serialized_data))
+            if (!callee_account.account.data.eqlSlice(caller_account.serialized_data))
                 return err;
         } else {
             try callee_account.setDataFromSlice(
@@ -1087,7 +1087,7 @@ fn cpiCommon(
                             const data = if (ic.tc.account_data_direct_mapping)
                                 callee_account.account.data
                             else
-                                region.hostSlice(state).?[0..callee_account.account.data.len];
+                                region.hostSlice(state).?[0..callee_account.account.data.len()];
                             region.* = .init(state, data, region.vm_addr_start);
                         },
                     }

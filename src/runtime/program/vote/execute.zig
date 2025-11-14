@@ -1045,7 +1045,7 @@ fn setVoteState(
 
         for (votes, landed_votes) |*vote, landed| vote.* = landed.lockout;
 
-        return account.serializeIntoAccountData(VoteStateVersions{ .v1_14_11 = .{
+        return account.serializeIntoAccountData(allocator, VoteStateVersions{ .v1_14_11 = .{
             .node_pubkey = state.node_pubkey,
             .withdrawer = state.withdrawer,
             .commission = state.commission,
@@ -1057,7 +1057,7 @@ fn setVoteState(
             .last_timestamp = state.last_timestamp,
         } });
     }
-    return account.serializeIntoAccountData(VoteStateVersions{ .current = state.* });
+    return account.serializeIntoAccountData(allocator, VoteStateVersions{ .current = state.* });
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3659

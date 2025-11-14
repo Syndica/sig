@@ -236,8 +236,8 @@ pub fn loadAndExecuteTransaction(
             while (rollbacks.pop()) |rollback| {
                 const item = writes.addOne() catch unreachable;
                 item.* = rollback;
-                try wrapDB(account_store.put(item.pubkey, item.account));
-                loaded_accounts_data_size += @intCast(rollback.account.data.len);
+                try wrapDB(account_store.putAccount(item.pubkey, item.account));
+                loaded_accounts_data_size += @intCast(rollback.account.data.len());
             }
             return .{ .ok = .{
                 .fees = fees,
@@ -290,7 +290,7 @@ pub fn loadAndExecuteTransaction(
         else for (loaded_accounts.accounts.slice()) |a| a.deinit(allocator);
     }
 
-    for (writes.slice()) |*acct| try wrapDB(account_store.put(acct.pubkey, acct.account));
+    for (writes.slice()) |*acct| try wrapDB(account_store.putAccount(acct.pubkey, acct.account));
 
     return .{
         .ok = .{
@@ -513,7 +513,7 @@ fn transactionAccountsRentState(
             } else {
                 break :blk rent_collector.getAccountRentState(
                     account.account.lamports,
-                    account.account.data.len,
+                    account.account.data.len(),
                 );
             }
         } else null;

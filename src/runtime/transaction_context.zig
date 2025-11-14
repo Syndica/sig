@@ -4,6 +4,7 @@ const sig = @import("../sig.zig");
 const program = sig.runtime.program;
 const vm = sig.vm;
 
+const Account = sig.core.Account;
 const Hash = sig.core.Hash;
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -227,7 +228,7 @@ pub const TransactionReturnData = struct {
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L137-L139
 pub const TransactionContextAccount = struct {
     pubkey: Pubkey,
-    account: *AccountSharedData,
+    account: *Account,
     read_refs: usize = 0,
     write_ref: bool = false,
 
@@ -247,7 +248,7 @@ pub const TransactionContextAccount = struct {
         }
     };
 
-    pub fn init(pubkey: Pubkey, account: *AccountSharedData) TransactionContextAccount {
+    pub fn init(pubkey: Pubkey, account: *Account) TransactionContextAccount {
         return .{
             .pubkey = pubkey,
             .account = account,
@@ -258,7 +259,7 @@ pub const TransactionContextAccount = struct {
 
     pub fn writeWithLock(
         self: *TransactionContextAccount,
-    ) ?struct { *AccountSharedData, WLockGuard } {
+    ) ?struct { *Account, WLockGuard } {
         if (self.write_ref or self.read_refs > 0) return null;
         self.write_ref = true;
         return .{ self.account, .{ .write_ref = &self.write_ref } };
@@ -266,7 +267,7 @@ pub const TransactionContextAccount = struct {
 
     pub fn readWithLock(
         self: *TransactionContextAccount,
-    ) ?struct { *AccountSharedData, RLockGuard } {
+    ) ?struct { *Account, RLockGuard } {
         if (self.write_ref) return null;
         self.read_refs += 1;
         return .{ self.account, .{ .read_refs = &self.read_refs } };
