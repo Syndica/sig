@@ -167,7 +167,6 @@ pub fn checkFeePayer(
                 .executable = maybe_nonce.?.account.executable,
                 .rent_epoch = payer_shared.rent_epoch,
             },
-            .is_owned = true,
         }) catch unreachable;
     } else {
         var rollback_payer = try payer_shared.clone(allocator);
@@ -179,7 +178,6 @@ pub fn checkFeePayer(
         rollbacks.append(.{
             .pubkey = fee_payer_key,
             .account = rollback_payer,
-            .is_owned = true,
         }) catch unreachable;
     }
 
@@ -394,7 +392,6 @@ fn checkLoadAndAdvanceMessageNonceAccount(
             .executable = nonce_account.executable,
             .rent_epoch = nonce_account.rent_epoch,
         },
-        .is_owned = true,
     };
 
     return .{
@@ -819,7 +816,6 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         .{
             .pubkey = transaction.fee_payer,
             .account = nonce_account,
-            .is_owned = true,
         },
         &sig.core.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,
@@ -888,7 +884,6 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         .{
             .pubkey = Pubkey.initRandom(prng.random()),
             .account = nonce_account,
-            .is_owned = true,
         },
         &sig.core.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,

@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 const tracy = @import("tracy");
 
-const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 const IoUring = std.os.linux.IoUring;
 

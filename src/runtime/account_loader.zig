@@ -78,17 +78,13 @@ pub const LoadedTransactionAccounts = struct {
     }
 };
 
-// An account that was loaded to execute a transaction. It may be either a
-// pointer to the account map, or an owned copy, as indicated by the is_owned
-// field. All writable accounts are expected to be owned, but there are some
-// cases where an owned account is not writable.
+// An account that was loaded to execute a transaction. The data slice is owned.
 pub const LoadedAccount = struct {
     pubkey: Pubkey,
     account: AccountSharedData,
-    is_owned: bool,
 
     pub fn deinit(self: LoadedAccount, allocator: Allocator) void {
-        if (self.is_owned) self.account.deinit(allocator);
+        self.account.deinit(allocator);
     }
 };
 
@@ -189,7 +185,7 @@ fn loadTransactionAccountsSimd186(
             slot,
             &account_key,
         );
-        errdefer if (loaded_account.is_owned) loaded_account.account.deinit(allocator);
+        errdefer loaded_account.account.deinit(allocator);
 
         try loaded.increase(
             loaded_account.loaded_size,
@@ -240,7 +236,6 @@ fn loadTransactionAccountsSimd186(
         loaded.accounts.appendAssumeCapacity(.{
             .account = loaded_account.account,
             .pubkey = account_key,
-            .is_owned = loaded_account.is_owned,
         });
     }
 
@@ -304,7 +299,7 @@ fn loadTransactionAccountsOld(
             slot,
             &account_key,
         );
-        errdefer if (loaded_account.is_owned) loaded_account.account.deinit(allocator);
+        errdefer loaded_account.account.deinit(allocator);
 
         try loaded.increase(
             loaded_account.loaded_size,
@@ -328,7 +323,6 @@ fn loadTransactionAccountsOld(
         loaded.accounts.appendAssumeCapacity(.{
             .account = loaded_account.account,
             .pubkey = account_key,
-            .is_owned = loaded_account.is_owned,
         });
     }
 
@@ -389,7 +383,6 @@ fn loadTransactionAccount(
     account: AccountSharedData,
     loaded_size: usize,
     rent_collected: u64,
-    is_owned: bool,
 } {
     if (key.equals(&runtime.sysvar.instruction.ID)) {
         @branchHint(.unlikely);
@@ -404,7 +397,6 @@ fn loadTransactionAccount(
             },
             .loaded_size = 0,
             .rent_collected = 0,
-            .is_owned = true,
         };
     }
 
@@ -423,7 +415,6 @@ fn loadTransactionAccount(
             .account = account,
             .loaded_size = 0,
             .rent_collected = 0,
-            .is_owned = true,
         };
     };
     errdefer account.account.deinit(allocator);
@@ -448,7 +439,6 @@ fn loadTransactionAccount(
         .account = account_shared_data,
         .loaded_size = account.loaded_size,
         .rent_collected = rent_collected.rent_amount,
-        .is_owned = true,
     };
 }
 
