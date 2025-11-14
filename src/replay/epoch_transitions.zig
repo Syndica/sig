@@ -548,88 +548,210 @@ fn featureActivationSlotFromAccount(account: Account) !?u64 {
     return bincode.readFromSlice(failing_allocator, ?u64, &feature_bytes, .{});
 }
 
-fn insertFeatureActivationAccount(
-    allocator: Allocator,
-    slot_store: SlotAccountStore,
-    feature: features.Feature,
-    activation_slot: ?Slot,
-) !void {
-    const feature_id = features.map.get(feature).key;
-    const data = try bincode.writeAlloc(
-        allocator,
-        activation_slot,
-        .{},
-    );
-    defer allocator.free(data);
-    const feature_account = AccountSharedData{
-        .lamports = 1,
-        .owner = sig.runtime.ids.FEATURE_PROGRAM_ID,
-        .executable = false,
-        .rent_epoch = std.math.maxInt(u64),
-        .data = data,
-    };
-    try slot_store.put(feature_id, feature_account);
-}
+const ThreadSafeAccountMap = sig.accounts_db.account_store.ThreadSafeAccountMap;
 
-test applyFeatureActivations {
-    const ThreadSafeAccountMap = sig.accounts_db.account_store.ThreadSafeAccountMap;
+const TestEnvironment = struct {
+    genesis_config: sig.core.GenesisConfig,
+    account_map: ThreadSafeAccountMap,
+    ancestors: Ancestors,
+    epoch_tracker: EpochTracker,
+    slot_constants: SlotConstants,
+    slot_state: SlotState,
+
+    pub fn init(allocator: Allocator) !TestEnvironment {
+        var genesis_config = sig.core.GenesisConfig.default(allocator);
+        errdefer genesis_config.deinit(allocator);
+
+        var account_map = ThreadSafeAccountMap.init(allocator);
+        errdefer account_map.deinit();
+
+        var ancestors = Ancestors.EMPTY;
+        errdefer ancestors.deinit(allocator);
+
+        var epoch_tracker: EpochTracker = .{ .schedule = .INIT };
+        errdefer epoch_tracker.deinit(allocator);
+
+        var epoch_constants = EpochConstants.genesis(genesis_config);
+        errdefer epoch_constants.deinit(allocator);
+        try epoch_tracker.put(allocator, 0, epoch_constants);
+
+        var slot_constants = try SlotConstants.genesis(allocator, .DEFAULT);
+        errdefer slot_constants.deinit(allocator);
+
+        var slot_state = SlotState.GENESIS;
+        errdefer slot_state.deinit(allocator);
+
+        return TestEnvironment{
+            .genesis_config = genesis_config,
+            .account_map = account_map,
+            .ancestors = ancestors,
+            .epoch_tracker = epoch_tracker,
+            .slot_constants = slot_constants,
+            .slot_state = slot_state,
+        };
+    }
+
+    pub fn deinit(self: *TestEnvironment, allocator: Allocator) void {
+        self.genesis_config.deinit(allocator);
+        self.account_map.deinit();
+        self.ancestors.deinit(allocator);
+        self.epoch_tracker.deinit(allocator);
+        self.slot_constants.deinit(allocator);
+        self.slot_state.deinit(allocator);
+    }
+
+    pub fn insertFeatureAccount(
+        self: *TestEnvironment,
+        allocator: Allocator,
+        slot: Slot,
+        lamports: u64,
+        feature: features.Feature,
+        activation_slot: ?Slot,
+    ) !void {
+        const feature_id = features.map.get(feature).key;
+        const data = try allocator.alloc(u8, 9);
+        defer allocator.free(data);
+        @memset(data, 0);
+        _ = try bincode.writeToSlice(
+            data,
+            activation_slot,
+            .{},
+        );
+        const feature_account = AccountSharedData{
+            .lamports = lamports,
+            .owner = sig.runtime.ids.FEATURE_PROGRAM_ID,
+            .executable = false,
+            .rent_epoch = std.math.maxInt(u64),
+            .data = data,
+        };
+        try self.accountStore().put(slot, feature_id, feature_account);
+    }
+
+    pub fn slotAccountStore(
+        self: *TestEnvironment,
+        slot: Slot,
+    ) SlotAccountStore {
+        return SlotAccountStore.init(
+            slot,
+            &self.slot_state,
+            self.accountStore(),
+            &self.ancestors,
+        );
+    }
+
+    pub fn accountStore(
+        self: *TestEnvironment,
+    ) AccountStore {
+        return .{ .thread_safe_map = &self.account_map };
+    }
+};
+
+test "applyFeatureActivations: activate pico inflation" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
 
-    var slot_state = SlotState.GENESIS;
-    defer slot_state.deinit(allocator);
+    {
+        const slot: Slot = 0;
 
-    var account_map = ThreadSafeAccountMap.init(allocator);
-    defer account_map.deinit();
+        var env = try TestEnvironment.init(allocator);
+        defer env.deinit(allocator);
+        try env.ancestors.addSlot(allocator, slot);
 
-    const ancestors = Ancestors.EMPTY;
-    defer ancestors.deinit(allocator);
+        const initial_rent_collector = env.epoch_tracker.getPtrForSlot(slot).?.rent_collector;
+        const initial_fee_rate_governor = env.slot_constants.fee_rate_governor;
 
-    const slot: Slot = 0;
-    const slot_store = SlotAccountStore.init(
-        slot,
-        &slot_state,
-        AccountStore{ .thread_safe_map = &account_map },
-        &ancestors,
-    );
+        try applyFeatureActivations(
+            allocator,
+            env.slotAccountStore(slot),
+            &env.epoch_tracker,
+            &env.slot_constants,
+            false,
+        );
+        try std.testing.expectEqual(
+            sig.core.genesis_config.Inflation.DEFAULT,
+            env.slot_constants.inflation,
+        );
+        try std.testing.expectEqual(
+            initial_fee_rate_governor.burn_percent,
+            env.slot_constants.fee_rate_governor.burn_percent,
+        );
+        try std.testing.expectEqual(
+            initial_rent_collector.rent.burn_percent,
+            env.epoch_tracker.getPtrForSlot(slot).?.rent_collector.rent.burn_percent,
+        );
 
-    var epoch_tracker: EpochTracker = .{ .schedule = .INIT };
-    defer epoch_tracker.deinit(allocator);
+        // Test PICO inflation activation - null in feature
+        try env.insertFeatureAccount(allocator, slot, 1, .pico_inflation, null);
 
-    const epoch: sig.core.Epoch = 0;
-    try epoch_tracker.put(allocator, epoch, .{
-        .genesis_creation_time = 0,
-        .hashes_per_tick = 0,
-        .ns_per_slot = 0,
-        .rent_collector = .initRandom(prng.random()),
-        .slots_per_year = 0,
-        .stakes = .EMPTY,
-        .ticks_per_slot = 0,
-    });
+        // Don't allow new activations
+        try applyFeatureActivations(
+            allocator,
+            env.slotAccountStore(slot),
+            &env.epoch_tracker,
+            &env.slot_constants,
+            false,
+        );
 
-    var slot_constants = try SlotConstants.genesis(allocator, .initRandom(prng.random()));
-    defer slot_constants.deinit(allocator);
+        try std.testing.expectEqual(
+            sig.core.genesis_config.Inflation.DEFAULT,
+            env.slot_constants.inflation,
+        );
+        try std.testing.expectEqual(
+            initial_fee_rate_governor.burn_percent,
+            env.slot_constants.fee_rate_governor.burn_percent,
+        );
+        try std.testing.expectEqual(
+            initial_rent_collector.rent.burn_percent,
+            env.epoch_tracker.getPtrForSlot(slot).?.rent_collector.rent.burn_percent,
+        );
 
-    try applyFeatureActivations(
-        allocator,
-        slot_store,
-        &epoch_tracker,
-        &slot_constants,
-        false,
-    );
+        // Allow new activations
+        try applyFeatureActivations(
+            allocator,
+            env.slotAccountStore(slot),
+            &env.epoch_tracker,
+            &env.slot_constants,
+            true,
+        );
+        try std.testing.expectEqual(0, env.slot_constants.feature_set.get(.pico_inflation));
+        try std.testing.expectEqual(sig.core.genesis_config.Inflation.PICO, env.slot_constants.inflation);
+        try std.testing.expectEqual(50, env.slot_constants.fee_rate_governor.burn_percent);
+        try std.testing.expectEqual(50, env.epoch_tracker.getPtrForSlot(slot).?.rent_collector.rent.burn_percent);
+    }
 
-    // Test PICO inflation activation
-    try insertFeatureActivationAccount(allocator, slot_store, .pico_inflation, slot);
-    try applyFeatureActivations(
-        allocator,
-        slot_store,
-        &epoch_tracker,
-        &slot_constants,
-        false,
-    );
-    try std.testing.expectEqual(sig.core.genesis_config.Inflation.PICO, slot_constants.inflation);
-    try std.testing.expectEqual(50, slot_constants.fee_rate_governor.burn_percent);
-    try std.testing.expectEqual(50, epoch_tracker.getPtrForSlot(slot).?.rent_collector.rent.burn_percent);
+    {
+        const slot: Slot = 0;
 
-    slot_constants.feature_set.disable(.pico_inflation);
+        var env = try TestEnvironment.init(allocator);
+        defer env.deinit(allocator);
+        try env.ancestors.addSlot(allocator, slot);
+
+        const initial_inflation = env.slot_constants.inflation;
+        const initial_rent_collector = env.epoch_tracker.getPtrForSlot(slot).?.rent_collector;
+        const initial_fee_rate_governor = env.slot_constants.fee_rate_governor;
+
+        // Test PICO inflation activation - feature slot 1
+        try env.insertFeatureAccount(allocator, slot, 1, .pico_inflation, 1);
+
+        // Allow new activations
+        try applyFeatureActivations(
+            allocator,
+            env.slotAccountStore(slot),
+            &env.epoch_tracker,
+            &env.slot_constants,
+            true,
+        );
+        try std.testing.expectEqual(1, env.slot_constants.feature_set.get(.pico_inflation));
+        try std.testing.expectEqual(
+            initial_inflation,
+            env.slot_constants.inflation,
+        );
+        try std.testing.expectEqual(
+            initial_fee_rate_governor.burn_percent,
+            env.slot_constants.fee_rate_governor.burn_percent,
+        );
+        try std.testing.expectEqual(
+            initial_rent_collector.rent.burn_percent,
+            env.epoch_tracker.getPtrForSlot(slot).?.rent_collector.rent.burn_percent,
+        );
+    }
 }
