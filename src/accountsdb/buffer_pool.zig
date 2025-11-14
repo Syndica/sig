@@ -976,27 +976,6 @@ pub const AccountDataHandle = union(enum) {
         };
     }
 
-    pub fn toSlice(self: AccountDataHandle, allocator: std.mem.Allocator) !union(enum) {
-        owned: []u8,
-        borrowed: []const u8,
-
-        pub fn deinit(item: @This(), alloc: Allocator) []const u8 {
-            if (item == .owned) alloc.free(item.owned);
-        }
-
-        pub fn asConst(item: @This()) []const u8 {
-            return switch (item) {
-                inline .owned, .unowned => |x| x,
-            };
-        }
-    } {
-        return switch (self) {
-            .owned_allocation => |data| .{ .owned = data },
-            .unowned_allocation => |data| .{ .borrowed = data },
-            else => .{ .owned = (try self.dupeAllocatedOwned(allocator)).owned_allocation },
-        };
-    }
-
     pub fn duplicateBufferPoolRead(
         self: AccountDataHandle,
         allocator: std.mem.Allocator,

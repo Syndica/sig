@@ -377,25 +377,6 @@ fn loadTransactionAccountsOld(
     return loaded;
 }
 
-pub const LoadedTransactionAccount = struct {
-    account: AccountSharedData,
-    loaded_size: usize,
-    rent_collected: u64,
-    is_owned: bool,
-
-    const DEFAULT: LoadedTransactionAccount = .{
-        .account = .{
-            .lamports = 0,
-            .data = &.{},
-            .owner = Pubkey.ZEROES,
-            .executable = false,
-            .rent_epoch = RENT_EXEMPT_RENT_EPOCH,
-        },
-        .loaded_size = 0,
-        .rent_collected = 0,
-    };
-};
-
 fn loadTransactionAccount(
     map: SlotAccountReader,
     allocator: Allocator,
@@ -404,7 +385,12 @@ fn loadTransactionAccount(
     feature_set: *const sig.core.FeatureSet,
     slot: sig.core.Slot,
     key: *const Pubkey,
-) InternalLoadError!LoadedTransactionAccount {
+) InternalLoadError!struct {
+    account: AccountSharedData,
+    loaded_size: usize,
+    rent_collected: u64,
+    is_owned: bool,
+} {
     if (key.equals(&runtime.sysvar.instruction.ID)) {
         @branchHint(.unlikely);
         const account = try constructInstructionsAccount(allocator, transaction);
@@ -433,7 +419,7 @@ fn loadTransactionAccount(
         var account = AccountSharedData.EMPTY;
         account.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
 
-        return LoadedTransactionAccount{
+        return .{
             .account = account,
             .loaded_size = 0,
             .rent_collected = 0,
