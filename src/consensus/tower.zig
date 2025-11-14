@@ -13,6 +13,7 @@ const TowerStorage = sig.consensus.tower_storage.TowerStorage;
 const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
+const vote_program = sig.runtime.program.vote;
 
 pub const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
 
@@ -64,6 +65,8 @@ pub const TowerError = error{
     // Converted into erros from panics (debugs) in Agave
     /// Slots in tower are not older than last_checked_slot
     FatallyInconsistentTowerSlotOrder,
+    /// Vote account is not owned by the vote program
+    InvalidVoteAccountOwner,
 };
 
 pub const Tower = struct {
@@ -89,23 +92,44 @@ pub const Tower = struct {
         fork_root: Slot,
         slot_account_reader: sig.accounts_db.SlotAccountReader,
     ) !void {
+        self.logger.info().logf(
+            "initializeLockoutsFromBank: fork_root={}, vote_pubkey={}",
+            .{ fork_root, vote_account_pubkey },
+        );
         const vote_account = blk: {
-            const maybe_vote_account = slot_account_reader.get(
+            const maybe_vote_account = try slot_account_reader.get(
                 allocator,
                 vote_account_pubkey.*,
-            ) catch |err| switch (err) {
-                error.OutOfMemory => |e| return e,
-                error.InvalidOffset,
-                error.FileIdNotFound,
-                error.SlotNotFound,
-                => null,
-            };
+            );
             break :blk maybe_vote_account orelse {
+                self.logger.warn().logf(
+                    "Vote account not found, initializing root to {}",
+                    .{fork_root},
+                );
                 self.initializeRoot(fork_root);
                 return;
             };
         };
         defer vote_account.deinit(allocator);
+
+        // Validate that the account is owned by the vote program
+        if (!vote_account.owner.equals(&vote_program.ID)) {
+            self.logger.err().logf(
+                "Invalid vote account owner. Expected: {}, Got: {}",
+                .{ vote_program.ID, vote_account.owner },
+            );
+            return error.InvalidVoteAccountOwner;
+        }
+
+        self.logger.debug().logf(
+            "Vote account loaded: Pubkey={}, Lamports={}, Owner={}, Data length={}",
+            .{
+                vote_account_pubkey,
+                vote_account.lamports,
+                vote_account.owner,
+                vote_account.data.len(),
+            },
+        );
 
         const vote_state = try stateFromAccount(
             allocator,
