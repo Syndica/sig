@@ -4199,6 +4199,145 @@ test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
         try testing.expect(gossip_table_read.getData(vote_key) != null);
     }
 }
+
+test "sendVoteToLeaders - sends to multiple upcoming leaders" {
+    const allocator = testing.allocator;
+
+    const vote_slot: Slot = 100;
+    const vote_tx = Transaction.EMPTY;
+
+    // Create three different leaders for consecutive slots
+    const leader1_pubkey = Pubkey.initRandom(std.crypto.random);
+    const leader2_pubkey = Pubkey.initRandom(std.crypto.random);
+    const leader3_pubkey = Pubkey.initRandom(std.crypto.random);
+
+    const leader_schedule_slots = try allocator.alloc(Pubkey, 150);
+    for (leader_schedule_slots, 0..) |*slot, i| {
+        if (i >= vote_slot and i < vote_slot + 3) {
+            slot.* = switch (i - vote_slot) {
+                0 => leader1_pubkey,
+                1 => leader2_pubkey,
+                2 => leader3_pubkey,
+                else => unreachable,
+            };
+        } else {
+            slot.* = Pubkey.initRandom(std.crypto.random);
+        }
+    }
+
+    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
+        allocator,
+        .INIT,
+    );
+    defer {
+        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
+        defer lg.unlock();
+        for (leader_schedules.values()) |schedule| schedule.deinit();
+        leader_schedules.deinit();
+    }
+
+    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .allocator = allocator,
+        .slot_leaders = leader_schedule_slots,
+    };
+    try leader_schedule_cache.put(0, leader_schedule);
+
+    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
+    defer sig.sync.mux.deinitMux(&gossip_table_rw);
+
+    {
+        var leader1_contact = sig.gossip.data.ContactInfo.init(
+            allocator,
+            leader1_pubkey,
+            sig.time.getWallclockMs(),
+            0,
+        );
+        try leader1_contact.setSocket(
+            .tpu_vote,
+            sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8001),
+        );
+
+        const leader1_keypair = sig.identity.KeyPair.generate();
+        const leader1_ci = sig.gossip.data.SignedGossipData.initSigned(
+            &leader1_keypair,
+            sig.gossip.data.GossipData{ .ContactInfo = leader1_contact },
+        );
+
+        const gossip_table_write, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try gossip_table_write.insert(leader1_ci, sig.time.getWallclockMs());
+    }
+
+    {
+        var leader2_contact = sig.gossip.data.ContactInfo.init(
+            allocator,
+            leader2_pubkey,
+            sig.time.getWallclockMs(),
+            0,
+        );
+        try leader2_contact.setSocket(
+            .tpu_vote,
+            sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 2 }, 8002),
+        );
+
+        const leader2_keypair = sig.identity.KeyPair.generate();
+        const leader2_ci = sig.gossip.data.SignedGossipData.initSigned(
+            &leader2_keypair,
+            sig.gossip.data.GossipData{ .ContactInfo = leader2_contact },
+        );
+
+        const gossip_table_write, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try gossip_table_write.insert(leader2_ci, sig.time.getWallclockMs());
+    }
+
+    {
+        var leader3_contact = sig.gossip.data.ContactInfo.init(
+            allocator,
+            leader3_pubkey,
+            sig.time.getWallclockMs(),
+            0,
+        );
+        try leader3_contact.setSocket(
+            .tpu_vote,
+            sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 3 }, 8003),
+        );
+
+        const leader3_keypair = sig.identity.KeyPair.generate();
+        const leader3_ci = sig.gossip.data.SignedGossipData.initSigned(
+            &leader3_keypair,
+            sig.gossip.data.GossipData{ .ContactInfo = leader3_contact },
+        );
+
+        const gossip_table_write, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try gossip_table_write.insert(leader3_ci, sig.time.getWallclockMs());
+    }
+
+    const my_pubkey = Pubkey.initRandom(std.crypto.random);
+
+    var sockets = try VoteSockets.init();
+    defer sockets.deinit();
+
+    try sendVoteToLeaders(
+        .noop,
+        allocator,
+        vote_slot,
+        vote_tx,
+        leader_schedule_cache.slotLeaders(),
+        &gossip_table_rw,
+        my_pubkey,
+        &sockets,
+    );
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+        try testing.expectEqual(3, gossip_table_read.len());
+    }
+}
+
 test "findVoteIndexToEvict - no newer vote returns next index" {
     const allocator = testing.allocator;
 
