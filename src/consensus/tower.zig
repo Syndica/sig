@@ -343,3 +343,124 @@ pub fn stateFromAccount(
     ) catch return error.BincodeError;
     return try versioned_state.convertToCurrent(allocator);
 }
+
+const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
+
+test "initializeLockoutsFromBank handles missing vote account" {
+    const allocator = std.testing.allocator;
+
+    var tower: Tower = .init(.noop);
+
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const vote_pubkey: Pubkey = .initRandom(prng.random());
+
+    // Create an empty account map (vote account not found)
+    var account_map: std.AutoArrayHashMapUnmanaged(Pubkey, Account) = .empty;
+    defer account_map.deinit(allocator);
+
+    const slot_account_reader: sig.accounts_db.SlotAccountReader = .{
+        .single_version_map = &account_map,
+    };
+
+    const fork_root: Slot = 100;
+
+    try tower.initializeLockoutsFromBank(
+        allocator,
+        &vote_pubkey,
+        fork_root,
+        slot_account_reader,
+    );
+
+    // Verify tower was initialized with the root
+    try std.testing.expectEqual(fork_root, tower.vote_state.root_slot);
+    try std.testing.expectEqual(0, tower.vote_state.votes.len);
+}
+
+test "initializeLockoutsFromBank handles invalid vote account owner" {
+    const allocator = std.testing.allocator;
+
+    var tower: Tower = .init(.noop);
+
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const vote_pubkey: Pubkey = .initRandom(prng.random());
+    const wrong_owner: Pubkey = Pubkey.initRandom(prng.random());
+
+    // Create an account with wrong owner
+    const account_with_wrong_owner = Account{
+        .data = AccountDataHandle.initAllocated(&[_]u8{}),
+        .executable = false,
+        .lamports = 1000,
+        .owner = wrong_owner,
+        .rent_epoch = 0,
+    };
+
+    var account_map: std.AutoArrayHashMapUnmanaged(Pubkey, Account) = .empty;
+    defer {
+        var iter = account_map.iterator();
+        while (iter.next()) |entry| {
+            entry.value_ptr.deinit(allocator);
+        }
+        account_map.deinit(allocator);
+    }
+    try account_map.put(allocator, vote_pubkey, account_with_wrong_owner);
+
+    const slot_account_reader: sig.accounts_db.SlotAccountReader = .{
+        .single_version_map = &account_map,
+    };
+
+    // Should return InvalidVoteAccountOwner error
+    const result = tower.initializeLockoutsFromBank(
+        allocator,
+        &vote_pubkey,
+        100,
+        slot_account_reader,
+    );
+
+    try std.testing.expectError(error.InvalidVoteAccountOwner, result);
+}
+
+test "initializeLockoutsFromBank handles invalid vote state" {
+    const allocator = std.testing.allocator;
+
+    var tower: Tower = .init(.noop);
+
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const vote_pubkey: Pubkey = .initRandom(prng.random());
+
+    // Create an account with invalid vote state data (garbage bytes)
+    const invalid_data_bytes = try allocator.alloc(u8, 4);
+    defer allocator.free(invalid_data_bytes);
+    @memcpy(invalid_data_bytes, &[_]u8{ 0xFF, 0xFF, 0xFF, 0xFF });
+
+    const invalid_account = Account{
+        .data = AccountDataHandle.initAllocated(invalid_data_bytes),
+        .executable = false,
+        .lamports = 1000,
+        .owner = vote_program.ID,
+        .rent_epoch = 0,
+    };
+
+    var account_map: std.AutoArrayHashMapUnmanaged(Pubkey, Account) = .empty;
+    defer {
+        var iter = account_map.iterator();
+        while (iter.next()) |entry| {
+            entry.value_ptr.deinit(allocator);
+        }
+        account_map.deinit(allocator);
+    }
+    try account_map.put(allocator, vote_pubkey, invalid_account);
+
+    const slot_account_reader: sig.accounts_db.SlotAccountReader = .{
+        .single_version_map = &account_map,
+    };
+
+    // Should return BincodeError when trying to deserialize invalid vote state
+    const result = tower.initializeLockoutsFromBank(
+        allocator,
+        &vote_pubkey,
+        100,
+        slot_account_reader,
+    );
+
+    try std.testing.expectError(error.BincodeError, result);
+}
