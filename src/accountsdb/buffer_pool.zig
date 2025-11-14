@@ -897,6 +897,20 @@ pub const AccountDataHandle = union(enum) {
     ) u32 {
         std.debug.assert(start <= self.len());
         const end: FileOffset = @intCast(start + buf.len);
+        return self.readRange(start, end, buf);
+    }
+
+    /// Copies data into specified buffer.
+    ///
+    /// Returns the number of bytes written into buf, which should be equal to end - start
+    pub fn readRange(
+        self: *const AccountDataHandle,
+        start: FileOffset,
+        end: FileOffset,
+        buf: []u8,
+    ) u32 {
+        std.debug.assert(start <= self.len());
+        std.debug.assert(end <= self.len());
 
         switch (self.*) {
             .owned_allocation, .unowned_allocation => |data| {
