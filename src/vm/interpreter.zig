@@ -9,8 +9,8 @@ const Instruction = sbpf.Instruction;
 const Executable = sig.vm.Executable;
 const TransactionContext = sig.runtime.TransactionContext;
 const ExecutionError = sig.vm.ExecutionError;
-const Syscall = sig.vm.syscalls.Syscall;
-const Registry = sig.vm.Registry;
+const Syscall = sig.vm.syscalls.SyscallFn;
+const SyscallMap = sig.vm.SyscallMap;
 
 pub const RegisterMap = std.EnumArray(sbpf.Instruction.Register, u64);
 
@@ -20,7 +20,7 @@ pub const Vm = struct {
 
     registers: RegisterMap,
     memory_map: MemoryMap,
-    loader: *const Registry(Syscall),
+    loader: *const SyscallMap,
 
     vm_addr: u64,
     call_frames: std.ArrayListUnmanaged(CallFrame),
@@ -39,7 +39,7 @@ pub const Vm = struct {
         allocator: std.mem.Allocator,
         executable: *const Executable,
         memory_map: MemoryMap,
-        loader: *const Registry(Syscall),
+        loader: *const SyscallMap,
         stack_len: u64,
         ctx: *TransactionContext,
     ) error{OutOfMemory}!Vm {
@@ -91,12 +91,12 @@ pub const Vm = struct {
         return .{ self.result, instruction_count };
     }
 
-    fn dispatchSyscall(self: *Vm, entry: anytype) !void {
+    fn dispatchSyscall(self: *Vm, func: Syscall) !void {
         if (self.executable.config.enable_instruction_meter)
             self.transaction_context.consumeUnchecked(self.instruction_count);
         self.instruction_count = 0;
         self.registers.set(.r0, 0);
-        try entry.value(
+        try func(
             self.transaction_context,
             &self.memory_map,
             &self.registers,
@@ -574,7 +574,7 @@ pub const Vm = struct {
             => {
                 if (opcode == .exit_or_syscall and version.enableStaticSyscalls()) {
                     // SBPFv3 SYSCALL instruction
-                    if (self.loader.lookupKey(inst.imm)) |entry| {
+                    if (self.loader.get(inst.imm)) |entry| {
                         try self.dispatchSyscall(entry);
                     } else {
                         @panic("TODO: detect invalid syscall in verifier");
@@ -602,7 +602,7 @@ pub const Vm = struct {
             },
             .call_imm => blk: {
                 if (!version.enableStaticSyscalls()) {
-                    if (self.loader.lookupKey(inst.imm)) |entry| {
+                    if (self.loader.get(inst.imm)) |entry| {
                         try self.dispatchSyscall(entry);
                         break :blk;
                     }

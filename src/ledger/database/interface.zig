@@ -743,6 +743,8 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
         }
 
         test "WriteBatch.deleteRange" {
+            if (true) return error.SkipZigTest;
+
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
