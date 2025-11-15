@@ -98,7 +98,7 @@ pub const ForkInfo = struct {
     }
 
     /// Returns true if the fork rooted at this node is included in fork choice
-    fn isCandidate(self: *const ForkInfo) bool {
+    pub fn isCandidate(self: *const ForkInfo) bool {
         return self.latest_duplicate_ancestor == null;
     }
 
@@ -189,6 +189,7 @@ pub const ForkChoice = struct {
             .last_root_time = Instant.now(),
             .metrics = try registry.initStruct(ForkChoiceMetrics),
         };
+        errdefer self.deinit();
 
         try self.addNewLeafSlot(tree_root, null);
         return self;
@@ -337,13 +338,35 @@ pub const ForkChoice = struct {
             };
 
             try self.fork_infos.put(slot_hash_key, new_fork_info);
+            errdefer {
+                var removed = self.fork_infos.fetchRemove(slot_hash_key);
+                if (removed) |*kv| kv.value.deinit();
+            }
         }
 
-        // If no parent is given then we are done.
-        const parent = if (maybe_parent) |parent| parent else return;
+        const parent = if (maybe_parent) |parent| parent else {
+            // Log fork tree state for root nodes (after adding to fork_infos)
+            const active_fork_slots = try self.countActiveForks(self.allocator);
+            defer self.allocator.free(active_fork_slots);
+
+            self.logger.info().logf(
+                "block added to fork tree, active forks: {}, slots: {any}",
+                .{ active_fork_slots.len, active_fork_slots },
+            );
+            return;
+        };
 
         if (self.fork_infos.getPtr(parent)) |parent_fork_info| {
             try parent_fork_info.children.put(slot_hash_key, {});
+
+            // Log fork tree state after updating parent's children
+            const active_fork_slots = try self.countActiveForks(self.allocator);
+            defer self.allocator.free(active_fork_slots);
+
+            self.logger.info().logf(
+                "block added to fork tree, active forks: {}, slots: {any}",
+                .{ active_fork_slots.len, active_fork_slots },
+            );
         } else {
             // If parent is given then parent's info must
             // already exist by time child is being added.
@@ -360,6 +383,26 @@ pub const ForkChoice = struct {
 
     pub fn containsBlock(self: *const ForkChoice, key: *const SlotAndHash) bool {
         return self.fork_infos.contains(key.*);
+    }
+
+    /// Returns the slot numbers of all active forks (leaf nodes in the fork tree)
+    pub fn countActiveForks(
+        self: *const ForkChoice,
+        allocator: std.mem.Allocator,
+    ) ![]const Slot {
+        var slots: std.ArrayListUnmanaged(Slot) = .empty;
+        errdefer slots.deinit(allocator);
+
+        var iter = self.fork_infos.iterator();
+        while (iter.next()) |entry| {
+            const slot_hash = entry.key_ptr.*;
+            const fork_info = entry.value_ptr;
+            if (fork_info.children.count() == 0) {
+                try slots.append(allocator, slot_hash.slot);
+            }
+        }
+
+        return slots.toOwnedSlice(allocator);
     }
 
     pub fn latestDuplicateAncestor(
@@ -524,6 +567,10 @@ pub const ForkChoice = struct {
             new_root.slot,
             new_root.hash,
         });
+        self.logger.info().logf(
+            "{} forks pruned, remaining total forks: {}",
+            .{ remove_set.count(), self.fork_infos.count() },
+        );
 
         // Update metrics after changing tree root
         self.updateMetrics();
@@ -574,6 +621,7 @@ pub const ForkChoice = struct {
             root_parent.slot,
             root_parent.hash,
         });
+        self.logger.info().logf("root parent added, total forks: {}", .{self.fork_infos.count()});
 
         // Update metrics after changing tree root
         self.updateMetrics();
