@@ -4351,6 +4351,186 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
     }
 }
 
+test "sendVoteToLeaders - continues when sendVoteTransaction fails" {
+    const allocator = testing.allocator;
+
+    const vote_slot: Slot = 75;
+    const vote_tx: Transaction = .EMPTY;
+
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const leader_pubkey: Pubkey = .initRandom(prng.random());
+
+    const leader_schedule_slots = try allocator.alloc(Pubkey, 10);
+    for (leader_schedule_slots) |*slot| slot.* = leader_pubkey;
+
+    var leader_schedule_cache: sig.core.leader_schedule.LeaderScheduleCache = .init(
+        allocator,
+        .INIT,
+    );
+    defer {
+        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
+        defer lg.unlock();
+        for (leader_schedules.values()) |schedule| schedule.deinit();
+        leader_schedules.deinit();
+    }
+
+    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .allocator = allocator,
+        .slot_leaders = leader_schedule_slots,
+    };
+    try leader_schedule_cache.put(0, leader_schedule);
+
+    const gossip_table: sig.gossip.GossipTable = try .init(allocator, allocator);
+    var gossip_table_rw: sig.sync.RwMux(sig.gossip.GossipTable) = .init(gossip_table);
+    defer sig.sync.mux.deinitMux(&gossip_table_rw);
+
+    var leader_contact: sig.gossip.data.ContactInfo = .init(
+        allocator,
+        leader_pubkey,
+        sig.time.getWallclockMs(),
+        0,
+    );
+    try leader_contact.setSocket(
+        .tpu_vote,
+        sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 10 }, 9001),
+    );
+
+    const leader_keypair = sig.identity.KeyPair.generate();
+    const leader_ci: sig.gossip.data.SignedGossipData = .initSigned(
+        &leader_keypair,
+        sig.gossip.data.GossipData{ .ContactInfo = leader_contact },
+    );
+
+    {
+        const gossip_table_write, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try gossip_table_write.insert(leader_ci, sig.time.getWallclockMs());
+    }
+
+    var sockets: VoteSockets = try .init();
+    sockets.ipv4.close();
+    defer sockets.ipv6.close();
+
+    try sendVoteToLeaders(
+        .noop,
+        allocator,
+        vote_slot,
+        vote_tx,
+        leader_schedule_cache.slotLeaders(),
+        &gossip_table_rw,
+        null,
+        &sockets,
+    );
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+        try testing.expectEqual(1, gossip_table_read.len());
+    }
+}
+
+test "sendVoteToLeaders - fallback handles missing self TPU data" {
+    const allocator = testing.allocator;
+
+    const vote_slot: Slot = 88;
+    const vote_tx: Transaction = .EMPTY;
+
+    const EmptySlotLeaders = struct {
+        const Self = @This();
+
+        fn get(_: *Self, _: Slot) ?Pubkey {
+            return null;
+        }
+
+        pub const empty: Self = .{};
+    };
+    var slot_state = EmptySlotLeaders.empty;
+    const slot_leaders: sig.core.leader_schedule.SlotLeaders = .init(
+        &slot_state,
+        EmptySlotLeaders.get,
+    );
+
+    const gossip_table: sig.gossip.GossipTable = try .init(allocator, allocator);
+    var gossip_table_rw: sig.sync.RwMux(sig.gossip.GossipTable) = .init(gossip_table);
+    defer sig.sync.mux.deinitMux(&gossip_table_rw);
+
+    var sockets: VoteSockets = try .init();
+    defer sockets.deinit();
+
+    const my_keypair: sig.identity.KeyPair = .generate();
+    const my_pubkey: Pubkey = .fromPublicKey(&my_keypair.public_key);
+
+    // No self contact info recorded in gossip.
+    try sendVoteToLeaders(
+        .noop,
+        allocator,
+        vote_slot,
+        vote_tx,
+        slot_leaders,
+        &gossip_table_rw,
+        my_pubkey,
+        &sockets,
+    );
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+        try testing.expectEqual(0, gossip_table_read.len());
+    }
+
+    // Insert self contact that lacks a TPU address.
+    const my_contact: sig.gossip.data.ContactInfo = .init(
+        allocator,
+        my_pubkey,
+        sig.time.getWallclockMs(),
+        0,
+    );
+    const signed_my_ci: sig.gossip.data.SignedGossipData = .initSigned(
+        &my_keypair,
+        sig.gossip.data.GossipData{ .ContactInfo = my_contact },
+    );
+    {
+        const gossip_table_write, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try gossip_table_write.insert(signed_my_ci, sig.time.getWallclockMs());
+    }
+
+    try sendVoteToLeaders(
+        .noop,
+        allocator,
+        vote_slot,
+        vote_tx,
+        slot_leaders,
+        &gossip_table_rw,
+        my_pubkey,
+        &sockets,
+    );
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+        try testing.expectEqual(1, gossip_table_read.len());
+    }
+
+    // Finally, ensure the branch that lacks my_pubkey executes.
+    try sendVoteToLeaders(
+        .noop,
+        allocator,
+        vote_slot,
+        vote_tx,
+        slot_leaders,
+        &gossip_table_rw,
+        null, // my_pubkey sent to null
+        &sockets,
+    );
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+        try testing.expectEqual(1, gossip_table_read.len());
+    }
+}
+
 test "findVoteIndexToEvict - no newer vote returns next index" {
     const allocator = testing.allocator;
 
