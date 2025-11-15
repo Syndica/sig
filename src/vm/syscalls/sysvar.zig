@@ -184,7 +184,7 @@ test getSysvar {
         },
     });
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -514,7 +514,7 @@ fn testGetStakeHistory(filled: bool) !void {
         .sysvar_cache = .{ .stake_history = src_history },
     });
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -591,7 +591,7 @@ fn testGetSlotHashes(filled: bool) !void {
         .sysvar_cache = .{ .slot_hashes = src_hashes },
     });
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 

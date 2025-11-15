@@ -47,7 +47,7 @@ pub fn main() !void {
     const epoch_stakes: EpochStakes = .EMPTY_WITH_GENESIS;
     defer epoch_stakes.deinit(gpa);
 
-    var program_map = ProgramMap{};
+    var program_map = ProgramMap.empty;
     defer program_map.deinit(gpa);
 
     var tc: TransactionContext = .{

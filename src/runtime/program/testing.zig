@@ -9,9 +9,9 @@ const Pubkey = sig.core.Pubkey;
 const LogCollector = sig.runtime.LogCollector;
 
 pub const InstructionContextAccountMetaParams = runtime_testing.InstructionInfoAccountMetaParams;
-pub const TransactionContextParams = runtime_testing.ExecuteContextsParams;
+pub const ExecuteContextsParams = runtime_testing.ExecuteContextsParams;
 
-const createTransactionContext = runtime_testing.createTransactionContext;
+const createTransactionContextPtr = runtime_testing.createTransactionContextPtr;
 const deinitTransactionContext = runtime_testing.deinitTransactionContext;
 const createInstructionInfo = runtime_testing.createInstructionInfo;
 const expectTransactionContextEqual = runtime_testing.expectTransactionContextEqual;
@@ -26,7 +26,7 @@ pub fn expectProgramExecuteError(
     program_id: Pubkey,
     instruction: anytype,
     instruction_accounts: []const InstructionContextAccountMetaParams,
-    initial_context_params: TransactionContextParams,
+    initial_context_params: ExecuteContextsParams,
     options: Options,
 ) !void {
     try std.testing.expectError(
@@ -48,8 +48,8 @@ pub fn expectProgramExecuteResult(
     program_id: Pubkey,
     instruction: anytype,
     instruction_accounts: []const InstructionContextAccountMetaParams,
-    initial_context_params: TransactionContextParams,
-    expected_context_params: TransactionContextParams,
+    initial_context_params: ExecuteContextsParams,
+    expected_context_params: ExecuteContextsParams,
     options: Options,
 ) !void {
     if (!builtin.is_test)
@@ -63,7 +63,7 @@ pub fn expectProgramExecuteResult(
     // Create the initial transaction context
     var initial_prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    var initial_cache, var initial_tc = try createTransactionContext(
+    const initial_cache, var initial_tc = try createTransactionContextPtr(
         allocator,
         initial_prng.random(),
         context_params,
@@ -79,25 +79,27 @@ pub fn expectProgramExecuteResult(
             }
         }
         deinitTransactionContext(allocator, initial_tc);
-        initial_cache.deinit(allocator);
+        sig.runtime.testing.deinitAccountMap(initial_cache, allocator);
+        allocator.destroy(initial_tc);
     }
 
     // Create the expected transaction context
     var expected_prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    var expected_cache, const expected_tc = try createTransactionContext(
+    const expected_cache, const expected_tc = try createTransactionContextPtr(
         allocator,
         expected_prng.random(),
         expected_context_params,
     );
     defer {
         deinitTransactionContext(allocator, expected_tc);
-        expected_cache.deinit(allocator);
+        sig.runtime.testing.deinitAccountMap(expected_cache, allocator);
+        allocator.destroy(expected_tc);
     }
 
     // Create the instruction info
     var instruction_info = try createInstructionInfo(
-        &initial_tc,
+        initial_tc,
         program_id,
         instruction,
         instruction_accounts,
@@ -107,7 +109,7 @@ pub fn expectProgramExecuteResult(
     // Execute the instruction
     try executor.executeInstruction(
         allocator,
-        &initial_tc,
+        initial_tc,
         instruction_info,
     );
 

@@ -91,7 +91,7 @@ pub fn prepareBpfV3Test(
     const program_map = try allocator.create(ProgramMap);
     errdefer allocator.destroy(program_map);
 
-    program_map.* = try program_loader.loadPrograms(
+    program_map.* = try program_loader.testLoad(
         allocator,
         &accounts,
         &environment,
