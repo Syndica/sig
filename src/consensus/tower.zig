@@ -13,6 +13,7 @@ const TowerStorage = sig.consensus.tower_storage.TowerStorage;
 const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
+const vote_program = sig.runtime.program.vote;
 
 pub const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
 
@@ -64,6 +65,8 @@ pub const TowerError = error{
     // Converted into erros from panics (debugs) in Agave
     /// Slots in tower are not older than last_checked_slot
     FatallyInconsistentTowerSlotOrder,
+    /// Vote account is not owned by the vote program
+    InvalidVoteAccountOwner,
 };
 
 pub const Tower = struct {
@@ -89,28 +92,48 @@ pub const Tower = struct {
         fork_root: Slot,
         slot_account_reader: sig.accounts_db.SlotAccountReader,
     ) !void {
+        self.logger.info().logf(
+            "initializeLockoutsFromBank: fork_root={}, vote_pubkey={}",
+            .{ fork_root, vote_account_pubkey },
+        );
         const vote_account = blk: {
-            const maybe_vote_account = slot_account_reader.get(
+            const maybe_vote_account = try slot_account_reader.get(
                 allocator,
                 vote_account_pubkey.*,
-            ) catch |err| switch (err) {
-                error.OutOfMemory => |e| return e,
-                error.InvalidOffset,
-                error.FileIdNotFound,
-                error.SlotNotFound,
-                => null,
-            };
+            );
             break :blk maybe_vote_account orelse {
+                self.logger.warn().logf(
+                    "Vote account not found, initializing root to {}",
+                    .{fork_root},
+                );
                 self.initializeRoot(fork_root);
                 return;
             };
         };
         defer vote_account.deinit(allocator);
 
+        // Validate that the account is owned by the vote program
+        if (!vote_account.owner.equals(&vote_program.ID)) {
+            self.logger.err().logf(
+                "Invalid vote account owner. Expected: {}, Got: {}",
+                .{ vote_program.ID, vote_account.owner },
+            );
+            return error.InvalidVoteAccountOwner;
+        }
+
+        self.logger.debug().logf(
+            "Vote account loaded: Pubkey={}, Lamports={}, Owner={}, Data length={}",
+            .{
+                vote_account_pubkey,
+                vote_account.lamports,
+                vote_account.owner,
+                vote_account.data.len(),
+            },
+        );
+
         const vote_state = try stateFromAccount(
             allocator,
             &vote_account,
-            vote_account_pubkey,
         );
 
         var lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(
@@ -303,7 +326,6 @@ pub fn lastVotedSlotInBank(
     const vote_state = stateFromAccount(
         allocator,
         &vote_account,
-        vote_account_pubkey,
     ) catch return null;
     return vote_state.lastVotedSlot();
 }
@@ -311,16 +333,134 @@ pub fn lastVotedSlotInBank(
 pub fn stateFromAccount(
     allocator: std.mem.Allocator,
     vote_account: *const Account,
-    vote_account_pubkey: *const Pubkey,
 ) (error{BincodeError} || std.mem.Allocator.Error)!VoteState {
-    const buf = try allocator.alloc(u8, vote_account.data.len());
-    // TODO Not sure if this is the way to get the data from the vote account. Review.
-    _ = vote_account.serialize(vote_account_pubkey, buf);
-    const versioned_state = sig.bincode.readFromSlice(
+    var iter = vote_account.data.iterator();
+    const versioned_state = sig.bincode.read(
         allocator,
         VoteStateVersions,
-        buf,
+        iter.reader(),
         .{},
     ) catch return error.BincodeError;
     return try versioned_state.convertToCurrent(allocator);
+}
+
+const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
+
+test "initializeLockoutsFromBank handles missing vote account" {
+    const allocator = std.testing.allocator;
+
+    var tower: Tower = .init(.noop);
+
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const vote_pubkey: Pubkey = .initRandom(prng.random());
+
+    // Create an empty account map (vote account not found)
+    var account_map: std.AutoArrayHashMapUnmanaged(Pubkey, Account) = .empty;
+    defer account_map.deinit(allocator);
+
+    const slot_account_reader: sig.accounts_db.SlotAccountReader = .{
+        .single_version_map = &account_map,
+    };
+
+    const fork_root: Slot = 100;
+
+    try tower.initializeLockoutsFromBank(
+        allocator,
+        &vote_pubkey,
+        fork_root,
+        slot_account_reader,
+    );
+
+    // Verify tower was initialized with the root
+    try std.testing.expectEqual(fork_root, tower.vote_state.root_slot);
+    try std.testing.expectEqual(0, tower.vote_state.votes.len);
+}
+
+test "initializeLockoutsFromBank handles invalid vote account owner" {
+    const allocator = std.testing.allocator;
+
+    var tower: Tower = .init(.noop);
+
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const vote_pubkey: Pubkey = .initRandom(prng.random());
+    const wrong_owner: Pubkey = Pubkey.initRandom(prng.random());
+
+    // Create an account with wrong owner
+    const account_with_wrong_owner = Account{
+        .data = AccountDataHandle.initAllocated(&[_]u8{}),
+        .executable = false,
+        .lamports = 1000,
+        .owner = wrong_owner,
+        .rent_epoch = 0,
+    };
+
+    var account_map: std.AutoArrayHashMapUnmanaged(Pubkey, Account) = .empty;
+    defer {
+        var iter = account_map.iterator();
+        while (iter.next()) |entry| {
+            entry.value_ptr.deinit(allocator);
+        }
+        account_map.deinit(allocator);
+    }
+    try account_map.put(allocator, vote_pubkey, account_with_wrong_owner);
+
+    const slot_account_reader: sig.accounts_db.SlotAccountReader = .{
+        .single_version_map = &account_map,
+    };
+
+    // Should return InvalidVoteAccountOwner error
+    const result = tower.initializeLockoutsFromBank(
+        allocator,
+        &vote_pubkey,
+        100,
+        slot_account_reader,
+    );
+
+    try std.testing.expectError(error.InvalidVoteAccountOwner, result);
+}
+
+test "initializeLockoutsFromBank handles invalid vote state" {
+    const allocator = std.testing.allocator;
+
+    var tower: Tower = .init(.noop);
+
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const vote_pubkey: Pubkey = .initRandom(prng.random());
+
+    // Create an account with invalid vote state data (garbage bytes)
+    const invalid_data_bytes = try allocator.alloc(u8, 4);
+    defer allocator.free(invalid_data_bytes);
+    @memcpy(invalid_data_bytes, &[_]u8{ 0xFF, 0xFF, 0xFF, 0xFF });
+
+    const invalid_account = Account{
+        .data = AccountDataHandle.initAllocated(invalid_data_bytes),
+        .executable = false,
+        .lamports = 1000,
+        .owner = vote_program.ID,
+        .rent_epoch = 0,
+    };
+
+    var account_map: std.AutoArrayHashMapUnmanaged(Pubkey, Account) = .empty;
+    defer {
+        var iter = account_map.iterator();
+        while (iter.next()) |entry| {
+            entry.value_ptr.deinit(allocator);
+        }
+        account_map.deinit(allocator);
+    }
+    try account_map.put(allocator, vote_pubkey, invalid_account);
+
+    const slot_account_reader: sig.accounts_db.SlotAccountReader = .{
+        .single_version_map = &account_map,
+    };
+
+    // Should return BincodeError when trying to deserialize invalid vote state
+    const result = tower.initializeLockoutsFromBank(
+        allocator,
+        &vote_pubkey,
+        100,
+        slot_account_reader,
+    );
+
+    try std.testing.expectError(error.BincodeError, result);
 }
