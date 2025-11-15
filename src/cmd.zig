@@ -2117,7 +2117,7 @@ const ReplayAndConsensusServiceState = struct {
                 .current_epoch_constants = current_epoch_constants,
                 .hard_forks = hard_forks,
                 .replay_threads = params.replay_threads,
-            });
+            }, if (params.disable_consensus) .disabled else .enabled);
         };
         errdefer replay_state.deinit();
 
@@ -2136,7 +2136,11 @@ const ReplayAndConsensusServiceState = struct {
         const senders: replay.TowerConsensus.Senders = try .create(allocator);
         errdefer senders.destroy();
 
-        const receivers: replay.TowerConsensus.Receivers = try .create(allocator);
+        // Create receivers, passing the replay_votes channel owned by ReplayState
+        const receivers: replay.TowerConsensus.Receivers = try .create(
+            allocator,
+            replay_state.replay_votes_channel,
+        );
         errdefer receivers.destroy();
 
         const metrics = try params.app_base.metrics_registry.initStruct(replay.service.Metrics);

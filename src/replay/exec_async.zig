@@ -260,7 +260,7 @@ const TransactionScheduler = struct {
     /// if non-null, a failure was already recorded and will be returned for every poll
     failure: ?replay.execution.ReplaySlotError,
     svm_params: SvmGateway.Params,
-    replay_votes_sender: *Channel(ParsedVote),
+    replay_votes_sender: ?*Channel(ParsedVote),
 
     const BatchMessage = struct {
         batch_index: usize,
