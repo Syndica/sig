@@ -1058,7 +1058,6 @@ fn sendVoteToLeaders(
     if (upcoming_leader_sockets.len > 0) {
         for (upcoming_leader_sockets) |tpu_vote_socket| {
             sendVoteTransaction(
-                logger,
                 vote_tx,
                 tpu_vote_socket,
                 sockets,
@@ -4435,6 +4434,7 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
         .noop,
         allocator,
         vote_slot,
+        Hash.ZEROES,
         vote_tx,
         leader_schedule_cache.slotLeaders(),
         &gossip_table_rw,
@@ -4513,6 +4513,7 @@ test "sendVoteToLeaders - continues when sendVoteTransaction fails" {
         .noop,
         allocator,
         vote_slot,
+        Hash.ZEROES,
         vote_tx,
         leader_schedule_cache.slotLeaders(),
         &gossip_table_rw,
@@ -4563,6 +4564,7 @@ test "sendVoteToLeaders - fallback handles missing self TPU data" {
         .noop,
         allocator,
         vote_slot,
+        Hash.ZEROES,
         vote_tx,
         slot_leaders,
         &gossip_table_rw,
@@ -4597,6 +4599,7 @@ test "sendVoteToLeaders - fallback handles missing self TPU data" {
         .noop,
         allocator,
         vote_slot,
+        Hash.ZEROES,
         vote_tx,
         slot_leaders,
         &gossip_table_rw,
@@ -4615,6 +4618,7 @@ test "sendVoteToLeaders - fallback handles missing self TPU data" {
         .noop,
         allocator,
         vote_slot,
+        Hash.ZEROES,
         vote_tx,
         slot_leaders,
         &gossip_table_rw,
