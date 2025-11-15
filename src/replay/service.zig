@@ -101,7 +101,7 @@ pub fn advanceReplay(
         defer duplicate_confirmed_slots.deinit(allocator);
 
         try consensus.tower.process(allocator, .{
-            .account_reader = replay_state.account_store.reader(),
+            .account_store = replay_state.account_store,
             .gossip_table = consensus.gossip_table,
             .ledger = replay_state.ledger,
             .slot_tracker = &replay_state.slot_tracker,
@@ -384,7 +384,7 @@ pub fn trackNewSlots(
 ///
 /// For the relevant updates to accountsdb to set sysvars, see
 /// updateSysvarsForNewSlot
-fn newSlotFromParent(
+pub fn newSlotFromParent(
     allocator: Allocator,
     account_reader: AccountReader,
     ticks_in_slot: u64,
@@ -795,7 +795,7 @@ test "process runs without error with no replay results" {
     // TODO: run consensus in the tests that actually execute blocks for better
     // coverage. currently consensus panics or hangs if you run it with actual data
     try consensus.process(allocator, .{
-        .account_reader = dep_stubs.accountsdb.accountReader(),
+        .account_store = .{ .thread_safe_map = &dep_stubs.accountsdb },
         .ledger = &dep_stubs.ledger,
         .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,

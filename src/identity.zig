@@ -83,3 +83,21 @@ pub fn getOrInit(allocator: std.mem.Allocator, logger: Logger) !KeyPair {
         },
     }
 }
+
+/// Reads a binary keypair file and returns its public key as `Pubkey`.
+pub fn readBinaryKeypairPubkey(path: []const u8) !sig.core.Pubkey {
+    var file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    var buf: [std.crypto.sign.Ed25519.SecretKey.encoded_length]u8 = undefined;
+
+    const end_pos = try file.getEndPos();
+    if (end_pos != buf.len) return error.InvalidKeypairFile;
+
+    const file_len = try file.readAll(&buf);
+    if (file_len != buf.len) return error.InvalidKeypairFile;
+
+    const secret_key = try std.crypto.sign.Ed25519.SecretKey.fromBytes(buf);
+    const keypair = try std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key);
+    return sig.core.Pubkey.fromPublicKey(&keypair.public_key);
+}

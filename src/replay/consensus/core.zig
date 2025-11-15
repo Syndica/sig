@@ -50,6 +50,7 @@ pub const VoteSockets = struct {
 };
 
 const AccountReader = sig.accounts_db.AccountReader;
+const AccountStore = sig.accounts_db.AccountStore;
 
 /// Transaction forwarding, which leader to forward to and how long to hold
 const FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET: u64 = 2;
@@ -348,7 +349,7 @@ pub const TowerConsensus = struct {
         self: *TowerConsensus,
         allocator: Allocator,
         params: struct {
-            account_reader: AccountReader,
+            account_store: AccountStore,
             ledger: *Ledger,
             /// Scanned by the vote collector if provided.
             gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
@@ -451,7 +452,7 @@ pub const TowerConsensus = struct {
             params.slot_tracker,
             params.epoch_tracker,
             params.progress_map,
-            params.account_reader,
+            params.account_store,
             params.slot_leaders,
             params.vote_sockets,
             self.identity.vote_account,
@@ -502,7 +503,7 @@ pub const TowerConsensus = struct {
         epoch_tracker: *const EpochTracker,
         progress_map: *ProgressMap,
         /// For reading the slot history account
-        account_reader: AccountReader,
+        account_store: AccountStore,
         slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
         vote_sockets: ?*const VoteSockets,
         vote_account: Pubkey,
@@ -608,7 +609,7 @@ pub const TowerConsensus = struct {
             &self.latest_validator_votes,
             &self.fork_choice,
             &epoch_stakes_map,
-            account_reader,
+            account_store.reader(),
         );
         defer vote_and_reset_forks.deinit(allocator);
         const maybe_voted_slot = vote_and_reset_forks.vote_slot;
@@ -648,7 +649,7 @@ pub const TowerConsensus = struct {
                 &self.replay_tower,
                 progress_map,
                 &self.fork_choice,
-                account_reader,
+                account_store,
                 self.signing.node,
                 self.signing.authorized_voters,
                 self.identity.vote_account,
@@ -884,7 +885,7 @@ fn handleVotableBank(
     replay_tower: *ReplayTower,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
-    account_reader: AccountReader,
+    account_store: AccountStore,
     node_keypair: ?sig.identity.KeyPair,
     authorized_voter_keypairs: []const sig.identity.KeyPair,
     vote_account_pubkey: Pubkey,
@@ -909,6 +910,7 @@ fn handleVotableBank(
             slot_tracker,
             progress,
             fork_choice,
+            account_store,
             new_root,
         );
         metrics.current_root.set(new_root);
@@ -936,7 +938,7 @@ fn handleVotableBank(
         node_keypair,
         switch_fork_decision,
         replay_tower,
-        account_reader,
+        account_store.reader(),
         slot_tracker,
         epoch_tracker,
     );
@@ -1053,20 +1055,21 @@ fn sendVoteToLeaders(
     );
     defer allocator.free(upcoming_leader_sockets);
 
-    for (upcoming_leader_sockets) |tpu_vote_socket| {
-        sendVoteTransaction(
-            vote_tx,
-            tpu_vote_socket,
-            sockets,
-        ) catch |err| {
-            logger.err().logf("Failed to send vote (slot: {}, hash: {f}) to leader (error: {s}).", .{
-                vote_slot, voted_hash, @errorName(err),
-            });
-        };
-        logger.debug().logf(
-            "Sent vote (slot: {}, hash: {f}) to leader ({f}).",
-            .{ vote_slot, voted_hash, tpu_vote_socket },
-        );
+    if (upcoming_leader_sockets.len > 0) {
+        for (upcoming_leader_sockets) |tpu_vote_socket| {
+            sendVoteTransaction(
+                logger,
+                vote_tx,
+                tpu_vote_socket,
+                sockets,
+            ) catch |err| {
+                logger.err().logf("Failed to send vote to leader: {}", .{err});
+            };
+            logger.debug().logf(
+                "Sent vote (slot: {}, hash: {f}) to leader ({f}).",
+                .{ vote_slot, voted_hash, tpu_vote_socket },
+            );
+        }
     } else {
         // Fallback: send to our own TPU address if no leaders were found
         if (maybe_my_pubkey) |my_pubkey| {
@@ -1283,24 +1286,46 @@ fn generateVoteTx(
     slot_tracker: *const SlotTracker,
     epoch_tracker: *const EpochTracker,
 ) !GenerateVoteTxResult {
+    const logger = replay_tower.logger;
     if (authorized_voter_keypairs.len == 0) {
+        logger.debug().log("No authorized voter keypairs");
         return .non_voting;
     }
 
-    const node_kp = node_keypair orelse return .non_voting;
+    const node_kp = node_keypair orelse {
+        logger.debug().log("No node keypair");
+        return .non_voting;
+    };
 
-    const last_voted_slot = replay_tower.lastVotedSlot() orelse return .failed;
+    const last_voted_slot = replay_tower.lastVotedSlot() orelse {
+        logger.warn().log("No last voted slot");
+        return .failed;
+    };
 
-    const slot_info = slot_tracker.get(last_voted_slot) orelse return .failed;
+    const slot_info = slot_tracker.get(last_voted_slot) orelse {
+        logger.warn().logf(
+            "Slot info not found in slot_tracker for last_voted_slot {}",
+            .{last_voted_slot},
+        );
+        return .failed;
+    };
 
     const vote_account_result = account_reader.forSlot(&slot_info.constants.ancestors)
-        .get(allocator, vote_account_pubkey) catch return .failed;
+        .get(allocator, vote_account_pubkey) catch |err| {
+        logger.warn().logf("Failed to read vote account: {}", .{err});
+        return .failed;
+    };
+
     const vote_account = vote_account_result orelse {
+        logger.warn().log("Vote account not found");
         return .failed;
     };
     defer vote_account.deinit(allocator);
 
-    const vote_account_data = vote_account.data.readAllAllocate(allocator) catch return .failed;
+    const vote_account_data = vote_account.data.readAllAllocate(allocator) catch |err| {
+        logger.warn().logf("Failed to read vote account data: {}", .{err});
+        return .failed;
+    };
     defer allocator.free(vote_account_data);
 
     var vote_state_versions = sig.bincode.readFromSlice(
@@ -1308,10 +1333,16 @@ fn generateVoteTx(
         sig.runtime.program.vote.state.VoteStateVersions,
         vote_account_data,
         .{},
-    ) catch return .failed;
+    ) catch |err| {
+        logger.warn().logf("Failed to deserialize vote state versions: {}", .{err});
+        return .failed;
+    };
     defer vote_state_versions.deinit(allocator);
 
-    var vote_state = vote_state_versions.convertToCurrent(allocator) catch return .failed;
+    var vote_state = vote_state_versions.convertToCurrent(allocator) catch |err| {
+        logger.warn().logf("Failed to convert vote state to current: {}", .{err});
+        return .failed;
+    };
     defer vote_state.deinit(allocator);
 
     const node_pubkey = Pubkey.fromPublicKey(&node_kp.public_key);
@@ -1322,6 +1353,7 @@ fn generateVoteTx(
     const current_epoch = epoch_tracker.schedule.getEpoch(last_voted_slot);
 
     const authorized_voter_pubkey = vote_state.voters.getAuthorizedVoter(current_epoch) orelse {
+        logger.warn().logf("No authorized voter for epoch {}", .{current_epoch});
         return .failed;
     };
 
@@ -1347,7 +1379,12 @@ fn generateVoteTx(
     const maybe_switch_proof_hash: ?Hash = switch (switch_fork_decision) {
         .switch_proof => |hash| hash,
         .same_fork => null,
-        else => return .failed,
+        else => {
+            logger.warn().logf("switch_fork_decision is {s}, cannot generate vote tx", .{
+                @tagName(switch_fork_decision),
+            });
+            return .failed;
+        },
     };
 
     const vote_ix = try createVoteInstruction(
@@ -1359,7 +1396,10 @@ fn generateVoteTx(
     );
     defer vote_ix.deinit(allocator);
 
-    const blockhash = slot_info.state.hash.readCopy() orelse return .failed;
+    const blockhash = slot_info.state.hash.readCopy() orelse {
+        logger.warn().logf("Blockhash is null for slot {}", .{last_voted_slot});
+        return .failed;
+    };
 
     const vote_tx_msg = try sig.core.transaction.Message.initCompile(
         allocator,
@@ -1485,6 +1525,7 @@ fn checkAndHandleNewRoot(
     slot_tracker: *SlotTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
+    account_store: AccountStore,
     new_root: Slot,
 ) !void {
     // get the root bank before squash.
@@ -1504,6 +1545,12 @@ fn checkAndHandleNewRoot(
     slot_tracker.root = new_root;
     // Prune non rooted slots
     slot_tracker.pruneNonRooted(allocator);
+    // Tell the account_store about it for its unrooted accounts
+    try account_store.onSlotRooted(
+        allocator,
+        new_root,
+        slot_tracker.get(new_root).?.constants.fee_rate_governor.lamports_per_signature,
+    );
 
     // TODO
     // - Prune program cache bank_forks.read().unwrap().prune_program_cache(new_root);
@@ -2492,6 +2539,7 @@ test "checkAndHandleNewRoot - missing slot" {
         &slot_tracker,
         &fixture.progress,
         &fixture.fork_choice,
+        .noop,
         123, // Non-existent slot
     );
 
@@ -2548,6 +2596,7 @@ test "checkAndHandleNewRoot - missing hash" {
         slot_tracker2_ptr,
         &fixture.progress,
         &fixture.fork_choice,
+        .noop,
         root.slot, // Non-existent hash
     );
 
@@ -2589,6 +2638,7 @@ test "checkAndHandleNewRoot - empty slot tracker" {
         slot_tracker3_ptr,
         &fixture.progress,
         &fixture.fork_choice,
+        .noop,
         root.slot,
     );
 
@@ -2688,6 +2738,7 @@ test "checkAndHandleNewRoot - success" {
             slot_tracker4_ptr,
             &fixture.progress,
             &fixture.fork_choice,
+            .noop,
             hash3.slot,
         );
     }
@@ -4259,6 +4310,325 @@ test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
         try testing.expect(gossip_table_read.getData(vote_key) != null);
     }
 }
+
+test "sendVoteToLeaders - sends to multiple upcoming leaders" {
+    const allocator = testing.allocator;
+
+    const vote_slot: Slot = 100;
+    const vote_tx = Transaction.EMPTY;
+
+    // Create three different leaders for consecutive slots
+    const leader1_pubkey = Pubkey.initRandom(std.crypto.random);
+    const leader2_pubkey = Pubkey.initRandom(std.crypto.random);
+    const leader3_pubkey = Pubkey.initRandom(std.crypto.random);
+
+    const leader_schedule_slots = try allocator.alloc(Pubkey, 150);
+    for (leader_schedule_slots, 0..) |*slot, i| {
+        if (i >= vote_slot and i < vote_slot + 3) {
+            slot.* = switch (i - vote_slot) {
+                0 => leader1_pubkey,
+                1 => leader2_pubkey,
+                2 => leader3_pubkey,
+                else => unreachable,
+            };
+        } else {
+            slot.* = Pubkey.initRandom(std.crypto.random);
+        }
+    }
+
+    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
+        allocator,
+        .INIT,
+    );
+    defer {
+        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
+        defer lg.unlock();
+        for (leader_schedules.values()) |schedule| schedule.deinit();
+        leader_schedules.deinit();
+    }
+
+    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .allocator = allocator,
+        .slot_leaders = leader_schedule_slots,
+    };
+    try leader_schedule_cache.put(0, leader_schedule);
+
+    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
+    defer sig.sync.mux.deinitMux(&gossip_table_rw);
+
+    {
+        var leader1_contact = sig.gossip.data.ContactInfo.init(
+            allocator,
+            leader1_pubkey,
+            sig.time.getWallclockMs(),
+            0,
+        );
+        try leader1_contact.setSocket(
+            .tpu_vote,
+            sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8001),
+        );
+
+        const leader1_keypair = sig.identity.KeyPair.generate();
+        const leader1_ci = sig.gossip.data.SignedGossipData.initSigned(
+            &leader1_keypair,
+            sig.gossip.data.GossipData{ .ContactInfo = leader1_contact },
+        );
+
+        const gossip_table_write, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try gossip_table_write.insert(leader1_ci, sig.time.getWallclockMs());
+    }
+
+    {
+        var leader2_contact = sig.gossip.data.ContactInfo.init(
+            allocator,
+            leader2_pubkey,
+            sig.time.getWallclockMs(),
+            0,
+        );
+        try leader2_contact.setSocket(
+            .tpu_vote,
+            sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 2 }, 8002),
+        );
+
+        const leader2_keypair = sig.identity.KeyPair.generate();
+        const leader2_ci = sig.gossip.data.SignedGossipData.initSigned(
+            &leader2_keypair,
+            sig.gossip.data.GossipData{ .ContactInfo = leader2_contact },
+        );
+
+        const gossip_table_write, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try gossip_table_write.insert(leader2_ci, sig.time.getWallclockMs());
+    }
+
+    {
+        var leader3_contact = sig.gossip.data.ContactInfo.init(
+            allocator,
+            leader3_pubkey,
+            sig.time.getWallclockMs(),
+            0,
+        );
+        try leader3_contact.setSocket(
+            .tpu_vote,
+            sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 3 }, 8003),
+        );
+
+        const leader3_keypair = sig.identity.KeyPair.generate();
+        const leader3_ci = sig.gossip.data.SignedGossipData.initSigned(
+            &leader3_keypair,
+            sig.gossip.data.GossipData{ .ContactInfo = leader3_contact },
+        );
+
+        const gossip_table_write, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try gossip_table_write.insert(leader3_ci, sig.time.getWallclockMs());
+    }
+
+    const my_pubkey = Pubkey.initRandom(std.crypto.random);
+
+    var sockets = try VoteSockets.init();
+    defer sockets.deinit();
+
+    try sendVoteToLeaders(
+        .noop,
+        allocator,
+        vote_slot,
+        vote_tx,
+        leader_schedule_cache.slotLeaders(),
+        &gossip_table_rw,
+        my_pubkey,
+        &sockets,
+    );
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+        try testing.expectEqual(3, gossip_table_read.len());
+    }
+}
+
+test "sendVoteToLeaders - continues when sendVoteTransaction fails" {
+    const allocator = testing.allocator;
+
+    const vote_slot: Slot = 75;
+    const vote_tx: Transaction = .EMPTY;
+
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const leader_pubkey: Pubkey = .initRandom(prng.random());
+
+    const leader_schedule_slots = try allocator.alloc(Pubkey, 10);
+    for (leader_schedule_slots) |*slot| slot.* = leader_pubkey;
+
+    var leader_schedule_cache: sig.core.leader_schedule.LeaderScheduleCache = .init(
+        allocator,
+        .INIT,
+    );
+    defer {
+        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
+        defer lg.unlock();
+        for (leader_schedules.values()) |schedule| schedule.deinit();
+        leader_schedules.deinit();
+    }
+
+    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .allocator = allocator,
+        .slot_leaders = leader_schedule_slots,
+    };
+    try leader_schedule_cache.put(0, leader_schedule);
+
+    const gossip_table: sig.gossip.GossipTable = try .init(allocator, allocator);
+    var gossip_table_rw: sig.sync.RwMux(sig.gossip.GossipTable) = .init(gossip_table);
+    defer sig.sync.mux.deinitMux(&gossip_table_rw);
+
+    var leader_contact: sig.gossip.data.ContactInfo = .init(
+        allocator,
+        leader_pubkey,
+        sig.time.getWallclockMs(),
+        0,
+    );
+    try leader_contact.setSocket(
+        .tpu_vote,
+        sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 10 }, 9001),
+    );
+
+    const leader_keypair = sig.identity.KeyPair.generate();
+    const leader_ci: sig.gossip.data.SignedGossipData = .initSigned(
+        &leader_keypair,
+        sig.gossip.data.GossipData{ .ContactInfo = leader_contact },
+    );
+
+    {
+        const gossip_table_write, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try gossip_table_write.insert(leader_ci, sig.time.getWallclockMs());
+    }
+
+    var sockets: VoteSockets = try .init();
+    sockets.ipv4.close();
+    defer sockets.ipv6.close();
+
+    try sendVoteToLeaders(
+        .noop,
+        allocator,
+        vote_slot,
+        vote_tx,
+        leader_schedule_cache.slotLeaders(),
+        &gossip_table_rw,
+        null,
+        &sockets,
+    );
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+        try testing.expectEqual(1, gossip_table_read.len());
+    }
+}
+
+test "sendVoteToLeaders - fallback handles missing self TPU data" {
+    const allocator = testing.allocator;
+
+    const vote_slot: Slot = 88;
+    const vote_tx: Transaction = .EMPTY;
+
+    const EmptySlotLeaders = struct {
+        const Self = @This();
+
+        fn get(_: *Self, _: Slot) ?Pubkey {
+            return null;
+        }
+
+        pub const empty: Self = .{};
+    };
+    var slot_state = EmptySlotLeaders.empty;
+    const slot_leaders: sig.core.leader_schedule.SlotLeaders = .init(
+        &slot_state,
+        EmptySlotLeaders.get,
+    );
+
+    const gossip_table: sig.gossip.GossipTable = try .init(allocator, allocator);
+    var gossip_table_rw: sig.sync.RwMux(sig.gossip.GossipTable) = .init(gossip_table);
+    defer sig.sync.mux.deinitMux(&gossip_table_rw);
+
+    var sockets: VoteSockets = try .init();
+    defer sockets.deinit();
+
+    const my_keypair: sig.identity.KeyPair = .generate();
+    const my_pubkey: Pubkey = .fromPublicKey(&my_keypair.public_key);
+
+    // No self contact info recorded in gossip.
+    try sendVoteToLeaders(
+        .noop,
+        allocator,
+        vote_slot,
+        vote_tx,
+        slot_leaders,
+        &gossip_table_rw,
+        my_pubkey,
+        &sockets,
+    );
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+        try testing.expectEqual(0, gossip_table_read.len());
+    }
+
+    // Insert self contact that lacks a TPU address.
+    const my_contact: sig.gossip.data.ContactInfo = .init(
+        allocator,
+        my_pubkey,
+        sig.time.getWallclockMs(),
+        0,
+    );
+    const signed_my_ci: sig.gossip.data.SignedGossipData = .initSigned(
+        &my_keypair,
+        sig.gossip.data.GossipData{ .ContactInfo = my_contact },
+    );
+    {
+        const gossip_table_write, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try gossip_table_write.insert(signed_my_ci, sig.time.getWallclockMs());
+    }
+
+    try sendVoteToLeaders(
+        .noop,
+        allocator,
+        vote_slot,
+        vote_tx,
+        slot_leaders,
+        &gossip_table_rw,
+        my_pubkey,
+        &sockets,
+    );
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+        try testing.expectEqual(1, gossip_table_read.len());
+    }
+
+    // Finally, ensure the branch that lacks my_pubkey executes.
+    try sendVoteToLeaders(
+        .noop,
+        allocator,
+        vote_slot,
+        vote_tx,
+        slot_leaders,
+        &gossip_table_rw,
+        null, // my_pubkey sent to null
+        &sockets,
+    );
+
+    {
+        const gossip_table_read, var lock = gossip_table_rw.readWithLock();
+        defer lock.unlock();
+        try testing.expectEqual(1, gossip_table_read.len());
+    }
+}
+
 test "findVoteIndexToEvict - no newer vote returns next index" {
     const allocator = testing.allocator;
 
@@ -4510,7 +4880,7 @@ test "edge cases - duplicate slot" {
     // run consensus
 
     try tower_consensus.process(gpa, .{
-        .account_reader = replay_state.account_store.reader(),
+        .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,
@@ -4665,7 +5035,7 @@ test "edge cases - duplicate confirmed slot" {
     // run consensus
 
     try tower_consensus.process(gpa, .{
-        .account_reader = replay_state.account_store.reader(),
+        .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,
@@ -4832,7 +5202,7 @@ test "edge cases - gossip verified vote hashes" {
     // run consensus
 
     try tower_consensus.process(gpa, .{
-        .account_reader = replay_state.account_store.reader(),
+        .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,
@@ -5013,7 +5383,7 @@ test "vote on heaviest frozen descendant with no switch" {
 
     // Component entry point being tested
     try consensus.process(allocator, .{
-        .account_reader = stubs.accountsdb.accountReader(),
+        .account_store = .{ .thread_safe_map = &stubs.accountsdb },
         .ledger = &stubs.ledger,
         .gossip_table = null,
         .slot_tracker = &slot_tracker,
@@ -5234,7 +5604,7 @@ test "vote accounts with landed votes populate bank stats" {
 
     // Component entry point being tested
     try consensus.process(allocator, .{
-        .account_reader = stubs.accountsdb.accountReader(),
+        .account_store = .{ .thread_safe_map = &stubs.accountsdb },
         .ledger = &stubs.ledger,
         .gossip_table = null,
         .slot_tracker = &slot_tracker,
@@ -5544,7 +5914,7 @@ test "root advances after vote satisfies lockouts" {
         };
 
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -5605,7 +5975,7 @@ test "root advances after vote satisfies lockouts" {
         };
 
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -5686,7 +6056,7 @@ test "root advances after vote satisfies lockouts" {
             .{ .slot = 33, .output = .{ .last_entry_hash = hashes[33] } },
         };
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -5867,7 +6237,7 @@ test "vote refresh when no new vote available" {
             .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
         };
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -5892,7 +6262,7 @@ test "vote refresh when no new vote available" {
     {
         const empty_results: []const ReplayResult = &.{};
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -6160,7 +6530,7 @@ test "detect and mark duplicate confirmed fork" {
             .{ .slot = 2, .output = .{ .last_entry_hash = slot2_hash } },
         };
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -6338,7 +6708,7 @@ test "detect and mark duplicate slot" {
             .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
         };
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -6711,7 +7081,7 @@ test "successful fork switch (switch_proof)" {
             .{ .slot = 2, .output = .{ .last_entry_hash = slot2_hash } },
         };
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -6751,7 +7121,7 @@ test "successful fork switch (switch_proof)" {
             .{ .slot = 4, .output = .{ .last_entry_hash = slot4_hash } },
         };
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -6811,7 +7181,7 @@ test "successful fork switch (switch_proof)" {
     {
         const empty_results: []const ReplayResult = &.{};
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -6883,7 +7253,7 @@ test "successful fork switch (switch_proof)" {
             },
         };
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,

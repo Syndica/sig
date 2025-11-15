@@ -1,7 +1,7 @@
 const std = @import("std");
 const net = @import("zig-network");
-const sig = @import("../sig.zig");
-const shred_network = @import("lib.zig");
+const sig = @import("../../sig.zig");
+const shred_network = @import("../lib.zig");
 
 const socket_utils = sig.net.socket_utils;
 

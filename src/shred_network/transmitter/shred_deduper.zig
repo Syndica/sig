@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("../../sig.zig");
 
 const AtomicBool = std.atomic.Value(bool);
 const AtomicU64 = std.atomic.Value(u64);
