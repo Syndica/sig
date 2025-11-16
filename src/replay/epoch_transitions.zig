@@ -91,8 +91,6 @@ pub fn updateEpochStakes(
 ) !void {
     const leader_schedule_epoch = epoch_tracker.schedule.getLeaderScheduleEpoch(slot);
     if (!epoch_tracker.epochs.contains(leader_schedule_epoch)) {
-        // TODO: This is mixing the wrong epoch constants with the wrong stakes.
-        // We are setting epoch constants for the leader schedule epoch with the epoch constants from the parent epoch.
         const parent_epoch_constants = epoch_tracker.get(parent_epoch) orelse {
             return error.ParentEpochConstantsNotFound;
         };

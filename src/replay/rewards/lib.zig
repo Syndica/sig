@@ -106,12 +106,12 @@ pub const PartitionedStakeRewards = PartitionedRewards(PartitionedStakeReward);
 pub const PartitionedVoteRewards = PartitionedRewards(PartitionedVoteReward);
 
 pub const PartitionedIndices = struct {
-    entries: [][]const usize,
+    entries: []const []const usize,
     rc: *sig.sync.ReferenceCounter,
 
     pub fn init(
         allocator: Allocator,
-        entries: [][]const usize,
+        entries: []const []const usize,
     ) !PartitionedIndices {
         const rc = try allocator.create(sig.sync.ReferenceCounter);
         errdefer allocator.destroy(rc);
@@ -218,6 +218,11 @@ pub const RewardsForPartitioning = struct {
     foundation_rate: f64,
     previous_epoch_duration_in_years: f64,
     capitalization: u64,
+
+    pub fn deinit(self: *RewardsForPartitioning, allocator: Allocator) void {
+        self.vote_rewards.deinit(allocator);
+        self.stake_rewards.deinit(allocator);
+    }
 };
 
 pub const StartBlockHeightAndRewards = struct {

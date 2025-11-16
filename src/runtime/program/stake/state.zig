@@ -439,3 +439,52 @@ pub const StakeStateV2 = union(enum) {
         );
     }
 };
+
+test StakeStateV2 {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const state = StakeStateV2{ .stake = .{
+        .meta = .{
+            .authorized = .{
+                .staker = Pubkey.initRandom(random),
+                .withdrawer = Pubkey.initRandom(random),
+            },
+            .lockup = .{
+                .unix_timestamp = 1234567890,
+                .epoch = 42,
+                .custodian = Pubkey.initRandom(random),
+            },
+            .rent_exempt_reserve = 1_000_000,
+        },
+        .stake = .initRandom(random),
+        .flags = .EMPTY,
+    } };
+
+    // Test serialization/deserialization via account data
+    const serialized = try sig.bincode.writeAlloc(allocator, state, .{});
+    defer allocator.free(serialized);
+
+    const account = sig.core.Account{
+        .lamports = 2_000_000,
+        .owner = sig.runtime.program.stake.ID,
+        .data = .initAllocated(serialized),
+        .executable = false,
+        .rent_epoch = 0,
+    };
+
+    const from_account = try StakeStateV2.fromAccount(allocator, account);
+
+    try std.testing.expect(from_account.getDelegation().?.eql(&state.getDelegation().?));
+
+    // Test delegation mutation
+    var state_mut = state;
+    const stake = state_mut.getStakePtr().?;
+    stake.delegation.stake += 500_000;
+    try std.testing.expectEqual(
+        state.getDelegation().?.stake + 500_000,
+        state_mut.getDelegation().?.stake,
+    );
+}

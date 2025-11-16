@@ -83,7 +83,6 @@ pub fn beginPartitionedRewards(
             epoch,
             slots_per_year,
             parent_epoch,
-            slot_state,
             previous_epoch_capitalization,
             epoch_schedule,
             feature_set,
@@ -185,7 +184,6 @@ fn calculateRewardsAndDistributeVoteRewards(
     epoch: Epoch,
     slots_per_year: f64,
     previous_epoch: Epoch,
-    slot_state: *SlotState,
     capitalization: *AtomicU64,
     epoch_schedule: *const EpochSchedule,
     feature_set: *const FeatureSet,
@@ -200,7 +198,7 @@ fn calculateRewardsAndDistributeVoteRewards(
     PartitionedStakeRewards,
 } {
     // TODO: Lookup in rewards calculation cache
-    const rewards_for_partitioning = try calculateRewardsForPartitioning(
+    var rewards_for_partitioning = try calculateRewardsForPartitioning(
         allocator,
         slot,
         epoch,
@@ -214,11 +212,12 @@ fn calculateRewardsAndDistributeVoteRewards(
         epoch_vote_accounts,
         new_warmup_and_cooldown_rate_epoch,
     );
+    defer rewards_for_partitioning.deinit(allocator);
 
     try storeVoteAccountsPartitioned(
         allocator,
         slot_store,
-        slot_state,
+        stakes_cache,
         rewards_for_partitioning.vote_rewards.vote_rewards.entries,
         new_warmup_and_cooldown_rate_epoch,
     );
@@ -235,6 +234,7 @@ fn calculateRewardsAndDistributeVoteRewards(
         .monotonic,
     );
 
+    rewards_for_partitioning.stake_rewards.stake_rewards.acquire();
     return .{
         rewards_for_partitioning.vote_rewards.total_vote_rewards_lamports,
         rewards_for_partitioning.point_value,
@@ -245,7 +245,7 @@ fn calculateRewardsAndDistributeVoteRewards(
 fn storeVoteAccountsPartitioned(
     allocator: Allocator,
     slot_store: SlotAccountStore,
-    slot_state: *SlotState,
+    stakes_cache: *StakesCache,
     vote_rewards: []const PartitionedVoteReward,
     new_warmup_and_cooldown_rate_epoch: ?Epoch,
 ) !void {
@@ -259,7 +259,7 @@ fn storeVoteAccountsPartitioned(
 
         account_shared_data.lamports = vote_reward.account.lamports;
 
-        try slot_state.stakes_cache.checkAndStore(
+        try stakes_cache.checkAndStore(
             allocator,
             vote_reward.vote_pubkey,
             account_shared_data,
@@ -317,7 +317,6 @@ fn calculateRewardsForPartitioning(
     };
 }
 
-/// NOTE: UNTESTED
 fn calculateValidatorRewards(
     allocator: Allocator,
     slot: Slot,
@@ -332,8 +331,9 @@ fn calculateValidatorRewards(
     defer stakes_lg.unlock();
 
     const stake_history = &stakes.stake_history;
-    const filtered_stake_delegations =
+    var filtered_stake_delegations =
         try filterStakesDelegations(allocator, slot, feature_set, stakes);
+    defer filtered_stake_delegations.deinit(allocator);
 
     const point_value = try calculateRewardPointsPartitioned(
         rewards,
@@ -567,6 +567,49 @@ fn calculatePreviousEpochInflationRewards(
     };
 }
 
+pub const TestEnvironment = struct {
+    slot: Slot,
+    slot_constants: SlotConstants,
+    slot_state: SlotState,
+    epoch_tracker: EpochTracker,
+    account_map: sig.accounts_db.ThreadSafeAccountMap,
+
+    pub fn deinit(self: *TestEnvironment, allocator: Allocator) void {
+        self.slot_constants.deinit(allocator);
+        self.slot_state.deinit(allocator);
+        self.epoch_tracker.deinit(allocator);
+        self.account_map.deinit();
+    }
+
+    pub fn genesis(
+        allocator: Allocator,
+    ) !TestEnvironment {
+        var epoch_tracker = EpochTracker{
+            .epochs = .empty,
+            .schedule = EpochSchedule.INIT,
+        };
+        errdefer epoch_tracker.deinit(allocator);
+        try epoch_tracker.put(
+            allocator,
+            0,
+            .genesis(sig.core.GenesisConfig.default(allocator)),
+        );
+        return .{
+            .slot = 0,
+            .slot_constants = try SlotConstants.genesis(allocator, sig.core.FeeRateGovernor.DEFAULT),
+            .slot_state = SlotState.GENESIS,
+            .epoch_tracker = epoch_tracker,
+            .account_map = sig.accounts_db.ThreadSafeAccountMap.init(allocator),
+        };
+    }
+
+    pub fn epochVoteAccounts(self: *const TestEnvironment, epoch: Epoch) !VoteAccounts {
+        const epoch_info = self.epoch_tracker.get(epoch) orelse
+            return error.NoEpochConstants;
+        return epoch_info.stakes.stakes.vote_accounts;
+    }
+};
+
 fn newVoteAccountForTest(
     allocator: Allocator,
     random: std.Random,
@@ -591,9 +634,309 @@ fn newVoteAccountForTest(
     );
 }
 
+test calculateRewardsAndDistributeVoteRewards {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const slot = 32;
+    const epoch = 1;
+    const previous_epoch = 0;
+    const epoch_schedule = EpochSchedule.INIT;
+    const inflation = Inflation.DEFAULT;
+    const feature_set = FeatureSet.ALL_DISABLED;
+    var previous_epoch_capitalization = AtomicU64.init(43074320810);
+    const slots_per_year: f64 = 32.00136089369159;
+
+    const vote_account_0_pubkey = Pubkey.initRandom(random);
+    const vote_account_0_stake: u64 = 5_000_000_000;
+    var vote_account_0 = try VoteAccount.init(
+        allocator,
+        .{
+            .lamports = 10_000_000_000,
+            .owner = sig.runtime.program.vote.ID,
+        },
+        try .init(
+            allocator,
+            Pubkey.initRandom(random),
+            Pubkey.initRandom(random),
+            Pubkey.initRandom(random),
+            10,
+            epoch,
+        ),
+    );
+    try vote_account_0.state.epoch_credits.append(allocator, .{
+        .credits = 10,
+        .epoch = 1,
+        .prev_credits = 5,
+    });
+
+    const stake_account_0_pubkey = Pubkey.initRandom(random);
+    const stake_account_0_stake = sig.runtime.program.stake.state.StakeStateV2.Stake{
+        .delegation = .{
+            .voter_pubkey = vote_account_0_pubkey,
+            .stake = 5_000_000_000,
+            .activation_epoch = 0,
+            .deactivation_epoch = std.math.maxInt(Epoch),
+            .deprecated_warmup_cooldown_rate = 0.0,
+        },
+        .credits_observed = 0,
+    };
+
+    var epoch_vote_accounts = VoteAccounts{};
+    defer epoch_vote_accounts.deinit(allocator);
+    try epoch_vote_accounts.vote_accounts.put(allocator, vote_account_0_pubkey, .{
+        .account = vote_account_0,
+        .stake = vote_account_0_stake,
+    });
+
+    var stakes_cache = StakesCache.EMPTY;
+    defer stakes_cache.deinit(allocator);
+
+    {
+        var stakes, var guard = stakes_cache.stakes.writeWithLock();
+        defer guard.unlock();
+
+        try stakes.stake_accounts.put(allocator, stake_account_0_pubkey, stake_account_0_stake);
+        try stakes.stake_history.entries.append(.{ .epoch = 1, .stake = .{
+            .activating = 0,
+            .effective = 500_000_000_000,
+            .deactivating = 0,
+        } });
+    }
+
+    var accounts_map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
+    defer accounts_map.deinit();
+
+    var ancestors = sig.core.Ancestors.EMPTY;
+    defer ancestors.deinit(allocator);
+    try ancestors.addSlot(allocator, 0);
+
+    const account_store = sig.accounts_db.AccountStore{
+        .thread_safe_map = &accounts_map,
+    };
+    const vote_account_shared_data = try vote_account_0.toAccountSharedData(allocator);
+    defer vote_account_shared_data.deinit(allocator);
+    try account_store.put(
+        0,
+        vote_account_0_pubkey,
+        vote_account_shared_data,
+    );
+    const slot_store = account_store.forSlot(slot, &ancestors);
+
+    var result = try calculateRewardsAndDistributeVoteRewards(
+        allocator,
+        slot,
+        epoch,
+        slots_per_year,
+        previous_epoch,
+        &previous_epoch_capitalization,
+        &epoch_schedule,
+        &feature_set,
+        &inflation,
+        &stakes_cache,
+        &epoch_vote_accounts,
+        null,
+        slot_store,
+    );
+    defer result[2].deinit(allocator);
+
+    const updated_vote_account = try slot_store.reader().get(
+        allocator,
+        vote_account_0_pubkey,
+    );
+    defer updated_vote_account.?.deinit(allocator);
+}
+
+test calculateRewardsForPartitioning {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const slot = 32;
+    const epoch = 1;
+    const previous_epoch = 0;
+    const epoch_schedule = EpochSchedule.INIT;
+    const inflation = Inflation.DEFAULT;
+    const feature_set = FeatureSet.ALL_DISABLED;
+    const previous_epoch_capitalization: u64 = 43074320810;
+    const slots_per_year: f64 = 32.00136089369159;
+
+    const vote_account_0_pubkey = Pubkey.initRandom(random);
+    const vote_account_0_stake: u64 = 5_000_000_000;
+    var vote_account_0 = try VoteAccount.init(
+        allocator,
+        .{
+            .lamports = 10_000_000_000,
+            .owner = sig.runtime.program.vote.ID,
+        },
+        try .init(
+            allocator,
+            Pubkey.initRandom(random),
+            Pubkey.initRandom(random),
+            Pubkey.initRandom(random),
+            10,
+            epoch,
+        ),
+    );
+    try vote_account_0.state.epoch_credits.append(allocator, .{
+        .credits = 10,
+        .epoch = 1,
+        .prev_credits = 5,
+    });
+
+    const stake_account_0_pubkey = Pubkey.initRandom(random);
+    const stake_account_0_stake = sig.runtime.program.stake.state.StakeStateV2.Stake{
+        .delegation = .{
+            .voter_pubkey = vote_account_0_pubkey,
+            .stake = 5_000_000_000,
+            .activation_epoch = 0,
+            .deactivation_epoch = std.math.maxInt(Epoch),
+            .deprecated_warmup_cooldown_rate = 0.0,
+        },
+        .credits_observed = 0,
+    };
+
+    var epoch_vote_accounts = VoteAccounts{};
+    defer epoch_vote_accounts.deinit(allocator);
+    try epoch_vote_accounts.vote_accounts.put(allocator, vote_account_0_pubkey, .{
+        .account = vote_account_0,
+        .stake = vote_account_0_stake,
+    });
+
+    var stakes_cache = StakesCache.EMPTY;
+    defer stakes_cache.deinit(allocator);
+
+    {
+        var stakes, var guard = stakes_cache.stakes.writeWithLock();
+        defer guard.unlock();
+
+        try stakes.stake_accounts.put(allocator, stake_account_0_pubkey, stake_account_0_stake);
+        try stakes.stake_history.entries.append(.{ .epoch = 1, .stake = .{
+            .activating = 0,
+            .effective = 500_000_000_000,
+            .deactivating = 0,
+        } });
+    }
+
+    var rewards = try calculateRewardsForPartitioning(
+        allocator,
+        slot,
+        epoch,
+        slots_per_year,
+        previous_epoch,
+        previous_epoch_capitalization,
+        &epoch_schedule,
+        &feature_set,
+        &inflation,
+        &stakes_cache,
+        &epoch_vote_accounts,
+        null,
+    );
+    defer rewards.deinit(allocator);
+}
+
 test calculateValidatorRewards {
-    // TODO: Implement test
-    _ = calculateValidatorRewards;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    { // Null
+        const slot = 0;
+        const previous_epoch = 0;
+        const previous_rewards: u64 = 0;
+        const feature_set = FeatureSet.ALL_DISABLED;
+        const epoch_vote_accounts = VoteAccounts{};
+        var stakes_cache = StakesCache.EMPTY;
+
+        const rewards = try calculateValidatorRewards(
+            allocator,
+            slot,
+            &feature_set,
+            previous_epoch,
+            previous_rewards,
+            &stakes_cache,
+            &epoch_vote_accounts,
+            null,
+        );
+
+        try std.testing.expectEqual(null, rewards);
+    }
+
+    const slot = 32;
+    const epoch = 1;
+    const previous_epoch = 0;
+    const previous_rewards: u64 = 0;
+    const feature_set = FeatureSet.ALL_DISABLED;
+
+    const vote_account_0_pubkey = Pubkey.initRandom(random);
+    const vote_account_0_stake: u64 = 5_000_000_000;
+    var vote_account_0 = try VoteAccount.init(
+        allocator,
+        .{
+            .lamports = 10_000_000_000,
+            .owner = sig.runtime.program.vote.ID,
+        },
+        try .init(
+            allocator,
+            Pubkey.initRandom(random),
+            Pubkey.initRandom(random),
+            Pubkey.initRandom(random),
+            10,
+            epoch,
+        ),
+    );
+    try vote_account_0.state.epoch_credits.append(allocator, .{
+        .credits = 10,
+        .epoch = 1,
+        .prev_credits = 5,
+    });
+
+    const stake_account_0_pubkey = Pubkey.initRandom(random);
+    const stake_account_0_stake = sig.runtime.program.stake.state.StakeStateV2.Stake{
+        .delegation = .{
+            .voter_pubkey = vote_account_0_pubkey,
+            .stake = 5_000_000_000,
+            .activation_epoch = 0,
+            .deactivation_epoch = std.math.maxInt(Epoch),
+            .deprecated_warmup_cooldown_rate = 0.0,
+        },
+        .credits_observed = 0,
+    };
+
+    var epoch_vote_accounts = VoteAccounts{};
+    defer epoch_vote_accounts.deinit(allocator);
+    try epoch_vote_accounts.vote_accounts.put(allocator, vote_account_0_pubkey, .{
+        .account = vote_account_0,
+        .stake = vote_account_0_stake,
+    });
+
+    var stakes_cache = StakesCache.EMPTY;
+    defer stakes_cache.deinit(allocator);
+
+    {
+        var stakes, var guard = stakes_cache.stakes.writeWithLock();
+        defer guard.unlock();
+
+        try stakes.stake_accounts.put(allocator, stake_account_0_pubkey, stake_account_0_stake);
+        try stakes.stake_history.entries.append(.{ .epoch = 1, .stake = .{
+            .activating = 0,
+            .effective = 500_000_000_000,
+            .deactivating = 0,
+        } });
+    }
+
+    const rewards = try calculateValidatorRewards(
+        allocator,
+        slot,
+        &feature_set,
+        previous_epoch,
+        previous_rewards,
+        &stakes_cache,
+        &epoch_vote_accounts,
+        null,
+    );
+    defer rewards.?.deinit(allocator);
 }
 
 test filterStakesDelegations {

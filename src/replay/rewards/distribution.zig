@@ -12,7 +12,6 @@ const StakesCache = sig.core.StakesCache;
 const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
 const StakeStateV2 = sig.runtime.program.stake.StakeStateV2;
 
-const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 const SlotAccountStore = sig.accounts_db.SlotAccountStore;
 
 // const SlotAccountStore = sig.replay.slot_account_store.SlotAccountStore;
@@ -149,6 +148,10 @@ fn distributeEpochRewardsInPartition(
             slot_store,
             null, // TODO: pass in new_rate_activation_epoch
         );
+    defer {
+        for (updated_stake_rewards) |reward| reward.deinit(allocator);
+        allocator.free(updated_stake_rewards);
+    }
     _ = capitalization.fetchAdd(lamports_distributed, .monotonic);
 
     var epoch_rewards = try getSysvarFromAccount(
@@ -173,9 +176,8 @@ fn distributeEpochRewardsInPartition(
         },
     );
 
-    // NOTE: This looks like its only required for metrics.
-    // updateRewardHistoryInPartition();
-    _ = updated_stake_rewards;
+    // NOTE: Used for metadata
+    // updateRewardHistoryInPartition(updated_stake_rewards);
 }
 
 fn storeStakeAccountsInPartition(
@@ -301,6 +303,7 @@ fn buildUpdatedStakeReward(
 //     slot_state: sig.core.SlotState,
 //     slot_constants: sig.core.SlotConstants,
 //     account_map: sig.accounts_db.account_store.ThreadSafeAccountMap,
+//     ancestors: sig.core.Ancestors,
 
 //     slot: Slot,
 //     epoch: Epoch,
@@ -308,10 +311,15 @@ fn buildUpdatedStakeReward(
 //     epoch_schedule: EpochSchedule,
 
 //     pub fn init(allocator: Allocator) !TestEnvironment {
+//         var ancestors = sig.core.Ancestors.EMPTY;
+//         errdefer ancestors.deinit(allocator);
+//         try ancestors.addSlot(allocator, 0);
+
 //         return .{
 //             .slot_state = .GENESIS,
 //             .slot_constants = try .genesis(allocator, .DEFAULT),
 //             .account_map = .init(allocator),
+//             .ancestors = ancestors,
 //             .slot = 0,
 //             .epoch = 0,
 //             .rent = .INIT,
@@ -323,92 +331,16 @@ fn buildUpdatedStakeReward(
 //         self.slot_state.deinit(allocator);
 //         self.slot_constants.deinit(allocator);
 //         self.account_map.deinit();
+//         self.ancestors.deinit(allocator);
 //     }
 
 //     pub fn slotStore(self: *TestEnvironment) SlotAccountStore {
-//         return SlotAccountStore{
-//             .slot = self.slot,
-//             .state = &self.slot_state,
-//             .reader = SlotAccountReader{ .thread_safe_map = .{
-//                 &self.account_map,
-//                 &self.slot_constants.ancestors,
-//             } },
-//             .writer = sig.accounts_db.account_store.AccountStore{
-//                 .thread_safe_map = &self.account_map,
-//             },
+//         const account_store = sig.accounts_db.AccountStore{
+//             .thread_safe_map = &self.account_map,
 //         };
+//         return account_store.forSlot(self.slot, &self.ancestors);
 //     }
 // };
-
-// test distributePartitionedEpochRewards {
-//     const PartitionedStakeReward = sig.replay.rewards.PartitionedStakeReward;
-
-//     const allocator = std.testing.allocator;
-//     var prng = std.Random.DefaultPrng.init(0);
-//     const random = prng.random();
-
-//     var env = try TestEnvironment.init(allocator);
-//     defer env.deinit(allocator);
-
-//     env.slot_state.reward_status = .{ .active = .{ .calculating = .{
-//         .distribution_start_block_height = 0,
-//         .all_stake_rewards = try .init(
-//             allocator,
-//             try allocator.dupe(PartitionedStakeReward, &[_]PartitionedStakeReward{
-//                 .{
-//                     .stake_pubkey = Pubkey.initRandom(random),
-//                     .stake = .{
-//                         .delegation = .{
-//                             .voter_pubkey = Pubkey.initRandom(random),
-//                             .stake = 1_000_000_000,
-//                             .activation_epoch = 0,
-//                             .deactivation_epoch = std.math.maxInt(Epoch),
-//                             .deprecated_warmup_cooldown_rate = 0.0,
-//                         },
-//                         .credits_observed = 0,
-//                     },
-//                     .stake_reward = 1_000_000_000,
-//                     .commission = 50,
-//                 },
-//             }),
-//         ),
-//     } } };
-// }
-
-// test distributeEpochRewardsInPartition {
-//     const PartitionedStakeReward = sig.replay.rewards.PartitionedStakeReward;
-
-//     const allocator = std.testing.allocator;
-//     var prng = std.Random.DefaultPrng.init(0);
-//     const random = prng.random();
-
-//     var env = try TestEnvironment.init(allocator);
-//     defer env.deinit(allocator);
-
-//     env.slot_state.reward_status = .{ .active = .{ .calculating = .{
-//         .distribution_start_block_height = 0,
-//         .all_stake_rewards = try .init(
-//             allocator,
-//             try allocator.dupe(PartitionedStakeReward, &[_]PartitionedStakeReward{
-//                 .{
-//                     .stake_pubkey = Pubkey.initRandom(random),
-//                     .stake = .{
-//                         .delegation = .{
-//                             .voter_pubkey = Pubkey.initRandom(random),
-//                             .stake = 1_000_000_000,
-//                             .activation_epoch = 0,
-//                             .deactivation_epoch = std.math.maxInt(Epoch),
-//                             .deprecated_warmup_cooldown_rate = 0.0,
-//                         },
-//                         .credits_observed = 0,
-//                     },
-//                     .stake_reward = 1_000_000_000,
-//                     .commission = 50,
-//                 },
-//             }),
-//         ),
-//     } } };
-// }
 
 // test storeStakeAccountsInPartition {
 //     const PartitionedStakeReward = sig.replay.rewards.PartitionedStakeReward;
@@ -445,115 +377,561 @@ fn buildUpdatedStakeReward(
 //     } } };
 // }
 
-// test buildUpdatedStakeReward {
-//     const allocator = std.testing.allocator;
-//     var prng = std.Random.DefaultPrng.init(0);
-//     const random = prng.random();
+test distributePartitionedEpochRewards {
+    const PartitionedStakeReward = sig.replay.rewards.PartitionedStakeReward;
 
-//     var env = try TestEnvironment.init(allocator);
-//     defer env.deinit(allocator);
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
 
-//     var partitioned_reward = sig.replay.rewards.PartitionedStakeReward{
-//         .stake_pubkey = Pubkey.initRandom(random),
-//         .stake = .{
-//             .delegation = .{
-//                 .voter_pubkey = Pubkey.initRandom(random),
-//                 .stake = 1_000_000_000,
-//                 .activation_epoch = 0,
-//                 .deactivation_epoch = std.math.maxInt(Epoch),
-//                 .deprecated_warmup_cooldown_rate = 0.0,
-//             },
-//             .credits_observed = 0,
-//         },
-//         .stake_reward = 1_000_000_000,
-//         .commission = 50,
-//     };
+    const slot = 0;
+    const epoch = 0;
+    const block_height = 0;
+    const epoch_schedule = EpochSchedule.INIT;
+    var capitalization = AtomicU64.init(0);
+    const rent = sig.core.RentCollector.DEFAULT.rent;
 
-//     var stake_accounts = std.AutoArrayHashMapUnmanaged(Pubkey, Stake).empty;
-//     defer stake_accounts.deinit(allocator);
+    var ancestors = sig.core.Ancestors.EMPTY;
+    defer ancestors.deinit(allocator);
+    try ancestors.addSlot(allocator, 0);
 
-//     {
-//         const result = buildUpdatedStakeReward(
-//             allocator,
-//             stake_accounts,
-//             partitioned_reward,
-//             env.slotStore(),
-//         );
-//         try std.testing.expectError(error.MissingStakeAccountInCache, result);
-//     }
+    var account_map = sig.accounts_db.account_store.ThreadSafeAccountMap.init(allocator);
+    defer account_map.deinit();
 
-//     try stake_accounts.put(allocator, partitioned_reward.stake_pubkey, partitioned_reward.stake);
+    const account_store = sig.accounts_db.AccountStore{
+        .thread_safe_map = &account_map,
+    };
+    const slot_store = account_store.forSlot(0, &ancestors);
 
-//     {
-//         const result = buildUpdatedStakeReward(
-//             allocator,
-//             stake_accounts,
-//             partitioned_reward,
-//             env.slotStore(),
-//         );
-//         try std.testing.expectError(error.MissingStakeAccountInDb, result);
-//     }
+    var stakes_cache = sig.core.StakesCache.EMPTY;
+    defer stakes_cache.deinit(allocator);
 
-//     var invalid_data = [_]u8{0} ** StakeStateV2.SIZE;
-//     try env.slotStore().put(partitioned_reward.stake_pubkey, .{
-//         .lamports = 5_000_000_000,
-//         .data = &invalid_data,
-//         .owner = sig.runtime.program.stake.ID,
-//         .executable = false,
-//         .rent_epoch = 0,
-//     });
+    // Partitioned Reward
+    var partitioned_reward = sig.replay.rewards.PartitionedStakeReward{
+        .stake_pubkey = Pubkey.initRandom(random),
+        .stake = .{
+            .delegation = .{
+                .voter_pubkey = Pubkey.initRandom(random),
+                .stake = 1_000_000_000,
+                .activation_epoch = 0,
+                .deactivation_epoch = std.math.maxInt(Epoch),
+                .deprecated_warmup_cooldown_rate = 0.0,
+            },
+            .credits_observed = 0,
+        },
+        .stake_reward = 1_000_000_000,
+        .commission = 50,
+    };
 
-//     {
-//         const result = buildUpdatedStakeReward(
-//             allocator,
-//             stake_accounts,
-//             partitioned_reward,
-//             env.slotStore(),
-//         );
-//         try std.testing.expectError(error.InvalidAccountData, result);
-//     }
+    // Stake State for Distribution
+    var data = [_]u8{0} ** StakeStateV2.SIZE;
+    const stake_state = StakeStateV2{ .stake = .{
+        .meta = .{
+            .rent_exempt_reserve = 0,
+            .authorized = .{
+                .staker = Pubkey.initRandom(random),
+                .withdrawer = Pubkey.initRandom(random),
+            },
+            .lockup = .{
+                .unix_timestamp = 0,
+                .epoch = 0,
+                .custodian = Pubkey.initRandom(random),
+            },
+        },
+        .stake = partitioned_reward.stake,
+        .flags = .EMPTY,
+    } };
+    _ = try sig.bincode.writeToSlice(
+        &data,
+        stake_state,
+        .{},
+    );
+    const account = sig.runtime.AccountSharedData{
+        .lamports = 5_000_000_000,
+        .data = &data,
+        .owner = sig.runtime.program.stake.ID,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    try slot_store.put(partitioned_reward.stake_pubkey, account);
+    {
+        var stakes, var guard = stakes_cache.stakes.writeWithLock();
+        defer guard.unlock();
+        try stakes.stake_accounts.put(
+            allocator,
+            partitioned_reward.stake_pubkey,
+            partitioned_reward.stake,
+        );
+    }
 
-//     var data = [_]u8{0} ** StakeStateV2.SIZE;
-//     const stake_state = StakeStateV2{ .stake = .{
-//         .meta = .{
-//             .rent_exempt_reserve = 0,
-//             .authorized = .{
-//                 .staker = Pubkey.initRandom(random),
-//                 .withdrawer = Pubkey.initRandom(random),
-//             },
-//             .lockup = .{
-//                 .unix_timestamp = 0,
-//                 .epoch = 0,
-//                 .custodian = Pubkey.initRandom(random),
-//             },
-//         },
-//         .stake = partitioned_reward.stake,
-//         .flags = .EMPTY,
-//     } };
-//     _ = try sig.bincode.writeToSlice(
-//         &data,
-//         stake_state,
-//         .{},
-//     );
-//     try env.slotStore().put(partitioned_reward.stake_pubkey, .{
-//         .lamports = 5_000_000_000,
-//         .data = &data,
-//         .owner = sig.runtime.program.stake.ID,
-//         .executable = false,
-//         .rent_epoch = 0,
-//     });
+    partitioned_reward.stake.delegation.stake = 2_000_000_000;
+    var partition_rewards: StartBlockHeightAndPartitionedRewards = .{
+        .distribution_start_block_height = 0,
+        .partitioned_indices = try sig.replay.rewards.PartitionedIndices.init(
+            allocator,
+            try allocator.dupe(
+                []const usize,
+                &[_][]const usize{try allocator.dupe(usize, &[_]usize{0})},
+            ),
+        ),
+        .all_stake_rewards = try sig.replay.rewards.PartitionedStakeRewards.init(
+            allocator,
+            try allocator.dupe(
+                PartitionedStakeReward,
+                &[_]PartitionedStakeReward{partitioned_reward},
+            ),
+        ),
+    };
+    defer partition_rewards.deinit(allocator);
 
-//     partitioned_reward.stake.delegation.stake = 2_000_000_000;
+    const epoch_rewards = sig.runtime.sysvar.EpochRewards{
+        .distribution_starting_block_height = 0,
+        .num_partitions = 1,
+        .parent_blockhash = .ZEROES,
+        .total_points = 0,
+        .total_rewards = 1_000_000_000,
+        .distributed_rewards = 0,
+        .active = true,
+    };
+    try updateSysvarAccount(EpochRewards, allocator, epoch_rewards, .{
+        .slot = 0,
+        .capitalization = &capitalization,
+        .rent = &rent,
+        .slot_store = slot_store,
+    });
 
-//     {
-//         const result = try buildUpdatedStakeReward(
-//             allocator,
-//             stake_accounts,
-//             partitioned_reward,
-//             env.slotStore(),
-//         );
-//         defer result.deinit(allocator);
+    var epoch_reward_status = EpochRewardStatus{
+        .active = .{ .distributing = partition_rewards },
+    };
 
-//         try std.testing.expectEqual(6_000_000_000, result.stake_reward_info.post_balance);
-//     }
-// }
+    try distributePartitionedEpochRewards(
+        allocator,
+        slot,
+        epoch,
+        block_height,
+        epoch_schedule,
+        &epoch_reward_status,
+        &stakes_cache,
+        &capitalization,
+        &rent,
+        slot_store,
+    );
+}
+
+test distributeEpochRewardsInPartition {
+    const PartitionedStakeReward = sig.replay.rewards.PartitionedStakeReward;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    const slot = 0;
+    var capitalization = AtomicU64.init(0);
+    const rent = sig.core.RentCollector.DEFAULT.rent;
+
+    var ancestors = sig.core.Ancestors.EMPTY;
+    defer ancestors.deinit(allocator);
+    try ancestors.addSlot(allocator, 0);
+
+    var account_map = sig.accounts_db.account_store.ThreadSafeAccountMap.init(allocator);
+    defer account_map.deinit();
+
+    const account_store = sig.accounts_db.AccountStore{
+        .thread_safe_map = &account_map,
+    };
+    const slot_store = account_store.forSlot(0, &ancestors);
+
+    var stakes_cache = sig.core.StakesCache.EMPTY;
+    defer stakes_cache.deinit(allocator);
+
+    // Partitioned Reward
+    const partition_index: u64 = 0;
+    var partitioned_reward = sig.replay.rewards.PartitionedStakeReward{
+        .stake_pubkey = Pubkey.initRandom(random),
+        .stake = .{
+            .delegation = .{
+                .voter_pubkey = Pubkey.initRandom(random),
+                .stake = 1_000_000_000,
+                .activation_epoch = 0,
+                .deactivation_epoch = std.math.maxInt(Epoch),
+                .deprecated_warmup_cooldown_rate = 0.0,
+            },
+            .credits_observed = 0,
+        },
+        .stake_reward = 1_000_000_000,
+        .commission = 50,
+    };
+
+    // Stake State for Distribution
+    var data = [_]u8{0} ** StakeStateV2.SIZE;
+    const stake_state = StakeStateV2{ .stake = .{
+        .meta = .{
+            .rent_exempt_reserve = 0,
+            .authorized = .{
+                .staker = Pubkey.initRandom(random),
+                .withdrawer = Pubkey.initRandom(random),
+            },
+            .lockup = .{
+                .unix_timestamp = 0,
+                .epoch = 0,
+                .custodian = Pubkey.initRandom(random),
+            },
+        },
+        .stake = partitioned_reward.stake,
+        .flags = .EMPTY,
+    } };
+    _ = try sig.bincode.writeToSlice(
+        &data,
+        stake_state,
+        .{},
+    );
+    const account = sig.runtime.AccountSharedData{
+        .lamports = 5_000_000_000,
+        .data = &data,
+        .owner = sig.runtime.program.stake.ID,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    try slot_store.put(partitioned_reward.stake_pubkey, account);
+    {
+        var stakes, var guard = stakes_cache.stakes.writeWithLock();
+        defer guard.unlock();
+        try stakes.stake_accounts.put(
+            allocator,
+            partitioned_reward.stake_pubkey,
+            partitioned_reward.stake,
+        );
+    }
+
+    partitioned_reward.stake.delegation.stake = 2_000_000_000;
+    var partition_rewards: StartBlockHeightAndPartitionedRewards = .{
+        .distribution_start_block_height = 0,
+        .partitioned_indices = try sig.replay.rewards.PartitionedIndices.init(
+            allocator,
+            try allocator.dupe(
+                []const usize,
+                &[_][]const usize{try allocator.dupe(usize, &[_]usize{0})},
+            ),
+        ),
+        .all_stake_rewards = try sig.replay.rewards.PartitionedStakeRewards.init(
+            allocator,
+            try allocator.dupe(
+                PartitionedStakeReward,
+                &[_]PartitionedStakeReward{partitioned_reward},
+            ),
+        ),
+    };
+    defer partition_rewards.deinit(allocator);
+
+    const epoch_rewards = sig.runtime.sysvar.EpochRewards{
+        .distribution_starting_block_height = 0,
+        .num_partitions = 1,
+        .parent_blockhash = .ZEROES,
+        .total_points = 0,
+        .total_rewards = 1_000_000_000,
+        .distributed_rewards = 0,
+        .active = true,
+    };
+    try updateSysvarAccount(EpochRewards, allocator, epoch_rewards, .{
+        .slot = 0,
+        .capitalization = &capitalization,
+        .rent = &rent,
+        .slot_store = slot_store,
+    });
+
+    try distributeEpochRewardsInPartition(
+        allocator,
+        slot,
+        &rent,
+        partition_rewards,
+        partition_index,
+        &capitalization,
+        &stakes_cache,
+        slot_store,
+    );
+}
+
+test storeStakeAccountsInPartition {
+    const PartitionedStakeReward = sig.replay.rewards.PartitionedStakeReward;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    var ancestors = sig.core.Ancestors.EMPTY;
+    defer ancestors.deinit(allocator);
+    try ancestors.addSlot(allocator, 0);
+
+    // Partitioned Reward
+    var partitioned_reward = sig.replay.rewards.PartitionedStakeReward{
+        .stake_pubkey = Pubkey.initRandom(random),
+        .stake = .{
+            .delegation = .{
+                .voter_pubkey = Pubkey.initRandom(random),
+                .stake = 1_000_000_000,
+                .activation_epoch = 0,
+                .deactivation_epoch = std.math.maxInt(Epoch),
+                .deprecated_warmup_cooldown_rate = 0.0,
+            },
+            .credits_observed = 0,
+        },
+        .stake_reward = 1_000_000_000,
+        .commission = 50,
+    };
+
+    {
+        // Partitioned Rewards
+        const partition_index: u64 = 0;
+        var partition_rewards: StartBlockHeightAndPartitionedRewards = .{
+            .distribution_start_block_height = 0,
+            .partitioned_indices = try sig.replay.rewards.PartitionedIndices.init(
+                allocator,
+                try allocator.dupe(
+                    []const usize,
+                    &[_][]const usize{try allocator.dupe(usize, &[_]usize{0})},
+                ),
+            ),
+            .all_stake_rewards = try sig.replay.rewards.PartitionedStakeRewards.init(
+                allocator,
+                try allocator.dupe(
+                    PartitionedStakeReward,
+                    &[_]PartitionedStakeReward{partitioned_reward},
+                ),
+            ),
+        };
+        defer partition_rewards.deinit(allocator);
+
+        var account_map = sig.accounts_db.account_store.ThreadSafeAccountMap.init(allocator);
+        defer account_map.deinit();
+
+        const account_store = sig.accounts_db.AccountStore{
+            .thread_safe_map = &account_map,
+        };
+        const slot_store = account_store.forSlot(0, &ancestors);
+
+        var stakes_cache = sig.core.StakesCache.EMPTY;
+        defer stakes_cache.deinit(allocator);
+
+        const result = try storeStakeAccountsInPartition(
+            allocator,
+            partition_rewards,
+            partition_index,
+            &stakes_cache,
+            slot_store,
+            null,
+        );
+        std.debug.print("result: {any}\n", .{result});
+    }
+
+    {
+        var account_map = sig.accounts_db.account_store.ThreadSafeAccountMap.init(allocator);
+        defer account_map.deinit();
+
+        const account_store = sig.accounts_db.AccountStore{
+            .thread_safe_map = &account_map,
+        };
+        const slot_store = account_store.forSlot(0, &ancestors);
+
+        var stakes_cache = sig.core.StakesCache.EMPTY;
+        defer stakes_cache.deinit(allocator);
+
+        // Stake State for Distribution
+        var data = [_]u8{0} ** StakeStateV2.SIZE;
+        const stake_state = StakeStateV2{ .stake = .{
+            .meta = .{
+                .rent_exempt_reserve = 0,
+                .authorized = .{
+                    .staker = Pubkey.initRandom(random),
+                    .withdrawer = Pubkey.initRandom(random),
+                },
+                .lockup = .{
+                    .unix_timestamp = 0,
+                    .epoch = 0,
+                    .custodian = Pubkey.initRandom(random),
+                },
+            },
+            .stake = partitioned_reward.stake,
+            .flags = .EMPTY,
+        } };
+        _ = try sig.bincode.writeToSlice(
+            &data,
+            stake_state,
+            .{},
+        );
+        const account = sig.runtime.AccountSharedData{
+            .lamports = 5_000_000_000,
+            .data = &data,
+            .owner = sig.runtime.program.stake.ID,
+            .executable = false,
+            .rent_epoch = 0,
+        };
+        try slot_store.put(partitioned_reward.stake_pubkey, account);
+
+        // Partitioned Rewards
+        const partition_index: u64 = 0;
+        partitioned_reward.stake.delegation.stake = 2_000_000_000;
+        var partition_rewards: StartBlockHeightAndPartitionedRewards = .{
+            .distribution_start_block_height = 0,
+            .partitioned_indices = try sig.replay.rewards.PartitionedIndices.init(
+                allocator,
+                try allocator.dupe(
+                    []const usize,
+                    &[_][]const usize{try allocator.dupe(usize, &[_]usize{0})},
+                ),
+            ),
+            .all_stake_rewards = try sig.replay.rewards.PartitionedStakeRewards.init(
+                allocator,
+                try allocator.dupe(
+                    PartitionedStakeReward,
+                    &[_]PartitionedStakeReward{partitioned_reward},
+                ),
+            ),
+        };
+        defer partition_rewards.deinit(allocator);
+
+        {
+            var stakes, var guard = stakes_cache.stakes.writeWithLock();
+            defer guard.unlock();
+            try stakes.stake_accounts.put(
+                allocator,
+                partitioned_reward.stake_pubkey,
+                partitioned_reward.stake,
+            );
+        }
+
+        const result = try storeStakeAccountsInPartition(
+            allocator,
+            partition_rewards,
+            partition_index,
+            &stakes_cache,
+            slot_store,
+            null,
+        );
+        defer {
+            for (result[2]) |sr| sr.deinit(allocator);
+            allocator.free(result[2]);
+        }
+    }
+}
+
+test buildUpdatedStakeReward {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    var ancestors = sig.core.Ancestors.EMPTY;
+    defer ancestors.deinit(allocator);
+    try ancestors.addSlot(allocator, 0);
+
+    var account_map = sig.accounts_db.account_store.ThreadSafeAccountMap.init(allocator);
+    defer account_map.deinit();
+
+    const account_store = sig.accounts_db.AccountStore{
+        .thread_safe_map = &account_map,
+    };
+    const slot_store = account_store.forSlot(0, &ancestors);
+
+    var partitioned_reward = sig.replay.rewards.PartitionedStakeReward{
+        .stake_pubkey = Pubkey.initRandom(random),
+        .stake = .{
+            .delegation = .{
+                .voter_pubkey = Pubkey.initRandom(random),
+                .stake = 1_000_000_000,
+                .activation_epoch = 0,
+                .deactivation_epoch = std.math.maxInt(Epoch),
+                .deprecated_warmup_cooldown_rate = 0.0,
+            },
+            .credits_observed = 0,
+        },
+        .stake_reward = 1_000_000_000,
+        .commission = 50,
+    };
+
+    var stake_accounts = std.AutoArrayHashMapUnmanaged(Pubkey, Stake).empty;
+    defer stake_accounts.deinit(allocator);
+
+    {
+        const result = buildUpdatedStakeReward(
+            allocator,
+            stake_accounts,
+            partitioned_reward,
+            slot_store,
+        );
+        try std.testing.expectError(error.MissingStakeAccountInCache, result);
+    }
+
+    try stake_accounts.put(allocator, partitioned_reward.stake_pubkey, partitioned_reward.stake);
+
+    {
+        const result = buildUpdatedStakeReward(
+            allocator,
+            stake_accounts,
+            partitioned_reward,
+            slot_store,
+        );
+        try std.testing.expectError(error.MissingStakeAccountInDb, result);
+    }
+
+    var invalid_data = [_]u8{0} ** StakeStateV2.SIZE;
+    try slot_store.put(partitioned_reward.stake_pubkey, .{
+        .lamports = 5_000_000_000,
+        .data = &invalid_data,
+        .owner = sig.runtime.program.stake.ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    {
+        const result = buildUpdatedStakeReward(
+            allocator,
+            stake_accounts,
+            partitioned_reward,
+            slot_store,
+        );
+        try std.testing.expectError(error.InvalidAccountData, result);
+    }
+
+    var data = [_]u8{0} ** StakeStateV2.SIZE;
+    const stake_state = StakeStateV2{ .stake = .{
+        .meta = .{
+            .rent_exempt_reserve = 0,
+            .authorized = .{
+                .staker = Pubkey.initRandom(random),
+                .withdrawer = Pubkey.initRandom(random),
+            },
+            .lockup = .{
+                .unix_timestamp = 0,
+                .epoch = 0,
+                .custodian = Pubkey.initRandom(random),
+            },
+        },
+        .stake = partitioned_reward.stake,
+        .flags = .EMPTY,
+    } };
+    _ = try sig.bincode.writeToSlice(
+        &data,
+        stake_state,
+        .{},
+    );
+    try slot_store.put(partitioned_reward.stake_pubkey, .{
+        .lamports = 5_000_000_000,
+        .data = &data,
+        .owner = sig.runtime.program.stake.ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    partitioned_reward.stake.delegation.stake = 2_000_000_000;
+
+    {
+        const result = try buildUpdatedStakeReward(
+            allocator,
+            stake_accounts,
+            partitioned_reward,
+            slot_store,
+        );
+        defer result.deinit(allocator);
+
+        try std.testing.expectEqual(6_000_000_000, result.stake_reward_info.post_balance);
+    }
+}

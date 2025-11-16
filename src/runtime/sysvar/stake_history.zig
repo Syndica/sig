@@ -165,3 +165,28 @@ test "serialize and deserialize" {
         );
     }
 }
+
+test "insert and add" {
+    var stake_history: StakeHistory = .INIT;
+
+    try stake_history.insertEntry(1, .{ .effective = 10, .activating = 5, .deactivating = 2 });
+    try stake_history.insertEntry(3, .{ .effective = 20, .activating = 10, .deactivating = 4 });
+    try stake_history.insertEntry(2, .{ .effective = 15, .activating = 7, .deactivating = 3 });
+
+    try std.testing.expectEqual(3, stake_history.entries.len);
+
+    const entry_2 = stake_history.getEntry(2) orelse unreachable;
+    try std.testing.expectEqual(15, entry_2.stake.effective);
+    try std.testing.expectEqual(7, entry_2.stake.activating);
+    try std.testing.expectEqual(3, entry_2.stake.deactivating);
+
+    var stake_2 = entry_2.stake;
+    stake_2.add(.{
+        .effective = 10,
+        .activating = 5,
+        .deactivating = 1,
+    });
+    try std.testing.expectEqual(25, stake_2.effective);
+    try std.testing.expectEqual(12, stake_2.activating);
+    try std.testing.expectEqual(4, stake_2.deactivating);
+}
