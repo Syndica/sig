@@ -123,12 +123,12 @@ pub fn getEpochStakes(
     leader_schedule_epoch: Epoch,
     stakes_cache: *StakesCache,
 ) !EpochStakes {
-    const stakes = blk: {
+    const new_stakes = blk: {
         const stakes, var stakes_lg = stakes_cache.stakes.readWithLock();
         defer stakes_lg.unlock();
-        break :blk try stakes.clone(allocator);
+        break :blk try stakes.convert(allocator, .delegation);
     };
-    const epoch_vote_accounts = stakes.vote_accounts.vote_accounts;
+    const epoch_vote_accounts = new_stakes.vote_accounts.vote_accounts;
 
     var node_id_to_vote_accounts = std.AutoArrayHashMapUnmanaged(
         Pubkey,
@@ -162,8 +162,6 @@ pub fn getEpochStakes(
             }
         }
     }
-
-    const new_stakes = try stakes.convert(allocator, .delegation);
 
     return .{
         .stakes = new_stakes,
@@ -209,18 +207,14 @@ pub fn applyFeatureActivations(
         }
     }
 
-    // Update active set of reserved account keys which are not allowed to be write locked
     slot_constants.reserved_accounts.update(feature_set, slot);
 
     const epoch_constants = epoch_tracker.getMutablePtrForSlot(slot).?;
-
-    // Activate pico inflation if it is in the newly activated set
     if (new_feature_activations.active(.pico_inflation, slot)) {
         slot_constants.inflation = .PICO;
         slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
         epoch_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.
     }
-
     if (feature_set
         .fullInflationFeatures(slot)
         .enabled(new_feature_activations, slot))
@@ -230,9 +224,6 @@ pub fn applyFeatureActivations(
         epoch_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.
     }
 
-    // Apply built-in program feature transitions
-    // Agave provides an option to not apply builtin program transitions, we can add this later if needed.
-    // TODO: migrateBuiltinProgramToCoreBpf
     try applyBuiltinProgramFeatureTransitions(
         allocator,
         slot,
@@ -248,7 +239,6 @@ pub fn applyFeatureActivations(
         // TODO: Implement
         return error.RaiseBlockLimitsTo100MActivationNotImplemented;
     }
-
     if (new_feature_activations.active(.raise_account_cu_limit, slot)) {
         // TODO: Implement
         return error.RaiseAccountCuLimitActivationNotImplemented;
@@ -792,10 +782,163 @@ const TestEnvironment = struct {
     }
 };
 
-test "applyFeatureActivations: activate pico inflation" {
+test updateEpochStakes {
+    const allocator = std.testing.allocator;
+    const VoteAccount = sig.core.stakes.VoteAccount;
+    const createTestVoteAccount = sig.runtime.program.vote.state.createTestVoteAccount;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const leader_schedule_epoch: Epoch = 1;
+    var stakes_cache = StakesCache.EMPTY;
+    defer stakes_cache.deinit(allocator);
+
+    var epoch_tracker: EpochTracker = .{ .schedule = .INIT };
+    defer epoch_tracker.deinit(allocator);
+    try epoch_tracker.put(
+        allocator,
+        0,
+        EpochConstants.genesis(sig.core.GenesisConfig.default(allocator)),
+    );
+
+    { // Empty stakes
+        try updateEpochStakes(
+            allocator,
+            0,
+            0,
+            &stakes_cache,
+            &epoch_tracker,
+        );
+
+        const epoch_constants = epoch_tracker.getMutablePtrForSlot(1).?;
+        try std.testing.expectEqual(0, epoch_constants.stakes.total_stake);
+
+        _ = epoch_tracker.epochs.swapRemove(1);
+    }
+
+    // Insert some stakes
+    var expected_total_stake: u64 = 0;
+    {
+        const stakes, var stakes_lg = stakes_cache.stakes.writeWithLock();
+        defer stakes_lg.unlock();
+
+        for (0..5) |_| {
+            const raw_vote_account = try createTestVoteAccount(
+                allocator,
+                Pubkey.initRandom(random),
+                Pubkey.initRandom(random),
+                10,
+                1,
+                leader_schedule_epoch,
+            );
+            defer raw_vote_account.deinit(allocator);
+
+            const stake = random.intRangeAtMost(u64, 1, 1_000_000_000_000);
+            const vote_account = try VoteAccount.fromAccountSharedData(
+                allocator,
+                raw_vote_account,
+            );
+
+            expected_total_stake += stake;
+            try stakes.vote_accounts.vote_accounts.put(
+                allocator,
+                Pubkey.initRandom(random),
+                .{
+                    .stake = stake,
+                    .account = vote_account,
+                },
+            );
+        }
+    }
+
+    { // Non-Empty stakes
+        try updateEpochStakes(
+            allocator,
+            1,
+            0,
+            &stakes_cache,
+            &epoch_tracker,
+        );
+        const epoch_constants = epoch_tracker.get(1).?;
+        try std.testing.expectEqual(expected_total_stake, epoch_constants.stakes.total_stake);
+    }
+}
+
+test getEpochStakes {
+    const allocator = std.testing.allocator;
+    const VoteAccount = sig.core.stakes.VoteAccount;
+    const createTestVoteAccount = sig.runtime.program.vote.state.createTestVoteAccount;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const leader_schedule_epoch: Epoch = 1;
+    var stakes_cache = StakesCache.EMPTY;
+    defer stakes_cache.deinit(allocator);
+
+    { // Empty stakes
+        const epoch_stakes = try getEpochStakes(
+            allocator,
+            leader_schedule_epoch,
+            &stakes_cache,
+        );
+        defer epoch_stakes.deinit(allocator);
+
+        try std.testing.expectEqual(0, epoch_stakes.total_stake);
+    }
+
+    // Insert some stakes
+    var expected_total_stake: u64 = 0;
+    {
+        const stakes, var stakes_lg = stakes_cache.stakes.writeWithLock();
+        defer stakes_lg.unlock();
+
+        for (0..5) |_| {
+            const raw_vote_account = try createTestVoteAccount(
+                allocator,
+                Pubkey.initRandom(random),
+                Pubkey.initRandom(random),
+                10,
+                1,
+                leader_schedule_epoch,
+            );
+            defer raw_vote_account.deinit(allocator);
+
+            const stake = random.intRangeAtMost(u64, 1, 1_000_000_000_000);
+            const vote_account = try VoteAccount.fromAccountSharedData(
+                allocator,
+                raw_vote_account,
+            );
+
+            expected_total_stake += stake;
+            try stakes.vote_accounts.vote_accounts.put(
+                allocator,
+                Pubkey.initRandom(random),
+                .{
+                    .stake = stake,
+                    .account = vote_account,
+                },
+            );
+        }
+    }
+
+    { // Non-Empty stakes
+        const epoch_stakes = try getEpochStakes(
+            allocator,
+            leader_schedule_epoch,
+            &stakes_cache,
+        );
+        defer epoch_stakes.deinit(allocator);
+
+        try std.testing.expectEqual(expected_total_stake, epoch_stakes.total_stake);
+    }
+}
+
+test "applyFeatureActivations: basic activations" {
     const allocator = std.testing.allocator;
 
-    {
+    { // Test PICO inflation activation - new activation
         const slot: Slot = 0;
 
         var env = try TestEnvironment.init(allocator);
@@ -827,7 +970,6 @@ test "applyFeatureActivations: activate pico inflation" {
             env.epoch_tracker.getPtrForSlot(slot).?.rent_collector.rent.burn_percent,
         );
 
-        // Test PICO inflation activation - null in feature
         try env.insertFeatureAccount(allocator, slot, 1, .pico_inflation, null);
 
         // Don't allow new activations
@@ -876,7 +1018,7 @@ test "applyFeatureActivations: activate pico inflation" {
         );
     }
 
-    {
+    { // Test PICO inflation activation - already activated
         const slot: Slot = 0;
 
         var env = try TestEnvironment.init(allocator);
@@ -887,7 +1029,6 @@ test "applyFeatureActivations: activate pico inflation" {
         const initial_rent_collector = env.epoch_tracker.getPtrForSlot(slot).?.rent_collector;
         const initial_fee_rate_governor = env.slot_constants.fee_rate_governor;
 
-        // Test PICO inflation activation - feature slot 1
         try env.insertFeatureAccount(allocator, slot, 1, .pico_inflation, 1);
 
         // Allow new activations
@@ -914,4 +1055,170 @@ test "applyFeatureActivations: activate pico inflation" {
             env.epoch_tracker.getPtrForSlot(slot).?.rent_collector.rent.burn_percent,
         );
     }
+
+    { // Full inflation activation - new activation
+        const slot: Slot = 0;
+
+        var env = try TestEnvironment.init(allocator);
+        defer env.deinit(allocator);
+        try env.ancestors.addSlot(allocator, slot);
+
+        // Test full inflation activation - feature slot 1
+        try env.insertFeatureAccount(allocator, slot, 1, .full_inflation_mainnet_enable, null);
+        try env.insertFeatureAccount(allocator, slot, 1, .full_inflation_mainnet_vote, null);
+
+        // Allow new activations
+        try applyFeatureActivations(
+            allocator,
+            slot,
+            &env.slot_constants,
+            &env.slot_state,
+            env.slotAccountStore(slot),
+            &env.epoch_tracker,
+            true,
+        );
+        try std.testing.expectEqual(
+            0,
+            env.slot_constants.feature_set.get(.full_inflation_mainnet_enable),
+        );
+        try std.testing.expectEqual(
+            0,
+            env.slot_constants.feature_set.get(.full_inflation_mainnet_vote),
+        );
+        try std.testing.expectEqual(
+            sig.core.genesis_config.Inflation.FULL,
+            env.slot_constants.inflation,
+        );
+        try std.testing.expectEqual(50, env.slot_constants.fee_rate_governor.burn_percent);
+        try std.testing.expectEqual(
+            50,
+            env.epoch_tracker.getPtrForSlot(slot).?.rent_collector.rent.burn_percent,
+        );
+    }
+
+    { // Error on raize block limits
+        const slot: Slot = 0;
+
+        var env = try TestEnvironment.init(allocator);
+        defer env.deinit(allocator);
+        try env.ancestors.addSlot(allocator, slot);
+
+        // Test full inflation activation - feature slot 1
+        try env.insertFeatureAccount(allocator, slot, 1, .raise_block_limits_to_100m, null);
+
+        // Allow new activations
+        const err = applyFeatureActivations(
+            allocator,
+            slot,
+            &env.slot_constants,
+            &env.slot_state,
+            env.slotAccountStore(slot),
+            &env.epoch_tracker,
+            true,
+        );
+        try std.testing.expectError(
+            error.RaiseBlockLimitsTo100MActivationNotImplemented,
+            err,
+        );
+    }
+
+    { // Error on raise account CU limit
+        const slot: Slot = 0;
+
+        var env = try TestEnvironment.init(allocator);
+        defer env.deinit(allocator);
+        try env.ancestors.addSlot(allocator, slot);
+
+        // Test full inflation activation - feature slot 1
+        try env.insertFeatureAccount(allocator, slot, 1, .raise_account_cu_limit, null);
+
+        // Allow new activations
+        const err = applyFeatureActivations(
+            allocator,
+            slot,
+            &env.slot_constants,
+            &env.slot_state,
+            env.slotAccountStore(slot),
+            &env.epoch_tracker,
+            true,
+        );
+        try std.testing.expectError(
+            error.RaiseAccountCuLimitActivationNotImplemented,
+            err,
+        );
+    }
+}
+
+test "applyFeatureActivations: Builtin Transitions" {
+    const allocator = std.testing.allocator;
+
+    const slot: Slot = 0;
+
+    var env = try TestEnvironment.init(allocator);
+    defer env.deinit(allocator);
+    try env.ancestors.addSlot(allocator, slot);
+
+    // Set address lookup table migration feature
+    try env.insertFeatureAccount(
+        allocator,
+        slot,
+        1,
+        .migrate_address_lookup_table_program_to_core_bpf,
+        null,
+    );
+
+    // Should be noop since the account doesn't exist yet
+    try applyFeatureActivations(
+        allocator,
+        slot,
+        &env.slot_constants,
+        &env.slot_state,
+        env.slotAccountStore(slot),
+        &env.epoch_tracker,
+        true,
+    );
+
+    // Get the builtin program info
+    const builtin_program = for (builtin_programs.BUILTINS) |bp| {
+        if (bp.program_id.equals(&sig.runtime.program.address_lookup_table.ID)) break bp;
+    } else unreachable;
+
+    // Attempt migration - should fail since account doesn't exist
+    try std.testing.expectError(error.AccountNotFound, migrateBuiltinProgramToCoreBpf(
+        allocator,
+        slot,
+        env.slotAccountStore(slot),
+        &env.slot_state.capitalization,
+        env.epoch_tracker.getPtrForSlot(slot).?,
+        &env.slot_constants.feature_set,
+        builtin_program.program_id,
+        builtin_program.core_bpf_migration_config.?,
+        .builtin,
+    ));
+
+    // Store invalid account - Incorrect Owner
+    try env.slotAccountStore(0).put(
+        builtin_program.program_id,
+        AccountSharedData{
+            .lamports = 1,
+            .data = &.{},
+            .executable = false,
+            .owner = .ZEROES,
+            .rent_epoch = 0,
+        },
+    );
+    try std.testing.expectError(error.IncorrectOwner, migrateBuiltinProgramToCoreBpf(
+        allocator,
+        slot,
+        env.slotAccountStore(slot),
+        &env.slot_state.capitalization,
+        env.epoch_tracker.getPtrForSlot(slot).?,
+        &env.slot_constants.feature_set,
+        builtin_program.program_id,
+        builtin_program.core_bpf_migration_config.?,
+        .builtin,
+    ));
+
+    // TODO: Full migration tests
+    // Store program data account, store buffer account, perform migration, verify results.
 }
