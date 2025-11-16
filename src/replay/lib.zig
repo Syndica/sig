@@ -2,6 +2,7 @@ pub const AccountLocks = @import("AccountLocks.zig");
 pub const exec_async = @import("exec_async.zig");
 pub const Committer = @import("Committer.zig");
 pub const consensus = @import("consensus/lib.zig");
+pub const epoch_transitions = @import("epoch_transitions.zig");
 pub const execution = @import("execution.zig");
 pub const freeze = @import("freeze.zig");
 pub const preprocess_transaction = @import("preprocess_transaction.zig");
@@ -14,6 +15,3 @@ pub const update_sysvar = @import("update_sysvar.zig");
 
 pub const Dependencies = service.Dependencies;
 pub const TowerConsensus = consensus.TowerConsensus;
-
-pub const epoch_transitions = @import("epoch_transitions.zig");
-pub const slot_account_store = @import("slot_account_store.zig");

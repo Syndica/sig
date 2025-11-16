@@ -370,22 +370,16 @@ pub fn trackNewSlots(
 
             const parent_epoch = epoch_tracker.schedule.getEpoch(parent_slot);
             const slot_epoch = epoch_tracker.schedule.getEpoch(slot);
-
-            const slot_store = sig.replay.slot_account_store.SlotAccountStore.init(
-                slot,
-                &state,
-                account_store,
-                &constants.ancestors,
-            );
+            const store = account_store.forSlot(slot, &constants.ancestors);
 
             if (parent_epoch < slot_epoch) {
                 try replay.epoch_transitions.processNewEpoch(
                     allocator,
                     slot,
-                    &state,
                     &constants,
+                    &state,
+                    store,
                     epoch_tracker,
-                    slot_store,
                 );
             } else {
                 try replay.epoch_transitions.updateEpochStakes(
@@ -409,9 +403,8 @@ pub fn trackNewSlots(
                 &state.reward_status,
                 &state.stakes_cache,
                 &state.capitalization,
-                &constants.ancestors,
                 &epoch_info.rent_collector.rent,
-                slot_store,
+                store,
             );
 
             try updateSysvarsForNewSlot(

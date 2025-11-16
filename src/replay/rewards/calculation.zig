@@ -4,6 +4,8 @@ const sig = @import("../../sig.zig");
 const Allocator = std.mem.Allocator;
 const AtomicU64 = std.atomic.Value(u64);
 
+const SlotAccountStore = sig.accounts_db.SlotAccountStore;
+
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
@@ -13,13 +15,15 @@ const FeatureSet = sig.core.FeatureSet;
 const Inflation = sig.core.Inflation;
 const VoteAccounts = sig.core.stakes.VoteAccounts;
 const VoteAccount = sig.core.stakes.VoteAccount;
-const VoteState = sig.runtime.program.vote.state.VoteState;
+const SlotState = sig.core.SlotState;
+const SlotConstants = sig.core.SlotConstants;
 const Stakes = sig.core.Stakes;
-const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
 const StakesCache = sig.core.stakes.StakesCacheGeneric(.stake);
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
+const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
+const VoteState = sig.runtime.program.vote.state.VoteState;
 
 const PreviousEpochInflationRewards = sig.replay.rewards.PreviousEpochInflationRewards;
 const ValidatorRewards = sig.replay.rewards.ValidatorRewards;
@@ -31,11 +35,6 @@ const PartitionedStakeRewards = sig.replay.rewards.PartitionedStakeRewards;
 const PartitionedVoteReward = sig.replay.rewards.PartitionedVoteReward;
 const RewardsForPartitioning = sig.replay.rewards.RewardsForPartitioning;
 const EpochTracker = sig.replay.trackers.EpochTracker;
-
-const SlotState = sig.core.SlotState;
-const SlotConstants = sig.core.SlotConstants;
-
-const SlotAccountStore = @import("../slot_account_store.zig").SlotAccountStore;
 
 const redeemRewards = sig.replay.rewards.inflation_rewards.redeemRewards;
 const calculatePoints = sig.replay.rewards.inflation_rewards.calculatePoints;
@@ -49,11 +48,11 @@ const updateSysvarAccount = sig.replay.update_sysvar.updateSysvarAccount;
 pub fn beginPartitionedRewards(
     allocator: Allocator,
     slot: Slot,
-    slot_state: *SlotState,
     /// These are not constant until we process the new epoch
     slot_constants: *SlotConstants,
-    epoch_tracker: *EpochTracker,
+    slot_state: *SlotState,
     slot_store: SlotAccountStore,
+    epoch_tracker: *EpochTracker,
 ) !void {
     const epoch = epoch_tracker.schedule.getEpoch(slot);
     const parent_epoch = epoch_tracker.schedule.getEpoch(slot_constants.parent_slot);
@@ -84,6 +83,7 @@ pub fn beginPartitionedRewards(
             epoch,
             slots_per_year,
             parent_epoch,
+            slot_state,
             previous_epoch_capitalization,
             epoch_schedule,
             feature_set,
@@ -117,11 +117,10 @@ pub fn beginPartitionedRewards(
         num_partitions,
         blockhash_queue.last_hash orelse return error.NoLastBlockhashInBlockhashQueue,
         .{
-            .account_store = slot_store.writer,
-            .capitalization = &slot_state.capitalization,
-            .ancestors = &slot_constants.ancestors,
-            .rent = &epoch_constants.rent_collector.rent,
             .slot = slot,
+            .slot_store = slot_store,
+            .capitalization = &slot_state.capitalization,
+            .rent = &epoch_constants.rent_collector.rent,
         },
     );
 }
@@ -186,6 +185,7 @@ fn calculateRewardsAndDistributeVoteRewards(
     epoch: Epoch,
     slots_per_year: f64,
     previous_epoch: Epoch,
+    slot_state: *SlotState,
     capitalization: *AtomicU64,
     epoch_schedule: *const EpochSchedule,
     feature_set: *const FeatureSet,
@@ -218,6 +218,7 @@ fn calculateRewardsAndDistributeVoteRewards(
     try storeVoteAccountsPartitioned(
         allocator,
         slot_store,
+        slot_state,
         rewards_for_partitioning.vote_rewards.vote_rewards.entries,
         new_warmup_and_cooldown_rate_epoch,
     );
@@ -244,11 +245,12 @@ fn calculateRewardsAndDistributeVoteRewards(
 fn storeVoteAccountsPartitioned(
     allocator: Allocator,
     slot_store: SlotAccountStore,
+    slot_state: *SlotState,
     vote_rewards: []const PartitionedVoteReward,
     new_warmup_and_cooldown_rate_epoch: ?Epoch,
 ) !void {
     for (vote_rewards) |vote_reward| {
-        const account = (try slot_store.get(allocator, vote_reward.vote_pubkey)) orelse
+        const account = (try slot_store.reader().get(allocator, vote_reward.vote_pubkey)) orelse
             return error.MissingVoteAccount;
         defer account.deinit(allocator);
 
@@ -257,7 +259,7 @@ fn storeVoteAccountsPartitioned(
 
         account_shared_data.lamports = vote_reward.account.lamports;
 
-        try slot_store.state.stakes_cache.checkAndStore(
+        try slot_state.stakes_cache.checkAndStore(
             allocator,
             vote_reward.vote_pubkey,
             account_shared_data,

@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
-const AtomicU64 = std.atomic.Value(u64);
+const Atomic = std.atomic.Value;
 
 const bincode = sig.bincode;
 const features = sig.core.features;
@@ -10,6 +10,7 @@ const program = sig.runtime.program;
 const builtin_programs = sig.runtime.program.builtin_programs;
 
 const AccountStore = sig.accounts_db.AccountStore;
+const SlotAccountStore = sig.accounts_db.SlotAccountStore;
 const AccountSharedData = sig.runtime.AccountSharedData;
 
 const Ancestors = sig.core.Ancestors;
@@ -25,7 +26,6 @@ const EpochConstants = sig.core.EpochConstants;
 const FeatureSet = sig.core.FeatureSet;
 
 const EpochTracker = sig.replay.trackers.EpochTracker;
-const SlotAccountStore = sig.replay.slot_account_store.SlotAccountStore;
 
 const beginPartitionedRewards = sig.replay.rewards.calculation.beginPartitionedRewards;
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
@@ -38,17 +38,18 @@ const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 pub fn processNewEpoch(
     allocator: Allocator,
     slot: Slot,
-    slot_state: *SlotState,
-    /// These are not constant until we process the new epoch
     slot_constants: *SlotConstants,
-    epoch_tracker: *EpochTracker,
+    slot_state: *SlotState,
     slot_store: SlotAccountStore,
+    epoch_tracker: *EpochTracker,
 ) !void {
     try applyFeatureActivations(
         allocator,
+        slot,
+        slot_constants,
+        slot_state,
         slot_store,
         epoch_tracker,
-        slot_constants,
         true, // allow_new_activations
     );
 
@@ -74,10 +75,10 @@ pub fn processNewEpoch(
     try beginPartitionedRewards(
         allocator,
         slot,
-        slot_state,
         slot_constants,
-        epoch_tracker,
+        slot_state,
         slot_store,
+        epoch_tracker,
     );
 }
 
@@ -175,9 +176,11 @@ pub fn getEpochStakes(
 /// https://github.com/anza-xyz/agave/blob/v3.0.0/runtime/src/bank.rs#L5332
 pub fn applyFeatureActivations(
     allocator: Allocator,
+    slot: Slot,
+    slot_constants: *SlotConstants,
+    slot_state: *SlotState,
     slot_store: SlotAccountStore,
     epoch_tracker: *EpochTracker,
-    slot_constants: *SlotConstants,
     allow_new_activations: bool,
 ) !void {
     // Iterate through the inactive features and:
@@ -189,16 +192,16 @@ pub fn applyFeatureActivations(
     //    and writing it back to the accounts db.
     const feature_set = &slot_constants.feature_set;
     var new_feature_activations = FeatureSet.ALL_DISABLED;
-    var inactive_iterator = feature_set.iterator(slot_store.slot, .inactive);
+    var inactive_iterator = feature_set.iterator(slot, .inactive);
     while (inactive_iterator.next()) |feature| {
         const feature_id: Pubkey = features.map.get(feature).key;
-        if (try slot_store.get(allocator, feature_id)) |feature_account| {
+        if (try slot_store.reader().get(allocator, feature_id)) |feature_account| {
             defer feature_account.deinit(allocator);
             if (try featureActivationSlotFromAccount(feature_account)) |activation_slot| {
                 feature_set.setSlot(feature, activation_slot);
             } else if (allow_new_activations) {
-                feature_set.setSlot(feature, slot_store.slot);
-                new_feature_activations.setSlot(feature, slot_store.slot);
+                feature_set.setSlot(feature, slot);
+                new_feature_activations.setSlot(feature, slot);
                 const account = try AccountSharedData.fromAccount(allocator, &feature_account);
                 defer allocator.free(account.data);
                 try slot_store.put(feature_id, account);
@@ -207,20 +210,20 @@ pub fn applyFeatureActivations(
     }
 
     // Update active set of reserved account keys which are not allowed to be write locked
-    slot_constants.reserved_accounts.update(feature_set, slot_store.slot);
+    slot_constants.reserved_accounts.update(feature_set, slot);
 
-    const epoch_constants = epoch_tracker.getMutablePtrForSlot(slot_store.slot).?;
+    const epoch_constants = epoch_tracker.getMutablePtrForSlot(slot).?;
 
     // Activate pico inflation if it is in the newly activated set
-    if (new_feature_activations.active(.pico_inflation, slot_store.slot)) {
+    if (new_feature_activations.active(.pico_inflation, slot)) {
         slot_constants.inflation = .PICO;
         slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
         epoch_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.
     }
 
     if (feature_set
-        .fullInflationFeatures(slot_store.slot)
-        .enabled(new_feature_activations, slot_store.slot))
+        .fullInflationFeatures(slot)
+        .enabled(new_feature_activations, slot))
     {
         slot_constants.inflation = .FULL;
         slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
@@ -232,6 +235,8 @@ pub fn applyFeatureActivations(
     // TODO: migrateBuiltinProgramToCoreBpf
     try applyBuiltinProgramFeatureTransitions(
         allocator,
+        slot,
+        slot_state,
         slot_store,
         epoch_constants,
         feature_set,
@@ -239,12 +244,12 @@ pub fn applyFeatureActivations(
         allow_new_activations,
     );
 
-    if (new_feature_activations.active(.raise_block_limits_to_100m, slot_store.slot)) {
+    if (new_feature_activations.active(.raise_block_limits_to_100m, slot)) {
         // TODO: Implement
         return error.RaiseBlockLimitsTo100MActivationNotImplemented;
     }
 
-    if (new_feature_activations.active(.raise_account_cu_limit, slot_store.slot)) {
+    if (new_feature_activations.active(.raise_account_cu_limit, slot)) {
         // TODO: Implement
         return error.RaiseAccountCuLimitActivationNotImplemented;
     }
@@ -254,6 +259,8 @@ pub fn applyFeatureActivations(
 /// [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L5451
 fn applyBuiltinProgramFeatureTransitions(
     allocator: Allocator,
+    slot: Slot,
+    slot_state: *SlotState,
     slot_store: SlotAccountStore,
     epoch_constants: *const EpochConstants,
     feature_set: *const FeatureSet,
@@ -264,11 +271,13 @@ fn applyBuiltinProgramFeatureTransitions(
         // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L5473-L5498
         var is_core_bpf = false;
         if (builtin_program.core_bpf_migration_config) |core_bpf_config| {
-            if (new_feature_activations.active(core_bpf_config.enable_feature_id, slot_store.slot)) {
+            if (new_feature_activations.active(core_bpf_config.enable_feature_id, slot)) {
                 is_core_bpf = true;
                 migrateBuiltinProgramToCoreBpf(
                     allocator,
+                    slot,
                     slot_store,
+                    &slot_state.capitalization,
                     epoch_constants,
                     feature_set,
                     builtin_program.program_id,
@@ -279,7 +288,7 @@ fn applyBuiltinProgramFeatureTransitions(
                     is_core_bpf = false;
                 };
             } else {
-                if (try slot_store.get(allocator, builtin_program.program_id)) |account| {
+                if (try slot_store.reader().get(allocator, builtin_program.program_id)) |account| {
                     defer account.deinit(allocator);
                     is_core_bpf = account.owner.equals(&program.bpf_loader.v3.ID);
                 } else is_core_bpf = false;
@@ -289,14 +298,16 @@ fn applyBuiltinProgramFeatureTransitions(
         // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L5500-L5520
         if (builtin_program.enable_feature_id) |feature_id| {
             const should_enable_on_transition = !is_core_bpf and if (allow_new_activations)
-                new_feature_activations.active(feature_id, slot_store.slot)
+                new_feature_activations.active(feature_id, slot)
             else
-                feature_set.active(feature_id, slot_store.slot);
+                feature_set.active(feature_id, slot);
 
             if (should_enable_on_transition) {
-                try slot_store.putBuiltinProgramAccount(
+                try putBuiltinProgramAccount(
                     allocator,
+                    slot_store,
                     builtin_program,
+                    &slot_state.capitalization,
                 );
             }
         }
@@ -308,7 +319,9 @@ fn applyBuiltinProgramFeatureTransitions(
         if (new_feature_activations.active(core_bpf_config.enable_feature_id, 0)) {
             migrateBuiltinProgramToCoreBpf(
                 allocator,
+                slot,
                 slot_store,
+                &slot_state.capitalization,
                 epoch_constants,
                 feature_set,
                 builtin_program.program_id,
@@ -324,15 +337,17 @@ fn applyBuiltinProgramFeatureTransitions(
     // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L5542-L5551
     for (program.precompiles.PRECOMPILES) |precompile| {
         const feature_id = precompile.required_feature orelse continue;
-        if (!feature_set.active(feature_id, slot_store.slot)) continue;
-        try slot_store.putPrecompile(allocator, precompile);
+        if (!feature_set.active(feature_id, slot)) continue;
+        try putPrecompile(allocator, slot_store, precompile, &slot_state.capitalization);
     }
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.0.3/runtime/src/bank/builtins/core_bpf_migration/mod.rs#L221
 fn migrateBuiltinProgramToCoreBpf(
     allocator: Allocator,
+    slot: Slot,
     slot_store: SlotAccountStore,
+    capitalization: *Atomic(u64),
     epoch_constants: *const EpochConstants,
     feature_set: *const FeatureSet,
     builtin_program_id: Pubkey,
@@ -344,14 +359,15 @@ fn migrateBuiltinProgramToCoreBpf(
     const target = .{
         .program_account = switch (migration_type) {
             .builtin => blk: {
-                const account = (slot_store.get(allocator, builtin_program_id) catch null) orelse
+                const account = (slot_store.reader()
+                    .get(allocator, builtin_program_id) catch null) orelse
                     return error.AccountNotFound;
                 if (!account.owner.equals(&sig.runtime.ids.NATIVE_LOADER_ID))
                     return error.IncorrectOwner;
                 break :blk account;
             },
             .stateless_builtin => blk: {
-                if ((slot_store.get(allocator, builtin_program_id) catch null) != null)
+                if ((slot_store.reader().get(allocator, builtin_program_id) catch null) != null)
                     return error.AccountExists;
                 break :blk null;
             },
@@ -362,7 +378,7 @@ fn migrateBuiltinProgramToCoreBpf(
                 program.bpf_loader.v3.ID,
             ) orelse unreachable; // agave/solana-address-1.0.0 panics on this case.
 
-            if ((slot_store.get(allocator, program_data_address) catch null) != null) {
+            if ((slot_store.reader().get(allocator, program_data_address) catch null) != null) {
                 return error.ProgramHasDataAccount;
             }
             break :blk program_data_address;
@@ -370,7 +386,7 @@ fn migrateBuiltinProgramToCoreBpf(
     };
 
     const source = blk: {
-        const buffer_account = (slot_store.get(
+        const buffer_account = (slot_store.reader().get(
             allocator,
             migration_config.source_buffer_address,
         ) catch null) orelse return error.AccountNotFound;
@@ -447,7 +463,7 @@ fn migrateBuiltinProgramToCoreBpf(
         _ = try bincode.writeToSlice(
             data,
             loader_v3.State{ .program_data = .{
-                .slot = slot_store.slot,
+                .slot = slot,
                 .upgrade_authority_address = migration_config.upgrade_authority_address,
             } },
             .{},
@@ -481,7 +497,7 @@ fn migrateBuiltinProgramToCoreBpf(
         try program.bpf_loader.verifyProgram(
             allocator,
             new_target_pda.data[loader_v3.State.PROGRAM_DATA_METADATA_SIZE..],
-            slot_store.slot,
+            slot,
             feature_set,
             &compute_budget,
             null, // no LogCollector
@@ -508,7 +524,7 @@ fn migrateBuiltinProgramToCoreBpf(
                     lamports_to_burn,
                     lamports_to_fund,
                 ) catch return error.ArithmeticOverflow;
-                _ = slot_store.state.capitalization.fetchSub(delta, .monotonic);
+                _ = capitalization.fetchSub(delta, .monotonic);
             },
             .lt => {
                 const delta = std.math.sub(
@@ -516,7 +532,7 @@ fn migrateBuiltinProgramToCoreBpf(
                     lamports_to_fund,
                     lamports_to_burn,
                 ) catch return error.ArithmeticOverflow;
-                _ = slot_store.state.capitalization.fetchAdd(delta, .monotonic);
+                _ = capitalization.fetchAdd(delta, .monotonic);
             },
             .eq => {},
         }
@@ -546,6 +562,137 @@ fn featureActivationSlotFromAccount(account: Account) !?u64 {
     var feature_bytes = [_]u8{0} ** 9;
     account.data.readAll(&feature_bytes);
     return bincode.readFromSlice(failing_allocator, ?u64, &feature_bytes, .{});
+}
+
+fn putAndUpdateCapitalization(
+    allocator: Allocator,
+    store: SlotAccountStore,
+    address: Pubkey,
+    account: AccountSharedData,
+    capitalization: *Atomic(u64),
+) !void {
+    const maybe_old_account = try store.reader().get(allocator, address);
+    const old_account_data_len = if (maybe_old_account) |old_account| blk: {
+        defer old_account.deinit(allocator);
+
+        const diff = if (account.lamports > old_account.lamports)
+            account.lamports - old_account.lamports
+        else
+            old_account.lamports - account.lamports;
+
+        _ = capitalization.fetchSub(diff, .monotonic);
+
+        break :blk old_account.data.len();
+    } else blk: {
+        _ = capitalization.fetchAdd(account.lamports, .monotonic);
+        break :blk 0;
+    };
+
+    try store.put(address, account);
+
+    // NOTE: update account size delta in slot state?
+    _ = old_account_data_len;
+}
+
+fn burnAndPurgeAccount(
+    store: SlotAccountStore,
+    address: Pubkey,
+    account: AccountSharedData,
+    capitalization: *Atomic(u64),
+) !void {
+    const account_data_len = account.data.len;
+    _ = capitalization.fetchSub(account.lamports, .monotonic);
+    var acc = account;
+    acc.lamports = 0;
+    @memset(acc.data, 0);
+    try store.put(address, acc);
+    // NOTE: update account size delta in slot state?
+    _ = account_data_len;
+}
+
+fn putPrecompile(
+    allocator: Allocator,
+    store: SlotAccountStore,
+    precompile: program.precompiles.Precompile,
+    capitalization: *Atomic(u64),
+) !void {
+    const maybe_account = try store.reader().get(allocator, precompile.program_id);
+    defer if (maybe_account) |account| account.deinit(allocator);
+
+    if (maybe_account) |account| if (!account.executable) {
+        try burnAndPurgeAccount(
+            store,
+            precompile.program_id,
+            try AccountSharedData.fromAccount(allocator, &account),
+            capitalization,
+        );
+    } else return;
+
+    // NOTE: Do we need this?
+    // assert!(!self.freeze_started());
+
+    const lamports, const rent_epoch = inheritLamportsAndRentEpoch(maybe_account);
+
+    try putAndUpdateCapitalization(
+        allocator,
+        store,
+        precompile.program_id,
+        .{
+            .lamports = lamports,
+            .data = &.{},
+            .executable = true,
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            .rent_epoch = rent_epoch,
+        },
+        capitalization,
+    );
+}
+
+fn putBuiltinProgramAccount(
+    allocator: Allocator,
+    store: SlotAccountStore,
+    builtin_program: builtin_programs.BuiltinProgram,
+    capitalization: *Atomic(u64),
+) !void {
+    if (try store.reader().get(allocator, builtin_program.program_id)) |account| {
+        defer account.deinit(allocator);
+        if (sig.runtime.ids.NATIVE_LOADER_ID.equals(&account.owner)) return;
+        const account_shared_data = try AccountSharedData.fromAccount(allocator, &account);
+        defer allocator.free(account_shared_data.data);
+        try burnAndPurgeAccount(
+            store,
+            builtin_program.program_id,
+            account_shared_data,
+            capitalization,
+        );
+    }
+
+    const lamports, const rent_epoch = inheritLamportsAndRentEpoch(null);
+    const account: AccountSharedData = .{
+        .lamports = lamports,
+        .data = try allocator.dupe(u8, builtin_program.data),
+        .executable = true,
+        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        .rent_epoch = rent_epoch,
+    };
+    defer allocator.free(account.data);
+
+    try putAndUpdateCapitalization(
+        allocator,
+        store,
+        builtin_program.program_id,
+        account,
+        capitalization,
+    );
+}
+
+fn inheritLamportsAndRentEpoch(
+    maybe_account: ?Account,
+) struct { u64, u64 } {
+    return if (maybe_account) |account|
+        .{ account.lamports, account.rent_epoch }
+    else
+        .{ 1, 0 };
 }
 
 const ThreadSafeAccountMap = sig.accounts_db.account_store.ThreadSafeAccountMap;
@@ -631,12 +778,11 @@ const TestEnvironment = struct {
         self: *TestEnvironment,
         slot: Slot,
     ) SlotAccountStore {
-        return SlotAccountStore.init(
+        return .{ .thread_safe_map = .{
+            &self.account_map,
             slot,
-            &self.slot_state,
-            self.accountStore(),
             &self.ancestors,
-        );
+        } };
     }
 
     pub fn accountStore(
@@ -661,9 +807,11 @@ test "applyFeatureActivations: activate pico inflation" {
 
         try applyFeatureActivations(
             allocator,
+            slot,
+            &env.slot_constants,
+            &env.slot_state,
             env.slotAccountStore(slot),
             &env.epoch_tracker,
-            &env.slot_constants,
             false,
         );
         try std.testing.expectEqual(
@@ -685,9 +833,11 @@ test "applyFeatureActivations: activate pico inflation" {
         // Don't allow new activations
         try applyFeatureActivations(
             allocator,
+            slot,
+            &env.slot_constants,
+            &env.slot_state,
             env.slotAccountStore(slot),
             &env.epoch_tracker,
-            &env.slot_constants,
             false,
         );
 
@@ -707,9 +857,11 @@ test "applyFeatureActivations: activate pico inflation" {
         // Allow new activations
         try applyFeatureActivations(
             allocator,
+            slot,
+            &env.slot_constants,
+            &env.slot_state,
             env.slotAccountStore(slot),
             &env.epoch_tracker,
-            &env.slot_constants,
             true,
         );
         try std.testing.expectEqual(0, env.slot_constants.feature_set.get(.pico_inflation));
@@ -741,9 +893,11 @@ test "applyFeatureActivations: activate pico inflation" {
         // Allow new activations
         try applyFeatureActivations(
             allocator,
+            slot,
+            &env.slot_constants,
+            &env.slot_state,
             env.slotAccountStore(slot),
             &env.epoch_tracker,
-            &env.slot_constants,
             true,
         );
         try std.testing.expectEqual(1, env.slot_constants.feature_set.get(.pico_inflation));

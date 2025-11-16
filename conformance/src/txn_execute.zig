@@ -369,11 +369,10 @@ fn executeTxnContext(
         }
 
         const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
-            .account_store = account_store,
-            .capitalization = &capitalization,
-            .ancestors = &ancestors,
-            .rent = &genesis_config.rent,
             .slot = slot,
+            .slot_store = account_store.forSlot(slot, &ancestors),
+            .capitalization = &capitalization,
+            .rent = &genesis_config.rent,
         };
 
         try update_sysvar.updateStakeHistory(
@@ -563,11 +562,10 @@ fn executeTxnContext(
                     .active = true,
                 };
                 try update_sysvar.updateSysvarAccount(EpochRewards, allocator, epoch_rewards, .{
-                    .account_store = account_store,
-                    .ancestors = &ancestors,
+                    .slot = slot,
+                    .slot_store = account_store.forSlot(slot, &ancestors),
                     .capitalization = &capitalization,
                     .rent = &genesis_config.rent,
-                    .slot = slot,
                 });
             } else {
                 const leader_schedule_epoch = epoch_schedule.getLeaderScheduleEpoch(slot);
@@ -589,11 +587,10 @@ fn executeTxnContext(
             // Update sysvars
             {
                 const update_sysvar_deps: update_sysvar.UpdateSysvarAccountDeps = .{
-                    .account_store = account_store,
-                    .capitalization = &capitalization,
-                    .ancestors = &ancestors,
-                    .rent = &genesis_config.rent,
                     .slot = slot,
+                    .slot_store = account_store.forSlot(slot, &ancestors),
+                    .capitalization = &capitalization,
+                    .rent = &genesis_config.rent,
                 };
 
                 try update_sysvar.updateSlotHashes(
@@ -681,11 +678,10 @@ fn executeTxnContext(
     // Update epoch schedule and rent to minimum rent exempt balance
     {
         const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
-            .account_store = account_store,
-            .capitalization = &capitalization,
-            .ancestors = &ancestors,
-            .rent = &genesis_config.rent,
             .slot = slot,
+            .slot_store = account_store.forSlot(slot, &ancestors),
+            .capitalization = &capitalization,
+            .rent = &genesis_config.rent,
         };
 
         try update_sysvar.updateRent(allocator, genesis_config.rent, update_sysvar_deps);
@@ -720,11 +716,10 @@ fn executeTxnContext(
         try blockhash_queue.insertHash(allocator, blockhash, lamports_per_signature);
     }
     const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
-        .account_store = account_store,
-        .capitalization = &capitalization,
-        .ancestors = &ancestors,
-        .rent = &genesis_config.rent,
         .slot = slot,
+        .slot_store = account_store.forSlot(slot, &ancestors),
+        .capitalization = &capitalization,
+        .rent = &genesis_config.rent,
     };
     try update_sysvar.updateRecentBlockhashes(allocator, &blockhash_queue, update_sysvar_deps);
 
