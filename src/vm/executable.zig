@@ -373,7 +373,7 @@ pub const Executable = struct {
     /// instructions are aligned to `sbpf.Instruction` rather than 1 like they would be
     /// if we created the executable from the Elf file. The GPA requires allocations and
     /// deallocations to be made with the same semantic alignment.
-    pub fn deinit(self: *Executable, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const Executable, allocator: std.mem.Allocator) void {
         if (self.from_asm) allocator.free(@as(
             []const Instruction,
             @alignCast(self.instructions),
@@ -890,12 +890,13 @@ pub fn Registry(T: type) type {
             return null;
         }
 
-        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        pub fn deinit(self: *const Self, allocator: std.mem.Allocator) void {
             var iter = self.map.iterator();
             while (iter.next()) |entry| {
                 allocator.free(entry.value_ptr.name);
             }
-            self.map.deinit(allocator);
+            var map = self.map;
+            map.deinit(allocator);
         }
 
         test "symbol collision" {

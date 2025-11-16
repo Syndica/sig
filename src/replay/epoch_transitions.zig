@@ -713,9 +713,15 @@ test "applyFeatureActivations: activate pico inflation" {
             true,
         );
         try std.testing.expectEqual(0, env.slot_constants.feature_set.get(.pico_inflation));
-        try std.testing.expectEqual(sig.core.genesis_config.Inflation.PICO, env.slot_constants.inflation);
+        try std.testing.expectEqual(
+            sig.core.genesis_config.Inflation.PICO,
+            env.slot_constants.inflation,
+        );
         try std.testing.expectEqual(50, env.slot_constants.fee_rate_governor.burn_percent);
-        try std.testing.expectEqual(50, env.epoch_tracker.getPtrForSlot(slot).?.rent_collector.rent.burn_percent);
+        try std.testing.expectEqual(
+            50,
+            env.epoch_tracker.getPtrForSlot(slot).?.rent_collector.rent.burn_percent,
+        );
     }
 
     {

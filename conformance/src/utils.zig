@@ -35,8 +35,8 @@ pub const ConvertedErrorCodes = struct {
     };
 };
 
-pub fn convertTransactionError(err: TransactionError) ConvertedErrorCodes {
-    switch (err) {
+pub fn convertTransactionError(maybe_err: ?TransactionError) ConvertedErrorCodes {
+    return if (maybe_err) |err| switch (err) {
         .InstructionError => |p| {
             const index, const instruction_error = p;
             return .{
@@ -55,7 +55,7 @@ pub fn convertTransactionError(err: TransactionError) ConvertedErrorCodes {
             .custom_error = 0,
             .instruction_index = 0,
         },
-    }
+    } else .default;
 }
 
 pub fn createTransactionContext(
@@ -103,7 +103,7 @@ pub fn createTransactionContext(
     else
         try allocator.create(ProgramMap);
     errdefer if (environment.program_map == null) allocator.destroy(program_map);
-    program_map.* = ProgramMap{};
+    program_map.* = ProgramMap.empty;
 
     const log_collector = try sig.runtime.LogCollector.default(allocator);
     errdefer log_collector.deinit(allocator);
@@ -160,9 +160,7 @@ pub fn deinitTransactionContext(
     tc.vm_environment.deinit(allocator);
     allocator.destroy(tc.vm_environment);
 
-    for (tc.program_map.values()) |*v| v.deinit(allocator);
-    var program_map = tc.program_map.*;
-    program_map.deinit(allocator);
+    tc.program_map.deinit(allocator);
     allocator.destroy(tc.program_map);
 
     for (tc.accounts) |account| {

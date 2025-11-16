@@ -18,9 +18,11 @@ const Hash = core.Hash;
 const Slot = core.Slot;
 
 const AccountStore = sig.accounts_db.AccountStore;
+
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
+const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const Committer = replay.Committer;
@@ -34,7 +36,6 @@ const SvmGateway = replay.svm_gateway.SvmGateway;
 
 const executeTransaction = replay.svm_gateway.executeTransaction;
 const preprocessTransaction = replay.preprocess_transaction.preprocessTransaction;
-const resolveBatch = replay.resolve_lookup.resolveBatch;
 const verifyPoh = core.entry.verifyPoh;
 
 const Logger = sig.trace.Logger("replay.execution");
@@ -176,12 +177,21 @@ fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
 pub const ReplaySlotParams = struct {
     /// confirm slot takes ownership of this
     entries: []const Entry,
+    /// confirm slot takes ownership of this
+    batches: []const replay.resolve_lookup.ResolvedBatch,
     last_entry: Hash,
-    svm_params: SvmGateway.Params,
+    svm_gateway: SvmGateway,
     committer: Committer,
     verify_ticks_params: VerifyTicksParams,
-    /// confirm slot takes ownership of this
-    slot_resolver: SlotResolver,
+    account_store: AccountStore,
+
+    pub fn deinit(self: ReplaySlotParams, allocator: Allocator) void {
+        for (self.entries) |entry| entry.deinit(allocator);
+        allocator.free(self.entries);
+        for (self.batches) |batch| batch.deinit(allocator);
+        allocator.free(self.batches);
+        self.svm_gateway.deinit(allocator);
+    }
 };
 
 /// Asynchronously validate and execute entries from a single slot.
@@ -200,38 +210,29 @@ pub fn replaySlotAsync(
     thread_pool: *ThreadPool,
     params: ReplaySlotParams,
 ) !*ReplaySlotFuture {
-    const entries = params.entries;
-    const last_entry = params.last_entry;
-    const svm_params = params.svm_params;
-    const committer = params.committer;
-    const verify_ticks_params = params.verify_ticks_params;
-    const slot_resolver = params.slot_resolver;
-
     var zone = tracy.Zone.init(@src(), .{ .name = "replaySlot" });
-    zone.value(svm_params.slot);
+    zone.value(params.svm_gateway.params.slot);
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
 
     logger.info().log("confirming slot");
 
     const future = fut: {
-        errdefer {
-            for (entries) |entry| entry.deinit(allocator);
-            allocator.free(entries);
-        }
+        errdefer params.deinit(allocator);
         break :fut try ReplaySlotFuture.create(
             allocator,
             .from(logger),
             thread_pool,
-            committer,
-            entries,
-            svm_params,
-            slot_resolver,
+            params.committer,
+            params.entries,
+            params.batches,
+            params.svm_gateway,
+            params.account_store,
         );
     };
     errdefer future.destroy(allocator);
 
-    if (verifyTicks(logger, entries, verify_ticks_params)) |block_error| {
+    if (verifyTicks(logger, params.entries, params.verify_ticks_params)) |block_error| {
         future.status = .{ .done = .{ .invalid_block = block_error } };
         return future;
     }
@@ -240,19 +241,10 @@ pub fn replaySlotAsync(
         allocator,
         .from(logger),
         &future.poh_verifier,
-        last_entry,
-        entries,
+        params.last_entry,
+        params.entries,
         &future.exit,
     );
-
-    for (entries) |entry| {
-        if (entry.isTick()) continue;
-
-        const batch = try resolveBatch(allocator, entry.transactions, slot_resolver);
-        errdefer batch.deinit(allocator);
-
-        future.scheduler.addBatchAssumeCapacity(batch);
-    }
 
     _ = try future.poll(); // starts batch execution. poll result is cached inside future
 
@@ -280,14 +272,11 @@ pub fn replaySlotSync(
     params: ReplaySlotParams,
 ) !?ReplaySlotError {
     var zone = tracy.Zone.init(@src(), .{ .name = "replaySlotSync" });
-    zone.value(params.svm_params.slot);
+    zone.value(params.svm_gateway.params.slot);
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
 
-    defer {
-        for (params.entries) |entry| entry.deinit(allocator);
-        allocator.free(params.entries);
-    }
+    defer params.deinit(allocator);
 
     logger.info().log("confirming slot");
 
@@ -299,16 +288,12 @@ pub fn replaySlotSync(
         return .{ .invalid_block = .InvalidEntryHash };
     }
 
-    for (params.entries) |entry| {
-        if (entry.isTick()) continue;
-
-        const batch = try resolveBatch(allocator, entry.transactions, params.slot_resolver);
-        defer batch.deinit(allocator);
-
+    var svm_gateway = params.svm_gateway;
+    for (params.batches) |batch| {
         var exit = Atomic(bool).init(false);
         switch (try replayBatch(
             allocator,
-            params.svm_params,
+            &svm_gateway,
             params.committer,
             batch.transactions,
             &exit,
@@ -336,7 +321,7 @@ pub const BatchResult = union(enum) {
 /// executing them with the SVM.
 pub fn replayBatch(
     allocator: Allocator,
-    svm_params: SvmGateway.Params,
+    svm_gateway: *SvmGateway,
     committer: Committer,
     transactions: []const ResolvedTransaction,
     exit: *Atomic(bool),
@@ -357,9 +342,6 @@ pub fn replayBatch(
         allocator.free(results);
     }
 
-    var svm_gateway = try SvmGateway.init(allocator, transactions, svm_params);
-    defer svm_gateway.deinit(allocator);
-
     for (transactions, 0..) |transaction, i| {
         if (exit.load(.monotonic)) {
             return .exit;
@@ -373,7 +355,7 @@ pub fn replayBatch(
 
         const runtime_transaction = transaction.toRuntimeTransaction(hash, compute_budget_details);
 
-        switch (try executeTransaction(allocator, &svm_gateway, &runtime_transaction)) {
+        switch (try executeTransaction(allocator, svm_gateway, &runtime_transaction)) {
             .ok => |result| {
                 results[i] = .{ hash, result };
                 populated_count += 1;
@@ -514,6 +496,9 @@ fn prepareSlot(
         break :blk .{ entries, slot_is_full };
     };
 
+    const tick_height =
+        slot_info.state.tick_height.fetchAdd(core.entry.tickCount(entries), .monotonic);
+
     const new_rate_activation_epoch =
         if (slot_info.constants.feature_set.get(.reduce_stake_warmup_cooldown)) |active_slot|
             epoch_tracker.schedule.getEpoch(active_slot)
@@ -527,34 +512,38 @@ fn prepareSlot(
     // scope of the sysvar cache, add this to slot constants, or implement
     // additional mechanisms for lookup tables to detect slot age (e.g. block height).
     const slot_hashes = try replay.update_sysvar.getSysvarFromAccount(
-        sig.runtime.sysvar.SlotHashes,
+        SlotHashes,
         state.allocator,
         slot_account_reader,
     ) orelse return error.MissingSlotHashesSysvar;
 
-    const slot_resolver = replay.resolve_lookup.SlotResolver{
+    const resolved_batches = try replay.resolve_lookup.resolveBlock(state.allocator, entries, .{
         .slot = slot,
         .account_reader = slot_account_reader,
         .reserved_accounts = &slot_info.constants.reserved_accounts,
         .slot_hashes = slot_hashes,
-    };
+    });
+    errdefer {
+        for (resolved_batches) |batch| batch.deinit(state.allocator);
+        state.allocator.free(resolved_batches);
+    }
 
-    const svm_params = SvmGateway.Params{
+    var svm_gateway = try SvmGateway.init(state.allocator, .{
         .slot = slot,
         .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
         .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,
         .blockhash_queue = &slot_info.state.blockhash_queue,
-        .account_reader = slot_account_reader,
+        .account_store = state.account_store.forSlot(slot, &slot_info.constants.ancestors),
         .ancestors = &slot_info.constants.ancestors,
         .feature_set = slot_info.constants.feature_set,
         .rent_collector = &epoch_constants.rent_collector,
         .epoch_stakes = &epoch_constants.stakes,
         .status_cache = &state.status_cache,
-    };
+    });
+    errdefer svm_gateway.deinit(state.allocator);
 
     const committer = replay.Committer{
         .logger = .from(state.logger),
-        .account_store = state.account_store,
         .slot_state = slot_info.state,
         .status_cache = &state.status_cache,
         .stakes_cache = &slot_info.state.stakes_cache,
@@ -563,27 +552,23 @@ fn prepareSlot(
     };
 
     const verify_ticks_params = replay.execution.VerifyTicksParams{
-        .tick_height = slot_info.state.tickHeight(),
+        .tick_height = tick_height,
         .max_tick_height = slot_info.constants.max_tick_height,
         .hashes_per_tick = epoch_constants.hashes_per_tick,
         .slot = slot,
         .slot_is_full = slot_is_full,
+        // TODO: come up with a better approach
         .tick_hash_count = &confirmation_progress.tick_hash_count,
     };
 
-    var num_ticks: u64 = 0;
-    for (entries) |entry| {
-        if (entry.isTick()) num_ticks += 1;
-    }
-    _ = slot_info.state.tick_height.fetchAdd(num_ticks, .monotonic);
-
     return .{ .confirm = .{
         .entries = entries,
+        .batches = resolved_batches,
         .last_entry = previous_last_entry,
-        .svm_params = svm_params,
+        .svm_gateway = svm_gateway,
         .committer = committer,
         .verify_ticks_params = verify_ticks_params,
-        .slot_resolver = slot_resolver,
+        .account_store = state.account_store,
     } };
 }
 
@@ -596,6 +581,7 @@ pub const VerifyTicksParams = struct {
     max_tick_height: u64,
 
     // slot-scoped state (constant during lifetime of this struct)
+    /// the starting tick height before processing entries
     tick_height: u64,
     slot_is_full: bool,
 
@@ -610,20 +596,19 @@ fn verifyTicks(
     entries: []const Entry,
     params: VerifyTicksParams,
 ) ?BlockError {
-    const next_bank_tick_height = params.tick_height + core.entry.tickCount(entries);
-    const max_bank_tick_height = params.max_tick_height;
+    const next_tick_height = params.tick_height + sig.core.entry.tickCount(entries);
 
-    if (next_bank_tick_height > max_bank_tick_height) {
+    if (next_tick_height > params.max_tick_height) {
         logger.warn().logf("Too many entry ticks found in slot: {}", .{params.slot});
         return .TooManyTicks;
     }
 
-    if (next_bank_tick_height < max_bank_tick_height and params.slot_is_full) {
+    if (next_tick_height < params.max_tick_height and params.slot_is_full) {
         logger.info().logf("Too few entry ticks found in slot: {}", .{params.slot});
         return .TooFewTicks;
     }
 
-    if (next_bank_tick_height == max_bank_tick_height) {
+    if (next_tick_height == params.max_tick_height) {
         if (entries.len == 0 or !entries[entries.len - 1].isTick()) {
             logger.warn().logf("Slot: {} did not end with a tick entry", .{params.slot});
             return .TrailingEntry;
@@ -965,13 +950,17 @@ fn testReplaySlot(
 
         for (entries_copy) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
+        const batches = try replay.resolve_lookup
+            .resolveBlock(allocator, entries_copy, state.resolver());
+        const svm_gateway = try SvmGateway.init(allocator, state.svmParams());
         const params = ReplaySlotParams{
             .entries = entries_copy,
+            .batches = batches,
             .last_entry = .ZEROES,
-            .svm_params = state.svmParams(),
-            .committer = state.committer(),
+            .svm_gateway = svm_gateway,
+            .committer = try state.committer(allocator),
             .verify_ticks_params = verify_ticks_params,
-            .slot_resolver = state.resolver(),
+            .account_store = state.accountStore(),
         };
 
         break :result try replaySlotSync(allocator, logger, params);
@@ -992,13 +981,17 @@ fn testReplaySlot(
 
         for (entries_copy) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
+        const batches = try replay.resolve_lookup
+            .resolveBlock(allocator, entries_copy, state.resolver());
+        const svm_gateway = try SvmGateway.init(allocator, state.svmParams());
         const params = ReplaySlotParams{
             .entries = entries_copy,
+            .batches = batches,
             .last_entry = .ZEROES,
-            .svm_params = state.svmParams(),
-            .committer = state.committer(),
+            .svm_gateway = svm_gateway,
+            .committer = try state.committer(allocator),
             .verify_ticks_params = verify_ticks_params,
-            .slot_resolver = state.resolver(),
+            .account_store = state.accountStore(),
         };
 
         var thread_pool = ThreadPool.init(.{});
@@ -1048,6 +1041,9 @@ pub const TestState = struct {
     slot_state: sig.core.SlotState,
     stakes_cache: sig.core.StakesCache,
 
+    // resolver
+    slot_hashes: SlotHashes,
+
     // Channels.
     replay_votes_channel: *sig.sync.Channel(ParsedVote),
 
@@ -1070,6 +1066,7 @@ pub const TestState = struct {
         try blockhash_queue.insertGenesisHash(allocator, .ZEROES, 1);
 
         var ancestors = Ancestors{};
+        errdefer ancestors.deinit(allocator);
         try ancestors.addSlot(allocator, 0);
 
         const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(allocator);
@@ -1087,6 +1084,7 @@ pub const TestState = struct {
             .epoch_stakes = epoch_stakes,
             .slot_state = slot_state,
             .stakes_cache = stakes_cache,
+            .slot_hashes = .INIT,
             .replay_votes_channel = replay_votes_channel,
             .exit = .init(false),
         };
@@ -1116,7 +1114,7 @@ pub const TestState = struct {
             .max_age = self.max_age,
             .lamports_per_signature = self.lamports_per_signature,
             .blockhash_queue = &self.blockhash_queue,
-            .account_reader = self.account_map.accountReader().forSlot(&self.ancestors),
+            .account_store = self.account_map.accountStore().forSlot(self.slot, &self.ancestors),
             .ancestors = &self.ancestors,
             .feature_set = self.feature_set,
             .rent_collector = &self.rent_collector,
@@ -1125,10 +1123,10 @@ pub const TestState = struct {
         };
     }
 
-    pub fn committer(self: *TestState) Committer {
+    pub fn committer(self: *TestState, allocator: Allocator) !Committer {
+        _ = allocator; // autofix
         return .{
             .logger = .FOR_TESTS,
-            .account_store = self.account_map.accountStore(),
             .slot_state = &self.slot_state,
             .status_cache = &self.status_cache,
             .stakes_cache = &self.stakes_cache,

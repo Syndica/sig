@@ -10,6 +10,7 @@ pub const swiss_map = @import("swiss_map.zig");
 
 pub const AccountStore = account_store.AccountStore;
 pub const AccountReader = account_store.AccountReader;
+pub const SlotAccountStore = account_store.SlotAccountStore;
 pub const SlotAccountReader = account_store.SlotAccountReader;
 pub const ThreadSafeAccountMap = account_store.ThreadSafeAccountMap;
 

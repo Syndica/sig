@@ -417,9 +417,8 @@ pub fn executeV4Retract(
         .authority_address_or_next_version = state.authority_address_or_next_version,
     });
 
-    const gop = try ic.tc.program_map.getOrPut(allocator, program_account.pubkey);
-    if (gop.found_existing) gop.value_ptr.deinit(allocator);
-    gop.value_ptr.* = .failed;
+    const old_program = try ic.tc.program_map.fetchPut(allocator, program_account.pubkey, .failed);
+    if (old_program) |p| p.deinit(allocator);
 }
 
 pub fn executeV4TransferAuthority(
@@ -1427,9 +1426,9 @@ pub fn executeV3Close(
                     clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
 
                     // Remove from the program map if it was deployed.
-                    const gop = try ic.tc.program_map.getOrPut(allocator, program_key);
-                    if (gop.found_existing) gop.value_ptr.deinit(allocator);
-                    gop.value_ptr.* = .failed;
+                    const old_program = try ic.tc.program_map
+                        .fetchPut(allocator, program_key, .failed);
+                    if (old_program) |p| p.deinit(allocator);
                 },
                 else => {
                     try ic.tc.log("Invalid Program Account", .{});
@@ -1814,9 +1813,8 @@ pub fn executeV3Migrate(
 
     if (progdata_info.len == 0) {
         // Close the program map entry.
-        const gop = try ic.tc.program_map.getOrPut(allocator, program_key);
-        if (gop.found_existing) gop.value_ptr.deinit(allocator);
-        gop.value_ptr.* = .failed;
+        const old_program = try ic.tc.program_map.fetchPut(allocator, program_key, .failed);
+        if (old_program) |p| p.deinit(allocator);
     } else {
         try ic.nativeInvoke(
             allocator,
@@ -1936,9 +1934,7 @@ pub fn deployProgram(
     try tc.log("Deploying program {}", .{program_id});
 
     // Remove from the program map since it should not be accessible on this slot anymore.
-    const gop = try tc.program_map.getOrPut(allocator, program_id);
-    if (gop.found_existing) gop.value_ptr.deinit(allocator);
-    gop.value_ptr.* = .failed;
+    _ = try tc.program_map.fetchPut(allocator, program_id, .failed);
 }
 
 pub fn verifyProgram(
@@ -3390,7 +3386,7 @@ test executeV3ExtendProgram {
         );
         const tc = &tx[1];
         defer {
-            sig.runtime.testing.deinitTransactionContext(allocator, tc.*);
+            sig.runtime.testing.deinitTransactionContext(allocator, tc);
             tx[0].deinit(allocator);
         }
 
@@ -3432,7 +3428,7 @@ test executeV3ExtendProgram {
         );
         const tc = &tx[1];
         defer {
-            sig.runtime.testing.deinitTransactionContext(allocator, tc.*);
+            sig.runtime.testing.deinitTransactionContext(allocator, tc);
             tx[0].deinit(allocator);
         }
 
@@ -4003,7 +3999,7 @@ test checkProgramAccount {
         .{},
     );
 
-    var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+    const cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
             .{
                 .pubkey = program_key,
@@ -4017,8 +4013,8 @@ test checkProgramAccount {
         },
     });
     defer {
-        testing.deinitTransactionContext(allocator, tc);
-        cache.deinit(allocator);
+        testing.deinitTransactionContext(allocator, &tc);
+        sig.runtime.testing.deinitAccountMap(cache, allocator);
     }
 
     var info = try testing.createInstructionInfo(
