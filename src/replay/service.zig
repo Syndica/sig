@@ -157,11 +157,13 @@ pub const Dependencies = struct {
         state: sig.core.SlotState,
     },
     current_epoch: sig.core.Epoch,
-    /// ownership transferred to replay; won't be freed if `ReplayState.init` returns an error.
+    next_epoch: ?sig.core.Epoch = null,
+    /// ownership transferred to replay
     current_epoch_constants: sig.core.EpochConstants,
-    /// ownership transferred to replay; won't be freed if `ReplayState.init` returns an error.
+    /// ownership transferred to replay
+    next_epoch_constants: ?sig.core.EpochConstants = null,
+    /// ownership transferred to replay
     hard_forks: sig.core.HardForks,
-
     replay_threads: u32,
     stop_at_slot: ?Slot,
 };
@@ -234,6 +236,13 @@ pub const ReplayState = struct {
             deps.current_epoch,
             deps.current_epoch_constants,
         );
+        if (deps.next_epoch_constants) |next_constants| {
+            try epoch_tracker.epochs.put(
+                deps.allocator,
+                deps.next_epoch orelse return error.MissingNextEpoch,
+                next_constants,
+            );
+        }
         errdefer epoch_tracker.deinit(deps.allocator);
         errdefer {
             // do not free the current epoch constants parameter, we don't own it unless the function returns successfully
