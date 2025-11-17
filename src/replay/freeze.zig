@@ -69,9 +69,8 @@ pub const FreezeParams = struct {
             },
             .finalize_state = .{
                 .update_sysvar = .{
-                    .account_store = account_store,
                     .slot = slot,
-                    .ancestors = &constants.ancestors,
+                    .slot_store = account_store.forSlot(slot, &constants.ancestors),
                     .rent = &epoch.rent_collector.rent,
                     .capitalization = &state.capitalization,
                 },
