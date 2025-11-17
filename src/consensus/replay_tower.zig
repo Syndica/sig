@@ -1191,8 +1191,9 @@ pub const ReplayTower = struct {
         (my_latest_landed_vote_slot >= last_voted_slot) or
             // 2. Already voting at the tip
             (last_voted_slot >= heaviest_bank_on_same_voted_fork) or
-            // 3. Last vote is within slot hashes, regular refresh is enough
-            slot_history.check(last_voted_slot) == .found;
+            // 3. Last vote is within this bank's slot hashes history, regular refresh is enough
+            (last_voted_slot < heaviest_bank_on_same_voted_fork and
+                slot_history.check(last_voted_slot) == .found);
     }
 
     /// Handles candidate selection when fork switching fails threshold checks
