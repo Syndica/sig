@@ -8,18 +8,27 @@ const Feature = sig.core.features.Feature;
 const FeatureSet = sig.core.FeatureSet;
 const Slot = sig.core.Slot;
 
-pub const ReservedAccounts = sig.utils.collections.PubkeyMap(void);
+pub const ReservedAccounts = @This();
+
+map: sig.utils.collections.PubkeyMap(void),
+
+pub const EMPTY: ReservedAccounts = .{ .map = .empty };
 
 pub fn init(allocator: Allocator) Allocator.Error!ReservedAccounts {
-    var reserved_accounts = ReservedAccounts{};
+    var reserved_accounts = ReservedAccounts{ .map = .empty };
     errdefer reserved_accounts.deinit(allocator);
-    try reserved_accounts.ensureTotalCapacity(allocator, ACCOUNTS.len);
+    try reserved_accounts.map.ensureTotalCapacity(allocator, ACCOUNTS.len);
 
     for (ACCOUNTS) |account| {
-        if (account.feature == null) reserved_accounts.putAssumeCapacity(account.pubkey, {});
+        if (account.feature == null) reserved_accounts.map.putAssumeCapacity(account.pubkey, {});
     }
 
     return reserved_accounts;
+}
+
+pub fn deinit(self: ReservedAccounts, allocator: Allocator) void {
+    var map = self.map;
+    map.deinit(allocator);
 }
 
 pub fn initForSlot(
@@ -28,19 +37,19 @@ pub fn initForSlot(
     slot: Slot,
 ) Allocator.Error!ReservedAccounts {
     var reserved_accounts = try init(allocator);
-    update(&reserved_accounts, feature_set, slot);
+    reserved_accounts.update(feature_set, slot);
     return reserved_accounts;
 }
 
 pub fn update(
-    reserved_accounts: *ReservedAccounts,
+    self: *ReservedAccounts,
     feature_set: *const FeatureSet,
     slot: Slot,
 ) void {
     for (ACCOUNTS) |account| {
         if (account.feature) |feature| {
             if (feature_set.active(feature, slot)) {
-                reserved_accounts.putAssumeCapacity(account.pubkey, {});
+                self.map.putAssumeCapacity(account.pubkey, {});
             }
         }
     }
