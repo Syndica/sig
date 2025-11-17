@@ -9,7 +9,7 @@ const bincode = sig.bincode;
 const vote_program = sig.runtime.program.vote;
 
 const Pubkey = sig.core.Pubkey;
-const CalculateStakeContext = sig.core.stake.CaclulateStakeContext;
+const CalculateStakeContext = sig.core.stakes.CalculateStakeContext;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 

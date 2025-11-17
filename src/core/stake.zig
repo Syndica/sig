@@ -10,8 +10,8 @@ const stake_program = sig.runtime.program.stake;
 
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
-const VoteAccounts = sig.core.vote_accounts.VoteAccounts;
-const VoteAccount = sig.core.vote_accounts.VoteAccount;
+const VoteAccounts = sig.core.stakes.VoteAccounts;
+const VoteAccount = sig.core.stakes.VoteAccount;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const VersionedVoteState = sig.runtime.program.vote.state.VoteStateVersions;
@@ -21,7 +21,7 @@ const StakeState = sig.runtime.sysvar.StakeHistory.StakeState;
 
 const RwMux = sig.sync.RwMux;
 
-const createVoteAccount = sig.core.vote_accounts.createVoteAccount;
+const createVoteAccount = sig.core.stakes.createTestVoteAccount;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
