@@ -31,8 +31,19 @@ pub const SlotIndex = struct {
     entries: std.ArrayHashMapUnmanaged(Pubkey, AccountSharedData, Context, true),
 
     const Context = struct {
+        // Applies a Murmur-like LCG to the public key, in order to alivate a
+        // bit of the bucketing that may happen if we load many vanity public keys,
+        // where the first bytes are mined.
         pub fn hash(_: Context, pubkey: Pubkey) u32 {
-            return @bitCast(pubkey.data[0..4].*);
+            var h: u32 = 0;
+            const pk: [8]u32 = @bitCast(pubkey.data);
+            for (pk) |k| h ^= k + 1;
+            h ^= h >> 16;
+            h *%= 0x85ebca6b;
+            h ^= h >> 13;
+            h *%= 0xc2b2ae35;
+            h ^= h >> 16;
+            return h;
         }
 
         pub fn eql(_: Context, a: Pubkey, b: Pubkey, _: usize) bool {
@@ -85,6 +96,9 @@ pub fn put(
     defer entry.lock.unlock();
 
     if (entry.slot != slot) {
+        // If consensus fails to root a slot after executing MAX_SLOTS - 1 other slots
+        // this will panic. It should be reasonable to assume that doesn't happen in
+        // a real-world situation.
         std.debug.assert(entry.is_empty.load(.acquire));
         entry.entries.clearRetainingCapacity();
         entry.slot = slot;
