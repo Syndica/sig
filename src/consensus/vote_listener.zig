@@ -1755,10 +1755,10 @@ test "simple usage" {
             .collector_id = .ZEROES,
             .max_tick_height = 1,
             .fee_rate_governor = .DEFAULT,
-            .epoch_reward_status = .inactive,
             .ancestors = .{ .ancestors = .empty },
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = .EMPTY,
+            .inflation = .DEFAULT,
         },
         .state = .GENESIS,
     });
@@ -1854,10 +1854,10 @@ test "check trackers" {
                 .collector_id = .ZEROES,
                 .max_tick_height = 1,
                 .fee_rate_governor = .DEFAULT,
-                .epoch_reward_status = .inactive,
                 .ancestors = .{ .ancestors = .empty },
                 .feature_set = .ALL_DISABLED,
                 .reserved_accounts = .EMPTY,
+                .inflation = .DEFAULT,
             },
             .state = state,
         });

@@ -530,10 +530,10 @@ test "processResult: confirm status with done poll and slot complete - success p
         // This should match tickHeight() for slot to be complete
         .max_tick_height = 64,
         .fee_rate_governor = sig.core.FeeRateGovernor.DEFAULT,
-        .epoch_reward_status = .inactive,
         .ancestors = .{ .ancestors = .empty },
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .EMPTY,
+        .inflation = .DEFAULT,
     };
 
     // Create slot state then modify tick height
@@ -637,10 +637,10 @@ test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot"
         .collector_id = sig.core.Pubkey.ZEROES,
         .max_tick_height = 0,
         .fee_rate_governor = sig.core.FeeRateGovernor.DEFAULT,
-        .epoch_reward_status = .inactive,
         .ancestors = .{ .ancestors = .empty },
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .EMPTY,
+        .inflation = .DEFAULT,
     };
     try test_resources.slot_tracker.put(allocator, slot, .{
         .constants = slot_consts,
@@ -726,8 +726,8 @@ test "updateConsensusForFrozenSlot: moves gossip votes with gossip vote_kind" {
         .collector_id = sig.core.Pubkey.initRandom(random),
         .max_tick_height = 64,
         .fee_rate_governor = sig.core.FeeRateGovernor.DEFAULT,
-        .epoch_reward_status = .inactive,
         .ancestors = .{ .ancestors = .empty },
+        .inflation = .DEFAULT,
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .EMPTY,
     };
