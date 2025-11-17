@@ -606,7 +606,7 @@ pub const Manifest = struct {
     pub fn epochVoteAccounts(
         self: *const Manifest,
         epoch: Epoch,
-    ) !*const sig.core.vote_accounts.StakeAndVoteAccountsMap {
+    ) !*const sig.core.stakes.StakeAndVoteAccountsMap {
         if (self.bank_fields.epoch_stakes.getPtr(epoch)) |_| {
             // Agave simply ignores this field. I've added this log message just
             // as a sanity check, but I don't expect to ever see it.

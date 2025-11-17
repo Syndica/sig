@@ -14,6 +14,7 @@
 //! to write code with a more minimal, clearer set of dependencies, to make the
 //! code easier to understand and maintain.
 
+const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
 const tracy = @import("tracy");
@@ -25,6 +26,8 @@ const Atomic = std.atomic.Value;
 
 const RwMux = sig.sync.RwMux;
 
+const SlotAccountReader = sig.accounts_db.account_store.SlotAccountReader;
+
 const BlockhashQueue = core.BlockhashQueue;
 const EpochSchedule = core.epoch_schedule.EpochSchedule;
 const FeatureSet = core.FeatureSet;
@@ -34,6 +37,7 @@ const LtHash = core.hash.LtHash;
 const Pubkey = core.pubkey.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const ReservedAccounts = sig.core.ReservedAccounts;
+const VoteAccount = sig.core.stakes.VoteAccount;
 
 const Epoch = core.time.Epoch;
 const Slot = core.time.Slot;
@@ -45,6 +49,9 @@ const Inflation = core.genesis_config.Inflation;
 const Ancestors = sig.core.Ancestors;
 const EpochStakesMap = core.EpochStakesMap;
 const Stakes = core.Stakes;
+
+const StakeStateV2 = sig.runtime.program.stake.StakeStateV2;
+const VoteState = sig.runtime.program.vote.state.VoteState;
 
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
@@ -227,11 +234,12 @@ pub const SlotState = struct {
         allocator: Allocator,
         bank_fields: *const BankFields,
         lt_hash: ?LtHash,
-    ) Allocator.Error!SlotState {
+        account_reader: SlotAccountReader,
+    ) !SlotState {
         const blockhash_queue = try bank_fields.blockhash_queue.clone(allocator);
         errdefer blockhash_queue.deinit(allocator);
 
-        const stakes = try bank_fields.stakes.clone(allocator);
+        const stakes = try parseStakes(allocator, &bank_fields.stakes, account_reader);
         errdefer stakes.deinit(allocator);
 
         return .{
@@ -291,7 +299,144 @@ pub const SlotState = struct {
     pub fn tickHeight(self: *const SlotState) u64 {
         return self.tick_height.load(.monotonic);
     }
+
+    /// Identical to fromBankFields however it does not validate stake and vote accounts. The credits
+    /// observed field for stake accounts is set to zero. To create a test where credits observed is
+    /// set for stake accounts, create an DB with the correct stake states and use fromBankFields.
+    pub fn fromBankFieldsForTest(
+        allocator: Allocator,
+        bank_fields: *const BankFields,
+        lt_hash: ?LtHash,
+    ) !SlotState {
+        if (!builtin.is_test) @compileError("only for tests");
+
+        const blockhash_queue = try bank_fields.blockhash_queue.clone(allocator);
+        errdefer blockhash_queue.deinit(allocator);
+
+        const stakes = try parseStakesForTest(allocator, &bank_fields.stakes);
+        errdefer stakes.deinit(allocator);
+
+        return .{
+            .blockhash_queue = .init(blockhash_queue),
+            .hash = .init(bank_fields.hash),
+            .capitalization = .init(bank_fields.capitalization),
+            .transaction_count = .init(bank_fields.transaction_count),
+            .signature_count = .init(bank_fields.signature_count),
+            .tick_height = .init(bank_fields.tick_height),
+            .collected_rent = .init(bank_fields.collected_rent),
+            .accounts_lt_hash = .init(lt_hash),
+            .stakes_cache = .{ .stakes = .init(stakes) },
+            .collected_transaction_fees = .init(0),
+            .collected_priority_fees = .init(0),
+        };
+    }
 };
+
+pub fn parseStakes(
+    allocator: Allocator,
+    stakes: *const Stakes(.delegation),
+    account_reader: SlotAccountReader,
+) !Stakes(.stake) {
+    var stake_accounts = std.AutoArrayHashMapUnmanaged(Pubkey, StakeStateV2.Stake){};
+    errdefer stake_accounts.deinit(allocator);
+
+    const keys = stakes.stake_accounts.keys();
+    const values = stakes.stake_accounts.values();
+    for (keys, values) |key, value| {
+        const account = try account_reader.get(allocator, key) orelse
+            return error.StakeAccountNotFound;
+        defer account.deinit(allocator);
+
+        const voter_pubkey = value.voter_pubkey;
+        if (stakes.vote_accounts.getAccount(voter_pubkey) == null) {
+            if (try account_reader.get(allocator, voter_pubkey)) |vote_account| {
+                defer vote_account.deinit(allocator);
+
+                const data = try vote_account.data.readAllAllocate(allocator);
+                defer allocator.free(data);
+
+                if (VoteState.isCorrectSizeAndInitialized(data)) {
+                    const deserialize_result = VoteAccount.fromAccountSharedData(allocator, .{
+                        .lamports = vote_account.lamports,
+                        .data = data,
+                        .owner = vote_account.owner,
+                        .executable = vote_account.executable,
+                        .rent_epoch = vote_account.rent_epoch,
+                    });
+                    if (!std.meta.isError(deserialize_result)) {
+                        var deserialized = deserialize_result catch unreachable;
+                        defer deserialized.deinit(allocator);
+                        return error.VoteAccountNotCached;
+                    }
+                }
+            }
+        }
+
+        var state_buffer = [_]u8{0} ** StakeStateV2.SIZE;
+        _ = account.data.readRange(0, StakeStateV2.SIZE, &state_buffer);
+
+        const state = try sig.bincode.readFromSlice(
+            allocator,
+            StakeStateV2,
+            &state_buffer,
+            .{},
+        );
+
+        const stake = state.getStake() orelse
+            return error.InvalidStakeAccount;
+
+        if (!stake.delegation.eql(&value.getDelegation()))
+            return error.InvalidDelegation;
+
+        try stake_accounts.put(allocator, key, StakeStateV2.Stake{
+            .delegation = value,
+            .credits_observed = stake.credits_observed,
+        });
+    }
+
+    // TODO: Validate vote accounts. We should consider changing the type of VoteAccount used
+    // in the bank fields to contain the full AccountSharedData again so that we can check for
+    // consistency against accounts DB. We may then convert into our more lightweight VoteAccount
+    // representation after validation.
+    const vote_accounts = try stakes.vote_accounts.clone(allocator);
+    errdefer vote_accounts.deinit(allocator);
+
+    return Stakes(.stake){
+        .vote_accounts = vote_accounts,
+        .stake_accounts = stake_accounts,
+        .epoch = stakes.epoch,
+        .stake_history = stakes.stake_history,
+        .unused = stakes.unused,
+    };
+}
+
+pub fn parseStakesForTest(
+    allocator: Allocator,
+    stakes: *const Stakes(.delegation),
+) !Stakes(.stake) {
+    const vote_accounts = try stakes.vote_accounts.clone(allocator);
+    errdefer vote_accounts.deinit(allocator);
+
+    var stake_accounts = std.AutoArrayHashMapUnmanaged(Pubkey, StakeStateV2.Stake){};
+    errdefer stake_accounts.deinit(allocator);
+
+    const keys = stakes.stake_accounts.keys();
+    const values = stakes.stake_accounts.values();
+    for (keys, values) |key, value| {
+        try stake_accounts.put(allocator, key, StakeStateV2.Stake{
+            .delegation = value,
+            .credits_observed = 0,
+        });
+    }
+
+    return Stakes(.stake){
+        .vote_accounts = vote_accounts,
+        .stake_accounts = stake_accounts,
+        .epoch = stakes.epoch,
+        .stake_history = stakes.stake_history,
+        .unused = stakes.unused,
+    };
+}
 
 /// Constant information about an epoch that is determined before the epoch
 /// starts.
@@ -732,9 +877,134 @@ pub const PartitionedStakeReward = struct {
     /// Stake account address
     stake_pubkey: Pubkey,
     /// `Stake` state to be stored in account
-    stake: core.stake.Stake,
+    stake: sig.runtime.program.stake.state.StakeStateV2.Stake,
     /// Stake reward for recording in the Bank on distribution
     stake_reward: u64,
     /// Vote commission for recording reward info
     commission: u8,
 };
+
+test parseStakes {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    var accounts_db = try sig.accounts_db.Two.initTest(allocator);
+    defer accounts_db.deinit();
+
+    var ancestors = Ancestors.EMPTY;
+    defer ancestors.deinit(allocator);
+    try ancestors.addSlot(allocator, 0);
+
+    const account_store = sig.accounts_db.AccountStore{ .accounts_db_two = &accounts_db.db };
+    const slot_account_store = account_store.forSlot(0, &ancestors);
+
+    var stakes = Stakes(.delegation).EMPTY;
+    defer stakes.deinit(allocator);
+
+    const test_accounts_1 = try sig.core.stakes.TestStakedNodeAccounts.init(
+        allocator,
+        random,
+        1_000_000_000,
+    );
+    defer test_accounts_1.deinit(allocator);
+
+    const stake_address_1 = test_accounts_1.stake_pubkey;
+    const stake_account_1 = try test_accounts_1.stake_account.clone(allocator);
+    defer stake_account_1.deinit(allocator);
+    const stake_state_1 = try sig.bincode.readFromSlice(
+        allocator,
+        StakeStateV2,
+        stake_account_1.data,
+        .{},
+    );
+
+    try stakes.stake_accounts.put(
+        allocator,
+        stake_address_1,
+        stake_state_1.getDelegation().?,
+    );
+
+    { // No stake accounts
+        const parsed_stakes = parseStakes(
+            allocator,
+            &stakes,
+            slot_account_store.reader(),
+        );
+        try std.testing.expectError(error.StakeAccountNotFound, parsed_stakes);
+    }
+
+    // Invalid Stake State
+    {
+        const invalid_state_1: StakeStateV2 = .uninitialized;
+
+        var invalid_stake_account_1 = stake_account_1;
+        defer invalid_stake_account_1.deinit(allocator);
+        invalid_stake_account_1.data = try allocator.alloc(u8, StakeStateV2.SIZE);
+        @memset(invalid_stake_account_1.data, 0);
+        _ = try sig.bincode.writeToSlice(
+            invalid_stake_account_1.data,
+            &invalid_state_1,
+            .{},
+        );
+
+        try accounts_db.db.put(0, stake_address_1, invalid_stake_account_1);
+        const parsed_stakes = parseStakes(
+            allocator,
+            &stakes,
+            slot_account_store.reader(),
+        );
+        try std.testing.expectError(error.InvalidStakeAccount, parsed_stakes);
+    }
+
+    // Invalid Delegation
+    {
+        var invalid_state_1 = stake_state_1;
+        invalid_state_1.stake.stake.delegation.voter_pubkey = Pubkey.initRandom(random);
+
+        var invalid_stake_account_1 = stake_account_1;
+        defer invalid_stake_account_1.deinit(allocator);
+        invalid_stake_account_1.data = try allocator.alloc(u8, StakeStateV2.SIZE);
+        @memset(invalid_stake_account_1.data, 0);
+        _ = try sig.bincode.writeToSlice(
+            invalid_stake_account_1.data,
+            &invalid_state_1,
+            .{},
+        );
+
+        try accounts_db.db.put(0, stake_address_1, invalid_stake_account_1);
+        const parsed_stakes = parseStakes(
+            allocator,
+            &stakes,
+            slot_account_store.reader(),
+        );
+        try std.testing.expectError(error.InvalidDelegation, parsed_stakes);
+    }
+
+    // Valid Stake Account
+    {
+        try accounts_db.db.put(0, stake_address_1, stake_account_1);
+        const parsed_stakes = try parseStakes(
+            allocator,
+            &stakes,
+            slot_account_store.reader(),
+        );
+        defer parsed_stakes.deinit(allocator);
+    }
+
+    const vote_address_1 = test_accounts_1.vote_pubkey;
+    const vote_account_1 = try test_accounts_1.vote_account.clone(allocator);
+    defer vote_account_1.deinit(allocator);
+
+    // Vote Account not Cached
+    {
+        try accounts_db.db.put(0, vote_address_1, vote_account_1);
+        const parsed_stakes = parseStakes(
+            allocator,
+            &stakes,
+            slot_account_store.reader(),
+        );
+        try std.testing.expectError(error.VoteAccountNotCached, parsed_stakes);
+    }
+}

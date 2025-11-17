@@ -5,7 +5,7 @@ const Allocator = std.mem.Allocator;
 
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
-const StakeAndVoteAccountsMap = sig.core.vote_accounts.StakeAndVoteAccountsMap;
+const StakeAndVoteAccountsMap = sig.core.stakes.StakeAndVoteAccountsMap;
 
 const SortedMap = sig.utils.collections.SortedMapUnmanaged;
 
@@ -103,7 +103,7 @@ pub fn calculateStakeWeightedTimestamp(
 }
 
 test "uses median: low-staked outliers" {
-    const VoteAccount = sig.core.vote_accounts.VoteAccount;
+    const VoteAccount = sig.core.stakes.VoteAccount;
     const denintMapAndValues = sig.utils.collections.deinitMapAndValues;
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
@@ -239,7 +239,7 @@ test "uses median: low-staked outliers" {
 }
 
 test "uses median: high-staked outliers" {
-    const VoteAccount = sig.core.vote_accounts.VoteAccount;
+    const VoteAccount = sig.core.stakes.VoteAccount;
     const denintMapAndValues = sig.utils.collections.deinitMapAndValues;
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
@@ -326,7 +326,7 @@ test "uses median: high-staked outliers" {
 }
 
 test "poh" {
-    const VoteAccount = sig.core.vote_accounts.VoteAccount;
+    const VoteAccount = sig.core.stakes.VoteAccount;
     const denintMapAndValues = sig.utils.collections.deinitMapAndValues;
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
@@ -451,7 +451,7 @@ test "poh" {
 }
 
 test "levels" {
-    const VoteAccount = sig.core.vote_accounts.VoteAccount;
+    const VoteAccount = sig.core.stakes.VoteAccount;
     const denintMapAndValues = sig.utils.collections.deinitMapAndValues;
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
@@ -569,7 +569,7 @@ test "levels" {
 }
 
 test "fast slow" {
-    const VoteAccount = sig.core.vote_accounts.VoteAccount;
+    const VoteAccount = sig.core.stakes.VoteAccount;
     const denintMapAndValues = sig.utils.collections.deinitMapAndValues;
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
@@ -677,7 +677,7 @@ test "fast slow" {
 }
 
 test "early" {
-    const VoteAccount = sig.core.vote_accounts.VoteAccount;
+    const VoteAccount = sig.core.stakes.VoteAccount;
     const denintMapAndValues = sig.utils.collections.deinitMapAndValues;
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 

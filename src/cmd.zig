@@ -2201,8 +2201,9 @@ const ReplayAndConsensusServiceState = struct {
 
             const lt_hash = manifest.bank_extra.accounts_lt_hash;
 
+            const account_reader = account_store.reader().forSlot(&bank_fields.ancestors);
             var root_slot_state: sig.core.SlotState =
-                try .fromBankFields(allocator, bank_fields, lt_hash);
+                try .fromBankFields(allocator, bank_fields, lt_hash, account_reader);
             errdefer root_slot_state.deinit(allocator);
 
             const hard_forks = try bank_fields.hard_forks.clone(allocator);
