@@ -61,8 +61,8 @@ export fn sol_compat_txn_execute_v1(
     return 1;
 }
 
-const builtins = @import("builtins.zig");
 const bank_methods = @import("bank_methods.zig");
+const builtin_programs = sig.runtime.builtin_programs;
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -309,7 +309,7 @@ fn executeTxnContext(
 
             const account_reader_for_ancestors = account_store.reader().forSlot(&ancestors);
             // Add builtin programs
-            for (builtins.BUILTINS) |builtin_program| {
+            for (builtin_programs.BUILTINS) |builtin_program| {
                 // If the feature id is not null, and the builtin program is not migrated, add
                 // to the builtin accounts map. If the builtin program has been migrated it will
                 // have an entry in accounts db with owner bpf_loader.v3.ID (i.e. it is now a BPF program).
