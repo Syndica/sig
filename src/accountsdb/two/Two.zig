@@ -102,6 +102,7 @@ pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot) error{FailedToRoot}!void
         std.debug.assert(rooted_index.slot == newly_rooted_slot);
         std.debug.assert(!rooted_index.is_empty.load(.acquire));
 
+        for (rooted_index.entries.values()) |data| data.deinit(self.allocator);
         rooted_index.entries.clearRetainingCapacity();
         rooted_index.is_empty.store(true, .release);
     }
