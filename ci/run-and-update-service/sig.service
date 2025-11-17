@@ -10,7 +10,7 @@ Restart=always
 User=sig
 Group=sig
 LimitNOFILE=infinity
-ExecStopPost=/usr/bin/bash -c 'echo "level=error message=exited" >> /home/sig/sig/logs/sig.log'
+ExecStopPost=/home/sig/sig/ci/run-and-update-service/handle-exit.sh
 MemoryAccounting=yes
 MemoryMax=85%
 
