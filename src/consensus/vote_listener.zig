@@ -954,18 +954,18 @@ fn trackNewVotesAndNotifyConfirmations(
 
     if (is_new_vote) {
         senders.subscriptions.notifyVote(vote_pubkey, vote, vote_transaction_signature);
-        const vote_slots_duped = try allocator.dupe(Slot, vote_slots);
-        errdefer allocator.free(vote_slots);
-        senders.verified_vote.send(.{
-            .key = vote_pubkey,
-            .slots = vote_slots_duped,
-        }) catch |err| {
-            logger.err().logf(
-                "{s}: verified vote couldn't send: " ++
-                    ".{{ .vote_pubkey = {f}, .vote_slots_duped = {any} }}",
-                .{ @errorName(err), vote_pubkey, vote_slots_duped },
-            );
-        };
+        // const vote_slots_duped = try allocator.dupe(Slot, vote_slots);
+        // errdefer allocator.free(vote_slots);
+        // senders.verified_vote.send(.{
+        //     .key = vote_pubkey,
+        //     .slots = vote_slots_duped,
+        // }) catch |err| {
+        //     logger.err().logf(
+        //         "{s}: verified vote couldn't send: " ++
+        //             ".{{ .vote_pubkey = {f}, .vote_slots_duped = {any} }}",
+        //         .{ @errorName(err), vote_pubkey, vote_slots_duped },
+        //     );
+        // };
     }
 }
 

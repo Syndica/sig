@@ -113,7 +113,7 @@ pub const TowerConsensus = struct {
 
     /// this is used for some temporary allocations that don't outlive
     /// functions; ie, it isn't used for any persistent data
-    arena_state: std.heap.ArenaAllocator.State,
+    arena: std.heap.ArenaAllocator,
 
     pub fn deinit(self: TowerConsensus, allocator: Allocator) void {
         self.replay_tower.deinit(allocator);
@@ -123,7 +123,7 @@ pub const TowerConsensus = struct {
         latest_validator_votes.deinit(allocator);
 
         self.slot_data.deinit(allocator);
-        self.arena_state.promote(allocator).deinit();
+        self.arena.deinit();
     }
 
     pub fn init(
@@ -181,7 +181,7 @@ pub const TowerConsensus = struct {
 
             .vote_collector = vote_collector,
 
-            .arena_state = .{},
+            .arena = .init(allocator),
         };
     }
 
@@ -353,12 +353,8 @@ pub const TowerConsensus = struct {
             results: []const ReplayResult,
         },
     ) !void {
-        var arena_state = self.arena_state.promote(allocator);
-        defer {
-            _ = arena_state.reset(.retain_capacity);
-            self.arena_state = arena_state.state;
-        }
-        const arena = arena_state.allocator();
+        const arena = self.arena.allocator();
+        defer _ = self.arena.reset(.retain_capacity);
 
         try self.vote_collector.collectAndProcessVotes(allocator, .from(self.logger), .{
             .slot_data_provider = .{
@@ -1478,7 +1474,7 @@ fn checkAndHandleNewRoot(
     // Set new root.
     slot_tracker.root = new_root;
     // Prune non rooted slots
-    slot_tracker.pruneNonRooted(allocator);
+    slot_tracker.pruneNonRooted();
 
     // TODO
     // - Prune program cache bank_forks.read().unwrap().prune_program_cache(new_root);

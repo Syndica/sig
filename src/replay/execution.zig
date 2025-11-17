@@ -55,20 +55,20 @@ pub const ReplayResult = struct {
 pub fn replayActiveSlots(state: *ReplayState) ![]const ReplayResult {
     const can_multi_thread = state.thread_pool.max_threads > 1;
     return if (can_multi_thread)
-        try awaitResults(state.allocator, try replayActiveSlotsAsync(state))
+        try awaitResults(state.replay_gpa, try replayActiveSlotsAsync(state.replay_gpa, state))
     else
         try replayActiveSlotsSync(state);
 }
 
-fn replayActiveSlotsAsync(state: *ReplayState) ![]struct { Slot, *ReplaySlotFuture } {
+fn replayActiveSlotsAsync(allocator: Allocator, state: *ReplayState) ![]struct { Slot, *ReplaySlotFuture } {
     var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsAsync" });
     defer zone.deinit();
 
     const slot_tracker = &state.slot_tracker;
     const epoch_tracker = &state.epoch_tracker;
 
-    const active_slots = try slot_tracker.activeSlots(state.allocator);
-    defer state.allocator.free(active_slots);
+    const active_slots = try slot_tracker.activeSlots(state.slot_tracker_gpa);
+    defer state.slot_tracker_gpa.free(active_slots);
     state.execution_log_helper.logActiveSlots(active_slots);
 
     if (active_slots.len == 0) {
@@ -77,8 +77,8 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]struct { Slot, *ReplaySlotFutu
 
     var slot_statuses = std.ArrayListUnmanaged(struct { Slot, *ReplaySlotFuture }).empty;
     errdefer {
-        for (slot_statuses.items) |status| status[1].destroy(state.allocator);
-        slot_statuses.deinit(state.allocator);
+        for (slot_statuses.items) |status| status[1].destroy(allocator);
+        slot_statuses.deinit(allocator);
     }
 
     for (active_slots) |slot| {
@@ -90,17 +90,17 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]struct { Slot, *ReplaySlotFutu
         };
 
         const future = try replaySlotAsync(
-            state.allocator,
+            state.replay_gpa,
             .from(state.logger),
             &state.thread_pool,
             params,
         );
 
-        errdefer future.destroy(state.allocator);
-        try slot_statuses.append(state.allocator, .{ slot, future });
+        errdefer future.destroy(allocator);
+        try slot_statuses.append(allocator, .{ slot, future });
     }
 
-    return slot_statuses.toOwnedSlice(state.allocator);
+    return slot_statuses.toOwnedSlice(allocator);
 }
 
 /// Takes ownership over the futures and destroys them
@@ -131,7 +131,7 @@ fn awaitResults(
 /// Fully synchronous version of replayActiveSlotsAsync that does not use
 /// multithreading or async execution in any way.
 fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
-    const allocator = state.allocator;
+    const allocator = state.replay_gpa;
     var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsSync" });
     defer zone.deinit();
 
@@ -438,7 +438,7 @@ fn prepareSlot(
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
 
-    const progress_get_or_put = try state.progress_map.map.getOrPut(state.allocator, slot);
+    const progress_get_or_put = try state.progress_map.map.getOrPut(state.progress_map_gpa, slot);
     if (progress_get_or_put.found_existing and progress_get_or_put.value_ptr.is_dead) {
         state.logger.info().logf("slot is dead: {}", .{slot});
         return .dead;
@@ -454,7 +454,7 @@ fn prepareSlot(
         const parent = state.progress_map.getForkProgress(parent_slot) orelse
             return error.MissingParentProgress;
 
-        progress_get_or_put.value_ptr.* = try ForkProgress.initFromParent(state.allocator, .{
+        progress_get_or_put.value_ptr.* = try ForkProgress.initFromParent(state.progress_map_gpa, .{
             .slot = slot,
             .parent_slot = parent_slot,
             .parent = parent,
@@ -484,7 +484,7 @@ fn prepareSlot(
     const entries, const slot_is_full = blk: {
         const entries, const num_shreds, const slot_is_full =
             state.ledger.reader().getSlotEntriesWithShredInfo(
-                state.allocator,
+                state.replay_gpa,
                 slot,
                 confirmation_progress.num_shreds,
                 false,
@@ -496,8 +496,8 @@ fn prepareSlot(
                 else => return err,
             };
         errdefer {
-            for (entries) |entry| entry.deinit(state.allocator);
-            state.allocator.free(entries);
+            for (entries) |entry| entry.deinit(state.replay_gpa);
+            state.replay_gpa.free(entries);
         }
 
         state.execution_log_helper.logEntryCount(entries.len, slot);
@@ -528,7 +528,7 @@ fn prepareSlot(
     // additional mechanisms for lookup tables to detect slot age (e.g. block height).
     const slot_hashes = try replay.update_sysvar.getSysvarFromAccount(
         sig.runtime.sysvar.SlotHashes,
-        state.allocator,
+        state.slot_tracker_gpa,
         slot_account_reader,
     ) orelse return error.MissingSlotHashesSysvar;
 
@@ -556,6 +556,7 @@ fn prepareSlot(
         .logger = .from(state.logger),
         .account_store = state.account_store,
         .slot_state = slot_info.state,
+        .state = state,
         .status_cache = &state.status_cache,
         .stakes_cache = &slot_info.state.stakes_cache,
         .new_rate_activation_epoch = new_rate_activation_epoch,

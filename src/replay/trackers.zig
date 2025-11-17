@@ -22,6 +22,7 @@ const SlotState = sig.core.SlotState;
 /// This struct is *not* thread safe, and the lifetimes of the returned pointers
 /// will end as soon as the items are removed.
 pub const SlotTracker = struct {
+    allocator: Allocator,
     slots: std.AutoArrayHashMapUnmanaged(Slot, *Element),
     root: Slot,
 
@@ -49,18 +50,21 @@ pub const SlotTracker = struct {
         slot_init: Element,
     ) std.mem.Allocator.Error!SlotTracker {
         var self: SlotTracker = .{
+            .allocator = allocator,
             .root = root_slot,
             .slots = .empty,
         };
-        errdefer self.deinit(allocator);
+        errdefer self.deinit();
 
-        try self.put(allocator, root_slot, slot_init);
+        try self.put(root_slot, slot_init);
         tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
 
         return self;
     }
 
-    pub fn deinit(self: SlotTracker, allocator: Allocator) void {
+    pub fn deinit(self: SlotTracker) void {
+        const allocator = self.allocator;
+
         var slots = self.slots;
         for (slots.values()) |element| {
             element.constants.deinit(allocator);
@@ -72,10 +76,10 @@ pub const SlotTracker = struct {
 
     pub fn put(
         self: *SlotTracker,
-        allocator: Allocator,
         slot: Slot,
         slot_init: Element,
     ) Allocator.Error!void {
+        const allocator = self.allocator;
         defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
 
         try self.slots.ensureUnusedCapacity(allocator, 1);
@@ -96,10 +100,10 @@ pub const SlotTracker = struct {
 
     pub fn getOrPut(
         self: *SlotTracker,
-        allocator: Allocator,
         slot: Slot,
         slot_init: Element,
     ) Allocator.Error!GetOrPutResult {
+        const allocator = self.allocator;
         defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
 
         if (self.get(slot)) |existing| return .{
@@ -183,7 +187,7 @@ pub const SlotTracker = struct {
     /// Analogous to [prune_non_rooted](https://github.com/anza-xyz/agave/blob/441258229dfed75e45be8f99c77865f18886d4ba/runtime/src/bank_forks.rs#L591)
     //  TODO Revisit: Currently this removes all slots less than the rooted slot.
     // In Agave, only the slots not in the root path are removed.
-    pub fn pruneNonRooted(self: *SlotTracker, allocator: Allocator) void {
+    pub fn pruneNonRooted(self: *SlotTracker) void {
         const zone = tracy.Zone.init(@src(), .{ .name = "SlotTracker.pruneNonRooted" });
         defer zone.deinit();
 
@@ -194,9 +198,9 @@ pub const SlotTracker = struct {
         while (index < slice.len) {
             if (slice.items(.key)[index] < self.root) {
                 const element = slice.items(.value)[index];
-                element.state.deinit(allocator);
-                element.constants.deinit(allocator);
-                allocator.destroy(element);
+                element.state.deinit(self.allocator);
+                element.constants.deinit(self.allocator);
+                self.allocator.destroy(element);
                 self.slots.swapRemoveAt(index);
                 slice = self.slots.entries.slice();
             } else {
@@ -209,6 +213,7 @@ pub const SlotTracker = struct {
 /// Tracks forks for the purpose of optimistically rooting slots in the absence
 /// of consensus.
 pub const SlotTree = struct {
+    allocator: Allocator,
     root: *Node,
     leaves: List(*Node),
 
@@ -234,14 +239,15 @@ pub const SlotTree = struct {
         try leaves.append(allocator, root_node);
 
         return .{
+            .allocator = allocator,
             .root = root_node,
             .leaves = leaves,
         };
     }
 
     /// record a new slot
-    pub fn record(self: *SlotTree, allocator: Allocator, slot: Slot, parent: Slot) !void {
-        const node = try allocator.create(Node);
+    pub fn record(self: *SlotTree, slot: Slot, parent: Slot) !void {
+        const node = try self.allocator.create(Node);
         node.* = .{ .slot = slot, .parent = null, .next = .{} };
 
         // check leaves first, it's probably there
@@ -249,15 +255,15 @@ pub const SlotTree = struct {
             const leaf = leaf_ptr_ptr.*;
             if (leaf.slot == parent) {
                 node.parent = leaf;
-                try leaf.next.append(allocator, node);
+                try leaf.next.append(self.allocator, node);
                 leaf_ptr_ptr.* = node;
                 break;
             }
         } else {
             // couldn't find the parent in leaves, so this slot must be creating
             // a new fork (or it's redundnant TODO)
-            try self.leaves.append(allocator, node);
-            try self.root.append(allocator, node, parent);
+            try self.leaves.append(self.allocator, node);
+            try self.root.append(self.allocator, node, parent);
         }
     }
 
@@ -278,7 +284,7 @@ pub const SlotTree = struct {
     /// 2. set the "root" slot to be the greatest common ancestor of all
     ///    remaining forks that is at least 32 blocks (not slots) older than the
     ///    leaf of the oldest fork that we are keeping after pruning.
-    pub fn reRoot(self: *SlotTree, allocator: Allocator) ?Slot {
+    pub fn reRoot(self: *SlotTree) ?Slot {
         const starting_root = self.root.slot;
 
         std.mem.sort(
@@ -297,7 +303,7 @@ pub const SlotTree = struct {
         for (self.leaves.items, 0..) |leaf_to_check, i| {
             if (last_leaf -| leaf_to_check.slot > min_age) {
                 for (self.leaves.items[i..]) |leaf_to_prune| {
-                    std.debug.assert(leaf_to_prune.pruneUpstreamToFork(allocator));
+                    std.debug.assert(leaf_to_prune.pruneUpstreamToFork(self.allocator));
                 }
                 self.leaves.shrinkRetainingCapacity(i);
                 break;
@@ -351,7 +357,7 @@ pub const SlotTree = struct {
         while (maybe_parent) |node_to_destroy| {
             std.debug.assert(node_to_destroy.next.items.len == 1); // older forks were pruned
             maybe_parent = node_to_destroy.parent;
-            node_to_destroy.destroy(allocator);
+            node_to_destroy.destroy(self.allocator);
         }
         self.root = root_candidate;
         self.root.parent = null;

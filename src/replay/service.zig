@@ -66,14 +66,12 @@ pub fn advanceReplay(
     const zone = tracy.Zone.init(@src(), .{ .name = "advanceReplay" });
     defer zone.deinit();
 
-    const allocator = replay_state.allocator;
-
     var start_time = sig.time.Timer.start();
     replay_state.logger.debug().log("advancing replay");
 
     // find slots in the ledger
     try trackNewSlots(
-        allocator,
+        replay_state,
         replay_state.logger,
         replay_state.account_store,
         replay_state.ledger,
@@ -87,7 +85,7 @@ pub fn advanceReplay(
 
     // replay slots
     const slot_results = try replay.execution.replayActiveSlots(replay_state);
-    defer allocator.free(slot_results);
+    defer replay_state.replay_gpa.free(slot_results);
 
     // freeze slots
     const processed_a_slot: bool = try freezeCompletedSlots(replay_state, slot_results);
@@ -97,12 +95,12 @@ pub fn advanceReplay(
         replay_state.logger.info().log("consensus.tower.process");
 
         var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
-        defer gossip_verified_vote_hashes.deinit(allocator);
+        defer gossip_verified_vote_hashes.deinit(replay_state.consensus_gpa);
 
         var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
-        defer duplicate_confirmed_slots.deinit(allocator);
+        defer duplicate_confirmed_slots.deinit(replay_state.consensus_gpa);
 
-        try consensus.tower.process(allocator, .{
+        try consensus.tower.process(replay_state.consensus_gpa, .{
             .account_reader = replay_state.account_store.reader(),
             .gossip_table = consensus.gossip_table,
             .ledger = replay_state.ledger,
@@ -128,7 +126,9 @@ pub fn advanceReplay(
 
 pub const Dependencies = struct {
     /// Used for all allocations within the replay stage
-    allocator: Allocator,
+    gpa: Allocator,
+    tracing_gpas: *std.SegmentedList(tracy.TracingAllocator, 0),
+
     logger: Logger,
     identity: sig.identity.ValidatorIdentity,
     signing: sig.identity.SigningKeys,
@@ -155,10 +155,29 @@ pub const Dependencies = struct {
     hard_forks: sig.core.HardForks,
 
     replay_threads: u32,
+
+    fn addTracingGpa(self: @This(), name: [*:0]const u8) !Allocator {
+        const tracing_gpa = try self.tracing_gpas.addOne(self.gpa);
+        tracing_gpa.* = .{ .name = name, .parent = self.gpa };
+        return tracing_gpa.allocator();
+    }
 };
 
 pub const ReplayState = struct {
-    allocator: Allocator,
+    gpa: Allocator,
+    tracing_gpas: *std.SegmentedList(tracy.TracingAllocator, 0),
+
+    replay_gpa: Allocator,
+    consensus_gpa: Allocator,
+
+    slot_tracker_gpa: Allocator,
+    epoch_tracker_gpa: Allocator,
+    progress_map_gpa: Allocator,
+    votes_gpa: Allocator,
+    slot_tree_gpa: Allocator,
+    cache_gpa: Allocator,
+    fork_gpa: Allocator,
+
     logger: Logger,
     identity: sig.identity.ValidatorIdentity,
     signing: sig.identity.SigningKeys,
@@ -179,61 +198,88 @@ pub const ReplayState = struct {
         self.thread_pool.shutdown();
         self.thread_pool.deinit();
 
-        self.slot_tracker.deinit(self.allocator);
-        self.epoch_tracker.deinit(self.allocator);
-        self.progress_map.deinit(self.allocator);
+        self.slot_tracker.deinit();
+        self.epoch_tracker.deinit(self.epoch_tracker_gpa);
+        self.progress_map.deinit(self.progress_map_gpa);
 
-        while (self.replay_votes_channel.tryReceive()) |item| item.deinit(self.allocator);
+        while (self.replay_votes_channel.tryReceive()) |item| item.deinit(self.votes_gpa);
         self.replay_votes_channel.destroy();
 
-        self.slot_tree.deinit(self.allocator);
-        self.status_cache.deinit(self.allocator);
-        self.hard_forks.deinit(self.allocator);
+        self.slot_tree.deinit(self.slot_tree_gpa);
+        self.status_cache.deinit(self.cache_gpa);
+        self.hard_forks.deinit(self.fork_gpa);
+
+        self.tracing_gpas.deinit(self.gpa);
+        self.gpa.destroy(self.tracing_gpas);
     }
 
     pub fn init(deps: Dependencies) !ReplayState {
         const zone = tracy.Zone.init(@src(), .{ .name = "ReplayState init" });
         defer zone.deinit();
 
-        var slot_tracker: SlotTracker = try .init(deps.allocator, deps.root.slot, .{
+        const replay_gpa = try deps.addTracingGpa("replay gpa");
+        const consensus_gpa = try deps.addTracingGpa("consensus gpa");
+
+        const slot_tracker_gpa = try deps.addTracingGpa("slot_tracker gpa");
+        const epoch_tracker_gpa = try deps.addTracingGpa("epoch_tracker gpa");
+        const progress_map_gpa = try deps.addTracingGpa("progress_map gpa");
+        const votes_gpa = try deps.addTracingGpa("votes gpa");
+        const slot_tree_gpa = try deps.addTracingGpa("slot_tree gpa");
+        const cache_gpa = try deps.addTracingGpa("cache gpa");
+        const fork_gpa = try deps.addTracingGpa("forl gpa");
+
+        var slot_tracker: SlotTracker = try .init(slot_tracker_gpa, deps.root.slot, .{
             .constants = deps.root.constants,
             .state = deps.root.state,
         });
-        errdefer slot_tracker.deinit(deps.allocator);
+        errdefer slot_tracker.deinit();
         errdefer {
             // do not free the root slot data parameter, we don't own it unless the function returns successfully
-            deps.allocator.destroy(slot_tracker.slots.fetchSwapRemove(deps.root.slot).?.value);
+            slot_tracker_gpa.destroy(slot_tracker.slots.fetchSwapRemove(deps.root.slot).?.value);
         }
 
-        const replay_votes_channel = try Channel(ParsedVote).create(deps.allocator);
+        const replay_votes_channel = try Channel(ParsedVote).create(votes_gpa);
         errdefer replay_votes_channel.destroy();
 
         var epoch_tracker: EpochTracker = .{ .schedule = deps.epoch_schedule };
         try epoch_tracker.epochs.put(
-            deps.allocator,
+            epoch_tracker_gpa,
             deps.current_epoch,
             deps.current_epoch_constants,
         );
-        errdefer epoch_tracker.deinit(deps.allocator);
+        errdefer epoch_tracker.deinit(epoch_tracker_gpa);
         errdefer {
             // do not free the current epoch constants parameter, we don't own it unless the function returns successfully
             std.debug.assert(epoch_tracker.epochs.swapRemove(deps.current_epoch));
         }
 
         const progress_map = try initProgressMap(
-            deps.allocator,
+            progress_map_gpa,
             &slot_tracker,
             &epoch_tracker,
             deps.identity.validator,
             deps.identity.vote_account,
         );
-        errdefer progress_map.deinit(deps.allocator);
+        errdefer progress_map.deinit(progress_map_gpa);
 
-        const slot_tree = try SlotTree.init(deps.allocator, deps.root.slot);
-        errdefer slot_tree.deinit(deps.allocator);
+        const slot_tree = try SlotTree.init(slot_tree_gpa, deps.root.slot);
+        errdefer slot_tree.deinit(slot_tree_gpa);
 
         return .{
-            .allocator = deps.allocator,
+            .gpa = deps.gpa,
+            .tracing_gpas = deps.tracing_gpas,
+
+            .replay_gpa = replay_gpa,
+            .consensus_gpa = consensus_gpa,
+
+            .slot_tracker_gpa = slot_tracker_gpa,
+            .epoch_tracker_gpa = epoch_tracker_gpa,
+            .progress_map_gpa = progress_map_gpa,
+            .votes_gpa = votes_gpa,
+            .slot_tree_gpa = slot_tree_gpa,
+            .cache_gpa = cache_gpa,
+            .fork_gpa = fork_gpa,
+
             .logger = .from(deps.logger),
             .identity = deps.identity,
             .signing = deps.signing,
@@ -304,7 +350,7 @@ pub const FrozenSlotsSortCtx = struct {
 /// Analogous to
 /// [generate_new_bank_forks](https://github.com/anza-xyz/agave/blob/146ebd8be3857d530c0946003fcd58be220c3290/core/src/replay_stage.rs#L4149)
 pub fn trackNewSlots(
-    allocator: Allocator,
+    self: *ReplayState,
     logger: Logger,
     account_store: AccountStore,
     ledger: *Ledger,
@@ -318,6 +364,8 @@ pub fn trackNewSlots(
 ) !void {
     var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
     defer zone.deinit();
+
+    const allocator = self.replay_gpa;
 
     const root = slot_tracker.root;
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
@@ -347,7 +395,7 @@ pub fn trackNewSlots(
                 return error.MissingEpoch;
 
             const constants, var state = try newSlotFromParent(
-                allocator,
+                slot_tracker.allocator,
                 account_store.reader(),
                 epoch_info.ticks_per_slot,
                 parent_slot,
@@ -356,8 +404,8 @@ pub fn trackNewSlots(
                 slot_leaders.get(slot) orelse return error.UnknownLeader,
                 slot,
             );
-            errdefer constants.deinit(allocator);
-            errdefer state.deinit(allocator);
+            errdefer constants.deinit(slot_tracker.allocator);
+            errdefer state.deinit(slot_tracker.allocator);
 
             try updateSysvarsForNewSlot(
                 allocator,
@@ -370,8 +418,8 @@ pub fn trackNewSlots(
                 hard_forks,
             );
 
-            try slot_tracker.put(allocator, slot, .{ .constants = constants, .state = state });
-            try slot_tree.record(allocator, slot, constants.parent_slot);
+            try slot_tracker.put(slot, .{ .constants = constants, .state = state });
+            try slot_tree.record(slot, constants.parent_slot);
 
             // TODO: update_fork_propagated_threshold_from_votes
         }
@@ -495,7 +543,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
             if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
                 state.logger.info().logf("finished replaying slot: {}", .{slot});
                 const epoch = epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
-                try replay.freeze.freezeSlot(state.allocator, .init(
+                try replay.freeze.freezeSlot(state.replay_gpa, .init(
                     .from(state.logger),
                     state.account_store,
                     &epoch,
@@ -503,6 +551,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     slot_info.constants,
                     slot,
                     last_entry_hash,
+                    state.slot_tracker_gpa,
                 ));
                 processed_a_slot = true;
             } else {
@@ -516,7 +565,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
 
 /// bypass the tower bft consensus protocol, simply rooting slots with SlotTree.reRoot
 fn bypassConsensus(state: *ReplayState) !void {
-    const maybe_root = state.slot_tree.reRoot(state.allocator);
+    const maybe_root = state.slot_tree.reRoot();
     state.logger.info().logf("bypass consensus: {any}", .{maybe_root});
 
     if (maybe_root) |new_root| {
@@ -524,10 +573,10 @@ fn bypassConsensus(state: *ReplayState) !void {
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root = new_root;
-        slot_tracker.pruneNonRooted(state.allocator);
+        slot_tracker.pruneNonRooted();
 
         try state.account_store.onSlotRooted(
-            state.allocator,
+            state.replay_gpa,
             new_root,
             slot_tracker.get(new_root).?.constants.fee_rate_governor.lamports_per_signature,
         );

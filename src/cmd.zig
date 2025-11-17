@@ -1051,8 +1051,7 @@ fn validator(
     const zone = tracy.Zone.init(@src(), .{ .name = "validator" });
     defer zone.deinit();
 
-    var app_base_gpa = tracy.TracingAllocator{ .name = "AppBase gpa", .parent = allocator };
-    var app_base = try AppBase.init(app_base_gpa.allocator(), cfg);
+    var app_base = try AppBase.init(allocator, cfg);
     defer {
         app_base.shutdown();
         app_base.deinit();
@@ -1084,23 +1083,22 @@ fn validator(
         gossip_gpa.allocator().destroy(gossip_service);
     }
 
-    var geyser_gpa = tracy.TracingAllocator{ .name = "geyser gpa", .parent = allocator };
     const geyser_writer: ?*GeyserWriter = if (!cfg.geyser.enable)
         null
     else
         try createGeyserWriter(
-            geyser_gpa.allocator(),
+            allocator,
             cfg.geyser.pipe_path,
             cfg.geyser.writer_fba_bytes,
         );
     defer if (geyser_writer) |geyser| {
         geyser.deinit();
-        geyser_gpa.allocator().destroy(geyser.exit);
-        geyser_gpa.allocator().destroy(geyser);
+        allocator.destroy(geyser.exit);
+        allocator.destroy(geyser);
     };
 
     // snapshot
-    var snapshot_gpa = tracy.TracingAllocator{ .name = "snapshot gpa", .parent = allocator };
+    var snapshot_gpa = tracy.TracingAllocator{ .name = "accountsdb gpa", .parent = allocator };
     var loaded_snapshot = try loadSnapshot(
         snapshot_gpa.allocator(),
         cfg.accounts_db,
@@ -1118,9 +1116,8 @@ fn validator(
     const bank_fields = &collapsed_manifest.bank_fields;
 
     // ledger
-    var ledger_gpa = tracy.TracingAllocator{ .name = "ledger gpa", .parent = allocator };
     var ledger = try Ledger.init(
-        ledger_gpa.allocator(),
+        allocator,
         .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
         app_base.metrics_registry,
@@ -1144,9 +1141,8 @@ fn validator(
     const epoch = bank_fields.epoch;
 
     const staked_nodes = try collapsed_manifest.epochStakes(epoch);
-    var epoch_ctx_gpa = tracy.TracingAllocator{ .name = "epoch ctx gpa", .parent = allocator };
     var epoch_context_manager = 
-        try sig.adapter.EpochContextManager.init(epoch_ctx_gpa.allocator(), epoch_schedule);
+        try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
     defer epoch_context_manager.deinit();
 
     try epoch_context_manager.contexts.realign(epoch);
@@ -1203,11 +1199,10 @@ fn validator(
     const turbine_config = cfg.turbine;
 
     // shred network
-    var shred_gpa = tracy.TracingAllocator{ .name = "shred network", .parent = allocator };
     var shred_network_manager = try sig.shred_network.start(
         cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
         .{
-            .allocator = shred_gpa.allocator(),
+            .allocator = allocator,
             .logger = .from(app_base.logger),
             .registry = app_base.metrics_registry,
             .random = prng.random(),
@@ -1229,8 +1224,7 @@ fn validator(
     else
         null;
 
-    var replay_gpa = tracy.TracingAllocator{ .name = "replay gpa", .parent = allocator };
-    var replay_service_state: ReplayAndConsensusServiceState = try .init(replay_gpa.allocator(), .{
+    var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
@@ -1239,7 +1233,7 @@ fn validator(
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = cfg.voting_enabled,
     });
-    defer replay_service_state.deinit(replay_gpa.allocator());
+    defer replay_service_state.deinit(allocator);
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
@@ -2067,6 +2061,13 @@ const ReplayAndConsensusServiceState = struct {
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
+            var tracing_gpas = try allocator.create(std.SegmentedList(tracy.TracingAllocator, 0));
+            tracing_gpas.* = .{};
+            errdefer {
+                tracing_gpas.deinit(allocator);
+                allocator.destroy(tracing_gpas);
+            }
+
             const account_store = params.loaded_snapshot.accounts_db.accountStore();
             const manifest = &params.loaded_snapshot.collapsed_manifest;
             const bank_fields = &manifest.bank_fields;
@@ -2102,7 +2103,8 @@ const ReplayAndConsensusServiceState = struct {
             errdefer current_epoch_constants.deinit(allocator);
 
             break :replay_state try .init(.{
-                .allocator = allocator,
+                .gpa = allocator,
+                .tracing_gpas = tracing_gpas,
                 .logger = .from(params.app_base.logger),
                 .identity = .{
                     .validator = .fromPublicKey(&params.app_base.my_keypair.public_key),

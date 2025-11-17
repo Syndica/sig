@@ -48,6 +48,7 @@ pub const FreezeParams = struct {
         constants: *const SlotConstants,
         slot: Slot,
         blockhash: Hash,
+        blockhash_allocator: Allocator,
     ) FreezeParams {
         return .{
             .logger = logger,
@@ -75,6 +76,7 @@ pub const FreezeParams = struct {
                 .account_reader = account_store.reader().forSlot(&constants.ancestors),
                 .capitalization = &state.capitalization,
                 .blockhash_queue = &state.blockhash_queue,
+                .blockhash_allocator = blockhash_allocator,
                 .rent = epoch.rent_collector.rent,
                 .slot = slot,
                 .blockhash = blockhash,
@@ -125,6 +127,7 @@ const FinalizeStateParams = struct {
     account_reader: SlotAccountReader,
     capitalization: *std.atomic.Value(u64),
     blockhash_queue: *sig.sync.RwMux(sig.core.BlockhashQueue),
+    blockhash_allocator: Allocator,
 
     // data params
     rent: Rent,
@@ -146,7 +149,7 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
     {
         var q = params.blockhash_queue.write();
         defer q.unlock();
-        try q.mut().insertHash(allocator, params.blockhash, params.lamports_per_signature);
+        try q.mut().insertHash(params.blockhash_allocator, params.blockhash, params.lamports_per_signature);
     }
     {
         var q = params.blockhash_queue.read();
@@ -248,6 +251,7 @@ fn tryPayoutFees(
                 .rent_epoch = old_account.rent_epoch,
             };
         } else AccountSharedData.EMPTY;
+    defer fee_collector_account.deinit(allocator);
 
     if (!fee_collector_account.owner.equals(&sig.runtime.program.system.ID)) {
         return error.InvalidAccountOwner;

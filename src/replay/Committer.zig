@@ -26,6 +26,7 @@ const Committer = @This();
 
 // All contained state is required to be thread-safe.
 logger: Logger,
+state: *replay.service.ReplayState,
 account_store: sig.accounts_db.AccountStore,
 slot_state: *sig.core.SlotState,
 status_cache: *sig.core.StatusCache,
@@ -83,13 +84,13 @@ pub fn commitTransactions(
                     isSimpleVoteTransaction(transaction.transaction))
                 {
                     if (try vote_listener.vote_parser.parseSanitizedVoteTransaction(
-                        allocator,
+                        self.state.votes_gpa,
                         transaction,
                     )) |parsed| {
                         if (parsed.vote.lastVotedSlot() != null) {
-                            self.replay_votes_sender.send(parsed) catch parsed.deinit(allocator);
+                            self.replay_votes_sender.send(parsed) catch parsed.deinit(self.state.votes_gpa);
                         } else {
-                            parsed.deinit(allocator);
+                            parsed.deinit(self.state.votes_gpa);
                         }
                     }
                 }
@@ -103,14 +104,14 @@ pub fn commitTransactions(
         const recent_blockhash = &transaction.transaction.msg.recent_blockhash;
         const signature = transaction.transaction.signatures[0];
         try self.status_cache.insert(
-            allocator,
+            self.state.cache_gpa,
             rng.random(),
             recent_blockhash,
             &message_hash.data,
             slot,
         );
         try self.status_cache.insert(
-            allocator,
+            self.state.cache_gpa,
             rng.random(),
             recent_blockhash,
             &signature.toBytes(),
@@ -127,7 +128,7 @@ pub fn commitTransactions(
 
     for (accounts_to_store.keys(), accounts_to_store.values()) |pubkey, account| {
         try self.stakes_cache.checkAndStore(
-            allocator,
+            self.state.slot_tracker_gpa,
             pubkey,
             account,
             self.new_rate_activation_epoch,
