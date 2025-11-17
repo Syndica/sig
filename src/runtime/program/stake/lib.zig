@@ -600,15 +600,7 @@ fn newStake(
 fn newWarmupCooldownRateEpoch(ic: *InstructionContext) ?Epoch {
     const epoch_schedule = ic.tc.sysvar_cache.get(sysvar.EpochSchedule) catch
         @panic("failed to get epoch schedule"); // agave calls .unwrap here (!!).
-
-    // Originally on FeatureSet, inlined here.
-    if (ic.tc.feature_set.get(.reduce_stake_warmup_cooldown)) |activated_slot| {
-        if (ic.tc.slot >= activated_slot) {
-            return epoch_schedule.getEpoch(activated_slot);
-        }
-    }
-
-    return null;
+    return ic.tc.feature_set.newWarmupCooldownRateEpoch(&epoch_schedule);
 }
 
 fn redelegateStake(

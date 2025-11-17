@@ -5,7 +5,7 @@ const ledger = @import("lib.zig");
 
 const Reward = ledger.transaction_status.Reward;
 const Rewards = ledger.transaction_status.Rewards;
-const RewardType = ledger.transaction_status.RewardType;
+const RewardType = sig.replay.rewards.RewardType;
 const Pubkey = sig.core.Pubkey;
 const initTestLedger = ledger_tests.initTestLedger;
 
@@ -22,7 +22,7 @@ fn createRewards(allocator: std.mem.Allocator, count: usize) !Rewards {
             .pubkey = &Pubkey.initRandom(rand).data,
             .lamports = @intCast(42 + i),
             .post_balance = std.math.maxInt(u64),
-            .reward_type = RewardType.Fee,
+            .reward_type = RewardType.fee,
             .commission = null,
         });
     }

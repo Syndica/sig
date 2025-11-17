@@ -52,6 +52,7 @@ const Stakes = core.Stakes;
 
 const StakeStateV2 = sig.runtime.program.stake.StakeStateV2;
 const VoteState = sig.runtime.program.vote.state.VoteState;
+const EpochRewardStatus = sig.replay.rewards.EpochRewardStatus;
 
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
@@ -91,9 +92,6 @@ pub const SlotConstants = struct {
     /// The fees requirements to use for transactions in this slot.
     fee_rate_governor: FeeRateGovernor,
 
-    /// Whether and how epoch rewards should be distributed in this slot.
-    epoch_reward_status: EpochRewardStatus,
-
     /// Set of slots leading to this one.
     /// Includes the current slot.
     /// Does not go back to genesis, may prune slots beyond 8192 generations ago.
@@ -109,6 +107,11 @@ pub const SlotConstants = struct {
     /// in the current slot.
     reserved_accounts: ReservedAccounts,
 
+    /// Inflation
+    /// NOTE: Agave keeps this in an RwLock in the Bank, but it should be constant across a slot,
+    /// so we keep it here.
+    inflation: Inflation,
+
     pub fn fromBankFields(
         allocator: Allocator,
         bank_fields: *const BankFields,
@@ -122,7 +125,6 @@ pub const SlotConstants = struct {
             .collector_id = bank_fields.collector_id,
             .max_tick_height = bank_fields.max_tick_height,
             .fee_rate_governor = bank_fields.fee_rate_governor,
-            .epoch_reward_status = .inactive,
             .ancestors = try bank_fields.ancestors.clone(allocator),
             .feature_set = feature_set,
             .reserved_accounts = try ReservedAccounts.initForSlot(
@@ -130,6 +132,7 @@ pub const SlotConstants = struct {
                 &feature_set,
                 bank_fields.slot,
             ),
+            .inflation = bank_fields.inflation,
         };
     }
 
@@ -149,16 +152,15 @@ pub const SlotConstants = struct {
             .collector_id = Pubkey.ZEROES,
             .max_tick_height = 0,
             .fee_rate_governor = fee_rate_governor,
-            .epoch_reward_status = .inactive,
             .ancestors = ancestors,
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = try ReservedAccounts.init(allocator),
+            .inflation = Inflation.DEFAULT,
         };
     }
 
     pub fn deinit(self_const: SlotConstants, allocator: Allocator) void {
         var self = self_const;
-        self.epoch_reward_status.deinit(allocator);
         self.ancestors.deinit(allocator);
         self.reserved_accounts.deinit(allocator);
     }
@@ -207,8 +209,12 @@ pub const SlotState = struct {
     /// 100% paid to leader
     collected_priority_fees: Atomic(u64),
 
+    /// Reward status, use to track reward distributions for N slots after an epoch boundary
+    reward_status: EpochRewardStatus,
+
     pub fn deinit(self: *SlotState, allocator: Allocator) void {
         self.stakes_cache.deinit(allocator);
+        self.reward_status.deinit(allocator);
 
         var blockhash_queue = self.blockhash_queue.tryWrite() orelse
             @panic("attempted to deinit SlotState.blockhash_queue while still in use");
@@ -228,6 +234,7 @@ pub const SlotState = struct {
         .stakes_cache = .EMPTY,
         .collected_transaction_fees = .init(0),
         .collected_priority_fees = .init(0),
+        .reward_status = .inactive,
     };
 
     pub fn fromBankFields(
@@ -254,6 +261,7 @@ pub const SlotState = struct {
             .stakes_cache = .{ .stakes = .init(stakes) },
             .collected_transaction_fees = .init(0),
             .collected_priority_fees = .init(0),
+            .reward_status = .inactive,
         };
     }
 
@@ -289,6 +297,7 @@ pub const SlotState = struct {
             .stakes_cache = .{ .stakes = .init(stakes) },
             .collected_transaction_fees = .init(0),
             .collected_priority_fees = .init(0),
+            .reward_status = parent.reward_status,
         };
     }
 
@@ -328,6 +337,7 @@ pub const SlotState = struct {
             .stakes_cache = .{ .stakes = .init(stakes) },
             .collected_transaction_fees = .init(0),
             .collected_priority_fees = .init(0),
+            .reward_status = .inactive,
         };
     }
 };
@@ -812,92 +822,20 @@ pub const UnusedAccounts = struct {
     }
 };
 
-pub const EpochRewardStatus = union(enum) {
-    /// this bank is in the reward phase.
-    /// Contents are the start point for epoch reward calculation,
-    /// i.e. parent_slot and parent_block height for the starting
-    /// block of the current epoch.
-    active: StartBlockHeightAndRewards,
-    /// this bank is outside of the rewarding phase.
-    inactive,
-
-    pub fn deinit(self: EpochRewardStatus, allocator: Allocator) void {
-        switch (self) {
-            .active => |s| s.deinit(allocator),
-            .inactive => {},
-        }
-    }
-
-    pub fn clone(self: EpochRewardStatus, allocator: Allocator) Allocator.Error!EpochRewardStatus {
-        return switch (self) {
-            .active => |s| .{ .active = try s.clone(allocator) },
-            .inactive => .inactive,
-        };
-    }
-};
-
-pub const StartBlockHeightAndRewards = struct {
-    /// the block height of the slot at which rewards distribution began
-    distribution_starting_block_height: u64,
-    /// calculated epoch rewards pending distribution, outer Vec is by partition (one partition per block)
-    stake_rewards_by_partition: []const []const PartitionedStakeReward,
-
-    pub fn deinit(self: StartBlockHeightAndRewards, allocator: Allocator) void {
-        for (self.stake_rewards_by_partition) |buf| {
-            allocator.free(buf);
-        }
-        allocator.free(self.stake_rewards_by_partition);
-    }
-
-    pub fn clone(
-        self: StartBlockHeightAndRewards,
-        allocator: Allocator,
-    ) Allocator.Error!StartBlockHeightAndRewards {
-        const stake_rewards_by_partition = try allocator
-            .alloc([]const PartitionedStakeReward, self.stake_rewards_by_partition.len);
-        errdefer allocator.free(stake_rewards_by_partition);
-
-        for (self.stake_rewards_by_partition, stake_rewards_by_partition, 0..) |old, *new, i| {
-            errdefer for (stake_rewards_by_partition[0..i]) |x| allocator.free(x);
-            const slice = try allocator.alloc(PartitionedStakeReward, old.len);
-            @memcpy(slice, old);
-            new.* = slice;
-        }
-
-        return .{
-            .distribution_starting_block_height = self.distribution_starting_block_height,
-            .stake_rewards_by_partition = stake_rewards_by_partition,
-        };
-    }
-};
-
-const PartitionedStakeRewards = []const PartitionedStakeReward;
-
-pub const PartitionedStakeReward = struct {
-    /// Stake account address
-    stake_pubkey: Pubkey,
-    /// `Stake` state to be stored in account
-    stake: sig.runtime.program.stake.state.StakeStateV2.Stake,
-    /// Stake reward for recording in the Bank on distribution
-    stake_reward: u64,
-    /// Vote commission for recording reward info
-    commission: u8,
-};
-
 test parseStakes {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    var accounts_db = try sig.accounts_db.Two.initTest(allocator);
-    defer accounts_db.deinit();
+    var test_context = try sig.accounts_db.Two.initTest(allocator);
+    defer test_context.deinit();
 
     var ancestors = Ancestors.EMPTY;
     defer ancestors.deinit(allocator);
     try ancestors.addSlot(allocator, 0);
 
-    const account_store = sig.accounts_db.AccountStore{ .accounts_db_two = &accounts_db.db };
+    const account_store = sig.accounts_db.AccountStore{ .accounts_db_two = &test_context.db };
     const slot_account_store = account_store.forSlot(0, &ancestors);
 
     var stakes = Stakes(.delegation).EMPTY;
@@ -949,7 +887,7 @@ test parseStakes {
             .{},
         );
 
-        try accounts_db.db.put(0, stake_address_1, invalid_stake_account_1);
+        try test_context.db.put(0, stake_address_1, invalid_stake_account_1);
         const parsed_stakes = parseStakes(
             allocator,
             &stakes,
@@ -973,7 +911,7 @@ test parseStakes {
             .{},
         );
 
-        try accounts_db.db.put(0, stake_address_1, invalid_stake_account_1);
+        try test_context.db.put(0, stake_address_1, invalid_stake_account_1);
         const parsed_stakes = parseStakes(
             allocator,
             &stakes,
@@ -984,7 +922,7 @@ test parseStakes {
 
     // Valid Stake Account
     {
-        try accounts_db.db.put(0, stake_address_1, stake_account_1);
+        try test_context.db.put(0, stake_address_1, stake_account_1);
         const parsed_stakes = try parseStakes(
             allocator,
             &stakes,
@@ -999,7 +937,7 @@ test parseStakes {
 
     // Vote Account not Cached
     {
-        try accounts_db.db.put(0, vote_address_1, vote_account_1);
+        try test_context.db.put(0, vote_address_1, vote_account_1);
         const parsed_stakes = parseStakes(
             allocator,
             &stakes,
