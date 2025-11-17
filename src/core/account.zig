@@ -18,6 +18,14 @@ pub const Account = struct {
     executable: bool,
     rent_epoch: Epoch,
 
+    pub const EMPTY: Account = .{
+        .lamports = 0,
+        .data = .{ .owned_allocation = &.{} },
+        .owner = Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+
     pub fn deinit(self: Account, allocator: std.mem.Allocator) void {
         self.data.deinit(allocator);
     }

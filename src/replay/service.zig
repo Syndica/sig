@@ -101,7 +101,7 @@ pub fn advanceReplay(
         defer duplicate_confirmed_slots.deinit(allocator);
 
         try consensus.tower.process(allocator, .{
-            .account_reader = replay_state.account_store.reader(),
+            .account_store = replay_state.account_store,
             .gossip_table = consensus.gossip_table,
             .ledger = replay_state.ledger,
             .slot_tracker = &replay_state.slot_tracker,
@@ -555,7 +555,7 @@ test "getActiveFeatures rejects wrong ownership" {
         acct,
     );
 
-    const features = try getActiveFeatures(allocator, .{ .single_version_map = &accounts }, 0);
+    const features = try getActiveFeatures(allocator, .{ .account_map = &accounts }, 0);
     try std.testing.expect(!features.active(.system_transfer_zero_check, 1));
 
     acct.owner = sig.runtime.ids.FEATURE_PROGRAM_ID;
@@ -565,7 +565,7 @@ test "getActiveFeatures rejects wrong ownership" {
         acct,
     );
 
-    const features2 = try getActiveFeatures(allocator, .{ .single_version_map = &accounts }, 0);
+    const features2 = try getActiveFeatures(allocator, .{ .account_map = &accounts }, 0);
     try std.testing.expect(features2.active(.system_transfer_zero_check, 1));
 }
 
@@ -810,7 +810,7 @@ test "process runs without error with no replay results" {
     // TODO: run consensus in the tests that actually execute blocks for better
     // coverage. currently consensus panics or hangs if you run it with actual data
     try consensus.process(allocator, .{
-        .account_reader = dep_stubs.accountsdb.accountReader(),
+        .account_store = .{ .thread_safe_map = &dep_stubs.accountsdb },
         .ledger = &dep_stubs.ledger,
         .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,

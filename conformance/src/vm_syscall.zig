@@ -164,7 +164,7 @@ fn executeSyscall(
         }
 
         const clock = try tc.sysvar_cache.get(sig.runtime.sysvar.Clock);
-        tc.program_map.* = try sig.runtime.program_loader.loadPrograms(
+        tc.program_map.* = try sig.runtime.program_loader.testLoad(
             allocator,
             &accounts,
             tc.vm_environment,

@@ -5,6 +5,7 @@ const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
+const Channel = sig.sync.Channel;
 const Logger = sig.trace.Logger("replay.committer");
 
 const Hash = sig.core.Hash;
@@ -14,19 +15,16 @@ const Transaction = sig.core.Transaction;
 
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 
-const AccountSharedData = sig.runtime.AccountSharedData;
+const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 
-const vote_listener = sig.consensus.vote_listener;
-const ParsedVote = vote_listener.vote_parser.ParsedVote;
-
-const Channel = sig.sync.Channel;
+const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
+const parseSanitizedVoteTransaction =
+    sig.consensus.vote_listener.vote_parser.parseSanitizedVoteTransaction;
 
 const Committer = @This();
 
-// All contained state is required to be thread-safe.
 logger: Logger,
-account_store: sig.accounts_db.AccountStore,
 slot_state: *sig.core.SlotState,
 status_cache: *sig.core.StatusCache,
 stakes_cache: *sig.core.StakesCache,
@@ -47,7 +45,7 @@ pub fn commitTransactions(
 
     var rng = std.Random.DefaultPrng.init(slot + transactions.len);
 
-    var accounts_to_store = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData).empty;
+    var accounts_to_store = std.AutoArrayHashMapUnmanaged(Pubkey, LoadedAccount).empty;
     defer accounts_to_store.deinit(allocator);
 
     var signature_count: usize = 0;
@@ -60,47 +58,38 @@ pub fn commitTransactions(
         const message_hash, const tx_result = result;
         signature_count += transaction.transaction.signatures.len;
 
-        // collect accounts to store
-        switch (tx_result.accounts()) {
-            .all_loaded => |accounts| {
-                for (accounts, transaction.accounts.items(.is_writable)) |account, is_writable|
-                    if (is_writable)
-                        try putAccount(allocator, self.logger, &accounts_to_store, account);
-            },
-            .written => |accounts| {
-                for (accounts) |account|
-                    try putAccount(allocator, self.logger, &accounts_to_store, account);
-            },
+        for (tx_result.writes.slice()) |account| {
+            const gop = try accounts_to_store.getOrPut(allocator, account.pubkey);
+            if (gop.found_existing) {
+                self.logger.err()
+                    .logf("multiple writes in a batch for address: {}\n", .{account.pubkey});
+                // this error probably indicates a bug in the SVM or the account locking
+                // code, since the account locks should have already been checked before
+                // reaching this point.
+                return error.MultipleWritesInBatch;
+            }
+            gop.value_ptr.* = account;
         }
+        transaction_fees += tx_result.fees.transaction_fee;
+        priority_fees += tx_result.fees.prioritization_fee;
 
-        switch (tx_result) {
-            .executed => |exec| {
-                rent_collected += exec.loaded_accounts.rent_collected;
-                transaction_fees += exec.fees.transaction_fee;
-                priority_fees += exec.fees.prioritization_fee;
-                // Skip non successful or non vote transactions.
-                // Only send votes if consensus is enabled (sender exists)
-                if (self.replay_votes_sender) |sender| {
-                    if (exec.executed_transaction.err == null and
-                        isSimpleVoteTransaction(transaction.transaction))
-                    {
-                        if (try vote_listener.vote_parser.parseSanitizedVoteTransaction(
-                            allocator,
-                            transaction,
-                        )) |parsed| {
-                            if (parsed.vote.lastVotedSlot() != null) {
-                                sender.send(parsed) catch parsed.deinit(allocator);
-                            } else {
-                                parsed.deinit(allocator);
-                            }
+        if (tx_result.outputs != null) {
+            rent_collected += tx_result.rent;
+
+            // Skip non successful or non vote transactions.
+            // Only send votes if consensus is enabled (sender exists)
+            if (self.replay_votes_sender) |sender| {
+                if (tx_result.err == null and isSimpleVoteTransaction(transaction.transaction)) {
+                    if (try parseSanitizedVoteTransaction(allocator, transaction)) |parsed| {
+                        if (parsed.vote.lastVotedSlot() != null) {
+                            sender.send(parsed) catch parsed.deinit(allocator);
+                        } else {
+                            parsed.deinit(allocator);
                         }
                     }
                 }
-            },
-            .fees_only => |fees| {
-                transaction_fees += fees.fees.transaction_fee;
-                priority_fees += fees.fees.prioritization_fee;
-            },
+            }
+
         }
 
         const recent_blockhash = &transaction.transaction.msg.recent_blockhash;
@@ -128,14 +117,13 @@ pub fn commitTransactions(
     _ = self.slot_state.signature_count.fetchAdd(signature_count, .monotonic);
     _ = self.slot_state.collected_rent.fetchAdd(rent_collected, .monotonic);
 
-    for (accounts_to_store.keys(), accounts_to_store.values()) |pubkey, account| {
+    for (accounts_to_store.values()) |account| {
         try self.stakes_cache.checkAndStore(
             allocator,
-            pubkey,
-            account,
+            account.pubkey,
+            account.account,
             self.new_rate_activation_epoch,
         );
-        try self.account_store.put(slot, pubkey, account);
     }
 }
 
@@ -145,22 +133,4 @@ fn isSimpleVoteTransaction(tx: Transaction) bool {
     const ix = msg.instructions[0];
     if (ix.program_index >= msg.account_keys.len) return false;
     return sig.runtime.program.vote.ID.equals(&msg.account_keys[ix.program_index]);
-}
-
-fn putAccount(
-    allocator: Allocator,
-    logger: Logger,
-    accounts_to_store: *std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
-    /// CachedAccount or CopiedAccount
-    account: anytype,
-) error{ OutOfMemory, MultipleWritesInBatch }!void {
-    const gop = try accounts_to_store.getOrPut(allocator, account.pubkey);
-    if (gop.found_existing) {
-        logger.err().logf("multiple writes in a batch for address: {}\n", .{account.pubkey});
-        // this error probably indicates a bug in the SVM or the account locking
-        // code, since the account locks should have already been checked before
-        // reaching this point.
-        return error.MultipleWritesInBatch;
-    }
-    gop.value_ptr.* = account.getAccount().*;
 }
