@@ -7,6 +7,7 @@ const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const PubkeyArraySet = std.AutoArrayHashMapUnmanaged(Pubkey, void);
+const Ancestors = sig.core.Ancestors;
 const ThresholdDecision = sig.consensus.tower.ThresholdDecision;
 
 /// TODO: any uses of these types are to be evaluated in their context, and
@@ -300,6 +301,9 @@ pub const ForkProgress = struct {
         });
         errdefer new_progress.deinit(allocator);
 
+        new_progress.fork_stats.ancestors =
+            try params.slot_info.constants.ancestors.clone(allocator);
+
         if (params.slot_info.state.hash.readCopy()) |frozen_hash| {
             new_progress.fork_stats.slot_hash = frozen_hash;
         }
@@ -322,6 +326,7 @@ pub const ForkProgress = struct {
             last_entry: Hash,
             i_am_leader: bool,
             epoch_stakes: *const sig.core.EpochStakes,
+            slot_ancestors: *const Ancestors,
         },
     ) !ForkProgress {
         const parent = params.parent;
@@ -359,6 +364,9 @@ pub const ForkProgress = struct {
             .num_blocks_on_fork = parent.num_blocks_on_fork + 1,
             .num_dropped_blocks_on_fork = num_dropped_blocks_on_fork,
         });
+        errdefer new_progress.deinit(allocator);
+
+        new_progress.fork_stats.ancestors = try params.slot_ancestors.clone(allocator);
 
         if (params.slot_hash) |hash| {
             new_progress.fork_stats.slot_hash = hash;
@@ -465,6 +473,7 @@ pub const ForkStats = struct {
     fork_stake: consensus.Stake,
     total_stake: consensus.Stake,
     block_height: u64,
+    ancestors: Ancestors,
     has_voted: bool,
     is_recent: bool,
     is_empty: bool,
@@ -483,6 +492,7 @@ pub const ForkStats = struct {
         .fork_stake = 0,
         .total_stake = 0,
         .block_height = 0,
+        .ancestors = .{ .ancestors = .empty },
         .has_voted = false,
         .is_recent = false,
         .is_empty = false,
@@ -505,6 +515,8 @@ pub const ForkStats = struct {
 
         const lockout_intervals = self.lockout_intervals;
         lockout_intervals.deinit(allocator);
+
+        self.ancestors.deinit(allocator);
     }
 
     pub fn clone(
@@ -520,10 +532,14 @@ pub const ForkStats = struct {
         const lockout_intervals = try self.lockout_intervals.clone(allocator);
         errdefer lockout_intervals.deinit(allocator);
 
+        const ancestors = try self.ancestors.clone(allocator);
+        errdefer ancestors.deinit(allocator);
+
         return .{
             .fork_stake = self.fork_stake,
             .total_stake = self.total_stake,
             .block_height = self.block_height,
+            .ancestors = ancestors,
             .has_voted = self.has_voted,
             .is_recent = self.is_recent,
             .is_empty = self.is_empty,
@@ -1279,8 +1295,10 @@ test "ForkProgress.init" {
     const expected_fork_stats = stats: {
         var fork_stats: ForkStats = .EMPTY_ZEROES;
         fork_stats.slot_hash = slot_state.hash.readCopy().?;
+        fork_stats.ancestors = try slot_consts.ancestors.clone(allocator);
         break :stats fork_stats;
     };
+    defer expected_fork_stats.ancestors.deinit(allocator);
 
     const bhq_last_hash = bhq_lh: {
         const bhq, var bhq_lg = slot_state.blockhash_queue.readWithLock();
@@ -1321,6 +1339,9 @@ test "ForkProgress.init" {
     defer expected_child.deinit(allocator);
     expected_child.propagated_stats.prev_leader_slot = slot;
     expected_child.num_blocks_on_fork += 1;
+    expected_child.fork_stats.ancestors.deinit(allocator);
+    expected_child.fork_stats.ancestors = try slot_consts.ancestors.clone(allocator);
+    try expected_child.fork_stats.ancestors.ancestors.put(allocator, slot + 1, {});
 
     const actual_init: ForkProgress = try .init(allocator, .{
         .now = now,
@@ -1344,6 +1365,10 @@ test "ForkProgress.init" {
     });
     defer actual_init_from_bank.deinit(allocator);
 
+    var child_slot_ancestors = try slot_consts.ancestors.clone(allocator);
+    defer child_slot_ancestors.deinit(allocator);
+    try child_slot_ancestors.ancestors.put(allocator, slot + 1, {});
+
     const actual_init_from_parent: ForkProgress = try .initFromParent(allocator, .{
         .now = now,
         .slot = slot + 1,
@@ -1359,8 +1384,14 @@ test "ForkProgress.init" {
             .node_id_to_vote_accounts = .empty,
             .epoch_authorized_voters = .empty,
         },
+        .slot_ancestors = &child_slot_ancestors,
     });
     defer actual_init_from_parent.deinit(allocator);
+
+    var expected_for_bank = try expected.clone(allocator);
+    defer expected_for_bank.deinit(allocator);
+    expected_for_bank.fork_stats.ancestors.deinit(allocator);
+    expected_for_bank.fork_stats.ancestors = try slot_consts.ancestors.clone(allocator);
 
     const override = struct {
         pub fn compare(a: anytype, b: @TypeOf(a)) !bool {
@@ -1379,7 +1410,7 @@ test "ForkProgress.init" {
     };
 
     try sig.testing.expectEqualDeepWithOverrides(expected, actual_init, override);
-    try sig.testing.expectEqualDeepWithOverrides(expected, actual_init_from_bank, override);
+    try sig.testing.expectEqualDeepWithOverrides(expected_for_bank, actual_init_from_bank, override);
     try sig.testing.expectEqualDeepWithOverrides(expected_child, actual_init_from_parent, override);
 }
 
@@ -1840,6 +1871,7 @@ fn forkStatsInitRandom(
         .fork_stake = random.int(consensus.Stake),
         .total_stake = random.int(consensus.Stake),
         .block_height = random.int(u64),
+        .ancestors = .{ .ancestors = .empty },
         .has_voted = random.boolean(),
         .is_recent = random.boolean(),
         .is_empty = random.boolean(),

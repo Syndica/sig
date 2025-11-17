@@ -30,6 +30,8 @@ const SlotState = sig.core.SlotState;
 const Transaction = sig.core.transaction.Transaction;
 const SocketAddr = sig.net.SocketAddr;
 
+const getSlotHistory = sig.consensus.replay_tower.getSlotHistory;
+
 /// UDP sockets used to send vote transactions.
 pub const VoteSockets = struct {
     ipv4: network.Socket,
@@ -79,6 +81,7 @@ const ProcessResultParams = replay.consensus.process_result.ProcessResultParams;
 const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
 
 const collectClusterVoteState = sig.consensus.replay_tower.collectClusterVoteState;
+const getSlotAncestors = sig.consensus.replay_tower.getSlotAncestors;
 const isDuplicateSlotConfirmed = sig.consensus.replay_tower.isDuplicateSlotConfirmed;
 const check_slot_agrees_with_cluster =
     sig.replay.consensus.cluster_sync.check_slot_agrees_with_cluster;
@@ -163,7 +166,7 @@ pub const TowerConsensus = struct {
 
         const root_ref = deps.slot_tracker.get(deps.slot_tracker.root).?;
         const root_ancestors = &root_ref.constants.ancestors;
-        const replay_tower: ReplayTower = try .init(
+        var replay_tower: ReplayTower = try .init(
             allocator,
             .from(deps.logger),
             deps.identity.validator,
@@ -173,6 +176,20 @@ pub const TowerConsensus = struct {
             deps.registry,
         );
         errdefer replay_tower.deinit(allocator);
+
+        {
+            const slot_history = try getSlotHistory(
+                allocator,
+                deps.account_reader.forSlot(root_ancestors),
+            );
+            defer slot_history.deinit(allocator);
+
+            try replay_tower.adjustLockoutsAfterReplay(
+                allocator,
+                deps.slot_tracker.root,
+                &slot_history,
+            );
+        }
 
         var vote_collector: sig.consensus.VoteCollector =
             try .init(deps.now, deps.slot_tracker.root, deps.registry);
@@ -436,11 +453,14 @@ pub const TowerConsensus = struct {
                     .ensureUnusedCapacity(arena, slot_ancestors.count());
                 for (slot_ancestors.keys()) |ancestor_slot| {
                     try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
+                    // TEMPORARY DEBUGGING: No filtering - include ALL ancestors in descendants
+                    // This will help identify if filtering is causing switching proof issues
                     const descendants_gop =
                         try descendants.getOrPutValue(arena, ancestor_slot, .empty);
                     try descendants_gop.value_ptr.put(arena, slot);
                 }
             }
+
             break :cluster_sync_and_ancestors_descendants .{ ancestors, descendants };
         };
 
@@ -510,6 +530,7 @@ pub const TowerConsensus = struct {
         vote_account: Pubkey,
         senders: Senders,
     ) !void {
+        self.logger.info().log("START==================================");
         var epoch_stakes_map: EpochStakesMap = .empty;
         defer epoch_stakes_map.deinit(allocator);
 
@@ -660,6 +681,9 @@ pub const TowerConsensus = struct {
                 vote_sockets,
                 self.metrics,
             );
+
+            // Log vote stake distribution after voting
+            logForkStakeDistribution(self.logger, &self.fork_choice);
         }
 
         // Reset onto a fork
@@ -667,6 +691,7 @@ pub const TowerConsensus = struct {
             // TODO implement
             _ = reset_slot;
         }
+        self.logger.info().log("END===================================");
     }
 
     fn handleDuplicateConfirmedFork(
@@ -1606,66 +1631,94 @@ fn resetFork(
     _ = last_reset_bank_descendants;
 }
 
-/// Logs the percentage of vote stake distribution across all candidate fork subtrees.
+/// Logs stake distribution across competing forks (where the chain splits).
+/// Shows only slots that have multiple candidate children (actual fork points).
 fn logForkStakeDistribution(
     logger: Logger,
     fork_choice: *const ForkChoice,
 ) void {
-    var total_stake: u64 = 0;
-    var candidate_count: usize = 0;
-
-    {
-        var count_iter = fork_choice.fork_infos.valueIterator();
-        while (count_iter.next()) |fork_info| {
-            total_stake += fork_info.stake_for_slot;
-            if (fork_info.isCandidate()) {
-                candidate_count += 1;
-            }
-        }
-    }
+    const root_fork_info = fork_choice.fork_infos.get(fork_choice.tree_root) orelse {
+        logger.info().log("Fork stake distribution: root not found");
+        return;
+    };
+    const total_stake = root_fork_info.stake_for_subtree;
 
     if (total_stake == 0) {
         logger.info().log("Fork stake distribution: no stake found");
         return;
     }
 
-    var buffer: [4096]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&buffer);
-    const allocator = fba.allocator();
+    const heaviest = fork_choice.heaviestOverallSlot();
 
-    var output = std.ArrayList(u8).init(allocator);
-    defer output.deinit();
-
-    output.writer().print(
-        "=== Fork Stake Distribution (by subtree) ===\nRoot: slot={} | {} candidate forks\n",
-        .{ fork_choice.tree_root.slot, candidate_count },
-    ) catch return;
-
+    // Find slots that have multiple candidate children (actual fork points)
+    var fork_count: usize = 0;
     var iter = fork_choice.fork_infos.iterator();
     while (iter.next()) |entry| {
-        const slot_hash = entry.key_ptr.*;
-        const fork_info = entry.value_ptr;
+        const parent_slot_hash = entry.key_ptr.*;
+        const parent_fork_info = entry.value_ptr;
 
-        if (!fork_info.isCandidate()) {
-            continue;
+        if (!parent_fork_info.isCandidate()) continue;
+
+        // Count candidate children
+        var candidate_child_count: usize = 0;
+        for (parent_fork_info.children.keys()) |child_slot_hash| {
+            if (fork_choice.fork_infos.get(child_slot_hash)) |child_info| {
+                if (child_info.isCandidate()) {
+                    candidate_child_count += 1;
+                }
+            }
         }
 
-        const is_heaviest = fork_choice.heaviestOverallSlot().equals(slot_hash);
-        const subtree_percentage =
-            @as(f64, @floatFromInt(fork_info.stake_for_subtree)) * 100.0 /
-            @as(f64, @floatFromInt(total_stake));
+        if (candidate_child_count >= 2) {
+            if (fork_count == 0) {
+                logger.info().log("=== Active Forks (Competing Branches) ===");
+                logger.info().logf("Total stake: {}", .{total_stake});
+            }
 
-        const marker = if (is_heaviest) " [HEAVIEST]" else "";
+            logger.info().logf("Fork at slot {}:", .{parent_slot_hash.slot});
 
-        output.writer().print(
-            "  Slot {}: {d:.2}%{s}\n",
-            .{ slot_hash.slot, subtree_percentage, marker },
-        ) catch return;
+            // Calculate sum of stakes for all candidate children at this fork point
+            var fork_point_total_stake: u64 = 0;
+            for (parent_fork_info.children.keys()) |child_slot_hash| {
+                if (fork_choice.fork_infos.get(child_slot_hash)) |child_info| {
+                    if (child_info.isCandidate()) {
+                        fork_point_total_stake += child_info.stake_for_subtree;
+                    }
+                }
+            }
+
+            for (parent_fork_info.children.keys()) |child_slot_hash| {
+                if (fork_choice.fork_infos.get(child_slot_hash)) |child_info| {
+                    if (child_info.isCandidate()) {
+                        const percentage = if (fork_point_total_stake > 0)
+                            @as(f64, @floatFromInt(child_info.stake_for_subtree)) * 100.0 /
+                                @as(f64, @floatFromInt(fork_point_total_stake))
+                        else
+                            0.0;
+                        // Only mark as HEAVIEST if it actually has stake
+                        const marker = if (child_info.stake_for_subtree > 0 and heaviest.equals(child_slot_hash)) " [HEAVIEST]" else "";
+                        logger.info().logf("  └─ Slot {}: {d:.2}% stake{s}", .{
+                            child_slot_hash.slot,
+                            percentage,
+                            marker,
+                        });
+                    }
+                }
+            }
+
+            fork_count += 1;
+        }
     }
 
-    output.writer().writeAll("============================================") catch return;
+    if (fork_count == 0) {
+        logger.info().log("=== No Active Forks (Single Chain) ===");
+        logger.info().logf("Building on slot: {}", .{heaviest.slot});
+        logger.info().logf("Total network stake: {}", .{total_stake});
+    } else {
+        logger.info().logf("Total fork points: {}", .{fork_count});
+    }
 
-    logger.info().logf("{s}", .{output.items});
+    logger.info().log("==========================================");
 }
 
 /// Compute consensus inputs for frozen slots that haven't been processed yet (where fork_stats.computed = false).
@@ -1700,20 +1753,41 @@ fn computeConsensusInputs(
 
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
-    // TODO agave sorts this by the slot first. Is this needed for the implementation to be correct?
-    // If not, then we can avoid sorting here which may be verbose given frozen_slots is a map.
+
+    var sorted_frozen_slots = try std.ArrayListUnmanaged(Slot).initCapacity(allocator, frozen_slots.count());
+    defer sorted_frozen_slots.deinit(allocator);
     for (frozen_slots.keys()) |slot| {
+        sorted_frozen_slots.appendAssumeCapacity(slot);
+    }
+    std.mem.sort(Slot, sorted_frozen_slots.items, {}, std.sort.asc(Slot));
+
+    for (sorted_frozen_slots.items) |slot| {
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
         if (!fork_stat.computed) {
             // TODO Self::adopt_on_chain_tower_if_behind
             // Gather voting information from all vote accounts to understand the current consensus state.
-            const slot_info_for_stakes = slot_tracker.get(slot) orelse return error.MissingSlot;
+            const epoch = epoch_schedule.getEpoch(slot);
+            const epoch_stakes = epoch_stakes_map.get(epoch) orelse
+                return error.MissingForkStats;
+
+            const slot_info_for_stakes = slot_tracker.get(slot) orelse
+                return error.MissingSlot;
+            var stakes_guard = slot_info_for_stakes.state.stakes_cache.stakes.read();
+            defer stakes_guard.unlock();
+            const stakes = stakes_guard.get();
+
+            logger.info().logf(
+                "computeConsensusInputs: slot={} epoch={} epoch_total_stake={} bank_vote_accounts={} stakes_cache_ptr={}",
+                .{
+                    slot,
+                    epoch,
+                    epoch_stakes.total_stake,
+                    stakes.vote_accounts.vote_accounts.count(),
+                    @intFromPtr(stakes),
+                },
+            );
 
             const cluster_vote_state = blk: {
-                const stakes, var stakes_lg =
-                    slot_info_for_stakes.state.stakes_cache.stakes.readWithLock();
-                defer stakes_lg.unlock();
-
                 break :blk try collectClusterVoteState(
                     allocator,
                     .from(logger),
@@ -1722,9 +1796,25 @@ fn computeConsensusInputs(
                     &stakes.vote_accounts.vote_accounts,
                     ancestors,
                     progress,
+                    slot_tracker,
                     latest_validator_votes,
                 );
             };
+
+            logger.info().logf(
+                "computeConsensusInputs: slot={} cluster_total_stake={} fork_stake={} voted_slots={} fork_weight={d:.1}%",
+                .{
+                    slot,
+                    cluster_vote_state.total_stake,
+                    cluster_vote_state.fork_stake,
+                    cluster_vote_state.voted_stakes.count(),
+                    if (cluster_vote_state.total_stake > 0)
+                        100.0 * @as(f64, @floatFromInt(cluster_vote_state.fork_stake)) /
+                            @as(f64, @floatFromInt(cluster_vote_state.total_stake))
+                    else
+                        0.0,
+                },
+            );
             // Update the fork choice tree with new votes discovered during collectClusterVoteState.
             // This updates the internal state of fork_choice with the determined heaviest (best) fork to build on.
             try fork_choice.processLatestVotes(
@@ -1734,10 +1824,9 @@ fn computeConsensusInputs(
                 latest_validator_votes,
             );
 
-            // Log vote stake distribution across all candidate forks
-            logForkStakeDistribution(logger, fork_choice);
-
             const fork_stats = progress.getForkStats(slot) orelse return error.MissingForkStats;
+            fork_stats.ancestors.deinit(allocator);
+            fork_stats.ancestors = try slot_info_for_stakes.constants.ancestors.clone(allocator);
             fork_stats.fork_stake = cluster_vote_state.fork_stake;
             fork_stats.total_stake = cluster_vote_state.total_stake;
 
@@ -1797,9 +1886,10 @@ fn cacheVotingSafetyChecks(
     stats.vote_threshold.deinit(allocator);
     stats.vote_threshold = .fromOwnedSlice(slice);
 
-    const slot_ancestors = ancestors.get(slot) orelse return error.MissingAncestor;
+    const slot_ancestors = getSlotAncestors(slot, ancestors) orelse
+        return error.MissingAncestor;
 
-    stats.is_locked_out = try replay_tower.tower.isLockedOut(slot, &slot_ancestors);
+    stats.is_locked_out = try replay_tower.tower.isLockedOut(slot, slot_ancestors);
     stats.has_voted = replay_tower.tower.hasVoted(slot);
     stats.is_recent = replay_tower.tower.isRecent(slot);
 }

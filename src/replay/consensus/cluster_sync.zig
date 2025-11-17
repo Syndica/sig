@@ -644,7 +644,7 @@ fn processPrunedButPopularForks(
             continue;
         }
 
-        logger.info().logf(
+        logger.trace().logf(
             "check_slot_agrees_with_cluster() slot: {}, root: {}, slot_state_update: {s}",
             .{ new_popular_pruned_slot, root, "popular_pruned_fork" },
         );
@@ -780,7 +780,7 @@ pub const check_slot_agrees_with_cluster = struct {
         purge_repair_slot_counter: *SlotData.PurgeRepairSlotCounters,
         slot_frozen_state: SlotFrozenState,
     ) !void {
-        logger.info().logf(
+        logger.trace().logf(
             "check_slot_agrees_with_cluster() slot: {}, root: {}, slot_state_update: {}",
             .{ slot, root, slot_frozen_state },
         );
@@ -893,7 +893,7 @@ pub const check_slot_agrees_with_cluster = struct {
         purge_repair_slot_counter: *SlotData.PurgeRepairSlotCounters,
         duplicate_confirmed_state: DuplicateConfirmedState,
     ) !void {
-        logger.debug().logf(
+        logger.trace().logf(
             "check_slot_agrees_with_cluster() slot: {}, root: {}, slot_state_update: {}",
             .{ slot, root, duplicate_confirmed_state },
         );
@@ -991,7 +991,7 @@ pub const check_slot_agrees_with_cluster = struct {
         ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
         dead_state: DeadState,
     ) !void {
-        logger.info().logf(
+        logger.trace().logf(
             "check_slot_agrees_with_cluster() slot: {}, root: {}, slot_state_update: {}",
             .{ slot, root, dead_state },
         );
@@ -1048,7 +1048,7 @@ pub const check_slot_agrees_with_cluster = struct {
         fork_choice: *HeaviestSubtreeForkChoice,
         duplicate_state: DuplicateState,
     ) !void {
-        logger.info().logf(
+        logger.trace().logf(
             "check_slot_agrees_with_cluster() slot: {}, root: {}, slot_state_update: {}",
             .{ slot, root, duplicate_state },
         );
@@ -1109,7 +1109,7 @@ pub const check_slot_agrees_with_cluster = struct {
         epoch_slots_frozen_slots: *SlotData.EpochSlotsFrozenSlots,
         epoch_slots_frozen_state: EpochSlotsFrozenState,
     ) !void {
-        logger.info().logf(
+        logger.trace().logf(
             "check_slot_agrees_with_cluster() slot: {}, root: {}, slot_state_update: {}",
             .{ slot, root, epoch_slots_frozen_state },
         );

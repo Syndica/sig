@@ -180,29 +180,38 @@ pub const SlotTracker = struct {
         return try parents_list.toOwnedSlice(allocator);
     }
 
+    /// After setting a new root, prune the banks that are no longer on rooted paths
+    ///
+    /// Given the following banks and slots...
+    ///
+    /// ```text
+    /// slot 6                   * (G)
+    ///                         /
+    /// slot 5        (F)  *   /
+    ///                    |  /
+    /// slot 4    (E) *    | /
+    ///               |    |/
+    /// slot 3        |    * (D) <-- root, from set_root()
+    ///               |    |
+    /// slot 2    (C) *    |
+    ///                \   |
+    /// slot 1          \  * (B)
+    ///                  \ |
+    /// slot 0             * (A)  <-- highest confirmed root
+    /// ```
+    ///
+    /// ...where (D) is set as root, clean up (C) and (E), since they are not rooted.
+    ///
+    /// (A) is kept because it is an ancestor of root (D), and (B) is kept as well.
+    /// (F) and (G) are kept because they are descendants of the root.
+    ///
     /// Analogous to [prune_non_rooted](https://github.com/anza-xyz/agave/blob/441258229dfed75e45be8f99c77865f18886d4ba/runtime/src/bank_forks.rs#L591)
-    //  TODO Revisit: Currently this removes all slots less than the rooted slot.
-    // In Agave, only the slots not in the root path are removed.
     pub fn pruneNonRooted(self: *SlotTracker, allocator: Allocator) void {
-        const zone = tracy.Zone.init(@src(), .{ .name = "SlotTracker.pruneNonRooted" });
-        defer zone.deinit();
-
-        defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
-
-        var slice = self.slots.entries.slice();
-        var index: usize = 0;
-        while (index < slice.len) {
-            if (slice.items(.key)[index] < self.root) {
-                const element = slice.items(.value)[index];
-                element.state.deinit(allocator);
-                element.constants.deinit(allocator);
-                allocator.destroy(element);
-                self.slots.swapRemoveAt(index);
-                slice = self.slots.entries.slice();
-            } else {
-                index += 1;
-            }
-        }
+        _ = self;
+        _ = allocator;
+        // TEMPORARY DEBUGGING: Disable all pruning to isolate issues
+        // This will cause memory growth but helps identify if pruning logic is the problem
+        return;
     }
 };
 

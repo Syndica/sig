@@ -465,6 +465,7 @@ fn prepareSlot(
             .epoch_stakes = &epoch_constants.stakes,
             .now = sig.time.Instant.now(),
             .validator_vote_pubkey = null, // voting not currently supported
+            .slot_ancestors = &slot_info.constants.ancestors,
         });
     }
     const fork_progress = progress_get_or_put.value_ptr;
