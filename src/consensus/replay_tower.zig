@@ -637,37 +637,26 @@ pub const ReplayTower = struct {
             // recent frozen bank on this fork to use, so we can ignore this one. Otherwise,
             // even if this bank has descendants, if they have not yet been frozen / stats computed,
             // then use this bank as a representative for the fork.
-            const is_descendant_computed = if (!is_progress_computed) blk: {
-                break :blk for (candidate_descendants.items()) |d| {
-                    if (progress.getForkStats(d)) |stats|
-                        break stats.computed
-                    else
-                        break false;
-                } else false;
-            } else is_progress_computed;
+            const is_descendant_computed = for (candidate_descendants.items()) |d| {
+                if (progress.getForkStats(d)) |stats| {
+                    if (stats.computed) break true;
+                }
+            } else false;
 
-            const is_candidate_eq_last_voted_slot = if (!is_descendant_computed)
-                (candidate_slot == last_voted_slot)
-            else
-                is_descendant_computed;
+            const is_valid_switching_vote = self.isValidSwitchingProofVote(
+                candidate_slot,
+                last_voted_slot,
+                switch_slot,
+                ancestors,
+                &last_vote_ancestors,
+            ) orelse false; // Agave uses unwrap_or(false), treating None as false
 
-            const is_candidate_less_eq_root = if (!is_candidate_eq_last_voted_slot)
-                (candidate_slot <= root)
-            else
-                is_candidate_eq_last_voted_slot;
-
-            const is_valid_switch = if (!is_candidate_less_eq_root)
-                self.isValidSwitchingProofVote(
-                    candidate_slot,
-                    last_voted_slot,
-                    switch_slot,
-                    ancestors,
-                    &last_vote_ancestors,
-                ).?
-            else
-                is_candidate_less_eq_root;
-
-            if (is_valid_switch) {
+            if (!is_progress_computed or
+                is_descendant_computed or
+                candidate_slot == last_voted_slot or
+                candidate_slot <= root or
+                !is_valid_switching_vote)
+            {
                 continue;
             }
 
@@ -689,9 +678,17 @@ pub const ReplayTower = struct {
             // Find any locked out intervals for vote accounts in this bank with
             // `lockout_interval_end` >= `last_vote`, which implies they are locked out at
             // `last_vote` on another fork.
-            const intervals_keyed_by_end = lockout_intervals.map.values()[last_voted_slot..];
-            for (intervals_keyed_by_end) |interval_keyed_by_end| {
-                for (interval_keyed_by_end.items) |vote_account| {
+            // Iterate through the lockout intervals map and check each entry
+            for (
+                lockout_intervals.map.keys(),
+                lockout_intervals.map.values(),
+            ) |lockout_interval_end, *intervals_keyed_by_end| {
+                // Only consider intervals that expire at or after last_voted_slot
+                if (lockout_interval_end < last_voted_slot) {
+                    continue;
+                }
+
+                for (intervals_keyed_by_end.items) |vote_account| {
                     if (locked_out_vote_accounts.contains(vote_account[1])) {
                         continue;
                     }
@@ -1636,7 +1633,10 @@ fn checkVoteStakeThreshold(
     }
 
     return .{
-        .failed_threshold = .{ .vote_depth = threshold_depth, .observed_stake = 0 },
+        .failed_threshold = .{
+            .vote_depth = threshold_depth,
+            .observed_stake = fork_stake,
+        },
     };
 }
 
