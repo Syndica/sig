@@ -439,7 +439,7 @@ pub fn newSlotFromParent(
     // This is inefficient, reserved accounts could live in epoch constants along with
     // the feature set since feature activations are only applied at epoch boundaries.
     // Then we only need to clone the map and update the reserved accounts once per epoch.
-    const reserved_accounts = try sig.core.reserved_accounts.initForSlot(
+    const reserved_accounts = try sig.core.ReservedAccounts.initForSlot(
         allocator,
         &feature_set,
         slot,
