@@ -39,7 +39,7 @@ pub fn applyFeatureActivations(
         allow_new_activations,
     );
 
-    var iterator = new_feature_activations.iterator(slot);
+    var iterator = new_feature_activations.iterator(slot, .active);
     while (iterator.next()) |feature| {
         const feature_id: Pubkey = features.map.get(feature).key;
         const db_account =
@@ -217,7 +217,7 @@ fn computeActiveFeatureSet(
     // var inactive = sig.utils.collections.PubkeyMap(void){};
     var pending: FeatureSet = .ALL_DISABLED;
 
-    var iterator = feature_set.iterator(slot);
+    var iterator = feature_set.iterator(slot, .inactive);
     while (iterator.next()) |feature| {
         const feature_id: Pubkey = features.map.get(feature).key;
         var maybe_activation_slot: ?u64 = null;
