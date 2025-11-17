@@ -131,6 +131,83 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
                 );
             }
         }
+
+        pub fn activateEpoch(
+            self: *Self,
+            allocator: Allocator,
+            next_epoch: Epoch,
+            new_rate_activation_epoch: ?Epoch,
+        ) !void {
+            var stakes, var stakes_lg = self.stakes.writeWithLock();
+            defer stakes_lg.unlock();
+
+            const stake_delegations = stakes.stake_accounts.values();
+            var stake_history_entry = StakeHistory.StakeState.DEFAULT;
+            for (stake_delegations) |stake_delegation| {
+                const delegation = stake_delegation.getDelegation();
+                stake_history_entry.add(delegation.getStakeState(
+                    stakes.epoch,
+                    &stakes.stake_history,
+                    new_rate_activation_epoch,
+                ));
+            }
+
+            try stakes.stake_history.insertEntry(stakes.epoch, stake_history_entry);
+            stakes.epoch = next_epoch;
+
+            try refreshVoteAccounts(
+                allocator,
+                next_epoch,
+                stakes,
+                new_rate_activation_epoch,
+            );
+        }
+
+        fn refreshVoteAccounts(
+            allocator: Allocator,
+            epoch: Epoch,
+            stakes: *Stakes(stakes_type),
+            new_activation_rate_epoch: ?Epoch,
+        ) !void {
+            var delegated_stakes = std.AutoArrayHashMapUnmanaged(Pubkey, u64){};
+            defer delegated_stakes.deinit(allocator);
+
+            for (stakes.stake_accounts.values()) |stake_delegation| {
+                const delegation = stake_delegation.getDelegation();
+                const entry = try delegated_stakes.getOrPut(
+                    allocator,
+                    delegation.voter_pubkey,
+                );
+                if (!entry.found_existing) {
+                    entry.value_ptr.* = 0;
+                }
+                entry.value_ptr.* += delegation.getEffectiveStake(
+                    epoch,
+                    &stakes.stake_history,
+                    new_activation_rate_epoch,
+                );
+            }
+
+            var new_vote_accounts = VoteAccounts{};
+            errdefer new_vote_accounts.deinit(allocator);
+            const keys = stakes.vote_accounts.vote_accounts.keys();
+            const values = stakes.vote_accounts.vote_accounts.values();
+            for (keys, values) |vote_pubkey, stake_and_vote_account| {
+                const delegated_stake = delegated_stakes.get(vote_pubkey) orelse 0;
+                try new_vote_accounts.vote_accounts.put(allocator, vote_pubkey, .{
+                    .stake = delegated_stake,
+                    .account = stake_and_vote_account.account.getAcquire(),
+                });
+            }
+
+            new_vote_accounts.staked_nodes = try VoteAccounts.computeStakedNodes(
+                allocator,
+                &new_vote_accounts.vote_accounts,
+            );
+
+            stakes.vote_accounts.deinit(allocator);
+            stakes.vote_accounts = new_vote_accounts;
+        }
     };
 }
 
@@ -1670,4 +1747,41 @@ test "staked nodes zero stake" {
         try std.testing.expectEqual(null, vote_accounts.staked_nodes.get(node_pubkey));
         try std.testing.expectEqual(null, vote_accounts.staked_nodes.get(new_node_pubkey));
     }
+}
+
+test "stakes activate epoch" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    var test_accounts = std.ArrayListUnmanaged(TestStakedNodeAccounts).empty;
+    defer {
+        for (test_accounts.items) |acc| acc.deinit(allocator);
+        test_accounts.deinit(allocator);
+    }
+
+    var stakes_cache = StakesCacheGeneric(.stake).EMPTY;
+    defer stakes_cache.deinit(allocator);
+
+    for (0..16) |_| {
+        const accs = try TestStakedNodeAccounts.init(allocator, random, 1_000);
+        try test_accounts.append(allocator, accs);
+        try stakes_cache.checkAndStore(
+            allocator,
+            accs.vote_pubkey,
+            accs.vote_account,
+            null,
+        );
+        try stakes_cache.checkAndStore(
+            allocator,
+            accs.stake_pubkey,
+            accs.stake_account,
+            null,
+        );
+    }
+
+    try stakes_cache.activateEpoch(allocator, 1, null);
+
+    // TODO: Validation
 }
