@@ -11,6 +11,7 @@ const builtin_programs = sig.runtime.program.builtin_programs;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const SlotAccountStore = sig.accounts_db.SlotAccountStore;
+const ThreadSafeAccountMap = sig.accounts_db.account_store.ThreadSafeAccountMap;
 const AccountSharedData = sig.runtime.AccountSharedData;
 
 const Ancestors = sig.core.Ancestors;
@@ -53,25 +54,19 @@ pub fn processNewEpoch(
         true, // allow_new_activations
     );
 
-    // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L1623-L1631
-    const epoch = epoch_tracker.schedule.getEpoch(slot);
     try slot_state.stakes_cache.activateEpoch(
         allocator,
-        epoch,
+        epoch_tracker.schedule.getEpoch(slot),
         slot_constants.feature_set.newWarmupCooldownRateEpoch(&epoch_tracker.schedule),
     );
 
-    // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L1632-L1636
-    const parent_epoch = epoch_tracker.schedule.getEpoch(slot_constants.parent_slot);
     try updateEpochStakes(
         allocator,
         slot,
-        parent_epoch,
         &slot_state.stakes_cache,
         epoch_tracker,
     );
 
-    // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L1637-L1647
     try beginPartitionedRewards(
         allocator,
         slot,
@@ -82,17 +77,21 @@ pub fn processNewEpoch(
     );
 }
 
+/// Update the epoch stakes for the leader schedule epoch corresponding to the given slot.
+/// If the epoch tracker does not contain an entry for the leader schedule epoch,
+/// we need to compute the epoch stakes and create a new EpochConstants entry. The
+/// leader schedule epoch is typically E + 1, where E is the current epoch.
+/// This ensures that the epoch constants are available at the point of transition.
 pub fn updateEpochStakes(
     allocator: Allocator,
     slot: Slot,
-    parent_epoch: Epoch,
     stakes_cache: *StakesCache,
     epoch_tracker: *EpochTracker,
 ) !void {
     const leader_schedule_epoch = epoch_tracker.schedule.getLeaderScheduleEpoch(slot);
     if (!epoch_tracker.epochs.contains(leader_schedule_epoch)) {
-        const parent_epoch_constants = epoch_tracker.get(parent_epoch) orelse {
-            return error.ParentEpochConstantsNotFound;
+        const current = epoch_tracker.getForSlot(slot) orelse {
+            return error.EpochConstantsNotFound;
         };
 
         const epoch_stakes = try getEpochStakes(
@@ -102,20 +101,25 @@ pub fn updateEpochStakes(
         );
         errdefer epoch_stakes.deinit(allocator);
 
-        const epoch_constants = EpochConstants{
-            .hashes_per_tick = parent_epoch_constants.hashes_per_tick,
-            .ticks_per_slot = parent_epoch_constants.ticks_per_slot,
-            .ns_per_slot = parent_epoch_constants.ns_per_slot,
-            .genesis_creation_time = parent_epoch_constants.genesis_creation_time,
-            .slots_per_year = parent_epoch_constants.slots_per_year,
+        try epoch_tracker.put(allocator, leader_schedule_epoch, .{
+            .hashes_per_tick = current.hashes_per_tick,
+            .ticks_per_slot = current.ticks_per_slot,
+            .ns_per_slot = current.ns_per_slot,
+            .genesis_creation_time = current.genesis_creation_time,
+            .slots_per_year = current.slots_per_year,
             .stakes = epoch_stakes,
-            .rent_collector = parent_epoch_constants.rent_collector,
-        };
-
-        try epoch_tracker.put(allocator, leader_schedule_epoch, epoch_constants);
+            .rent_collector = current.rent_collector,
+        });
     }
 }
 
+/// Compute the epoch stakes for the given leader schedule epoch.
+/// Contains
+///  - snapshot of the current stakes, converted to Stakes(.delegation).
+///  - total stake delegated to current vote accounts.
+///  - mapping of authorized voters (node IDs) to their vote accounts active in this epoch.
+///  - mapping of vote accounts to their authorized voters.
+/// The authorized voters are determined based on the vote state and leader schedule epoch.
 pub fn getEpochStakes(
     allocator: Allocator,
     leader_schedule_epoch: Epoch,
@@ -169,7 +173,12 @@ pub fn getEpochStakes(
     };
 }
 
-/// https://github.com/anza-xyz/agave/blob/v3.0.0/runtime/src/bank.rs#L5332
+/// Apply feature activations at the given slot.
+/// Activated features are stored in feature accounts with a non-null activation slot.
+/// Pending feature activations are stored in feature accounts with a null activation slot.
+/// If new activations are allowed, pending features will be activated at the current slot, have
+/// their feature account updated, and the corresponding effects applied.
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.0.0/runtime/src/bank.rs#L5332
 pub fn applyFeatureActivations(
     allocator: Allocator,
     slot: Slot,
@@ -683,8 +692,6 @@ fn inheritLamportsAndRentEpoch(
         .{ 1, 0 };
 }
 
-const ThreadSafeAccountMap = sig.accounts_db.account_store.ThreadSafeAccountMap;
-
 const TestEnvironment = struct {
     genesis_config: sig.core.GenesisConfig,
     account_map: ThreadSafeAccountMap,
@@ -804,7 +811,6 @@ test updateEpochStakes {
         try updateEpochStakes(
             allocator,
             0,
-            0,
             &stakes_cache,
             &epoch_tracker,
         );
@@ -854,7 +860,6 @@ test updateEpochStakes {
         try updateEpochStakes(
             allocator,
             1,
-            0,
             &stakes_cache,
             &epoch_tracker,
         );

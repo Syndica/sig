@@ -385,7 +385,6 @@ pub fn trackNewSlots(
                 try replay.epoch_transitions.updateEpochStakes(
                     allocator,
                     slot,
-                    parent_epoch,
                     &state.stakes_cache,
                     epoch_tracker,
                 );
