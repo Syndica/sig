@@ -89,7 +89,6 @@ pub fn commitTransactions(
                     }
                 }
             }
-
         }
 
         const recent_blockhash = &transaction.transaction.msg.recent_blockhash;
