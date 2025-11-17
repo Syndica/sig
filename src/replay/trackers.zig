@@ -438,6 +438,10 @@ pub const EpochTracker = struct {
         epochs.deinit(allocator);
     }
 
+    pub fn get(self: *const EpochTracker, epoch: Epoch) ?EpochConstants {
+        return self.epochs.get(epoch);
+    }
+
     pub fn getForSlot(self: *const EpochTracker, slot: Slot) ?EpochConstants {
         return self.epochs.get(self.schedule.getEpoch(slot));
     }
@@ -457,10 +461,10 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
         .collector_id = .ZEROES,
         .max_tick_height = 0,
         .fee_rate_governor = .DEFAULT,
-        .epoch_reward_status = .inactive,
         .ancestors = .{ .ancestors = .empty },
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .EMPTY,
+        .inflation = .DEFAULT,
     };
 }
 

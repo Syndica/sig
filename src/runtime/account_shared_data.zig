@@ -97,4 +97,21 @@ pub const AccountSharedData = struct {
             .rent_epoch = self.rent_epoch,
         };
     }
+
+    /// Converts an `Account` to an `AccountSharedData`, copying the data into owned memory.
+    pub fn fromAccount(
+        allocator: std.mem.Allocator,
+        account: *const sig.core.Account,
+    ) !AccountSharedData {
+        const data = try account.data.dupeAllocatedOwned(allocator);
+        defer data.deinit(allocator);
+
+        return .{
+            .lamports = account.lamports,
+            .data = try allocator.dupe(u8, data.owned_allocation),
+            .owner = account.owner,
+            .executable = account.executable,
+            .rent_epoch = account.rent_epoch,
+        };
+    }
 };
