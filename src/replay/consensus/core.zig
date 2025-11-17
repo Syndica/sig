@@ -1575,9 +1575,17 @@ fn computeConsensusInputs(
 
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
-    // TODO agave sorts this by the slot first. Is this needed for the implementation to be correct?
-    // If not, then we can avoid sorting here which may be verbose given frozen_slots is a map.
+
+    var sorted_frozen_slots =
+        try std.ArrayListUnmanaged(Slot).initCapacity(allocator, frozen_slots.count());
+    defer sorted_frozen_slots.deinit(allocator);
+
     for (frozen_slots.keys()) |slot| {
+        sorted_frozen_slots.appendAssumeCapacity(slot);
+    }
+    std.mem.sort(Slot, sorted_frozen_slots.items, {}, std.sort.asc(Slot));
+
+    for (sorted_frozen_slots.keys()) |slot| {
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
         if (!fork_stat.computed) {
             // TODO Self::adopt_on_chain_tower_if_behind
