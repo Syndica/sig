@@ -106,7 +106,7 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
             .total_stake = 0,
             .stakes = .{
                 .vote_accounts = .{},
-                .stake_delegations = .empty,
+                .stake_accounts = .empty,
                 .unused = 0,
                 .epoch = 0,
                 .stake_history = StakeHistory.initWithEntries(&.{.{
@@ -195,11 +195,17 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
 
 /// Analogous to [NodeVoteAccounts](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/epoch_stakes.rs#L14)
 pub const NodeVoteAccounts = struct {
-    vote_accounts: []const Pubkey,
+    vote_accounts: std.ArrayListUnmanaged(Pubkey),
     total_stake: u64,
 
+    pub const EMPTY: NodeVoteAccounts = .{
+        .vote_accounts = .{},
+        .total_stake = 0,
+    };
+
     pub fn deinit(self: NodeVoteAccounts, allocator: Allocator) void {
-        allocator.free(self.vote_accounts);
+        var vote_accounts = self.vote_accounts;
+        vote_accounts.deinit(allocator);
     }
 
     pub fn clone(
@@ -207,7 +213,7 @@ pub const NodeVoteAccounts = struct {
         allocator: Allocator,
     ) Allocator.Error!NodeVoteAccounts {
         return .{
-            .vote_accounts = try allocator.dupe(Pubkey, self.vote_accounts),
+            .vote_accounts = try self.vote_accounts.clone(allocator),
             .total_stake = self.total_stake,
         };
     }
@@ -217,12 +223,12 @@ pub const NodeVoteAccounts = struct {
         allocator: Allocator,
         max_list_entries: usize,
     ) Allocator.Error!NodeVoteAccounts {
-        const vote_accounts = try allocator.alloc(
-            Pubkey,
-            random.uintLessThan(usize, max_list_entries),
-        );
-        errdefer allocator.free(vote_accounts);
-        for (vote_accounts) |*vote_account| vote_account.* = Pubkey.initRandom(random);
+        var vote_accounts = try std.ArrayListUnmanaged(Pubkey)
+            .initCapacity(allocator, max_list_entries);
+        errdefer vote_accounts.deinit(allocator);
+        for (0..random.uintAtMost(usize, max_list_entries)) |_| {
+            try vote_accounts.append(allocator, Pubkey.initRandom(random));
+        }
         return .{
             .vote_accounts = vote_accounts,
             .total_stake = random.int(u64),
