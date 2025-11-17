@@ -4990,14 +4990,14 @@ pub fn testEpochStakes(
         @compileError("testEpochStakes should only be called in test mode");
     }
 
-    var vote_accounts: sig.core.vote_accounts.VoteAccounts = .{};
+    var vote_accounts = sig.core.stakes.VoteAccounts{};
     errdefer vote_accounts.deinit(allocator);
     try vote_accounts.vote_accounts.ensureUnusedCapacity(allocator, pubkeys.len);
 
     for (pubkeys) |pubkey| {
         vote_accounts.vote_accounts.putAssumeCapacity(pubkey, .{
             .stake = stake,
-            .account = try sig.core.vote_accounts.createRandomVoteAccount(
+            .account = try sig.core.stakes.VoteAccount.initRandom(
                 allocator,
                 random,
                 .initRandom(random),
@@ -5008,7 +5008,7 @@ pub fn testEpochStakes(
     return .{
         .stakes = .{
             .vote_accounts = vote_accounts,
-            .stake_delegations = .empty,
+            .stake_accounts = .empty,
             .unused = 0,
             .epoch = 0,
             .stake_history = .INIT,
