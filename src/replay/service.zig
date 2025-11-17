@@ -364,13 +364,15 @@ pub fn trackNewSlots(
             if (slot_tracker.contains(slot)) continue;
             logger.info().logf("tracking new slot: {}", .{slot});
 
-            const epoch_info = epoch_tracker.getPtrForSlot(slot) orelse
-                return error.MissingEpoch;
+            const ticks_per_slot = (epoch_tracker.getPtrForSlot(slot) orelse
+                return error.MissingEpoch).ticks_per_slot;
 
-            const constants, var state = try newSlotFromParent(
+            // Constants are not constant at this point since processing new epochs
+            // may modify the feature set.
+            var constants, var state = try newSlotFromParent(
                 allocator,
                 account_store.reader(),
-                epoch_info.ticks_per_slot,
+                ticks_per_slot,
                 parent_slot,
                 parent_info.constants,
                 parent_info.state,
@@ -379,6 +381,44 @@ pub fn trackNewSlots(
             );
             errdefer constants.deinit(allocator);
             errdefer state.deinit(allocator);
+
+            const parent_epoch = epoch_tracker.schedule.getEpoch(parent_slot);
+            const slot_epoch = epoch_tracker.schedule.getEpoch(slot);
+            const store = account_store.forSlot(slot, &constants.ancestors);
+
+            if (parent_epoch < slot_epoch) {
+                try replay.epoch_transitions.processNewEpoch(
+                    allocator,
+                    slot,
+                    &constants,
+                    &state,
+                    store,
+                    epoch_tracker,
+                );
+            } else {
+                try replay.epoch_transitions.updateEpochStakes(
+                    allocator,
+                    slot,
+                    &state.stakes_cache,
+                    epoch_tracker,
+                );
+            }
+
+            const epoch_info = epoch_tracker.getPtrForSlot(slot) orelse
+                return error.MissingEpoch;
+
+            try replay.rewards.distribution.distributePartitionedEpochRewards(
+                allocator,
+                slot,
+                slot_epoch,
+                constants.block_height,
+                epoch_tracker.schedule,
+                &state.reward_status,
+                &state.stakes_cache,
+                &state.capitalization,
+                &epoch_info.rent_collector.rent,
+                store,
+            );
 
             try updateSysvarsForNewSlot(
                 allocator,
