@@ -1585,7 +1585,7 @@ fn computeConsensusInputs(
     }
     std.mem.sort(Slot, sorted_frozen_slots.items, {}, std.sort.asc(Slot));
 
-    for (sorted_frozen_slots.keys()) |slot| {
+    for (sorted_frozen_slots.items) |slot| {
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
         if (!fork_stat.computed) {
             // TODO Self::adopt_on_chain_tower_if_behind
