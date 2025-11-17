@@ -1134,42 +1134,58 @@ fn validator(
     const my_contact_info =
         sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
 
-    const epoch_schedule = bank_fields.epoch_schedule;
-    const epoch = bank_fields.epoch;
+    const account_reader = sig.accounts_db.AccountReader{
+        .accounts_db = &loaded_snapshot.accounts_db,
+    };
+    const feature_set = try sig.replay.service.getActiveFeatures(
+        allocator,
+        account_reader.forSlot(&bank_fields.ancestors),
+        bank_fields.slot,
+    );
 
-    const staked_nodes = try collapsed_manifest.epochStakes(epoch);
-    var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
+    var epoch_context_manager = try sig.adapter.EpochContextManager.init(
+        allocator,
+        bank_fields.epoch_schedule,
+    );
     defer epoch_context_manager.deinit();
-    try epoch_context_manager.contexts.realign(epoch);
-    {
-        var staked_nodes_cloned = try staked_nodes.clone(allocator);
-        errdefer staked_nodes_cloned.deinit(allocator);
+    try epoch_context_manager.contexts.realign(bank_fields.epoch);
 
-        const leader_schedule = if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule|
-            leader_schedule[1].slot_leaders
-        else ls: {
-            // TODO: Implement feature gating for vote keyed leader schedule.
-            // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
-            // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
-            break :ls if (true)
-                try LeaderSchedule.fromVoteAccounts(
-                    allocator,
-                    epoch,
-                    epoch_schedule.slots_per_epoch,
-                    try collapsed_manifest.epochVoteAccounts(epoch),
-                )
-            else
-                try LeaderSchedule.fromStakedNodes(
-                    allocator,
-                    epoch,
-                    epoch_schedule.slots_per_epoch,
-                    staked_nodes,
-                );
-        };
-        errdefer allocator.free(leader_schedule);
+    { // Add epoch context for current epoch
+        const epoch = bank_fields.epoch;
+        const epoch_vote_accounts = try collapsed_manifest.epochVoteAccounts(epoch);
+        var epoch_staked_nodes = try epoch_vote_accounts.staked_nodes.clone(allocator);
+        errdefer epoch_staked_nodes.deinit(allocator);
+
+        const leader_schedule = try LeaderSchedule.init(
+            allocator,
+            epoch,
+            &bank_fields.epoch_schedule,
+            epoch_vote_accounts,
+            &feature_set,
+        );
 
         try epoch_context_manager.put(epoch, .{
-            .staked_nodes = staked_nodes_cloned,
+            .staked_nodes = epoch_staked_nodes,
+            .leader_schedule = leader_schedule,
+        });
+    }
+
+    { // Add epoch context for leader schedule epoch
+        const epoch = bank_fields.epoch_schedule.getLeaderScheduleEpoch(bank_fields.epoch);
+        const epoch_vote_accounts = try collapsed_manifest.epochVoteAccounts(epoch);
+        var epoch_staked_nodes = try epoch_vote_accounts.staked_nodes.clone(allocator);
+        errdefer epoch_staked_nodes.deinit(allocator);
+
+        const leader_schedule = try LeaderSchedule.init(
+            allocator,
+            epoch,
+            &bank_fields.epoch_schedule,
+            epoch_vote_accounts,
+            &feature_set,
+        );
+
+        try epoch_context_manager.put(epoch, .{
+            .staked_nodes = epoch_staked_nodes,
             .leader_schedule = leader_schedule,
         });
     }
@@ -1321,19 +1337,6 @@ fn replayOffline(
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
     const bank_fields = &collapsed_manifest.bank_fields;
 
-    // leader schedule
-    var leader_schedule_cache = LeaderScheduleCache.init(allocator, bank_fields.epoch_schedule);
-    if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule| {
-        try leader_schedule_cache.put(bank_fields.epoch, leader_schedule[1]);
-    } else {
-        const schedule_1 = try collapsed_manifest.leaderSchedule(allocator, null);
-        errdefer schedule_1.deinit();
-        try leader_schedule_cache.put(bank_fields.epoch, schedule_1);
-        const schedule_2 = try collapsed_manifest.leaderSchedule(allocator, bank_fields.epoch + 1);
-        errdefer schedule_2.deinit();
-        try leader_schedule_cache.put(bank_fields.epoch + 1, schedule_2);
-    }
-
     // ledger
     var ledger = try Ledger.init(
         allocator,
@@ -1349,67 +1352,59 @@ fn replayOffline(
         app_base.exit,
     });
 
-    const epoch_schedule = bank_fields.epoch_schedule;
-    const epoch = bank_fields.epoch;
+    const account_reader = sig.accounts_db.AccountReader{
+        .accounts_db = &loaded_snapshot.accounts_db,
+    };
+    const feature_set = try sig.replay.service.getActiveFeatures(
+        allocator,
+        account_reader.forSlot(&bank_fields.ancestors),
+        bank_fields.slot,
+    );
 
-    const staked_nodes = try collapsed_manifest.epochStakes(epoch);
-    var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
+    var epoch_context_manager = try sig.adapter.EpochContextManager.init(
+        allocator,
+        bank_fields.epoch_schedule,
+    );
     defer epoch_context_manager.deinit();
-    try epoch_context_manager.contexts.realign(epoch);
-    {
-        var staked_nodes_cloned = try staked_nodes.clone(allocator);
-        errdefer staked_nodes_cloned.deinit(allocator);
+    try epoch_context_manager.contexts.realign(bank_fields.epoch);
 
-        // TODO: Implement feature gating for vote keyed leader schedule.
-        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
-        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
-        const leader_schedule_0 = if (true)
-            try LeaderSchedule.fromVoteAccounts(
-                allocator,
-                epoch,
-                epoch_schedule.slots_per_epoch,
-                try collapsed_manifest.epochVoteAccounts(epoch),
-            )
-        else
-            try LeaderSchedule.fromStakedNodes(
-                allocator,
-                epoch,
-                epoch_schedule.slots_per_epoch,
-                staked_nodes,
-            );
-        errdefer allocator.free(leader_schedule_0);
+    { // Add epoch context for current epoch
+        const epoch = bank_fields.epoch;
+        const epoch_vote_accounts = try collapsed_manifest.epochVoteAccounts(epoch);
+        var epoch_staked_nodes = try epoch_vote_accounts.staked_nodes.clone(allocator);
+        errdefer epoch_staked_nodes.deinit(allocator);
+
+        const leader_schedule = try LeaderSchedule.init(
+            allocator,
+            epoch,
+            &bank_fields.epoch_schedule,
+            epoch_vote_accounts,
+            &feature_set,
+        );
 
         try epoch_context_manager.put(epoch, .{
-            .staked_nodes = staked_nodes_cloned,
-            .leader_schedule = leader_schedule_0,
+            .staked_nodes = epoch_staked_nodes,
+            .leader_schedule = leader_schedule,
         });
     }
-    { // TODO: This was a quick ugly fix, needs to be handled correctly before merging
-        var staked_nodes_cloned = try staked_nodes.clone(allocator);
-        errdefer staked_nodes_cloned.deinit(allocator);
 
-        // TODO: Implement feature gating for vote keyed leader schedule.
-        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
-        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
-        const leader_schedule_1 = if (true)
-            try LeaderSchedule.fromVoteAccounts(
-                allocator,
-                epoch + 1,
-                epoch_schedule.slots_per_epoch,
-                try collapsed_manifest.epochVoteAccounts(epoch + 1),
-            )
-        else
-            try LeaderSchedule.fromStakedNodes(
-                allocator,
-                epoch,
-                epoch_schedule.slots_per_epoch,
-                staked_nodes,
-            );
-        errdefer allocator.free(leader_schedule_1);
+    { // Add epoch context for leader schedule epoch
+        const epoch = bank_fields.epoch_schedule.getLeaderScheduleEpoch(bank_fields.epoch);
+        const epoch_vote_accounts = try collapsed_manifest.epochVoteAccounts(epoch);
+        var epoch_staked_nodes = try epoch_vote_accounts.staked_nodes.clone(allocator);
+        errdefer epoch_staked_nodes.deinit(allocator);
 
-        try epoch_context_manager.put(epoch + 1, .{
-            .staked_nodes = staked_nodes_cloned,
-            .leader_schedule = leader_schedule_1,
+        const leader_schedule = try LeaderSchedule.init(
+            allocator,
+            epoch,
+            &bank_fields.epoch_schedule,
+            epoch_vote_accounts,
+            &feature_set,
+        );
+
+        try epoch_context_manager.put(epoch, .{
+            .staked_nodes = epoch_staked_nodes,
+            .leader_schedule = leader_schedule,
         });
     }
 
@@ -1693,9 +1688,10 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
 
         const bank_fields = &loaded_snapshot.collapsed_manifest.bank_fields;
         _, const slot_index = bank_fields.epoch_schedule.getEpochAndSlotIndex(bank_fields.slot);
+        const feature_set = sig.core.FeatureSet.ALL_DISABLED;
         break :b .{
             bank_fields.slot - slot_index,
-            try loaded_snapshot.collapsed_manifest.leaderSchedule(allocator, null),
+            try loaded_snapshot.collapsed_manifest.leaderSchedule(allocator, &feature_set, null),
         };
     };
 

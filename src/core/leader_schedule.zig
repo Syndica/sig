@@ -115,6 +115,31 @@ pub const LeaderSchedule = struct {
     allocator: std.mem.Allocator,
     slot_leaders: []const Pubkey,
 
+    pub fn init(
+        allocator: Allocator,
+        epoch: Epoch,
+        epoch_schedule: *const EpochSchedule,
+        vote_accounts: *const sig.core.stakes.VoteAccounts,
+        feature_set: *const sig.core.FeatureSet,
+    ) ![]const Pubkey {
+        const slots_in_epoch = epoch_schedule.getSlotsInEpoch(epoch);
+        const slot_leaders = if (LeaderSchedule.useVoteKeyedLeaderSchedule(epoch, epoch_schedule, feature_set))
+            try LeaderSchedule.fromVoteAccounts(
+                allocator,
+                epoch,
+                slots_in_epoch,
+                &vote_accounts.vote_accounts,
+            )
+        else
+            try LeaderSchedule.fromStakedNodes(
+                allocator,
+                epoch,
+                slots_in_epoch,
+                &vote_accounts.staked_nodes,
+            );
+        return slot_leaders;
+    }
+
     pub fn deinit(self: LeaderSchedule) void {
         self.allocator.free(self.slot_leaders);
     }
@@ -293,6 +318,23 @@ pub const LeaderSchedule = struct {
     pub fn write(self: *const LeaderSchedule, writer: anytype, start_slot: Slot) !void {
         for (self.slot_leaders, 0..) |leader, i| {
             try writer.print("  {}       {s}\n", .{ i + start_slot, leader });
+        }
+    }
+
+    pub fn useVoteKeyedLeaderSchedule(epoch: Epoch, epoch_schedule: *const EpochSchedule, feature_set: *const sig.core.FeatureSet) bool {
+        const maybe_activation_slot = feature_set.get(.enable_vote_address_leader_schedule);
+        if (maybe_activation_slot) |activated_slot| {
+            if (activated_slot == 0) {
+                // If the feature is activated at slot 0, always use the new leader schedule
+                return true;
+            } else {
+                // Always use the new leader schedule for epochs after the activated epoch
+                const activated_epoch = epoch_schedule.getEpoch(activated_slot);
+                return epoch >= activated_epoch;
+            }
+        } else {
+            // TODO: do we need to return null here
+            return false;
         }
     }
 };

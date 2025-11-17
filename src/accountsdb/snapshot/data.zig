@@ -525,32 +525,17 @@ pub const Manifest = struct {
         return try bincode.read(allocator, Manifest, reader, .{ .allocation_limit = 2 << 30 });
     }
 
-    pub fn epochStakes(
-        self: *const Manifest,
-        epoch: Epoch,
-    ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
-        if (self.bank_fields.epoch_stakes.getPtr(epoch)) |_| {
-            // Agave simply ignores this field. I've added this log message just
-            // as a sanity check, but I don't expect to ever see it.
-            std.log.warn("ignoring deprecated epoch stakes", .{});
-        }
-        return if (self.bank_extra.versioned_epoch_stakes.getPtr(epoch)) |es|
-            &es.current.stakes.vote_accounts.staked_nodes
-        else
-            return error.NoEpochStakes;
-    }
-
     pub fn epochVoteAccounts(
         self: *const Manifest,
         epoch: Epoch,
-    ) !*const sig.core.stakes.StakeAndVoteAccountsMap {
+    ) !*const sig.core.stakes.VoteAccounts {
         if (self.bank_fields.epoch_stakes.getPtr(epoch)) |_| {
             // Agave simply ignores this field. I've added this log message just
             // as a sanity check, but I don't expect to ever see it.
             std.log.warn("ignoring deprecated epoch stakes", .{});
         }
         return if (self.bank_extra.versioned_epoch_stakes.getPtr(epoch)) |es|
-            &es.current.stakes.vote_accounts.vote_accounts
+            &es.current.stakes.vote_accounts
         else
             return error.NoEpochStakes;
     }
@@ -560,17 +545,22 @@ pub const Manifest = struct {
     pub fn leaderSchedule(
         self: *const Manifest,
         allocator: std.mem.Allocator,
+        feature_set: *const sig.core.FeatureSet,
         /// Default is the bank's epoch.
-        custom_epoch: ?Epoch,
+        custom_slot: ?Slot,
     ) !sig.core.leader_schedule.LeaderSchedule {
-        const epoch = custom_epoch orelse self.bank_fields.epoch;
-        const slots_in_epoch =
-            self.bank_fields.epoch_schedule.getSlotsInEpoch(self.bank_fields.epoch);
-        const staked_nodes = try self.epochStakes(epoch);
+        const slot = custom_slot orelse self.bank_fields.slot;
+        const epoch = self.bank_fields.epoch_schedule.getEpoch(slot);
+        const slot_leaders = try sig.core.leader_schedule.LeaderSchedule.init(
+            allocator,
+            slot,
+            &self.bank_fields.epoch_schedule,
+            try self.epochVoteAccounts(epoch),
+            feature_set,
+        );
         return .{
             .allocator = allocator,
-            .slot_leaders = try sig.core.leader_schedule.LeaderSchedule
-                .fromStakedNodes(allocator, epoch, slots_in_epoch, staked_nodes),
+            .slot_leaders = slot_leaders,
         };
     }
 };

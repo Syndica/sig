@@ -974,7 +974,7 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
         allocator,
         epoch,
         manifest.bank_fields.epoch_schedule.slots_per_epoch,
-        try manifest.epochVoteAccounts(epoch),
+        (try manifest.epochVoteAccounts(epoch)).vote_accounts,
     );
     defer allocator.free(leader_schedule);
     var slot_leaders = sig.core.leader_schedule.SingleEpochSlotLeaders{
