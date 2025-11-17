@@ -392,6 +392,7 @@ pub const ThreadSafeAccountMap = struct {
         }
 
         const account = try put_account.clone(self.allocator);
+        errdefer account.deinit(self.allocator);
 
         slot_map: {
             const slot_map = &self.slot_map;
