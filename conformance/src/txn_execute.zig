@@ -756,7 +756,7 @@ fn executeTxnContext(
     );
 
     // Initialize reserved accounts for the slot
-    var reserved_accounts = try sig.core.reserved_accounts.initForSlot(
+    var reserved_accounts = try sig.core.ReservedAccounts.initForSlot(
         allocator,
         &feature_set,
         slot,
