@@ -418,9 +418,13 @@ pub const TowerConsensus = struct {
             for (params.slot_tracker.slots.keys(), params.slot_tracker.slots.values()) |slot, info| {
                 const slot_ancestors = &info.constants.ancestors.ancestors;
                 const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
+                // Ensure every slot has a descendants entry (even if empty)
+                _ = try descendants.getOrPutValue(arena, slot, .empty);
                 try ancestor_gop.value_ptr.ancestors
                     .ensureUnusedCapacity(arena, slot_ancestors.count());
                 for (slot_ancestors.keys()) |ancestor_slot| {
+                    // Exclude the slot itself from ancestors.
+                    if (ancestor_slot == slot) continue;
                     try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
                     const descendants_gop =
                         try descendants.getOrPutValue(arena, ancestor_slot, .empty);
