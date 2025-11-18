@@ -317,6 +317,11 @@ pub const ReplayTower = struct {
             block_id,
         );
 
+        self.logger.info().logf(
+            "recorded vote in tower for slot {d}, new root: {?d}",
+            .{ vote_slot, new_root },
+        );
+
         return new_root;
     }
 
@@ -1369,15 +1374,34 @@ pub const ReplayTower = struct {
         }
 
         // Final decision
+        const switch_fork_can_vote = switch_fork_decision.canVote();
         const can_vote = !is_locked_out and
             threshold_passed and
             propagation_confirmed and
-            switch_fork_decision.canVote();
+            switch_fork_can_vote;
 
         if (can_vote) {
             self.logger.info().logf(
-                "voting: {d} {d:.1}%",
+                "Can vote on: {d} {d:.1}%",
                 .{ candidate_vote_bank_slot, 100.0 * fork_weight },
+            );
+        } else {
+            self.logger.info().logf(
+                \\ Cannot vote on slot {d}:
+                \\ locked_out={}
+                \\ threshold_passed={}
+                \\ propagation_confirmed={}
+                \\ switch_fork_can_vote={}
+                \\ switch_fork_decision={any}"
+            ,
+                .{
+                    candidate_vote_bank_slot,
+                    is_locked_out,
+                    threshold_passed,
+                    propagation_confirmed,
+                    switch_fork_can_vote,
+                    switch_fork_decision.*,
+                },
             );
         }
 
