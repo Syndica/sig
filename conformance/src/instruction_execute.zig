@@ -111,7 +111,7 @@ fn executeInstruction(
 
     // Load programs into the program map
     const clock = try tc.sysvar_cache.get(sysvar.Clock);
-    program_map.* = try program_loader.loadPrograms(
+    program_map.* = try program_loader.testLoad(
         allocator,
         &accounts_map,
         vm_environment,
