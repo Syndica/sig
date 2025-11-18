@@ -78,10 +78,36 @@ pub const ResolvedTransaction = struct {
 pub const SlotResolver = struct {
     slot: Slot,
     account_reader: SlotAccountReader,
-    /// borrowed
     reserved_accounts: *const ReservedAccounts,
     slot_hashes: SlotHashes,
 };
+
+pub fn resolveBlock(
+    allocator: Allocator,
+    entries: []const sig.core.Entry,
+    resolver: SlotResolver,
+) ![]const replay.resolve_lookup.ResolvedTransaction {
+    var transaction_count: usize = 0;
+    for (entries) |entry| {
+        if (!entry.isTick()) transaction_count += entry.transactions.len;
+    }
+    const resolved_transactions =
+        try allocator.alloc(replay.resolve_lookup.ResolvedTransaction, transaction_count);
+    errdefer allocator.free(resolved_transactions);
+
+    var i: usize = 0;
+    errdefer for (resolved_transactions[0..i]) |transaction| transaction.deinit(allocator);
+    for (entries) |*entry| {
+        if (!entry.isTick()) {
+            for (entry.transactions) |txn| {
+                resolved_transactions[i] = try resolveTransaction(allocator, txn, resolver);
+                i += 1;
+            }
+        }
+    }
+
+    return resolved_transactions;
+}
 
 pub fn resolveBatch(
     allocator: Allocator,

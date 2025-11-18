@@ -50,6 +50,7 @@ pub const VoteSockets = struct {
 };
 
 const AccountReader = sig.accounts_db.AccountReader;
+const AccountStore = sig.accounts_db.AccountStore;
 
 /// Transaction forwarding, which leader to forward to and how long to hold
 const FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET: u64 = 2;
@@ -294,16 +295,20 @@ pub const TowerConsensus = struct {
         /// Sent by WindowService and DuplicateShred handlers
         duplicate_slots: *Channel(Slot),
         /// Sent by `replayActiveSlots`, received by the vote collector.
-        replay_votes: *Channel(ParsedVote),
+        /// Optional - null when consensus is disabled.
+        replay_votes: ?*Channel(ParsedVote),
 
+        // Note: replay_votes is owned by ReplayState, not destroyed here
         pub fn destroy(self: Receivers) void {
             self.ancestor_duplicate_slots.destroy();
             self.popular_pruned_forks.destroy();
             self.duplicate_slots.destroy();
-            self.replay_votes.destroy();
         }
 
-        pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!Receivers {
+        pub fn create(
+            allocator: std.mem.Allocator,
+            replay_votes: ?*Channel(ParsedVote),
+        ) std.mem.Allocator.Error!Receivers {
             const ancestor_duplicate_slots: *Channel(AncestorDuplicateSlotToRepair) =
                 try .create(allocator);
             errdefer ancestor_duplicate_slots.destroy();
@@ -313,9 +318,6 @@ pub const TowerConsensus = struct {
 
             const duplicate_slots: *Channel(Slot) = try .create(allocator);
             errdefer duplicate_slots.destroy();
-
-            const replay_votes: *Channel(ParsedVote) = try .create(allocator);
-            errdefer replay_votes.destroy();
 
             return .{
                 .ancestor_duplicate_slots = ancestor_duplicate_slots,
@@ -334,7 +336,7 @@ pub const TowerConsensus = struct {
         self: *TowerConsensus,
         allocator: Allocator,
         params: struct {
-            account_reader: AccountReader,
+            account_store: AccountStore,
             ledger: *Ledger,
             /// Scanned by the vote collector if provided.
             gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
@@ -437,7 +439,7 @@ pub const TowerConsensus = struct {
             params.slot_tracker,
             params.epoch_tracker,
             params.progress_map,
-            params.account_reader,
+            params.account_store,
             params.slot_leaders,
             params.vote_sockets,
             self.identity.vote_account,
@@ -488,7 +490,7 @@ pub const TowerConsensus = struct {
         epoch_tracker: *const EpochTracker,
         progress_map: *ProgressMap,
         /// For reading the slot history account
-        account_reader: AccountReader,
+        account_store: AccountStore,
         slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
         vote_sockets: ?*const VoteSockets,
         vote_account: Pubkey,
@@ -594,7 +596,7 @@ pub const TowerConsensus = struct {
             &self.latest_validator_votes,
             &self.fork_choice,
             &epoch_stakes_map,
-            account_reader,
+            account_store.reader(),
         );
         defer vote_and_reset_forks.deinit(allocator);
         const maybe_voted_slot = vote_and_reset_forks.vote_slot;
@@ -634,7 +636,7 @@ pub const TowerConsensus = struct {
                 &self.replay_tower,
                 progress_map,
                 &self.fork_choice,
-                account_reader,
+                account_store,
                 self.signing.node,
                 self.signing.authorized_voters,
                 self.identity.vote_account,
@@ -869,7 +871,7 @@ fn handleVotableBank(
     replay_tower: *ReplayTower,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
-    account_reader: AccountReader,
+    account_store: AccountStore,
     node_keypair: ?sig.identity.KeyPair,
     authorized_voter_keypairs: []const sig.identity.KeyPair,
     vote_account_pubkey: Pubkey,
@@ -893,6 +895,7 @@ fn handleVotableBank(
             slot_tracker,
             progress,
             fork_choice,
+            account_store,
             new_root,
         );
     }
@@ -918,7 +921,7 @@ fn handleVotableBank(
         node_keypair,
         switch_fork_decision,
         replay_tower,
-        account_reader,
+        account_store.reader(),
         slot_tracker,
         epoch_tracker,
     );
@@ -1460,6 +1463,7 @@ fn checkAndHandleNewRoot(
     slot_tracker: *SlotTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
+    account_store: AccountStore,
     new_root: Slot,
 ) !void {
     // get the root bank before squash.
@@ -1479,6 +1483,12 @@ fn checkAndHandleNewRoot(
     slot_tracker.root = new_root;
     // Prune non rooted slots
     slot_tracker.pruneNonRooted(allocator);
+    // Tell the account_store about it for its unrooted accounts
+    try account_store.onSlotRooted(
+        allocator,
+        new_root,
+        slot_tracker.get(new_root).?.constants.fee_rate_governor.lamports_per_signature,
+    );
 
     // TODO
     // - Prune program cache bank_forks.read().unwrap().prune_program_cache(new_root);
@@ -2401,6 +2411,7 @@ test "checkAndHandleNewRoot - missing slot" {
         &slot_tracker,
         &fixture.progress,
         &fixture.fork_choice,
+        .noop,
         123, // Non-existent slot
     );
 
@@ -2457,6 +2468,7 @@ test "checkAndHandleNewRoot - missing hash" {
         slot_tracker2_ptr,
         &fixture.progress,
         &fixture.fork_choice,
+        .noop,
         root.slot, // Non-existent hash
     );
 
@@ -2498,6 +2510,7 @@ test "checkAndHandleNewRoot - empty slot tracker" {
         slot_tracker3_ptr,
         &fixture.progress,
         &fixture.fork_choice,
+        .noop,
         root.slot,
     );
 
@@ -2597,6 +2610,7 @@ test "checkAndHandleNewRoot - success" {
             slot_tracker4_ptr,
             &fixture.progress,
             &fixture.fork_choice,
+            .noop,
             hash3.slot,
         );
     }
@@ -4380,7 +4394,11 @@ test "edge cases - duplicate slot" {
     const tc_output_channels: TowerConsensus.Senders = try .create(gpa);
     defer tc_output_channels.destroy();
 
-    const tc_input_channels: TowerConsensus.Receivers = try .create(gpa);
+    const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(gpa);
+    defer replay_votes_channel.destroy();
+    defer while (replay_votes_channel.tryReceive()) |pv| pv.deinit(gpa);
+
+    const tc_input_channels: TowerConsensus.Receivers = try .create(gpa, replay_votes_channel);
     defer tc_input_channels.destroy();
 
     var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
@@ -4411,7 +4429,7 @@ test "edge cases - duplicate slot" {
     // run consensus
 
     try tower_consensus.process(gpa, .{
-        .account_reader = replay_state.account_store.reader(),
+        .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,
@@ -4534,7 +4552,11 @@ test "edge cases - duplicate confirmed slot" {
     const tc_output_channels: TowerConsensus.Senders = try .create(gpa);
     defer tc_output_channels.destroy();
 
-    const tc_input_channels: TowerConsensus.Receivers = try .create(gpa);
+    const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(gpa);
+    defer replay_votes_channel.destroy();
+    defer while (replay_votes_channel.tryReceive()) |pv| pv.deinit(gpa);
+
+    const tc_input_channels: TowerConsensus.Receivers = try .create(gpa, replay_votes_channel);
     defer tc_input_channels.destroy();
 
     var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
@@ -4566,7 +4588,7 @@ test "edge cases - duplicate confirmed slot" {
     // run consensus
 
     try tower_consensus.process(gpa, .{
-        .account_reader = replay_state.account_store.reader(),
+        .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,
@@ -4698,7 +4720,11 @@ test "edge cases - gossip verified vote hashes" {
     const tc_output_channels: TowerConsensus.Senders = try .create(gpa);
     defer tc_output_channels.destroy();
 
-    const tc_input_channels: TowerConsensus.Receivers = try .create(gpa);
+    const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(gpa);
+    defer replay_votes_channel.destroy();
+    defer while (replay_votes_channel.tryReceive()) |pv| pv.deinit(gpa);
+
+    const tc_input_channels: TowerConsensus.Receivers = try .create(gpa, replay_votes_channel);
     defer tc_input_channels.destroy();
 
     var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
@@ -4733,7 +4759,7 @@ test "edge cases - gossip verified vote hashes" {
     // run consensus
 
     try tower_consensus.process(gpa, .{
-        .account_reader = replay_state.account_store.reader(),
+        .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,
@@ -4914,7 +4940,7 @@ test "vote on heaviest frozen descendant with no switch" {
 
     // Component entry point being tested
     try consensus.process(allocator, .{
-        .account_reader = stubs.accountsdb.accountReader(),
+        .account_store = .{ .thread_safe_map = &stubs.accountsdb },
         .ledger = &stubs.ledger,
         .gossip_table = null,
         .slot_tracker = &slot_tracker,
@@ -5135,7 +5161,7 @@ test "vote accounts with landed votes populate bank stats" {
 
     // Component entry point being tested
     try consensus.process(allocator, .{
-        .account_reader = stubs.accountsdb.accountReader(),
+        .account_store = .{ .thread_safe_map = &stubs.accountsdb },
         .ledger = &stubs.ledger,
         .gossip_table = null,
         .slot_tracker = &slot_tracker,
@@ -5445,7 +5471,7 @@ test "root advances after vote satisfies lockouts" {
         };
 
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -5506,7 +5532,7 @@ test "root advances after vote satisfies lockouts" {
         };
 
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -5587,7 +5613,7 @@ test "root advances after vote satisfies lockouts" {
             .{ .slot = 33, .output = .{ .last_entry_hash = hashes[33] } },
         };
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -5768,7 +5794,7 @@ test "vote refresh when no new vote available" {
             .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
         };
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -5793,7 +5819,7 @@ test "vote refresh when no new vote available" {
     {
         const empty_results: []const ReplayResult = &.{};
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -6061,7 +6087,7 @@ test "detect and mark duplicate confirmed fork" {
             .{ .slot = 2, .output = .{ .last_entry_hash = slot2_hash } },
         };
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -6239,7 +6265,7 @@ test "detect and mark duplicate slot" {
             .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
         };
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -6612,7 +6638,7 @@ test "successful fork switch (switch_proof)" {
             .{ .slot = 2, .output = .{ .last_entry_hash = slot2_hash } },
         };
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -6652,7 +6678,7 @@ test "successful fork switch (switch_proof)" {
             .{ .slot = 4, .output = .{ .last_entry_hash = slot4_hash } },
         };
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -6712,7 +6738,7 @@ test "successful fork switch (switch_proof)" {
     {
         const empty_results: []const ReplayResult = &.{};
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,
@@ -6784,7 +6810,7 @@ test "successful fork switch (switch_proof)" {
             },
         };
         try consensus.process(allocator, .{
-            .account_reader = stubs.accountsdb.accountReader(),
+            .account_store = .{ .thread_safe_map = &stubs.accountsdb },
             .ledger = &stubs.ledger,
             .gossip_table = null,
             .slot_tracker = &slot_tracker,

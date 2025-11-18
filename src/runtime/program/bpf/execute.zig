@@ -32,7 +32,7 @@ pub fn execute(
             return InstructionError.IncorrectProgramId;
         }
 
-        const loaded_program = ic.tc.program_map.getPtr(program_account.pubkey) orelse {
+        const loaded_program = ic.tc.program_map.get(program_account.pubkey) orelse {
             try ic.tc.log("Program is not cached", .{});
             if (remove_accounts_executable_flag_checks)
                 return InstructionError.UnsupportedProgramId
@@ -40,7 +40,7 @@ pub fn execute(
                 return InstructionError.InvalidAccountData;
         };
 
-        switch (loaded_program.*) {
+        switch (loaded_program) {
             .failed => {
                 try ic.tc.log("Program is not deployed", .{});
                 if (remove_accounts_executable_flag_checks)

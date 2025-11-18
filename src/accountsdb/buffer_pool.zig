@@ -3,8 +3,8 @@ const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 const tracy = @import("tracy");
 
-const IoUring = std.os.linux.IoUring;
 const Atomic = std.atomic.Value;
+const IoUring = std.os.linux.IoUring;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
 const bincode = sig.bincode;
@@ -784,7 +784,7 @@ pub const AccountDataHandle = union(enum) {
     buffer_pool_read: BufferPoolRead,
 
     /// Data allocated elsewhere, not owned or created by BufferPool. BufferPool will deallocate.
-    owned_allocation: []const u8,
+    owned_allocation: []u8,
     /// Data allocated elsewhere, not owned or created by BufferPool.
     unowned_allocation: []const u8,
     /// Data owned by parent AccountDataHandle
@@ -836,7 +836,7 @@ pub const AccountDataHandle = union(enum) {
     }
 
     /// External to the BufferPool, data will be freed upon .deinit
-    pub fn initAllocatedOwned(data: []const u8) AccountDataHandle {
+    pub fn initAllocatedOwned(data: []u8) AccountDataHandle {
         return AccountDataHandle{ .owned_allocation = data };
     }
 
@@ -966,6 +966,13 @@ pub const AccountDataHandle = union(enum) {
     ) !AccountDataHandle {
         const data_copy = try self.readAllAllocate(allocator);
         return initAllocatedOwned(data_copy);
+    }
+
+    pub fn toOwned(self: AccountDataHandle, allocator: std.mem.Allocator) ![]u8 {
+        return switch (self) {
+            .owned_allocation => |data| data,
+            else => (try self.dupeAllocatedOwned(allocator)).owned_allocation,
+        };
     }
 
     pub fn duplicateBufferPoolRead(
