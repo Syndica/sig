@@ -326,7 +326,7 @@ const DEFAULT_MS_PER_SLOT: u64 =
     sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
 const Receivers = struct {
-    replay_votes: *sig.sync.Channel(vote_parser.ParsedVote),
+    replay_votes: ?*sig.sync.Channel(vote_parser.ParsedVote),
 };
 
 pub const VoteListenerMetrics = struct {
@@ -461,9 +461,11 @@ fn listenAndConfirmVotes(
 
     const replay_votes: []const vote_parser.ParsedVote = blk: {
         replay_votes_buffer.clearRetainingCapacity();
-        while (receivers.replay_votes.tryReceive()) |vote| {
-            replay_votes_buffer.appendAssumeCapacity(vote);
-            if (replay_votes_buffer.unusedCapacitySlice().len == 0) break;
+        if (receivers.replay_votes) |channel| {
+            while (channel.tryReceive()) |vote| {
+                replay_votes_buffer.appendAssumeCapacity(vote);
+                if (replay_votes_buffer.unusedCapacitySlice().len == 0) break;
+            }
         }
         break :blk replay_votes_buffer.items;
     };
@@ -954,18 +956,23 @@ fn trackNewVotesAndNotifyConfirmations(
 
     if (is_new_vote) {
         senders.subscriptions.notifyVote(vote_pubkey, vote, vote_transaction_signature);
-        const vote_slots_duped = try allocator.dupe(Slot, vote_slots);
         errdefer allocator.free(vote_slots);
-        senders.verified_vote.send(.{
-            .key = vote_pubkey,
-            .slots = vote_slots_duped,
-        }) catch |err| {
-            logger.err().logf(
-                "{s}: verified vote couldn't send: " ++
-                    ".{{ .vote_pubkey = {f}, .vote_slots_duped = {any} }}",
-                .{ @errorName(err), vote_pubkey, vote_slots_duped },
-            );
-        };
+        // TODO: Uncomment when our RepairService implements vote-weighted repair heuristic.
+        //
+        // In Agave, verified votes are sent to RepairService (via verified_vote_receiver)
+        // to prioritize repairing slots that validators are voting on.
+        // See: https://github.com/anza-xyz/agave/blob/a2e0bd9515c50f924ece55cd2793817801c43fca/core/src/repair/repair_service.rs#L529
+        // const vote_slots_duped = try allocator.dupe(Slot, vote_slots);
+        // senders.verified_vote.send(.{
+        //     .key = vote_pubkey,
+        //     .slots = vote_slots_duped,
+        // }) catch |err| {
+        //     logger.err().logf(
+        //         "{s}: verified vote couldn't send: " ++
+        //             ".{{ .vote_pubkey = {f}, .vote_slots_duped = {any} }}",
+        //         .{ @errorName(err), vote_pubkey, vote_slots_duped },
+        //     );
+        // };
     }
 }
 
