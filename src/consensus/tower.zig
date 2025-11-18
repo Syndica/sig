@@ -359,7 +359,7 @@ test "initializeLockoutsFromBank handles missing vote account" {
     defer account_map.deinit(allocator);
 
     const slot_account_reader: sig.accounts_db.SlotAccountReader = .{
-        .single_version_map = &account_map,
+        .account_map = &account_map,
     };
 
     const fork_root: Slot = 100;
@@ -405,7 +405,7 @@ test "initializeLockoutsFromBank handles invalid vote account owner" {
     try account_map.put(allocator, vote_pubkey, account_with_wrong_owner);
 
     const slot_account_reader: sig.accounts_db.SlotAccountReader = .{
-        .single_version_map = &account_map,
+        .account_map = &account_map,
     };
 
     // Should return InvalidVoteAccountOwner error
@@ -451,7 +451,7 @@ test "initializeLockoutsFromBank handles invalid vote state" {
     try account_map.put(allocator, vote_pubkey, invalid_account);
 
     const slot_account_reader: sig.accounts_db.SlotAccountReader = .{
-        .single_version_map = &account_map,
+        .account_map = &account_map,
     };
 
     // Should return BincodeError when trying to deserialize invalid vote state
