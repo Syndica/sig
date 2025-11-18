@@ -29,4 +29,4 @@ pub const TransactionContextAccount = transaction_context.TransactionContextAcco
 pub const ComputeBudget = compute_budget.ComputeBudget;
 
 // TODO: move to accounts db
-pub const AccountSharedData = @import("account_shared_data.zig").AccountSharedData;
+pub const AccountSharedData = @import("AccountSharedData.zig");
