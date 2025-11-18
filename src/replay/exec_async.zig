@@ -911,7 +911,7 @@ fn resolveForTest(
     return try replay.resolve_lookup.resolveBlock(allocator, entries, .{
         .slot = 0,
         .account_reader = account_reader,
-        .reserved_accounts = &.empty,
+        .reserved_accounts = &.EMPTY,
         .slot_hashes = .INIT,
     });
 }

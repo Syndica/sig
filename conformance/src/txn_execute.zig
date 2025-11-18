@@ -61,8 +61,8 @@ export fn sol_compat_txn_execute_v1(
     return 1;
 }
 
-const builtins = @import("builtins.zig");
 const bank_methods = @import("bank_methods.zig");
+const builtin_programs = sig.runtime.builtin_programs;
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -307,7 +307,7 @@ fn executeTxnContext(
 
             const account_reader_for_ancestors = account_store.reader().forSlot(&ancestors);
             // Add builtin programs
-            for (builtins.BUILTINS) |builtin_program| {
+            for (builtin_programs.BUILTINS) |builtin_program| {
                 // If the feature id is not null, and the builtin program is not migrated, add
                 // to the builtin accounts map. If the builtin program has been migrated it will
                 // have an entry in accounts db with owner bpf_loader.v3.ID (i.e. it is now a BPF program).
@@ -369,11 +369,10 @@ fn executeTxnContext(
         }
 
         const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
-            .account_store = account_store,
-            .capitalization = &capitalization,
-            .ancestors = &ancestors,
-            .rent = &genesis_config.rent,
             .slot = slot,
+            .slot_store = account_store.forSlot(slot, &ancestors),
+            .capitalization = &capitalization,
+            .rent = &genesis_config.rent,
         };
 
         try update_sysvar.updateStakeHistory(
@@ -563,11 +562,10 @@ fn executeTxnContext(
                     .active = true,
                 };
                 try update_sysvar.updateSysvarAccount(EpochRewards, allocator, epoch_rewards, .{
-                    .account_store = account_store,
-                    .ancestors = &ancestors,
+                    .slot = slot,
+                    .slot_store = account_store.forSlot(slot, &ancestors),
                     .capitalization = &capitalization,
                     .rent = &genesis_config.rent,
-                    .slot = slot,
                 });
             } else {
                 const leader_schedule_epoch = epoch_schedule.getLeaderScheduleEpoch(slot);
@@ -589,11 +587,10 @@ fn executeTxnContext(
             // Update sysvars
             {
                 const update_sysvar_deps: update_sysvar.UpdateSysvarAccountDeps = .{
-                    .account_store = account_store,
-                    .capitalization = &capitalization,
-                    .ancestors = &ancestors,
-                    .rent = &genesis_config.rent,
                     .slot = slot,
+                    .slot_store = account_store.forSlot(slot, &ancestors),
+                    .capitalization = &capitalization,
+                    .rent = &genesis_config.rent,
                 };
 
                 try update_sysvar.updateSlotHashes(
@@ -681,11 +678,10 @@ fn executeTxnContext(
     // Update epoch schedule and rent to minimum rent exempt balance
     {
         const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
-            .account_store = account_store,
-            .capitalization = &capitalization,
-            .ancestors = &ancestors,
-            .rent = &genesis_config.rent,
             .slot = slot,
+            .slot_store = account_store.forSlot(slot, &ancestors),
+            .capitalization = &capitalization,
+            .rent = &genesis_config.rent,
         };
 
         try update_sysvar.updateRent(allocator, genesis_config.rent, update_sysvar_deps);
@@ -720,11 +716,10 @@ fn executeTxnContext(
         try blockhash_queue.insertHash(allocator, blockhash, lamports_per_signature);
     }
     const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
-        .account_store = account_store,
-        .capitalization = &capitalization,
-        .ancestors = &ancestors,
-        .rent = &genesis_config.rent,
         .slot = slot,
+        .slot_store = account_store.forSlot(slot, &ancestors),
+        .capitalization = &capitalization,
+        .rent = &genesis_config.rent,
     };
     try update_sysvar.updateRecentBlockhashes(allocator, &blockhash_queue, update_sysvar_deps);
 
@@ -755,7 +750,7 @@ fn executeTxnContext(
     );
 
     // Initialize reserved accounts for the slot
-    var reserved_accounts = try sig.core.reserved_accounts.initForSlot(
+    var reserved_accounts = try sig.core.ReservedAccounts.initForSlot(
         allocator,
         &feature_set,
         slot,
