@@ -388,9 +388,6 @@ pub const ReplayTower = struct {
         return null;
     }
 
-    /// Provides proof that enough validators voted for this new branch,
-    /// so it's safe to switch to it.
-    ///
     /// Checks if a vote for `candidate_slot` is usable in a switching proof
     /// from `last_voted_slot` to `switch_slot`.
     ///
@@ -625,19 +622,15 @@ pub const ReplayTower = struct {
         for (descendants.keys(), descendants.values()) |candidate_slot, *candidate_descendants| {
             // 1) Don't consider any banks that haven't been frozen yet
             //    because the needed stats are unavailable
-            // 2) Only consider lockouts at the latest `frozen` bank
-            //    on each fork, as that bank will contain all the
-            //    lockout intervals for ancestors on that fork as well.
-            // 3) Don't consider lockouts on the `last_vote` itself
-            // 4) Don't consider lockouts on any descendants of
-            //    `last_vote`
-            // 5) Don't consider any banks before the root because
-            //    all lockouts must be ancestors of `last_vote`
             const is_progress_computed = if (progress.getForkStats(candidate_slot)) |stats|
                 stats.computed
             else
                 false;
+            if (!is_progress_computed) continue;
 
+            // 2) Only consider lockouts at the latest `frozen` bank
+            //    on each fork, as that bank will contain all the
+            //    lockout intervals for ancestors on that fork as well.
             // If any of the descendants have the `computed` flag set, then there must be a more
             // recent frozen bank on this fork to use, so we can ignore this one. Otherwise,
             // even if this bank has descendants, if they have not yet been frozen / stats computed,
@@ -647,7 +640,17 @@ pub const ReplayTower = struct {
                     if (stats.computed) break true;
                 }
             } else false;
+            if (is_descendant_computed) continue;
 
+            // 3) Don't consider lockouts on the `last_vote` itself
+            if (candidate_slot == last_voted_slot) continue;
+
+            // 4) Don't consider lockouts on any descendants of
+            //    `last_vote`
+            if (candidate_slot <= root) continue;
+
+            // 5) Don't consider any banks before the root because
+            //    all lockouts must be ancestors of `last_vote`
             const is_valid_switching_vote = self.isValidSwitchingProofVote(
                 candidate_slot,
                 last_voted_slot,
@@ -656,14 +659,7 @@ pub const ReplayTower = struct {
                 &last_vote_ancestors,
             ) orelse false; // Agave uses unwrap_or(false), treating None as false
 
-            if (!is_progress_computed or
-                is_descendant_computed or
-                candidate_slot == last_voted_slot or
-                candidate_slot <= root or
-                !is_valid_switching_vote)
-            {
-                continue;
-            }
+            if (!is_valid_switching_vote) continue;
 
             // By the time we reach here, any ancestors of the `last_vote`,
             // should have been filtered out, as they all have a descendant,
