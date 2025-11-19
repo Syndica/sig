@@ -497,7 +497,7 @@ pub const ReplayTower = struct {
         // so this is safe to check here. We return here if the last voted slot was rolled back/purged due to
         // being a duplicate because `ancestors`/`descendants`/`progress` structures may be missing this slot due
         // to duplicate purging. This would cause many of the `unwrap()` checks below to fail.
-        const switch_hash = progress.getHash(switch_slot).?;
+        const switch_hash = progress.getHash(switch_slot) orelse return error.MissingSlot;
         if (heaviest_subtree_fork_choice.latestDuplicateAncestor(
             SlotAndHash{ .slot = last_voted_slot, .hash = last_voted_hash },
         )) |latest_duplicate_ancestor| {
@@ -657,7 +657,7 @@ pub const ReplayTower = struct {
                 switch_slot,
                 ancestors,
                 &last_vote_ancestors,
-            ) orelse false; // Agave uses unwrap_or(false), treating None as false
+            ) orelse return error.MissingSlotInAncestors;
 
             if (!is_valid_switching_vote) continue;
 
@@ -899,11 +899,6 @@ pub const ReplayTower = struct {
 
     pub fn isStrayLastVote(self: *const ReplayTower) bool {
         const signal = self.lastVoteSignal();
-
-        if (signal == .stray) {
-            self.metrics.stray_restored_slots.inc();
-        }
-
         return signal == .stray;
     }
 
