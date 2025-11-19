@@ -28,7 +28,6 @@ pub fn init(
     allocator: std.mem.Allocator,
     file_path: [:0]const u8,
     accounts_dir: std.fs.Dir,
-    verify: ?sig.core.Hash,
 ) !Rooted {
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.init" });
     defer zone.deinit();
@@ -88,15 +87,6 @@ pub fn init(
     } else {
         std.debug.print("db is empty -  loading from snapshot!\n", .{});
         try self.insertFromSnapshot(allocator, accounts_dir);
-    }
-
-    if (verify) |expected_hash| {
-        const actual_hash = (try self.accountsHash()).checksum();
-
-        const expected_str = expected_hash.base58String();
-        const actual_str = actual_hash.base58String();
-
-        try std.testing.expectEqualStrings(expected_str.constSlice(), actual_str.constSlice());
     }
 
     return self;
