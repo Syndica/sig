@@ -366,6 +366,7 @@ fn handleRpcRequest(
                 error.InvalidJsonRpcVersion,
                 => .{ .invalid_request, "Invalid Request" },
 
+                error.MethodNotImplemented,
                 error.InvalidMethod,
                 => .{ .method_not_found, "Method not found" },
 

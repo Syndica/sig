@@ -537,7 +537,7 @@ test "processResult: confirm status with done poll and slot complete - success p
     };
 
     // Create slot state then modify tick height
-    var mock_slot_state = try sig.core.SlotState.genesis(allocator);
+    var mock_slot_state: sig.core.SlotState = .GENESIS;
 
     // Set tick height equal to max_tick_height to make slot complete
     _ = mock_slot_state.tick_height.swap(64, .monotonic);
@@ -625,7 +625,8 @@ test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot"
     );
 
     // Provide a minimal slot in the slot tracker so markDeadSlot can read a hash
-    var slot_state = try sig.core.SlotState.genesis(allocator);
+    var slot_state: sig.core.SlotState = .GENESIS;
+
     var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
     slot_state.hash.set(sig.core.Hash.initRandom(rng.random()));
     const slot_consts = sig.core.SlotConstants{
@@ -730,7 +731,7 @@ test "updateConsensusForFrozenSlot: moves gossip votes with gossip vote_kind" {
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .empty,
     };
-    var slot_state = try sig.core.SlotState.genesis(allocator);
+    var slot_state: sig.core.SlotState = .GENESIS;
     slot_state.hash.set(slot_hash);
 
     try test_state.slot_tracker.put(allocator, slot, .{

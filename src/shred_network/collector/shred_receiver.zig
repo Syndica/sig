@@ -1,8 +1,8 @@
 const std = @import("std");
 const network = @import("zig-network");
 const tracy = @import("tracy");
-const sig = @import("../sig.zig");
-const shred_network = @import("lib.zig");
+const sig = @import("../../sig.zig");
+const shred_network = @import("../lib.zig");
 
 const bincode = sig.bincode;
 const layout = sig.ledger.shred.layout;
@@ -630,7 +630,7 @@ test "handleBatch/handlePacket" {
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .INIT);
     defer epoch_ctx.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);

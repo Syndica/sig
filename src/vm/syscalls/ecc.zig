@@ -684,7 +684,7 @@ test "edwards curve group operations" {
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -818,7 +818,7 @@ test "ristretto curve group operations" {
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -955,7 +955,7 @@ test "multiscalar multiplication" {
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1050,7 +1050,7 @@ test "multiscalar multiplication large" {
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1136,7 +1136,7 @@ test "alt_bn128 add" {
         }}, .compute_meter = 334 },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1205,7 +1205,7 @@ test "alt_bn128 mul" {
         }}, .compute_meter = 3_840 },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1270,7 +1270,7 @@ test "alt_bn128 pairing" {
         }}, .compute_meter = 48_986 },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1357,7 +1357,7 @@ test "alt_bn128 g1 compress/decompress" {
         }}, .compute_meter = 628 * 2 },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1420,7 +1420,7 @@ test "alt_bn128 g2 compress/decompress" {
         }}, .compute_meter = 13_896 * 2 },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1499,7 +1499,7 @@ test "alt_bn128 compression failure cases" {
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1592,7 +1592,7 @@ test "alt_bn128 group op failure cases" {
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1638,7 +1638,7 @@ test "secp256k1_recover" {
         },
     });
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 

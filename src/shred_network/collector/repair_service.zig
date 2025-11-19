@@ -1,7 +1,7 @@
 const std = @import("std");
 const zig_network = @import("zig-network");
-const sig = @import("../sig.zig");
-const shred_network = @import("lib.zig");
+const sig = @import("../../sig.zig");
+const shred_network = @import("../lib.zig");
 const tracy = @import("tracy");
 
 const bincode = sig.bincode;
@@ -134,7 +134,7 @@ pub const RepairService = struct {
 
     pub fn run(self: *Self) !void {
         var waiting_for_peers = false;
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         while (!self.exit.load(.acquire)) {
             timer.reset();
             var num_repairs_sent: usize = 0;

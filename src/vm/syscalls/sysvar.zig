@@ -152,7 +152,7 @@ test getSysvar {
         });
 
         fn fill(zeroed: bool, v: anytype) @TypeOf(v) {
-            var new_v = @TypeOf(v).DEFAULT;
+            var new_v = @TypeOf(v).INIT;
             if (zeroed) {
                 @memset(std.mem.asBytes(&new_v), 0);
             } else {
@@ -184,13 +184,13 @@ test getSysvar {
         },
     });
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
     // // Test clock sysvar
     {
-        var obj = sysvar.Clock.DEFAULT;
+        var obj = sysvar.Clock.INIT;
         const obj_addr = 0x100000000;
 
         var buffer = std.mem.zeroes([sysvar.Clock.STORAGE_SIZE]u8);
@@ -243,7 +243,7 @@ test getSysvar {
 
     // // Test epoch_schedule sysvar
     {
-        var obj = sysvar.EpochSchedule.DEFAULT;
+        var obj = sysvar.EpochSchedule.INIT;
         const obj_addr = 0x100000000;
 
         var buffer = std.mem.zeroes([sysvar.EpochSchedule.STORAGE_SIZE]u8);
@@ -295,7 +295,7 @@ test getSysvar {
 
     // Test fees sysvar
     {
-        var obj = sysvar.Fees.DEFAULT;
+        var obj = sysvar.Fees.INIT;
         const obj_addr = 0x100000000;
 
         var clean_obj = src.fill(true, obj); // has bytes/padding zeroed.
@@ -318,7 +318,7 @@ test getSysvar {
 
     // Test rent sysvar
     {
-        var obj = src.fill(true, sysvar.Rent.DEFAULT);
+        var obj = src.fill(true, sysvar.Rent.INIT);
         const obj_addr = 0x100000000;
 
         var buffer = std.mem.zeroes([sysvar.Rent.STORAGE_SIZE]u8);
@@ -368,7 +368,7 @@ test getSysvar {
 
     // Test epoch rewards sysvar
     {
-        var obj = src.fill(true, sysvar.EpochRewards.DEFAULT);
+        var obj = src.fill(true, sysvar.EpochRewards.INIT);
         const obj_addr = 0x100000000;
 
         var buffer = std.mem.zeroes([sysvar.EpochRewards.STORAGE_SIZE]u8);
@@ -423,7 +423,7 @@ test getSysvar {
 
     // Test last restart slot sysvar
     {
-        var obj = sysvar.LastRestartSlot.DEFAULT;
+        var obj = sysvar.LastRestartSlot.INIT;
         const obj_addr = 0x100000000;
 
         var buffer = std.mem.zeroes([sysvar.LastRestartSlot.STORAGE_SIZE]u8);
@@ -497,7 +497,7 @@ fn testGetStakeHistory(filled: bool) !void {
         } });
     }
 
-    const src_history = try sysvar.StakeHistory.initWithEntries(allocator, entries.constSlice());
+    const src_history = sysvar.StakeHistory.initWithEntries(entries.constSlice());
     // deinitialised by transaction context
 
     {
@@ -514,7 +514,7 @@ fn testGetStakeHistory(filled: bool) !void {
         .sysvar_cache = .{ .stake_history = src_history },
     });
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -541,7 +541,6 @@ fn testGetStakeHistory(filled: bool) !void {
     });
 
     const obj_parsed = try bincode.readFromSlice(allocator, sysvar.StakeHistory, &buffer, .{});
-    defer obj_parsed.deinit(allocator);
 
     try std.testing.expectEqualSlices(
         sysvar.StakeHistory.Entry,
@@ -575,7 +574,7 @@ fn testGetSlotHashes(filled: bool) !void {
         try entries.append(.{ .slot = slot, .hash = result });
     }
 
-    const src_hashes = try sysvar.SlotHashes.initWithEntries(allocator, entries.constSlice());
+    const src_hashes = sysvar.SlotHashes.initWithEntries(entries.constSlice());
     // deinitialised by transaction context
 
     {
@@ -592,7 +591,7 @@ fn testGetSlotHashes(filled: bool) !void {
         .sysvar_cache = .{ .slot_hashes = src_hashes },
     });
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -619,7 +618,6 @@ fn testGetSlotHashes(filled: bool) !void {
     });
 
     const obj_parsed = try bincode.readFromSlice(allocator, sysvar.SlotHashes, &buffer, .{});
-    defer obj_parsed.deinit(allocator);
 
     try std.testing.expectEqualSlices(
         sysvar.SlotHashes.Entry,

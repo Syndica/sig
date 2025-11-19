@@ -4,14 +4,58 @@ const sig = @import("../sig.zig");
 const bpf_loader = sig.runtime.program.bpf_loader;
 const vm = sig.vm;
 
+const Allocator = std.mem.Allocator;
+
+const SlotAccountReader = sig.accounts_db.SlotAccountReader;
+
 const Pubkey = sig.core.Pubkey;
 const AccountSharedData = sig.runtime.AccountSharedData;
 
 const Executable = sig.vm.Executable;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
+const assert = std.debug.assert;
 
-pub const ProgramMap = std.AutoArrayHashMapUnmanaged(Pubkey, LoadedProgram);
+const AccountLoadError = sig.runtime.account_loader.AccountLoadError;
+const wrapDB = sig.runtime.account_loader.wrapDB;
+
+pub const ProgramMap = struct {
+    inner: std.AutoArrayHashMapUnmanaged(Pubkey, LoadedProgram),
+    lock: std.Thread.RwLock,
+
+    pub const empty = ProgramMap{
+        .inner = .empty,
+        .lock = .{},
+    };
+
+    pub fn deinit(self: *ProgramMap, allocator: Allocator) void {
+        for (self.inner.values()) |*v| v.deinit(allocator);
+        self.inner.deinit(allocator);
+    }
+
+    pub fn get(self: *ProgramMap, address: Pubkey) ?LoadedProgram {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        return self.inner.get(address);
+    }
+
+    pub fn fetchPut(
+        self: *ProgramMap,
+        allocator: Allocator,
+        address: Pubkey,
+        program: LoadedProgram,
+    ) Allocator.Error!?LoadedProgram {
+        self.lock.lock();
+        defer self.lock.unlock();
+        return if (try self.inner.fetchPut(allocator, address, program)) |x| x.value else null;
+    }
+
+    pub fn contains(self: *ProgramMap, address: Pubkey) bool {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        return self.inner.contains(address);
+    }
+};
 
 pub const LoadedProgram = union(enum(u8)) {
     failed,
@@ -20,7 +64,7 @@ pub const LoadedProgram = union(enum(u8)) {
         source: []const u8,
     },
 
-    pub fn deinit(self: *LoadedProgram, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const LoadedProgram, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .failed => {},
             .loaded => |*loaded| {
@@ -31,83 +75,75 @@ pub const LoadedProgram = union(enum(u8)) {
     }
 };
 
-pub fn loadPrograms(
+pub fn loadIfProgram(
     allocator: std.mem.Allocator,
-    accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    programs: *ProgramMap,
+    address: Pubkey,
+    account: *const AccountSharedData,
+    account_reader: SlotAccountReader,
     enviroment: *const vm.Environment,
     slot: u64,
-) error{OutOfMemory}!ProgramMap {
-    var programs = ProgramMap{};
-    errdefer programs.deinit(allocator);
+) AccountLoadError!void {
+    // https://github.com/firedancer-io/solfuzz-agave/blob/agave-v3.0.3/src/lib.rs#L771-L800
+    if (!account.owner.equals(&bpf_loader.v1.ID) and
+        !account.owner.equals(&bpf_loader.v2.ID) and
+        !account.owner.equals(&bpf_loader.v3.ID) and
+        !account.owner.equals(&bpf_loader.v4.ID) or
+        programs.contains(address)) return;
 
-    for (accounts.keys(), accounts.values()) |pubkey, account| {
-        // https://github.com/firedancer-io/solfuzz-agave/blob/agave-v3.0.3/src/lib.rs#L771-L800
-        if (!account.owner.equals(&bpf_loader.v1.ID) and
-            !account.owner.equals(&bpf_loader.v2.ID) and
-            !account.owner.equals(&bpf_loader.v3.ID) and
-            !account.owner.equals(&bpf_loader.v4.ID)) continue;
+    var loaded_program = try loadProgram(allocator, account, account_reader, enviroment, slot);
+    errdefer loaded_program.deinit(allocator);
 
-        var loaded_program = try loadProgram(
-            allocator,
-            &account,
-            accounts,
-            enviroment,
-            slot,
-        );
-        errdefer loaded_program.deinit(allocator);
-
-        try programs.put(allocator, pubkey, loaded_program);
+    if (try programs.fetchPut(allocator, address, loaded_program)) |old_value| {
+        old_value.deinit(allocator);
     }
-
-    return programs;
 }
 
 /// Load program requires that the account is executable
-pub fn loadProgram(
+fn loadProgram(
     allocator: std.mem.Allocator,
     account: *const AccountSharedData,
-    accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    accounts: SlotAccountReader,
     environment: *const vm.Environment,
     slot: u64,
-) !LoadedProgram {
-    // executable bytes are owned by the entry in the accounts map and should not be freed
-    const maybe_deployment_slot, const executable_bytes = loadDeploymentSlotAndExecutableBytes(
+) AccountLoadError!LoadedProgram {
+    const maybe_deployment_slot, var executable_bytes = try loadDeploymentSlotAndExecutableBytes(
+        allocator,
         account,
         accounts,
     ) orelse return .failed;
+    defer allocator.free(executable_bytes); // freed unless returned
 
     if (maybe_deployment_slot) |ds| if (ds >= slot) return .failed;
 
-    const source = try allocator.dupe(u8, executable_bytes);
     var executable = Executable.fromBytes(
         allocator,
-        source,
+        executable_bytes,
         &environment.loader,
         environment.config,
-    ) catch {
-        allocator.free(source);
-        return .failed;
-    };
+    ) catch return .failed;
 
     executable.verify(&environment.loader) catch {
         executable.deinit(allocator);
         return .failed;
     };
 
-    return .{
-        .loaded = .{
-            .executable = executable,
-            .source = source,
-        },
-    };
+    const ret = LoadedProgram{ .loaded = .{
+        .executable = executable,
+        .source = executable_bytes,
+    } };
+    executable_bytes = &.{}; // to avoid freeing
+    return ret;
 }
 
-pub fn loadDeploymentSlotAndExecutableBytes(
+/// returned bytes are allocated with the passed allocator and owned by the caller
+fn loadDeploymentSlotAndExecutableBytes(
+    allocator: Allocator,
     account: *const AccountSharedData,
-    accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
-) ?struct { ?u64, []const u8 } {
+    accounts: SlotAccountReader,
+) AccountLoadError!?struct { ?u64, []u8 } {
     if (account.owner.equals(&bpf_loader.v1.ID) or account.owner.equals(&bpf_loader.v2.ID)) {
-        return .{ null, account.data };
+        return .{ null, try allocator.dupe(u8, account.data) };
     } else if (account.owner.equals(&bpf_loader.v3.ID)) {
         const program_state = sig.bincode.readFromSlice(
             failing_allocator,
@@ -121,28 +157,39 @@ pub fn loadDeploymentSlotAndExecutableBytes(
             else => return null,
         };
 
-        const program_data_account = accounts.getPtr(program_data_key) orelse
+        const program_data_account = try wrapDB(accounts.get(allocator, program_data_key)) orelse
             return null;
 
-        if (program_data_account.data.len < bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE) {
+        const meta_size = bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE;
+        const account_len = program_data_account.data.len();
+        if (account_len < meta_size) {
             return null;
         }
 
-        const program_metadata_bytes =
-            program_data_account.data[0..bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE];
-        const program_elf_bytes =
-            program_data_account.data[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE..];
+        var program_metadata_bytes: [meta_size]u8 = undefined;
+        assert(meta_size == program_data_account.data.read(0, &program_metadata_bytes));
+
+        const program_elf_bytes = try allocator.alloc(u8, account_len - meta_size);
+        errdefer allocator.free(program_elf_bytes);
+        assert(account_len - meta_size ==
+            program_data_account.data.read(@intCast(meta_size), program_elf_bytes));
 
         const program_metadata = sig.bincode.readFromSlice(
             failing_allocator,
             bpf_loader.v3.State,
-            program_metadata_bytes,
+            &program_metadata_bytes,
             .{},
-        ) catch return null;
+        ) catch {
+            allocator.free(program_elf_bytes);
+            return null;
+        };
 
         const slot = switch (program_metadata) {
             .program_data => |data| data.slot,
-            else => return null,
+            else => {
+                allocator.free(program_elf_bytes);
+                return null;
+            },
         };
 
         return .{ slot, program_elf_bytes };
@@ -158,7 +205,7 @@ pub fn loadDeploymentSlotAndExecutableBytes(
 
         return .{
             program_state.slot,
-            account.data[bpf_loader.v4.State.PROGRAM_DATA_METADATA_SIZE..],
+            try allocator.dupe(u8, account.data[bpf_loader.v4.State.PROGRAM_DATA_METADATA_SIZE..]),
         };
     } else {
         return null;
@@ -206,31 +253,17 @@ test "loadPrograms: load v1, v2 program" {
         },
     );
 
-    const environment = vm.Environment{
-        .loader = .{},
-        .config = .{},
-    };
-    defer environment.deinit(allocator);
-
     { // Success
-        var loaded_programs = try loadPrograms(
-            allocator,
-            &accounts,
-            &environment,
-            0,
-        );
-        defer {
-            for (loaded_programs.values()) |*v| v.deinit(allocator);
-            loaded_programs.deinit(allocator);
-        }
+        var loaded_programs = try testLoad(allocator, &accounts, &.{}, 0);
+        defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_v1_key).?) {
-            .failed => std.debug.panic("Program failed to load!", .{}),
+            .failed => return error.FailedToLoadProgram,
             .loaded => {},
         }
 
         switch (loaded_programs.get(program_v2_key).?) {
-            .failed => std.debug.panic("Program failed to load!", .{}),
+            .failed => return error.FailedToLoadProgram,
             .loaded => {},
         }
     }
@@ -289,44 +322,23 @@ test "loadPrograms: load v3 program" {
         },
     );
 
-    const environment = vm.Environment{
-        .loader = .{},
-        .config = .{},
-    };
-
     { // Success
-        var loaded_programs = try loadPrograms(
-            allocator,
-            &accounts,
-            &environment,
-            program_deployment_slot + 1,
-        );
-        defer {
-            for (loaded_programs.values()) |*v| v.deinit(allocator);
-            loaded_programs.deinit(allocator);
-        }
+        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot + 1);
+        defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
-            .failed => std.debug.panic("Program failed to load!", .{}),
+            .failed => return error.TestFailed,
             .loaded => {},
         }
     }
 
     { // Delay visibility failure
-        var loaded_programs = try loadPrograms(
-            allocator,
-            &accounts,
-            &environment,
-            program_deployment_slot,
-        );
-        defer {
-            for (loaded_programs.values()) |*v| v.deinit(allocator);
-            loaded_programs.deinit(allocator);
-        }
+        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot);
+        defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
             .failed => {},
-            .loaded => std.debug.panic("Program should not load!", .{}),
+            .loaded => return error.TestFailed,
         }
     }
 
@@ -336,20 +348,12 @@ test "loadPrograms: load v3 program" {
         account.data[0] = 0xFF; // Corrupt the first byte of the metadata
         defer account.data[0] = tmp_byte;
 
-        var loaded_programs = try loadPrograms(
-            allocator,
-            &accounts,
-            &environment,
-            program_deployment_slot + 1,
-        );
-        defer {
-            for (loaded_programs.values()) |*v| v.deinit(allocator);
-            loaded_programs.deinit(allocator);
-        }
+        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot + 1);
+        defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
             .failed => {},
-            .loaded => std.debug.panic("Program should not load!", .{}),
+            .loaded => return error.TestFailed,
         }
     }
 
@@ -359,20 +363,12 @@ test "loadPrograms: load v3 program" {
         account.data[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE + 1] = 0xFF; // Corrupt the first byte of the elf
         defer account.data[0] = tmp_byte;
 
-        var loaded_programs = try loadPrograms(
-            allocator,
-            &accounts,
-            &environment,
-            program_deployment_slot + 1,
-        );
-        defer {
-            for (loaded_programs.values()) |*loaded_program| loaded_program.deinit(allocator);
-            loaded_programs.deinit(allocator);
-        }
+        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot + 1);
+        defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
             .failed => {},
-            .loaded => std.debug.panic("Program should not load!", .{}),
+            .loaded => return error.TestFailed,
         }
     }
 }
@@ -389,11 +385,6 @@ test "loadPrograms: load v4 program" {
         std.math.maxInt(usize),
     );
     defer allocator.free(program_elf);
-
-    const environment = vm.Environment{
-        .loader = .{},
-        .config = .{},
-    };
 
     var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
     defer {
@@ -432,19 +423,11 @@ test "loadPrograms: load v4 program" {
     );
 
     { // Success
-        var loaded_programs = try loadPrograms(
-            allocator,
-            &accounts,
-            &environment,
-            program_deployment_slot + 1,
-        );
-        defer {
-            for (loaded_programs.values()) |*v| v.deinit(allocator);
-            loaded_programs.deinit(allocator);
-        }
+        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot + 1);
+        defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
-            .failed => std.debug.panic("Program failed to load!", .{}),
+            .failed => return error.TestFailed,
             .loaded => {},
         }
     }
@@ -452,20 +435,12 @@ test "loadPrograms: load v4 program" {
     { // Bad program data meta
         @memset(program_data[0..bpf_loader.v4.State.PROGRAM_DATA_METADATA_SIZE], 0xaa);
 
-        var loaded_programs = try loadPrograms(
-            allocator,
-            &accounts,
-            &environment,
-            program_deployment_slot + 1,
-        );
-        defer {
-            for (loaded_programs.values()) |*v| v.deinit(allocator);
-            loaded_programs.deinit(allocator);
-        }
+        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot + 1);
+        defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
             .failed => {},
-            .loaded => std.debug.panic("Program should not load!", .{}),
+            .loaded => return error.TestFailed,
         }
     }
 }
@@ -493,25 +468,11 @@ test "loadPrograms: bad owner" {
         },
     );
 
-    const environment = vm.Environment{
-        .loader = .{},
-        .config = .{},
-    };
-
     { // Failed to load program with bad owner
-        var loaded_programs = try loadPrograms(
-            allocator,
-            &accounts,
-            &environment,
-            prng.random().int(u64),
-        );
-        defer {
-            for (loaded_programs.values()) |*v| v.deinit(allocator);
-            loaded_programs.deinit(allocator);
-        }
+        var loaded_programs = try testLoad(allocator, &accounts, &.{}, prng.random().int(u64));
+        defer loaded_programs.deinit(allocator);
 
-        if (loaded_programs.get(program_key) != null)
-            std.debug.panic("Program should not load!", .{});
+        if (loaded_programs.get(program_key) != null) return error.TestFailed;
     }
 }
 
@@ -551,11 +512,34 @@ pub fn createV3ProgramAccountData(
         .{},
     );
 
-    std.debug.assert(
-        program_data_metadata_bytes.len <= bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE,
-    );
+    assert(program_data_metadata_bytes.len <= bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE);
 
     @memcpy(program_data_bytes[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE..], program_elf_bytes);
 
     return .{ program_bytes, program_data_bytes };
+}
+
+/// helper function to load programs for tests
+pub fn testLoad(
+    allocator: std.mem.Allocator,
+    accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    environment: *const vm.Environment,
+    slot: u64,
+) AccountLoadError!ProgramMap {
+    var programs = ProgramMap.empty;
+    errdefer programs.deinit(allocator);
+
+    for (accounts.keys(), accounts.values()) |address, account| {
+        try loadIfProgram(
+            allocator,
+            &programs,
+            address,
+            &account,
+            .{ .account_shared_data_map = accounts },
+            environment,
+            slot,
+        );
+    }
+
+    return programs;
 }
