@@ -341,12 +341,12 @@ pub const ShredReceiver = struct {
         const my_pubkey = sig.core.Pubkey.fromPublicKey(&self.params.keypair.public_key);
 
         // Early return if we already have a duplicate for this slot.
-        if (hasDuplicateForSlot(gossip, my_pubkey, slot)) {
+        if (hasDuplicateForSlot(&gossip.gossip_table_rw, my_pubkey, slot)) {
             return;
         }
 
         // Compute ring offset where new entries should be placed/overwritten.
-        const ring_offset = computeRingOffset(gossip, my_pubkey);
+        const ring_offset = computeRingOffset(&gossip.gossip_table_rw, my_pubkey);
 
         // Serialize duplicate slot proof.
         const allocator = gossip.allocator;
@@ -355,7 +355,7 @@ pub const ShredReceiver = struct {
 
         // Build chunks that will be converted to CRDS.
         const chunks = try self.buildDuplicateShredChunks(
-            gossip,
+            gossip.allocator,
             slot,
             shred_payload,
             proof_bytes,
@@ -374,11 +374,11 @@ pub const ShredReceiver = struct {
     }
 
     fn hasDuplicateForSlot(
-        gossip: *sig.gossip.GossipService,
+        gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
         my_pubkey: sig.core.Pubkey,
         slot: Slot,
     ) bool {
-        var gossip_table, var lock = gossip.gossip_table_rw.readWithLock();
+        var gossip_table, var lock = gossip_table_rw.readWithLock();
         defer lock.unlock();
 
         if (gossip_table.pubkey_to_values.get(my_pubkey)) |records| {
@@ -397,7 +397,7 @@ pub const ShredReceiver = struct {
     }
 
     fn computeRingOffset(
-        gossip: *sig.gossip.GossipService,
+        gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
         my_pubkey: sig.core.Pubkey,
     ) u16 {
         const MAX_DUPLICATE_SHREDS = sig.gossip.data.MAX_DUPLICATE_SHREDS;
@@ -405,7 +405,7 @@ pub const ShredReceiver = struct {
         var oldest_index: u16 = 0;
         var maybe_oldest_wallclock: ?u64 = null;
 
-        var gossip_table, var lock = gossip.gossip_table_rw.readWithLock();
+        var gossip_table, var lock = gossip_table_rw.readWithLock();
         defer lock.unlock();
 
         if (gossip_table.pubkey_to_values.get(my_pubkey)) |records| {
@@ -453,7 +453,7 @@ pub const ShredReceiver = struct {
 
     fn buildDuplicateShredChunks(
         self: *ShredReceiver,
-        gossip: *sig.gossip.GossipService,
+        allocator: std.mem.Allocator,
         slot: Slot,
         shred_payload: []const u8,
         proof_bytes: []const u8,
@@ -476,10 +476,10 @@ pub const ShredReceiver = struct {
 
         var chunks: std.ArrayListUnmanaged(sig.gossip.data.DuplicateShred) = .empty;
         errdefer {
-            for (chunks.items) |dup| gossip.allocator.free(dup.chunk);
-            chunks.deinit(gossip.allocator);
+            for (chunks.items) |dup| allocator.free(dup.chunk);
+            chunks.deinit(allocator);
         }
-        try chunks.ensureTotalCapacity(gossip.allocator, num_chunks_usize);
+        try chunks.ensureTotalCapacity(allocator, num_chunks_usize);
 
         var chunk_index: u8 = 0;
         var offset: usize = 0;
@@ -497,11 +497,11 @@ pub const ShredReceiver = struct {
                 .shred_type = shred_type,
                 .num_chunks = num_chunks,
                 .chunk_index = chunk_index,
-                .chunk = try gossip.allocator.dupe(u8, chunk_data),
+                .chunk = try allocator.dupe(u8, chunk_data),
             });
         }
 
-        return try chunks.toOwnedSlice(gossip.allocator);
+        return try chunks.toOwnedSlice(allocator);
     }
 
     fn enqueueDuplicateShredCrdsValues(
