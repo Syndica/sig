@@ -318,18 +318,25 @@ pub const Message = struct {
 
     pub fn clone(self: Message, allocator: std.mem.Allocator) !Message {
         const account_keys = try allocator.dupe(Pubkey, self.account_keys);
-        errdefer sig.bincode.free(allocator, account_keys);
+        errdefer allocator.free(account_keys);
 
         var instructions = try allocator.alloc(Instruction, self.instructions.len);
-        errdefer sig.bincode.free(allocator, instructions);
-        for (self.instructions, 0..) |instr, i|
-            instructions[i] = try instr.clone(allocator);
+        errdefer allocator.free(instructions);
 
-        const address_lookups =
-            try allocator.alloc(AddressLookup, self.address_lookups.len);
-        errdefer sig.bincode.free(allocator, address_lookups);
-        for (address_lookups, 0..) |*alt, i|
-            alt.* = try self.address_lookups[i].clone(allocator);
+        for (self.instructions, 0..) |instr, i| {
+            errdefer for (instructions[0..i]) |_instr| _instr.deinit(allocator);
+            instructions[i] = try instr.clone(allocator);
+        }
+        errdefer for (instructions) |instr| instr.deinit(allocator);
+
+        const address_lookups = try allocator.alloc(AddressLookup, self.address_lookups.len);
+        errdefer allocator.free(address_lookups);
+
+        for (self.address_lookups, 0..) |alt, i| {
+            errdefer for (address_lookups[0..i]) |_alt| _alt.deinit(allocator);
+            address_lookups[i] = try alt.clone(allocator);
+        }
+        errdefer for (address_lookups) |alt| alt.deinit(allocator);
 
         return .{
             .signature_count = self.signature_count,
@@ -483,21 +490,32 @@ pub const Message = struct {
         const readonly_unsigned_count = try reader.readByte();
 
         const account_keys = try allocator.alloc(Pubkey, try leb.readULEB128(u16, reader));
-        errdefer sig.bincode.free(allocator, account_keys);
-        for (account_keys) |*id| id.* = .{ .data = try reader.readBytesNoEof(Pubkey.SIZE) };
+        errdefer allocator.free(account_keys);
+
+        for (account_keys) |*id| {
+            id.* = .{ .data = try reader.readBytesNoEof(Pubkey.SIZE) };
+        }
 
         const recent_blockhash: Hash = .{ .data = try reader.readBytesNoEof(Hash.SIZE) };
 
         const instructions = try allocator.alloc(Instruction, try leb.readULEB128(u16, reader));
-        errdefer sig.bincode.free(allocator, instructions);
-        for (instructions) |*instr|
+        errdefer allocator.free(instructions);
+
+        for (instructions, 0..) |*instr, i| {
+            errdefer for (instructions[0..i]) |_instr| _instr.deinit(allocator);
             instr.* = try sig.bincode.readWithLimit(limit_allocator, Instruction, reader, .{});
+        }
+        errdefer for (instructions) |instr| instr.deinit(allocator);
 
         const address_lookups_len = if (version == .legacy) 0 else try leb.readULEB128(u16, reader);
         const address_lookups = try allocator.alloc(AddressLookup, address_lookups_len);
-        errdefer sig.bincode.free(allocator, address_lookups);
-        for (address_lookups) |*alt|
+        errdefer allocator.free(address_lookups);
+
+        for (address_lookups, 0..) |*alt, i| {
+            errdefer for (address_lookups[0..i]) |_alt| _alt.deinit(allocator);
             alt.* = try sig.bincode.readWithLimit(limit_allocator, AddressLookup, reader, .{});
+        }
+        errdefer for (address_lookups) |alt| alt.deinit(allocator);
 
         return .{
             .signature_count = signature_count,
