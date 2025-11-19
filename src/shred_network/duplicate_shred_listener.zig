@@ -100,6 +100,12 @@ const DuplicateShredHandler = struct {
     // Cached state: last root slot from blockstore to reduce read overhead.
     // Updated at the beginning of each handle() call.
     last_root: Slot,
+    // Cached state: the epoch for which cached_staked_nodes is valid.
+    // Used to determine when to refresh cached stake information.
+    cached_on_epoch: sig.core.Epoch,
+    // Cached state: stake information for the current epoch.
+    // Refreshed when the epoch changes to avoid repeated lookups during pruning.
+    cached_staked_nodes: std.AutoHashMapUnmanaged(Pubkey, u64),
     cached_slots_in_epoch: u64,
 
     pub fn init(allocator: Allocator, logger: Logger, params: Params) DuplicateShredHandler {
@@ -110,6 +116,8 @@ const DuplicateShredHandler = struct {
             .dup_buffer = .empty,
             .consumed = .empty,
             .last_root = 0,
+            .cached_on_epoch = 0,
+            .cached_staked_nodes = .empty,
             .cached_slots_in_epoch = params.epoch_tracker.epoch_schedule.slots_per_epoch,
         };
     }
@@ -120,6 +128,7 @@ const DuplicateShredHandler = struct {
         }
         self.dup_buffer.deinit(self.allocator);
         self.consumed.deinit(self.allocator);
+        self.cached_staked_nodes.deinit(self.allocator);
     }
 
     pub fn handle(self: *DuplicateShredHandler, dup_shred_data: DuplicateShred) !void {
@@ -129,11 +138,33 @@ const DuplicateShredHandler = struct {
     }
 
     fn cacheRootInfo(self: *DuplicateShredHandler) void {
-        const new_root = self.params.ledger_reader.maxRoot();
-        if (new_root == self.last_root) return;
-        self.last_root = new_root;
+        const last_root = self.params.ledger_reader.maxRoot();
+        // Early return if last_root unchanged and we have cached staked nodes
+        if (last_root == self.last_root and self.cached_staked_nodes.count() > 0) return;
+        self.last_root = last_root;
+
         const epoch = self.params.epoch_tracker.epoch_schedule.getEpoch(self.last_root);
-        self.cached_slots_in_epoch = self.params.epoch_tracker.epoch_schedule.getSlotsInEpoch(epoch);
+        // Only update cached staked nodes if we don't have any cached or the epoch has changed
+        if (self.cached_staked_nodes.count() == 0 or self.cached_on_epoch < epoch) {
+            self.cached_on_epoch = epoch;
+
+            // Refresh cached staked nodes from epoch context
+            if (self.params.epoch_tracker.getEpochInfo(self.last_root)) |epoch_info| {
+                // Clear and repopulate cached staked nodes
+                self.cached_staked_nodes.clearRetainingCapacity();
+                for (
+                    epoch_info.stakes.stakes.vote_accounts.staked_nodes.keys(),
+                    epoch_info.stakes.stakes.vote_accounts.staked_nodes.values(),
+                ) |pubkey, stake| {
+                    self.cached_staked_nodes.put(self.allocator, pubkey, stake) catch {
+                        break;
+                    };
+                }
+            } else |_| {}
+
+            self.cached_slots_in_epoch =
+                self.params.epoch_tracker.epoch_schedule.getSlotsInEpoch(epoch);
+        }
     }
 
     fn shouldConsumeSlot(self: *DuplicateShredHandler, slot: Slot) !bool {
@@ -150,18 +181,42 @@ const DuplicateShredHandler = struct {
     }
 
     fn maybePruneBuffer(self: *DuplicateShredHandler) !void {
-        if (self.dup_buffer.count() < BUFFER_CAPACITY * 2) return;
+        if (self.dup_buffer.count() < BUFFER_CAPACITY *| 2) return;
 
+        // Prune consumed cache to only keep slots greater than last_root
+        var consumed_iter = self.consumed.iterator();
+        var slots_to_remove: std.ArrayListUnmanaged(Slot) = .empty;
+        defer slots_to_remove.deinit(self.allocator);
+        while (consumed_iter.next()) |entry| {
+            if (entry.key_ptr.* <= self.last_root) {
+                try slots_to_remove.append(self.allocator, entry.key_ptr.*);
+            }
+        }
+        for (slots_to_remove.items) |slot| {
+            _ = self.consumed.remove(slot);
+        }
+
+        // Filter out obsolete slots and limit number of entries per pubkey.
         var counts: std.AutoHashMapUnmanaged(Pubkey, usize) = .empty;
         defer counts.deinit(self.allocator);
+
         var keys_to_remove: std.ArrayListUnmanaged(Key) = .empty;
         defer keys_to_remove.deinit(self.allocator);
 
         for (self.dup_buffer.keys()) |key| {
-            var keep =
-                key.slot > self.last_root and key.slot < self.last_root + self.cached_slots_in_epoch;
+            // Slot must be in valid range
+            var keep = key.slot > self.last_root and
+                key.slot < self.last_root +| self.cached_slots_in_epoch;
             if (keep) {
-                keep = (self.shouldConsumeSlot(key.slot) catch false);
+                // Not already consumed
+                const gop = self.consumed.getOrPut(self.allocator, key.slot) catch {
+                    keep = false;
+                    continue;
+                };
+                if (!gop.found_existing) {
+                    gop.value_ptr.* = self.params.ledger_reader.isDuplicateSlot(key.slot) catch true;
+                }
+                keep = !gop.value_ptr.*;
             }
             if (keep) {
                 const g = counts.getOrPut(self.allocator, key.from) catch {
@@ -186,10 +241,7 @@ const DuplicateShredHandler = struct {
         var tmp: std.ArrayListUnmanaged(struct { u64, Key }) = .empty;
         defer tmp.deinit(self.allocator);
         for (self.dup_buffer.keys()) |key| {
-            var stake: u64 = 0;
-            if (self.params.epoch_tracker.getEpochInfo(key.slot)) |c| {
-                if (c.stakes.stakes.vote_accounts.staked_nodes.get(key.from)) |s| stake = s;
-            } else |_| {}
+            const stake = self.cached_staked_nodes.get(key.from) orelse 0;
             try tmp.append(self.allocator, .{ stake, key });
         }
         std.sort.pdq(struct { u64, Key }, tmp.items, {}, struct {
