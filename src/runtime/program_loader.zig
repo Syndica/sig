@@ -254,7 +254,7 @@ test "loadPrograms: load v1, v2 program" {
     );
 
     { // Success
-        var loaded_programs = try testLoad(allocator, &accounts, &.{}, 0);
+        var loaded_programs = try testLoad(allocator, &accounts, &.ALL_ENABLED, 0);
         defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_v1_key).?) {
@@ -323,7 +323,12 @@ test "loadPrograms: load v3 program" {
     );
 
     { // Success
-        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot + 1);
+        var loaded_programs = try testLoad(
+            allocator,
+            &accounts,
+            &.ALL_ENABLED,
+            program_deployment_slot + 1,
+        );
         defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
@@ -333,7 +338,12 @@ test "loadPrograms: load v3 program" {
     }
 
     { // Delay visibility failure
-        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot);
+        var loaded_programs = try testLoad(
+            allocator,
+            &accounts,
+            &.ALL_ENABLED,
+            program_deployment_slot,
+        );
         defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
@@ -348,7 +358,12 @@ test "loadPrograms: load v3 program" {
         account.data[0] = 0xFF; // Corrupt the first byte of the metadata
         defer account.data[0] = tmp_byte;
 
-        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot + 1);
+        var loaded_programs = try testLoad(
+            allocator,
+            &accounts,
+            &.ALL_ENABLED,
+            program_deployment_slot + 1,
+        );
         defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
@@ -363,7 +378,12 @@ test "loadPrograms: load v3 program" {
         account.data[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE + 1] = 0xFF; // Corrupt the first byte of the elf
         defer account.data[0] = tmp_byte;
 
-        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot + 1);
+        var loaded_programs = try testLoad(
+            allocator,
+            &accounts,
+            &.ALL_ENABLED,
+            program_deployment_slot + 1,
+        );
         defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
@@ -423,7 +443,12 @@ test "loadPrograms: load v4 program" {
     );
 
     { // Success
-        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot + 1);
+        var loaded_programs = try testLoad(
+            allocator,
+            &accounts,
+            &.ALL_ENABLED,
+            program_deployment_slot + 1,
+        );
         defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
@@ -435,7 +460,12 @@ test "loadPrograms: load v4 program" {
     { // Bad program data meta
         @memset(program_data[0..bpf_loader.v4.State.PROGRAM_DATA_METADATA_SIZE], 0xaa);
 
-        var loaded_programs = try testLoad(allocator, &accounts, &.{}, program_deployment_slot + 1);
+        var loaded_programs = try testLoad(
+            allocator,
+            &accounts,
+            &.ALL_ENABLED,
+            program_deployment_slot + 1,
+        );
         defer loaded_programs.deinit(allocator);
 
         switch (loaded_programs.get(program_key).?) {
@@ -469,7 +499,12 @@ test "loadPrograms: bad owner" {
     );
 
     { // Failed to load program with bad owner
-        var loaded_programs = try testLoad(allocator, &accounts, &.{}, prng.random().int(u64));
+        var loaded_programs = try testLoad(
+            allocator,
+            &accounts,
+            &.ALL_ENABLED,
+            prng.random().int(u64),
+        );
         defer loaded_programs.deinit(allocator);
 
         if (loaded_programs.get(program_key) != null) return error.TestFailed;

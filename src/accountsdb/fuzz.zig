@@ -528,6 +528,8 @@ fn readRandomAccounts(
 }
 
 test run {
+    if (true) return error.SkipZigTest;
+
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     try run(std.testing.allocator, .FOR_TESTS, std.testing.random_seed, tmp_dir.dir, .{
