@@ -842,6 +842,42 @@ fn sortCompiledKeys(
     key_meta_map.sort(sort_ctx);
 }
 
+test "serialization" {
+    const allocator = std.testing.allocator;
+    const transaction = Transaction{
+        .signatures = &.{},
+        .version = .legacy,
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{Pubkey.ZEROES},
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{},
+            .address_lookups = &.{},
+        },
+    };
+
+    const serialized = try sig.bincode.writeAlloc(allocator, transaction, .{});
+    defer sig.bincode.free(allocator, serialized);
+
+    const deserialized = try sig.bincode.readFromSlice(allocator, Transaction, serialized, .{});
+    defer deserialized.deinit(allocator);
+
+    try std.testing.expectEqualDeep(deserialized, transaction);
+
+    try std.testing.checkAllAllocationFailures(
+        allocator,
+        struct {
+            fn bincodeTest(gpa: std.mem.Allocator, data: []const u8) !void {
+                const txn = try sig.bincode.readFromSlice(gpa, Transaction, data, .{});
+                defer txn.deinit(gpa);
+            }
+        }.bincodeTest,
+        .{serialized},
+    );
+}
+
 test "clone transaction" {
     const allocator = std.testing.allocator;
     const transaction = Transaction{
@@ -870,6 +906,17 @@ test "clone transaction" {
     try std.testing.expectEqual(transaction.msg.recent_blockhash, clone.msg.recent_blockhash);
     try std.testing.expectEqual(transaction.msg.instructions.len, clone.msg.instructions.len);
     try std.testing.expectEqual(transaction.msg.address_lookups.len, clone.msg.address_lookups.len);
+
+    try std.testing.checkAllAllocationFailures(
+        allocator,
+        struct {
+            fn cloneTest(gpa: std.mem.Allocator, txn: Transaction) !void {
+                const copy = try txn.clone(gpa);
+                defer copy.deinit(gpa);
+            }
+        }.cloneTest,
+        .{transaction},
+    );
 }
 
 test "sanitize succeeds minimal valid transaction" {
