@@ -1198,16 +1198,16 @@ fn validator(
     else
         null;
 
-    const consensus_deps = if (cfg.disable_consensus)
-        null
-    else
-        try consensusDependencies(
-            allocator,
-            &gossip_service.gossip_table_rw,
-            epoch_context_manager.slotLeaders(),
-            maybe_vote_sockets,
-        );
-    defer if (consensus_deps) |d| d.deinit();
+    var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
+        .app_base = &app_base,
+        .loaded_snapshot = &loaded_snapshot,
+        .ledger = &ledger,
+        .epoch_context_manager = &epoch_context_manager,
+        .replay_threads = cfg.replay_threads,
+        .disable_consensus = cfg.disable_consensus,
+        .voting_enabled = cfg.voting_enabled,
+    });
+    defer replay_service_state.deinit(allocator);
 
     // shred network
     var shred_network_manager = try sig.shred_network.start(
@@ -1226,30 +1226,14 @@ fn validator(
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = turbine_config.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
-            .duplicate_slots_sender = if (consensus_deps) |d|
-                d.receivers.duplicate_slots
+            .duplicate_slots_sender = if (cfg.disable_consensus)
+                null
             else
-                null,
+                replay_service_state.receivers.duplicate_slots,
             .gossip_service = gossip_service,
         },
     );
     defer shred_network_manager.deinit();
-
-    const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (cfg.voting_enabled)
-        try replay.consensus.core.VoteSockets.init()
-    else
-        null;
-
-    var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
-        .app_base = &app_base,
-        .loaded_snapshot = &loaded_snapshot,
-        .ledger = &ledger,
-        .epoch_context_manager = &epoch_context_manager,
-        .replay_threads = cfg.replay_threads,
-        .disable_consensus = cfg.disable_consensus,
-        .voting_enabled = cfg.voting_enabled,
-    });
-    defer replay_service_state.deinit(allocator);
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,

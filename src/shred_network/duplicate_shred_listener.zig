@@ -393,7 +393,7 @@ test "DuplicateShredHandler: invalid chunk index rejected" {
     const allocator = std.testing.allocator;
     var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
 
-    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .INIT);
     defer epoch_ctx.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
@@ -435,7 +435,7 @@ test "DuplicateShredHandler: invalid chunk index rejected" {
 test "DuplicateShredHandler: overwrite existing chunk at same index" {
     const allocator = std.testing.allocator;
     var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
-    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .INIT);
     defer epoch_ctx.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
@@ -487,7 +487,7 @@ test "DuplicateShredHandler: overwrite existing chunk at same index" {
 test "DuplicateShredHandler: complete invalid proof cleans up entry" {
     const allocator = std.testing.allocator;
     var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
-    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .INIT);
     defer epoch_ctx.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
@@ -533,7 +533,7 @@ test "DuplicateShredHandler: complete invalid proof cleans up entry" {
 test "DuplicateShredHandler: early duplicate slot skips buffering" {
     const allocator = std.testing.allocator;
     var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
-    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .INIT);
     defer epoch_ctx.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
@@ -584,7 +584,7 @@ test "DuplicateShredHandler: early duplicate slot skips buffering" {
 
 test "DuplicateShredHandler: cacheRootInfo updates cached slots in epoch" {
     const allocator = std.testing.allocator;
-    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .INIT);
     defer epoch_ctx.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
@@ -639,7 +639,7 @@ test "DuplicateShredHandler: cacheRootInfo updates cached slots in epoch" {
 
 test "DuplicateShredHandler: maybePruneBuffer prunes when over capacity" {
     const allocator = std.testing.allocator;
-    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .INIT);
     defer epoch_ctx.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
@@ -688,7 +688,7 @@ test "DuplicateShredHandler: maybePruneBuffer prunes when over capacity" {
 
 test "DuplicateShredHandler: reconstructShredsFromData returns shreds on valid proof" {
     const allocator = std.testing.allocator;
-    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .INIT);
     defer epoch_ctx.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);

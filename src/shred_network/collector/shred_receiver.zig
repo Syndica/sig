@@ -221,7 +221,6 @@ pub const ShredReceiver = struct {
         allocator: Allocator,
         result: *const ShredInserter.Result,
     ) !void {
-        const sender = self.params.duplicate_slots_sender orelse return;
         if (result.duplicate_shreds.items.len == 0) return;
 
         for (result.duplicate_shreds.items) |duplicate_shred| {
@@ -241,7 +240,7 @@ pub const ShredReceiver = struct {
                     defer existing_shred_payload.deinit();
 
                     try self.handleDuplicateSlot(
-                        sender,
+                        self.params.duplicate_slots_sender,
                         shred_slot,
                         shred.payload(),
                         existing_shred_payload.items,
@@ -253,7 +252,7 @@ pub const ShredReceiver = struct {
                 => |conflict| {
                     const shred_slot = conflict.original.commonHeader().slot;
                     try self.handleDuplicateSlot(
-                        sender,
+                        self.params.duplicate_slots_sender,
                         shred_slot,
                         conflict.original.payload(),
                         conflict.conflict.data,
@@ -274,7 +273,7 @@ pub const ShredReceiver = struct {
                     }
 
                     try self.handleDuplicateSlot(
-                        sender,
+                        self.params.duplicate_slots_sender,
                         shred_slot,
                         conflict.original.payload(),
                         conflict.conflict.data,
@@ -286,7 +285,7 @@ pub const ShredReceiver = struct {
 
     fn handleDuplicateSlot(
         self: *ShredReceiver,
-        sender: *Channel(Slot),
+        maybe_sender: ?*Channel(Slot),
         slot: Slot,
         shred_payload: []const u8,
         duplicate_payload: []const u8,
@@ -303,14 +302,6 @@ pub const ShredReceiver = struct {
             );
         };
 
-        // Send to consensus
-        sender.send(slot) catch |err| {
-            self.logger.err().logf(
-                "failed to send duplicate slot {} to consensus: {}",
-                .{ slot, err },
-            );
-        };
-
         // Broadcast duplicate shred proof via gossip
         if (self.params.gossip_service) |gossip| {
             self.pushDuplicateShredToGossip(
@@ -321,6 +312,16 @@ pub const ShredReceiver = struct {
             ) catch |err| {
                 self.logger.err().logf(
                     "failed to push duplicate shred to gossip for slot {}: {}",
+                    .{ slot, err },
+                );
+            };
+        }
+
+        // Send to consensus (only if consensus is enabled)
+        if (maybe_sender) |sender| {
+            sender.send(slot) catch |err| {
+                self.logger.err().logf(
+                    "failed to send duplicate slot {} to consensus: {}",
                     .{ slot, err },
                 );
             };
@@ -849,7 +850,7 @@ test "handleDuplicateSlots: no sender configured" {
         .endpoint = null,
     };
 
-    var epoch_ctx: EpochContextManager = try .init(allocator, .DEFAULT);
+    var epoch_ctx = try EpochContextManager.init(allocator, sig.core.EpochSchedule.INIT);
     defer epoch_ctx.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
@@ -893,7 +894,7 @@ test "handleDuplicateSlots: no sender configured" {
     };
     defer result.deinit();
 
-    // Should not crash or send anything since sender is null
+    // Should not crash. Will attempt ledger storage and gossip broadcast, but not send to consensus.
     try shred_receiver.handleDuplicateSlots(allocator, &result);
 }
 
@@ -912,7 +913,7 @@ test "handleDuplicateSlots: no duplicate shreds" {
         .endpoint = null,
     };
 
-    var epoch_ctx: EpochContextManager = try .init(allocator, .DEFAULT);
+    var epoch_ctx = try EpochContextManager.init(allocator, sig.core.EpochSchedule.INIT);
     defer epoch_ctx.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
@@ -975,7 +976,7 @@ test "handleDuplicateSlots: single duplicate shred" {
         .endpoint = null,
     };
 
-    var epoch_ctx: EpochContextManager = try .init(allocator, .DEFAULT);
+    var epoch_ctx = try EpochContextManager.init(allocator, sig.core.EpochSchedule.INIT);
     defer epoch_ctx.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
@@ -1070,7 +1071,7 @@ test "handleDuplicateSlots: multiple duplicates same slot" {
         .endpoint = null,
     };
 
-    var epoch_ctx: EpochContextManager = try .init(allocator, .DEFAULT);
+    var epoch_ctx = try EpochContextManager.init(allocator, sig.core.EpochSchedule.INIT);
     defer epoch_ctx.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
@@ -1168,7 +1169,7 @@ test "handleDuplicateSlots: Exists but slot already duplicate" {
     const root_slot = 0;
     const test_socket: Socket = .{ .family = .ipv4, .internal = -1, .endpoint = null };
 
-    var epoch_ctx: EpochContextManager = try .init(allocator, .DEFAULT);
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, sig.core.EpochSchedule.INIT);
     defer epoch_ctx.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
@@ -1235,7 +1236,7 @@ test "handleDuplicateSlots: emits and stores via handleDuplicateSlot" {
     const root_slot = 0;
     const test_socket: Socket = .{ .family = .ipv4, .internal = -1, .endpoint = null };
 
-    var epoch_ctx: EpochContextManager = try .init(allocator, .DEFAULT);
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, sig.core.EpochSchedule.INIT);
     defer epoch_ctx.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
@@ -1303,7 +1304,7 @@ test "pushDuplicateShredToGossip: enqueues chunks and ring indices" {
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .INIT);
     defer epoch_ctx.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
@@ -1455,7 +1456,7 @@ test "pushDuplicateShredToGossip: no-op when duplicate for slot exists" {
         sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
     var epoch_ctx =
-        try sig.adapter.EpochContextManager.init(allocator, .DEFAULT);
+        try sig.adapter.EpochContextManager.init(allocator, .INIT);
     defer epoch_ctx.deinit();
     var ledger =
         try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
