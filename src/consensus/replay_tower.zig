@@ -416,7 +416,7 @@ pub const ReplayTower = struct {
         if (last_vote_ancestors.ancestors.count() == 0) {
             // If `last_vote_ancestors` is empty, this means we must have a last vote that is stray. If the `last_voted_slot`
             // is stray, it must be descended from some earlier root than the latest root (the anchor at startup).
-            // The above check also guarentees that the candidate slot is not a descendant of this stray last vote.
+            // The above check also guarantees that the candidate slot is not a descendant of this stray last vote.
             //
             // This gives us a fork graph:
             //     / ------------- stray `last_voted_slot`
@@ -424,7 +424,7 @@ pub const ReplayTower = struct {
             //     \- latest root (anchor) - ... - candidate slot
             //                                \- switch slot
             //
-            // Thus the common acnestor of `last_voted_slot` and `candidate_slot` is `old_root`, which the `switch_slot`
+            // Thus the common ancestor of `last_voted_slot` and `candidate_slot` is `old_root`, which the `switch_slot`
             // descends from. Thus it is safe to use `candidate_slot` in the switching proof.
             //
             // Note: the calling function should have already panicked if we do not have ancestors and the last vote is not stray.
@@ -603,6 +603,14 @@ pub const ReplayTower = struct {
                 // stray slots (which should always be empty_ancestors).
                 //
                 // This is covered by test_future_tower_* in local_cluster
+                self
+                    .logger
+                    .info()
+                    .logf(
+                    "failed_switch_threshold. switch_proof_stake: {}, total_stake: {}",
+                    .{ 0, total_stake },
+                );
+
                 return SwitchForkDecision{ .failed_switch_threshold = .{
                     .switch_proof_stake = 0,
                     .total_stake = total_stake,
@@ -783,6 +791,14 @@ pub const ReplayTower = struct {
         }
         // We have not detected sufficient lockout past the last voted slot to generate
         // a switching proof
+        self
+            .logger
+            .info()
+            .logf(
+            "Final failed_switch_threshold. switch_proof_stake: {}, total_stake: {}",
+            .{ locked_out_stake, total_stake },
+        );
+
         return SwitchForkDecision{
             .failed_switch_threshold = .{
                 .switch_proof_stake = locked_out_stake,
