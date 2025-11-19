@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 
-if [[ $SERVICE_RESULT == "success" ]]; then
+if [[ "$SERVICE_RESULT $EXIT_CODE $EXIT_STATUS" == "success killed TERM" ]]; then
+    # During upgrades, we use `systemctl stop` which signals TERM to the
+    # process. This is expected and not something we want an error alert for.
     exit 0
 fi
 
 timestamp="$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")"
-echo "time=$timestamp scope=handle-exit level=error message=\"exited unexpectedly\"" >>/home/sig/sig/logs/sig.log
+message="exited unexpectedly with SERVICE_RESULT=$SERVICE_RESULT EXIT_CODE=$EXIT_CODE EXIT_STATUS=$EXIT_STATUS"
+echo "time=$timestamp level=error scope=handle-exit message=\"$message\"" >>/home/sig/sig/logs/sig.log
 
 # Sig crashed, so we want to preserve the state for debugging, but we also want
 # to clear it out from "validator" so the next run can start fresh.
