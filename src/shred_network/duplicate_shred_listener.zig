@@ -74,10 +74,10 @@ pub fn recvLoop(
             defer versioned.deinit(allocator);
             switch (versioned.data) {
                 .DuplicateShred => |data| {
-                    _, const dup = data;
-                    handler.handle(dup) catch |e| handler.logger.err().logf(
+                    _, const duplicate_shred = data;
+                    handler.handle(duplicate_shred) catch |e| handler.logger.err().logf(
                         "duplicate_shred_listener: handle chunk failed for slot {}: {}",
-                        .{ dup.slot, e },
+                        .{ duplicate_shred.slot, e },
                     );
                 },
                 else => {},
@@ -96,8 +96,18 @@ const DuplicateShredHandler = struct {
     // 1 packet and it needs to be cut down as chunks for transfer. So we need to piece
     // together the chunks into the original proof before anything useful is done.
     dup_buffer: std.AutoArrayHashMapUnmanaged(Key, BufferEntry),
+    // Cached state: slots for which a duplicate proof is already ingested.
+    // This is synchronized with the blockstore during pruning to avoid redundant duplicate slot checks.
     consumed: std.AutoHashMapUnmanaged(Slot, bool),
+    // Cached state: last root slot from blockstore to reduce read overhead.
+    // Updated at the beginning of each handle() call.
     last_root: Slot,
+    // Cached state: the epoch for which cached_staked_nodes is valid.
+    // Used to determine when to refresh cached stake information.
+    cached_on_epoch: sig.core.Epoch,
+    // Cached state: stake information for the current epoch.
+    // Refreshed when the epoch changes to avoid repeated lookups during pruning.
+    cached_staked_nodes: std.AutoHashMapUnmanaged(Pubkey, u64),
     cached_slots_in_epoch: u64,
 
     pub fn init(allocator: Allocator, logger: Logger, params: Params) DuplicateShredHandler {
@@ -108,6 +118,8 @@ const DuplicateShredHandler = struct {
             .dup_buffer = .empty,
             .consumed = .empty,
             .last_root = 0,
+            .cached_on_epoch = 0,
+            .cached_staked_nodes = .empty,
             .cached_slots_in_epoch = params.epoch_schedule.slots_per_epoch,
         };
     }
@@ -118,6 +130,7 @@ const DuplicateShredHandler = struct {
         }
         self.dup_buffer.deinit(self.allocator);
         self.consumed.deinit(self.allocator);
+        self.cached_staked_nodes.deinit(self.allocator);
     }
 
     pub fn handle(self: *DuplicateShredHandler, dup_shred_data: DuplicateShred) !void {
@@ -128,10 +141,30 @@ const DuplicateShredHandler = struct {
 
     fn cacheRootInfo(self: *DuplicateShredHandler) void {
         const last_root = self.params.ledger_reader.maxRoot();
-        if (last_root == self.last_root) return;
+        // Early return if last_root unchanged and we have cached staked nodes
+        if (last_root == self.last_root and self.cached_staked_nodes.count() > 0) return;
         self.last_root = last_root;
+
         const epoch = self.params.epoch_schedule.getEpoch(self.last_root);
-        self.cached_slots_in_epoch = self.params.epoch_schedule.getSlotsInEpoch(epoch);
+        // Only update cached staked nodes if we don't have any cached or the epoch has changed
+        if (self.cached_staked_nodes.count() == 0 or self.cached_on_epoch < epoch) {
+            self.cached_on_epoch = epoch;
+
+            // Refresh cached staked nodes from epoch context
+            if (self.params.epoch_ctx_mgr.get(epoch)) |ctx| {
+                defer self.params.epoch_ctx_mgr.release(ctx);
+
+                // Clear and repopulate cached staked nodes
+                self.cached_staked_nodes.clearRetainingCapacity();
+                for (ctx.staked_nodes.keys(), ctx.staked_nodes.values()) |pubkey, stake| {
+                    self.cached_staked_nodes.put(self.allocator, pubkey, stake) catch {
+                        break;
+                    };
+                }
+            }
+
+            self.cached_slots_in_epoch = self.params.epoch_schedule.getSlotsInEpoch(epoch);
+        }
     }
 
     fn shouldConsumeSlot(self: *DuplicateShredHandler, slot: Slot) !bool {
@@ -148,18 +181,42 @@ const DuplicateShredHandler = struct {
     }
 
     fn maybePruneBuffer(self: *DuplicateShredHandler) !void {
-        if (self.dup_buffer.count() < BUFFER_CAPACITY * 2) return;
+        if (self.dup_buffer.count() < BUFFER_CAPACITY *| 2) return;
 
+        // Prune consumed cache to only keep slots greater than last_root
+        var consumed_iter = self.consumed.iterator();
+        var slots_to_remove: std.ArrayListUnmanaged(Slot) = .empty;
+        defer slots_to_remove.deinit(self.allocator);
+        while (consumed_iter.next()) |entry| {
+            if (entry.key_ptr.* <= self.last_root) {
+                try slots_to_remove.append(self.allocator, entry.key_ptr.*);
+            }
+        }
+        for (slots_to_remove.items) |slot| {
+            _ = self.consumed.remove(slot);
+        }
+
+        // Filter out obsolete slots and limit number of entries per pubkey.
         var counts: std.AutoHashMapUnmanaged(Pubkey, usize) = .empty;
         defer counts.deinit(self.allocator);
+
         var keys_to_remove: std.ArrayListUnmanaged(Key) = .empty;
         defer keys_to_remove.deinit(self.allocator);
 
         for (self.dup_buffer.keys()) |key| {
-            var keep =
-                key.slot > self.last_root and key.slot < self.last_root + self.cached_slots_in_epoch;
+            // Slot must be in valid range
+            var keep = key.slot > self.last_root and
+                key.slot < self.last_root +| self.cached_slots_in_epoch;
             if (keep) {
-                keep = (self.shouldConsumeSlot(key.slot) catch false);
+                // Not already consumed
+                const gop = self.consumed.getOrPut(self.allocator, key.slot) catch {
+                    keep = false;
+                    continue;
+                };
+                if (!gop.found_existing) {
+                    gop.value_ptr.* = self.params.ledger_reader.isDuplicateSlot(key.slot) catch true;
+                }
+                keep = !gop.value_ptr.*;
             }
             if (keep) {
                 const g = counts.getOrPut(self.allocator, key.from) catch {
@@ -184,13 +241,7 @@ const DuplicateShredHandler = struct {
         var tmp: std.ArrayListUnmanaged(struct { u64, Key }) = .empty;
         defer tmp.deinit(self.allocator);
         for (self.dup_buffer.keys()) |key| {
-            const epoch = self.params.epoch_schedule.getEpoch(key.slot);
-            const ctx = self.params.epoch_ctx_mgr.get(epoch);
-            var stake: u64 = 0;
-            if (ctx) |c| {
-                if (c.staked_nodes.get(key.from)) |s| stake = s;
-                self.params.epoch_ctx_mgr.release(c);
-            }
+            const stake = self.cached_staked_nodes.get(key.from) orelse 0;
             try tmp.append(self.allocator, .{ stake, key });
         }
         std.sort.pdq(struct { u64, Key }, tmp.items, {}, struct {
@@ -635,6 +686,155 @@ test "DuplicateShredHandler: cacheRootInfo updates cached slots in epoch" {
         const expected_slots_in_epoch2 = handler.params.epoch_schedule.getSlotsInEpoch(update_epoch);
         try std.testing.expectEqual(expected_slots_in_epoch2, handler.cached_slots_in_epoch);
     }
+}
+
+test "DuplicateShredHandler: cacheRootInfo populates and uses cached staked nodes" {
+    const allocator = std.testing.allocator;
+    var epoch_ctx_mgr = try sig.adapter.EpochContextManager.init(allocator, .INIT);
+    defer epoch_ctx_mgr.deinit();
+
+    // Set up an epoch context with staked nodes
+    var staked_nodes: std.AutoArrayHashMapUnmanaged(Pubkey, u64) = .empty;
+
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const node1 = Pubkey.initRandom(prng.random());
+    const node2 = Pubkey.initRandom(prng.random());
+    const node3 = Pubkey.initRandom(prng.random());
+
+    try staked_nodes.put(allocator, node1, 1_000_000);
+    try staked_nodes.put(allocator, node2, 500_000);
+    try staked_nodes.put(allocator, node3, 100_000);
+
+    const leader_schedule = try allocator.alloc(Pubkey, 1);
+    leader_schedule[0] = node1;
+
+    const epoch_context = sig.core.EpochContext{
+        .staked_nodes = staked_nodes,
+        .leader_schedule = leader_schedule,
+    };
+    // Transfer ownership - epoch_ctx_mgr will handle cleanup
+    try epoch_ctx_mgr.put(0, epoch_context);
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer ledger.deinit();
+
+    var dup_slots_channel = try Channel(Slot).init(allocator);
+    defer dup_slots_channel.deinit();
+
+    var shred_version = std.atomic.Value(u16).init(0);
+
+    var handler = DuplicateShredHandler.init(allocator, .noop, .{
+        .exit = undefined,
+        .gossip_table_rw = undefined,
+        .result_writer = ledger.resultWriter(),
+        .ledger_reader = ledger.reader(),
+        .duplicate_slots_sender = &dup_slots_channel,
+        .leader_schedule = epoch_ctx_mgr.slotLeaders(),
+        .shred_version = &shred_version,
+        .epoch_schedule = epoch_ctx_mgr.schedule,
+        .epoch_ctx_mgr = &epoch_ctx_mgr,
+    });
+    defer handler.deinit();
+
+    // Initially cached_staked_nodes should be empty
+    try std.testing.expectEqual(0, handler.cached_staked_nodes.count());
+    try std.testing.expectEqual(0, handler.cached_on_epoch);
+
+    // Set a root in epoch 0
+    {
+        var setter = try handler.params.result_writer.setRootsIncremental();
+        defer setter.deinit();
+        try setter.addRoot(10);
+        try setter.commit();
+    }
+
+    // Call cacheRootInfo - should populate cached_staked_nodes
+    handler.cacheRootInfo();
+
+    try std.testing.expectEqual(10, handler.last_root);
+    try std.testing.expectEqual(0, handler.cached_on_epoch);
+    try std.testing.expectEqual(3, handler.cached_staked_nodes.count());
+    try std.testing.expectEqual(1_000_000, handler.cached_staked_nodes.get(node1).?);
+    try std.testing.expectEqual(500_000, handler.cached_staked_nodes.get(node2).?);
+    try std.testing.expectEqual(100_000, handler.cached_staked_nodes.get(node3).?);
+
+    // Call cacheRootInfo again with same root - should return early without refetching
+    const initial_count = handler.cached_staked_nodes.count();
+    handler.cacheRootInfo();
+    try std.testing.expectEqual(initial_count, handler.cached_staked_nodes.count());
+
+    // Now test that pruning uses the cached stakes
+    handler.last_root = 100;
+    handler.cached_slots_in_epoch = 200_000;
+
+    const capacity = BUFFER_CAPACITY;
+    const total_entries: usize = capacity * 2;
+    const entries_per_node = MAX_NUM_ENTRIES_PER_PUBKEY;
+    const num_nodes = total_entries / entries_per_node;
+
+    // Create many nodes - half with high stake (node1), half with low stake (node3)
+    var high_stake_nodes = std.ArrayList(Pubkey).init(allocator);
+    defer high_stake_nodes.deinit();
+    var low_stake_nodes = std.ArrayList(Pubkey).init(allocator);
+    defer low_stake_nodes.deinit();
+
+    // Generate nodes and add them to cached_staked_nodes
+    for (0..num_nodes / 2) |_| {
+        const node = Pubkey.initRandom(prng.random());
+        try high_stake_nodes.append(node);
+        try handler.cached_staked_nodes.put(allocator, node, 1_000_000);
+    }
+    for (0..num_nodes / 2) |_| {
+        const node = Pubkey.initRandom(prng.random());
+        try low_stake_nodes.append(node);
+        try handler.cached_staked_nodes.put(allocator, node, 100_000);
+    }
+
+    // Create entries - each node gets MAX_NUM_ENTRIES_PER_PUBKEY entries
+    var slot: Slot = 150;
+    for (high_stake_nodes.items) |node| {
+        for (0..entries_per_node) |_| {
+            const key = Key{ .slot = slot, .from = node };
+            const gop = try handler.dup_buffer.getOrPut(allocator, key);
+            if (!gop.found_existing) gop.value_ptr.* = .{ .chunks = @splat(null) };
+            slot += 1;
+        }
+    }
+    for (low_stake_nodes.items) |node| {
+        for (0..entries_per_node) |_| {
+            const key = Key{ .slot = slot, .from = node };
+            const gop = try handler.dup_buffer.getOrPut(allocator, key);
+            if (!gop.found_existing) gop.value_ptr.* = .{ .chunks = @splat(null) };
+            slot += 1;
+        }
+    }
+
+    try std.testing.expect(handler.dup_buffer.count() >= capacity * 2);
+    try handler.maybePruneBuffer();
+
+    // After pruning, buffer should be at capacity
+    try std.testing.expectEqual(capacity, handler.dup_buffer.count());
+
+    // Count entries from high-stake vs low-stake nodes
+    var high_stake_count: usize = 0;
+    var low_stake_count: usize = 0;
+    for (handler.dup_buffer.keys()) |key| {
+        for (high_stake_nodes.items) |node| {
+            if (key.from.equals(&node)) {
+                high_stake_count += 1;
+                break;
+            }
+        }
+        for (low_stake_nodes.items) |node| {
+            if (key.from.equals(&node)) {
+                low_stake_count += 1;
+                break;
+            }
+        }
+    }
+
+    // High-stake nodes should have more entries retained than low-stake nodes
+    try std.testing.expect(high_stake_count > low_stake_count);
 }
 
 test "DuplicateShredHandler: maybePruneBuffer prunes when over capacity" {
