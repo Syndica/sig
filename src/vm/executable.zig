@@ -7,7 +7,7 @@ const memory = sig.vm.memory;
 const Elf = sig.vm.elf.Elf;
 const Instruction = sbpf.Instruction;
 const Register = Instruction.Register;
-const Syscall = sig.vm.syscalls.Syscall;
+const SyscallMap = sig.vm.SyscallMap;
 
 pub const Executable = struct {
     bytes: []const u8,
@@ -17,7 +17,7 @@ pub const Executable = struct {
     from_asm: bool,
     ro_section: Section,
     text_vaddr: u64,
-    function_registry: Registry(u64),
+    function_registry: Registry,
     config: Config,
 
     /// Takes ownership of the `Elf`.
@@ -45,7 +45,7 @@ pub const Executable = struct {
     pub fn fromBytes(
         allocator: std.mem.Allocator,
         source: []u8,
-        loader: *const Registry(Syscall),
+        loader: *const SyscallMap,
         config: Config,
     ) !Executable {
         const elf = try Elf.parse(allocator, source, loader, config);
@@ -64,7 +64,7 @@ pub const Executable = struct {
         );
         // loader isn't owned by the executable, so it's fine for it to
         // die on the stack after the function returns
-        var loader: Registry(Syscall) = .{};
+        var loader: SyscallMap = .ALL_DISABLED;
         return fromTextBytes(
             allocator,
             std.mem.sliceAsBytes(instructions),
@@ -78,8 +78,8 @@ pub const Executable = struct {
     pub fn fromTextBytes(
         allocator: std.mem.Allocator,
         source: []const u8,
-        loader: *Registry(Syscall),
-        registry: *Registry(u64),
+        loader: *SyscallMap,
+        registry: *Registry,
         from_asm: bool,
         config: Config,
     ) !Executable {
@@ -121,7 +121,7 @@ pub const Executable = struct {
 
     pub fn verify(
         self: *const Executable,
-        loader: *const Registry(Syscall),
+        loader: *const SyscallMap,
     ) !void {
         const version = self.version;
         const instructions = self.instructions;
@@ -357,7 +357,7 @@ pub const Executable = struct {
                 .@"return" => if (!version.enableStaticSyscalls())
                     return error.UnsupportedInstruction,
                 .exit_or_syscall => if (version.enableStaticSyscalls() and
-                    !loader.map.contains(inst.imm))
+                    loader.get(inst.imm) == null)
                 {
                     return error.InvalidSyscall;
                 },
@@ -444,7 +444,7 @@ pub const Assembler = struct {
         allocator: std.mem.Allocator,
         source: []const u8,
         config: Config,
-    ) !struct { Registry(u64), []const Instruction } {
+    ) !struct { Registry, []const Instruction } {
         const version = config.maximum_version;
         var assembler: Assembler = .{ .source = source };
         const statements = try assembler.tokenize(allocator);
@@ -461,7 +461,7 @@ pub const Assembler = struct {
         var labels: std.StringHashMapUnmanaged(u32) = .{};
         defer labels.deinit(allocator);
 
-        var function_registry: Registry(u64) = .{};
+        var function_registry: Registry = .{};
         errdefer function_registry.deinit(allocator);
 
         try labels.put(allocator, "entrypoint", 0);
@@ -814,113 +814,111 @@ pub const Assembler = struct {
     }
 };
 
-pub fn Registry(T: type) type {
-    return struct {
-        map: std.AutoArrayHashMapUnmanaged(u64, Entry) = .{},
+pub const Registry = struct {
+    map: std.AutoArrayHashMapUnmanaged(u64, Entry) = .{},
 
-        const Entry = struct {
-            name: []const u8,
-            value: T,
-        };
-        const Self = @This();
-
-        /// Duplicates `name` to free later later.
-        pub fn register(
-            self: *Self,
-            allocator: std.mem.Allocator,
-            key: u64,
-            name: []const u8,
-            value: T,
-        ) !void {
-            const gop = try self.map.getOrPut(allocator, key);
-            if (gop.found_existing) {
-                if (gop.value_ptr.value != value) {
-                    return error.SymbolHashCollision;
-                }
-            } else {
-                gop.value_ptr.* = .{ .name = try allocator.dupe(u8, name), .value = value };
-            }
-        }
-
-        pub fn registerHashed(
-            self: *Self,
-            allocator: std.mem.Allocator,
-            name: []const u8,
-            value: T,
-        ) !u64 {
-            const key = sbpf.hashSymbolName(name);
-            try self.register(allocator, key, name, value);
-            return key;
-        }
-
-        pub fn registerHashedLegacy(
-            self: *Self,
-            allocator: std.mem.Allocator,
-            loader: *const Registry(Syscall),
-            hash_symbol_name: bool,
-            name: []const u8,
-            value: T,
-        ) !u64 {
-            const hash = if (std.mem.eql(u8, name, "entrypoint"))
-                sbpf.hashSymbolName(name)
-            else
-                sbpf.hashSymbolName(&std.mem.toBytes(value));
-            const key: u64 = if (hash_symbol_name) blk: {
-                if (loader.lookupKey(hash) != null) {
-                    return error.SymbolHashCollision;
-                }
-                break :blk hash;
-            } else value;
-
-            try self.register(allocator, key, &.{}, value);
-            return key;
-        }
-
-        pub fn lookupKey(self: *const Self, key: u64) ?Entry {
-            return self.map.get(key);
-        }
-
-        // TODO: this can be sped up by using a bidirectional map
-        pub fn lookupName(self: *const Self, name: []const u8) ?Entry {
-            var iter = self.map.iterator();
-            while (iter.next()) |entry| {
-                const entry_name = entry.value_ptr.name;
-                if (std.mem.eql(u8, entry_name, name)) return entry.value_ptr.*;
-            }
-            return null;
-        }
-
-        pub fn deinit(self: *const Self, allocator: std.mem.Allocator) void {
-            var iter = self.map.iterator();
-            while (iter.next()) |entry| {
-                allocator.free(entry.value_ptr.name);
-            }
-            var map = self.map;
-            map.deinit(allocator);
-        }
-
-        test "symbol collision" {
-            const allocator = std.testing.allocator;
-            var registry: Registry(u64) = .{};
-            defer registry.deinit(allocator);
-
-            _ = try registry.registerHashed(
-                allocator,
-                "foo",
-                0,
-            );
-
-            try std.testing.expectError(
-                error.SymbolHashCollision,
-                registry.registerHashed(
-                    allocator,
-                    "gmyionqhgxitzddvxfwubqhpomupciyvbeczintxxtfdsfhiyxcnzyowtgnrnvvd",
-                    4,
-                ),
-            );
-        }
+    const Entry = struct {
+        name: []const u8,
+        value: u64,
     };
-}
+
+    /// Duplicates `name` to free later later.
+    pub fn register(
+        self: *Registry,
+        allocator: std.mem.Allocator,
+        key: u64,
+        name: []const u8,
+        value: u64,
+    ) !void {
+        const gop = try self.map.getOrPut(allocator, key);
+        if (gop.found_existing) {
+            if (gop.value_ptr.value != value) {
+                return error.SymbolHashCollision;
+            }
+        } else {
+            gop.value_ptr.* = .{
+                .name = try allocator.dupe(u8, name),
+                .value = value,
+            };
+        }
+    }
+
+    pub fn registerHashed(
+        self: *Registry,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+        value: u64,
+    ) !u64 {
+        const key = sbpf.hashSymbolName(name);
+        try self.register(allocator, key, name, value);
+        return key;
+    }
+
+    pub fn registerHashedLegacy(
+        self: *Registry,
+        allocator: std.mem.Allocator,
+        loader: *const SyscallMap,
+        hash_symbol_name: bool,
+        name: []const u8,
+        value: u64,
+    ) !u64 {
+        const hash = if (std.mem.eql(u8, name, "entrypoint"))
+            sbpf.hashSymbolName(name)
+        else
+            sbpf.hashSymbolName(&std.mem.toBytes(value));
+        const key: u64 = if (hash_symbol_name) blk: {
+            if (loader.get(hash) != null) return error.SymbolHashCollision;
+            break :blk hash;
+        } else value;
+
+        try self.register(allocator, key, &.{}, value);
+        return key;
+    }
+
+    pub fn lookupKey(self: *const Registry, key: u64) ?Entry {
+        return self.map.get(key);
+    }
+
+    // TODO: this can be sped up by using a bidirectional map
+    pub fn lookupName(self: *const Registry, name: []const u8) ?Entry {
+        var iter = self.map.iterator();
+        while (iter.next()) |entry| {
+            const entry_name = entry.value_ptr.name;
+            if (std.mem.eql(u8, entry_name, name)) return entry.value_ptr.*;
+        }
+        return null;
+    }
+
+    pub fn deinit(self: *const Registry, allocator: std.mem.Allocator) void {
+        var iter = self.map.iterator();
+        while (iter.next()) |entry| {
+            allocator.free(entry.value_ptr.name);
+        }
+        var copy = self.map;
+        copy.deinit(allocator);
+    }
+
+    test "symbol collision" {
+        const allocator = std.testing.allocator;
+        var registry: Registry = .{};
+        defer registry.deinit(allocator);
+
+        _ = try registry.registerHashed(
+            allocator,
+            "foo",
+            0,
+        );
+
+        try std.testing.expectError(
+            error.SymbolHashCollision,
+            registry.registerHashed(
+                allocator,
+                "gmyionqhgxitzddvxfwubqhpomupciyvbeczintxxtfdsfhiyxcnzyowtgnrnvvd",
+                4,
+            ),
+        );
+    }
+};
 
 /// [agave] https://github.com/anza-xyz/sbpf/blob/bce8eed8df53595afb8770531cf4ca938e449cf7/src/vm.rs#L52
 /// VM configuration settings

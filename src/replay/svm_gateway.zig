@@ -87,8 +87,7 @@ pub const SvmGateway = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "SvmGateway.init" });
         defer zone.deinit();
 
-        const vm_environment = try vm.Environment.initV1(
-            allocator,
+        const vm_environment = vm.Environment.initV1(
             &params.feature_set,
             // This does not actually set the compute budget. it's only used to
             // set that max call depth and stack frame size. the actual compute
@@ -99,7 +98,7 @@ pub const SvmGateway = struct {
             false,
         );
 
-        var sysvar_cache = SysvarCache{};
+        var sysvar_cache: SysvarCache = .{};
         try replay.update_sysvar.fillMissingSysvarCacheEntries(
             allocator,
             params.account_store.reader(),
@@ -128,8 +127,6 @@ pub const SvmGateway = struct {
         bhq.unlock();
 
         self.state.sysvar_cache.deinit(allocator);
-        self.state.vm_environment.deinit(allocator);
-        if (self.state.next_vm_environment) |next_vm| next_vm.deinit(allocator);
 
         var programs = self.state.programs;
         programs.deinit(allocator);

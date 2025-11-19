@@ -95,7 +95,7 @@ pub fn createTransactionContext(
         try allocator.create(sig.vm.Environment);
     vm_environment.* = sig.vm.Environment{
         .config = .{},
-        .loader = .{},
+        .loader = .ALL_DISABLED,
     };
 
     const program_map = if (environment.program_map) |ptr|
@@ -150,15 +150,13 @@ pub fn deinitTransactionContext(
     tc: TransactionContext,
 ) void {
     allocator.destroy(tc.feature_set);
+    allocator.destroy(tc.vm_environment);
 
     tc.epoch_stakes.deinit(allocator);
     allocator.destroy(tc.epoch_stakes);
 
     tc.sysvar_cache.deinit(allocator);
     allocator.destroy(tc.sysvar_cache);
-
-    tc.vm_environment.deinit(allocator);
-    allocator.destroy(tc.vm_environment);
 
     tc.program_map.deinit(allocator);
     allocator.destroy(tc.program_map);

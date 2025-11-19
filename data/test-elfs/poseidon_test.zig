@@ -5,8 +5,8 @@ const SolBytes = extern struct {
     len: u64,
 };
 
-// hashed as `log`
-const log: *align(1) const fn (msg: [*]const u8, len: u64) void = @ptrFromInt(0x6bf5c3fe);
+// hashed as `sol_log_`
+const log: *align(1) const fn (msg: [*]const u8, len: u64) void = @ptrFromInt(0x207559bd);
 
 // hashed as `sol_poseidon`
 const sol_poseidon: *align(1) const fn (
