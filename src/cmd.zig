@@ -1239,7 +1239,7 @@ fn validator(
         defer if (cfg.vote_account_path == null) allocator.free(vote_keypair_path);
 
         break :blk sig.identity.readBinaryKeypairPubkey(vote_keypair_path) catch |err| {
-            app_base.logger.warn().logf(
+            app_base.logger.err().logf(
                 "vote-account: failed to read {s}: {}; voting will be disabled",
                 .{ vote_keypair_path, err },
             );
