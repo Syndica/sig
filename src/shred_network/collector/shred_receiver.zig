@@ -290,6 +290,12 @@ pub const ShredReceiver = struct {
         shred_payload: []const u8,
         duplicate_payload: []const u8,
     ) !void {
+        // NOTE: All operations in this function (ledger storage, gossip broadcast,
+        // consensus notification) are best effort.
+        // We catch and log their errors rather than propagating them because:
+        // 1. One failure shouldn't prevent the other operations from attempting
+        // 2. Duplicate slot detection is auxiliary to the main shred processing pipeline
+
         // Store in ledger
         self.params.result_writer.storeDuplicateSlot(
             slot,
