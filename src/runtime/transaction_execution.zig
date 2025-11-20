@@ -682,7 +682,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     );
     defer allocator.free(transfer_instruction_data);
 
-    var accounts = std.MultiArrayList(AccountMeta){};
+    var accounts: std.MultiArrayList(AccountMeta) = .{};
     defer accounts.deinit(allocator);
     try accounts.append(allocator, .{
         .pubkey = sender_key,
@@ -700,7 +700,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .is_writable = false,
     });
 
-    var transaction = RuntimeTransaction{
+    var transaction: RuntimeTransaction = .{
         .signature_count = 1,
         .fee_payer = sender_key,
         .msg_hash = Hash.initRandom(prng.random()),
@@ -807,7 +807,10 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .rent_collector = &rent_collector,
         .blockhash_queue = &blockhash_queue,
         .epoch_stakes = &epoch_stakes,
-        .vm_environment = &vm.Environment{},
+        .vm_environment = &.{
+            .loader = .ALL_DISABLED,
+            .config = .{},
+        },
         .next_vm_environment = null,
         .slot = 0,
         .max_age = 0,
