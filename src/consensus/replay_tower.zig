@@ -1906,8 +1906,8 @@ fn updateAncestorVotedStakes(
         const entry_vote_stake = try voted_stakes.getOrPutValue(allocator, voted_slot, 0);
         entry_vote_stake.value_ptr.* += voted_stake;
         for (vote_slot_ancestors.ancestors.keys()) |ancestor_slot| {
-            // Slot is included in the list of its ancestors.
-            // avoid double-counting by skipping.
+            // Ideally, slot should not be included the list of its ancestors.
+            // still check to avoid double-counting by skipping.
             if (ancestor_slot == voted_slot) continue;
             const entry_voted_stake = try voted_stakes.getOrPutValue(allocator, ancestor_slot, 0);
             entry_voted_stake.value_ptr.* += voted_stake;
