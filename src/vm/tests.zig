@@ -9,14 +9,14 @@ const executor = sig.runtime.executor;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const Elf = sig.vm.elf.Elf;
 const Executable = sig.vm.Executable;
-const Registry = sig.vm.Registry;
-const Syscall = sig.vm.syscalls.Syscall;
 const Config = sig.vm.Config;
 const Region = sig.vm.memory.Region;
 const MemoryMap = sig.vm.memory.MemoryMap;
 const Vm = sig.vm.interpreter.Vm;
 const VmResult = sig.vm.interpreter.Result;
 const OpCode = sbpf.Instruction.OpCode;
+const SyscallMap = sig.vm.SyscallMap;
+const Syscall = sig.vm.syscalls.Syscall;
 
 const expectEqual = std.testing.expectEqual;
 const createTransactionContext = sig.runtime.testing.createTransactionContext;
@@ -45,7 +45,7 @@ fn testAsmWithMemory(
 ) !void {
     const allocator = std.testing.allocator;
 
-    var loader: Registry(Syscall) = .{};
+    var loader: SyscallMap = .ALL_DISABLED;
     var executable = try Executable.fromAsm(allocator, source, config);
     defer executable.deinit(allocator);
 
@@ -69,14 +69,14 @@ fn testAsmWithMemory(
         config,
     );
 
-    var prng = std.Random.DefaultPrng.init(10);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try createTransactionContext(
         allocator,
         prng.random(),
         .{ .compute_meter = expected[1] },
     );
     defer {
-        deinitTranactionContext(allocator, tc);
+        deinitTranactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1912,14 +1912,14 @@ test "pqr" {
     program[33] = 16; // src = r1
     program[40] = @intFromEnum(OpCode.exit_or_syscall);
 
-    var prng = std.Random.DefaultPrng.init(10);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try createTransactionContext(
         allocator,
         prng.random(),
         .{ .compute_meter = 6 },
     );
     defer {
-        deinitTranactionContext(allocator, tc);
+        deinitTranactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1996,8 +1996,8 @@ test "pqr" {
 
         const config: Config = .{ .maximum_version = .v2 };
 
-        var registry: sig.vm.Registry(u64) = .{};
-        var loader: Registry(Syscall) = .{};
+        var registry: sig.vm.Registry = .{};
+        var loader: SyscallMap = .ALL_DISABLED;
         var executable = try Executable.fromTextBytes(
             allocator,
             &program,
@@ -2046,8 +2046,8 @@ test "pqr divide by zero" {
 
         const config: Config = .{ .maximum_version = .v2 };
 
-        var registry: sig.vm.Registry(u64) = .{};
-        var loader: Registry(Syscall) = .{};
+        var registry: sig.vm.Registry = .{};
+        var loader: SyscallMap = .ALL_DISABLED;
         var executable = try Executable.fromTextBytes(
             allocator,
             &program,
@@ -2059,7 +2059,7 @@ test "pqr divide by zero" {
         defer executable.deinit(allocator);
 
         const map = try MemoryMap.init(allocator, &.{}, .v3, .{});
-        var prng = std.Random.DefaultPrng.init(10);
+        var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
         var cache, var tc = try createTransactionContext(
             allocator,
@@ -2067,7 +2067,7 @@ test "pqr divide by zero" {
             .{ .compute_meter = 2 },
         );
         defer {
-            deinitTranactionContext(allocator, tc);
+            deinitTranactionContext(allocator, &tc);
             cache.deinit(allocator);
         }
 
@@ -2300,7 +2300,7 @@ fn testElf(config: Config, path: []const u8, expected: anytype) !void {
 pub fn testElfWithSyscalls(
     config: Config,
     path: []const u8,
-    extra_syscalls: []const syscalls.Entry,
+    extra_syscalls: []const Syscall,
     expected: anytype,
 ) !void {
     const allocator = std.testing.allocator;
@@ -2309,16 +2309,8 @@ pub fn testElfWithSyscalls(
     const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: Registry(Syscall) = .{};
-    defer loader.deinit(allocator);
-
-    for (extra_syscalls) |syscall| {
-        _ = try loader.registerHashed(
-            allocator,
-            syscall.name,
-            syscall.builtin_fn,
-        );
-    }
+    var loader: SyscallMap = .ALL_DISABLED;
+    for (extra_syscalls) |syscall| loader.enable(syscall);
 
     const elf = try Elf.parse(allocator, bytes, &loader, config);
     var executable = Executable.fromElf(elf);
@@ -2341,7 +2333,7 @@ pub fn testElfWithSyscalls(
         config,
     );
 
-    var prng = std.Random.DefaultPrng.init(10);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try createTransactionContext(
         allocator,
         prng.random(),
@@ -2353,7 +2345,7 @@ pub fn testElfWithSyscalls(
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -2452,7 +2444,7 @@ test "syscall reloc 64_32" {
     try testElfWithSyscalls(
         .{ .maximum_version = .v0 },
         sig.ELF_DATA_DIR ++ "syscall_reloc_64_32_sbpfv0.so",
-        &.{.{ .name = "log", .builtin_fn = syscalls.log }},
+        &.{.sol_log_},
         .{ 0, 105 },
     );
 }
@@ -2461,7 +2453,7 @@ test "static syscall" {
     try testElfWithSyscalls(
         .{},
         sig.ELF_DATA_DIR ++ "syscall_static.so",
-        &.{.{ .name = "log", .builtin_fn = syscalls.log }},
+        &.{.sol_log_},
         .{ 0, 106 },
     );
 }
@@ -2510,29 +2502,6 @@ test "bss section" {
     );
 }
 
-test "hash collision" {
-    // Mined Murmur3_32 hashes until I found one that collided with
-    // `hashSymbolName(&std.mem.toBytes(@as(u64, 0)))`
-    const colliding_name: []const u8 = &.{
-        0x6b, 0x2b, 0xad, 0xc9, 0xea, 0x56, 0xe0, 0x18, 0x4e, 0xf9, 0xce, 0x29,
-        0xf6, 0x48, 0x40, 0x80, 0xc2, 0xb2, 0x2e, 0xca, 0x1b, 0x4d, 0xc1, 0x22,
-        0xd5, 0x59, 0x39, 0xeb, 0xfb, 0x86, 0xc2, 0xe3, 0x18, 0xbc, 0xdc, 0x2e,
-        0x68, 0x23, 0x1,  0xb4, 0x86, 0x65, 0xb0, 0xc4, 0x71, 0x65, 0x26, 0x89,
-        0x5d, 0xbe, 0xbc, 0x4f, 0xd6, 0xe9, 0xff, 0x9e, 0xf6, 0x76, 0x81, 0x1d,
-        0xb6, 0xb0, 0x99, 0x95,
-    };
-
-    try expectEqual(
-        error.SymbolHashCollision,
-        testElfWithSyscalls(
-            .{ .maximum_version = .v0 },
-            sig.ELF_DATA_DIR ++ "hash_collision_sbpfv0.so",
-            &.{.{ .name = colliding_name, .builtin_fn = syscalls.abort }},
-            .{ 0, 0 },
-        ),
-    );
-}
-
 // Verification tests
 
 fn testVerify(
@@ -2554,23 +2523,15 @@ fn testVerifyTextBytes(
 fn testVerifyTextBytesWithSyscalls(
     config: Config,
     program: []const u8,
-    extra_syscalls: []const syscalls.Entry,
+    extra_syscalls: []const Syscall,
     expected: anytype,
 ) !void {
     const allocator = std.testing.allocator;
 
-    var loader: Registry(Syscall) = .{};
-    defer loader.deinit(allocator);
+    var loader: SyscallMap = .ALL_DISABLED;
+    for (extra_syscalls) |syscall| loader.enable(syscall);
 
-    for (extra_syscalls) |syscall| {
-        _ = try loader.registerHashed(
-            allocator,
-            syscall.name,
-            syscall.builtin_fn,
-        );
-    }
-
-    var function_registry: sig.vm.Registry(u64) = .{};
+    var function_registry: sig.vm.Registry = .{};
     var executable = try Executable.fromTextBytes(
         allocator,
         program,
@@ -2588,21 +2549,13 @@ fn testVerifyTextBytesWithSyscalls(
 fn testVerifyWithSyscalls(
     config: Config,
     source: []const u8,
-    extra_syscalls: []const syscalls.Entry,
+    extra_syscalls: []const Syscall,
     expected: anytype,
 ) !void {
     const allocator = std.testing.allocator;
 
-    var loader: Registry(Syscall) = .{};
-    defer loader.deinit(allocator);
-
-    for (extra_syscalls) |syscall| {
-        _ = try loader.registerHashed(
-            allocator,
-            syscall.name,
-            syscall.builtin_fn,
-        );
-    }
+    var loader: SyscallMap = .ALL_DISABLED;
+    for (extra_syscalls) |entry| loader.enable(entry);
 
     var executable = try Executable.fromAsm(allocator, source, config);
     defer executable.deinit(allocator);
@@ -2775,7 +2728,7 @@ test "unknown syscall" {
     try testVerifyTextBytes(
         .{},
         &.{
-            0x95, 0x00, 0x00, 0x00, 0xDD, 0x0C, 0x02, 0x91, // syscall gather_bytes
+            0x95, 0x00, 0x00, 0x00, 0xBD, 0x59, 0x75, 0x20, // syscall sol_log_
             0x9d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // return
         },
         error.InvalidSyscall,
@@ -2786,10 +2739,10 @@ test "known syscall" {
     try testVerifyTextBytesWithSyscalls(
         .{},
         &.{
-            0x95, 0x00, 0x00, 0x00, 0xDD, 0x0C, 0x02, 0x91, // syscall gather_bytes
+            0x95, 0x00, 0x00, 0x00, 0xBD, 0x59, 0x75, 0x20, // syscall sol_log_
             0x9d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // return
         },
-        &.{.{ .name = "gather_bytes", .builtin_fn = syscalls.log }},
+        &.{.sol_log_},
         {},
     );
 }
@@ -2955,7 +2908,7 @@ pub fn testSyscall(
 ) !void {
     const testing = sig.runtime.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{.{
@@ -2965,7 +2918,7 @@ pub fn testSyscall(
         .compute_meter = config.compute_meter,
     });
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 

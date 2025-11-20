@@ -100,8 +100,7 @@ fn executeInstruction(
     }
 
     // Override vm environment in the tc context
-    vm_environment.* = try sig.vm.Environment.initV1(
-        allocator,
+    vm_environment.* = sig.vm.Environment.initV1(
         tc.feature_set,
         &tc.compute_budget,
         tc.slot,
@@ -111,7 +110,7 @@ fn executeInstruction(
 
     // Load programs into the program map
     const clock = try tc.sysvar_cache.get(sysvar.Clock);
-    program_map.* = try program_loader.loadPrograms(
+    program_map.* = try program_loader.testLoad(
         allocator,
         &accounts_map,
         vm_environment,

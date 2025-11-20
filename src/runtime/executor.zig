@@ -13,6 +13,8 @@ const Pubkey = sig.core.Pubkey;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionContext = sig.runtime.TransactionContext;
 
+const deinitAccountMap = sig.runtime.testing.deinitAccountMap;
+
 /// Execute an instruction described by the instruction info\
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L462-L479
 pub fn executeInstruction(
@@ -319,9 +321,9 @@ test pushInstruction {
     const system_program = sig.runtime.program.system;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    var cache, var tc = try testing.createTransactionContext(
+    const cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -333,8 +335,8 @@ test pushInstruction {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
-        cache.deinit(allocator);
+        testing.deinitTransactionContext(allocator, &tc);
+        deinitAccountMap(cache, allocator);
     }
 
     var instruction_info = try testing.createInstructionInfo(
@@ -396,10 +398,10 @@ test "pushInstruction sysvar account data" {
     const testing = sig.runtime.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var sysvar_data: [20]u8 = @splat(0);
-    var cache, var tc = try testing.createTransactionContext(
+    const cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -416,8 +418,8 @@ test "pushInstruction sysvar account data" {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
-        cache.deinit(allocator);
+        testing.deinitTransactionContext(allocator, &tc);
+        deinitAccountMap(cache, allocator);
     }
 
     var instruction_info = try testing.createInstructionInfo(
@@ -443,10 +445,10 @@ test "pushInstruction sysvar account too small" {
     const testing = sig.runtime.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var sysvar_data: [1]u8 = @splat(0); // needs to be at least 2 bytes large
-    var cache, var tc = try testing.createTransactionContext(
+    const cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -463,8 +465,8 @@ test "pushInstruction sysvar account too small" {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
-        cache.deinit(allocator);
+        testing.deinitTransactionContext(allocator, &tc);
+        deinitAccountMap(cache, allocator);
     }
 
     var instruction_info = try testing.createInstructionInfo(
@@ -493,9 +495,9 @@ test "processNextInstruction" {
     const system_program = sig.runtime.program.system;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    var cache, var tc = try testing.createTransactionContext(
+    const cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -508,8 +510,8 @@ test "processNextInstruction" {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
-        cache.deinit(allocator);
+        testing.deinitTransactionContext(allocator, &tc);
+        deinitAccountMap(cache, allocator);
     }
 
     var instruction_info = try testing.createInstructionInfo(
@@ -560,9 +562,9 @@ test popInstruction {
     const system_program = sig.runtime.program.system;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    var cache, var tc = try testing.createTransactionContext(
+    const cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -574,8 +576,8 @@ test popInstruction {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
-        cache.deinit(allocator);
+        testing.deinitTransactionContext(allocator, &tc);
+        deinitAccountMap(cache, allocator);
     }
 
     var instruction_info = try testing.createInstructionInfo(
@@ -643,9 +645,9 @@ test prepareCpiInstructionInfo {
     const system_program = sig.runtime.program.system;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    var cache, var tc = try testing.createTransactionContext(
+    const cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -658,8 +660,8 @@ test prepareCpiInstructionInfo {
         },
     );
     defer {
-        testing.deinitTransactionContext(allocator, tc);
-        cache.deinit(allocator);
+        testing.deinitTransactionContext(allocator, &tc);
+        deinitAccountMap(cache, allocator);
     }
 
     const caller = try testing.createInstructionInfo(

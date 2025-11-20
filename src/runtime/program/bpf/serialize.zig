@@ -761,7 +761,7 @@ test serializeParameters {
 
     // const allocator = std.testing.allocator;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     for ([_]Pubkey{
         program.bpf_loader.v1.ID,
@@ -774,7 +774,7 @@ test serializeParameters {
         }) |stricter_abi_and_runtime_constraints| {
             const program_id = Pubkey.initRandom(prng.random());
 
-            var cache, var tc = try createTransactionContext(
+            const cache, var tc = try createTransactionContext(
                 allocator,
                 prng.random(),
                 .{
@@ -846,8 +846,8 @@ test serializeParameters {
                 },
             );
             defer {
-                deinitTransactionContext(allocator, tc);
-                cache.deinit(allocator);
+                deinitTransactionContext(allocator, &tc);
+                sig.runtime.testing.deinitAccountMap(cache, allocator);
             }
 
             const instruction_info = try createInstructionInfo(

@@ -161,7 +161,7 @@ test "stable_log" {
     const createTransactionContext = sig.runtime.testing.createTransactionContext;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var cache, var tc = try createTransactionContext(
         allocator,
@@ -171,7 +171,7 @@ test "stable_log" {
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 

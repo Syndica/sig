@@ -10,7 +10,7 @@ const ZonInfo = struct {
     activated_on_all_clusters: bool = false,
     reverted: bool = false,
 };
-pub const features: []const ZonInfo = @import("features.zon");
+const features: []const ZonInfo = @import("features.zon");
 pub const NUM_FEATURES = features.len;
 
 pub const Feature = @Type(.{ .@"enum" = .{

@@ -417,9 +417,8 @@ pub fn executeV4Retract(
         .authority_address_or_next_version = state.authority_address_or_next_version,
     });
 
-    const gop = try ic.tc.program_map.getOrPut(allocator, program_account.pubkey);
-    if (gop.found_existing) gop.value_ptr.deinit(allocator);
-    gop.value_ptr.* = .failed;
+    const old_program = try ic.tc.program_map.fetchPut(allocator, program_account.pubkey, .failed);
+    if (old_program) |p| p.deinit(allocator);
 }
 
 pub fn executeV4TransferAuthority(
@@ -1427,9 +1426,9 @@ pub fn executeV3Close(
                     clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
 
                     // Remove from the program map if it was deployed.
-                    const gop = try ic.tc.program_map.getOrPut(allocator, program_key);
-                    if (gop.found_existing) gop.value_ptr.deinit(allocator);
-                    gop.value_ptr.* = .failed;
+                    const old_program = try ic.tc.program_map
+                        .fetchPut(allocator, program_key, .failed);
+                    if (old_program) |p| p.deinit(allocator);
                 },
                 else => {
                     try ic.tc.log("Invalid Program Account", .{});
@@ -1814,9 +1813,8 @@ pub fn executeV3Migrate(
 
     if (progdata_info.len == 0) {
         // Close the program map entry.
-        const gop = try ic.tc.program_map.getOrPut(allocator, program_key);
-        if (gop.found_existing) gop.value_ptr.deinit(allocator);
-        gop.value_ptr.* = .failed;
+        const old_program = try ic.tc.program_map.fetchPut(allocator, program_key, .failed);
+        if (old_program) |p| p.deinit(allocator);
     } else {
         try ic.nativeInvoke(
             allocator,
@@ -1926,28 +1924,16 @@ pub fn deployProgram(
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
     var environment = vm.Environment.initV1(
-        allocator,
         tc.feature_set,
         &tc.compute_budget,
         tc.slot,
         false,
         true,
-    ) catch |err| {
-        try tc.log("Failed to register syscalls: {s}", .{@errorName(err)});
-        return InstructionError.ProgramEnvironmentSetupFailure;
-    };
-    defer environment.deinit(allocator);
+    );
 
     // Deployment of programs with sol_alloc_free is disabled.
-    {
-        const loader_map = &environment.loader.map;
-        for (loader_map.values(), 0..) |entry, i| {
-            if (std.mem.eql(u8, entry.name, "sol_alloc_free_")) {
-                loader_map.swapRemoveAt(i);
-                allocator.free(entry.name); // was allocator.dupe()'d internally
-                break;
-            }
-        }
+    if (environment.loader.map.get(.sol_alloc_free_) != null) {
+        environment.loader.map.set(.sol_alloc_free_, null);
     }
 
     // Copy the program data to a new buffer
@@ -1973,9 +1959,8 @@ pub fn deployProgram(
     try tc.log("Deploying program {}", .{program_id});
 
     // Remove from the program map since it should not be accessible on this slot anymore.
-    const gop = try tc.program_map.getOrPut(allocator, program_id);
-    if (gop.found_existing) gop.value_ptr.deinit(allocator);
-    gop.value_ptr.* = .failed;
+    const old_program = try tc.program_map.fetchPut(allocator, program_id, .failed);
+    if (old_program) |p| p.deinit(allocator);
 }
 
 test executeV3InitializeBuffer {
@@ -1983,7 +1968,7 @@ test executeV3InitializeBuffer {
 
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const buffer_account_key = Pubkey.initRandom(prng.random());
     const buffer_authority_key = Pubkey.initRandom(prng.random());
@@ -2053,7 +2038,7 @@ test executeV3Write {
 
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const buffer_account_key = Pubkey.initRandom(prng.random());
     const buffer_authority_key = Pubkey.initRandom(prng.random());
@@ -2131,7 +2116,7 @@ test executeV3DeployWithMaxDataLen {
 
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const payer_account_key = Pubkey.initRandom(prng.random());
     const program_account_key = Pubkey.initRandom(prng.random());
@@ -2142,7 +2127,7 @@ test executeV3DeployWithMaxDataLen {
     const buffer_account_key = Pubkey.initRandom(prng.random());
     const buffer_authority_key = Pubkey.initRandom(prng.random());
 
-    const rent = sysvar.Rent.DEFAULT;
+    const rent = sysvar.Rent.INIT;
 
     const additional_bytes = 1024;
 
@@ -2263,8 +2248,8 @@ test executeV3DeployWithMaxDataLen {
                 },
             },
             .sysvar_cache = .{
-                .rent = sysvar.Rent.DEFAULT,
-                .clock = sysvar.Clock.DEFAULT,
+                .rent = sysvar.Rent.INIT,
+                .clock = sysvar.Clock.INIT,
             },
             // TODO: Should we need extra for system program cpi???
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS + 150,
@@ -2314,8 +2299,8 @@ test executeV3DeployWithMaxDataLen {
                     initial_buffer_account_data.len,
             ),
             .sysvar_cache = .{
-                .rent = sysvar.Rent.DEFAULT,
-                .clock = sysvar.Clock.DEFAULT,
+                .rent = sysvar.Rent.INIT,
+                .clock = sysvar.Clock.INIT,
             },
         },
         .{},
@@ -2326,7 +2311,7 @@ test executeV3SetAuthority {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const buffer_account_key = Pubkey.initRandom(prng.random());
     const buffer_authority_key = Pubkey.initRandom(prng.random());
@@ -2537,7 +2522,7 @@ test executeV3SetAuthorityChecked {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const buffer_account_key = Pubkey.initRandom(prng.random());
     const buffer_authority_key = Pubkey.initRandom(prng.random());
@@ -2706,7 +2691,7 @@ test executeV3Close {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const close_account_key = Pubkey.initRandom(prng.random());
     const repicient_key = Pubkey.initRandom(prng.random());
@@ -2856,7 +2841,7 @@ test executeV3Close {
 
     // program_data
     {
-        var clock = sysvar.Clock.DEFAULT;
+        var clock = sysvar.Clock.INIT;
         clock.slot = 1337;
 
         const initial_data = try bincode.writeToSlice(
@@ -2963,7 +2948,7 @@ test executeV3Upgrade {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const spill_account_key = Pubkey.initRandom(prng.random());
     const upgrade_authority_key = Pubkey.initRandom(prng.random());
@@ -2975,8 +2960,8 @@ test executeV3Upgrade {
         bpf_loader_program.v3.ID,
     ) orelse @panic("findProgramAddress failed");
 
-    const rent = sysvar.Rent.DEFAULT;
-    var clock = sysvar.Clock.DEFAULT;
+    const rent = sysvar.Rent.INIT;
+    var clock = sysvar.Clock.INIT;
     clock.slot += 1337;
 
     // const buf_size = 512;
@@ -3152,7 +3137,7 @@ test executeV3ExtendProgram {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const payer_account_key = Pubkey.initRandom(prng.random());
     const upgrade_authority_key = Pubkey.initRandom(prng.random());
@@ -3163,7 +3148,7 @@ test executeV3ExtendProgram {
         bpf_loader_program.v3.ID,
     ) orelse @panic("findProgramAddress failed");
 
-    var clock = sysvar.Clock.DEFAULT;
+    var clock = sysvar.Clock.INIT;
     clock.slot += 1337;
 
     const initial_program_data = try createValidProgramData(
@@ -3210,7 +3195,7 @@ test executeV3ExtendProgram {
 
             const payer_balance = prng.random().uintAtMost(u32, 1024) + help_pay;
             const program_data_lamports =
-                sysvar.Rent.DEFAULT.minimumBalance(initial_program_data.len + additional_bytes) -
+                sysvar.Rent.INIT.minimumBalance(initial_program_data.len + additional_bytes) -
                 help_pay;
 
             var compute_units: u64 = bpf_loader_program.v3.COMPUTE_UNITS;
@@ -3291,7 +3276,7 @@ test executeV3ExtendProgram {
                     },
                     .compute_meter = compute_units,
                     .sysvar_cache = .{
-                        .rent = sysvar.Rent.DEFAULT,
+                        .rent = sysvar.Rent.INIT,
                         .clock = clock,
                     },
                     .feature_set = if (check_authority)
@@ -3357,7 +3342,7 @@ test executeV3ExtendProgram {
                 },
                 .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
                 .sysvar_cache = .{
-                    .rent = sysvar.Rent.DEFAULT,
+                    .rent = sysvar.Rent.INIT,
                     .clock = clock,
                 },
                 .feature_set = &.{
@@ -3370,7 +3355,7 @@ test executeV3ExtendProgram {
         );
         const tc = &tx[1];
         defer {
-            sig.runtime.testing.deinitTransactionContext(allocator, tc.*);
+            sig.runtime.testing.deinitTransactionContext(allocator, tc);
             tx[0].deinit(allocator);
         }
 
@@ -3405,14 +3390,14 @@ test executeV3ExtendProgram {
                 },
                 .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
                 .sysvar_cache = .{
-                    .rent = sysvar.Rent.DEFAULT,
+                    .rent = sysvar.Rent.INIT,
                     .clock = clock,
                 },
             },
         );
         const tc = &tx[1];
         defer {
-            sig.runtime.testing.deinitTransactionContext(allocator, tc.*);
+            sig.runtime.testing.deinitTransactionContext(allocator, tc);
             tx[0].deinit(allocator);
         }
 
@@ -3437,7 +3422,7 @@ test executeV3ExtendProgram {
 test executeV3Migrate {
     const testing = sig.runtime.program.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     for ([_]enum { use_auth, no_auth, migrate, migrate_zero }{
         .use_auth,
@@ -3452,7 +3437,7 @@ test executeV3Migrate {
             program_account_key,
         ) orelse @panic("findProgramAddress failed");
 
-        var clock = sysvar.Clock.DEFAULT;
+        var clock = sysvar.Clock.INIT;
         clock.slot += 1337;
 
         const program_data_buffer = try createValidProgramData(
@@ -3519,9 +3504,9 @@ test executeV3Migrate {
         defer allocator.free(final_program_buffer);
 
         const program_data_balance =
-            sysvar.Rent.DEFAULT.minimumBalance(program_data_buffer.len);
+            sysvar.Rent.INIT.minimumBalance(program_data_buffer.len);
         const program_account_balance =
-            sysvar.Rent.DEFAULT.minimumBalance(program_account_buffer.len);
+            sysvar.Rent.INIT.minimumBalance(program_account_buffer.len);
 
         const compute_units: u64 = bpf_loader_program.v3.COMPUTE_UNITS +
             // does 3 v4 CPI calls (+ v4.finalize or v4.transfer_authority depending on mode)
@@ -3602,7 +3587,7 @@ test executeV3Migrate {
                     },
                 },
                 .sysvar_cache = .{
-                    .rent = sysvar.Rent.DEFAULT,
+                    .rent = sysvar.Rent.INIT,
                     .clock = clock,
                 },
             },
@@ -3690,7 +3675,7 @@ fn createValidProgramData(
 test executeV4Write {
     const testing = sig.runtime.program.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const program_key = Pubkey.initRandom(prng.random());
 
@@ -3759,7 +3744,7 @@ test executeV4Write {
 test executeV4Retract {
     const testing = sig.runtime.program.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const program_key = Pubkey.initRandom(prng.random());
 
@@ -3787,7 +3772,7 @@ test executeV4Retract {
         .{},
     );
 
-    var clock = sysvar.Clock.DEFAULT;
+    var clock = sysvar.Clock.INIT;
     clock.slot = DEPLOYMENT_COOLDOWN_IN_SLOTS;
 
     try testing.expectProgramExecuteResult(
@@ -3813,7 +3798,7 @@ test executeV4Retract {
             },
             .compute_meter = bpf_loader_program.v4.COMPUTE_UNITS,
             .sysvar_cache = .{
-                .rent = sysvar.Rent.DEFAULT,
+                .rent = sysvar.Rent.INIT,
                 .clock = clock,
             },
         },
@@ -3837,12 +3822,12 @@ test executeV4Retract {
 test executeV4SetProgramLength {
     const testing = sig.runtime.program.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     for ([_]enum { open, grow, shrink, close }{ .open, .grow, .shrink, .close }) |mode| {
         const program_key = Pubkey.initRandom(prng.random());
         const recipient_key = Pubkey.initRandom(prng.random());
-        const rent = sysvar.Rent.DEFAULT;
+        const rent = sysvar.Rent.INIT;
 
         const bump_size: usize = 100;
         const required_lamports = rent.minimumBalance(@sizeOf(V4State) + bump_size);
@@ -3969,7 +3954,7 @@ test executeV4SetProgramLength {
 test checkProgramAccount {
     const testing = sig.runtime.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const program_key = Pubkey.initRandom(prng.random());
     var program_data: [@sizeOf(V4State)]u8 = @splat(0);
@@ -3983,7 +3968,7 @@ test checkProgramAccount {
         .{},
     );
 
-    var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+    const cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
             .{
                 .pubkey = program_key,
@@ -3997,8 +3982,8 @@ test checkProgramAccount {
         },
     });
     defer {
-        testing.deinitTransactionContext(allocator, tc);
-        cache.deinit(allocator);
+        testing.deinitTransactionContext(allocator, &tc);
+        sig.runtime.testing.deinitAccountMap(cache, allocator);
     }
 
     var info = try testing.createInstructionInfo(

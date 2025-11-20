@@ -1,14 +1,15 @@
 #!/usr/bin/env python3.11
 
-import os
 import argparse
 import json
+import os
+import shlex
 import sys
 import textwrap
+
 from collections import defaultdict
 
 conformance_dir = os.path.dirname(os.path.abspath(__file__))
-
 
 try:
     from typer.testing import CliRunner
@@ -34,18 +35,34 @@ except:
 def main():
     os.environ["PYTHONUNBUFFERED"] = "1"
 
-    agave = path("env/solfuzz-agave/target/release/libsolfuzz_agave.so")
-    sig = path("zig-out/lib/libsolfuzz_sig.so")
+    create_lib = os.environ.get(
+        "CREATE_LIB", path("env/solfuzz-agave/target/release/libsolfuzz_agave.so")
+    )
+    exec_lib = os.environ.get("EXEC_LIB", path("zig-out/lib/libsolfuzz_sig.so"))
 
     parser = argparse.ArgumentParser(description="Run test fixtures")
-    parser.add_argument("fixtures", nargs="*", help="Fixtures to run. Runs all if unspecified")
+    parser.add_argument(
+        "fixtures",
+        nargs="*",
+        default=shlex.split(os.environ["FIXTURES"]) if "FIXTURES" in os.environ else [],
+        help="Fixtures to run. Defaults to FIXTURES env var. Runs all if unset.",
+    )
     parser.add_argument("--create", action="store_true", help="Create the fixtures from scratch")
     parser.add_argument("--no-run", action="store_true", help="Don't exec fixtures (only create)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Print commands and output")
     parser.add_argument("--filter", help="Filter for fixture to execute")
     parser.add_argument("--save", help="File to save results in json")
-    parser.add_argument("--create-lib", default=agave, help=f"Default: {agave}")
-    parser.add_argument("--exec-lib", default=sig, help=f"Default: {sig}")
+    parser.add_argument(
+        "--create-lib",
+        default=create_lib,
+        help=f"Default: CREATE_LIB env var if set, otherwise: {create_lib}",
+    )
+    parser.add_argument(
+        "-x",
+        "--exec-lib",
+        default=exec_lib,
+        help=f"Default: EXEC_LIB env var if set, otherwise: {exec_lib}",
+    )
     parser.add_argument("--num-processes", type=int, default=os.cpu_count())
     parser.add_argument(
         "--run-separately",

@@ -1,4 +1,3 @@
-const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
@@ -13,7 +12,7 @@ const pubkey_utils = sig.runtime.pubkey_utils;
 const serialize = sig.runtime.program.bpf.serialize;
 
 const memory = sig.vm.memory;
-
+const Murmur3 = std.hash.Murmur3_32;
 const SyscallError = sig.vm.SyscallError;
 const Pubkey = sig.core.Pubkey;
 const MemoryMap = memory.MemoryMap;
@@ -23,18 +22,183 @@ const TransactionContext = sig.runtime.TransactionContext;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const AccountMeta = cpi.AccountMetaRust;
+const Feature = sig.core.features.Feature;
 
 pub const Error = sig.vm.ExecutionError;
 
-pub const Syscall = *const fn (
+pub const SyscallFn = *const fn (
     *TransactionContext,
     *MemoryMap,
     *RegisterMap,
 ) Error!void;
 
-pub const Entry = struct {
-    name: []const u8,
-    builtin_fn: Syscall,
+pub const Syscall = enum {
+    abort,
+    sol_panic_,
+    sol_alloc_free_,
+
+    sol_log_,
+    sol_log_64_,
+    sol_log_pubkey,
+    sol_log_compute_units_,
+    sol_log_data,
+
+    sol_create_program_address,
+    sol_try_find_program_address,
+
+    sol_sha256,
+    sol_keccak256,
+    sol_blake3,
+    sol_poseidon,
+
+    sol_secp256k1_recover,
+    sol_curve_validate_point,
+    sol_curve_group_op,
+    sol_curve_multiscalar_mul,
+    sol_alt_bn128_group_op,
+    sol_alt_bn128_compression,
+
+    sol_get_clock_sysvar,
+    sol_get_epoch_schedule_sysvar,
+    sol_get_fees_sysvar,
+    sol_get_rent_sysvar,
+    sol_get_last_restart_slot,
+    sol_get_epoch_rewards_sysvar,
+
+    sol_memcpy_,
+    sol_memmove_,
+    sol_memset_,
+    sol_memcmp_,
+
+    sol_get_processed_sibling_instruction,
+    sol_get_stack_height,
+    sol_set_return_data,
+    sol_get_return_data,
+    sol_get_sysvar,
+    sol_get_epoch_stake,
+    sol_remaining_compute_units,
+
+    sol_invoke_signed_c,
+    sol_invoke_signed_rust,
+
+    /// We basically just store this as an array of syscall enumerations with their murmur hash as the value.
+    /// This makes lookups O(N) relative to the number of syscalls, however this shouldn't be a huge problem.
+    /// The hashmap approach we had before only slightly reduced the lookup times, all of which was wiped
+    /// out by the cost of allocating it. So this is the prefered approach for now.
+    ///
+    /// TODO: perhaps we can look into a PHF based approach here, although I imagine it'll just end up
+    /// being keyed by murmur and truncated to unique bits.
+    pub const Registry = struct {
+        map: std.EnumArray(Syscall, ?u32),
+        is_stubbed: bool,
+
+        /// Relates Syscalls to the Murmur3 hash of their name, used for symbol collision checking.
+        pub const ALL_ENABLED: Registry = .{ .map = b: {
+            var kvs: std.enums.EnumFieldStruct(Syscall, ?u32, null) = undefined;
+            for (@typeInfo(Syscall).@"enum".fields) |field| {
+                @field(kvs, field.name) = Murmur3.hashWithSeed(field.name, 0);
+            }
+            break :b .init(kvs);
+        }, .is_stubbed = false };
+
+        pub const ALL_DISABLED: Registry = .{ .map = .initFill(null), .is_stubbed = false };
+
+        /// Returns a `SycallFn` based on the provided hash.
+        pub fn get(self: *const Registry, bytes: u32) ?SyscallFn {
+            const syscall: Syscall = for (self.map.values, 0..) |entry, i| {
+                const value = entry orelse continue; // disabled entries don't collide
+                if (value == bytes) break @enumFromInt(i); // assumes that the EnumArray will be in "array" mode, which it should be.
+            } else return null; // no such hash
+            // TODO: consider just making a build flag for harness builds that removes this check entirely for perf
+            return if (self.is_stubbed) &stubbed else map.get(syscall);
+        }
+
+        fn stubbed(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {}
+
+        /// Generally spekaing this should only be used for tests and special setup.
+        /// Otherwise take the ALL_ENABLED -> disabling approach, since it's faster.
+        pub fn enable(self: *Registry, name: Syscall) void {
+            self.map.set(name, Murmur3.hashWithSeed(@tagName(name), 0));
+        }
+    };
+
+    /// Lookup for the syscall's implementation function.
+    pub const map = std.EnumArray(Syscall, SyscallFn).init(.{
+        .abort = abort,
+        .sol_panic_ = panic,
+        .sol_alloc_free_ = allocFree,
+
+        .sol_log_ = log,
+        .sol_log_64_ = log64,
+        .sol_log_pubkey = logPubkey,
+        .sol_log_compute_units_ = logComputeUnits,
+        .sol_log_data = logData,
+
+        .sol_create_program_address = createProgramAddress,
+        .sol_try_find_program_address = findProgramAddress,
+
+        .sol_sha256 = hash.sha256,
+        .sol_keccak256 = hash.keccak256,
+        .sol_blake3 = hash.blake3,
+        .sol_poseidon = hash.poseidon,
+
+        .sol_secp256k1_recover = ecc.secp256k1Recover,
+        .sol_curve_validate_point = ecc.curvePointValidation,
+        .sol_curve_group_op = ecc.curveGroupOp,
+        .sol_curve_multiscalar_mul = ecc.curveMultiscalarMul,
+        .sol_alt_bn128_group_op = ecc.altBn128GroupOp,
+        .sol_alt_bn128_compression = ecc.altBn128Compression,
+
+        .sol_get_clock_sysvar = sysvar.getClock,
+        .sol_get_epoch_schedule_sysvar = sysvar.getEpochSchedule,
+        .sol_get_fees_sysvar = sysvar.getFees,
+        .sol_get_rent_sysvar = sysvar.getRent,
+        .sol_get_last_restart_slot = sysvar.getLastRestartSlot,
+        .sol_get_epoch_rewards_sysvar = sysvar.getEpochRewards,
+        .sol_get_sysvar = sysvar.getSysvar,
+
+        .sol_memcpy_ = memops.memcpy,
+        .sol_memmove_ = memops.memmove,
+        .sol_memset_ = memops.memset,
+        .sol_memcmp_ = memops.memcmp,
+
+        .sol_get_processed_sibling_instruction = getProcessedSiblingInstruction,
+        .sol_get_stack_height = getStackHeight,
+        .sol_set_return_data = setReturnData,
+        .sol_get_return_data = getReturnData,
+        .sol_get_epoch_stake = getEpochStake,
+        .sol_remaining_compute_units = remainingComputeUnits,
+
+        .sol_invoke_signed_c = cpi.invokeSignedC,
+        .sol_invoke_signed_rust = cpi.invokeSignedRust,
+    });
+
+    const Gate = struct {
+        feature: Feature,
+        /// Whether the feature "disables", instead of "enabling" the syscall.
+        invert: bool = false,
+    };
+
+    /// Describes syscalls whos activation is locked behind a feature gate.
+    pub const gates = std.EnumArray(Syscall, ?Gate).initDefault(@as(?Gate, null), .{
+        // NOTE: also needs to check for `reject_deployment_of_broken_elfs`.
+        .sol_alloc_free_ = .{ .feature = .disable_deploy_of_alloc_free_syscall, .invert = true },
+
+        .sol_blake3 = .{ .feature = .blake3_syscall_enabled },
+        .sol_poseidon = .{ .feature = .enable_poseidon_syscall },
+
+        .sol_curve_validate_point = .{ .feature = .curve25519_syscall_enabled },
+        .sol_curve_group_op = .{ .feature = .curve25519_syscall_enabled },
+        .sol_curve_multiscalar_mul = .{ .feature = .curve25519_syscall_enabled },
+        .sol_alt_bn128_group_op = .{ .feature = .enable_alt_bn128_syscall },
+        .sol_alt_bn128_compression = .{ .feature = .enable_alt_bn128_compression_syscall },
+
+        .sol_get_fees_sysvar = .{ .feature = .disable_fees_sysvar, .invert = true },
+        .sol_get_last_restart_slot = .{ .feature = .last_restart_slot_sysvar },
+        .sol_remaining_compute_units = .{ .feature = .remaining_compute_units_syscall_enabled },
+        .sol_get_sysvar = .{ .feature = .get_sysvar_syscall_enabled },
+        .sol_get_epoch_stake = .{ .feature = .enable_get_epoch_stake_syscall },
+    });
 };
 
 // logging
@@ -642,8 +806,6 @@ fn callProgramAddressSyscall(
     program_id: Pubkey,
     overlap_outputs: bool,
 ) !struct { Pubkey, u8 } {
-    comptime std.debug.assert(builtin.is_test);
-
     const seeds_addr = 0x100000000;
     const program_id_addr = 0x200000000;
     const address_addr = 0x300000000;
@@ -699,7 +861,7 @@ fn callProgramAddressSyscall(
 test findProgramAddress {
     const testing = sig.runtime.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
@@ -710,7 +872,7 @@ test findProgramAddress {
         },
     });
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -817,7 +979,7 @@ test findProgramAddress {
 test createProgramAddress {
     const testing = sig.runtime.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
@@ -828,7 +990,7 @@ test createProgramAddress {
         },
     });
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -986,7 +1148,7 @@ test createProgramAddress {
 
 test allocFree {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
@@ -994,7 +1156,7 @@ test allocFree {
         .{},
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1034,7 +1196,7 @@ test allocFree {
 test getProcessedSiblingInstruction {
     const testing = sig.runtime.testing;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var account_params: [9]testing.ExecuteContextsParams.AccountParams = undefined;
     for (&account_params) |*a| a.* = .{
@@ -1046,7 +1208,7 @@ test getProcessedSiblingInstruction {
         .accounts = &account_params,
     });
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1186,7 +1348,7 @@ test getProcessedSiblingInstruction {
 
 test getEpochStake {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const target_vote_address = Pubkey.initRandom(prng.random());
     const total_epoch_stake = 200_000_000_000_000;
@@ -1209,7 +1371,7 @@ test getEpochStake {
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1313,7 +1475,7 @@ test "set and get return data" {
     var data_buffer: [16]u8 = .{0} ** 16;
     var id_buffer: [32]u8 = .{0} ** 32;
 
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
@@ -1326,7 +1488,7 @@ test "set and get return data" {
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 

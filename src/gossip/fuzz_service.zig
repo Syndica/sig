@@ -36,7 +36,7 @@ const SLEEP_TIME = Duration.zero();
 
 const Logger = sig.trace.Logger("gossip.fuzz_service");
 
-pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
+pub fn run(seed: u64, args: []const []const u8) !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -53,7 +53,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var prng = std.Random.DefaultPrng.init(seed);
 
     // parse cli args to define where to send packets
-    const maybe_max_messages_string = args.next();
+    const maybe_max_messages_string: ?[]const u8 = if (args.len == 0) null else args[0];
     const maybe_max_messages = blk: {
         if (maybe_max_messages_string) |max_messages_str| {
             break :blk try std.fmt.parseInt(u64, max_messages_str, 10);

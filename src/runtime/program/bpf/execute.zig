@@ -9,8 +9,7 @@ const ExecutionError = sig.vm.ExecutionError;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;
-const Registry = sig.vm.Registry;
-const Syscall = sig.vm.syscalls.Syscall;
+const SyscallMap = sig.vm.SyscallMap;
 
 pub fn execute(
     allocator: std.mem.Allocator,
@@ -32,7 +31,7 @@ pub fn execute(
             return InstructionError.IncorrectProgramId;
         }
 
-        const loaded_program = ic.tc.program_map.getPtr(program_account.pubkey) orelse {
+        const loaded_program = ic.tc.program_map.get(program_account.pubkey) orelse {
             try ic.tc.log("Program is not cached", .{});
             if (remove_accounts_executable_flag_checks)
                 return InstructionError.UnsupportedProgramId
@@ -40,7 +39,7 @@ pub fn execute(
                 return InstructionError.InvalidAccountData;
         };
 
-        switch (loaded_program.*) {
+        switch (loaded_program) {
             .failed => {
                 try ic.tc.log("Program is not deployed", .{});
                 if (remove_accounts_executable_flag_checks)
@@ -162,7 +161,7 @@ pub fn initVm(
     tc: *TransactionContext,
     executable: *const vm.Executable,
     regions: []vm.memory.Region,
-    syscalls: *const Registry(Syscall),
+    syscalls: *const SyscallMap,
 ) !struct {
     vm.Vm,
     []u8,

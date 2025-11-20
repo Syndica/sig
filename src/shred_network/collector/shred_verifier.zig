@@ -1,4 +1,4 @@
-const sig = @import("../sig.zig");
+const sig = @import("../../sig.zig");
 
 const shred_layout = sig.ledger.shred.layout;
 

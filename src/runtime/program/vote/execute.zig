@@ -233,7 +233,7 @@ fn intializeAccount(
         return InstructionError.MissingRequiredSignature;
     }
 
-    const vote_state = try VoteState.init(
+    var vote_state = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -241,7 +241,7 @@ fn intializeAccount(
         commission,
         clock,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     try setVoteState(
         allocator,
@@ -292,12 +292,14 @@ fn authorize(
     clock: Clock,
     signers: []const Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const versioned_state = try vote_account.deserializeFromAccountData(
+    var versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
+    defer versioned_state.deinit(allocator);
+
     var vote_state = try versioned_state.convertToCurrent(allocator);
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     switch (vote_authorize) {
         .voter => {
@@ -328,6 +330,7 @@ fn authorize(
             }
 
             const maybe_err = try vote_state.setNewAuthorizedVoter(
+                allocator,
                 authorized,
                 target_epoch,
             );
@@ -530,13 +533,14 @@ fn updateValidatorIdentity(
     vote_account: *BorrowedAccount,
     new_identity: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const versioned_state = try vote_account.deserializeFromAccountData(
+    var versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
+    defer versioned_state.deinit(allocator);
 
     var vote_state = try versioned_state.convertToCurrent(allocator);
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // Both the current authorized withdrawer and new identity must sign.
     if (!ic.ixn_info.isPubkeySigner(vote_state.withdrawer) or
@@ -589,21 +593,19 @@ fn updateCommission(
 
     const enforce_commission_update_rule = blk: {
         if (ic.tc.feature_set.active(.allow_commission_decrease_at_any_time, ic.tc.slot)) {
-            const versioned_state = vote_account.deserializeFromAccountData(
+            var versioned_state = vote_account.deserializeFromAccountData(
                 allocator,
                 VoteStateVersions,
-            ) catch {
-                break :blk true;
-            };
+            ) catch break :blk true;
+            defer versioned_state.deinit(allocator);
+
             const vote_state = try versioned_state.convertToCurrent(allocator);
             maybe_vote_state = vote_state;
             // [agave] https://github.com/anza-xyz/agave/blob/9806724b6d49dec06a9d50396adf26565d6b7745/programs/vote/src/vote_state/mod.rs#L792
             //
             // Given a proposed new commission, returns true if this would be a commission increase, false otherwise
             break :blk commission > vote_state.commission;
-        } else {
-            break :blk true;
-        }
+        } else break :blk true;
     };
 
     if (enforce_commission_update_rule and ic.tc.feature_set.active(
@@ -612,29 +614,24 @@ fn updateCommission(
     )) {
         if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
             // Clean up before returning, if we have a vote_state already.
-            if (maybe_vote_state) |*vote_state| {
-                vote_state.deinit();
-            }
+            if (maybe_vote_state) |*vote_state| vote_state.deinit(allocator);
             ic.tc.custom_error = @intFromEnum(VoteError.commission_update_too_late);
             return InstructionError.Custom;
         }
     }
 
-    var vote_state = blk: {
-        if (maybe_vote_state) |vote_state| {
-            break :blk vote_state;
-        } else {
-            const versioned_state = try vote_account.deserializeFromAccountData(
-                allocator,
-                VoteStateVersions,
-            );
+    var vote_state = maybe_vote_state orelse state: {
+        var versioned_state = try vote_account.deserializeFromAccountData(
+            allocator,
+            VoteStateVersions,
+        );
+        defer versioned_state.deinit(allocator);
 
-            break :blk versioned_state.convertToCurrent(allocator) catch {
-                return InstructionError.InvalidAccountData;
-            };
-        }
+        break :state versioned_state.convertToCurrent(allocator) catch {
+            return InstructionError.InvalidAccountData;
+        };
     };
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // Current authorized withdrawer must sign transaction.
     if (!ic.ixn_info.isPubkeySigner(vote_state.withdrawer)) {
@@ -708,13 +705,14 @@ fn widthraw(
     var vote_account = try ic.borrowInstructionAccount(vote_account_index);
     defer vote_account.release();
 
-    const versioned_state = try vote_account.deserializeFromAccountData(
+    var versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
+    defer versioned_state.deinit(allocator);
 
     var vote_state = try versioned_state.convertToCurrent(allocator);
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     if (!ic.ixn_info.isPubkeySigner(vote_state.withdrawer)) {
         return InstructionError.MissingRequiredSignature;
@@ -743,8 +741,8 @@ fn widthraw(
             return InstructionError.Custom;
         } else {
             // Deinitialize upon zero-balance
-            const deinitialized_state = VoteState.default(allocator);
-            defer deinitialized_state.deinit();
+            var deinitialized_state: VoteState = .DEFAULT;
+            defer deinitialized_state.deinit(allocator);
 
             try setVoteState(
                 allocator,
@@ -816,7 +814,7 @@ fn processVoteWithAccount(
         vote_account,
         clock,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     const maybe_err = try vote_state.processVote(
         allocator,
@@ -899,7 +897,7 @@ fn voteStateUpdate(
         vote_account,
         clock,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     const maybe_err = try vote_state.processVoteStateUpdate(
         allocator,
@@ -963,7 +961,7 @@ fn towerSync(
         vote_account,
         clock,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     const maybe_err = try vote_state.processTowerSync(
         allocator,
@@ -994,18 +992,17 @@ fn verifyAndGetVoteState(
     vote_account: *BorrowedAccount,
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!VoteState {
-    const versioned_state = try vote_account.deserializeFromAccountData(
+    var versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
+    // we either clone it in `convertToCurrent` or don't use at all
+    defer versioned_state.deinit(allocator);
 
-    if (versioned_state.isUninitialized()) {
-        versioned_state.deinit();
-        return InstructionError.UninitializedAccount;
-    }
+    if (versioned_state.isUninitialized()) return InstructionError.UninitializedAccount;
 
     var vote_state = try versioned_state.convertToCurrent(allocator);
-    errdefer vote_state.deinit();
+    errdefer vote_state.deinit(allocator);
 
     const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, clock.epoch);
     if (!ic.ixn_info.isPubkeySigner(authorized_voter)) {
@@ -1042,14 +1039,17 @@ fn setVoteState(
                 VoteState.MAX_VOTE_STATE_SIZE,
             ))))
     {
-        var votes = try std.ArrayList(Lockout).initCapacity(allocator, state.votes.items.len);
-        defer votes.deinit();
-        for (state.votes.items) |vote| votes.appendAssumeCapacity(vote.lockout);
+        const landed_votes = state.votes.items;
+        const votes = try allocator.alloc(Lockout, landed_votes.len);
+        defer allocator.free(votes);
+
+        for (votes, landed_votes) |*vote, landed| vote.* = landed.lockout;
+
         return account.serializeIntoAccountData(VoteStateVersions{ .v1_14_11 = .{
             .node_pubkey = state.node_pubkey,
             .withdrawer = state.withdrawer,
             .commission = state.commission,
-            .votes = votes,
+            .votes = .fromOwnedSlice(votes),
             .root_slot = state.root_slot,
             .voters = state.voters,
             .prior_voters = state.prior_voters,
@@ -1225,9 +1225,9 @@ test "vote_program: executeIntializeAccount" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
+    const rent = Rent.INIT;
     const clock = Clock{
         .slot = 0,
         .epoch_start_timestamp = 0,
@@ -1244,7 +1244,7 @@ test "vote_program: executeIntializeAccount" {
 
     // Account data.
     const vote_account = Pubkey.initRandom(prng.random());
-    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_publey,
         authorized_voter,
@@ -1252,7 +1252,7 @@ test "vote_program: executeIntializeAccount" {
         commission,
         clock,
     ) };
-    defer final_vote_state.deinit();
+    defer final_vote_state.deinit(allocator);
 
     var final_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
@@ -1317,7 +1317,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1338,7 +1338,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
     // Account data.
     const vote_account = Pubkey.initRandom(prng.random());
 
-    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -1346,9 +1346,9 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
         commission,
         clock,
     ) };
-    defer initial_vote_state.deinit();
+    defer initial_vote_state.deinit(allocator);
 
-    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -1356,7 +1356,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
         commission,
         clock,
     ) };
-    defer final_vote_state.deinit();
+    defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
@@ -1416,10 +1416,9 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
 test "vote_program: executeAuthorize voter signed by current withdrawer" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
-    const PriorVote = sig.runtime.program.vote.state.PriorVote;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1439,7 +1438,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
     // Account data.
     const vote_account = Pubkey.initRandom(prng.random());
 
-    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -1447,7 +1446,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
         commission,
         clock,
     ) };
-    defer initial_vote_state.deinit();
+    defer initial_vote_state.deinit(allocator);
 
     var final_vote_state = try VoteState.init(
         allocator,
@@ -1457,15 +1456,15 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
         commission,
         clock,
     );
-    try final_vote_state.voters.insert(1, new_authorized_voter);
-    final_vote_state.prior_voters.append(PriorVote{
+    try final_vote_state.voters.insert(allocator, 1, new_authorized_voter);
+    final_vote_state.prior_voters.append(.{
         .key = authorized_voter,
         .start = 0,
         .end = 1,
     });
 
-    var final_current_vote_state = VoteStateVersions{ .current = final_vote_state };
-    defer final_current_vote_state.deinit();
+    var final_current_vote_state: VoteStateVersions = .{ .current = final_vote_state };
+    defer final_current_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
@@ -1527,7 +1526,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1556,7 +1555,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
         current_withdrawer_owner,
     );
 
-    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -1564,9 +1563,9 @@ test "vote_program: authorizeWithSeed withdrawer" {
         commission,
         clock,
     ) };
-    defer initial_vote_state.deinit();
+    defer initial_vote_state.deinit(allocator);
 
-    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -1574,7 +1573,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
         commission,
         clock,
     ) };
-    defer final_vote_state.deinit();
+    defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
@@ -1638,7 +1637,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1666,7 +1665,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
         current_withdrawer_owner,
     );
 
-    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -1674,9 +1673,9 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
         commission,
         clock,
     ) };
-    defer initial_vote_state.deinit();
+    defer initial_vote_state.deinit(allocator);
 
-    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -1684,7 +1683,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
         commission,
         clock,
     ) };
-    defer final_vote_state.deinit();
+    defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
@@ -1750,7 +1749,7 @@ test "vote_program: authorizeChecked withdrawer" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1769,7 +1768,7 @@ test "vote_program: authorizeChecked withdrawer" {
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
-    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -1777,9 +1776,9 @@ test "vote_program: authorizeChecked withdrawer" {
         commission,
         clock,
     ) };
-    defer initial_vote_state.deinit();
+    defer initial_vote_state.deinit(allocator);
 
-    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -1787,7 +1786,7 @@ test "vote_program: authorizeChecked withdrawer" {
         commission,
         clock,
     ) };
-    defer final_vote_state.deinit();
+    defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
@@ -1849,7 +1848,7 @@ test "vote_program: update_validator_identity" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1867,7 +1866,7 @@ test "vote_program: update_validator_identity" {
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
-    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -1875,9 +1874,9 @@ test "vote_program: update_validator_identity" {
         commission,
         clock,
     ) };
-    defer initial_vote_state.deinit();
+    defer initial_vote_state.deinit(allocator);
 
-    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         new_node_pubkey,
         authorized_voter,
@@ -1885,7 +1884,7 @@ test "vote_program: update_validator_identity" {
         commission,
         clock,
     ) };
-    defer final_vote_state.deinit();
+    defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
@@ -1939,7 +1938,7 @@ test "vote_program: update_validator_identity new authority did not sign" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -1957,7 +1956,7 @@ test "vote_program: update_validator_identity new authority did not sign" {
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
-    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -1965,9 +1964,9 @@ test "vote_program: update_validator_identity new authority did not sign" {
         commission,
         clock,
     ) };
-    defer initial_vote_state.deinit();
+    defer initial_vote_state.deinit(allocator);
 
-    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         new_node_pubkey,
         authorized_voter,
@@ -1975,7 +1974,7 @@ test "vote_program: update_validator_identity new authority did not sign" {
         commission,
         clock,
     ) };
-    defer final_vote_state.deinit();
+    defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
@@ -2032,7 +2031,7 @@ test "vote_program: update_validator_identity current authority did not sign" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2050,7 +2049,7 @@ test "vote_program: update_validator_identity current authority did not sign" {
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
-    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -2058,9 +2057,9 @@ test "vote_program: update_validator_identity current authority did not sign" {
         commission,
         clock,
     ) };
-    defer initial_vote_state.deinit();
+    defer initial_vote_state.deinit(allocator);
 
-    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         new_node_pubkey,
         authorized_voter,
@@ -2068,7 +2067,7 @@ test "vote_program: update_validator_identity current authority did not sign" {
         commission,
         clock,
     ) };
-    defer final_vote_state.deinit();
+    defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
@@ -2125,7 +2124,7 @@ test "vote_program: update_commission increasing commission" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2151,7 +2150,7 @@ test "vote_program: update_commission increasing commission" {
     const initial_commission: u8 = 10;
     const final_commission: u8 = 20;
 
-    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -2159,9 +2158,9 @@ test "vote_program: update_commission increasing commission" {
         initial_commission,
         clock,
     ) };
-    defer initial_vote_state.deinit();
+    defer initial_vote_state.deinit(allocator);
 
-    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -2169,7 +2168,7 @@ test "vote_program: update_commission increasing commission" {
         final_commission,
         clock,
     ) };
-    defer final_vote_state.deinit();
+    defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
@@ -2236,7 +2235,7 @@ test "vote_program: update_commission decreasing commission" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2262,7 +2261,7 @@ test "vote_program: update_commission decreasing commission" {
     const initial_commission: u8 = 10;
     const final_commission: u8 = 5;
 
-    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -2270,9 +2269,9 @@ test "vote_program: update_commission decreasing commission" {
         initial_commission,
         clock,
     ) };
-    defer initial_vote_state.deinit();
+    defer initial_vote_state.deinit(allocator);
 
-    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -2280,7 +2279,7 @@ test "vote_program: update_commission decreasing commission" {
         final_commission,
         clock,
     ) };
-    defer final_vote_state.deinit();
+    defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
@@ -2347,7 +2346,7 @@ test "vote_program: update_commission commission update too late passes with fea
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 1060, // needed to make isCommissionUpdateAllowed return false
@@ -2373,7 +2372,7 @@ test "vote_program: update_commission commission update too late passes with fea
     const initial_commission: u8 = 10;
     const final_commission: u8 = 15;
 
-    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -2381,9 +2380,9 @@ test "vote_program: update_commission commission update too late passes with fea
         initial_commission,
         clock,
     ) };
-    defer initial_vote_state.deinit();
+    defer initial_vote_state.deinit(allocator);
 
-    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -2391,7 +2390,7 @@ test "vote_program: update_commission commission update too late passes with fea
         final_commission,
         clock,
     ) };
-    defer final_vote_state.deinit();
+    defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
@@ -2449,7 +2448,7 @@ test "vote_program: update_commission error commission update too late failure" 
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 1060, // needed to make isCommissionUpdateAllowed return false
@@ -2475,7 +2474,7 @@ test "vote_program: update_commission error commission update too late failure" 
     const initial_commission: u8 = 10;
     const final_commission: u8 = 15;
 
-    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -2483,9 +2482,9 @@ test "vote_program: update_commission error commission update too late failure" 
         initial_commission,
         clock,
     ) };
-    defer initial_vote_state.deinit();
+    defer initial_vote_state.deinit(allocator);
 
-    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -2493,7 +2492,7 @@ test "vote_program: update_commission error commission update too late failure" 
         final_commission,
         clock,
     ) };
-    defer final_vote_state.deinit();
+    defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
@@ -2564,7 +2563,7 @@ test "vote_program: update_commission missing signature" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const clock = Clock{
         .slot = 0,
@@ -2590,7 +2589,7 @@ test "vote_program: update_commission missing signature" {
     const initial_commission: u8 = 10;
     const final_commission: u8 = 20;
 
-    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -2598,9 +2597,9 @@ test "vote_program: update_commission missing signature" {
         initial_commission,
         clock,
     ) };
-    defer initial_vote_state.deinit();
+    defer initial_vote_state.deinit(allocator);
 
-    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -2608,7 +2607,7 @@ test "vote_program: update_commission missing signature" {
         final_commission,
         clock,
     ) };
-    defer final_vote_state.deinit();
+    defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
@@ -2680,10 +2679,10 @@ test "vote_program: widthdraw no changes" {
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
-    const clock = Clock.DEFAULT;
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -2694,7 +2693,7 @@ test "vote_program: widthdraw no changes" {
 
     const recipient_withdrawer = Pubkey.initRandom(prng.random());
 
-    const vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -2702,7 +2701,7 @@ test "vote_program: widthdraw no changes" {
         commission,
         clock,
     ) };
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // TODO use VoteState.MAX_VOTE_STATE_SIZE instead of hardcoding the size.
     // Do in a clean up PR after all instructions has been added.
@@ -2764,10 +2763,10 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
-    const clock = Clock.DEFAULT;
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -2778,7 +2777,7 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
 
     const recipient_withdrawer = Pubkey.initRandom(prng.random());
 
-    const vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -2786,7 +2785,7 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
         commission,
         clock,
     ) };
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // TODO use VoteState.MAX_VOTE_STATE_SIZE instead of hardcoding the size.
     // Do in a clean up PR after all instructions has been added.
@@ -2843,15 +2842,16 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
 
 test "vote_program: widthdraw all and close account with active vote account" {
     const EpochCredit = sig.runtime.program.vote.state.EpochCredit;
+    _ = EpochCredit; // autofix
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
     // TODO use constant in other tests.
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
+    const rent = Rent.INIT;
     const clock = Clock{
         .slot = 0,
         .epoch_start_timestamp = 0,
@@ -2877,7 +2877,7 @@ test "vote_program: widthdraw all and close account with active vote account" {
         commission,
         clock,
     );
-    try state.epoch_credits.append(EpochCredit{
+    try state.epoch_credits.append(allocator, .{
         // Condition for account close down not met.
         // current_epoch - last_epoch_with_credits > 2
         .epoch = 30,
@@ -2885,16 +2885,16 @@ test "vote_program: widthdraw all and close account with active vote account" {
         .prev_credits = 1000,
     });
 
-    const initial_vote_state = VoteStateVersions{ .current = state };
-    defer initial_vote_state.deinit();
+    var initial_vote_state = VoteStateVersions{ .current = state };
+    defer initial_vote_state.deinit(allocator);
 
     // TODO use VoteState.MAX_VOTE_STATE_SIZE instead of hardcoding the size.
     // Do in a clean up PR after all instructions has been added.
     var initial_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-    const final_vote_state = VoteStateVersions{ .current = VoteState.default(allocator) };
-    defer final_vote_state.deinit();
+    var final_vote_state = VoteStateVersions{ .current = .DEFAULT };
+    defer final_vote_state.deinit(allocator);
 
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
@@ -2957,10 +2957,10 @@ test "vote_program: widthdraw some amount below with balance below rent exempt" 
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
-    const clock = Clock.DEFAULT;
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -2971,7 +2971,7 @@ test "vote_program: widthdraw some amount below with balance below rent exempt" 
 
     const recipient_withdrawer = Pubkey.initRandom(prng.random());
 
-    const vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -2979,7 +2979,7 @@ test "vote_program: widthdraw some amount below with balance below rent exempt" 
         commission,
         clock,
     ) };
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // TODO use VoteState.MAX_VOTE_STATE_SIZE instead of hardcoding the size.
     // Do in a clean up PR after all instructions has been added.
@@ -3044,10 +3044,10 @@ test "vote_program: widthdraw insufficient funds" {
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
-    const clock = Clock.DEFAULT;
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -3058,7 +3058,7 @@ test "vote_program: widthdraw insufficient funds" {
 
     const recipient_withdrawer = Pubkey.initRandom(prng.random());
 
-    const vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -3066,7 +3066,7 @@ test "vote_program: widthdraw insufficient funds" {
         commission,
         clock,
     ) };
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // TODO use VoteState.MAX_VOTE_STATE_SIZE instead of hardcoding the size.
     // Do in a clean up PR after all instructions has been added.
@@ -3129,10 +3129,10 @@ test "vote_program: widthdraw with missing signature" {
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const rent = Rent.DEFAULT;
-    const clock = Clock.DEFAULT;
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -3143,7 +3143,7 @@ test "vote_program: widthdraw with missing signature" {
 
     const recipient_withdrawer = Pubkey.initRandom(prng.random());
 
-    const vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -3151,7 +3151,7 @@ test "vote_program: widthdraw with missing signature" {
         commission,
         clock,
     ) };
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // TODO use VoteState.MAX_VOTE_STATE_SIZE instead of hardcoding the size.
     // Do in a clean up PR after all instructions has been added.
@@ -3215,9 +3215,9 @@ test "vote_program: vote" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3225,7 +3225,7 @@ test "vote_program: vote" {
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
-    const vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -3233,7 +3233,7 @@ test "vote_program: vote" {
         commission,
         clock,
     ) };
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
@@ -3246,8 +3246,7 @@ test "vote_program: vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(
-        allocator,
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }},
     );
     // deinitialised by expectProgramExecuteResult
@@ -3266,11 +3265,11 @@ test "vote_program: vote" {
         .lockout = Lockout{ .confirmation_count = 1, .slot = 0 },
     };
 
-    try final_state.votes.append(landed_vote);
+    try final_state.votes.append(allocator, landed_vote);
     try final_state.doubleLockouts();
 
-    const final_vote_state = VoteStateVersions{ .current = final_state };
-    defer final_vote_state.deinit();
+    var final_vote_state = VoteStateVersions{ .current = final_state };
+    defer final_vote_state.deinit(allocator);
 
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
@@ -3331,9 +3330,9 @@ test "vote_program: vote switch" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3341,7 +3340,7 @@ test "vote_program: vote switch" {
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
-    const vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -3349,7 +3348,7 @@ test "vote_program: vote switch" {
         commission,
         clock,
     ) };
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
@@ -3362,8 +3361,7 @@ test "vote_program: vote switch" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(
-        allocator,
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }},
     );
     // deinitialised by expectProgramExecuteResult
@@ -3382,11 +3380,11 @@ test "vote_program: vote switch" {
         .lockout = Lockout{ .confirmation_count = 1, .slot = 0 },
     };
 
-    try final_state.votes.append(landed_vote);
+    try final_state.votes.append(allocator, landed_vote);
     try final_state.doubleLockouts();
 
-    const final_vote_state = VoteStateVersions{ .current = final_state };
-    defer final_vote_state.deinit();
+    var final_vote_state = VoteStateVersions{ .current = final_state };
+    defer final_vote_state.deinit(allocator);
 
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
@@ -3447,9 +3445,9 @@ test "vote_program: vote missing signature" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3457,7 +3455,7 @@ test "vote_program: vote missing signature" {
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
-    const vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -3465,7 +3463,7 @@ test "vote_program: vote missing signature" {
         commission,
         clock,
     ) };
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
@@ -3478,8 +3476,7 @@ test "vote_program: vote missing signature" {
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(
-        allocator,
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }},
     );
     // deinitialised by expectProgramExecuteResult
@@ -3498,11 +3495,11 @@ test "vote_program: vote missing signature" {
         .lockout = Lockout{ .confirmation_count = 1, .slot = 0 },
     };
 
-    try final_state.votes.append(landed_vote);
+    try final_state.votes.append(allocator, landed_vote);
     try final_state.doubleLockouts();
 
-    const final_vote_state = VoteStateVersions{ .current = final_state };
-    defer final_vote_state.deinit();
+    var final_vote_state = VoteStateVersions{ .current = final_state };
+    defer final_vote_state.deinit(allocator);
 
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
@@ -3566,9 +3563,9 @@ test "vote_program: empty vote" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3576,7 +3573,7 @@ test "vote_program: empty vote" {
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
-    const vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -3584,9 +3581,9 @@ test "vote_program: empty vote" {
         commission,
         clock,
     ) };
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
-    var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
+    var initial_state_bytes: [VoteState.MAX_VOTE_STATE_SIZE]u8 = @splat(0);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
 
     var slots = [_]u64{0};
@@ -3594,13 +3591,12 @@ test "vote_program: empty vote" {
     const vote = Vote{
         // No vote added
         .slots = &slots,
-        .hash = sig.core.Hash.ZEROES,
+        .hash = .ZEROES,
         .timestamp = null,
     };
 
-    const slot_hashes = try SlotHashes.initWithEntries(
-        allocator,
-        &.{.{ .slot = 0, .hash = sig.core.Hash.ZEROES }},
+    const slot_hashes = SlotHashes.initWithEntries(
+        &.{.{ .slot = 0, .hash = .ZEROES }},
     );
     // deinitialised by expectProgramExecuteResult
 
@@ -3618,11 +3614,11 @@ test "vote_program: empty vote" {
         .lockout = Lockout{ .confirmation_count = 1, .slot = 0 },
     };
 
-    try final_state.votes.append(landed_vote);
+    try final_state.votes.append(allocator, landed_vote);
     try final_state.doubleLockouts();
 
-    const final_vote_state = VoteStateVersions{ .current = final_state };
-    defer final_vote_state.deinit();
+    var final_vote_state = VoteStateVersions{ .current = final_state };
+    defer final_vote_state.deinit(allocator);
 
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
@@ -3687,9 +3683,9 @@ test "vote_program: vote state update" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3708,6 +3704,7 @@ test "vote_program: vote state update" {
     );
 
     try vote_state_init.votes.appendSlice(
+        allocator,
         &[_]LandedVote{
             .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 3 } },
             .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 2 } },
@@ -3715,8 +3712,8 @@ test "vote_program: vote state update" {
         },
     );
 
-    const vote_state = VoteStateVersions{ .current = vote_state_init };
-    defer vote_state.deinit();
+    var vote_state = VoteStateVersions{ .current = vote_state_init };
+    defer vote_state.deinit(allocator);
 
     var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
@@ -3749,6 +3746,7 @@ test "vote_program: vote state update" {
     );
 
     try final_state_init.votes.appendSlice(
+        allocator,
         &[_]LandedVote{
             .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 4 } },
             .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 3 } },
@@ -3757,14 +3755,13 @@ test "vote_program: vote state update" {
         },
     );
 
-    const final_vote_state = VoteStateVersions{ .current = final_state_init };
-    defer final_vote_state.deinit();
+    var final_vote_state = VoteStateVersions{ .current = final_state_init };
+    defer final_vote_state.deinit(allocator);
 
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
-        allocator,
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
@@ -3826,9 +3823,9 @@ test "vote_program: vote state update switch" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3847,6 +3844,7 @@ test "vote_program: vote state update switch" {
     );
 
     try vote_state_init.votes.appendSlice(
+        allocator,
         &[_]LandedVote{
             .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 3 } },
             .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 2 } },
@@ -3854,8 +3852,8 @@ test "vote_program: vote state update switch" {
         },
     );
 
-    const vote_state = VoteStateVersions{ .current = vote_state_init };
-    defer vote_state.deinit();
+    var vote_state = VoteStateVersions{ .current = vote_state_init };
+    defer vote_state.deinit(allocator);
 
     var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
@@ -3888,6 +3886,7 @@ test "vote_program: vote state update switch" {
     );
 
     try final_state_init.votes.appendSlice(
+        allocator,
         &[_]LandedVote{
             .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 4 } },
             .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 3 } },
@@ -3896,19 +3895,18 @@ test "vote_program: vote state update switch" {
         },
     );
 
-    const final_vote_state = VoteStateVersions{ .current = final_state_init };
-    defer final_vote_state.deinit();
+    var final_vote_state = VoteStateVersions{ .current = final_state_init };
+    defer final_vote_state.deinit(allocator);
 
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
-        allocator,
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
-            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 6, .hash = .ZEROES },
+            .{ .slot = 4, .hash = .ZEROES },
+            .{ .slot = 2, .hash = .ZEROES },
         },
     );
     // deinitialised by expectProgramExecuteResult
@@ -3919,7 +3917,7 @@ test "vote_program: vote state update switch" {
         VoteProgramInstruction{
             .update_vote_state_switch = .{
                 .vote_state_update = vote_state_update,
-                .hash = sig.core.Hash.ZEROES,
+                .hash = .ZEROES,
             },
         },
         &.{
@@ -3966,9 +3964,9 @@ test "vote_program: compact vote state update" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -3987,6 +3985,7 @@ test "vote_program: compact vote state update" {
     );
 
     try vote_state_init.votes.appendSlice(
+        allocator,
         &[_]LandedVote{
             .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 3 } },
             .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 2 } },
@@ -3994,8 +3993,8 @@ test "vote_program: compact vote state update" {
         },
     );
 
-    const vote_state = VoteStateVersions{ .current = vote_state_init };
-    defer vote_state.deinit();
+    var vote_state = VoteStateVersions{ .current = vote_state_init };
+    defer vote_state.deinit(allocator);
 
     var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
@@ -4028,6 +4027,7 @@ test "vote_program: compact vote state update" {
     );
 
     try final_state_init.votes.appendSlice(
+        allocator,
         &[_]LandedVote{
             .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 4 } },
             .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 3 } },
@@ -4036,14 +4036,13 @@ test "vote_program: compact vote state update" {
         },
     );
 
-    const final_vote_state = VoteStateVersions{ .current = final_state_init };
-    defer final_vote_state.deinit();
+    var final_vote_state = VoteStateVersions{ .current = final_state_init };
+    defer final_vote_state.deinit(allocator);
 
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
-        allocator,
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
@@ -4105,9 +4104,9 @@ test "vote_program: compact vote state update switch" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -4126,6 +4125,7 @@ test "vote_program: compact vote state update switch" {
     );
 
     try vote_state_init.votes.appendSlice(
+        allocator,
         &[_]LandedVote{
             .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 3 } },
             .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 2 } },
@@ -4133,8 +4133,8 @@ test "vote_program: compact vote state update switch" {
         },
     );
 
-    const vote_state = VoteStateVersions{ .current = vote_state_init };
-    defer vote_state.deinit();
+    var vote_state = VoteStateVersions{ .current = vote_state_init };
+    defer vote_state.deinit(allocator);
 
     var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
@@ -4167,6 +4167,7 @@ test "vote_program: compact vote state update switch" {
     );
 
     try final_state_init.votes.appendSlice(
+        allocator,
         &[_]LandedVote{
             .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 4 } },
             .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 3 } },
@@ -4175,14 +4176,13 @@ test "vote_program: compact vote state update switch" {
         },
     );
 
-    const final_vote_state = VoteStateVersions{ .current = final_state_init };
-    defer final_vote_state.deinit();
+    var final_vote_state = VoteStateVersions{ .current = final_state_init };
+    defer final_vote_state.deinit(allocator);
 
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
-        allocator,
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
@@ -4245,9 +4245,9 @@ test "vote_program: tower sync" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -4266,6 +4266,7 @@ test "vote_program: tower sync" {
     );
 
     try vote_state_init.votes.appendSlice(
+        allocator,
         &[_]LandedVote{
             .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 3 } },
             .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 2 } },
@@ -4273,8 +4274,8 @@ test "vote_program: tower sync" {
         },
     );
 
-    const vote_state = VoteStateVersions{ .current = vote_state_init };
-    defer vote_state.deinit();
+    var vote_state = VoteStateVersions{ .current = vote_state_init };
+    defer vote_state.deinit(allocator);
 
     var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
@@ -4308,6 +4309,7 @@ test "vote_program: tower sync" {
     );
 
     try final_state_init.votes.appendSlice(
+        allocator,
         &[_]LandedVote{
             .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 4 } },
             .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 3 } },
@@ -4316,14 +4318,13 @@ test "vote_program: tower sync" {
         },
     );
 
-    const final_vote_state = VoteStateVersions{ .current = final_state_init };
-    defer final_vote_state.deinit();
+    var final_vote_state = VoteStateVersions{ .current = final_state_init };
+    defer final_vote_state.deinit(allocator);
 
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
-        allocator,
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
@@ -4391,9 +4392,9 @@ test "vote_program: tower sync switch" {
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.DEFAULT;
+    const clock: Clock = .INIT;
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -4412,6 +4413,7 @@ test "vote_program: tower sync switch" {
     );
 
     try vote_state_init.votes.appendSlice(
+        allocator,
         &[_]LandedVote{
             .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 3 } },
             .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 2 } },
@@ -4419,8 +4421,8 @@ test "vote_program: tower sync switch" {
         },
     );
 
-    const vote_state = VoteStateVersions{ .current = vote_state_init };
-    defer vote_state.deinit();
+    var vote_state = VoteStateVersions{ .current = vote_state_init };
+    defer vote_state.deinit(allocator);
 
     var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
@@ -4454,6 +4456,7 @@ test "vote_program: tower sync switch" {
     );
 
     try final_state_init.votes.appendSlice(
+        allocator,
         &[_]LandedVote{
             .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 4 } },
             .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 3 } },
@@ -4462,14 +4465,13 @@ test "vote_program: tower sync switch" {
         },
     );
 
-    const final_vote_state = VoteStateVersions{ .current = final_state_init };
-    defer final_vote_state.deinit();
+    var final_vote_state = VoteStateVersions{ .current = final_state_init };
+    defer final_vote_state.deinit(allocator);
 
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    const slot_hashes = try SlotHashes.initWithEntries(
-        allocator,
+    const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
             .{ .slot = 6, .hash = sig.core.Hash.ZEROES },

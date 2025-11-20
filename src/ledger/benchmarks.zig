@@ -14,7 +14,7 @@ const deinitShreds = ledger_tests.deinitShreds;
 const testShreds = ledger_tests.testShreds;
 
 fn createRewards(allocator: std.mem.Allocator, count: usize) !Rewards {
-    var rng = std.Random.DefaultPrng.init(100);
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const rand = rng.random();
     var rewards: Rewards = Rewards.init(allocator);
     for (0..count) |i| {
@@ -57,7 +57,7 @@ pub const BenchmarkLedger = struct {
             is_repairs[i] = false;
         }
 
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         const shred_inserter = state.shredInserter();
         const result = try shred_inserter.insertShreds(
             allocator,
@@ -78,7 +78,7 @@ pub const BenchmarkLedger = struct {
 
         var rewards: Rewards = try createRewards(allocator, 100);
         const rewards_slice = try rewards.toOwnedSlice();
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         try state.db.put(schema.rewards, slot, .{
             .rewards = rewards_slice,
             .num_partitions = null,
@@ -98,7 +98,7 @@ pub const BenchmarkLedger = struct {
             .rewards = try rewards.toOwnedSlice(),
             .num_partitions = null,
         });
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         _ = try state.db.get(allocator, schema.rewards, slot);
         return timer.read();
     }
@@ -123,10 +123,10 @@ pub const BenchmarkLedger = struct {
         const slot: u32 = 0;
         const num_reads = total_shreds / 15;
 
-        var rng = std.Random.DefaultPrng.init(100);
+        var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
         const reader = state.reader();
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         const start_index = rng.random().intRangeAtMost(u32, 0, @intCast(total_shreds));
         for (start_index..start_index + num_reads) |i| {
             const shred_index = i % total_shreds;
@@ -155,7 +155,7 @@ pub const BenchmarkLedger = struct {
 
         const slot: u32 = 0;
 
-        var rng = std.Random.DefaultPrng.init(100);
+        var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
         var indices = try std.ArrayList(u32).initCapacity(allocator, num_reads);
         defer indices.deinit();
@@ -164,7 +164,7 @@ pub const BenchmarkLedger = struct {
         }
 
         const reader = state.reader();
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         for (indices.items) |shred_index| {
             _ = try reader.getDataShred(
                 slot,
@@ -181,7 +181,7 @@ pub const BenchmarkLedger = struct {
         result.deinit();
 
         const reader = state.reader();
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         _ = try reader.getCompleteBlock(
             std.heap.c_allocator,
             result.slot + 2,
@@ -197,7 +197,7 @@ pub const BenchmarkLedger = struct {
         result.deinit();
 
         const reader = state.reader();
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         const shreds = try reader.getDataShredsForSlot(
             std.heap.c_allocator,
             result.slot + 2,
@@ -215,7 +215,7 @@ pub const BenchmarkLedger = struct {
         result.deinit();
 
         const reader = state.reader();
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         const items = try reader.getSlotEntriesWithShredInfo(
             std.heap.c_allocator,
             result.slot + 2,
@@ -242,7 +242,7 @@ pub const BenchmarkLedger = struct {
 
         const slot: u32 = 1;
 
-        var rng = std.Random.DefaultPrng.init(100);
+        var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
         var indices = try std.ArrayList(u32).initCapacity(allocator, total_shreds);
         defer indices.deinit();
@@ -251,7 +251,7 @@ pub const BenchmarkLedger = struct {
         }
 
         const reader = state.reader();
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         for (indices.items) |shred_index| {
             _ = try reader.getCodeShred(
                 slot,
@@ -277,7 +277,7 @@ pub const BenchmarkLedger = struct {
         const start_index = 0;
 
         const reader = state.reader();
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         const code_shreds = try reader.getCodeShredsForSlot(
             allocator,
             slot,
@@ -298,7 +298,7 @@ pub const BenchmarkLedger = struct {
 
         var state = try initTestLedger(allocator, @src(), .noop);
         defer state.deinit();
-        var rng = std.Random.DefaultPrng.init(100);
+        var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
         var signatures: std.ArrayList(Signature) =
             try std.ArrayList(Signature).initCapacity(allocator, 64);
@@ -339,7 +339,7 @@ pub const BenchmarkLedger = struct {
         const slot = 5;
 
         const result_writer = state.resultWriter();
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         for (signatures.items, 0..) |signature, tx_idx| {
             const status = TransactionStatusMeta.EMPTY_FOR_TEST;
             const w_keys = writable_keys.items[tx_idx];
@@ -395,7 +395,7 @@ pub const BenchmarkLedgerSlow = struct {
         try db.commit(&write_batch);
 
         const reader = state.reader();
-        var timer = try sig.time.Timer.start();
+        var timer = sig.time.Timer.start();
         const is_connected = try reader.slotRangeConnected(
             allocator,
             1,

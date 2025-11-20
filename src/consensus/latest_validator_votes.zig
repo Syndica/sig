@@ -186,7 +186,7 @@ fn runFrozenBanksCheckAddVoteIsReplayTest(
         @compileError("runFrozenBanksCheckAddVoteIsReplayTest should only be called in test mode");
     }
     const testing = std.testing;
-    var prng = std.Random.DefaultPrng.init(608159);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var latest_validator_votes: LatestValidatorVotes = .empty;
@@ -433,7 +433,7 @@ fn runFrozenBanksTakeVotesDirtySet(
     if (!@import("builtin").is_test) {
         @compileError("runFrozenBanksTakeVotesDirtySet should only be called in test mode");
     }
-    var prng = std.Random.DefaultPrng.init(608159);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var latest_validator_votes = LatestValidatorVotes.empty;
@@ -559,7 +559,7 @@ test "latest validator votes take votes dirty set is not replay" {
 
 test "latest validator votes for frozen banks add replay and gossip vote" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(608159);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var latest_validator_votes = LatestValidatorVotes.empty;
