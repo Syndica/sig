@@ -8,6 +8,7 @@ const tracy = @import("tracy");
 
 const replay = sig.replay;
 
+const Channel = sig.sync.Channel;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
 const ContactInfo = sig.gossip.ContactInfo;
@@ -1284,10 +1285,20 @@ fn validator(
     // If voting was enabled but no vote account is available, disable voting.
     const voting_enabled = cfg.voting_enabled and maybe_vote_pubkey != null;
 
-    const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (voting_enabled)
-        try replay.consensus.core.VoteSockets.init()
-    else
-        null;
+    var quic_sender = try Channel(sig.net.Packet).init(allocator);
+    defer quic_sender.deinit();
+
+    const quic_sender_thread = try app_base.spawnService(
+        "quic sender",
+        .{},
+        sig.net.quic_client.runClient,
+        .{
+            allocator,
+            &quic_sender,
+            sig.net.quic_client.Logger.from(app_base.logger),
+            sig.sync.ExitCondition{ .unordered = app_base.exit },
+        },
+    );
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
@@ -1305,7 +1316,7 @@ fn validator(
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
-        if (maybe_vote_sockets) |*vs| vs else null,
+        if (voting_enabled) &quic_sender else null,
         &gossip_service.gossip_table_rw,
     );
 
@@ -1320,12 +1331,23 @@ fn validator(
     else
         null;
 
-    if (rpc_server_thread) |thread| thread.join();
+    if (rpc_server_thread) |thread| {
+        app_base.logger.info().logf("joining thread 'rpc_server_thread'", .{});
+        thread.join();
+    }
+    app_base.logger.info().logf("joining thread 'replay_thread'", .{});
     replay_thread.join();
+    app_base.logger.info().logf("joining thread 'rpc_epoch_ctx_service_thread'", .{});
     rpc_epoch_ctx_service_thread.join();
+    app_base.logger.info().logf("joining thread 'gossip_service.service_manager'", .{});
     gossip_service.service_manager.join();
+    app_base.logger.info().logf("joining thread 'shred_network_manager'", .{});
     shred_network_manager.join();
+    app_base.logger.info().logf("joining thread 'ledger_cleanup_service'", .{});
     ledger_cleanup_service.join();
+    app_base.logger.info().logf("joining thread 'quic_sender_thread'", .{});
+    quic_sender_thread.join();
+    app_base.logger.info().logf("completed joining threads.", .{});
 }
 
 fn runRPCServer(
@@ -1811,7 +1833,7 @@ fn testTransactionSenderService(
 
     // setup channel for communication to the tx-sender service
     const transaction_channel =
-        try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(allocator);
+        try Channel(sig.transaction_sender.TransactionInfo).create(allocator);
     defer transaction_channel.destroy();
 
     // this handles transactions and forwards them to leaders TPU ports
@@ -2266,7 +2288,7 @@ const ReplayAndConsensusServiceState = struct {
     fn spawnService(
         self: *ReplayAndConsensusServiceState,
         app_base: *const AppBase,
-        vote_sockets: ?*const replay.consensus.core.VoteSockets,
+        vote_sender: ?*Channel(sig.net.Packet),
         gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     ) !std.Thread {
         return try app_base.spawnService(
@@ -2285,9 +2307,9 @@ const ReplayAndConsensusServiceState = struct {
                 if (self.consensus) |*c| replay.service.AvanceReplayConsensusParams{
                     .tower = &c.tower,
                     .gossip_table = gossip_table,
-                    .senders = c.senders,
-                    .receivers = c.receivers,
-                    .vote_sockets = vote_sockets,
+                    .senders = self.senders,
+                    .receivers = self.receivers,
+                    .vote_sender = vote_sender,
                 } else null,
             },
         );

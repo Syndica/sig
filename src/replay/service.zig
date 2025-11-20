@@ -52,7 +52,7 @@ pub const AvanceReplayConsensusParams = struct {
     gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     senders: TowerConsensus.Senders,
     receivers: TowerConsensus.Receivers,
-    vote_sockets: ?*const sig.replay.consensus.core.VoteSockets,
+    vote_sender: ?*Channel(sig.net.Packet),
 };
 
 /// Run a single iteration of the entire replay process. Includes:
@@ -110,7 +110,7 @@ pub fn advanceReplay(
             .status_cache = &replay_state.status_cache,
             .senders = consensus.senders,
             .receivers = consensus.receivers,
-            .vote_sockets = consensus.vote_sockets,
+            .vote_sender = consensus.vote_sender,
             .slot_leaders = replay_state.slot_leaders,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
@@ -834,7 +834,7 @@ test "process runs without error with no replay results" {
         .status_cache = &replay_state.status_cache,
         .senders = consensus_senders,
         .receivers = consensus_receivers,
-        .vote_sockets = null,
+        .vote_sender = null,
         .slot_leaders = null,
         .duplicate_confirmed_slots = vc_senders.duplicate_confirmed_slots,
         .gossip_verified_vote_hashes = vc_senders.gossip_verified_vote_hashes,
