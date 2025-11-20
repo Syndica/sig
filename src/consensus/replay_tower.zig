@@ -3802,7 +3802,7 @@ test "isValidSwitchingProofVote basic cases" {
     try ancestors.put(allocator, 48, try createAncestor(allocator, &.{ 47, 44, 43, 0 }));
     try ancestors.put(allocator, 110, try createAncestor(allocator, &.{ 44, 43, 0 }));
 
-    var tower = try createTestReplayTower(0, 0);
+    const tower = try createTestReplayTower(0, 0);
     defer tower.deinit(std.testing.allocator);
 
     const last_voted_slot: Slot = 47;
@@ -3836,9 +3836,6 @@ test "isValidSwitchingProofVote basic cases" {
         try std.testing.expect(result != null);
         try std.testing.expectEqual(true, result.?);
     }
-
-    // Note: candidate_slot == last_voted_slot is filtered by the calling
-    // function (makeCheckSwitchThresholdDecision) and never reaches isValidSwitchingProofVote
 }
 
 test "isValidSwitchingProofVote descendant filtering" {
@@ -3871,7 +3868,7 @@ test "isValidSwitchingProofVote descendant filtering" {
     try ancestors.put(allocator, 111, try createAncestor(allocator, &.{ 110, 45, 44, 43, 0 }));
     try ancestors.put(allocator, 112, try createAncestor(allocator, &.{ 111, 110, 45, 44, 43, 0 }));
 
-    var tower = try createTestReplayTower(0, 0);
+    const tower = try createTestReplayTower(0, 0);
     defer tower.deinit(std.testing.allocator);
 
     const last_voted_slot: Slot = 47;
@@ -3903,12 +3900,6 @@ test "isValidSwitchingProofVote descendant filtering" {
         try std.testing.expect(result != null);
         try std.testing.expectEqual(true, result.?);
     }
-
-    // Votes on ancestors of last vote (43, 44, 45, 46) should be filtered
-    // by the assertion in the calling code, but let's test the logic
-    // These are actually VALID from isValidSwitchingProofVote perspective
-    // because they're on different forks, but they get filtered out because
-    // they're ancestors of last_vote
 }
 
 test "isValidSwitchingProofVote ancestor filtering" {
@@ -3936,7 +3927,7 @@ test "isValidSwitchingProofVote ancestor filtering" {
     try ancestors.put(allocator, 47, try createAncestor(allocator, &.{ 46, 45, 13, 12, 0 }));
     try ancestors.put(allocator, 110, try createAncestor(allocator, &.{ 45, 13, 12, 0 }));
 
-    var tower = try createTestReplayTower(0, 0);
+    const tower = try createTestReplayTower(0, 0);
     defer tower.deinit(std.testing.allocator);
 
     const last_voted_slot: Slot = 47;
@@ -4055,7 +4046,7 @@ test "isValidSwitchingProofVote common ancestor" {
     );
     try ancestors.put(allocator, 113, try createAncestor(allocator, &.{ 44, 43, 2, 1, 0 }));
 
-    var tower = try createTestReplayTower(0, 0);
+    const tower = try createTestReplayTower(0, 0);
     defer tower.deinit(std.testing.allocator);
 
     const last_voted_slot: Slot = 49;
@@ -4324,7 +4315,7 @@ test "switch threshold" {
     }
 
     // Add hashes to progress map
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
     const random = prng.random();
     for (slots_to_add) |slot| {
         if (progress.map.getPtr(slot)) |fork_progress| {
@@ -4351,10 +4342,10 @@ test "switch threshold" {
     _ = try tower.recordBankVote(allocator, 47, progress.getHash(47).?);
 
     // Create empty latest validator votes
-    const latest_validator_votes = LatestValidatorVotes.empty;
+    const latest_validator_votes: LatestValidatorVotes = .empty;
 
     // Create fork choice
-    var fork_choice = try HeaviestSubtreeForkChoice.init(
+    const fork_choice: HeaviestSubtreeForkChoice = try .init(
         allocator,
         .noop,
         SlotAndHash{ .slot = 0, .hash = progress.getHash(0).? },
@@ -4393,7 +4384,7 @@ test "switch threshold" {
         );
         switch (decision) {
             .failed_switch_threshold => |threshold| {
-                try std.testing.expectEqual(@as(u64, 0), threshold.switch_proof_stake);
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
                 try std.testing.expectEqual(total_stake, threshold.total_stake);
             },
             else => try std.testing.expect(false), // Should be FailedSwitchThreshold
@@ -4425,7 +4416,7 @@ test "switch threshold" {
         );
         switch (decision) {
             .failed_switch_threshold => |threshold| {
-                try std.testing.expectEqual(@as(u64, 0), threshold.switch_proof_stake);
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
                 try std.testing.expectEqual(total_stake, threshold.total_stake);
             },
             else => try std.testing.expect(false),
@@ -4466,7 +4457,7 @@ test "switch threshold" {
         );
         switch (decision) {
             .failed_switch_threshold => |threshold| {
-                try std.testing.expectEqual(@as(u64, 0), threshold.switch_proof_stake);
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
                 try std.testing.expectEqual(total_stake, threshold.total_stake);
             },
             else => try std.testing.expect(false),
@@ -4505,7 +4496,7 @@ test "switch threshold" {
         );
         switch (decision) {
             .failed_switch_threshold => |threshold| {
-                try std.testing.expectEqual(@as(u64, 0), threshold.switch_proof_stake);
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
                 try std.testing.expectEqual(total_stake, threshold.total_stake);
             },
             else => try std.testing.expect(false),
@@ -4544,7 +4535,7 @@ test "switch threshold" {
         );
         switch (decision) {
             .failed_switch_threshold => |threshold| {
-                try std.testing.expectEqual(@as(u64, 0), threshold.switch_proof_stake);
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
                 try std.testing.expectEqual(total_stake, threshold.total_stake);
             },
             else => try std.testing.expect(false),
@@ -4649,7 +4640,7 @@ test "switch threshold" {
         // Should fail because lockout start (12) is below root (43)
         switch (decision) {
             .failed_switch_threshold => |threshold| {
-                try std.testing.expectEqual(@as(u64, 0), threshold.switch_proof_stake);
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
                 try std.testing.expectEqual(total_stake, threshold.total_stake);
             },
             else => try std.testing.expect(false),
@@ -4803,20 +4794,20 @@ test "switch threshold use gossip votes" {
     }
 
     // Add hashes to progress map
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
     const random = prng.random();
     for (slots_to_add) |slot| {
         if (progress.map.getPtr(slot)) |fork_progress| {
-            fork_progress.fork_stats.slot_hash = Hash.initRandom(random);
+            fork_progress.fork_stats.slot_hash = .initRandom(random);
         }
     }
 
     // Create vote accounts with 10000 stake each (total_stake = 20000)
     const total_stake: u64 = 20000;
-    var epoch_vote_accounts = StakeAndVoteAccountsMap{};
+    var epoch_vote_accounts: StakeAndVoteAccountsMap = .empty;
     defer epoch_vote_accounts.deinit(allocator);
 
-    var prng2 = std.Random.DefaultPrng.init(std.testing.random_seed);
+    var prng2: std.Random.DefaultPrng = .init(std.testing.random_seed);
     const vote_pubkey1: Pubkey = .initRandom(prng2.random());
     const vote_pubkey2: Pubkey = .initRandom(prng2.random());
     const other_vote_account = vote_pubkey2;
@@ -4838,7 +4829,7 @@ test "switch threshold use gossip votes" {
     defer latest_validator_votes.deinit(allocator);
 
     // Create fork choice
-    var fork_choice = try HeaviestSubtreeForkChoice.init(
+    const fork_choice: HeaviestSubtreeForkChoice = try .init(
         allocator,
         .noop,
         SlotAndHash{ .slot = 0, .hash = progress.getHash(0).? },
@@ -4861,7 +4852,7 @@ test "switch threshold use gossip votes" {
         );
         switch (decision) {
             .failed_switch_threshold => |threshold| {
-                try std.testing.expectEqual(@as(u64, 0), threshold.switch_proof_stake);
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
                 try std.testing.expectEqual(total_stake, threshold.total_stake);
             },
             else => try std.testing.expect(false),
@@ -4893,7 +4884,7 @@ test "switch threshold use gossip votes" {
         );
         switch (decision) {
             .failed_switch_threshold => |threshold| {
-                try std.testing.expectEqual(@as(u64, 0), threshold.switch_proof_stake);
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
                 try std.testing.expectEqual(total_stake, threshold.total_stake);
             },
             else => try std.testing.expect(false),
@@ -4972,7 +4963,7 @@ test "switch threshold use gossip votes" {
         );
         switch (decision) {
             .failed_switch_threshold => |threshold| {
-                try std.testing.expectEqual(@as(u64, 0), threshold.switch_proof_stake);
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
                 try std.testing.expectEqual(total_stake, threshold.total_stake);
             },
             else => try std.testing.expect(false),
@@ -4984,7 +4975,7 @@ test "selectVoteAndResetForks stake not found" {
     const allocator = std.testing.allocator;
     const fork_tuples = sig.consensus.fork_choice.fork_tuples;
 
-    var fork_choice = try sig.consensus.fork_choice.forkChoiceForTest(
+    const fork_choice = try sig.consensus.fork_choice.forkChoiceForTest(
         allocator,
         fork_tuples[0..],
     );
