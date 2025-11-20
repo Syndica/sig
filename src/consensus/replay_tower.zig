@@ -1832,7 +1832,6 @@ pub fn lastVotedSlotInBank(
     const vote_state = stateFromAccount(
         allocator,
         &vote_account,
-        vote_account_pubkey,
     ) catch |err| switch (err) {
         error.OutOfMemory => |e| return e,
         error.BincodeError => return null,
