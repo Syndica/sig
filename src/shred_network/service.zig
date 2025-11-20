@@ -190,16 +190,18 @@ pub fn start(
             .{
                 deps.allocator,
                 sig.trace.Logger("duplicate_shred_listener").from(deps.logger),
-                shred_network.duplicate_shred_listener.Params{
+                shred_network.duplicate_shred_listener.RecvLoopParams{
                     .exit = deps.exit,
                     .gossip_table_rw = deps.gossip_table_rw,
-                    .result_writer = deps.ledger.resultWriter(),
-                    .ledger_reader = deps.ledger.reader(),
-                    .duplicate_slots_sender = dup_sender,
-                    .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
-                    .shred_version = deps.my_shred_version,
-                    .epoch_schedule = deps.epoch_context_mgr.schedule,
-                    .epoch_ctx_mgr = deps.epoch_context_mgr,
+                    .handler = .{
+                        .result_writer = deps.ledger.resultWriter(),
+                        .ledger_reader = deps.ledger.reader(),
+                        .duplicate_slots_sender = dup_sender,
+                        .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
+                        .shred_version = deps.my_shred_version,
+                        .epoch_schedule = deps.epoch_context_mgr.schedule,
+                        .epoch_ctx_mgr = deps.epoch_context_mgr,
+                    },
                 },
             },
         );

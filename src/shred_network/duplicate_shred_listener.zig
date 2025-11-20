@@ -22,9 +22,7 @@ const MAX_NUM_CHUNKS: usize = 3;
 const MAX_NUM_ENTRIES_PER_PUBKEY: usize = 128;
 const BUFFER_CAPACITY: usize = 512 * MAX_NUM_ENTRIES_PER_PUBKEY;
 
-pub const Params = struct {
-    exit: *Atomic(bool),
-    gossip_table_rw: *RwMux(GossipTable),
+pub const HandlerParams = struct {
     result_writer: ResultWriter,
     ledger_reader: LedgerReader,
     duplicate_slots_sender: *Channel(Slot),
@@ -32,6 +30,12 @@ pub const Params = struct {
     shred_version: *const std.atomic.Value(u16),
     epoch_schedule: sig.core.EpochSchedule,
     epoch_ctx_mgr: *sig.adapter.EpochContextManager,
+};
+
+pub const RecvLoopParams = struct {
+    exit: *Atomic(bool),
+    gossip_table_rw: *RwMux(GossipTable),
+    handler: HandlerParams,
 };
 
 const Key = struct { slot: Slot, from: Pubkey };
@@ -43,9 +47,9 @@ const BufferEntry = struct {
 pub fn recvLoop(
     allocator: Allocator,
     logger: Logger,
-    params: Params,
+    params: RecvLoopParams,
 ) !void {
-    var handler = DuplicateShredHandler.init(allocator, logger, params);
+    var handler = DuplicateShredHandler.init(allocator, logger, params.handler);
     defer handler.deinit();
 
     var cursor: usize = 0;
@@ -89,7 +93,7 @@ pub fn recvLoop(
 const DuplicateShredHandler = struct {
     allocator: Allocator,
     logger: Logger,
-    params: Params,
+    params: HandlerParams,
     // Because we use UDP for packet transfer, we can normally only send ~1500 bytes
     // in each packet. We send both shreds and meta data in duplicate shred proof, and
     // each shred is normally 1 packet(1500 bytes), so the whole proof is larger than
@@ -110,7 +114,7 @@ const DuplicateShredHandler = struct {
     cached_staked_nodes: std.AutoHashMapUnmanaged(Pubkey, u64),
     cached_slots_in_epoch: u64,
 
-    pub fn init(allocator: Allocator, logger: Logger, params: Params) DuplicateShredHandler {
+    pub fn init(allocator: Allocator, logger: Logger, params: HandlerParams) DuplicateShredHandler {
         return .{
             .allocator = allocator,
             .logger = logger,
@@ -456,8 +460,6 @@ test "DuplicateShredHandler: invalid chunk index rejected" {
     var shred_version = std.atomic.Value(u16).init(0);
 
     var handler = DuplicateShredHandler.init(allocator, .noop, .{
-        .exit = undefined, // not used in handler
-        .gossip_table_rw = undefined,
         .result_writer = ledger.resultWriter(),
         .ledger_reader = ledger.reader(),
         .duplicate_slots_sender = &dup_slots_channel,
@@ -498,8 +500,6 @@ test "DuplicateShredHandler: overwrite existing chunk at same index" {
     var shred_version = std.atomic.Value(u16).init(0);
 
     var handler = DuplicateShredHandler.init(allocator, .noop, .{
-        .exit = undefined,
-        .gossip_table_rw = undefined,
         .result_writer = ledger.resultWriter(),
         .ledger_reader = ledger.reader(),
         .duplicate_slots_sender = &dup_slots_channel,
@@ -550,8 +550,6 @@ test "DuplicateShredHandler: complete invalid proof cleans up entry" {
     var shred_version = std.atomic.Value(u16).init(0);
 
     var handler = DuplicateShredHandler.init(allocator, .noop, .{
-        .exit = undefined,
-        .gossip_table_rw = undefined,
         .result_writer = ledger.resultWriter(),
         .ledger_reader = ledger.reader(),
         .duplicate_slots_sender = &dup_slots_channel,
@@ -596,8 +594,6 @@ test "DuplicateShredHandler: early duplicate slot skips buffering" {
     var shred_version = std.atomic.Value(u16).init(0);
 
     var handler = DuplicateShredHandler.init(allocator, .noop, .{
-        .exit = undefined,
-        .gossip_table_rw = undefined,
         .result_writer = ledger.resultWriter(),
         .ledger_reader = ledger.reader(),
         .duplicate_slots_sender = &dup_slots_channel,
@@ -647,8 +643,6 @@ test "DuplicateShredHandler: cacheRootInfo updates cached slots in epoch" {
     var shred_version = std.atomic.Value(u16).init(0);
 
     var handler = DuplicateShredHandler.init(allocator, .noop, .{
-        .exit = undefined,
-        .gossip_table_rw = undefined,
         .result_writer = ledger.resultWriter(),
         .ledger_reader = ledger.reader(),
         .duplicate_slots_sender = &dup_slots_channel,
@@ -724,8 +718,6 @@ test "DuplicateShredHandler: cacheRootInfo populates and uses cached staked node
     var shred_version = std.atomic.Value(u16).init(0);
 
     var handler = DuplicateShredHandler.init(allocator, .noop, .{
-        .exit = undefined,
-        .gossip_table_rw = undefined,
         .result_writer = ledger.resultWriter(),
         .ledger_reader = ledger.reader(),
         .duplicate_slots_sender = &dup_slots_channel,
@@ -851,8 +843,6 @@ test "DuplicateShredHandler: maybePruneBuffer prunes when over capacity" {
     var shred_version = std.atomic.Value(u16).init(0);
 
     var handler = DuplicateShredHandler.init(allocator, .noop, .{
-        .exit = undefined,
-        .gossip_table_rw = undefined,
         .result_writer = ledger.resultWriter(),
         .ledger_reader = ledger.reader(),
         .duplicate_slots_sender = &dup_slots_channel,
@@ -917,8 +907,6 @@ test "DuplicateShredHandler: reconstructShredsFromData returns shreds on valid p
 
     var shred_version = std.atomic.Value(u16).init(version);
     var handler = DuplicateShredHandler.init(allocator, .noop, .{
-        .exit = undefined,
-        .gossip_table_rw = undefined,
         .result_writer = ledger.resultWriter(),
         .ledger_reader = ledger.reader(),
         .duplicate_slots_sender = &dup_slots_channel,
