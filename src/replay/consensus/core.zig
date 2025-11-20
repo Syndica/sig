@@ -30,25 +30,6 @@ const SlotState = sig.core.SlotState;
 const Transaction = sig.core.transaction.Transaction;
 const SocketAddr = sig.net.SocketAddr;
 
-/// UDP sockets used to send vote transactions.
-pub const VoteSockets = struct {
-    ipv4: network.Socket,
-    ipv6: network.Socket,
-
-    pub fn init() !VoteSockets {
-        const s4 = try network.Socket.create(.ipv4, .udp);
-        errdefer s4.close();
-        const s6 = try network.Socket.create(.ipv6, .udp);
-        return .{ .ipv4 = s4, .ipv6 = s6 };
-    }
-
-    pub fn deinit(self: *const VoteSockets) void {
-        var mut = self.*;
-        mut.ipv4.close();
-        mut.ipv6.close();
-    }
-};
-
 const AccountReader = sig.accounts_db.AccountReader;
 const AccountStore = sig.accounts_db.AccountStore;
 
@@ -345,7 +326,7 @@ pub const TowerConsensus = struct {
             progress_map: *ProgressMap,
             senders: Senders,
             receivers: Receivers,
-            vote_sockets: ?*const VoteSockets,
+            vote_sender: ?*sig.sync.Channel(sig.net.Packet),
             slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
             /// Generally expected to be empty, but can be non-empty for testing purposes.
             /// Will be appended to, and then cleared after being used as an input to consensus.
@@ -441,7 +422,7 @@ pub const TowerConsensus = struct {
             params.progress_map,
             params.account_store,
             params.slot_leaders,
-            params.vote_sockets,
+            params.vote_sender,
             self.identity.vote_account,
             params.senders,
         );
@@ -492,7 +473,7 @@ pub const TowerConsensus = struct {
         /// For reading the slot history account
         account_store: AccountStore,
         slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
-        vote_sockets: ?*const VoteSockets,
+        vote_sender: ?*sig.sync.Channel(sig.net.Packet),
         vote_account: Pubkey,
         senders: Senders,
     ) !void {
@@ -643,7 +624,7 @@ pub const TowerConsensus = struct {
                 voted.decision,
                 gossip_table,
                 slot_leaders,
-                vote_sockets,
+                vote_sender,
             );
         }
 
@@ -878,7 +859,7 @@ fn handleVotableBank(
     switch_fork_decision: SwitchForkDecision,
     gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
-    maybe_sockets: ?*const VoteSockets,
+    maybe_sender: ?*sig.sync.Channel(sig.net.Packet),
 ) !void {
     const maybe_new_root = try replay_tower.recordBankVote(
         allocator,
@@ -946,7 +927,7 @@ fn handleVotableBank(
                 slot_leaders,
                 node_keypair,
                 sig.time.getWallclockMs(),
-                maybe_sockets,
+                maybe_sender,
             );
         },
         .non_voting => {
@@ -962,6 +943,7 @@ fn handleVotableBank(
 /// slots. Leaders and sockets are deduped. Caller owns the returned slice.
 fn upcomingLeaderTpuVoteSockets(
     allocator: Allocator,
+    logger: Logger,
     current_slot: Slot,
     slot_leaders: sig.core.leader_schedule.SlotLeaders,
     gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
@@ -988,7 +970,10 @@ fn upcomingLeaderTpuVoteSockets(
             const leader_pubkey = leader_pubkey_ptr.*;
             const contact_info =
                 gossip_table.getThreadSafeContactInfo(leader_pubkey) orelse continue;
-            const socket_addr = contact_info.tpu_addr orelse continue;
+            const socket_addr = contact_info.tpu_vote_quic_addr orelse {
+                logger.warn().logf("Leader {} has no tpu_vote_quic address", .{leader_pubkey});
+                continue;
+            };
             seen_sockets.putAssumeCapacity(socket_addr, {});
         }
     }
@@ -1000,17 +985,17 @@ fn sendVoteTransaction(
     logger: Logger,
     vote_tx: Transaction,
     tpu_address: SocketAddr,
-    sockets: *const VoteSockets,
+    sender: *sig.sync.Channel(sig.net.Packet),
 ) !void {
     var buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
-    const serialized = try sig.bincode.writeToSlice(&buf, vote_tx, .{});
+    const written = try sig.bincode.writeToSlice(&buf, vote_tx, .{});
 
-    const socket = switch (tpu_address) {
-        .V4 => sockets.ipv4,
-        .V6 => sockets.ipv6,
-    };
-
-    _ = socket.sendTo(tpu_address.toEndpoint(), serialized) catch |err| {
+    sender.send(.{
+        .buffer = buf,
+        .size = written.len,
+        .addr = tpu_address.toEndpoint(),
+        .flags = .{},
+    }) catch |err| {
         logger.err().logf("Failed to send vote transaction: {}", .{err});
         return err;
     };
@@ -1024,13 +1009,14 @@ fn sendVoteToLeaders(
     slot_leaders: sig.core.leader_schedule.SlotLeaders,
     gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
     maybe_my_pubkey: ?Pubkey,
-    sockets: *const VoteSockets,
+    sockets: *sig.sync.Channel(sig.net.Packet),
 ) !void {
     const UPCOMING_LEADER_FANOUT_SLOTS: u64 =
         FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET + 1;
 
     const upcoming_leader_sockets = try upcomingLeaderTpuVoteSockets(
         allocator,
+        logger,
         vote_slot,
         slot_leaders,
         gossip_table_rw,
@@ -1203,7 +1189,7 @@ fn sendVote(
     maybe_slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
     maybe_my_keypair: ?sig.identity.KeyPair,
     now: u64,
-    maybe_sockets: ?*const VoteSockets,
+    maybe_sender: ?*sig.sync.Channel(sig.net.Packet),
 ) !void {
     const gossip_table_rw = maybe_gossip_table_rw orelse {
         logger.warn().log("Cannot send vote: gossip table not provided");
@@ -1221,7 +1207,7 @@ fn sendVote(
             Pubkey.fromPublicKey(&kp.public_key)
         else
             null;
-        if (maybe_sockets) |sockets| {
+        if (maybe_sender) |sockets| {
             try sendVoteToLeaders(
                 logger,
                 allocator,
@@ -4101,8 +4087,8 @@ test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
     // Provide sockets so sendVoteToLeaders is executed
-    var sockets = try VoteSockets.init();
-    defer sockets.deinit();
+    var sender = try Channel(sig.net.Packet).init(allocator);
+    defer sender.deinit();
 
     try sendVote(
         .noop,
@@ -4113,7 +4099,7 @@ test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
         leader_schedule_cache.slotLeaders(),
         my_keypair,
         700,
-        &sockets,
+        &sender,
     );
 
     // Validate gossip received the vote
@@ -4190,8 +4176,8 @@ test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
     }
 
     // Provide sockets so sendVoteToLeaders is called and triggers fallback to self TPU
-    var sockets = try VoteSockets.init();
-    defer sockets.deinit();
+    var sender = try Channel(sig.net.Packet).init(allocator);
+    defer sender.deinit();
 
     try sendVote(
         .noop,
@@ -4202,7 +4188,7 @@ test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
         leader_schedule_cache.slotLeaders(),
         my_keypair,
         800,
-        &sockets,
+        &sender,
     );
 
     {
@@ -4331,8 +4317,8 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
 
     const my_pubkey = Pubkey.initRandom(std.crypto.random);
 
-    var sockets = try VoteSockets.init();
-    defer sockets.deinit();
+    var sender = try Channel(sig.net.Packet).init(allocator);
+    defer sender.deinit();
 
     try sendVoteToLeaders(
         .noop,
@@ -4342,7 +4328,7 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
         leader_schedule_cache.slotLeaders(),
         &gossip_table_rw,
         my_pubkey,
-        &sockets,
+        &sender,
     );
 
     {
@@ -4408,9 +4394,8 @@ test "sendVoteToLeaders - continues when sendVoteTransaction fails" {
         _ = try gossip_table_write.insert(leader_ci, sig.time.getWallclockMs());
     }
 
-    var sockets: VoteSockets = try .init();
-    sockets.ipv4.close();
-    defer sockets.ipv6.close();
+    var sender = try Channel(sig.net.Packet).init(allocator);
+    defer sender.deinit();
 
     try sendVoteToLeaders(
         .noop,
@@ -4420,7 +4405,7 @@ test "sendVoteToLeaders - continues when sendVoteTransaction fails" {
         leader_schedule_cache.slotLeaders(),
         &gossip_table_rw,
         null,
-        &sockets,
+        &sender,
     );
 
     {
@@ -4455,8 +4440,8 @@ test "sendVoteToLeaders - fallback handles missing self TPU data" {
     var gossip_table_rw: sig.sync.RwMux(sig.gossip.GossipTable) = .init(gossip_table);
     defer sig.sync.mux.deinitMux(&gossip_table_rw);
 
-    var sockets: VoteSockets = try .init();
-    defer sockets.deinit();
+    var sender = try Channel(sig.net.Packet).init(allocator);
+    defer sender.deinit();
 
     const my_keypair: sig.identity.KeyPair = .generate();
     const my_pubkey: Pubkey = .fromPublicKey(&my_keypair.public_key);
@@ -4470,7 +4455,7 @@ test "sendVoteToLeaders - fallback handles missing self TPU data" {
         slot_leaders,
         &gossip_table_rw,
         my_pubkey,
-        &sockets,
+        &sender,
     );
 
     {
@@ -4504,7 +4489,7 @@ test "sendVoteToLeaders - fallback handles missing self TPU data" {
         slot_leaders,
         &gossip_table_rw,
         my_pubkey,
-        &sockets,
+        &sender,
     );
 
     {
@@ -4522,7 +4507,7 @@ test "sendVoteToLeaders - fallback handles missing self TPU data" {
         slot_leaders,
         &gossip_table_rw,
         null, // my_pubkey sent to null
-        &sockets,
+        &sender,
     );
 
     {
@@ -4795,7 +4780,7 @@ test "edge cases - duplicate slot" {
         .progress_map = &replay_state.progress_map,
         .senders = tc_output_channels,
         .receivers = tc_input_channels,
-        .vote_sockets = null,
+        .vote_sender = null,
         .slot_leaders = null,
         .duplicate_confirmed_slots = &duplicate_confirmed_slots,
         .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
@@ -4954,7 +4939,7 @@ test "edge cases - duplicate confirmed slot" {
         .progress_map = &replay_state.progress_map,
         .senders = tc_output_channels,
         .receivers = tc_input_channels,
-        .vote_sockets = null,
+        .vote_sender = null,
         .slot_leaders = null,
         .duplicate_confirmed_slots = &duplicate_confirmed_slots,
         .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
@@ -5125,7 +5110,7 @@ test "edge cases - gossip verified vote hashes" {
         .progress_map = &replay_state.progress_map,
         .senders = tc_output_channels,
         .receivers = tc_input_channels,
-        .vote_sockets = null,
+        .vote_sender = null,
         .slot_leaders = null,
         .duplicate_confirmed_slots = &duplicate_confirmed_slots,
         .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
@@ -5306,7 +5291,7 @@ test "vote on heaviest frozen descendant with no switch" {
         .progress_map = &progress,
         .senders = stubs.senders,
         .receivers = stubs.receivers,
-        .vote_sockets = null,
+        .vote_sender = null,
         .slot_leaders = null,
         .duplicate_confirmed_slots = &duplicate_confirmed_slots,
         .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
@@ -5527,7 +5512,7 @@ test "vote accounts with landed votes populate bank stats" {
         .progress_map = &progress,
         .senders = stubs.senders,
         .receivers = stubs.receivers,
-        .vote_sockets = null,
+        .vote_sender = null,
         .slot_leaders = null,
         .duplicate_confirmed_slots = &duplicate_confirmed_slots,
         .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
@@ -5837,7 +5822,7 @@ test "root advances after vote satisfies lockouts" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_sockets = null,
+            .vote_sender = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
@@ -5898,7 +5883,7 @@ test "root advances after vote satisfies lockouts" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_sockets = null,
+            .vote_sender = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
@@ -5979,7 +5964,7 @@ test "root advances after vote satisfies lockouts" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_sockets = null,
+            .vote_sender = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
@@ -6160,7 +6145,7 @@ test "vote refresh when no new vote available" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_sockets = null,
+            .vote_sender = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
@@ -6185,7 +6170,7 @@ test "vote refresh when no new vote available" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_sockets = null,
+            .vote_sender = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
@@ -6453,7 +6438,7 @@ test "detect and mark duplicate confirmed fork" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_sockets = null,
+            .vote_sender = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
@@ -6631,7 +6616,7 @@ test "detect and mark duplicate slot" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_sockets = null,
+            .vote_sender = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
@@ -7004,7 +6989,7 @@ test "successful fork switch (switch_proof)" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_sockets = null,
+            .vote_sender = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
@@ -7044,7 +7029,7 @@ test "successful fork switch (switch_proof)" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_sockets = null,
+            .vote_sender = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
@@ -7104,7 +7089,7 @@ test "successful fork switch (switch_proof)" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_sockets = null,
+            .vote_sender = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
@@ -7176,7 +7161,7 @@ test "successful fork switch (switch_proof)" {
             .progress_map = &progress,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
-            .vote_sockets = null,
+            .vote_sender = null,
             .slot_leaders = null,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
