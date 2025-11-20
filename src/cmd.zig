@@ -1239,7 +1239,7 @@ fn validator(
         defer if (cfg.vote_account_path == null) allocator.free(vote_keypair_path);
 
         break :blk sig.identity.readBinaryKeypairPubkey(vote_keypair_path) catch |err| {
-            app_base.logger.warn().logf(
+            app_base.logger.err().logf(
                 "vote-account: failed to read {s}: {}; voting will be disabled",
                 .{ vote_keypair_path, err },
             );
@@ -1263,7 +1263,7 @@ fn validator(
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = voting_enabled,
-        .vote_account_pubkey = maybe_vote_pubkey,
+        .vote_account_address = maybe_vote_pubkey,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -1428,7 +1428,7 @@ fn replayOffline(
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = false,
-        .vote_account_pubkey = Pubkey.ZEROES,
+        .vote_account_address = Pubkey.ZEROES,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -2083,7 +2083,7 @@ const ReplayAndConsensusServiceState = struct {
             replay_threads: u32,
             disable_consensus: bool,
             voting_enabled: bool,
-            vote_account_pubkey: ?Pubkey,
+            vote_account_address: ?Pubkey,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
@@ -2126,7 +2126,7 @@ const ReplayAndConsensusServiceState = struct {
                 .logger = .from(params.app_base.logger),
                 .identity = .{
                     .validator = .fromPublicKey(&params.app_base.my_keypair.public_key),
-                    .vote_account = params.vote_account_pubkey orelse Pubkey.ZEROES,
+                    .vote_account = params.vote_account_address orelse Pubkey.ZEROES,
                 },
                 .signing = .{
                     .node = params.app_base.my_keypair,

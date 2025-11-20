@@ -102,7 +102,7 @@ pub const Tower = struct {
                 vote_account_pubkey.*,
             );
             break :blk maybe_vote_account orelse {
-                self.logger.warn().logf(
+                self.logger.info().logf(
                     "Vote account not found, initializing root to {}",
                     .{fork_root},
                 );

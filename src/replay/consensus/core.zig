@@ -1279,7 +1279,7 @@ fn generateVoteTx(
     };
 
     const last_voted_slot = replay_tower.lastVotedSlot() orelse {
-        logger.warn().log("No last voted slot");
+        logger.info().log("No last voted slot");
         return .failed;
     };
 
@@ -1293,19 +1293,19 @@ fn generateVoteTx(
 
     const vote_account_result = account_reader.forSlot(&slot_info.constants.ancestors)
         .get(allocator, vote_account_pubkey) catch |err| {
-        logger.warn().logf("Failed to read vote account: {}", .{err});
-        return .failed;
+        logger.err().logf("Failed to read vote account: {}", .{err});
+        return err;
     };
 
     const vote_account = vote_account_result orelse {
-        logger.warn().log("Vote account not found");
+        logger.err().log("Vote account not found");
         return .failed;
     };
     defer vote_account.deinit(allocator);
 
     const vote_account_data = vote_account.data.readAllAllocate(allocator) catch |err| {
-        logger.warn().logf("Failed to read vote account data: {}", .{err});
-        return .failed;
+        logger.err().logf("Failed to read vote account data: {}", .{err});
+        return err;
     };
     defer allocator.free(vote_account_data);
 
@@ -1315,13 +1315,13 @@ fn generateVoteTx(
         vote_account_data,
         .{},
     ) catch |err| {
-        logger.warn().logf("Failed to deserialize vote state versions: {}", .{err});
+        logger.err().logf("Failed to deserialize vote state versions: {}", .{err});
         return .failed;
     };
     defer vote_state_versions.deinit(allocator);
 
     var vote_state = vote_state_versions.convertToCurrent(allocator) catch |err| {
-        logger.warn().logf("Failed to convert vote state to current: {}", .{err});
+        logger.err().logf("Failed to convert vote state to current: {}", .{err});
         return .failed;
     };
     defer vote_state.deinit(allocator);
@@ -1334,7 +1334,7 @@ fn generateVoteTx(
     const current_epoch = epoch_tracker.schedule.getEpoch(last_voted_slot);
 
     const authorized_voter_pubkey = vote_state.voters.getAuthorizedVoter(current_epoch) orelse {
-        logger.warn().logf("No authorized voter for epoch {}", .{current_epoch});
+        logger.err().logf("No authorized voter for epoch {}", .{current_epoch});
         return .failed;
     };
 
