@@ -240,10 +240,10 @@ pub const Tower = struct {
         if (self.vote_state.lastVotedSlot()) |last_voted_slot| {
             if (slot <= last_voted_slot) {
                 return false;
-            } else if (self.vote_state.root_slot) |root_slot| {
-                if (slot <= root_slot) {
-                    return false;
-                }
+            }
+        } else if (self.vote_state.root_slot) |root_slot| {
+            if (slot <= root_slot) {
+                return false;
             }
         }
         return true;
