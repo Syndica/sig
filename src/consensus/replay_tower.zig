@@ -698,22 +698,24 @@ pub const ReplayTower = struct {
                 }
 
                 for (intervals_keyed_by_end.items) |vote_account| {
-                    if (locked_out_vote_accounts.contains(vote_account[1])) {
+                    const voted_slot = vote_account[0];
+                    const voted_pubkey = vote_account[1];
+                    if (locked_out_vote_accounts.contains(voted_pubkey)) {
                         continue;
                     }
                     // Only count lockouts on slots that are:
                     // 1) Not ancestors of `last_vote`, meaning being on different fork
                     // 2) Not from before the current root as we can't determine if
                     // anything before the root was an ancestor of `last_vote` or not
-                    if (!last_vote_ancestors.containsSlot(vote_account[0]) and (
+                    if (!last_vote_ancestors.containsSlot(voted_slot) and (
                         // Given a `lockout_interval_start` < root that appears in a
                         // bank for a `candidate_slot`, it must be that `lockout_interval_start`
                         // is an ancestor of the current root, because `candidate_slot` is a
                         // descendant of the current root
-                        vote_account[0] > root))
+                        voted_slot > root))
                     {
                         const stake =
-                            if (epoch_vote_accounts.get(vote_account[1])) |staked_account|
+                            if (epoch_vote_accounts.get(voted_pubkey)) |staked_account|
                                 staked_account.stake
                             else
                                 0;
@@ -725,7 +727,7 @@ pub const ReplayTower = struct {
                         ) > SWITCH_FORK_THRESHOLD) {
                             return SwitchForkDecision{ .switch_proof = switch_proof };
                         }
-                        try locked_out_vote_accounts.put(allocator, vote_account[1]);
+                        try locked_out_vote_accounts.put(allocator, voted_pubkey);
                     }
                 }
             }
