@@ -1396,7 +1396,7 @@ pub const ReplayTower = struct {
             );
         } else {
             self.logger.info().logf(
-                \\ Cannot vote on slot {d}:
+                \\Cannot vote on slot {d}:
                 \\ locked_out={}
                 \\ threshold_passed={}
                 \\ propagation_confirmed={}
