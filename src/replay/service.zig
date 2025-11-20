@@ -119,7 +119,9 @@ pub fn advanceReplay(
 
     const elapsed = start_time.read().asNanos();
     metrics.slot_execution_time.observe(elapsed);
-    replay_state.logger.info().logf("advanced in {}", .{std.fmt.fmtDuration(elapsed)});
+    if (slot_results.len != 0) {
+        replay_state.logger.info().logf("advanced in {}", .{std.fmt.fmtDuration(elapsed)});
+    }
 
     if (!processed_a_slot) try std.Thread.yield();
 }
