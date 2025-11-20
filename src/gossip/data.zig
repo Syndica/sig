@@ -1005,7 +1005,7 @@ pub const NodeInstance = struct {
         return Self{
             .from = from,
             .wallclock = wallclock,
-            .timestamp = @intCast(std.time.microTimestamp()),
+            .timestamp = @intCast(sig.time.microTimestamp()),
             .token = random.int(u64),
         };
     }
@@ -1299,7 +1299,7 @@ pub const ContactInfo = struct {
     }
 
     pub fn toNodeInstance(self: *Self, random: std.Random) NodeInstance {
-        return NodeInstance.init(random, self.pubkey, @intCast(std.time.milliTimestamp()));
+        return NodeInstance.init(random, self.pubkey, @intCast(sig.time.milliTimestamp()));
     }
 
     pub fn deinit(self: *const Self) void {
@@ -1309,7 +1309,7 @@ pub const ContactInfo = struct {
     }
 
     pub fn initSpy(allocator: std.mem.Allocator, id: Pubkey, gossip_socket_addr: SocketAddr, shred_version: u16) !Self {
-        var contact_info = Self.init(allocator, id, @intCast(std.time.microTimestamp()), shred_version);
+        var contact_info = Self.init(allocator, id, @intCast(sig.time.microTimestamp()), shred_version);
         try contact_info.setSocket(.gossip, gossip_socket_addr);
         return contact_info;
     }
@@ -1320,7 +1320,7 @@ pub const ContactInfo = struct {
         wallclock: u64,
         shred_version: u16,
     ) Self {
-        const outset = @as(u64, @intCast(std.time.microTimestamp()));
+        const outset = @as(u64, @intCast(sig.time.microTimestamp()));
         return .{
             .pubkey = pubkey,
             .wallclock = wallclock,
@@ -1669,7 +1669,7 @@ test "new contact info" {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    var ci = ContactInfo.init(testing.allocator, Pubkey.initRandom(random), @as(u64, @intCast(std.time.microTimestamp())), 0);
+    var ci = ContactInfo.init(testing.allocator, Pubkey.initRandom(random), @as(u64, @intCast(sig.time.microTimestamp())), 0);
     defer ci.deinit();
 }
 
@@ -1697,7 +1697,7 @@ test "set & get socket on contact info" {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    var ci = ContactInfo.init(testing.allocator, Pubkey.initRandom(random), @as(u64, @intCast(std.time.microTimestamp())), 0);
+    var ci = ContactInfo.init(testing.allocator, Pubkey.initRandom(random), @as(u64, @intCast(sig.time.microTimestamp())), 0);
     defer ci.deinit();
     try ci.setSocket(.rpc, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8899));
 

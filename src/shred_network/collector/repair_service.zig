@@ -406,7 +406,7 @@ pub const RepairRequester = struct {
 
         self.metrics.pending_requests.add(requests.len);
         defer self.metrics.pending_requests.set(0);
-        const timestamp = std.time.milliTimestamp();
+        const timestamp = sig.time.milliTimestamp();
         for (requests) |request| {
             var packet: Packet = .{
                 .addr = request.recipient_addr.toEndpoint(),
@@ -538,7 +538,7 @@ pub const RepairPeerProvider = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "getPeers" });
         defer zone.deinit();
 
-        const now: u64 = @intCast(std.time.timestamp());
+        const now: u64 = @intCast(sig.time.timestamp());
 
         if (self.cache.get(slot)) |peers| {
             if (now - peers.insertion_time_secs <= REPAIR_PEERS_CACHE_TTL_SECONDS) {
@@ -684,7 +684,7 @@ test "RepairService sends repair request to gossip peer" {
     // assertions
     try std.testing.expect(160 == size);
     const msg = try bincode.readFromSlice(allocator, RepairMessage, buf[0..160], .{});
-    try msg.verify(buf[0..160], Pubkey.fromPublicKey(&peer_keypair.public_key), @intCast(std.time.milliTimestamp()));
+    try msg.verify(buf[0..160], Pubkey.fromPublicKey(&peer_keypair.public_key), @intCast(sig.time.milliTimestamp()));
     try std.testing.expect(msg.highest_window_index.slot == 13579);
     try std.testing.expect(msg.highest_window_index.shred_index == 0);
 }

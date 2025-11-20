@@ -31,7 +31,7 @@ pub const GossipDumpService = struct {
             self.exit_condition.afterExit();
         }
 
-        const start_time = std.time.timestamp();
+        const start_time = sig.time.timestamp();
         const dir_name_bounded = sig.utils.fmt.boundedFmt("gossip-dumps/{}", .{start_time});
 
         var dir = try std.fs.cwd().makeOpenPath(dir_name_bounded.constSlice(), .{});
@@ -88,7 +88,7 @@ pub const GossipDumpService = struct {
         defer self.allocator.free(data.buf);
 
         // create file
-        const now = std.time.timestamp();
+        const now = sig.time.timestamp();
         const filename_bounded = sig.utils.fmt.boundedFmt("gossip-dump-{}.csv", .{now});
 
         var file = try dir.createFile(filename_bounded.constSlice(), .{});
