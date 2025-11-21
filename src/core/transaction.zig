@@ -336,7 +336,6 @@ pub const Message = struct {
             errdefer for (address_lookups[0..i]) |_alt| _alt.deinit(allocator);
             address_lookups[i] = try alt.clone(allocator);
         }
-        errdefer for (address_lookups) |alt| alt.deinit(allocator);
 
         return .{
             .signature_count = self.signature_count,
@@ -515,7 +514,6 @@ pub const Message = struct {
             errdefer for (address_lookups[0..i]) |_alt| _alt.deinit(allocator);
             alt.* = try sig.bincode.readWithLimit(limit_allocator, AddressLookup, reader, .{});
         }
-        errdefer for (address_lookups) |alt| alt.deinit(allocator);
 
         return .{
             .signature_count = signature_count,
@@ -890,7 +888,13 @@ test "clone transaction" {
             .account_keys = &.{Pubkey.ZEROES},
             .recent_blockhash = Hash.ZEROES,
             .instructions = &.{},
-            .address_lookups = &.{},
+            .address_lookups = &.{
+                AddressLookup{
+                    .readonly_indexes = &.{},
+                    .writable_indexes = &.{0},
+                    .table_address = Pubkey.ZEROES,
+                },
+            },
         },
     };
 
@@ -917,6 +921,21 @@ test "clone transaction" {
         }.cloneTest,
         .{transaction},
     );
+
+    inline for ([_]usize{
+        // alloc fail on dupe(account_keys)
+        0,
+        // alloc fail on alt alloc
+        @sizeOf(Pubkey),
+        // alloc fail on alt clone
+        @sizeOf(Pubkey) + @sizeOf(AddressLookup),
+        // succeed
+        @sizeOf(Pubkey) + @sizeOf(AddressLookup) + @sizeOf(usize),
+    }) |size| {
+        var buf: [size]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+        _ = transaction.clone(fba.allocator()) catch {};
+    }
 }
 
 test "sanitize succeeds minimal valid transaction" {
