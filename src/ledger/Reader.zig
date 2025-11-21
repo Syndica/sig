@@ -232,7 +232,7 @@ pub fn findMissingDataIndexes(
     defer iter.deinit();
 
     var missing_indexes = ArrayList(u64).init(allocator);
-    const now = @as(u64, @intCast(std.time.milliTimestamp()));
+    const now = @as(u64, @intCast(sig.time.milliTimestamp()));
     const ticks_since_first_insert = DEFAULT_TICKS_PER_SECOND * (now -| first_timestamp) / 1000;
 
     // The index of the first missing shred in the slot

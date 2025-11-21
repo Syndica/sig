@@ -25,6 +25,37 @@ const std = @import("std");
 const builtin = @import("builtin");
 const time = @This();
 
+/// monotonic timestamp analogous to std.time.timestamp
+pub fn timestamp() i64 {
+    return @divFloor(milliTimestamp(), std.time.ms_per_s);
+}
+
+/// monotonic timestamp analogous to std.time.milliTimestamp
+pub fn milliTimestamp() i64 {
+    return @as(i64, @intCast(@divFloor(nanoTimestamp(), std.time.ns_per_ms)));
+}
+
+/// monotonic timestamp analogous to std.time.microTimestamp
+pub fn microTimestamp() i64 {
+    return @as(i64, @intCast(@divFloor(nanoTimestamp(), std.time.ns_per_us)));
+}
+
+/// global state to ensure nanoTimestamp() is monotonic
+var last_clock: std.atomic.Value(i64) = .init(0);
+
+fn nanoTimestamp() i64 {
+    const current: i64 = @intCast(std.time.nanoTimestamp());
+    const last = last_clock.load(.monotonic);
+
+    if (current <= last) return last;
+
+    if (last_clock.cmpxchgStrong(last, current, .monotonic, .monotonic)) |new_now| {
+        return new_now;
+    }
+
+    return current;
+}
+
 pub const DateTime = struct {
     ms: u16,
     seconds: u16,
@@ -618,7 +649,7 @@ pub const Instant = struct {
     };
 
     pub fn now() Instant {
-        return .{ .inner = std.time.Instant.now() catch unreachable };
+        return UNIX_EPOCH.plus(.fromNanos(@intCast(nanoTimestamp())));
     }
 
     pub fn elapsed(self: Instant) Duration {
@@ -627,6 +658,10 @@ pub const Instant = struct {
 
     pub fn elapsedSince(self: Instant, earlier: Instant) Duration {
         return Duration.fromNanos(self.inner.since(earlier.inner));
+    }
+
+    pub fn order(self: Instant, other: Instant) std.math.Order {
+        return self.inner.order(other.inner);
     }
 
     pub fn plus(self: Instant, duration: Duration) Instant {

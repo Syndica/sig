@@ -85,7 +85,7 @@ pub const BlockhashQueue = struct {
         std.debug.assert(self.last_hash_index == 0);
         try self.hash_infos.put(allocator, hash, .{
             .index = 0,
-            .timestamp = @intCast(std.time.milliTimestamp()),
+            .timestamp = @intCast(sig.time.milliTimestamp()),
             .lamports_per_signature = lamports_per_signature,
         });
         self.last_hash = hash;
@@ -102,7 +102,7 @@ pub const BlockhashQueue = struct {
 
         try self.hash_infos.put(allocator, hash, .{
             .index = last_hash_index,
-            .timestamp = @intCast(std.time.milliTimestamp()),
+            .timestamp = @intCast(sig.time.milliTimestamp()),
             .lamports_per_signature = lamports_per_signature,
         });
 
@@ -138,7 +138,7 @@ pub const BlockhashQueue = struct {
         // Used by BankFeilds.initRandom inside accounts_db.manager.runLoop, should be made test only when possible.
         // if (!builtin.is_test) @compileError("only for testing");
         var self = BlockhashQueue.DEFAULT;
-        var timestamp: u64 = @intCast(std.time.milliTimestamp());
+        var timestamp: u64 = @intCast(sig.time.milliTimestamp());
 
         for (0..max_list_entries) |_| {
             const hash = Hash.initRandom(random);

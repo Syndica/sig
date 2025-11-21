@@ -693,7 +693,7 @@ const AtomicInterval = struct {
         interval_time_ms: u64,
         skip_first: bool,
     ) bool {
-        const now: u64 = @intCast(std.time.timestamp());
+        const now: u64 = @intCast(sig.time.timestamp());
         const last: u64 = @intCast(self.last_update.load(.monotonic));
         return now -| last > interval_time_ms and
             self.last_update.cmpxchgStrong(last, now, .monotonic, .monotonic) == last and

@@ -1140,7 +1140,7 @@ fn validator(
     });
 
     // Random number generator
-    var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
+    var prng = std.Random.DefaultPrng.init(@bitCast(sig.time.timestamp()));
 
     // shred networking
     const my_contact_info =
@@ -1509,7 +1509,7 @@ fn shredNetwork(
         app_base.exit,
     });
 
-    var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
+    var prng = std.Random.DefaultPrng.init(@bitCast(sig.time.timestamp()));
 
     const my_contact_info =
         sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);

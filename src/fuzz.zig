@@ -134,7 +134,7 @@ pub fn main() !void {
         const seed_file = try data_dir.createFile("fuzz_seeds.txt", .{ .truncate = false });
         defer seed_file.close();
         try seed_file.seekFromEnd(0);
-        const now: u64 = @intCast(std.time.timestamp());
+        const now: u64 = @intCast(sig.time.timestamp());
         try seed_file.writer().print(
             "{s}: time: {d}, seed: {d}\n",
             .{ @tagName(fuzzer), now, seed },

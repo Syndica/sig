@@ -369,7 +369,7 @@ pub const ReplayTower = struct {
         if (current_slot > self.last_timestamp.slot or
             (self.last_timestamp.slot == 0 and current_slot == self.last_timestamp.slot))
         {
-            const timestamp = std.time.timestamp();
+            const timestamp = sig.time.timestamp();
             if (timestamp >= self.last_timestamp.timestamp) {
                 self.last_timestamp = BlockTimestamp{
                     .slot = current_slot,

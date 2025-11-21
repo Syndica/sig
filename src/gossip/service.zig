@@ -1513,7 +1513,7 @@ pub const GossipService = struct {
         self: *Self,
         pong_messages: *const ArrayList(PongMessage),
     ) void {
-        const now = std.time.Instant.now() catch @panic("time is not supported on the OS!");
+        const now = sig.time.Instant.now();
 
         var ping_cache_lock = self.ping_cache_rw.write();
         defer ping_cache_lock.unlock();
@@ -2356,7 +2356,7 @@ test "handle pong messages" {
         const ping_cache_ptr_ptr, var ping_cache_lg = gossip_service.ping_cache_rw.writeWithLock();
         defer ping_cache_lg.unlock();
 
-        const now = try std.time.Instant.now();
+        const now = sig.time.Instant.now();
         const ping = ping_cache_ptr_ptr.*.maybePing(now, pubkey_and_addr, &keypair);
         break :blk ping.?;
     };
@@ -2382,7 +2382,7 @@ test "handle pong messages" {
         const ping_cache_ptr_ptr, var ping_cache_lg = gossip_service.ping_cache_rw.writeWithLock();
         defer ping_cache_lg.unlock();
 
-        const now = try std.time.Instant.now();
+        const now = sig.time.Instant.now();
         const r = ping_cache_ptr_ptr.*.check(now, pubkey_and_addr, &keypair);
         std.debug.assert(r.passes_ping_check);
     }
