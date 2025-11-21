@@ -95,6 +95,7 @@ pub fn resolveBlock(
         try allocator.alloc(replay.resolve_lookup.ResolvedBatch, batch_count);
     errdefer allocator.free(resolved_batches);
     var i: usize = 0;
+    errdefer for (resolved_batches[0..i]) |b| b.deinit(allocator);
     for (entries) |*entry| {
         if (!entry.isTick()) {
             resolved_batches[i] = try resolveBatch(allocator, entry.transactions, resolver);

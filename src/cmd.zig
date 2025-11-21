@@ -66,11 +66,11 @@ pub fn main() !void {
     var gpa_state: GpaOrCAllocator(.{}) = .{};
     // defer _ = gpa_state.deinit();
 
-    var tracing_gpa = tracy.TracingAllocator{
-        .name = "gpa",
-        .parent = gpa_state.allocator(),
-    };
-    const gpa = tracing_gpa.allocator();
+    // var tracing_gpa = tracy.TracingAllocator{
+    //     .name = "gpa",
+    //     .parent = gpa_state.allocator(),
+    // };
+    const gpa = gpa_state.allocator();
 
     var gossip_gpa_state: GpaOrCAllocator(.{ .stack_trace_frames = 100 }) = .{};
     var tracing_gossip_gpa = tracy.TracingAllocator{
@@ -2087,6 +2087,13 @@ const ReplayAndConsensusServiceState = struct {
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
+            var tracing_gpas = std.SegmentedList(tracy.TracingAllocator, 0){};
+            errdefer tracing_gpas.deinit(allocator);
+
+            const persist_allocator = try tracing_gpas.addOne(allocator);
+            persist_allocator.* = .{ .name = "persist gpa", .parent = allocator };
+            const persist_gpa = persist_allocator.allocator();
+
             const account_store = params.loaded_snapshot.accounts_db.accountStore();
             const manifest = &params.loaded_snapshot.collapsed_manifest;
             const bank_fields = &manifest.bank_fields;
@@ -2097,32 +2104,35 @@ const ReplayAndConsensusServiceState = struct {
                 return error.EpochStakesMissingFromSnapshot;
 
             const feature_set = try sig.replay.service.getActiveFeatures(
-                allocator,
+                persist_gpa,
                 account_store.reader().forSlot(&bank_fields.ancestors),
                 bank_fields.slot,
             );
 
             const root_slot_constants: sig.core.SlotConstants =
-                try .fromBankFields(allocator, bank_fields, feature_set);
-            errdefer root_slot_constants.deinit(allocator);
+                try .fromBankFields(persist_gpa, bank_fields, feature_set);
+            errdefer root_slot_constants.deinit(persist_gpa);
 
             const lt_hash = manifest.bank_extra.accounts_lt_hash;
 
             var root_slot_state: sig.core.SlotState =
-                try .fromBankFields(allocator, bank_fields, lt_hash);
-            errdefer root_slot_state.deinit(allocator);
+                try .fromBankFields(persist_gpa, bank_fields, lt_hash);
+            errdefer root_slot_state.deinit(persist_gpa);
 
-            const hard_forks = try bank_fields.hard_forks.clone(allocator);
-            errdefer hard_forks.deinit(allocator);
+            const hard_forks = try bank_fields.hard_forks.clone(persist_gpa);
+            errdefer hard_forks.deinit(persist_gpa);
 
             const current_epoch_constants: sig.core.EpochConstants = try .fromBankFields(
                 bank_fields,
-                try epoch_stakes.current.convert(allocator, .delegation),
+                try epoch_stakes.current.convert(persist_gpa, .delegation),
             );
-            errdefer current_epoch_constants.deinit(allocator);
+            errdefer current_epoch_constants.deinit(persist_gpa);
 
             break :replay_state try .init(.{
                 .allocator = allocator,
+                .tracing_gpas = tracing_gpas,
+                .persist_gpa = persist_gpa,
+
                 .logger = .from(params.app_base.logger),
                 .identity = .{
                     .validator = .fromPublicKey(&params.app_base.my_keypair.public_key),
