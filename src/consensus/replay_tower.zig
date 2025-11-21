@@ -698,8 +698,8 @@ pub const ReplayTower = struct {
                 }
 
                 for (intervals_keyed_by_end.items) |vote_account| {
-                    const voted_slot = vote_account[0];
-                    const voted_pubkey = vote_account[1];
+                    const voted_slot, const voted_pubkey = vote_account;
+
                     if (locked_out_vote_accounts.contains(voted_pubkey)) {
                         continue;
                     }
