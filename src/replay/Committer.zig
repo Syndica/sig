@@ -24,6 +24,7 @@ const parseSanitizedVoteTransaction =
 
 const Committer = @This();
 
+state: *replay.service.ReplayState,
 logger: Logger,
 slot_state: *sig.core.SlotState,
 status_cache: *sig.core.StatusCache,
@@ -80,11 +81,12 @@ pub fn commitTransactions(
             // Only send votes if consensus is enabled (sender exists)
             if (self.replay_votes_sender) |sender| {
                 if (tx_result.err == null and isSimpleVoteTransaction(transaction.transaction)) {
-                    if (try parseSanitizedVoteTransaction(allocator, transaction)) |parsed| {
+                    const parsed_gpa = self.state.persist_gpa;
+                    if (try parseSanitizedVoteTransaction(parsed_gpa, transaction)) |parsed| {
                         if (parsed.vote.lastVotedSlot() != null) {
-                            sender.send(parsed) catch parsed.deinit(allocator);
+                            sender.send(parsed) catch parsed.deinit(parsed_gpa);
                         } else {
-                            parsed.deinit(allocator);
+                            parsed.deinit(parsed_gpa);
                         }
                     }
                 }
@@ -94,14 +96,14 @@ pub fn commitTransactions(
         const recent_blockhash = &transaction.transaction.msg.recent_blockhash;
         const signature = transaction.transaction.signatures[0];
         try self.status_cache.insert(
-            allocator,
+            self.state.persist_gpa,
             rng.random(),
             recent_blockhash,
             &message_hash.data,
             slot,
         );
         try self.status_cache.insert(
-            allocator,
+            self.state.persist_gpa,
             rng.random(),
             recent_blockhash,
             &signature.toBytes(),
@@ -118,7 +120,7 @@ pub fn commitTransactions(
 
     for (accounts_to_store.values()) |account| {
         try self.stakes_cache.checkAndStore(
-            allocator,
+            self.state.persist_gpa,
             account.pubkey,
             account.account,
             self.new_rate_activation_epoch,

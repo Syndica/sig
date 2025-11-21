@@ -53,23 +53,24 @@ pub const ReplayResult = struct {
 /// 2. Store the replay results into the relevant data structures.
 ///
 /// Analogous to [replay_active_banks](https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3356)
-pub fn replayActiveSlots(state: *ReplayState) ![]const ReplayResult {
+pub fn replayActiveSlots(allocator: Allocator, state: *ReplayState) ![]const ReplayResult {
     const can_multi_thread = state.thread_pool.max_threads > 1;
     return if (can_multi_thread)
-        try awaitResults(state.allocator, try replayActiveSlotsAsync(state))
+        try awaitResults(allocator, try replayActiveSlotsAsync(allocator, state))
     else
-        try replayActiveSlotsSync(state);
+        try replayActiveSlotsSync(allocator, state);
 }
 
-fn replayActiveSlotsAsync(state: *ReplayState) ![]struct { Slot, *ReplaySlotFuture } {
+fn replayActiveSlotsAsync(allocator: Allocator, state: *ReplayState) ![]struct { Slot, *ReplaySlotFuture } {
     var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsAsync" });
     defer zone.deinit();
 
     const slot_tracker = &state.slot_tracker;
     const epoch_tracker = &state.epoch_tracker;
 
-    const active_slots = try slot_tracker.activeSlots(state.allocator);
-    defer state.allocator.free(active_slots);
+    const active_slots = try slot_tracker.activeSlots(allocator);
+    defer allocator.free(active_slots);
+
     state.execution_log_helper.logActiveSlots(active_slots);
 
     if (active_slots.len == 0) {
@@ -77,31 +78,31 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]struct { Slot, *ReplaySlotFutu
     }
 
     var slot_statuses = std.ArrayListUnmanaged(struct { Slot, *ReplaySlotFuture }).empty;
-    errdefer {
-        for (slot_statuses.items) |status| status[1].destroy(state.allocator);
-        slot_statuses.deinit(state.allocator);
+    defer {
+        for (slot_statuses.items) |status| status[1].destroy(allocator);
+        slot_statuses.deinit(allocator);
     }
 
     for (active_slots) |slot| {
         state.logger.debug().logf("replaying slot: {}", .{slot});
 
-        const params = switch (try prepareSlot(state, slot_tracker, epoch_tracker, slot)) {
+        const params = switch (try prepareSlot(allocator, state, slot_tracker, epoch_tracker, slot)) {
             .confirm => |params| params,
             .empty, .dead, .leader => continue,
         };
 
         const future = try replaySlotAsync(
-            state.allocator,
+            allocator,
             .from(state.logger),
             &state.thread_pool,
             params,
         );
 
-        errdefer future.destroy(state.allocator);
-        try slot_statuses.append(state.allocator, .{ slot, future });
+        errdefer future.destroy(allocator);
+        try slot_statuses.append(allocator, .{ slot, future });
     }
 
-    return slot_statuses.toOwnedSlice(state.allocator);
+    return slot_statuses.toOwnedSlice(allocator);
 }
 
 /// Takes ownership over the futures and destroys them
@@ -131,8 +132,7 @@ fn awaitResults(
 
 /// Fully synchronous version of replayActiveSlotsAsync that does not use
 /// multithreading or async execution in any way.
-fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
-    const allocator = state.allocator;
+fn replayActiveSlotsSync(allocator: Allocator, state: *ReplayState) ![]const ReplayResult {
     var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsSync" });
     defer zone.deinit();
 
@@ -154,7 +154,7 @@ fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
     for (active_slots) |slot| {
         state.logger.debug().logf("replaying slot: {}", .{slot});
 
-        const params = switch (try prepareSlot(state, slot_tracker, epoch_tracker, slot)) {
+        const params = switch (try prepareSlot(allocator, state, slot_tracker, epoch_tracker, slot)) {
             .confirm => |params| params,
             .empty, .dead, .leader => continue,
         };
@@ -269,14 +269,15 @@ pub fn replaySlotAsync(
 pub fn replaySlotSync(
     allocator: Allocator,
     logger: Logger,
-    params: ReplaySlotParams,
+    _params: ReplaySlotParams,
 ) !?ReplaySlotError {
+    var params = _params;
+    defer params.deinit(allocator);
+
     var zone = tracy.Zone.init(@src(), .{ .name = "replaySlotSync" });
     zone.value(params.svm_gateway.params.slot);
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
-
-    defer params.deinit(allocator);
 
     logger.info().log("confirming slot");
 
@@ -288,12 +289,11 @@ pub fn replaySlotSync(
         return .{ .invalid_block = .InvalidEntryHash };
     }
 
-    var svm_gateway = params.svm_gateway;
     for (params.batches) |batch| {
         var exit = Atomic(bool).init(false);
         switch (try replayBatch(
             allocator,
-            &svm_gateway,
+            &params.svm_gateway,
             params.committer,
             batch.transactions,
             &exit,
@@ -410,6 +410,7 @@ const PreparedSlot = union(enum) {
 /// - [replay_blockstore_into_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L2232)
 /// - [confirm_slot](https://github.com/anza-xyz/agave/blob/d79257e5f4afca4d092793f7a1e854cd5ccd6be9/ledger/src/blockstore_processor.rs#L1486)
 fn prepareSlot(
+    allocator: Allocator,
     state: *ReplayState,
     slot_tracker: *const SlotTracker,
     epoch_tracker: *const EpochTracker,
@@ -420,7 +421,7 @@ fn prepareSlot(
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
 
-    const progress_get_or_put = try state.progress_map.map.getOrPut(state.allocator, slot);
+    const progress_get_or_put = try state.progress_map.map.getOrPut(state.persist_gpa, slot);
     if (progress_get_or_put.found_existing and progress_get_or_put.value_ptr.is_dead) {
         state.logger.info().logf("slot is dead: {}", .{slot});
         return .dead;
@@ -436,7 +437,7 @@ fn prepareSlot(
         const parent = state.progress_map.getForkProgress(parent_slot) orelse
             return error.MissingParentProgress;
 
-        progress_get_or_put.value_ptr.* = try ForkProgress.initFromParent(state.allocator, .{
+        progress_get_or_put.value_ptr.* = try ForkProgress.initFromParent(state.persist_gpa, .{
             .slot = slot,
             .parent_slot = parent_slot,
             .parent = parent,
@@ -466,7 +467,7 @@ fn prepareSlot(
     const entries, const slot_is_full = blk: {
         const entries, const num_shreds, const slot_is_full =
             state.ledger.reader().getSlotEntriesWithShredInfo(
-                state.allocator,
+                allocator,
                 slot,
                 confirmation_progress.num_shreds,
                 false,
@@ -478,8 +479,8 @@ fn prepareSlot(
                 else => return err,
             };
         errdefer {
-            for (entries) |entry| entry.deinit(state.allocator);
-            state.allocator.free(entries);
+            for (entries) |entry| entry.deinit(allocator);
+            allocator.free(entries);
         }
 
         state.execution_log_helper.logEntryCount(entries.len, slot);
@@ -513,22 +514,22 @@ fn prepareSlot(
     // additional mechanisms for lookup tables to detect slot age (e.g. block height).
     const slot_hashes = try replay.update_sysvar.getSysvarFromAccount(
         SlotHashes,
-        state.allocator,
+        allocator,
         slot_account_reader,
     ) orelse return error.MissingSlotHashesSysvar;
 
-    const resolved_batches = try replay.resolve_lookup.resolveBlock(state.allocator, entries, .{
+    const resolved_batches = try replay.resolve_lookup.resolveBlock(allocator, entries, .{
         .slot = slot,
         .account_reader = slot_account_reader,
         .reserved_accounts = &slot_info.constants.reserved_accounts,
         .slot_hashes = slot_hashes,
     });
     errdefer {
-        for (resolved_batches) |batch| batch.deinit(state.allocator);
-        state.allocator.free(resolved_batches);
+        for (resolved_batches) |batch| batch.deinit(allocator);
+        allocator.free(resolved_batches);
     }
 
-    var svm_gateway = try SvmGateway.init(state.allocator, .{
+    var svm_gateway = try SvmGateway.init(allocator, .{
         .slot = slot,
         .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
         .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,
@@ -540,9 +541,10 @@ fn prepareSlot(
         .epoch_stakes = &epoch_constants.stakes,
         .status_cache = &state.status_cache,
     });
-    errdefer svm_gateway.deinit(state.allocator);
+    errdefer svm_gateway.deinit(allocator);
 
     const committer = replay.Committer{
+        .state = state,
         .logger = .from(state.logger),
         .slot_state = slot_info.state,
         .status_cache = &state.status_cache,
