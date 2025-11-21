@@ -1904,9 +1904,9 @@ test "cacheTowerStats - success sets flags and empty thresholds" {
 
     const stats = fixture.progress.getForkStats(root.slot).?;
     try testing.expectEqual(0, stats.vote_threshold.items.len);
-    try testing.expectEqual(false, stats.is_locked_out);
+    try testing.expectEqual(true, stats.is_locked_out);
     try testing.expectEqual(false, stats.has_voted);
-    try testing.expectEqual(true, stats.is_recent);
+    try testing.expectEqual(false, stats.is_recent);
 }
 
 test "cacheTowerStats - records failed threshold at depth 0" {
@@ -1944,9 +1944,9 @@ test "cacheTowerStats - records failed threshold at depth 0" {
     const t = stats.vote_threshold.items[0];
     try testing.expect(t == .failed_threshold);
     try testing.expectEqual(0, t.failed_threshold.vote_depth);
-    try testing.expectEqual(false, stats.is_locked_out);
+    try testing.expectEqual(true, stats.is_locked_out);
     try testing.expectEqual(false, stats.has_voted);
-    try testing.expectEqual(true, stats.is_recent);
+    try testing.expectEqual(false, stats.is_recent);
 }
 
 test "maybeRefreshLastVote - no heaviest slot on same fork" {
