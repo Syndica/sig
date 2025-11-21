@@ -3,34 +3,40 @@ bin := bin
 systemd := lib/systemd
 branch := main
 
-install: create_user install_config
+install: install-user install-config install-service
+
+install-service:
 	install -Dm755 sig-update         "$(prefix)/$(bin)/sig-update"
 	install -Dm644 sig.service        "$(prefix)/$(systemd)/system/sig.service"
 	install -Dm644 sig-update.service "$(prefix)/$(systemd)/system/sig-update.service"
 	install -Dm644 sig-update.timer   "$(prefix)/$(systemd)/system/sig-update.timer"
-	sudo -u sig git clone https://github.com/Syndica/sig.git /home/sig/sig
-	sudo -u sig mkdir /home/sig/sig/logs
 	systemctl daemon-reload
 
-create_user:
+install-user:
 	@if ! id sig >/dev/null 2>&1; then \
 		echo "Creating user sig"; \
 		useradd -m sig; \
 	fi
+	sudo -u sig git clone https://github.com/Syndica/sig.git /home/sig/sig
+	sudo -u sig mkdir /home/sig/sig/logs
 
-install_config:
+install-config:
 	@if ! [ -f /etc/sig.conf ]; then \
 		echo "Installing /etc/sig.conf"; \
 		install -Dm644 sig.conf /etc/sig.conf; \
 		sed -i 's#BRANCH=main#BRANCH=$(branch)#g' /etc/sig.conf; \
 	fi
 
-uninstall: stop
+uninstall: stop uninstall-service uninstall-user
+
+uninstall-service:
 	-rm "$(prefix)/$(bin)/sig-update"
 	-rm "$(prefix)/$(systemd)/system/sig.service"
 	-rm "$(prefix)/$(systemd)/system/sig-update.service"
 	-rm "$(prefix)/$(systemd)/system/sig-update.timer"
 	-systemctl daemon-reload
+
+uninstall-user:
 	-userdel sig
 	-rm -rf /home/sig/sig
 
