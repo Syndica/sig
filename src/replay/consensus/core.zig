@@ -1620,16 +1620,9 @@ fn computeConsensusInputs(
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
 
-    var sorted_frozen_slots =
-        try std.ArrayListUnmanaged(Slot).initCapacity(allocator, frozen_slots.count());
-    defer sorted_frozen_slots.deinit(allocator);
+    frozen_slots.sort(replay.service.FrozenSlotsSortCtx{ .slots = frozen_slots.keys() });
 
     for (frozen_slots.keys()) |slot| {
-        sorted_frozen_slots.appendAssumeCapacity(slot);
-    }
-    std.mem.sort(Slot, sorted_frozen_slots.items, {}, std.sort.asc(Slot));
-
-    for (sorted_frozen_slots.items) |slot| {
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
         if (!fork_stat.computed) {
             // TODO Self::adopt_on_chain_tower_if_behind
