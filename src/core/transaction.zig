@@ -840,19 +840,31 @@ fn sortCompiledKeys(
     key_meta_map.sort(sort_ctx);
 }
 
-test "serialization" {
+test "transaction serialization" {
     const allocator = std.testing.allocator;
     const transaction = Transaction{
         .signatures = &.{},
-        .version = .legacy,
+        .version = .v0,
         .msg = .{
-            .signature_count = 1,
+            .signature_count = 0,
             .readonly_signed_count = 0,
             .readonly_unsigned_count = 0,
             .account_keys = &.{Pubkey.ZEROES},
             .recent_blockhash = Hash.ZEROES,
-            .instructions = &.{},
-            .address_lookups = &.{},
+            .instructions = &.{
+                Instruction{
+                    .account_indexes = &.{0},
+                    .data = &.{0},
+                    .program_index = 0,
+                },
+            },
+            .address_lookups = &.{
+                AddressLookup{
+                    .readonly_indexes = &.{0},
+                    .writable_indexes = &.{0},
+                    .table_address = Pubkey.ZEROES,
+                },
+            },
         },
     };
 
@@ -862,7 +874,7 @@ test "serialization" {
     const deserialized = try sig.bincode.readFromSlice(allocator, Transaction, serialized, .{});
     defer deserialized.deinit(allocator);
 
-    try std.testing.expectEqualDeep(deserialized, transaction);
+    try std.testing.expectEqualDeep(transaction, deserialized);
 
     try std.testing.checkAllAllocationFailures(
         allocator,
@@ -874,6 +886,13 @@ test "serialization" {
         }.bincodeTest,
         .{serialized},
     );
+
+    for (0..serialized.len) |i| {
+        try std.testing.expectError(
+            error.EndOfStream,
+            sig.bincode.readFromSlice(allocator, Transaction, serialized[0..i], .{}),
+        );
+    }
 }
 
 test "clone transaction" {
@@ -887,10 +906,16 @@ test "clone transaction" {
             .readonly_unsigned_count = 0,
             .account_keys = &.{Pubkey.ZEROES},
             .recent_blockhash = Hash.ZEROES,
-            .instructions = &.{},
+            .instructions = &.{
+                Instruction{
+                    .account_indexes = &.{0},
+                    .data = &.{0},
+                    .program_index = 0,
+                },
+            },
             .address_lookups = &.{
                 AddressLookup{
-                    .readonly_indexes = &.{},
+                    .readonly_indexes = &.{0},
                     .writable_indexes = &.{0},
                     .table_address = Pubkey.ZEROES,
                 },
@@ -921,21 +946,6 @@ test "clone transaction" {
         }.cloneTest,
         .{transaction},
     );
-
-    inline for ([_]usize{
-        // alloc fail on dupe(account_keys)
-        0,
-        // alloc fail on alt alloc
-        @sizeOf(Pubkey),
-        // alloc fail on alt clone
-        @sizeOf(Pubkey) + @sizeOf(AddressLookup),
-        // succeed
-        @sizeOf(Pubkey) + @sizeOf(AddressLookup) + @sizeOf(usize),
-    }) |size| {
-        var buf: [size]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&buf);
-        _ = transaction.clone(fba.allocator()) catch {};
-    }
 }
 
 test "sanitize succeeds minimal valid transaction" {
