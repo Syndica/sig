@@ -13,11 +13,9 @@
 //! The philosophy is that breaking the Bank into separate pieces will enable us
 //! to write code with a more minimal, clearer set of dependencies, to make the
 //! code easier to understand and maintain.
-
 const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
-const tracy = @import("tracy");
 
 const core = sig.core;
 
@@ -25,46 +23,21 @@ const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 const Random = std.Random;
 
-const RwMux = sig.sync.RwMux;
-
-const SlotAccountReader = sig.accounts_db.account_store.SlotAccountReader;
-
-const BlockhashQueue = core.BlockhashQueue;
 const EpochSchedule = core.epoch_schedule.EpochSchedule;
-const FeatureSet = core.FeatureSet;
-const Hash = core.hash.Hash;
-const HardForks = core.HardForks;
-const LtHash = core.hash.LtHash;
 const Pubkey = core.pubkey.Pubkey;
-const RentCollector = sig.core.rent_collector.RentCollector;
-const ReservedAccounts = sig.core.ReservedAccounts;
-const VoteAccount = sig.core.stakes.VoteAccount;
 const EpochStakes = sig.core.EpochStakes;
 
 const Epoch = core.time.Epoch;
 const Slot = core.time.Slot;
-const UnixTimestamp = core.time.UnixTimestamp;
-
-const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
-const Inflation = core.genesis_config.Inflation;
 
 const Ancestors = sig.core.Ancestors;
-const EpochStakesMap = core.EpochStakesMap;
-const Stakes = core.Stakes;
-
-const StakeStateV2 = sig.runtime.program.stake.StakeStateV2;
-const VoteState = sig.runtime.program.vote.state.VoteState;
-const EpochRewardStatus = sig.replay.rewards.EpochRewardStatus;
-
-const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
-const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
 
 const AtomicSlot = std.atomic.Value(Slot);
 
 /// This is a WORK AROUND for our current lack of fork awareness outside of replay.
 /// It ATTEMPTS to satisfy immediate requirements to run on testnet.
 /// It MUST be replaced by a better implementation as soon as possible.
-pub const MagicInfo = struct {
+pub const MagicTracker = struct {
     /// The most recently rooted slot, set by consensus.
     root_slot: AtomicSlot,
 
@@ -101,7 +74,7 @@ pub const MagicInfo = struct {
     pub fn init(
         root_slot: Slot,
         epoch_schedule: EpochSchedule,
-    ) MagicInfo {
+    ) MagicTracker {
         return .{
             .root_slot = .init(root_slot),
             .epoch_schedule = epoch_schedule,
@@ -110,24 +83,90 @@ pub const MagicInfo = struct {
         };
     }
 
-    pub fn deinit(self: *MagicInfo, allocator: Allocator) void {
+    pub fn initForTest(
+        allocator: Allocator,
+        random: Random,
+        root_slot: Slot,
+        epoch_schedule: EpochSchedule,
+    ) !MagicTracker {
+        if (!builtin.is_test) @compileError("only for tests");
+        var self = MagicTracker.init(root_slot, epoch_schedule);
+        errdefer self.deinit(allocator);
+
+        const epoch = epoch_schedule.getEpoch(root_slot);
+        for (epoch -| 3..epoch + 1) |epoch_i| {
+            const epoch_info_ptr = try allocator.create(EpochInfo);
+            errdefer allocator.destroy(epoch_info_ptr);
+
+            epoch_info_ptr.* = try EpochInfo.initRandom(
+                allocator,
+                random,
+                .{ .epoch = epoch_i, .schedule = epoch_schedule },
+            );
+            errdefer epoch_info_ptr.deinit(allocator);
+
+            try self.rooted_epochs.insert(allocator, epoch_info_ptr);
+        }
+
+        return self;
+    }
+
+    pub fn deinit(self: *MagicTracker, allocator: Allocator) void {
         self.rooted_epochs.deinit(allocator);
         self.unrooted_epochs.deinit(allocator);
     }
 
+    pub fn getAggregateLeaderSchedule(self: *const MagicTracker) !AggregateLeaderSchedule {
+        const slot = self.root_slot.load(.monotonic);
+
+        const start = self.epoch_schedule.getFirstSlotInEpoch(
+            self.epoch_schedule.getEpoch(slot),
+        );
+        const leaders = (try self.rooted_epochs.get(self.epoch_schedule.getEpoch(
+            slot -| self.epoch_schedule.leader_schedule_slot_offset,
+        ))).leaders;
+
+        const next_start = self.epoch_schedule.getFirstSlotInEpoch(
+            self.epoch_schedule.getEpoch(slot +| self.epoch_schedule.leader_schedule_slot_offset),
+        );
+        const next_leaders = (try self.rooted_epochs.get(self.epoch_schedule.getEpoch(
+            slot,
+        ))).leaders;
+
+        return .{
+            .start = start,
+            .leaders = leaders,
+            .next_start = next_start,
+            .next_leaders = next_leaders,
+        };
+    }
+
     pub fn getLeaderSchedule(
-        self: *const MagicInfo,
+        self: *const MagicTracker,
         slot: Slot,
     ) !LeaderSchedule {
-        const epoch = self.epoch_schedule.getEpoch(slot -| self.epoch_schedule.leader_schedule_slot_offset);
+        const epoch = self.epoch_schedule.getEpoch(slot);
+        const leader_schedule_epoch = self.epoch_schedule.getEpoch(
+            slot -| self.epoch_schedule.leader_schedule_slot_offset,
+        );
+        const epoch_info = try self.rooted_epochs.get(leader_schedule_epoch);
         return .{
-            .leaders = (try self.rooted_epochs.get(epoch)).leaders,
+            .leaders = epoch_info.leaders,
             .start = self.epoch_schedule.getFirstSlotInEpoch(epoch),
         };
     }
 
+    pub fn getRootedStakedNodes(
+        self: *const MagicTracker,
+        slot: Slot,
+    ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
+        const epoch = self.epoch_schedule.getEpoch(slot);
+        const epoch_info = try self.rooted_epochs.get(epoch);
+        return &epoch_info.stakes.stakes.vote_accounts.staked_nodes;
+    }
+
     pub fn onSlotRooted(
-        self: *MagicInfo,
+        self: *MagicTracker,
         allocator: Allocator,
         slot: Slot,
         ancestors: *const Ancestors,
@@ -138,7 +177,7 @@ pub const MagicInfo = struct {
     }
 
     fn onFirstSlotInEpochRooted(
-        self: *MagicInfo,
+        self: *MagicTracker,
         allocator: Allocator,
         ancestors: *const Ancestors,
     ) !void {
@@ -154,7 +193,7 @@ pub const MagicInfo = struct {
     }
 
     pub fn insertUnrootedEpochInfo(
-        self: *MagicInfo,
+        self: *MagicTracker,
         allocator: Allocator,
         slot: Slot,
         ancestors: *const Ancestors,
@@ -244,6 +283,22 @@ pub const LeaderSchedule = struct {
     }
 };
 
+pub const AggregateLeaderSchedule = struct {
+    start: Slot,
+    leaders: []const Pubkey,
+    next_start: Slot,
+    next_leaders: []const Pubkey,
+
+    pub fn getLeader(self: *const AggregateLeaderSchedule, slot: Slot) !Pubkey {
+        return if (self.start <= slot and slot < self.next_start)
+            self.leaders[slot - self.start]
+        else if (self.next_start <= slot and slot < self.next_start + self.next_leaders.len)
+            self.next_leaders[slot - self.next_start]
+        else
+            return error.SlotOutOfRange;
+    }
+};
+
 /// Epoch Ring Buffer which holds 4 EpochInfo entries.
 ///
 /// Inserts must increase monotonically by exactly 1 epoch.
@@ -252,16 +307,16 @@ pub const LeaderSchedule = struct {
 /// No process should ever need to access E-3 or older EpochInfos and it is thus safe to
 /// deinitialize the corresponding data when overwriting entries with new epoch data.
 pub const RootedEpochBuffer = struct {
-    buf: [4]?*const EpochInfo = [_]?*const EpochInfo{null} ** 4,
-    root: ?Atomic(Epoch) = null,
+    buf: [4]?*const EpochInfo = @splat(null),
+    root: Atomic(Epoch) = .init(0),
 
     pub fn deinit(self: *RootedEpochBuffer, allocator: Allocator) void {
-        for (0..self.buf.len) |i| {
-            if (self.buf[i]) |value| {
-                value.deinit(allocator);
-                allocator.destroy(value);
+        for (&self.buf) |*maybe_entry| {
+            if (maybe_entry.*) |entry| {
+                entry.deinit(allocator);
+                allocator.destroy(entry);
             }
-            self.buf[i] = null;
+            maybe_entry.* = null;
         }
         self.* = undefined;
     }
@@ -272,57 +327,64 @@ pub const RootedEpochBuffer = struct {
         value: *const EpochInfo,
     ) !void {
         const epoch = value.stakes.stakes.epoch;
+        if (!self.isNext(epoch)) return error.InvalidInsert;
 
-        if (self.root != null and epoch != self.root.?.load(.monotonic) + 1)
-            return error.InvalidInsert;
-
-        const index = epoch & (self.buf.len - 1);
+        const index = epoch % self.buf.len;
         if (self.buf[index]) |old_value| {
             old_value.deinit(allocator);
             allocator.destroy(old_value);
         }
 
         self.buf[index] = value;
-        if (self.root == null)
-            self.root = .init(epoch)
-        else
-            self.root.?.store(epoch, .monotonic);
+        self.root.store(epoch, .monotonic);
     }
 
     pub fn get(
         self: *const RootedEpochBuffer,
         epoch: Epoch,
     ) !*const EpochInfo {
-        const root_epoch = (self.root orelse return error.EpochNotFound).load(.monotonic);
+        const root_epoch = self.root.load(.monotonic);
+
+        if (root_epoch == 0 and std.mem.allEqual(
+            ?*const EpochInfo,
+            &self.buf,
+            null,
+        )) return error.EpochNotFound;
 
         if (epoch > root_epoch or
-            epoch < root_epoch - self.buf.len + 1 or
-            self.buf[epoch & (self.buf.len - 1)] == null) return error.EpochNotFound;
+            epoch + self.buf.len <= root_epoch or
+            self.buf[epoch % self.buf.len] == null) return error.EpochNotFound;
 
-        const epoch_at_index = self.buf[epoch & (self.buf.len - 1)].?.stakes.stakes.epoch;
+        const epoch_at_index = self.buf[epoch % self.buf.len].?.stakes.stakes.epoch;
         if (epoch != epoch_at_index) return error.EpochOverwritten;
 
-        return self.buf[epoch & (self.buf.len - 1)].?;
+        return self.buf[epoch % self.buf.len].?;
     }
 
     pub fn isNext(self: *const RootedEpochBuffer, epoch: Epoch) bool {
-        return if (self.root) |root| epoch == root.load(.monotonic) + 1 else true;
+        const root = self.root.load(.monotonic);
+        if (root == 0 and (epoch == 1 or std.mem.allEqual(
+            ?*const EpochInfo,
+            &self.buf,
+            null,
+        ))) return true;
+        return epoch == root + 1;
     }
 };
 
 pub const UnrootedEpochBuffer = struct {
-    buf: [MAX_FORKS]?struct { Slot, *const EpochInfo } = [_]?struct { Slot, *const EpochInfo }{null} ** MAX_FORKS,
+    // name fields
+    buf: [MAX_FORKS]?struct { slot: Slot, info: *const EpochInfo } = @splat(null),
 
     pub const MAX_FORKS = 4;
 
     pub fn deinit(self: *UnrootedEpochBuffer, allocator: Allocator) void {
-        for (0..self.buf.len) |i| {
-            if (self.buf[i]) |entry| {
-                _, const info = entry;
-                info.deinit(allocator);
-                allocator.destroy(info);
+        for (&self.buf) |*maybe_entry| {
+            if (maybe_entry.*) |entry| {
+                entry.info.deinit(allocator);
+                allocator.destroy(entry.info);
             }
-            self.buf[i] = null;
+            maybe_entry.* = null;
         }
         self.* = undefined;
     }
@@ -336,34 +398,27 @@ pub const UnrootedEpochBuffer = struct {
     ) !*const EpochInfo {
         const epoch = epoch_info.stakes.stakes.epoch;
 
-        const insert_index = for (0..self.buf.len) |i| {
-            if (self.buf[i] == null) {
-                // Entry is free, we can use it.
-                break i;
-            }
-
-            const item_slot, const item_info = self.buf[i].?;
-            if (epoch > item_info.stakes.stakes.epoch) {
+        const index = for (&self.buf, 0..) |maybe_entry, i| {
+            const entry = if (maybe_entry) |entry| entry else break i;
+            const entry_epoch = entry.info.stakes.stakes.epoch;
+            if (epoch > entry_epoch) {
                 // Entry occupied by old epoch, we can overwrite it.
-                item_info.deinit(allocator);
-                allocator.destroy(item_info);
+                entry.info.deinit(allocator);
+                allocator.destroy(entry.info);
                 break i;
-            } else if (epoch == item_info.stakes.stakes.epoch) {
+            } else if (epoch == entry_epoch) {
                 // Entry occupied by an existing fork.
-                // Check we are not duplicating an insert for the same fork, otherwise continue.
-                if (ancestors.containsSlot(item_slot)) {
-                    return error.DuplicateBranch;
-                }
+                if (ancestors.containsSlot(entry.slot)) return error.DuplicateBranch;
                 continue;
             } else {
-                // epoch < self.buf[i].?.epoch
+                // We should never insert an epoch older than existing entries.
                 return error.InvalidEpoch;
             }
         } else return error.MaxForksExceeded;
 
         const info_ptr = try allocator.create(EpochInfo);
         info_ptr.* = epoch_info;
-        self.buf[insert_index] = .{ slot, info_ptr };
+        self.buf[index] = .{ .slot = slot, .info = info_ptr };
 
         return info_ptr;
     }
@@ -372,24 +427,24 @@ pub const UnrootedEpochBuffer = struct {
         self: *const UnrootedEpochBuffer,
         ancestors: *const Ancestors,
     ) !*const EpochInfo {
-        return for (0..self.buf.len) |i| {
-            if (self.buf[i] != null and ancestors.containsSlot(self.buf[i].?[0])) {
-                break self.buf[i].?[1];
-            }
-        } else error.ForkNotFound;
+        for (&self.buf) |maybe_entry|
+            if (maybe_entry) |entry|
+                if (ancestors.containsSlot(entry.slot)) return entry.info;
+        return error.ForkNotFound;
     }
 
     pub fn take(
         self: *UnrootedEpochBuffer,
         ancestors: *const Ancestors,
     ) !*const EpochInfo {
-        return for (0..self.buf.len) |i| {
-            if (self.buf[i] != null and ancestors.containsSlot(self.buf[i].?[0])) {
-                const info = self.buf[i].?[1];
-                self.buf[i] = null;
-                break info;
-            }
-        } else error.ForkNotFound;
+        for (&self.buf) |*maybe_entry|
+            if (maybe_entry.*) |entry|
+                if (ancestors.containsSlot(entry.slot)) {
+                    const info = entry.info;
+                    maybe_entry.* = null;
+                    return info;
+                };
+        return error.ForkNotFound;
     }
 };
 
@@ -547,7 +602,7 @@ test "UnrootedEpochBuffer" {
     // TODO: Implement specific tests for UnrootedEpochBuffer
 }
 
-test "MagicInfo" {
+test MagicTracker {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -559,7 +614,7 @@ test "MagicInfo" {
     });
 
     // Begin test at last slot in epoch 0
-    var magic = MagicInfo.init(31, epoch_schedule);
+    var magic = MagicTracker.init(31, epoch_schedule);
     defer magic.deinit(allocator);
 
     // Only the root slot is set

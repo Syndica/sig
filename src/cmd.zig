@@ -7,6 +7,7 @@ const config = @import("config.zig");
 const tracy = @import("tracy");
 
 const replay = sig.replay;
+const magic_info = sig.core.magic_info;
 
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
@@ -1178,10 +1179,17 @@ fn validator(
     var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
     defer rpc_client.deinit();
 
+    var magic_tracker = magic_info.MagicTracker.init(
+        bank_fields.slot,
+        bank_fields.epoch_schedule,
+    );
+    defer magic_tracker.deinit(allocator);
+
     var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService.init(
         allocator,
         .from(app_base.logger),
         &epoch_context_manager,
+        &magic_tracker,
         rpc_client,
     );
 
@@ -1206,7 +1214,7 @@ fn validator(
             .exit = app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
-            .epoch_context_mgr = &epoch_context_manager,
+            .magic_tracker = &magic_tracker,
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = turbine_config.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
@@ -1482,15 +1490,29 @@ fn shredNetwork(
         allocator.destroy(gossip_service);
     }
 
+    var magic_tracker = magic_info.MagicTracker.init(
+        shred_network_conf.root_slot,
+        genesis_config.epoch_schedule,
+    );
+    defer magic_tracker.deinit(allocator);
+
     var epoch_context_manager = try sig.adapter.EpochContextManager
         .init(allocator, genesis_config.epoch_schedule);
     var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService
-        .init(allocator, .from(app_base.logger), &epoch_context_manager, rpc_client);
+        .init(allocator, .from(app_base.logger), &epoch_context_manager, &magic_tracker, rpc_client);
     const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
         .{},
         sig.adapter.RpcEpochContextService.run,
         .{ &rpc_epoch_ctx_service, app_base.exit },
     );
+
+    var start = sig.time.Timer.start();
+    while (start.read().asSecs() < 60) {
+        _ = magic_tracker.getAggregateLeaderSchedule() catch {
+            std.Thread.sleep(1_000_000_000);
+            continue;
+        };
+    }
 
     var ledger = try Ledger.init(
         allocator,
@@ -1522,7 +1544,7 @@ fn shredNetwork(
         .exit = app_base.exit,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .my_shred_version = &gossip_service.my_shred_version,
-        .epoch_context_mgr = &epoch_context_manager,
+        .magic_tracker = &magic_tracker,
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,

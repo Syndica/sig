@@ -160,7 +160,11 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
             epoch: ?Epoch = null,
             max_list_entries: usize = 0,
         }) Allocator.Error!Self {
-            var stakes = try Stakes(stakes_type).initRandom(allocator, random, options.max_list_entries);
+            var stakes = try Stakes(stakes_type).initRandom(
+                allocator,
+                random,
+                options.max_list_entries,
+            );
             errdefer stakes.deinit(allocator);
             if (options.epoch) |epoch| stakes.epoch = epoch;
 
@@ -171,7 +175,11 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
             errdefer deinitMapAndValues(allocator, node_id_to_vote_accounts);
 
             for (0..random.uintAtMost(usize, options.max_list_entries)) |_| {
-                const value = try NodeVoteAccounts.initRandom(random, allocator, options.max_list_entries);
+                const value = try NodeVoteAccounts.initRandom(
+                    random,
+                    allocator,
+                    options.max_list_entries,
+                );
                 errdefer value.deinit(allocator);
                 try node_id_to_vote_accounts.put(allocator, Pubkey.initRandom(random), value);
             }
