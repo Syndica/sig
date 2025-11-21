@@ -822,15 +822,14 @@ pub const VoteAccount = struct {
         );
         defer versioned_vote_state.deinit(allocator); // `convertToCurrent` clones
 
-        const rc = try allocator.create(sig.sync.ReferenceCounter);
-        errdefer allocator.destroy(rc);
-        rc.* = .init;
+        var vote_state = try versioned_vote_state.convertToCurrent(allocator);
+        errdefer vote_state.deinit(allocator);
 
-        return .{
-            .account = .{ .lamports = account.lamports, .owner = account.owner },
-            .state = try versioned_vote_state.convertToCurrent(allocator),
-            .rc = rc,
-        };
+        return .init(
+            allocator,
+            .{ .lamports = account.lamports, .owner = account.owner },
+            vote_state,
+        );
     }
 
     pub fn toAccountSharedData(
