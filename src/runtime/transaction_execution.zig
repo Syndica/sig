@@ -232,6 +232,7 @@ pub fn loadAndExecuteTransaction(
         .ok => |x| x,
         .err => |err| {
             var writes = ProcessedTransaction.Writes{};
+            errdefer while (writes.pop()) |item| item.account.deinit(allocator);
             var loaded_accounts_data_size: u32 = 0;
             while (rollbacks.pop()) |rollback| {
                 const item = writes.addOne() catch unreachable;
