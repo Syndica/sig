@@ -34,7 +34,10 @@ pub const ExecuteContextsParams = struct {
     program_map: ?*ProgramMap = null,
 
     // Environment used to load and verify programs.
-    vm_environment: *const vm.Environment = &.{},
+    vm_environment: *const vm.Environment = &.{
+        .loader = .ALL_DISABLED,
+        .config = .{},
+    },
     next_vm_environment: ?*const vm.Environment = null,
 
     // Slot Context
