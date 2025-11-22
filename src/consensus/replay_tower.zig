@@ -185,7 +185,7 @@ pub const ReplayTower = struct {
         allocator: std.mem.Allocator,
         logger: Logger,
         node_pubkey: Pubkey,
-        vote_account_pubkey: Pubkey,
+        vote_account_pubkey: ?Pubkey,
         fork_root: Slot,
         slot_account_reader: sig.accounts_db.SlotAccountReader,
         registry: *sig.prometheus.Registry(.{}),
@@ -193,7 +193,7 @@ pub const ReplayTower = struct {
         var tower = Tower.init(.from(logger));
         try tower.initializeLockoutsFromBank(
             allocator,
-            &vote_account_pubkey,
+            vote_account_pubkey,
             fork_root,
             slot_account_reader,
         );
@@ -1681,7 +1681,7 @@ fn optimisticallyBypassVoteStakeThresholdCheck(
 pub fn collectClusterVoteState(
     allocator: std.mem.Allocator,
     logger: Logger,
-    vote_account_pubkey: *const Pubkey,
+    vote_account_pubkey: ?Pubkey,
     bank_slot: Slot,
     vote_accounts: *const StakeAndVoteAccountsMap,
     ancestors: *const AutoArrayHashMapUnmanaged(Slot, Ancestors),
@@ -1706,7 +1706,7 @@ pub fn collectClusterVoteState(
         }
 
         logger.trace().logf(
-            "{} {} with stake {}",
+            "{?} {} with stake {}",
             .{ vote_account_pubkey, vote_address, vote.stake },
         );
 
@@ -1722,7 +1722,7 @@ pub fn collectClusterVoteState(
         }
 
         // Vote account for this validator
-        if (vote_address.equals(vote_account_pubkey)) {
+        if (vote_account_pubkey != null and vote_address.equals(&vote_account_pubkey.?)) {
             my_latest_landed_vote = if (vote_state.nthRecentLockout(0)) |l| l.slot else null;
             logger.debug().logf("vote state {any}", .{vote_state});
             const observed_slot = if (vote_state.nthRecentLockout(0)) |l| l.slot else 0;
@@ -2017,7 +2017,7 @@ test "check_vote_threshold_forks" {
         var computed_banks = try collectClusterVoteState(
             allocator,
             .noop,
-            &Pubkey.ZEROES,
+            null,
             vote_to_evaluate,
             &accounts,
             &ancestors,
@@ -2048,7 +2048,7 @@ test "check_vote_threshold_forks" {
         var computed_banks = try collectClusterVoteState(
             allocator,
             .noop,
-            &Pubkey.ZEROES,
+            null,
             vote_to_evaluate,
             &accounts,
             &ancestors,
@@ -2164,7 +2164,7 @@ test "collect vote lockouts root" {
     var computed_banks = try collectClusterVoteState(
         allocator,
         .noop,
-        &Pubkey.initRandom(random),
+        .initRandom(random),
         MAX_LOCKOUT_HISTORY,
         &accounts,
         &ancestors,
@@ -2261,7 +2261,7 @@ test "collect vote lockouts sums" {
     var computed_banks = try collectClusterVoteState(
         allocator,
         .noop,
-        &Pubkey.ZEROES,
+        null,
         1,
         &accounts,
         &ancestors,

@@ -493,7 +493,7 @@ pub const TowerConsensus = struct {
         account_store: AccountStore,
         slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
         vote_sockets: ?*const VoteSockets,
-        vote_account: Pubkey,
+        vote_account: ?Pubkey,
         senders: Senders,
     ) !void {
         var epoch_stakes_map: EpochStakesMap = .empty;
@@ -874,7 +874,7 @@ fn handleVotableBank(
     account_store: AccountStore,
     node_keypair: ?sig.identity.KeyPair,
     authorized_voter_keypairs: []const sig.identity.KeyPair,
-    vote_account_pubkey: Pubkey,
+    vote_account_pubkey: ?Pubkey,
     switch_fork_decision: SwitchForkDecision,
     gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
@@ -904,7 +904,7 @@ fn handleVotableBank(
 
     // Skip vote generation and sending if not configured to vote
     // Note: When voting is disabled, `authorized_voter_keypairs` is set to an empty slice
-    if (authorized_voter_keypairs.len == 0 or node_keypair == null) {
+    if (authorized_voter_keypairs.len == 0 or node_keypair == null or vote_account_pubkey == null) {
         replay_tower.markLastVoteTxBlockhashNonVoting();
         return;
     }
@@ -1254,7 +1254,7 @@ fn sendVote(
 /// Analogous to [generate_vote_tx](https://github.com/anza-xyz/agave/blob/8e696b9a6ec1dc84a9add834f25325b9e39cbcb4/core/src/replay_stage.rs#L2561)
 fn generateVoteTx(
     allocator: std.mem.Allocator,
-    vote_account_pubkey: Pubkey,
+    maybe_vote_account_pubkey: ?Pubkey,
     authorized_voter_keypairs: []const sig.identity.KeyPair,
     node_keypair: ?sig.identity.KeyPair,
     switch_fork_decision: SwitchForkDecision,
@@ -1271,6 +1271,11 @@ fn generateVoteTx(
 
     const node_kp = node_keypair orelse {
         logger.debug().log("No node keypair");
+        return .non_voting;
+    };
+
+    const vote_account_pubkey = maybe_vote_account_pubkey orelse {
+        logger.debug().log("No vote account address");
         return .non_voting;
     };
 
@@ -1600,7 +1605,7 @@ fn resetFork(
 fn computeConsensusInputs(
     allocator: std.mem.Allocator,
     logger: Logger,
-    my_vote_pubkey: Pubkey,
+    my_vote_pubkey: ?Pubkey,
     ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
     slot_tracker: *const SlotTracker,
     epoch_schedule: *const EpochSchedule,
@@ -1632,7 +1637,7 @@ fn computeConsensusInputs(
                 break :blk try collectClusterVoteState(
                     allocator,
                     .from(logger),
-                    &my_vote_pubkey,
+                    my_vote_pubkey,
                     slot,
                     &stakes.vote_accounts.vote_accounts,
                     ancestors,
