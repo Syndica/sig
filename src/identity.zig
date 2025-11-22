@@ -4,7 +4,7 @@ const sig = @import("sig.zig");
 const Logger = sig.trace.Logger("identity");
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;
 
-pub const IDENTITY_KEYPAIR_PATH = "identity.key";
+pub const IDENTITY_KEYPAIR_PATH = "identity.json";
 
 /// Re-export of stdlib's Ed25519 KeyPair.
 pub const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -36,37 +36,12 @@ pub fn getOrInit(allocator: std.mem.Allocator, logger: Logger) !KeyPair {
     var app_data_dir = try std.fs.cwd().makeOpenPath(app_data_dir_path, .{});
     defer app_data_dir.close();
 
-    if (app_data_dir.openFile(IDENTITY_KEYPAIR_PATH, .{
-        // NOTE: the file will never be modified
-        .mode = .read_only,
-    })) |file| {
+    if (app_data_dir.openFile(IDENTITY_KEYPAIR_PATH, .{ .mode = .read_only })) |file| {
         defer file.close();
-
-        var buf: [SecretKey.encoded_length]u8 = undefined;
-
-        const end_pos = try file.getEndPos();
-        if (end_pos != buf.len) {
-            logger.err().logf(
-                "Overlong identity file, expected {} bytes, found {}",
-                .{ buf.len, end_pos },
-            );
+        return parseKeypairJson(file.reader()) catch |e| {
+            logger.err().logf("Invalid identity.json: {}", .{e});
             return error.InvalidIdentityFile;
-        }
-
-        const file_len = try file.readAll(&buf);
-        if (file_len != buf.len) {
-            logger.err().logf(
-                "Truncated identity file, expected {} bytes, found {}",
-                .{ buf.len, file_len },
-            );
-            return error.InvalidIdentityFile;
-        }
-
-        // NOTE: this should never fail so we can ignore the error
-        const secret_key = SecretKey.fromBytes(buf) catch |err| switch (err) {};
-        const keypair = try KeyPair.fromSecretKey(secret_key);
-
-        return keypair;
+        };
     } else |err| switch (err) {
         else => |e| return e,
         error.FileNotFound => {
@@ -77,27 +52,44 @@ pub fn getOrInit(allocator: std.mem.Allocator, logger: Logger) !KeyPair {
             defer file.close();
 
             const keypair = KeyPair.generate();
-            try file.writeAll(&keypair.secret_key.toBytes());
+            try std.json.stringify(&keypair.secret_key.toBytes(), .{}, file.writer());
 
             return keypair;
         },
     }
 }
 
-/// Reads a binary keypair file and returns its public key as `Pubkey`.
-pub fn readBinaryKeypairPubkey(path: []const u8) !sig.core.Pubkey {
-    var file = try std.fs.cwd().openFile(path, .{});
+/// Reads a pubkey either as a base58 string or from a json keypair file
+pub fn readPubkeyFlexible(logger: Logger, base58_or_kp_path: []const u8) !sig.core.Pubkey {
+    const pk_err = if (sig.core.Pubkey.parseRuntime(base58_or_kp_path)) |p| return p else |e| e;
+
+    var file = try std.fs.cwd().openFile(base58_or_kp_path, .{});
     defer file.close();
 
-    var buf: [std.crypto.sign.Ed25519.SecretKey.encoded_length]u8 = undefined;
+    const keypair = parseKeypairJson(file.reader()) catch |e| {
+        logger.err().logf(
+            "Could not interpret as a base58 pubkey due to {} or a json keypair file due to {}",
+            .{ pk_err, e },
+        );
+        return error.InvalidPubkeySource;
+    };
 
-    const end_pos = try file.getEndPos();
-    if (end_pos != buf.len) return error.InvalidKeypairFile;
-
-    const file_len = try file.readAll(&buf);
-    if (file_len != buf.len) return error.InvalidKeypairFile;
-
-    const secret_key = try std.crypto.sign.Ed25519.SecretKey.fromBytes(buf);
-    const keypair = try std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key);
     return sig.core.Pubkey.fromPublicKey(&keypair.public_key);
+}
+
+fn parseKeypairJson(reader: anytype) !KeyPair {
+    var fba_buf: [SecretKey.encoded_length * 10]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
+    var json_buf: [SecretKey.encoded_length * 10]u8 = undefined;
+    const string_len = try reader.readAll(&json_buf);
+
+    const buf = try std.json.parseFromSliceLeaky(
+        [SecretKey.encoded_length]u8,
+        fba.allocator(),
+        json_buf[0..string_len],
+        .{},
+    );
+
+    const secret_key = try SecretKey.fromBytes(buf);
+    return try KeyPair.fromSecretKey(secret_key);
 }
