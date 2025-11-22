@@ -119,7 +119,7 @@ pub fn main() !void {
         .validator => |params| {
             current_config.shred_version = params.shred_version;
             current_config.leader_schedule_path = params.leader_schedule;
-            current_config.vote_account_path = params.vote_account;
+            current_config.vote_account = params.vote_account;
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
@@ -405,7 +405,8 @@ const Cmd = struct {
         .alias = .none,
         .default_value = null,
         .config = .string,
-        .help = "Path to vote account keypair file. Defaults to $HOME/.sig/vote-account.key",
+        .help = "Base58 string of the vote account's address, or a path to vote account json" ++
+            " keypair file. Defaults to sig/vote-account.json in your system's app config folder",
     };
 
     const GossipArgumentsCommon = struct {
@@ -707,7 +708,7 @@ const Cmd = struct {
             .long =
             \\Gets own identity (Pubkey) or creates one if doesn't exist.
             \\
-            \\NOTE: Keypair is saved in $HOME/.sig/identity.key.
+            \\NOTE: Keypair is saved in sig/identity.json in your system's app config folder.
             ,
         },
         .sub = .{},
@@ -1024,7 +1025,7 @@ fn identity(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     const keypair = try sig.identity.getOrInit(allocator, .from(logger));
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
-    logger.info().logf("Identity: {s}\n", .{pubkey});
+    logger.info().logf("Identity: {s}", .{pubkey});
 }
 
 /// entrypoint to run only gossip
@@ -1228,17 +1229,20 @@ fn validator(
 
     // Vote account. if not provided, disable voting
     const maybe_vote_pubkey: ?Pubkey = if (cfg.voting_enabled) blk: {
-        const vote_keypair_path = cfg.vote_account_path orelse default_path: {
+        const vote_keypair_path = cfg.vote_account orelse default_path: {
             const app_data_dir_path = try std.fs.getAppDataDir(allocator, "sig");
             defer allocator.free(app_data_dir_path);
             break :default_path try std.fs.path.join(
                 allocator,
-                &.{ app_data_dir_path, "vote-account.key" },
+                &.{ app_data_dir_path, "vote-account.json" },
             );
         };
-        defer if (cfg.vote_account_path == null) allocator.free(vote_keypair_path);
+        defer if (cfg.vote_account == null) allocator.free(vote_keypair_path);
 
-        break :blk sig.identity.readBinaryKeypairPubkey(vote_keypair_path) catch |err| {
+        break :blk sig.identity.readPubkeyFlexible(
+            .from(app_base.logger),
+            vote_keypair_path,
+        ) catch |err| {
             app_base.logger.err().logf(
                 "vote-account: failed to read {s}: {}; voting will be disabled",
                 .{ vote_keypair_path, err },
