@@ -43,10 +43,12 @@ const Logger = sig.trace.Logger("replay.execution");
 /// The result of replaying an individual slot.
 pub const ReplayResult = struct {
     slot: Slot,
-    output: union(enum) {
+    output: Output,
+
+    pub const Output = union(enum) {
         last_entry_hash: sig.core.Hash,
         err: ReplaySlotError,
-    },
+    };
 };
 
 /// 1. Replays transactions from all the slots that need to be replayed.
@@ -56,77 +58,62 @@ pub const ReplayResult = struct {
 pub fn replayActiveSlots(state: *ReplayState) ![]const ReplayResult {
     const can_multi_thread = state.thread_pool.max_threads > 1;
     return if (can_multi_thread)
-        try awaitResults(state.allocator, try replayActiveSlotsAsync(state))
+        try replayActiveSlotsAsync(state)
     else
         try replayActiveSlotsSync(state);
 }
 
-fn replayActiveSlotsAsync(state: *ReplayState) ![]struct { Slot, *ReplaySlotFuture } {
-    var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsAsync" });
+fn replayActiveSlotsAsync(state: *ReplayState) ![]const ReplayResult {
+    const zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsAsync" });
     defer zone.deinit();
 
     const slot_tracker = &state.slot_tracker;
     const epoch_tracker = &state.epoch_tracker;
 
-    const active_slots = try slot_tracker.activeSlots(state.allocator);
-    defer state.allocator.free(active_slots);
-    state.execution_log_helper.logActiveSlots(active_slots);
+    var results = std.ArrayListUnmanaged(ReplaySlotFuture.Result){};
+    defer results.deinit(state.allocator);
 
-    if (active_slots.len == 0) {
-        return &.{};
+    {
+        var wait_group = std.Thread.WaitGroup{};
+        defer wait_group.wait();
+
+        const active_slots = try slot_tracker.activeSlots(state.allocator);
+        defer state.allocator.free(active_slots);
+        state.execution_log_helper.logActiveSlots(active_slots);
+
+        if (active_slots.len == 0) {
+            return &.{};
+        }
+
+        try results.ensureTotalCapacity(state.allocator, active_slots.len);
+        for (active_slots) |slot| {
+            state.logger.debug().logf("replaying slot: {}", .{slot});
+
+            const params = switch (try prepareSlot(state, slot_tracker, epoch_tracker, slot)) {
+                .confirm => |params| params,
+                .empty, .dead, .leader => continue,
+            };
+
+            const result_ptr = results.addOneAssumeCapacity();
+            replaySlotAsync(
+                state.allocator,
+                .from(state.logger),
+                &state.thread_pool,
+                &wait_group,
+                params,
+                result_ptr,
+            );
+        }
     }
 
-    var slot_statuses = std.ArrayListUnmanaged(struct { Slot, *ReplaySlotFuture }).empty;
-    errdefer {
-        for (slot_statuses.items) |status| status[1].destroy(state.allocator);
-        slot_statuses.deinit(state.allocator);
+    const replay_results = try state.allocator.alloc(ReplayResult, results.items.len);
+    errdefer state.allocator.free(replay_results);
+
+    for (replay_results, results.items) |*replay_result, result| {
+        replay_result.* = try result;
     }
 
-    for (active_slots) |slot| {
-        state.logger.debug().logf("replaying slot: {}", .{slot});
-
-        const params = switch (try prepareSlot(state, slot_tracker, epoch_tracker, slot)) {
-            .confirm => |params| params,
-            .empty, .dead, .leader => continue,
-        };
-
-        const future = try replaySlotAsync(
-            state.allocator,
-            .from(state.logger),
-            &state.thread_pool,
-            params,
-        );
-
-        errdefer future.destroy(state.allocator);
-        try slot_statuses.append(state.allocator, .{ slot, future });
-    }
-
-    return slot_statuses.toOwnedSlice(state.allocator);
-}
-
-/// Takes ownership over the futures and destroys them
-fn awaitResults(
-    allocator: Allocator,
-    /// takes ownership and frees with allocator
-    slot_futures: []struct { Slot, *ReplaySlotFuture },
-) ![]const ReplayResult {
-    defer {
-        for (slot_futures) |sf| sf[1].destroy(allocator);
-        allocator.free(slot_futures);
-    }
-    const results = try allocator.alloc(ReplayResult, slot_futures.len);
-    errdefer allocator.free(results);
-    for (results, slot_futures) |*result, slot_future| {
-        const slot, const future = slot_future;
-        result.* = .{
-            .slot = slot,
-            .output = if (try future.awaitBlocking()) |err|
-                .{ .err = err }
-            else
-                .{ .last_entry_hash = future.entries[future.entries.len - 1].hash },
-        };
-    }
-    return results;
+    return replay_results;
 }
 
 /// Fully synchronous version of replayActiveSlotsAsync that does not use
@@ -178,9 +165,11 @@ pub const ReplaySlotParams = struct {
     /// confirm slot takes ownership of this
     entries: []const Entry,
     /// confirm slot takes ownership of this
-    batches: []const replay.resolve_lookup.ResolvedBatch,
-    last_entry: Hash,
+    transactions: []const replay.resolve_lookup.ResolvedTransaction,
+    /// confirm slot takes ownership of this
     svm_gateway: SvmGateway,
+
+    last_entry: Hash,
     committer: Committer,
     verify_ticks_params: VerifyTicksParams,
     account_store: AccountStore,
@@ -188,15 +177,15 @@ pub const ReplaySlotParams = struct {
     pub fn deinit(self: ReplaySlotParams, allocator: Allocator) void {
         for (self.entries) |entry| entry.deinit(allocator);
         allocator.free(self.entries);
-        for (self.batches) |batch| batch.deinit(allocator);
-        allocator.free(self.batches);
+        for (self.transactions) |transaction| transaction.deinit(allocator);
+        allocator.free(self.transactions);
         self.svm_gateway.deinit(allocator);
     }
 };
 
 /// Asynchronously validate and execute entries from a single slot.
-///
-/// Return: ReplaySlotFuture which you can poll periodically to await a result.
+/// Holds a reference to the WaitGroup while computing the result asynchronously.
+/// When completed, writes the result (or error) into the `result_ptr`.
 ///
 /// Takes ownership of the entries. Pass the same allocator that was used for
 /// the entry allocation.
@@ -208,47 +197,24 @@ pub fn replaySlotAsync(
     allocator: Allocator,
     logger: Logger,
     thread_pool: *ThreadPool,
+    wait_group: *std.Thread.WaitGroup,
     params: ReplaySlotParams,
-) !*ReplaySlotFuture {
-    var zone = tracy.Zone.init(@src(), .{ .name = "replaySlot" });
+    result_ptr: *ReplaySlotFuture.Result,
+) void {
+    var zone = tracy.Zone.init(@src(), .{ .name = "replaySlotAsync" });
     zone.value(params.svm_gateway.params.slot);
     defer zone.deinit();
-    errdefer zone.color(0xFF0000);
 
     logger.info().log("confirming slot");
 
-    const future = fut: {
-        errdefer params.deinit(allocator);
-        break :fut try ReplaySlotFuture.create(
-            allocator,
-            .from(logger),
-            thread_pool,
-            params.committer,
-            params.entries,
-            params.batches,
-            params.svm_gateway,
-            params.account_store,
-        );
-    };
-    errdefer future.destroy(allocator);
-
-    if (verifyTicks(logger, params.entries, params.verify_ticks_params)) |block_error| {
-        future.status = .{ .done = .{ .invalid_block = block_error } };
-        return future;
-    }
-
-    try replay.exec_async.startPohVerify(
+    ReplaySlotFuture.startAsync(
         allocator,
         .from(logger),
-        &future.poh_verifier,
-        params.last_entry,
-        params.entries,
-        &future.exit,
+        thread_pool,
+        wait_group,
+        params,
+        result_ptr,
     );
-
-    _ = try future.poll(); // starts batch execution. poll result is cached inside future
-
-    return future;
 }
 
 /// Synchronous version of replaySlotAsync -- The main benefit of this function
@@ -289,13 +255,13 @@ pub fn replaySlotSync(
     }
 
     var svm_gateway = params.svm_gateway;
-    for (params.batches) |batch| {
+    for (params.transactions) |transaction| {
         var exit = Atomic(bool).init(false);
         switch (try replayBatch(
             allocator,
             &svm_gateway,
             params.committer,
-            batch.transactions,
+            &.{transaction},
             &exit,
         )) {
             .success => {},
@@ -415,7 +381,7 @@ fn prepareSlot(
     epoch_tracker: *const EpochTracker,
     slot: Slot,
 ) !PreparedSlot {
-    var zone = tracy.Zone.init(@src(), .{ .name = "replaySlot" });
+    var zone = tracy.Zone.init(@src(), .{ .name = "prepareSlot" });
     zone.value(slot);
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
@@ -517,15 +483,15 @@ fn prepareSlot(
         slot_account_reader,
     ) orelse return error.MissingSlotHashesSysvar;
 
-    const resolved_batches = try replay.resolve_lookup.resolveBlock(state.allocator, entries, .{
+    const resolved_txns = try replay.resolve_lookup.resolveBlock(state.allocator, entries, .{
         .slot = slot,
         .account_reader = slot_account_reader,
         .reserved_accounts = &slot_info.constants.reserved_accounts,
         .slot_hashes = slot_hashes,
     });
     errdefer {
-        for (resolved_batches) |batch| batch.deinit(state.allocator);
-        state.allocator.free(resolved_batches);
+        for (resolved_txns) |transaction| transaction.deinit(state.allocator);
+        state.allocator.free(resolved_txns);
     }
 
     var svm_gateway = try SvmGateway.init(state.allocator, .{
@@ -563,7 +529,7 @@ fn prepareSlot(
 
     return .{ .confirm = .{
         .entries = entries,
-        .batches = resolved_batches,
+        .transactions = resolved_txns,
         .last_entry = previous_last_entry,
         .svm_gateway = svm_gateway,
         .committer = committer,
@@ -591,7 +557,7 @@ pub const VerifyTicksParams = struct {
 
 /// Verify that a segment of entries has the correct number of ticks and hashes
 /// analogous to [verify_ticks](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/ledger/src/blockstore_processor.rs#L1097)
-fn verifyTicks(
+pub fn verifyTicks(
     logger: Logger,
     entries: []const Entry,
     params: VerifyTicksParams,
@@ -943,19 +909,22 @@ fn testReplaySlot(
 
         const entries_copy = try allocator.dupe(Entry, entries);
         errdefer allocator.free(entries_copy);
-        for (entries_copy, 0..) |*entry, i| {
-            errdefer for (entries_copy, 0..i) |e, _| e.deinit(allocator);
+
+        var i: usize = 0;
+        errdefer for (entries_copy[0..i]) |e| e.deinit(allocator);
+        for (entries_copy) |*entry| {
             entry.* = try entry.clone(allocator);
+            i += 1;
         }
 
         for (entries_copy) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
-        const batches = try replay.resolve_lookup
+        const transactions = try replay.resolve_lookup
             .resolveBlock(allocator, entries_copy, state.resolver());
         const svm_gateway = try SvmGateway.init(allocator, state.svmParams());
         const params = ReplaySlotParams{
             .entries = entries_copy,
-            .batches = batches,
+            .transactions = transactions,
             .last_entry = .ZEROES,
             .svm_gateway = svm_gateway,
             .committer = try state.committer(allocator),
@@ -974,19 +943,22 @@ fn testReplaySlot(
 
         const entries_copy = try allocator.dupe(Entry, entries);
         errdefer allocator.free(entries_copy);
-        for (entries_copy, 0..) |*entry, i| {
-            errdefer for (entries_copy, 0..i) |e, _| e.deinit(allocator);
+
+        var i: usize = 0;
+        errdefer for (entries_copy[0..i]) |e| e.deinit(allocator);
+        for (entries_copy) |*entry| {
             entry.* = try entry.clone(allocator);
+            i += 1;
         }
 
         for (entries_copy) |e| try state.makeTransactionsPassable(allocator, e.transactions);
 
-        const batches = try replay.resolve_lookup
+        const transactions = try replay.resolve_lookup
             .resolveBlock(allocator, entries_copy, state.resolver());
         const svm_gateway = try SvmGateway.init(allocator, state.svmParams());
         const params = ReplaySlotParams{
             .entries = entries_copy,
-            .batches = batches,
+            .transactions = transactions,
             .last_entry = .ZEROES,
             .svm_gateway = svm_gateway,
             .committer = try state.committer(allocator),
@@ -1000,10 +972,17 @@ fn testReplaySlot(
             thread_pool.deinit();
         }
 
-        const future = try replaySlotAsync(allocator, logger, &thread_pool, params);
-        defer future.destroy(allocator);
+        var result: ReplaySlotFuture.Result = undefined;
+        {
+            var wg = std.Thread.WaitGroup{};
+            defer wg.wait();
+            replaySlotAsync(allocator, logger, &thread_pool, &wg, params, &result);
+        }
 
-        break :result try testAwait(future);
+        break :result switch ((try result).output) {
+            .err => |e| e,
+            .last_entry_hash => null,
+        };
     };
 
     errdefer std.log.err("failed with: {any} - {any}\n", .{ async_result, sync_result });
