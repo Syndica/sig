@@ -13,7 +13,7 @@ pub const ValidatorIdentity = struct {
     /// Public key identifying this validator
     validator: sig.core.Pubkey,
     /// Public key of the vote account
-    vote_account: sig.core.Pubkey,
+    vote_account: ?sig.core.Pubkey,
 };
 
 pub const SigningKeys = struct {

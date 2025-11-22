@@ -268,7 +268,7 @@ pub const ForkProgress = struct {
             /// Should usually be `.now()`.
             now: sig.time.Instant,
             validator_identity: *const Pubkey,
-            validator_vote_pubkey: *const Pubkey,
+            validator_vote_pubkey: ?Pubkey,
             prev_leader_slot: ?Slot,
             num_blocks_on_fork: u64,
             num_dropped_blocks_on_fork: u64,
@@ -278,10 +278,13 @@ pub const ForkProgress = struct {
             &params.slot_info.constants.collector_id,
             params.validator_identity,
         )) .{
-            .validator_vote_pubkey = params.validator_vote_pubkey.*,
+            .validator_vote_pubkey = params.validator_vote_pubkey,
             .stake = blk: {
                 const vote_accounts = &params.epoch_stakes.stakes.vote_accounts;
-                break :blk vote_accounts.getDelegatedStake(params.validator_vote_pubkey.*);
+                break :blk if (params.validator_vote_pubkey) |v|
+                    vote_accounts.getDelegatedStake(v)
+                else
+                    0;
             },
             .total_epoch_stake = params.epoch_stakes.total_stake,
         } else null;
@@ -405,7 +408,7 @@ pub const ForkProgress = struct {
             break :blk .{
                 true,
                 info.stake,
-                try .init(allocator, &.{info.validator_vote_pubkey}, &.{}),
+                if (info.validator_vote_pubkey) |v| try .init(allocator, &.{v}, &.{}) else .{},
                 info.isPropagated(),
                 info.total_epoch_stake,
             };
@@ -444,13 +447,13 @@ pub const ForkProgress = struct {
 };
 
 pub const ValidatorStakeInfo = struct {
-    validator_vote_pubkey: Pubkey,
+    validator_vote_pubkey: ?Pubkey,
     stake: u64,
     total_epoch_stake: u64,
 
     pub const DEFAULT: ValidatorStakeInfo = .{
         .stake = 0,
-        .validator_vote_pubkey = .ZEROES,
+        .validator_vote_pubkey = null,
         .total_epoch_stake = 1,
     };
 
@@ -1274,7 +1277,7 @@ test "ForkProgress.init" {
 
     var expected_propagated_validators: PubkeyArraySet = .{};
     defer expected_propagated_validators.deinit(allocator);
-    try expected_propagated_validators.put(allocator, vsi.validator_vote_pubkey, {});
+    try expected_propagated_validators.put(allocator, vsi.validator_vote_pubkey.?, {});
 
     const expected_fork_stats = stats: {
         var fork_stats: ForkStats = .EMPTY_ZEROES;
@@ -1337,7 +1340,7 @@ test "ForkProgress.init" {
         .epoch_stakes = &epoch_consts.stakes,
         .now = now,
         .validator_identity = &slot_consts.collector_id,
-        .validator_vote_pubkey = &vsi.validator_vote_pubkey,
+        .validator_vote_pubkey = vsi.validator_vote_pubkey,
         .prev_leader_slot = null,
         .num_blocks_on_fork = 15,
         .num_dropped_blocks_on_fork = 16,

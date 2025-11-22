@@ -88,18 +88,18 @@ pub const Tower = struct {
     pub fn initializeLockoutsFromBank(
         self: *Tower,
         allocator: std.mem.Allocator,
-        vote_account_pubkey: *const Pubkey,
+        vote_account_pubkey: ?Pubkey,
         fork_root: Slot,
         slot_account_reader: sig.accounts_db.SlotAccountReader,
     ) !void {
         self.logger.info().logf(
-            "initializeLockoutsFromBank: fork_root={}, vote_pubkey={}",
+            "initializeLockoutsFromBank: fork_root={}, vote_pubkey={?}",
             .{ fork_root, vote_account_pubkey },
         );
         const vote_account = blk: {
             const maybe_vote_account = try slot_account_reader.get(
                 allocator,
-                vote_account_pubkey.*,
+                vote_account_pubkey orelse return,
             );
             break :blk maybe_vote_account orelse {
                 self.logger.info().logf(
@@ -122,7 +122,7 @@ pub const Tower = struct {
         }
 
         self.logger.debug().logf(
-            "Vote account loaded: Pubkey={}, Lamports={}, Owner={}, Data length={}",
+            "Vote account loaded: Pubkey={?}, Lamports={}, Owner={}, Data length={}",
             .{
                 vote_account_pubkey,
                 vote_account.lamports,
@@ -366,7 +366,7 @@ test "initializeLockoutsFromBank handles missing vote account" {
 
     try tower.initializeLockoutsFromBank(
         allocator,
-        &vote_pubkey,
+        vote_pubkey,
         fork_root,
         slot_account_reader,
     );
@@ -411,7 +411,7 @@ test "initializeLockoutsFromBank handles invalid vote account owner" {
     // Should return InvalidVoteAccountOwner error
     const result = tower.initializeLockoutsFromBank(
         allocator,
-        &vote_pubkey,
+        vote_pubkey,
         100,
         slot_account_reader,
     );
@@ -457,7 +457,7 @@ test "initializeLockoutsFromBank handles invalid vote state" {
     // Should return BincodeError when trying to deserialize invalid vote state
     const result = tower.initializeLockoutsFromBank(
         allocator,
-        &vote_pubkey,
+        vote_pubkey,
         100,
         slot_account_reader,
     );
