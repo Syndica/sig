@@ -69,6 +69,12 @@ pub const StakeHistory = struct {
         return self.entries.len == 0;
     }
 
+    pub fn containsEpoch(self: *const StakeHistory, epoch: Epoch) bool {
+        if (self.entries.len == 0) return false;
+        return self.entries.buffer[0].epoch >= epoch and
+            epoch >= self.entries.buffer[self.entries.len - 1].epoch;
+    }
+
     pub fn getEntry(self: StakeHistory, epoch: Epoch) ?Entry {
         return if (std.sort.binarySearch(
             Entry,

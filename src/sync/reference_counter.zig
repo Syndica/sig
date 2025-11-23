@@ -92,6 +92,40 @@ pub const ReferenceCounter = extern struct {
         }
         self.state.store(@bitCast(State{ .refs = 1 }), .release);
     }
+
+    pub fn Wrapped(comptime T: type) type {
+        return struct {
+            value: T,
+            rc: *ReferenceCounter,
+
+            pub fn init(allocator: std.mem.Allocator, value: T) !@This() {
+                const rc = try allocator.create(ReferenceCounter);
+                errdefer allocator.destroy(rc);
+                rc.* = .init;
+                return .{ .value = value, .rc = rc };
+            }
+
+            pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
+                if (self.rc.release()) {
+                    allocator.destroy(self.rc);
+                    allocator.free(self.value);
+                }
+            }
+
+            pub fn release(self: *ReferenceCounter) void {
+                std.debug.assert(self.rc.release());
+            }
+
+            pub fn acquire(self: *const @This()) void {
+                std.debug.assert(self.rc.acquire());
+            }
+
+            pub fn getAcquire(self: *const @This()) @This() {
+                self.acquire();
+                return self.*;
+            }
+        };
+    }
 };
 
 /// A reference counted item that is only freed when the last
