@@ -317,6 +317,11 @@ pub const ReplayTower = struct {
             block_id,
         );
 
+        self.logger.info().logf(
+            "recorded vote in tower for slot {d}, new root: {?d}",
+            .{ vote_slot, new_root },
+        );
+
         // Log tower state after recording vote
         self.logTowerState();
 
@@ -431,9 +436,6 @@ pub const ReplayTower = struct {
         return null;
     }
 
-    /// Provides proof that enough validators voted for this new branch,
-    /// so it's safe to switch to it.
-    ///
     /// Checks if a vote for `candidate_slot` is usable in a switching proof
     /// from `last_voted_slot` to `switch_slot`.
     ///
@@ -462,7 +464,7 @@ pub const ReplayTower = struct {
         if (last_vote_ancestors.ancestors.count() == 0) {
             // If `last_vote_ancestors` is empty, this means we must have a last vote that is stray. If the `last_voted_slot`
             // is stray, it must be descended from some earlier root than the latest root (the anchor at startup).
-            // The above check also guarentees that the candidate slot is not a descendant of this stray last vote.
+            // The above check also guarantees that the candidate slot is not a descendant of this stray last vote.
             //
             // This gives us a fork graph:
             //     / ------------- stray `last_voted_slot`
@@ -470,7 +472,7 @@ pub const ReplayTower = struct {
             //     \- latest root (anchor) - ... - candidate slot
             //                                \- switch slot
             //
-            // Thus the common acnestor of `last_voted_slot` and `candidate_slot` is `old_root`, which the `switch_slot`
+            // Thus the common ancestor of `last_voted_slot` and `candidate_slot` is `old_root`, which the `switch_slot`
             // descends from. Thus it is safe to use `candidate_slot` in the switching proof.
             //
             // Note: the calling function should have already panicked if we do not have ancestors and the last vote is not stray.
@@ -543,7 +545,7 @@ pub const ReplayTower = struct {
         // so this is safe to check here. We return here if the last voted slot was rolled back/purged due to
         // being a duplicate because `ancestors`/`descendants`/`progress` structures may be missing this slot due
         // to duplicate purging. This would cause many of the `unwrap()` checks below to fail.
-        const switch_hash = progress.getHash(switch_slot).?;
+        const switch_hash = progress.getHash(switch_slot) orelse return error.MissingSlot;
         if (heaviest_subtree_fork_choice.latestDuplicateAncestor(
             SlotAndHash{ .slot = last_voted_slot, .hash = last_voted_hash },
         )) |latest_duplicate_ancestor| {
@@ -649,6 +651,14 @@ pub const ReplayTower = struct {
                 // stray slots (which should always be empty_ancestors).
                 //
                 // This is covered by test_future_tower_* in local_cluster
+                self
+                    .logger
+                    .info()
+                    .logf(
+                    "failed_switch_threshold. switch_proof_stake: {}, total_stake: {}",
+                    .{ 0, total_stake },
+                );
+
                 return SwitchForkDecision{ .failed_switch_threshold = .{
                     .switch_proof_stake = 0,
                     .total_stake = total_stake,
@@ -668,56 +678,44 @@ pub const ReplayTower = struct {
         for (descendants.keys(), descendants.values()) |candidate_slot, *candidate_descendants| {
             // 1) Don't consider any banks that haven't been frozen yet
             //    because the needed stats are unavailable
-            // 2) Only consider lockouts at the latest `frozen` bank
-            //    on each fork, as that bank will contain all the
-            //    lockout intervals for ancestors on that fork as well.
-            // 3) Don't consider lockouts on the `last_vote` itself
-            // 4) Don't consider lockouts on any descendants of
-            //    `last_vote`
-            // 5) Don't consider any banks before the root because
-            //    all lockouts must be ancestors of `last_vote`
             const is_progress_computed = if (progress.getForkStats(candidate_slot)) |stats|
                 stats.computed
             else
                 false;
+            if (!is_progress_computed) continue;
 
+            // 2) Only consider lockouts at the latest `frozen` bank
+            //    on each fork, as that bank will contain all the
+            //    lockout intervals for ancestors on that fork as well.
             // If any of the descendants have the `computed` flag set, then there must be a more
             // recent frozen bank on this fork to use, so we can ignore this one. Otherwise,
             // even if this bank has descendants, if they have not yet been frozen / stats computed,
             // then use this bank as a representative for the fork.
-            const is_descendant_computed = if (!is_progress_computed) blk: {
-                break :blk for (candidate_descendants.items()) |d| {
-                    if (progress.getForkStats(d)) |stats|
-                        break stats.computed
-                    else
-                        break false;
-                } else false;
-            } else is_progress_computed;
+            const is_descendant_computed = for (candidate_descendants.items()) |d| {
+                if (progress.getForkStats(d)) |stats| {
+                    if (stats.computed) break true;
+                }
+            } else false;
+            if (is_descendant_computed) continue;
 
-            const is_candidate_eq_last_voted_slot = if (!is_descendant_computed)
-                (candidate_slot == last_voted_slot)
-            else
-                is_descendant_computed;
+            // 3) Don't consider lockouts on the `last_vote` itself
+            if (candidate_slot == last_voted_slot) continue;
 
-            const is_candidate_less_eq_root = if (!is_candidate_eq_last_voted_slot)
-                (candidate_slot <= root)
-            else
-                is_candidate_eq_last_voted_slot;
+            // 4) Don't consider lockouts on any descendants of
+            //    `last_vote`
+            if (candidate_slot <= root) continue;
 
-            const is_valid_switch = if (!is_candidate_less_eq_root)
-                self.isValidSwitchingProofVote(
-                    candidate_slot,
-                    last_voted_slot,
-                    switch_slot,
-                    ancestors,
-                    &last_vote_ancestors,
-                ).?
-            else
-                is_candidate_less_eq_root;
+            // 5) Don't consider any banks before the root because
+            //    all lockouts must be ancestors of `last_vote`
+            const is_valid_switching_vote = self.isValidSwitchingProofVote(
+                candidate_slot,
+                last_voted_slot,
+                switch_slot,
+                ancestors,
+                &last_vote_ancestors,
+            ) orelse return error.MissingSlotInAncestors;
 
-            if (is_valid_switch) {
-                continue;
-            }
+            if (!is_valid_switching_vote) continue;
 
             // By the time we reach here, any ancestors of the `last_vote`,
             // should have been filtered out, as they all have a descendant,
@@ -737,25 +735,35 @@ pub const ReplayTower = struct {
             // Find any locked out intervals for vote accounts in this bank with
             // `lockout_interval_end` >= `last_vote`, which implies they are locked out at
             // `last_vote` on another fork.
-            const intervals_keyed_by_end = lockout_intervals.map.values()[last_voted_slot..];
-            for (intervals_keyed_by_end) |interval_keyed_by_end| {
-                for (interval_keyed_by_end.items) |vote_account| {
-                    if (locked_out_vote_accounts.contains(vote_account[1])) {
+            // Iterate through the lockout intervals map and check each entry
+            for (
+                lockout_intervals.map.keys(),
+                lockout_intervals.map.values(),
+            ) |lockout_interval_end, *intervals_keyed_by_end| {
+                // Only consider intervals that expire at or after last_voted_slot
+                if (lockout_interval_end < last_voted_slot) {
+                    continue;
+                }
+
+                for (intervals_keyed_by_end.items) |vote_account| {
+                    const voted_slot, const voted_pubkey = vote_account;
+
+                    if (locked_out_vote_accounts.contains(voted_pubkey)) {
                         continue;
                     }
                     // Only count lockouts on slots that are:
                     // 1) Not ancestors of `last_vote`, meaning being on different fork
                     // 2) Not from before the current root as we can't determine if
                     // anything before the root was an ancestor of `last_vote` or not
-                    if (!last_vote_ancestors.containsSlot(vote_account[0]) and (
+                    if (!last_vote_ancestors.containsSlot(voted_slot) and (
                         // Given a `lockout_interval_start` < root that appears in a
                         // bank for a `candidate_slot`, it must be that `lockout_interval_start`
                         // is an ancestor of the current root, because `candidate_slot` is a
                         // descendant of the current root
-                        vote_account[0] > root))
+                        voted_slot > root))
                     {
                         const stake =
-                            if (epoch_vote_accounts.get(vote_account[1])) |staked_account|
+                            if (epoch_vote_accounts.get(voted_pubkey)) |staked_account|
                                 staked_account.stake
                             else
                                 0;
@@ -767,7 +775,7 @@ pub const ReplayTower = struct {
                         ) > SWITCH_FORK_THRESHOLD) {
                             return SwitchForkDecision{ .switch_proof = switch_proof };
                         }
-                        try locked_out_vote_accounts.put(allocator, vote_account[1]);
+                        try locked_out_vote_accounts.put(allocator, voted_pubkey);
                     }
                 }
             }
@@ -833,6 +841,14 @@ pub const ReplayTower = struct {
         }
         // We have not detected sufficient lockout past the last voted slot to generate
         // a switching proof
+        self
+            .logger
+            .info()
+            .logf(
+            "Final failed_switch_threshold. switch_proof_stake: {}, total_stake: {}",
+            .{ locked_out_stake, total_stake },
+        );
+
         return SwitchForkDecision{
             .failed_switch_threshold = .{
                 .switch_proof_stake = locked_out_stake,
@@ -949,11 +965,6 @@ pub const ReplayTower = struct {
 
     pub fn isStrayLastVote(self: *const ReplayTower) bool {
         const signal = self.lastVoteSignal();
-
-        if (signal == .stray) {
-            self.metrics.stray_restored_slots.inc();
-        }
-
         return signal == .stray;
     }
 
@@ -1239,8 +1250,9 @@ pub const ReplayTower = struct {
         (my_latest_landed_vote_slot >= last_voted_slot) or
             // 2. Already voting at the tip
             (last_voted_slot >= heaviest_bank_on_same_voted_fork) or
-            // 3. Last vote is within slot hashes, regular refresh is enough
-            slot_history.check(last_voted_slot) == .found;
+            // 3. Last vote is within this bank's slot hashes history, regular refresh is enough
+            (last_voted_slot < heaviest_bank_on_same_voted_fork and
+                slot_history.check(last_voted_slot) == .found);
     }
 
     /// Handles candidate selection when fork switching fails threshold checks
@@ -1419,15 +1431,34 @@ pub const ReplayTower = struct {
         }
 
         // Final decision
+        const switch_fork_can_vote = switch_fork_decision.canVote();
         const can_vote = !is_locked_out and
             threshold_passed and
             propagation_confirmed and
-            switch_fork_decision.canVote();
+            switch_fork_can_vote;
 
         if (can_vote) {
             self.logger.info().logf(
-                "voting: {d} {d:.1}%",
+                "Can vote on: {d} {d:.1}%",
                 .{ candidate_vote_bank_slot, 100.0 * fork_weight },
+            );
+        } else {
+            self.logger.info().logf(
+                \\Cannot vote on slot {d}:
+                \\ locked_out={}
+                \\ threshold_passed={}
+                \\ propagation_confirmed={}
+                \\ switch_fork_can_vote={}
+                \\ switch_fork_decision={any}"
+            ,
+                .{
+                    candidate_vote_bank_slot,
+                    is_locked_out,
+                    threshold_passed,
+                    propagation_confirmed,
+                    switch_fork_can_vote,
+                    switch_fork_decision.*,
+                },
             );
         }
 
@@ -1683,7 +1714,10 @@ fn checkVoteStakeThreshold(
     }
 
     return .{
-        .failed_threshold = .{ .vote_depth = threshold_depth, .observed_stake = 0 },
+        .failed_threshold = .{
+            .vote_depth = threshold_depth,
+            .observed_stake = fork_stake,
+        },
     };
 }
 
@@ -1920,6 +1954,9 @@ fn updateAncestorVotedStakes(
         const entry_vote_stake = try voted_stakes.getOrPutValue(allocator, voted_slot, 0);
         entry_vote_stake.value_ptr.* += voted_stake;
         for (vote_slot_ancestors.ancestors.keys()) |ancestor_slot| {
+            // Ideally, slot should not be included the list of its ancestors.
+            // still check to avoid double-counting by skipping.
+            if (ancestor_slot == voted_slot) continue;
             const entry_voted_stake = try voted_stakes.getOrPutValue(allocator, ancestor_slot, 0);
             entry_voted_stake.value_ptr.* += voted_stake;
         }
@@ -3792,11 +3829,1201 @@ test "greatestCommonAncestor" {
     }
 }
 
+test "isValidSwitchingProofVote basic cases" {
+    // Test basic cases of switch proof validation
+    const allocator = std.testing.allocator;
+
+    var ancestors: AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
+    defer {
+        for (ancestors.values()) |*set| set.deinit(allocator);
+        ancestors.deinit(allocator);
+    }
+
+    // Fork structure:
+    //          /- 48
+    // 0 - 43 - 44 - 47
+    //            \- 110
+    try ancestors.put(allocator, 0, try createAncestor(allocator, &.{}));
+    try ancestors.put(allocator, 43, try createAncestor(allocator, &.{0}));
+    try ancestors.put(allocator, 44, try createAncestor(allocator, &.{ 43, 0 }));
+    try ancestors.put(allocator, 47, try createAncestor(allocator, &.{ 44, 43, 0 }));
+    try ancestors.put(allocator, 48, try createAncestor(allocator, &.{ 47, 44, 43, 0 }));
+    try ancestors.put(allocator, 110, try createAncestor(allocator, &.{ 44, 43, 0 }));
+
+    const tower = try createTestReplayTower(0, 0);
+    defer tower.deinit(std.testing.allocator);
+
+    const last_voted_slot: Slot = 47;
+    const switch_slot: Slot = 110;
+    const last_vote_ancestors = ancestors.get(last_voted_slot).?;
+
+    // Test 1: Candidate is descendant of last vote - should be INVALID
+    // 48 is a descendant of 47 (our last vote), so it's on the same fork
+    {
+        const result = tower.isValidSwitchingProofVote(
+            48,
+            last_voted_slot,
+            switch_slot,
+            &ancestors,
+            &last_vote_ancestors,
+        );
+        try std.testing.expect(result != null);
+        try std.testing.expectEqual(false, result.?);
+    }
+
+    // Test 2: Candidate on valid different fork - should be VALID
+    // 110 forked off at 44, which is an ancestor of both 47 and 110
+    {
+        const result = tower.isValidSwitchingProofVote(
+            110,
+            last_voted_slot,
+            switch_slot,
+            &ancestors,
+            &last_vote_ancestors,
+        );
+        try std.testing.expect(result != null);
+        try std.testing.expectEqual(true, result.?);
+    }
+}
+
+test "isValidSwitchingProofVote descendant filtering" {
+    // Test that votes on descendants of last vote don't count
+    const allocator = std.testing.allocator;
+
+    var ancestors: AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
+    defer {
+        for (ancestors.values()) |*set| set.deinit(allocator);
+        ancestors.deinit(allocator);
+    }
+
+    // Fork structure:
+    //                    /- 110 - 111 - 112
+    // 0 - 43 - 44 - 45 - 46 - 47 - 48 - 49 - 50
+    try ancestors.put(allocator, 0, try createAncestor(allocator, &.{}));
+    try ancestors.put(allocator, 43, try createAncestor(allocator, &.{0}));
+    try ancestors.put(allocator, 44, try createAncestor(allocator, &.{ 43, 0 }));
+    try ancestors.put(allocator, 45, try createAncestor(allocator, &.{ 44, 43, 0 }));
+    try ancestors.put(allocator, 46, try createAncestor(allocator, &.{ 45, 44, 43, 0 }));
+    try ancestors.put(allocator, 47, try createAncestor(allocator, &.{ 46, 45, 44, 43, 0 }));
+    try ancestors.put(allocator, 48, try createAncestor(allocator, &.{ 47, 46, 45, 44, 43, 0 }));
+    try ancestors.put(allocator, 49, try createAncestor(allocator, &.{ 48, 47, 46, 45, 44, 43, 0 }));
+    try ancestors.put(
+        allocator,
+        50,
+        try createAncestor(allocator, &.{ 49, 48, 47, 46, 45, 44, 43, 0 }),
+    );
+    try ancestors.put(allocator, 110, try createAncestor(allocator, &.{ 45, 44, 43, 0 }));
+    try ancestors.put(allocator, 111, try createAncestor(allocator, &.{ 110, 45, 44, 43, 0 }));
+    try ancestors.put(allocator, 112, try createAncestor(allocator, &.{ 111, 110, 45, 44, 43, 0 }));
+
+    const tower = try createTestReplayTower(0, 0);
+    defer tower.deinit(std.testing.allocator);
+
+    const last_voted_slot: Slot = 47;
+    const switch_slot: Slot = 110;
+    const last_vote_ancestors = ancestors.get(last_voted_slot).?;
+
+    // Votes on descendants of last vote (48, 49, 50) should all be INVALID
+    for ([_]Slot{ 48, 49, 50 }) |candidate| {
+        const result = tower.isValidSwitchingProofVote(
+            candidate,
+            last_voted_slot,
+            switch_slot,
+            &ancestors,
+            &last_vote_ancestors,
+        );
+        try std.testing.expect(result != null);
+        try std.testing.expectEqual(false, result.?);
+    }
+
+    // Votes on the switch fork (110, 111, 112) should all be VALID
+    for ([_]Slot{ 110, 111, 112 }) |candidate| {
+        const result = tower.isValidSwitchingProofVote(
+            candidate,
+            last_voted_slot,
+            switch_slot,
+            &ancestors,
+            &last_vote_ancestors,
+        );
+        try std.testing.expect(result != null);
+        try std.testing.expectEqual(true, result.?);
+    }
+}
+
+test "isValidSwitchingProofVote ancestor filtering" {
+    // Test filtering based on lockout intervals that don't cover last vote
+    const allocator = std.testing.allocator;
+
+    var ancestors: AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
+    defer {
+        for (ancestors.values()) |*set| set.deinit(allocator);
+        ancestors.deinit(allocator);
+    }
+
+    // Fork structure:
+    //               /- 14 - 15
+    // 0 - 12 - 13 -
+    //               \- 45 - 46 - 47
+    //                 \- 110
+    try ancestors.put(allocator, 0, try createAncestor(allocator, &.{}));
+    try ancestors.put(allocator, 12, try createAncestor(allocator, &.{0}));
+    try ancestors.put(allocator, 13, try createAncestor(allocator, &.{ 12, 0 }));
+    try ancestors.put(allocator, 14, try createAncestor(allocator, &.{ 13, 12, 0 }));
+    try ancestors.put(allocator, 15, try createAncestor(allocator, &.{ 14, 13, 12, 0 }));
+    try ancestors.put(allocator, 45, try createAncestor(allocator, &.{ 13, 12, 0 }));
+    try ancestors.put(allocator, 46, try createAncestor(allocator, &.{ 45, 13, 12, 0 }));
+    try ancestors.put(allocator, 47, try createAncestor(allocator, &.{ 46, 45, 13, 12, 0 }));
+    try ancestors.put(allocator, 110, try createAncestor(allocator, &.{ 45, 13, 12, 0 }));
+
+    const tower = try createTestReplayTower(0, 0);
+    defer tower.deinit(std.testing.allocator);
+
+    const last_voted_slot: Slot = 47;
+    const switch_slot: Slot = 110;
+    const last_vote_ancestors = ancestors.get(last_voted_slot).?;
+
+    // Slot 14 and 15 are on a different fork
+    // They should be VALID for contributing to switch proof
+    for ([_]Slot{ 14, 15 }) |candidate| {
+        const result = tower.isValidSwitchingProofVote(
+            candidate,
+            last_voted_slot,
+            switch_slot,
+            &ancestors,
+            &last_vote_ancestors,
+        );
+        try std.testing.expect(result != null);
+        try std.testing.expectEqual(true, result.?);
+    }
+}
+
+test "isValidSwitchingProofVote common ancestor" {
+    // This test covers the critical logic from Agave's test_switch_threshold_common_ancestor
+    // Fork structure:
+    //                                       /- 50
+    //          /- 51    /- 45 - 46 - 47 - 48 - 49
+    // 0 - 1 - 2 - 43 - 44
+    //                   \- 110 - 111 - 112
+    //                    \- 113
+    //
+    // Last vote: 49 (on path 43-44-45-46-47-48-49)
+    // Switch slot: 111 (on path 43-44-110-111)
+    //
+    // Candidate slot 50 should NOT work because:
+    //   - It's on the same fork as last_vote (49) relative to switch_slot (111)
+    //   - The common ancestor of 50 and 49 is 48, and switch_slot (111) does NOT descend from 48
+    //
+    // Candidate slots 51, 111, 112, 113 SHOULD work because:
+    //   - They forked off at or before the common ancestor of switch_slot and last_vote
+
+    const allocator = std.testing.allocator;
+
+    var ancestors: AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
+    defer {
+        for (ancestors.values()) |*set| set.deinit(allocator);
+        ancestors.deinit(allocator);
+    }
+
+    // Build the ancestry information for each slot
+    // Format: slot -> its ancestors (not including itself)
+    try ancestors.put(
+        allocator,
+        0,
+        try createAncestor(allocator, &.{}),
+    );
+    try ancestors.put(
+        allocator,
+        1,
+        try createAncestor(allocator, &.{0}),
+    );
+    try ancestors.put(allocator, 2, try createAncestor(
+        allocator,
+        &.{ 1, 0 },
+    ));
+    try ancestors.put(allocator, 43, try createAncestor(
+        allocator,
+        &.{ 2, 1, 0 },
+    ));
+    try ancestors.put(allocator, 44, try createAncestor(
+        allocator,
+        &.{ 43, 2, 1, 0 },
+    ));
+    try ancestors.put(allocator, 45, try createAncestor(
+        allocator,
+        &.{ 44, 43, 2, 1, 0 },
+    ));
+    try ancestors.put(allocator, 46, try createAncestor(
+        allocator,
+        &.{ 45, 44, 43, 2, 1, 0 },
+    ));
+    try ancestors.put(allocator, 47, try createAncestor(
+        allocator,
+        &.{ 46, 45, 44, 43, 2, 1, 0 },
+    ));
+    try ancestors.put(allocator, 48, try createAncestor(
+        allocator,
+        &.{ 47, 46, 45, 44, 43, 2, 1, 0 },
+    ));
+    try ancestors.put(allocator, 49, try createAncestor(
+        allocator,
+        &.{ 48, 47, 46, 45, 44, 43, 2, 1, 0 },
+    ));
+    try ancestors.put(allocator, 50, try createAncestor(
+        allocator,
+        &.{ 49, 48, 47, 46, 45, 44, 43, 2, 1, 0 },
+    ));
+    try ancestors.put(
+        allocator,
+        51,
+        try createAncestor(allocator, &.{ 2, 1, 0 }),
+    );
+    try ancestors.put(
+        allocator,
+        110,
+        try createAncestor(allocator, &.{ 44, 43, 2, 1, 0 }),
+    );
+    try ancestors.put(
+        allocator,
+        111,
+        try createAncestor(allocator, &.{ 110, 44, 43, 2, 1, 0 }),
+    );
+    try ancestors.put(
+        allocator,
+        112,
+        try createAncestor(allocator, &.{ 111, 110, 44, 43, 2, 1, 0 }),
+    );
+    try ancestors.put(allocator, 113, try createAncestor(allocator, &.{ 44, 43, 2, 1, 0 }));
+
+    const tower = try createTestReplayTower(0, 0);
+    defer tower.deinit(std.testing.allocator);
+
+    const last_voted_slot: Slot = 49;
+    const switch_slot: Slot = 111;
+    const last_vote_ancestors = ancestors.get(last_voted_slot).?;
+
+    // Test candidate 50: should be INVALID (false)
+    // Because 50 is on the same fork as 49 relative to switch 111
+    {
+        const result = tower.isValidSwitchingProofVote(
+            50, // candidate_slot
+            last_voted_slot,
+            switch_slot,
+            &ancestors,
+            &last_vote_ancestors,
+        );
+        try std.testing.expect(result != null);
+        try std.testing.expectEqual(false, result.?);
+    }
+
+    // Test candidate 51: should be VALID (true)
+    // Because 51 forked off at slot 2, before the common ancestor (44) of 49 and 111
+    {
+        const result = tower.isValidSwitchingProofVote(
+            51,
+            last_voted_slot,
+            switch_slot,
+            &ancestors,
+            &last_vote_ancestors,
+        );
+        try std.testing.expect(result != null);
+        try std.testing.expectEqual(true, result.?);
+    }
+
+    // Test candidate 111: should be VALID (true)
+    // Because 111 is the switch slot itself
+    {
+        const result = tower.isValidSwitchingProofVote(
+            111,
+            last_voted_slot,
+            switch_slot,
+            &ancestors,
+            &last_vote_ancestors,
+        );
+        try std.testing.expect(result != null);
+        try std.testing.expectEqual(true, result.?);
+    }
+
+    // Test candidate 112: should be VALID (true)
+    // Because 112 is on the switch fork
+    {
+        const result = tower.isValidSwitchingProofVote(
+            112,
+            last_voted_slot,
+            switch_slot,
+            &ancestors,
+            &last_vote_ancestors,
+        );
+        try std.testing.expect(result != null);
+        try std.testing.expectEqual(true, result.?);
+    }
+
+    // Test candidate 113: should be VALID (true)
+    // Because 113 forked off at slot 44, which is the common ancestor
+    {
+        const result = tower.isValidSwitchingProofVote(
+            113,
+            last_voted_slot,
+            switch_slot,
+            &ancestors,
+            &last_vote_ancestors,
+        );
+        try std.testing.expect(result != null);
+        try std.testing.expectEqual(true, result.?);
+    }
+}
+
+// Analogous to [test_switch_threshold](https://github.com/anza-xyz/agave/blob/1538a5d7823c5a4ea2c8000d14d09eff3bee2ef1/core/src/consensus.rs#L2103)
+test "switch threshold" {
+    const allocator = std.testing.allocator;
+
+    // Setup fork structure:
+    //        /- 10 - 11 - 12 - 13 - 14  (minor fork 1)
+    // 0 - 1 - 2
+    //        \- 43 - 44 - 45 - 46 - 47 - 48 - 49 - 50  (minor fork 2)
+    //                  \- 110  (switch target)
+    //                  \- 112
+
+    // Create ancestors map
+    var ancestors: AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
+    defer {
+        for (ancestors.values()) |*set| set.deinit(allocator);
+        ancestors.deinit(allocator);
+    }
+
+    // Build ancestry for all slots in the fork structure
+    try ancestors.put(allocator, 0, try createAncestor(allocator, &.{}));
+    try ancestors.put(allocator, 1, try createAncestor(allocator, &.{0}));
+    try ancestors.put(allocator, 2, try createAncestor(allocator, &.{ 1, 0 }));
+
+    // Minor fork 1: 10-14
+    try ancestors.put(allocator, 10, try createAncestor(allocator, &.{ 2, 1, 0 }));
+    try ancestors.put(allocator, 11, try createAncestor(allocator, &.{ 10, 2, 1, 0 }));
+    try ancestors.put(allocator, 12, try createAncestor(allocator, &.{ 11, 10, 2, 1, 0 }));
+    try ancestors.put(allocator, 13, try createAncestor(allocator, &.{ 12, 11, 10, 2, 1, 0 }));
+    try ancestors.put(allocator, 14, try createAncestor(allocator, &.{ 13, 12, 11, 10, 2, 1, 0 }));
+
+    // Minor fork 2: 43-50
+    try ancestors.put(
+        allocator,
+        43,
+        try createAncestor(allocator, &.{ 2, 1, 0 }),
+    );
+    try ancestors.put(
+        allocator,
+        44,
+        try createAncestor(allocator, &.{ 43, 2, 1, 0 }),
+    );
+    try ancestors.put(
+        allocator,
+        45,
+        try createAncestor(allocator, &.{ 44, 43, 2, 1, 0 }),
+    );
+    try ancestors.put(
+        allocator,
+        46,
+        try createAncestor(allocator, &.{ 45, 44, 43, 2, 1, 0 }),
+    );
+    try ancestors.put(
+        allocator,
+        47,
+        try createAncestor(allocator, &.{ 46, 45, 44, 43, 2, 1, 0 }),
+    );
+    try ancestors.put(
+        allocator,
+        48,
+        try createAncestor(allocator, &.{ 47, 46, 45, 44, 43, 2, 1, 0 }),
+    );
+    try ancestors.put(
+        allocator,
+        49,
+        try createAncestor(allocator, &.{ 48, 47, 46, 45, 44, 43, 2, 1, 0 }),
+    );
+    try ancestors.put(
+        allocator,
+        50,
+        try createAncestor(allocator, &.{ 49, 48, 47, 46, 45, 44, 43, 2, 1, 0 }),
+    );
+
+    // Switch target and other fork
+    try ancestors.put(allocator, 110, try createAncestor(allocator, &.{ 44, 43, 2, 1, 0 }));
+    try ancestors.put(allocator, 112, try createAncestor(allocator, &.{ 43, 2, 1, 0 }));
+
+    // Create descendants map
+    var descendants: AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)) = .empty;
+    defer {
+        for (descendants.values()) |*set| set.deinit(allocator);
+        descendants.deinit(allocator);
+    }
+
+    // Helper to add descendants
+    const addDescendants = struct {
+        fn call(
+            desc: *AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
+            alloc: std.mem.Allocator,
+            slot: Slot,
+            desc_slots: []const Slot,
+        ) !void {
+            var set: SortedSetUnmanaged(Slot) = .empty;
+            for (desc_slots) |s| try set.put(alloc, s);
+            try desc.put(alloc, slot, set);
+        }
+    }.call;
+
+    try addDescendants(&descendants, allocator, 0, &.{
+        1,
+        2,
+        10,
+        11,
+        12,
+        13,
+        14,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        110,
+        112,
+    });
+    try addDescendants(&descendants, allocator, 1, &.{
+        2,
+        10,
+        11,
+        12,
+        13,
+        14,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        110,
+        112,
+    });
+    try addDescendants(
+        &descendants,
+        allocator,
+        2,
+        &.{ 10, 11, 12, 13, 14, 43, 44, 45, 46, 47, 48, 49, 50, 110, 112 },
+    );
+    try addDescendants(&descendants, allocator, 10, &.{ 11, 12, 13, 14 });
+    try addDescendants(&descendants, allocator, 11, &.{ 12, 13, 14 });
+    try addDescendants(&descendants, allocator, 12, &.{ 13, 14 });
+    try addDescendants(&descendants, allocator, 13, &.{14});
+    try addDescendants(&descendants, allocator, 14, &.{});
+    try addDescendants(&descendants, allocator, 43, &.{ 44, 45, 46, 47, 48, 49, 50, 110, 112 });
+    try addDescendants(&descendants, allocator, 44, &.{ 45, 46, 47, 48, 49, 50, 110 });
+    try addDescendants(&descendants, allocator, 45, &.{ 46, 47, 48, 49, 50 });
+    try addDescendants(&descendants, allocator, 46, &.{ 47, 48, 49, 50 });
+    try addDescendants(&descendants, allocator, 47, &.{ 48, 49, 50 });
+    try addDescendants(&descendants, allocator, 48, &.{ 49, 50 });
+    try addDescendants(&descendants, allocator, 49, &.{50});
+    try addDescendants(&descendants, allocator, 50, &.{});
+    try addDescendants(&descendants, allocator, 110, &.{});
+    try addDescendants(&descendants, allocator, 112, &.{});
+
+    // Create progress map with all slots marked as computed
+    var progress: ProgressMap = .INIT;
+    defer {
+        for (progress.map.values()) |*v| v.deinit(allocator);
+        progress.map.deinit(allocator);
+    }
+
+    const slots_to_add = [_]Slot{
+        0,
+        1,
+        2,
+        10,
+        11,
+        12,
+        13,
+        14,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        110,
+        112,
+    };
+    for (slots_to_add) |slot| {
+        var fork_progress: ForkProgress = try .zeroes(allocator);
+        fork_progress.fork_stats.computed = true;
+        fork_progress.fork_stats.block_height = slot;
+        try progress.map.put(allocator, slot, fork_progress);
+    }
+
+    // Add hashes to progress map
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const random = prng.random();
+    for (slots_to_add) |slot| {
+        if (progress.map.getPtr(slot)) |fork_progress| {
+            fork_progress.fork_stats.slot_hash = Hash.initRandom(random);
+        }
+    }
+
+    // Create epoch vote accounts (2 validators with 10000 stake each)
+    var epoch_vote_accounts: StakeAndVoteAccountsMap = .empty;
+    defer epoch_vote_accounts.deinit(allocator);
+
+    const vote_pubkey1 = Pubkey.initRandom(random);
+    const vote_pubkey2 = Pubkey.initRandom(random);
+
+    try epoch_vote_accounts.put(allocator, vote_pubkey1, .{ .stake = 10000, .account = undefined });
+    try epoch_vote_accounts.put(allocator, vote_pubkey2, .{ .stake = 10000, .account = undefined });
+
+    const total_stake: u64 = 20000;
+    const other_vote_account = vote_pubkey2;
+
+    // Create tower and set last vote to 47
+    var tower = try createTestReplayTower(0, 0);
+    defer tower.deinit(allocator);
+    _ = try tower.recordBankVote(allocator, 47, progress.getHash(47).?);
+
+    // Create empty latest validator votes
+    const latest_validator_votes: LatestValidatorVotes = .empty;
+
+    // Create fork choice
+    const fork_choice: HeaviestSubtreeForkChoice = try .init(
+        allocator,
+        .noop,
+        SlotAndHash{ .slot = 0, .hash = progress.getHash(0).? },
+        sig.prometheus.globalRegistry(),
+    );
+    defer fork_choice.deinit();
+
+    // Test 1: Trying to switch to a descendant of last vote should always work (SameFork)
+    {
+        const decision = try tower.makeCheckSwitchThresholdDecision(
+            allocator,
+            48,
+            &ancestors,
+            &descendants,
+            &progress,
+            total_stake,
+            &epoch_vote_accounts,
+            &latest_validator_votes,
+            &fork_choice,
+        );
+        try std.testing.expectEqual(SwitchForkDecision.same_fork, decision);
+    }
+
+    // Test 2: Trying to switch to another fork at 110 should fail (no stake)
+    {
+        const decision = try tower.makeCheckSwitchThresholdDecision(
+            allocator,
+            110,
+            &ancestors,
+            &descendants,
+            &progress,
+            total_stake,
+            &epoch_vote_accounts,
+            &latest_validator_votes,
+            &fork_choice,
+        );
+        switch (decision) {
+            .failed_switch_threshold => |threshold| {
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
+                try std.testing.expectEqual(total_stake, threshold.total_stake);
+            },
+            else => try std.testing.expect(false), // Should be FailedSwitchThreshold
+        }
+    }
+
+    // Test 3: Adding lockout on descendant of last vote (50) shouldn't count
+    {
+        // Add lockout interval for slot 50: lockout from 49 to 100
+        if (progress.map.getPtr(50)) |fork_progress| {
+            const interval =
+                try fork_progress.fork_stats.lockout_intervals.map.getOrPut(allocator, 100);
+            if (!interval.found_existing) {
+                interval.value_ptr.* = .empty;
+            }
+            try interval.value_ptr.append(allocator, .{ 49, other_vote_account });
+        }
+
+        const decision = try tower.makeCheckSwitchThresholdDecision(
+            allocator,
+            110,
+            &ancestors,
+            &descendants,
+            &progress,
+            total_stake,
+            &epoch_vote_accounts,
+            &latest_validator_votes,
+            &fork_choice,
+        );
+        switch (decision) {
+            .failed_switch_threshold => |threshold| {
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
+                try std.testing.expectEqual(total_stake, threshold.total_stake);
+            },
+            else => try std.testing.expect(false),
+        }
+
+        // Clear the lockout
+        if (progress.map.getPtr(50)) |fork_progress| {
+            fork_progress.fork_stats.lockout_intervals.deinit(allocator);
+            fork_progress.fork_stats.lockout_intervals = .{ .map = .{} };
+        }
+    }
+
+    // Test 4: Adding lockout on ancestor of last vote (45) shouldn't count
+    {
+        if (progress.map.getPtr(50)) |fork_progress| {
+            const interval =
+                try fork_progress
+                    .fork_stats
+                    .lockout_intervals
+                    .map
+                    .getOrPut(allocator, 100);
+            if (!interval.found_existing) {
+                interval.value_ptr.* = .empty;
+            }
+            try interval.value_ptr.append(allocator, .{ 45, other_vote_account });
+        }
+
+        const decision = try tower.makeCheckSwitchThresholdDecision(
+            allocator,
+            110,
+            &ancestors,
+            &descendants,
+            &progress,
+            total_stake,
+            &epoch_vote_accounts,
+            &latest_validator_votes,
+            &fork_choice,
+        );
+        switch (decision) {
+            .failed_switch_threshold => |threshold| {
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
+                try std.testing.expectEqual(total_stake, threshold.total_stake);
+            },
+            else => try std.testing.expect(false),
+        }
+
+        if (progress.map.getPtr(50)) |fork_progress| {
+            fork_progress.fork_stats.lockout_intervals.deinit(allocator);
+            fork_progress.fork_stats.lockout_intervals = .{ .map = .{} };
+        }
+    }
+
+    // Test 5: Lockout on different fork (14) that doesn't cover last vote (12 to 46) shouldn't count
+    {
+        if (progress.map.getPtr(14)) |fork_progress| {
+            const interval = try fork_progress
+                .fork_stats
+                .lockout_intervals
+                .map
+                .getOrPut(allocator, 46);
+            if (!interval.found_existing) {
+                interval.value_ptr.* = .empty;
+            }
+            try interval.value_ptr.append(allocator, .{ 12, other_vote_account });
+        }
+
+        const decision = try tower.makeCheckSwitchThresholdDecision(
+            allocator,
+            110,
+            &ancestors,
+            &descendants,
+            &progress,
+            total_stake,
+            &epoch_vote_accounts,
+            &latest_validator_votes,
+            &fork_choice,
+        );
+        switch (decision) {
+            .failed_switch_threshold => |threshold| {
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
+                try std.testing.expectEqual(total_stake, threshold.total_stake);
+            },
+            else => try std.testing.expect(false),
+        }
+
+        if (progress.map.getPtr(14)) |fork_progress| {
+            fork_progress.fork_stats.lockout_intervals.deinit(allocator);
+            fork_progress.fork_stats.lockout_intervals = .{ .map = .{} };
+        }
+    }
+
+    // Test 6: Lockout on slot 13 that covers last vote shouldn't count because 14 is more recent frozen bank
+    {
+        if (progress.map.getPtr(13)) |fork_progress| {
+            const interval = try fork_progress
+                .fork_stats
+                .lockout_intervals
+                .map
+                .getOrPut(allocator, 47);
+            if (!interval.found_existing) {
+                interval.value_ptr.* = .empty;
+            }
+            try interval.value_ptr.append(allocator, .{ 12, other_vote_account });
+        }
+
+        const decision = try tower.makeCheckSwitchThresholdDecision(
+            allocator,
+            110,
+            &ancestors,
+            &descendants,
+            &progress,
+            total_stake,
+            &epoch_vote_accounts,
+            &latest_validator_votes,
+            &fork_choice,
+        );
+        switch (decision) {
+            .failed_switch_threshold => |threshold| {
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
+                try std.testing.expectEqual(total_stake, threshold.total_stake);
+            },
+            else => try std.testing.expect(false),
+        }
+
+        if (progress.map.getPtr(13)) |fork_progress| {
+            fork_progress.fork_stats.lockout_intervals.deinit(allocator);
+            fork_progress.fork_stats.lockout_intervals = .{ .map = .{} };
+        }
+    }
+
+    // Test 7: Lockout on different fork (14) that covers last vote (12 to 47) SHOULD succeed
+    {
+        if (progress.map.getPtr(14)) |fork_progress| {
+            const interval =
+                try fork_progress
+                    .fork_stats
+                    .lockout_intervals
+                    .map
+                    .getOrPut(allocator, 47);
+            if (!interval.found_existing) {
+                interval.value_ptr.* = .empty;
+            }
+            try interval.value_ptr.append(allocator, .{ 12, other_vote_account });
+        }
+
+        const decision = try tower.makeCheckSwitchThresholdDecision(
+            allocator,
+            110,
+            &ancestors,
+            &descendants,
+            &progress,
+            total_stake,
+            &epoch_vote_accounts,
+            &latest_validator_votes,
+            &fork_choice,
+        );
+        try std.testing.expectEqual(SwitchForkDecision{ .switch_proof = Hash.ZEROES }, decision);
+
+        // Test 7b: Adding unfrozen descendant (10000) shouldn't remove slot 14 from consideration
+        {
+            const desc_14 = descendants.getPtr(14).?;
+            try desc_14.put(allocator, 10000);
+
+            const decision2 = try tower.makeCheckSwitchThresholdDecision(
+                allocator,
+                110,
+                &ancestors,
+                &descendants,
+                &progress,
+                total_stake,
+                &epoch_vote_accounts,
+                &latest_validator_votes,
+                &fork_choice,
+            );
+            try std.testing.expectEqual(
+                SwitchForkDecision{ .switch_proof = Hash.ZEROES },
+                decision2,
+            );
+
+            // Clean up descendant
+            _ = desc_14.orderedRemove(10000);
+        }
+
+        if (progress.map.getPtr(14)) |fork_progress| {
+            fork_progress.fork_stats.lockout_intervals.deinit(allocator);
+            fork_progress.fork_stats.lockout_intervals = .{ .map = .{} };
+        }
+    }
+
+    // Test 8: Setting a root should filter out lockouts below the root
+    {
+        // Add lockout that covers last vote
+        if (progress.map.getPtr(14)) |fork_progress| {
+            const interval =
+                try fork_progress
+                    .fork_stats
+                    .lockout_intervals
+                    .map
+                    .getOrPut(allocator, 47);
+            if (!interval.found_existing) {
+                interval.value_ptr.* = .empty;
+            }
+            try interval.value_ptr.append(allocator, .{ 12, other_vote_account });
+        }
+
+        // Set root to 43
+        tower.tower.vote_state.root_slot = 43;
+
+        const decision = try tower.makeCheckSwitchThresholdDecision(
+            allocator,
+            110,
+            &ancestors,
+            &descendants,
+            &progress,
+            total_stake,
+            &epoch_vote_accounts,
+            &latest_validator_votes,
+            &fork_choice,
+        );
+
+        // Should fail because lockout start (12) is below root (43)
+        switch (decision) {
+            .failed_switch_threshold => |threshold| {
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
+                try std.testing.expectEqual(total_stake, threshold.total_stake);
+            },
+            else => try std.testing.expect(false),
+        }
+
+        if (progress.map.getPtr(14)) |fork_progress| {
+            fork_progress.fork_stats.lockout_intervals.deinit(allocator);
+            fork_progress.fork_stats.lockout_intervals = .{ .map = .{} };
+        }
+    }
+}
+
+// Analogous to [test_switch_threshold_use_gossip_votes](https://github.com/anza-xyz/agave/blob/1538a5d7823c5a4ea2c8000d14d09eff3bee2ef1/core/src/consensus.rs#L2272)
+test "switch threshold use gossip votes" {
+    const allocator = std.testing.allocator;
+
+    // Setup: Use same fork structure as test_switch_threshold
+    //        /- 10 - 11 - 12 - 13 - 14  (minor fork 1)
+    // 0 - 1 - 2
+    //        \\- 43 - 44 - 45 - 46 - 47 - 48 - 49 - 50  (minor fork 2)
+    //                  \\- 110  (switch target)
+    //                  \\- 112
+
+    // Create ancestors map
+    var ancestors: AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
+    defer {
+        for (ancestors.values()) |*set| set.deinit(allocator);
+        ancestors.deinit(allocator);
+    }
+
+    try ancestors.put(allocator, 0, .EMPTY);
+    try ancestors.put(allocator, 1, try createAncestor(allocator, &.{0}));
+    try ancestors.put(allocator, 2, try createAncestor(allocator, &.{ 1, 0 }));
+    try ancestors.put(allocator, 10, try createAncestor(allocator, &.{ 2, 1, 0 }));
+    try ancestors.put(allocator, 11, try createAncestor(allocator, &.{ 10, 2, 1, 0 }));
+    try ancestors.put(allocator, 12, try createAncestor(allocator, &.{ 11, 10, 2, 1, 0 }));
+    try ancestors.put(allocator, 13, try createAncestor(allocator, &.{ 12, 11, 10, 2, 1, 0 }));
+    try ancestors.put(allocator, 14, try createAncestor(allocator, &.{ 13, 12, 11, 10, 2, 1, 0 }));
+    try ancestors.put(allocator, 43, try createAncestor(allocator, &.{ 2, 1, 0 }));
+    try ancestors.put(allocator, 44, try createAncestor(allocator, &.{ 43, 2, 1, 0 }));
+    try ancestors.put(
+        allocator,
+        45,
+        try createAncestor(allocator, &.{ 44, 43, 2, 1, 0 }),
+    );
+    try ancestors.put(
+        allocator,
+        46,
+        try createAncestor(allocator, &.{ 45, 44, 43, 2, 1, 0 }),
+    );
+    try ancestors.put(
+        allocator,
+        47,
+        try createAncestor(allocator, &.{ 46, 45, 44, 43, 2, 1, 0 }),
+    );
+    try ancestors.put(
+        allocator,
+        48,
+        try createAncestor(allocator, &.{ 47, 46, 45, 44, 43, 2, 1, 0 }),
+    );
+    try ancestors.put(
+        allocator,
+        49,
+        try createAncestor(allocator, &.{ 48, 47, 46, 45, 44, 43, 2, 1, 0 }),
+    );
+    try ancestors.put(
+        allocator,
+        50,
+        try createAncestor(allocator, &.{ 49, 48, 47, 46, 45, 44, 43, 2, 1, 0 }),
+    );
+    try ancestors.put(allocator, 110, try createAncestor(allocator, &.{ 44, 43, 2, 1, 0 }));
+    try ancestors.put(allocator, 112, try createAncestor(allocator, &.{ 43, 2, 1, 0 }));
+
+    // Create descendants map
+    var descendants: AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)) = .empty;
+    defer {
+        for (descendants.values()) |*set| set.deinit(allocator);
+        descendants.deinit(allocator);
+    }
+
+    const addDescendants = struct {
+        fn call(
+            desc: *AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
+            alloc: std.mem.Allocator,
+            slot: Slot,
+            desc_slots: []const Slot,
+        ) !void {
+            var set: SortedSetUnmanaged(Slot) = .empty;
+            for (desc_slots) |s| try set.put(alloc, s);
+            try desc.put(alloc, slot, set);
+        }
+    }.call;
+
+    try addDescendants(
+        &descendants,
+        allocator,
+        0,
+        &.{ 1, 2, 10, 11, 12, 13, 14, 43, 44, 45, 46, 47, 48, 49, 50, 110, 112 },
+    );
+    try addDescendants(
+        &descendants,
+        allocator,
+        1,
+        &.{ 2, 10, 11, 12, 13, 14, 43, 44, 45, 46, 47, 48, 49, 50, 110, 112 },
+    );
+    try addDescendants(
+        &descendants,
+        allocator,
+        2,
+        &.{ 10, 11, 12, 13, 14, 43, 44, 45, 46, 47, 48, 49, 50, 110, 112 },
+    );
+    try addDescendants(
+        &descendants,
+        allocator,
+        43,
+        &.{ 44, 45, 46, 47, 48, 49, 50, 110, 112 },
+    );
+    try addDescendants(&descendants, allocator, 44, &.{ 45, 46, 47, 48, 49, 50, 110 });
+    try addDescendants(&descendants, allocator, 45, &.{ 46, 47, 48, 49, 50 });
+    try addDescendants(&descendants, allocator, 46, &.{ 47, 48, 49, 50 });
+    try addDescendants(&descendants, allocator, 47, &.{ 48, 49, 50 });
+    try addDescendants(&descendants, allocator, 48, &.{ 49, 50 });
+    try addDescendants(&descendants, allocator, 49, &.{50});
+
+    // Create progress map with all slots
+    var progress: ProgressMap = .INIT;
+    defer progress.deinit(allocator);
+
+    const slots_to_add = [_]Slot{
+        0,
+        1,
+        2,
+        10,
+        11,
+        12,
+        13,
+        14,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        110,
+        112,
+    };
+    for (slots_to_add) |slot| {
+        try progress.map.put(allocator, slot, try ForkProgress.zeroes(allocator));
+    }
+
+    // Add hashes to progress map
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const random = prng.random();
+    for (slots_to_add) |slot| {
+        if (progress.map.getPtr(slot)) |fork_progress| {
+            fork_progress.fork_stats.slot_hash = .initRandom(random);
+        }
+    }
+
+    // Create vote accounts with 10000 stake each (total_stake = 20000)
+    const total_stake: u64 = 20000;
+    var epoch_vote_accounts: StakeAndVoteAccountsMap = .empty;
+    defer epoch_vote_accounts.deinit(allocator);
+
+    var prng2: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const vote_pubkey1: Pubkey = .initRandom(prng2.random());
+    const vote_pubkey2: Pubkey = .initRandom(prng2.random());
+    const other_vote_account = vote_pubkey2;
+
+    try epoch_vote_accounts.put(allocator, vote_pubkey1, .{ .stake = 10000, .account = undefined });
+    try epoch_vote_accounts.put(allocator, vote_pubkey2, .{ .stake = 10000, .account = undefined });
+
+    // Create tower and set last vote to 47
+    var tower = try createTestReplayTower(0, 0);
+    defer tower.deinit(allocator);
+    _ = try tower.recordBankVote(allocator, 47, progress.getHash(47).?);
+
+    // Create latest validator votes (initially empty)
+    var latest_validator_votes: LatestValidatorVotes = .{
+        .max_gossip_frozen_votes = .empty,
+        .max_replay_frozen_votes = .empty,
+        .fork_choice_dirty_set = .empty,
+    };
+    defer latest_validator_votes.deinit(allocator);
+
+    // Create fork choice
+    const fork_choice: HeaviestSubtreeForkChoice = try .init(
+        allocator,
+        .noop,
+        SlotAndHash{ .slot = 0, .hash = progress.getHash(0).? },
+        sig.prometheus.globalRegistry(),
+    );
+    defer fork_choice.deinit();
+
+    // Test 1: Trying to switch to another fork at 110 should fail
+    {
+        const decision = try tower.makeCheckSwitchThresholdDecision(
+            allocator,
+            110,
+            &ancestors,
+            &descendants,
+            &progress,
+            total_stake,
+            &epoch_vote_accounts,
+            &latest_validator_votes,
+            &fork_choice,
+        );
+        switch (decision) {
+            .failed_switch_threshold => |threshold| {
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
+                try std.testing.expectEqual(total_stake, threshold.total_stake);
+            },
+            else => try std.testing.expect(false),
+        }
+    }
+
+    // Test 2: Adding a vote on the descendant (50) shouldn't count toward the switch threshold
+    {
+        // Add lockout interval for slot 50: lockout from 49 to 100
+        if (progress.map.getPtr(50)) |fork_progress| {
+            const interval =
+                try fork_progress.fork_stats.lockout_intervals.map.getOrPut(allocator, 100);
+            if (!interval.found_existing) {
+                interval.value_ptr.* = .empty;
+            }
+            try interval.value_ptr.append(allocator, .{ 49, other_vote_account });
+        }
+
+        const decision = try tower.makeCheckSwitchThresholdDecision(
+            allocator,
+            110,
+            &ancestors,
+            &descendants,
+            &progress,
+            total_stake,
+            &epoch_vote_accounts,
+            &latest_validator_votes,
+            &fork_choice,
+        );
+        switch (decision) {
+            .failed_switch_threshold => |threshold| {
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
+                try std.testing.expectEqual(total_stake, threshold.total_stake);
+            },
+            else => try std.testing.expect(false),
+        }
+    }
+
+    // Test 3: Adding a later vote from gossip that isn't on the same fork should count toward the switch threshold
+    {
+        // Add gossip vote for slot 112
+        _ = try latest_validator_votes.checkAddVote(
+            allocator,
+            other_vote_account,
+            112,
+            progress.getHash(112).?,
+            .gossip,
+        );
+
+        const decision = try tower.makeCheckSwitchThresholdDecision(
+            allocator,
+            110,
+            &ancestors,
+            &descendants,
+            &progress,
+            total_stake,
+            &epoch_vote_accounts,
+            &latest_validator_votes,
+            &fork_choice,
+        );
+        try std.testing.expectEqual(SwitchForkDecision{ .switch_proof = Hash.ZEROES }, decision);
+    }
+
+    // Test 4: If we now set a root that causes slot 112 to be purged from ancestors/descendants,
+    // then the switch proof will now fail since that validator's vote can no longer be included
+    {
+        // Set root to 44 - this makes slot 112 (descendant of 43) unreachable
+        tower.tower.vote_state.root_slot = 44;
+
+        // Update ancestors and descendants to reflect new root
+        // Rebuild ancestors from root 44
+        for (ancestors.values()) |*set| set.deinit(allocator);
+        ancestors.clearRetainingCapacity();
+        try ancestors.put(allocator, 44, .EMPTY);
+        try ancestors.put(allocator, 45, try createAncestor(allocator, &.{44}));
+        try ancestors.put(allocator, 46, try createAncestor(allocator, &.{ 45, 44 }));
+        try ancestors.put(allocator, 47, try createAncestor(allocator, &.{ 46, 45, 44 }));
+        try ancestors.put(allocator, 48, try createAncestor(allocator, &.{ 47, 46, 45, 44 }));
+        try ancestors.put(allocator, 49, try createAncestor(allocator, &.{ 48, 47, 46, 45, 44 }));
+        try ancestors.put(
+            allocator,
+            50,
+            try createAncestor(allocator, &.{ 49, 48, 47, 46, 45, 44 }),
+        );
+        try ancestors.put(allocator, 110, try createAncestor(allocator, &.{44}));
+        // Note: 112 is no longer in ancestors because it descends from 43 which is below root 44
+
+        // Rebuild descendants from root 44
+        for (descendants.values()) |*set| set.deinit(allocator);
+        descendants.clearRetainingCapacity();
+        try addDescendants(&descendants, allocator, 44, &.{ 45, 46, 47, 48, 49, 50, 110 });
+        try addDescendants(&descendants, allocator, 45, &.{ 46, 47, 48, 49, 50 });
+        try addDescendants(&descendants, allocator, 46, &.{ 47, 48, 49, 50 });
+        try addDescendants(&descendants, allocator, 47, &.{ 48, 49, 50 });
+        try addDescendants(&descendants, allocator, 48, &.{ 49, 50 });
+        try addDescendants(&descendants, allocator, 49, &.{50});
+
+        const decision = try tower.makeCheckSwitchThresholdDecision(
+            allocator,
+            110,
+            &ancestors,
+            &descendants,
+            &progress,
+            total_stake,
+            &epoch_vote_accounts,
+            &latest_validator_votes,
+            &fork_choice,
+        );
+        switch (decision) {
+            .failed_switch_threshold => |threshold| {
+                try std.testing.expectEqual(0, threshold.switch_proof_stake);
+                try std.testing.expectEqual(total_stake, threshold.total_stake);
+            },
+            else => try std.testing.expect(false),
+        }
+    }
+}
+
 test "selectVoteAndResetForks stake not found" {
     const allocator = std.testing.allocator;
     const fork_tuples = sig.consensus.fork_choice.fork_tuples;
 
-    var fork_choice = try sig.consensus.fork_choice.forkChoiceForTest(
+    const fork_choice = try sig.consensus.fork_choice.forkChoiceForTest(
         allocator,
         fork_tuples[0..],
     );
