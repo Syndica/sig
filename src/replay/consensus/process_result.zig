@@ -534,6 +534,7 @@ test "processResult: confirm status with done poll and slot complete - success p
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .empty,
         .inflation = .DEFAULT,
+        .rent_collector = .DEFAULT,
     };
 
     // Create slot state then modify tick height
@@ -641,6 +642,7 @@ test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot"
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .empty,
         .inflation = .DEFAULT,
+        .rent_collector = .DEFAULT,
     };
     try test_resources.slot_tracker.put(allocator, slot, .{
         .constants = slot_consts,
@@ -730,6 +732,7 @@ test "updateConsensusForFrozenSlot: moves gossip votes with gossip vote_kind" {
         .inflation = .DEFAULT,
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .empty,
+        .rent_collector = .DEFAULT,
     };
     var slot_state: sig.core.SlotState = .GENESIS;
     slot_state.hash.set(slot_hash);
