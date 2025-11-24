@@ -188,7 +188,7 @@ pub fn computeFromVoteAccounts(
     // this implementation is naive and performs unnecessay allocations to construct and
     // input compatable with fromStakedNodes and re-key results.
     // It should be addressed as part of issue #945
-    var stakes = std.AutoArrayHashMapUnmanaged(Pubkey, u64){};
+    var stakes = sig.utils.collections.PubkeyMap(u64){};
     defer stakes.deinit(allocator);
 
     for (vote_accounts.keys(), vote_accounts.values()) |key, value| {
@@ -214,9 +214,9 @@ pub fn computeFromStakedNodes(
     allocator: std.mem.Allocator,
     leader_schedule_epoch: Epoch,
     slots_in_epoch: Slot,
-    staked_nodes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
+    staked_nodes: *const sig.utils.collections.PubkeyMap(u64),
 ) ![]Pubkey {
-    const Entry = std.AutoArrayHashMap(Pubkey, u64).Entry;
+    const Entry = sig.utils.collections.PubkeyMap(u64).Entry;
 
     const nodes = try allocator.alloc(Entry, staked_nodes.count());
     defer allocator.free(nodes);
