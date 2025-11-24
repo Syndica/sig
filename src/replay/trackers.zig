@@ -4,9 +4,6 @@ const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
-const Epoch = sig.core.Epoch;
-const EpochConstants = sig.core.EpochConstants;
-const EpochSchedule = sig.core.EpochSchedule;
 const Slot = sig.core.Slot;
 const SlotConstants = sig.core.SlotConstants;
 const SlotState = sig.core.SlotState;
@@ -428,45 +425,6 @@ pub const SlotTree = struct {
     };
 };
 
-pub const EpochTracker = struct {
-    epochs: std.AutoArrayHashMapUnmanaged(Epoch, EpochConstants) = .empty,
-    schedule: EpochSchedule,
-
-    pub fn deinit(self: EpochTracker, allocator: Allocator) void {
-        var epochs = self.epochs;
-        for (epochs.values()) |ec| ec.deinit(allocator);
-        epochs.deinit(allocator);
-    }
-
-    pub fn get(self: *const EpochTracker, epoch: Epoch) ?EpochConstants {
-        return self.epochs.get(epoch);
-    }
-
-    pub fn getForSlot(self: *const EpochTracker, slot: Slot) ?EpochConstants {
-        return self.epochs.get(self.schedule.getEpoch(slot));
-    }
-
-    /// lifetime ends as soon as the map is modified
-    pub fn getPtrForSlot(self: *const EpochTracker, slot: Slot) ?*const EpochConstants {
-        return self.epochs.getPtr(self.schedule.getEpoch(slot));
-    }
-
-    // lifetime ends as soon as the map is modified
-    pub fn getMutablePtrForSlot(self: *EpochTracker, slot: Slot) ?*EpochConstants {
-        return self.epochs.getPtr(self.schedule.getEpoch(slot));
-    }
-
-    pub fn put(
-        self: *EpochTracker,
-        allocator: Allocator,
-        epoch: Epoch,
-        epoch_constants: EpochConstants,
-    ) Allocator.Error!void {
-        try self.epochs.ensureUnusedCapacity(allocator, 1);
-        self.epochs.putAssumeCapacity(epoch, epoch_constants);
-    }
-};
-
 fn testDummySlotConstants(slot: Slot) SlotConstants {
     return .{
         .parent_slot = slot - 1,
@@ -480,6 +438,7 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .empty,
         .inflation = .DEFAULT,
+        .rent_collector = .DEFAULT,
     };
 }
 

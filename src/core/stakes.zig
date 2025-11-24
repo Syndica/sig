@@ -677,16 +677,18 @@ pub const VoteAccounts = struct {
         errdefer self.deinit(allocator);
 
         for (0..random.intRangeAtMost(u64, 1, max_list_entries)) |_| {
+            var vote_account = try VoteAccount.initRandom(
+                allocator,
+                random,
+                Pubkey.initRandom(random),
+            );
+            errdefer vote_account.deinit(allocator);
             try self.vote_accounts.put(
                 allocator,
                 Pubkey.initRandom(random),
                 .{
                     .stake = random.int(u64),
-                    .account = try .initRandom(
-                        allocator,
-                        random,
-                        Pubkey.initRandom(random),
-                    ),
+                    .account = vote_account,
                 },
             );
         }
@@ -822,15 +824,14 @@ pub const VoteAccount = struct {
         );
         defer versioned_vote_state.deinit(allocator); // `convertToCurrent` clones
 
-        const rc = try allocator.create(sig.sync.ReferenceCounter);
-        errdefer allocator.destroy(rc);
-        rc.* = .init;
+        var vote_state = try versioned_vote_state.convertToCurrent(allocator);
+        errdefer vote_state.deinit(allocator);
 
-        return .{
-            .account = .{ .lamports = account.lamports, .owner = account.owner },
-            .state = try versioned_vote_state.convertToCurrent(allocator),
-            .rc = rc,
-        };
+        return .init(
+            allocator,
+            .{ .lamports = account.lamports, .owner = account.owner },
+            vote_state,
+        );
     }
 
     pub fn toAccountSharedData(
@@ -991,6 +992,194 @@ fn createStakeAccount(
     _ = try bincode.writeToSlice(stake_account.data, stake_state, .{});
 
     return stake_account;
+}
+
+pub const RandomStakesOptions = struct {
+    epoch: Epoch = 0,
+    max_nodes: usize = 1,
+    num_voters: usize = 1,
+    num_delegations: usize = 1,
+    commission_min: u8 = 0,
+    commission_max: u8 = 100,
+    new_rate_activation_epoch: ?Epoch = null,
+    delegation_min: u64 = 100_000_000, // 0.1 SOL
+    delegation_max: u64 = 10_000_000_000, // 10 SOL
+    // Default to bootstrapped activations so all delegations are active.
+    activation_epoch_min: Epoch = std.math.maxInt(Epoch),
+    activation_epoch_max: Epoch = std.math.maxInt(Epoch),
+    effective_epochs_min: Epoch = std.math.maxInt(Epoch),
+    effective_epochs_max: Epoch = std.math.maxInt(Epoch),
+};
+
+pub fn randomEpochStakes(
+    allocator: Allocator,
+    random: std.Random,
+    options: RandomStakesOptions,
+) !sig.core.EpochStakes {
+    if (!builtin.is_test) @compileError("only for tests");
+
+    var stakes = try randomStakes(allocator, random, options);
+    defer stakes.deinit(allocator);
+
+    var stakes_cache = StakesCacheGeneric(.stake){
+        .stakes = RwMux(Stakes(.stake)).init(stakes),
+    };
+
+    return sig.replay.epoch_transitions.getEpochStakes(
+        allocator,
+        options.epoch + 1,
+        &stakes_cache,
+    );
+}
+
+// Initialize random `valid` EpochStakes for testing
+pub fn randomStakes(
+    allocator: Allocator,
+    random: std.Random,
+    options: RandomStakesOptions,
+) !Stakes(.stake) {
+    if (!builtin.is_test) @compileError("only for tests");
+
+    var self = Stakes(.stake){
+        .vote_accounts = .{},
+        .stake_accounts = .empty,
+        .unused = 0,
+        .epoch = options.epoch,
+        .stake_history = .INIT,
+    };
+
+    for (0..options.epoch) |e| {
+        try self.stake_history.insertEntry(e, .{
+            .effective = 1_000_000_000 * 1_000_000, // 1 million SOL
+            .activating = 250_000_000 * 1_000_000, // 250k SOL
+            .deactivating = 250_000_000 * 1_000_000, // 250k SOL
+        });
+    }
+
+    const nodes = try allocator.alloc(Pubkey, options.max_nodes);
+    defer allocator.free(nodes);
+    for (nodes) |*node| node.* = Pubkey.initRandom(random);
+
+    const voters = try allocator.alloc(Pubkey, options.num_voters);
+    defer allocator.free(voters);
+    for (voters) |*voter| voter.* = Pubkey.initRandom(random);
+
+    for (0..options.num_voters) |i| {
+        var vote_state = try VoteState.init(
+            allocator,
+            nodes[random.uintLessThan(usize, options.max_nodes)],
+            Pubkey.initRandom(random),
+            Pubkey.initRandom(random),
+            random.intRangeAtMost(
+                u8,
+                options.commission_min,
+                options.commission_max,
+            ),
+            options.epoch + 1,
+        );
+        errdefer vote_state.deinit(allocator);
+        var vote_account = try VoteAccount.init(allocator, .{
+            .lamports = 1_000_000_000,
+            .owner = vote_program.ID,
+        }, vote_state);
+        errdefer vote_account.deinit(allocator);
+        try self.upsertVoteAccount(
+            allocator,
+            voters[i],
+            vote_account,
+            options.new_rate_activation_epoch,
+        );
+    }
+
+    for (0..options.num_delegations) |_| {
+        const activation_epoch = random.intRangeAtMost(
+            Epoch,
+            options.activation_epoch_min,
+            options.activation_epoch_max,
+        );
+        const deactivation_epoch = activation_epoch +|
+            random.intRangeAtMost(
+                Epoch,
+                options.effective_epochs_min,
+                options.effective_epochs_max,
+            );
+        const staker_delegation = Stake{
+            .delegation = .{
+                .voter_pubkey = voters[random.uintLessThan(usize, options.num_voters)],
+                .stake = random.intRangeAtMost(
+                    u64,
+                    options.delegation_min,
+                    options.delegation_max,
+                ),
+                .activation_epoch = activation_epoch,
+                .deactivation_epoch = deactivation_epoch,
+                .deprecated_warmup_cooldown_rate = 0,
+            },
+            .credits_observed = 0,
+        };
+        const stake_account = StakeAccount{
+            .account = .{
+                .lamports = 1,
+                .data = &.{},
+                .owner = stake_program.ID,
+                .executable = false,
+                .rent_epoch = 0,
+            },
+            .stake = staker_delegation,
+        };
+        try self.upsertStakeAccount(
+            allocator,
+            Pubkey.initRandom(random),
+            stake_account,
+            options.new_rate_activation_epoch,
+        );
+    }
+
+    return self;
+}
+
+test "randomEpochStakes produces valid leader schedule" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const epoch = 10;
+    var epoch_stakes = try randomEpochStakes(
+        allocator,
+        random,
+        .{ .epoch = epoch },
+    );
+    defer epoch_stakes.deinit(allocator);
+
+    const leaders = try sig.core.magic_leader_schedule.LeaderSchedule.init(
+        allocator,
+        epoch_stakes.stakes.epoch,
+        epoch_stakes.stakes.vote_accounts,
+        &.INIT,
+        &.ALL_DISABLED,
+    );
+    defer leaders.deinit(allocator);
+}
+
+test "randomStakes creates valid stakes" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    var stakes = try randomStakes(allocator, random, .{
+        .epoch = 10,
+        .max_nodes = 10,
+        .num_voters = 20,
+        .num_delegations = 100,
+        .activation_epoch_min = 0,
+        .activation_epoch_max = 10,
+    });
+    defer stakes.deinit(allocator);
+
+    try std.testing.expectEqual(10, stakes.epoch);
+    try std.testing.expect(10 >= stakes.vote_accounts.staked_nodes.count());
+    try std.testing.expectEqual(20, stakes.vote_accounts.vote_accounts.count());
+    try std.testing.expectEqual(100, stakes.stake_accounts.count());
 }
 
 const VoteAccountsArray = std.ArrayListUnmanaged(struct { Pubkey, StakeAndVoteAccount });

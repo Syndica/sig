@@ -112,6 +112,9 @@ pub const SlotConstants = struct {
     /// so we keep it here.
     inflation: Inflation,
 
+    /// Rent collector
+    rent_collector: RentCollector,
+
     pub fn fromBankFields(
         allocator: Allocator,
         bank_fields: *const BankFields,
@@ -138,6 +141,7 @@ pub const SlotConstants = struct {
             .feature_set = feature_set,
             .reserved_accounts = reserved_accounts,
             .inflation = bank_fields.inflation,
+            .rent_collector = bank_fields.rent_collector,
         };
     }
 
@@ -161,6 +165,7 @@ pub const SlotConstants = struct {
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = try ReservedAccounts.init(allocator),
             .inflation = Inflation.DEFAULT,
+            .rent_collector = .DEFAULT,
         };
     }
 
