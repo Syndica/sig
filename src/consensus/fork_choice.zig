@@ -654,10 +654,6 @@ pub const ForkChoice = struct {
             new_root.slot,
             new_root.hash,
         });
-        self.logger.info().logf(
-            "{} forks pruned, remaining total forks: {}",
-            .{ remove_set.count(), self.fork_infos.count() },
-        );
 
         // Update metrics after changing tree root
         self.updateMetrics();
