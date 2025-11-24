@@ -10,6 +10,7 @@ pub const turbine_tree = @import("transmitter/turbine_tree.zig");
 
 pub const service = @import("service.zig");
 pub const duplicate_shred_listener = @import("duplicate_shred_listener.zig");
+pub const duplicate_shred_handler = @import("collector/duplicate_shred_handler.zig");
 
 pub const ShredNetworkConfig = service.ShredNetworkConfig;
 pub const ShredNetworkDependencies = service.ShredNetworkDependencies;

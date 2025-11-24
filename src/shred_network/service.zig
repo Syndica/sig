@@ -19,6 +19,7 @@ const Slot = sig.core.Slot;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 
 const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
+const DuplicateShredHandler = shred_network.duplicate_shred_handler.DuplicateShredHandler;
 const RepairPeerProvider = shred_network.repair_service.RepairPeerProvider;
 const RepairRequester = shred_network.repair_service.RepairRequester;
 const RepairService = shred_network.repair_service.RepairService;
@@ -106,6 +107,14 @@ pub fn start(
     try defers.deferCall(Channel(Packet).destroy, .{retransmit_channel});
 
     // receiver (threads)
+    const duplicate_handler = DuplicateShredHandler{
+        .ledger_reader = deps.ledger.reader(),
+        .result_writer = deps.ledger.resultWriter(),
+        .duplicate_slots_sender = deps.duplicate_slots_sender,
+        .gossip_service = deps.gossip_service,
+        .keypair = deps.my_keypair,
+        .logger = .from(deps.logger),
+    };
     const shred_receiver = try arena.create(ShredReceiver);
     shred_receiver.* = try .init(deps.allocator, .from(deps.logger), deps.registry, .{
         .keypair = deps.my_keypair,
@@ -117,10 +126,7 @@ pub fn start(
         .epoch_tracker = deps.epoch_tracker,
         .tracker = shred_tracker,
         .inserter = deps.ledger.shredInserter(),
-        .ledger_reader = deps.ledger.reader(),
-        .result_writer = deps.ledger.resultWriter(),
-        .duplicate_slots_sender = deps.duplicate_slots_sender,
-        .gossip_service = deps.gossip_service,
+        .duplicate_handler = duplicate_handler,
     });
     try defers.deferCall(ShredReceiver.deinit, .{ shred_receiver, deps.allocator });
     try service_manager.spawn(
