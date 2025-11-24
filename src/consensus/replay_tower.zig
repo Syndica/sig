@@ -605,7 +605,7 @@ pub const ReplayTower = struct {
                 // This is covered by test_future_tower_* in local_cluster
                 self
                     .logger
-                    .info()
+                    .warn()
                     .logf(
                     "failed_switch_threshold. switch_proof_stake: {}, total_stake: {}",
                     .{ 0, total_stake },
@@ -630,11 +630,8 @@ pub const ReplayTower = struct {
         for (descendants.keys(), descendants.values()) |candidate_slot, *candidate_descendants| {
             // 1) Don't consider any banks that haven't been frozen yet
             //    because the needed stats are unavailable
-            const is_progress_computed = if (progress.getForkStats(candidate_slot)) |stats|
-                stats.computed
-            else
-                false;
-            if (!is_progress_computed) continue;
+            const stats = progress.getForkStats(candidate_slot) orelse continue;
+            if (!stats.computed) continue;
 
             // 2) Only consider lockouts at the latest `frozen` bank
             //    on each fork, as that bank will contain all the
@@ -644,8 +641,8 @@ pub const ReplayTower = struct {
             // even if this bank has descendants, if they have not yet been frozen / stats computed,
             // then use this bank as a representative for the fork.
             const is_descendant_computed = for (candidate_descendants.items()) |d| {
-                if (progress.getForkStats(d)) |stats| {
-                    if (stats.computed) break true;
+                if (progress.getForkStats(d)) |stat| {
+                    if (stat.computed) break true;
                 }
             } else false;
             if (is_descendant_computed) continue;
@@ -1203,8 +1200,7 @@ pub const ReplayTower = struct {
             // 2. Already voting at the tip
             (last_voted_slot >= heaviest_bank_on_same_voted_fork) or
             // 3. Last vote is within this bank's slot hashes history, regular refresh is enough
-            (last_voted_slot < heaviest_bank_on_same_voted_fork and
-                slot_history.check(last_voted_slot) == .found);
+            (slot_history.check(last_voted_slot) == .found);
     }
 
     /// Handles candidate selection when fork switching fails threshold checks
