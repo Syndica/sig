@@ -327,7 +327,7 @@ pub const ForkChoice = struct {
 
     /// Calculates the total stake along the fork path from root to the given leaf node.
     /// This sums up stake_for_slot for all nodes along the path.
-    fn calculateForkPathStake(self: *const ForkChoice, leaf_slot_hash: SlotAndHash) u64 {
+    pub fn calculateForkPathStake(self: *const ForkChoice, leaf_slot_hash: SlotAndHash) u64 {
         var total_stake: u64 = 0;
         var current: ?SlotAndHash = leaf_slot_hash;
 

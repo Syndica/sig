@@ -1650,20 +1650,23 @@ fn logForkStakeDistribution(
         const slot_hash = entry.key_ptr.*;
         const fork_info = entry.value_ptr;
 
-        if (!fork_info.isCandidate()) {
+        // Only show leaf nodes (active forks), not intermediate nodes
+        if (!fork_info.isCandidate() or fork_info.children.count() != 0) {
             continue;
         }
 
         const is_heaviest = fork_choice.heaviestOverallSlot().equals(slot_hash);
-        const subtree_percentage =
-            @as(f64, @floatFromInt(fork_info.stake_for_subtree)) * 100.0 /
+        // Calculate total stake along the fork path from root to this leaf
+        const total_fork_stake = fork_choice.calculateForkPathStake(slot_hash);
+        const fork_percentage =
+            @as(f64, @floatFromInt(total_fork_stake)) * 100.0 /
             @as(f64, @floatFromInt(total_stake));
 
         const marker = if (is_heaviest) " [HEAVIEST]" else "";
 
         output.writer().print(
             "  Slot {}: {d:.2}%{s}\n",
-            .{ slot_hash.slot, subtree_percentage, marker },
+            .{ slot_hash.slot, fork_percentage, marker },
         ) catch return;
     }
 
