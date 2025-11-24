@@ -9,9 +9,7 @@ const Pubkey = sig.core.Pubkey;
 const SortedMap = sig.utils.collections.SortedMap;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const Slot = sig.core.Slot;
-const EpochStakesMap = sig.core.EpochStakesMap;
 const EpochStakes = sig.core.EpochStakes;
-const EpochSchedule = sig.core.EpochSchedule;
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const LatestValidatorVotes =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
@@ -440,15 +438,13 @@ pub const ForkChoice = struct {
         self: *ForkChoice,
         allocator: std.mem.Allocator,
         pubkey_votes: []const PubkeyVote,
-        epoch_stakes: *const EpochStakesMap,
-        epoch_schedule: *const EpochSchedule,
+        magic_tracker: *const sig.core.magic_info.MagicTracker,
     ) !SlotAndHash {
         // Generate the set of updates
         var update_ops = try self.generateUpdateOperations(
             allocator,
             pubkey_votes,
-            epoch_stakes,
-            epoch_schedule,
+            magic_tracker,
         );
         defer update_ops.deinit();
 
@@ -1034,8 +1030,7 @@ pub const ForkChoice = struct {
         self: *ForkChoice,
         allocator: std.mem.Allocator,
         pubkey_votes: []const PubkeyVote,
-        epoch_stakes: *const EpochStakesMap,
-        epoch_schedule: *const EpochSchedule,
+        magic_tracker: *const sig.core.magic_info.MagicTracker,
     ) !UpdateOperations {
         var update_operations = UpdateOperations.init(self.allocator);
         errdefer update_operations.deinit();
@@ -1081,12 +1076,11 @@ pub const ForkChoice = struct {
                     continue;
                 }
 
-                const epoch = epoch_schedule.getEpoch(old_latest_vote_slot);
                 const stake_update = stake_update: {
-                    const stakes = epoch_stakes.get(epoch) orelse
+                    const info = magic_tracker.getEpochInfo(old_latest_vote_slot) catch
                         break :stake_update 0;
                     const stake_and_vote_account =
-                        stakes.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
+                        info.stakes.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
                         break :stake_update 0;
                     break :stake_update stake_and_vote_account.stake;
                 };
@@ -1118,12 +1112,11 @@ pub const ForkChoice = struct {
             entry.value_ptr.* = new_vote_slot_hash;
 
             // Add this pubkey stake to new fork
-            const epoch = epoch_schedule.getEpoch(new_vote_slot_hash.slot);
             const stake_update = stake_update: {
-                const stakes = epoch_stakes.get(epoch) orelse
+                const info = magic_tracker.getEpochInfo(new_vote_slot_hash.slot) catch
                     break :stake_update 0;
                 const stake_and_vote_account =
-                    stakes.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
+                    info.stakes.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
                     break :stake_update 0;
                 break :stake_update stake_and_vote_account.stake;
             };
@@ -1498,8 +1491,7 @@ pub const ForkChoice = struct {
     pub fn processLatestVotes(
         self: *ForkChoice,
         allocator: std.mem.Allocator,
-        epoch_stakes: *const EpochStakesMap,
-        epoch_schedule: *const EpochSchedule,
+        magic_tracker: *const sig.core.magic_info.MagicTracker,
         latest_validator_votes: *LatestValidatorVotes,
     ) !void {
         const root = self.tree_root.slot;
@@ -1525,8 +1517,7 @@ pub const ForkChoice = struct {
         _ = try self.addVotes(
             allocator,
             new_votes.items,
-            epoch_stakes,
-            epoch_schedule,
+            magic_tracker,
         );
     }
 
@@ -2118,12 +2109,12 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 6, .hash = Hash.ZEROES } },
@@ -2132,8 +2123,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
     _ = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
 
     // Leaf slot 9 stops being the `heaviest_slot` at slot 1 because there
@@ -2166,8 +2156,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
     _ = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes2,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
 
     try std.testing.expectEqual(8, fork_choice.heaviestOverallSlot().slot);
@@ -2259,12 +2248,12 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf2" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 4, .hash = Hash.ZEROES } },
@@ -2273,8 +2262,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf2" {
     _ = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
     try std.testing.expectEqual(6, fork_choice.heaviestOverallSlot().slot);
 
@@ -2305,12 +2293,12 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     // Vote for slot 0
     const pubkey_votes1 = [_]PubkeyVote{
@@ -2320,8 +2308,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
     _ = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes1,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
 
     // Set root to 1, should purge 0 from the tree, but
@@ -2336,8 +2323,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
     _ = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes2,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
 
     try std.testing.expectEqual(
@@ -2365,8 +2351,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
     _ = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes3,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
 
     try std.testing.expectEqual(
@@ -2389,8 +2374,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
     _ = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes4,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
 
     try std.testing.expectEqual(
@@ -2985,14 +2969,15 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
         Pubkey.initRandom(random),
         Pubkey.initRandom(random),
     };
-    const versioned_stakes = try testEpochStakes(allocator, &vote_pubkeys, stake, random);
-    defer versioned_stakes.deinit(allocator);
+    const versioned_stakes_0 = try testEpochStakes(allocator, &vote_pubkeys, stake, random);
+    var versioned_stakes_1 = try versioned_stakes_0.clone(allocator);
+    versioned_stakes_1.stakes.epoch = 1;
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
-    try epoch_stakes.put(test_allocator, 1, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{ versioned_stakes_0, versioned_stakes_1 },
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -3042,8 +3027,7 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
         var generated_update_operations = try fork_choice.generateUpdateOperations(
             allocator,
             &pubkey_votes,
-            &epoch_stakes,
-            &EpochSchedule.INIT,
+            &magic_tracker,
         );
         defer generated_update_operations.deinit();
 
@@ -3066,8 +3050,7 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
         var generated_update_operations = try fork_choice.generateUpdateOperations(
             allocator,
             &pubkey_votes,
-            &epoch_stakes,
-            &EpochSchedule.INIT,
+            &magic_tracker,
         );
         defer generated_update_operations.deinit();
         try std.testing.expect(generated_update_operations.count() == 0);
@@ -3130,8 +3113,7 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
         var generated_update_operations = try fork_choice.generateUpdateOperations(
             allocator,
             &pubkey_votes,
-            &epoch_stakes,
-            &EpochSchedule.INIT,
+            &magic_tracker,
         );
         defer generated_update_operations.deinit();
 
@@ -3204,8 +3186,7 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
         var generated_update_operations = try fork_choice.generateUpdateOperations(
             allocator,
             &pubkey_votes,
-            &epoch_stakes,
-            &EpochSchedule.INIT,
+            &magic_tracker,
         );
         defer generated_update_operations.deinit();
 
@@ -3249,12 +3230,12 @@ test "HeaviestSubtreeForkChoice.addRootParent" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = .{
@@ -3266,8 +3247,7 @@ test "HeaviestSubtreeForkChoice.addRootParent" {
     _ = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
 
     try fork_choice.addRootParent(.{ .slot = 2, .hash = Hash.ZEROES });
@@ -3329,12 +3309,12 @@ test "HeaviestSubtreeForkChoice.addVotes" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
@@ -3348,8 +3328,7 @@ test "HeaviestSubtreeForkChoice.addVotes" {
     const deepest_slot = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
 
     try std.testing.expectEqual(
@@ -3394,12 +3373,12 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
     // one in the event of a tie
@@ -3407,8 +3386,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
     try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     ));
     // we tie break the duplicate_leaves_descended_from_6 and pick the smaller one
     // for deepest
@@ -3426,8 +3404,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
     try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes2,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     ));
     try std.testing.expectEqual(
         expected_deepest_slot_hash,
@@ -3493,19 +3470,18 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateSmallerHashPrioritized" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     const expected_best_slot_hash = duplicate_leaves_descended_from_4[1];
     try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     ));
     const expected_deepest_slot_hash = duplicate_leaves_descended_from_6[1];
 
@@ -3534,8 +3510,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateSmallerHashPrioritized" {
     try std.testing.expectEqual(expected_best_slot_hash2, try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes2,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     ));
 
     // AFTER, only one of the validators is voting on this leaf
@@ -3609,12 +3584,12 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
     // one in the event of a tie
@@ -3622,8 +3597,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
     try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     ));
 
     // Create two children for slots greater than the duplicate slot,
@@ -3663,8 +3637,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
     try std.testing.expectEqual(expected_best_slot_hash2, try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes2,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     ));
 
     // All the stake directly voting on the duplicates have been outdated
@@ -3748,12 +3721,12 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
     // one in the event of a tie
@@ -3761,8 +3734,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
     try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     ));
     try std.testing.expectEqual(
         expected_best_slot_hash,
@@ -3788,8 +3760,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
     try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes2,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     ));
 
     try std.testing.expectEqual(
@@ -3846,12 +3817,12 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     // Make new vote with vote_pubkeys[0] for a higher slot
     // Create new child with heaviest duplicate parent
@@ -3875,8 +3846,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
     try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     ));
     try std.testing.expectEqual(
         duplicate_leaves_descended_from_4[1],
@@ -3892,8 +3862,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
     try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes2,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     ));
     try std.testing.expectEqual(
         higher_child_with_duplicate_parent,
@@ -3982,12 +3951,12 @@ test "HeaviestSubtreeForkChoice.isBestChild" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = SlotAndHash{ .slot = 9, .hash = Hash.ZEROES } },
@@ -3996,8 +3965,7 @@ test "HeaviestSubtreeForkChoice.isBestChild" {
     _ = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
 
     try std.testing.expect(
@@ -4039,12 +4007,12 @@ test "HeaviestSubtreeForkChoice.markInvalidThenAddNewHeavierDuplicateSlot" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     // If we add a new version of the duplicate slot that is not descended from the invalid
     // candidate and votes for that duplicate slot, the new duplicate slot should be picked
@@ -4067,8 +4035,7 @@ test "HeaviestSubtreeForkChoice.markInvalidThenAddNewHeavierDuplicateSlot" {
     _ = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
 
     try std.testing.expectEqual(
@@ -4098,12 +4065,12 @@ test "HeaviestSubtreeForkChoice.markValidInvalidForks" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = SlotAndHash{ .slot = 6, .hash = Hash.ZEROES } },
@@ -4114,8 +4081,7 @@ test "HeaviestSubtreeForkChoice.markValidInvalidForks" {
     try std.testing.expectEqual(expected_best_slot, try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     ));
     try std.testing.expectEqual(
         expected_best_slot,
@@ -4175,8 +4141,7 @@ test "HeaviestSubtreeForkChoice.markValidInvalidForks" {
         try fork_choice.addVotes(
             test_allocator,
             &pubkey_votes2,
-            &epoch_stakes,
-            &EpochSchedule.INIT,
+            &magic_tracker,
         ),
     );
 
@@ -4239,12 +4204,12 @@ test "HeaviestSubtreeForkChoice.setRootAndAddVotes" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     // Vote for slot 2
     const pubkey_votes1 = [_]PubkeyVote{
@@ -4254,8 +4219,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddVotes" {
     _ = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes1,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
     try std.testing.expectEqual(4, fork_choice.heaviestOverallSlot().slot);
 
@@ -4271,8 +4235,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddVotes" {
     _ = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes2,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
 
     try std.testing.expectEqual(6, fork_choice.heaviestOverallSlot().slot);
@@ -4332,18 +4295,17 @@ test "HeaviestSubtreeForkChoice.splitOffOnBestPath" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     _ = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
 
     try std.testing.expectEqual(6, fork_choice.heaviestOverallSlot().slot);
@@ -4417,18 +4379,17 @@ test "HeaviestSubtreeForkChoice.splitOffSimple" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     _ = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
 
     var registry = sig.prometheus.Registry(.{}).init(test_allocator);
@@ -4510,12 +4471,12 @@ test "HeaviestSubtreeForkChoice.splitOffSubtreeWithDups" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
     // one in the event of a tie
@@ -4526,8 +4487,7 @@ test "HeaviestSubtreeForkChoice.splitOffSubtreeWithDups" {
         try fork_choice.addVotes(
             test_allocator,
             &pubkey_votes,
-            &epoch_stakes,
-            &EpochSchedule.INIT,
+            &magic_tracker,
         ),
     );
 
@@ -4599,18 +4559,17 @@ test "HeaviestSubtreeForkChoice.splitOffUnvoted" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     _ = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
 
     var registry = sig.prometheus.Registry(.{}).init(test_allocator);
@@ -4682,12 +4641,12 @@ test "HeaviestSubtreeForkChoice.splitOffWithDups" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
     // one in the event of a tie
@@ -4697,8 +4656,7 @@ test "HeaviestSubtreeForkChoice.splitOffWithDups" {
         try fork_choice.addVotes(
             test_allocator,
             &pubkey_votes,
-            &epoch_stakes,
-            &EpochSchedule.INIT,
+            &magic_tracker,
         ),
     );
 
@@ -4769,18 +4727,17 @@ test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
         stake,
         random,
     );
-    defer versioned_stakes.deinit(test_allocator);
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(test_allocator);
-
-    try epoch_stakes.put(test_allocator, 0, versioned_stakes);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        test_allocator,
+        &.{versioned_stakes},
+    );
+    defer magic_tracker.deinit(test_allocator);
 
     _ = try fork_choice.addVotes(
         test_allocator,
         &pubkey_votes,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
     );
 
     // Best slot is 4
@@ -4806,8 +4763,7 @@ test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
     // Call computeBankStats - gossip votes shouldn't affect fork choice
     try fork_choice.processLatestVotes(
         test_allocator,
-        &epoch_stakes,
-        &EpochSchedule.INIT,
+        &magic_tracker,
         &latest_validator_votes,
     );
 
