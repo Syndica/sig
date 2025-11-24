@@ -114,7 +114,10 @@ pub const PohEntry = struct {
 };
 
 /// returns a valid PoH chain of entries with transactions that have valid signatures.
-pub fn testPoh(valid_signatures: bool) !struct { Poh, std.BoundedArray(sig.core.Entry, 7) } {
+pub fn testPoh(
+    valid_signatures: bool,
+    include_account_conflict: bool,
+) !struct { Poh, std.BoundedArray(sig.core.Entry, 7) } {
     const allocator = std.testing.allocator;
     const expect = std.testing.expect;
     const expectEqual = std.testing.expectEqual;
@@ -123,7 +126,12 @@ pub fn testPoh(valid_signatures: bool) !struct { Poh, std.BoundedArray(sig.core.
 
     var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    var a_transaction = try Transaction.initRandom(allocator, rng.random());
+    const shared_payer: ?std.crypto.sign.Ed25519.KeyPair = if (include_account_conflict)
+        try .generateDeterministic(@splat(0))
+    else
+        null;
+
+    var a_transaction = try Transaction.initRandom(allocator, rng.random(), shared_payer);
     if (!valid_signatures) {
         const sigs = try allocator.dupe(sig.core.Signature, a_transaction.signatures);
         allocator.free(a_transaction.signatures);
@@ -131,13 +139,13 @@ pub fn testPoh(valid_signatures: bool) !struct { Poh, std.BoundedArray(sig.core.
         sigs[0].r[0] +%= 1;
     }
 
-    const transactions = [_]Transaction{
+    var transactions = [_]Transaction{
         a_transaction,
-        try Transaction.initRandom(allocator, rng.random()),
-        try Transaction.initRandom(allocator, rng.random()),
-        try Transaction.initRandom(allocator, rng.random()),
-        try Transaction.initRandom(allocator, rng.random()),
-        try Transaction.initRandom(allocator, rng.random()),
+        try Transaction.initRandom(allocator, rng.random(), shared_payer),
+        try Transaction.initRandom(allocator, rng.random(), null),
+        try Transaction.initRandom(allocator, rng.random(), null),
+        try Transaction.initRandom(allocator, rng.random(), null),
+        try Transaction.initRandom(allocator, rng.random(), null),
     };
 
     const batch1 = try allocator.dupe(Transaction, transactions[0..2]);
@@ -200,7 +208,7 @@ pub fn testPoh(valid_signatures: bool) !struct { Poh, std.BoundedArray(sig.core.
 test Poh {
     const allocator = std.testing.allocator;
 
-    _, var entry_array = try testPoh(true);
+    _, var entry_array = try testPoh(true, false);
     const entries: []sig.core.Entry = entry_array.slice();
     defer for (entries) |entry| entry.deinit(allocator);
 

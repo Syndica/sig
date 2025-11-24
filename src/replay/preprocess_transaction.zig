@@ -73,7 +73,7 @@ test preprocessTransaction {
     const random = prng.random();
 
     { // Verify succeeds
-        const txn = try Transaction.initRandom(allocator, random);
+        const txn = try Transaction.initRandom(allocator, random, null);
         defer txn.deinit(allocator);
         _ = preprocessTransaction(txn, .run_sig_verify).ok;
         _ = preprocessTransaction(txn, .skip_sig_verify).ok;
