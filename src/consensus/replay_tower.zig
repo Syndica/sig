@@ -319,10 +319,18 @@ pub const ReplayTower = struct {
             block_id,
         );
 
-        self.logger.info().logf(
-            "recorded vote in tower for slot {d}, new root: {?d}",
-            .{ vote_slot, new_root },
-        );
+        const current_root = try self.tower.getRoot();
+        if (new_root) |nr| {
+            self.logger.info().logf(
+                "recorded vote in tower for slot {d}, new root: {d}",
+                .{ vote_slot, nr },
+            );
+        } else {
+            self.logger.info().logf(
+                "recorded vote in tower for slot {d}, root unchanged: {d}",
+                .{ vote_slot, current_root },
+            );
+        }
 
         // Log tower state after recording vote
         self.logTowerState();
