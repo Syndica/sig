@@ -137,6 +137,7 @@ pub const Dependencies = struct {
     allocator: Allocator,
     tracing_gpas: std.SegmentedList(tracy.TracingAllocator, 0),
     persist_gpa: Allocator,
+    slot_tracker_gpa: Allocator,
 
     logger: Logger,
     identity: sig.identity.ValidatorIdentity,
@@ -183,6 +184,7 @@ pub const ReplayState = struct {
 
     replay_gpa: Allocator,
     persist_gpa: Allocator,
+    slot_tracker_gpa: Allocator,
 
     logger: Logger,
     identity: sig.identity.ValidatorIdentity,
@@ -204,7 +206,7 @@ pub const ReplayState = struct {
         self.thread_pool.shutdown();
         self.thread_pool.deinit();
 
-        self.slot_tracker.deinit(self.persist_gpa);
+        self.slot_tracker.deinit(self.slot_tracker_gpa);
         self.epoch_tracker.deinit(self.persist_gpa);
         self.progress_map.deinit(self.persist_gpa);
 
@@ -227,15 +229,16 @@ pub const ReplayState = struct {
 
         const persist_gpa = deps.persist_gpa;
         const replay_gpa = try deps.addTracingGpa("replay gpa");
+        const slot_tracker_gpa = deps.slot_tracker_gpa;
 
-        var slot_tracker: SlotTracker = try .init(persist_gpa, deps.root.slot, .{
+        var slot_tracker: SlotTracker = try .init(slot_tracker_gpa, deps.root.slot, .{
             .constants = deps.root.constants,
             .state = deps.root.state,
         });
-        errdefer slot_tracker.deinit(persist_gpa);
+        errdefer slot_tracker.deinit(slot_tracker_gpa);
         errdefer {
             // do not free the root slot data parameter, we don't own it unless the function returns successfully
-            persist_gpa.destroy(slot_tracker.slots.fetchSwapRemove(deps.root.slot).?.value);
+            slot_tracker_gpa.destroy(slot_tracker.slots.fetchSwapRemove(deps.root.slot).?.value);
         }
 
         const replay_votes_channel: ?*Channel(ParsedVote) = if (consensus_status == .enabled)
@@ -274,6 +277,7 @@ pub const ReplayState = struct {
 
             .persist_gpa = persist_gpa,
             .replay_gpa = replay_gpa,
+            .slot_tracker_gpa = slot_tracker_gpa,
 
             .logger = .from(deps.logger),
             .identity = deps.identity,
@@ -380,6 +384,7 @@ pub fn trackNewSlots(
 
     for (next_slots.keys(), next_slots.values()) |parent_slot, children| {
         const parent_info = frozen_slots.get(parent_slot) orelse return error.MissingParent;
+        const slot_tracker_gpa = replay_state.slot_tracker_gpa;
 
         for (children.items) |slot| {
             if (slot_tracker.contains(slot)) continue;
@@ -389,7 +394,7 @@ pub fn trackNewSlots(
                 return error.MissingEpoch;
 
             const constants, var state = try newSlotFromParent(
-                allocator,
+                slot_tracker_gpa,
                 replay_state,
                 account_store.reader(),
                 epoch_info.ticks_per_slot,
@@ -399,11 +404,11 @@ pub fn trackNewSlots(
                 slot_leaders.get(slot) orelse return error.UnknownLeader,
                 slot,
             );
-            errdefer constants.deinit(allocator);
-            errdefer state.deinit(allocator);
+            errdefer constants.deinit(slot_tracker_gpa);
+            errdefer state.deinit(slot_tracker_gpa);
 
             try updateSysvarsForNewSlot(
-                allocator,
+                slot_tracker_gpa,
                 account_store,
                 epoch_info,
                 epoch_tracker.schedule,
@@ -413,7 +418,7 @@ pub fn trackNewSlots(
                 hard_forks,
             );
 
-            try slot_tracker.put(allocator, slot, .{ .constants = constants, .state = state });
+            try slot_tracker.put(slot_tracker_gpa, slot, .{ .constants = constants, .state = state });
             try slot_tree.record(allocator, slot, constants.parent_slot);
 
             // TODO: update_fork_propagated_threshold_from_votes
@@ -541,7 +546,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
             if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
                 state.logger.info().logf("finished replaying slot: {}", .{slot});
                 const epoch = epoch_tracker.getForSlot(slot) orelse return error.MissingEpoch;
-                try replay.freeze.freezeSlot(state.persist_gpa, .init(
+                try replay.freeze.freezeSlot(state.persist_gpa, state, .init(
                     .from(state.logger),
                     state.account_store,
                     &epoch,
@@ -567,7 +572,7 @@ fn bypassConsensus(state: *ReplayState) !void {
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root = new_root;
-        slot_tracker.pruneNonRooted(state.persist_gpa);
+        slot_tracker.pruneNonRooted(state.slot_tracker_gpa);
 
         try state.account_store.onSlotRooted(
             state.persist_gpa,

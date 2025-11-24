@@ -54,7 +54,7 @@ pub const ReplayResult = struct {
 ///
 /// Analogous to [replay_active_banks](https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3356)
 pub fn replayActiveSlots(allocator: Allocator, state: *ReplayState) ![]const ReplayResult {
-    const can_multi_thread = state.thread_pool.max_threads > 1;
+    const can_multi_thread = false; // state.thread_pool.max_threads > 1;
     return if (can_multi_thread)
         try awaitResults(allocator, try replayActiveSlotsAsync(allocator, state))
     else

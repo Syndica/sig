@@ -120,7 +120,7 @@ pub fn commitTransactions(
 
     for (accounts_to_store.values()) |account| {
         try self.stakes_cache.checkAndStore(
-            self.state.persist_gpa,
+            self.state.slot_tracker_gpa,
             account.pubkey,
             account.account,
             self.new_rate_activation_epoch,

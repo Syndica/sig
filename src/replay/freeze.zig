@@ -92,7 +92,7 @@ pub const FreezeParams = struct {
 /// hash for the slot.
 ///
 /// Analogous to [Bank::freeze](https://github.com/anza-xyz/agave/blob/b948b97d2a08850f56146074c0be9727202ceeff/runtime/src/bank.rs#L2620)
-pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
+pub fn freezeSlot(allocator: Allocator, replay_state: *replay.service.ReplayState, params: FreezeParams) !void {
     var zone = tracy.Zone.init(@src(), .{ .name = "freezeSlot" });
     zone.value(params.finalize_state.slot);
     defer zone.deinit();
@@ -103,7 +103,7 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
 
     if (slot_hash.get().* != null) return; // already frozen
 
-    try finalizeState(allocator, params.finalize_state);
+    try finalizeState(replay_state.slot_tracker_gpa, params.finalize_state);
 
     const maybe_lt_hash, slot_hash.mut().* = try hashSlot(allocator, params.hash_slot);
     if (maybe_lt_hash) |lt_hash| params.accounts_lt_hash.set(lt_hash);
@@ -277,7 +277,14 @@ pub const HashSlotParams = struct {
 };
 
 /// Calculates the slot hash (known as the "bank hash" in agave)
-pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash, Hash } {
+pub fn hashSlot(_allocator: Allocator, params: HashSlotParams) !struct { ?LtHash, Hash } {
+    var gpa = std.heap.DebugAllocator(.{
+        .stack_trace_frames = 32,
+        .resize_stack_traces = true,
+    }){ .backing_allocator = _allocator };
+    defer if (gpa.deinit() != .ok) std.debug.panic("hashSlot leaked\n", .{});
+    const allocator = gpa.allocator();
+
     var signature_count_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &signature_count_bytes, params.signature_count, .little);
 

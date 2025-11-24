@@ -2094,6 +2094,10 @@ const ReplayAndConsensusServiceState = struct {
             persist_allocator.* = .{ .name = "persist gpa", .parent = allocator };
             const persist_gpa = persist_allocator.allocator();
 
+            const slot_tracker_allocator = try tracing_gpas.addOne(allocator);
+            slot_tracker_allocator.* = .{ .name = "slot_tracker gpa", .parent = allocator };
+            const slot_tracker_gpa = slot_tracker_allocator.allocator();
+
             const account_store = params.loaded_snapshot.accounts_db.accountStore();
             const manifest = &params.loaded_snapshot.collapsed_manifest;
             const bank_fields = &manifest.bank_fields;
@@ -2110,14 +2114,14 @@ const ReplayAndConsensusServiceState = struct {
             );
 
             const root_slot_constants: sig.core.SlotConstants =
-                try .fromBankFields(persist_gpa, bank_fields, feature_set);
-            errdefer root_slot_constants.deinit(persist_gpa);
+                try .fromBankFields(slot_tracker_gpa, bank_fields, feature_set);
+            errdefer root_slot_constants.deinit(slot_tracker_gpa);
 
             const lt_hash = manifest.bank_extra.accounts_lt_hash;
 
             var root_slot_state: sig.core.SlotState =
-                try .fromBankFields(persist_gpa, bank_fields, lt_hash);
-            errdefer root_slot_state.deinit(persist_gpa);
+                try .fromBankFields(slot_tracker_gpa, bank_fields, lt_hash);
+            errdefer root_slot_state.deinit(slot_tracker_gpa);
 
             const hard_forks = try bank_fields.hard_forks.clone(persist_gpa);
             errdefer hard_forks.deinit(persist_gpa);
@@ -2132,6 +2136,7 @@ const ReplayAndConsensusServiceState = struct {
                 .allocator = allocator,
                 .tracing_gpas = tracing_gpas,
                 .persist_gpa = persist_gpa,
+                .slot_tracker_gpa = slot_tracker_gpa,
 
                 .logger = .from(params.app_base.logger),
                 .identity = .{
