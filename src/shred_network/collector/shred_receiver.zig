@@ -1110,9 +1110,9 @@ test "pushDuplicateShredToGossip: enqueues chunks and ring indices" {
     );
     defer allocator.free(proof_bytes);
     const chunk_size: usize =
-        @as(usize, @intCast(DUPLICATE_SHRED_MAX_PAYLOAD_SIZE)) - @as(
+        @as(usize, DUPLICATE_SHRED_MAX_PAYLOAD_SIZE) - @as(
             usize,
-            @intCast(DUPLICATE_SHRED_HEADER_SIZE),
+            DUPLICATE_SHRED_HEADER_SIZE,
         );
     const expected_chunks: usize = (proof_bytes.len + chunk_size - 1) / chunk_size;
 
@@ -1220,7 +1220,7 @@ test "pushDuplicateShredToGossip: no-op when duplicate for slot exists" {
         .from = my_pubkey,
         .wallclock = 1,
         .slot = slot,
-        .shred_index = @intCast(shred_index),
+        .shred_index = shred_index,
         .shred_type = .Code,
         .num_chunks = 1,
         .chunk_index = 0,
@@ -1331,7 +1331,7 @@ test "computeRingOffset: under capacity and at capacity oldest index" {
     const MAX = sig.gossip.data.MAX_DUPLICATE_SHREDS;
     var i: u16 = 3;
     while (i < MAX) : (i += 1) {
-        const wc: u64 = if (i == 5) 1 else @intCast(1000 + i);
+        const wc: u64 = if (i == 5) 1 else 1000 + i;
         try insert_dup.run(gossip_service, &keypair, i, wc, 100 + i);
     }
     const offset_full =
