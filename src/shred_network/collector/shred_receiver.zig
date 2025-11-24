@@ -24,7 +24,6 @@ const RepairMessage = shred_network.repair_message.RepairMessage;
 const Shred = sig.ledger.shred.Shred;
 const ShredInserter = sig.ledger.ShredInserter;
 const Slot = sig.core.Slot;
-const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SocketThread = sig.net.SocketThread;
 const ExitCondition = sig.sync.ExitCondition;
 const VariantCounter = sig.prometheus.VariantCounter;
@@ -58,8 +57,7 @@ pub const ShredReceiver = struct {
 
         shred_version: *const Atomic(u16),
 
-        root_slot: Slot,
-        leader_schedule: SlotLeaders,
+        magic_tracker: *const sig.core.magic_info.MagicTracker,
 
         /// shared with repair
         tracker: *BasicShredTracker,
@@ -159,6 +157,8 @@ pub const ShredReceiver = struct {
             self.shred_batch.clearRetainingCapacity();
         }
 
+        const leader_schedules = try self.params.magic_tracker.getLeaderSchedules();
+
         var packet_count: usize = 0;
         while (self.incoming_shreds.tryReceive()) |packet| {
             const is_repair = packet.flags.isSet(.repair);
@@ -167,7 +167,7 @@ pub const ShredReceiver = struct {
             packet_count += 1;
             tracy.plot(u32, "shred-batch packets received", @intCast(packet_count));
 
-            if (try self.handlePacket(allocator, packet)) |shred| {
+            if (try self.handlePacket(allocator, &leader_schedules, packet)) |shred| {
                 try self.shred_batch.append(allocator, .{
                     .shred = shred,
                     .is_repair = is_repair,
@@ -181,7 +181,7 @@ pub const ShredReceiver = struct {
             self.shred_batch.items(.shred),
             self.shred_batch.items(.is_repair),
             .{
-                .slot_leaders = self.params.leader_schedule,
+                .leader_schedules = &leader_schedules,
                 .shred_tracker = self.params.tracker,
             },
         );
@@ -194,7 +194,12 @@ pub const ShredReceiver = struct {
     const MAX_SHREDS_PER_ITER = 1024;
 
     /// Handle a single packet and return a shred if it's a valid shred.
-    fn handlePacket(self: *ShredReceiver, allocator: Allocator, packet: Packet) !?Shred {
+    fn handlePacket(
+        self: *ShredReceiver,
+        allocator: Allocator,
+        leader_schedule: *const sig.core.magic_leader_schedule.LeaderSchedules,
+        packet: Packet,
+    ) !?Shred {
         if (packet.size == REPAIR_RESPONSE_SERIALIZED_PING_BYTES) {
             if (try handlePing(
                 allocator,
@@ -210,7 +215,7 @@ pub const ShredReceiver = struct {
             const max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
             validateShred(
                 &packet,
-                self.params.root_slot,
+                self.params.magic_tracker.root_slot.load(.monotonic),
                 self.params.shred_version,
                 max_slot,
             ) catch |err| {
@@ -221,7 +226,7 @@ pub const ShredReceiver = struct {
 
             shred_verifier.verifyShred(
                 &packet,
-                self.params.leader_schedule,
+                leader_schedule,
                 &self.verified_merkle_roots,
                 self.verifier_metrics,
             ) catch |err| {
@@ -280,6 +285,9 @@ pub const ShredReceiver = struct {
 
 test "handleBatch/handlePacket" {
     const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
     const keypair = try sig.identity.KeyPair.generateDeterministic(.{1} ** 32);
     const root_slot = 0;
     const invalid_socket = Socket{
@@ -291,8 +299,13 @@ test "handleBatch/handlePacket" {
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var epoch_ctx = try sig.adapter.EpochContextManager.init(allocator, .INIT);
-    defer epoch_ctx.deinit();
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initForTest(
+        allocator,
+        random,
+        root_slot,
+        .INIT,
+    );
+    defer magic_tracker.deinit(allocator);
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
@@ -311,9 +324,8 @@ test "handleBatch/handlePacket" {
         .repair_socket = invalid_socket,
         .turbine_socket = invalid_socket,
         .shred_version = &shred_version,
-        .root_slot = root_slot,
         .maybe_retransmit_shred_sender = null,
-        .leader_schedule = epoch_ctx.slotLeaders(),
+        .magic_tracker = &magic_tracker,
         .tracker = shred_tracker,
         .inserter = ledger.shredInserter(),
     });
