@@ -565,45 +565,6 @@ fn calculatePreviousEpochInflationRewards(
     };
 }
 
-pub const TestEnvironment = struct {
-    slot: Slot,
-    slot_constants: SlotConstants,
-    slot_state: SlotState,
-    magic_tracker: sig.core.magic_info.MagicTracker,
-
-    pub fn deinit(self: *TestEnvironment, allocator: Allocator) void {
-        self.slot_constants.deinit(allocator);
-        self.slot_state.deinit(allocator);
-        self.magic_tracker.deinit(allocator);
-        self.account_map.deinit();
-    }
-
-    pub fn genesis(
-        allocator: Allocator,
-        random: std.Random,
-    ) !TestEnvironment {
-        var magic_tracker = sig.core.magic_info.MagicTracker.initForTest(
-            allocator,
-            random,
-            0,
-            .INIT,
-        );
-        errdefer magic_tracker.deinit(allocator);
-        return .{
-            .slot = 0,
-            .slot_constants = try SlotConstants.genesis(allocator, sig.core.FeeRateGovernor.DEFAULT),
-            .slot_state = SlotState.GENESIS,
-            .magic_tracker = magic_tracker,
-        };
-    }
-
-    pub fn epochVoteAccounts(self: *const TestEnvironment, epoch: Epoch) !VoteAccounts {
-        const epoch_info = self.epoch_tracker.get(epoch) orelse
-            return error.NoEpochConstants;
-        return epoch_info.stakes.stakes.vote_accounts;
-    }
-};
-
 fn newVoteAccountForTest(
     allocator: Allocator,
     random: std.Random,
