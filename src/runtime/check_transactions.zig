@@ -120,6 +120,7 @@ pub fn checkFeePayer(
         .executable = payer_account.executable,
         .rent_epoch = payer_account.rent_epoch,
     };
+    defer payer_shared.deinit(allocator);
 
     const fee_payer_loaded_rent_epoch = payer_shared.rent_epoch;
 
