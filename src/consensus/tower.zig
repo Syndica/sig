@@ -1,8 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const Account = sig.core.Account;
-const AccountsDB = sig.accounts_db.AccountsDB;
 const LockoutIntervals = sig.consensus.replay_tower.LockoutIntervals;
 const Lockout = sig.runtime.program.vote.state.Lockout;
 const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
@@ -10,10 +8,6 @@ const Ancestors = sig.core.Ancestors;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const TowerStorage = sig.consensus.tower_storage.TowerStorage;
-const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
-const VoteState = sig.runtime.program.vote.state.VoteState;
-const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
-const vote_program = sig.runtime.program.vote;
 
 pub const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
 
@@ -70,123 +64,32 @@ pub const TowerError = error{
 };
 
 pub const Tower = struct {
-    logger: Logger,
-    vote_state: TowerVoteState,
+    root: ?Slot,
+    votes: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},
 
-    const Logger = sig.trace.Logger(@typeName(Tower));
-
-    pub fn init(logger: Logger) Tower {
-        var tower = Tower{
-            .logger = logger.withScope(@typeName(Tower)),
-            .vote_state = .{},
+    pub fn fromAccount(account_state: *const sig.runtime.program.vote.state.VoteState) !Tower {
+        var lockouts: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{};
+        for (account_state.votes.items) |landed| {
+            try lockouts.append(.{
+                .slot = landed.lockout.slot,
+                .confirmation_count = landed.lockout.confirmation_count,
+            });
+        }
+        return .{
+            .root = account_state.root_slot,
+            .votes = lockouts,
         };
-        // VoteState::root_slot is ensured to be Some in Tower
-        tower.vote_state.root_slot = 0;
-        return tower;
     }
 
-    pub fn initializeLockoutsFromBank(
-        self: *Tower,
-        allocator: std.mem.Allocator,
-        vote_account_pubkey: ?Pubkey,
-        fork_root: Slot,
-        slot_account_reader: sig.accounts_db.SlotAccountReader,
-    ) !void {
-        self.logger.info().logf(
-            "initializeLockoutsFromBank: fork_root={}, vote_pubkey={?}",
-            .{ fork_root, vote_account_pubkey },
-        );
-        const vote_account = blk: {
-            const maybe_vote_account = try slot_account_reader.get(
-                allocator,
-                vote_account_pubkey orelse return,
-            );
-            break :blk maybe_vote_account orelse {
-                self.logger.info().logf(
-                    "Vote account not found, initializing root to {}",
-                    .{fork_root},
-                );
-                self.initializeRoot(fork_root);
-                return;
-            };
-        };
-        defer vote_account.deinit(allocator);
+    pub fn setRoot(self: *Tower, new_root: Slot) void {
+        self.root = new_root;
 
-        // Validate that the account is owned by the vote program
-        if (!vote_account.owner.equals(&vote_program.ID)) {
-            self.logger.err().logf(
-                "Invalid vote account owner. Expected: {}, Got: {}",
-                .{ vote_program.ID, vote_account.owner },
-            );
-            return error.InvalidVoteAccountOwner;
+        // this slice is overwritten in place, but the loop capture stays ahead of those writes
+        const stale_votes = self.votes.constSlice();
+        self.votes.len = 0;
+        for (stale_votes) |vote| {
+            if (vote.slot > new_root) self.votes.append(vote) catch unreachable;
         }
-
-        self.logger.debug().logf(
-            "Vote account loaded: Pubkey={?}, Lamports={}, Owner={}, Data length={}",
-            .{
-                vote_account_pubkey,
-                vote_account.lamports,
-                vote_account.owner,
-                vote_account.data.len(),
-            },
-        );
-
-        const vote_state = try stateFromAccount(
-            allocator,
-            &vote_account,
-        );
-
-        var lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(
-            allocator,
-            vote_state.votes.items.len,
-        );
-        for (vote_state.votes.items) |landed| {
-            try lockouts.append(
-                allocator,
-                Lockout{
-                    .slot = landed.lockout.slot,
-                    .confirmation_count = landed.lockout.confirmation_count,
-                },
-            );
-        }
-        self.vote_state = TowerVoteState{
-            .votes = try std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY)
-                .fromSlice(try lockouts.toOwnedSlice(allocator)),
-            .root_slot = vote_state.root_slot,
-        };
-        self.initializeRoot(fork_root);
-
-        var flags = try std.DynamicBitSetUnmanaged.initEmpty(
-            allocator,
-            self.vote_state.votes.len,
-        );
-        defer flags.deinit(allocator);
-
-        for (self.vote_state.votes.constSlice(), 0..) |vote, i| {
-            flags.setValue(i, vote.slot > fork_root);
-        }
-
-        try self.initializeLockouts(flags);
-    }
-
-    pub fn initializeLockouts(
-        self: *Tower,
-        should_retain: std.DynamicBitSetUnmanaged,
-    ) !void {
-        std.debug.assert(should_retain.capacity() >= self.vote_state.votes.len);
-        var retained = try std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY).init(0);
-        for (self.vote_state.votes.constSlice(), 0..) |item, i| {
-            if (should_retain.isSet(i)) {
-                _ = try retained.append(item);
-            }
-        }
-        self.vote_state.votes = retained;
-    }
-
-    /// Updating root is needed to correctly restore from newly-saved tower for the next
-    /// boot.
-    pub fn initializeRoot(self: *Tower, root_slot: Slot) void {
-        self.vote_state.root_slot = root_slot;
     }
 
     /// Record a vote in the tower.
@@ -195,7 +98,7 @@ pub const Tower = struct {
         self: *Tower,
         vote_slot: Slot,
     ) !?Slot {
-        if (self.vote_state.lastVotedSlot()) |last_voted_sot| {
+        if (self.lastVotedSlot()) |last_voted_sot| {
             if (vote_slot <= last_voted_sot) {
                 return error.VoteTooOld;
             }
@@ -203,7 +106,7 @@ pub const Tower = struct {
 
         const old_root = try self.getRoot();
 
-        try self.vote_state.processNextVoteSlot(vote_slot);
+        try self.processNextVoteSlot(vote_slot);
 
         const new_root = try self.getRoot();
 
@@ -215,8 +118,8 @@ pub const Tower = struct {
     }
 
     pub fn towerSlots(self: *const Tower, allocator: std.mem.Allocator) ![]Slot {
-        var slots = try allocator.alloc(Slot, self.vote_state.votes.len);
-        for (self.vote_state.votes.constSlice(), 0..) |vote, i| {
+        var slots = try allocator.alloc(Slot, self.votes.len);
+        for (self.votes.constSlice(), 0..) |vote, i| {
             slots[i] = vote.slot;
         }
         return slots;
@@ -230,18 +133,17 @@ pub const Tower = struct {
     // snapshot (slot N). In other words, there should be no possibility a Tower doesn't have
     // root, unlike young vote accounts.
     pub fn getRoot(self: *const Tower) !Slot {
-        if (self.vote_state.root_slot == null) return error.RootSlotMissing;
-        return self.vote_state.root_slot.?;
+        return if (self.root) |root| root else error.RootSlotMissing;
     }
 
     // a slot is recent if it's newer than the last vote we have. If we haven't voted yet
     // but have a root (hard forks situation) then compare it to the root
     pub fn isRecent(self: *const Tower, slot: Slot) bool {
-        if (self.vote_state.lastVotedSlot()) |last_voted_slot| {
+        if (self.lastVotedSlot()) |last_voted_slot| {
             if (slot <= last_voted_slot) {
                 return false;
-            } else if (self.vote_state.root_slot) |root_slot| {
-                if (slot <= root_slot) {
+            } else if (self.root) |root| {
+                if (slot <= root) {
                     return false;
                 }
             }
@@ -250,7 +152,7 @@ pub const Tower = struct {
     }
 
     pub fn hasVoted(self: *const Tower, slot: Slot) bool {
-        for (self.vote_state.votes.constSlice()) |vote| {
+        for (self.votes.constSlice()) |vote| {
             if (slot == vote.slot) {
                 return true;
             }
@@ -272,11 +174,11 @@ pub const Tower = struct {
         // slot to the current lockouts to pop any expired votes. If any of the
         // remaining voted slots are on a different fork from the checked slot,
         // it's still locked out.
-        var vote_state = self.vote_state;
+        var copy = self.*;
 
-        try vote_state.processNextVoteSlot(slot);
+        try copy.processNextVoteSlot(slot);
 
-        for (vote_state.votes.constSlice()) |vote| {
+        for (copy.votes.constSlice()) |vote| {
             if (slot != vote.slot and
                 // This means the validator is trying to vote on a fork incompatible with previous votes.
                 !ancestors.containsSlot(vote.slot))
@@ -285,11 +187,11 @@ pub const Tower = struct {
             }
         }
 
-        if (vote_state.root_slot) |root_slot| {
-            if (slot != root_slot
+        if (copy.root) |root| {
+            if (slot != root
                 // This case should never happen because bank forks purges all
                 // non-descendants of the root every time root is set
-            and !ancestors.containsSlot(root_slot)) {
+            and !ancestors.containsSlot(root)) {
                 return error.InvalidRootSlot;
             }
         }
@@ -299,8 +201,8 @@ pub const Tower = struct {
     }
 
     pub fn votedSlots(self: *const Tower, allocator: std.mem.Allocator) ![]Slot {
-        var slots = try allocator.alloc(Slot, self.vote_state.votes.len);
-        for (self.vote_state.votes.slice(), 0..) |lockout, i| {
+        var slots = try allocator.alloc(Slot, self.votes.len);
+        for (self.votes.slice(), 0..) |lockout, i| {
             slots[i] = lockout.slot;
         }
         return slots;
@@ -312,155 +214,72 @@ pub const Tower = struct {
     ) !Tower {
         return try tower_storage.load(node_pubkey);
     }
+
+    pub fn lastLockout(self: *const Tower) ?Lockout {
+        if (self.votes.len == 0) return null;
+        return self.votes.get(self.votes.len - 1);
+    }
+
+    pub fn lastVotedSlot(self: *const Tower) ?Slot {
+        return if (self.lastLockout()) |last_lockout| last_lockout.slot else null;
+    }
+
+    pub fn nthRecentLockout(self: *const Tower, position: usize) ?Lockout {
+        const pos = std.math.sub(usize, self.votes.len, (position +| 1)) catch
+            return null;
+        return self.votes.get(pos);
+    }
+
+    pub fn processNextVoteSlot(
+        self: *Tower,
+        next_vote_slot: Slot,
+    ) !void {
+        // Ignore votes for slots earlier than we already have votes for
+        if (self.lastVotedSlot()) |last_voted_slot| {
+            if (next_vote_slot <= last_voted_slot) {
+                return;
+            }
+        }
+
+        self.popExpiredVotes(next_vote_slot);
+
+        // Once the stack is full, pop the oldest lockout and distribute rewards
+        if (self.votes.len == MAX_LOCKOUT_HISTORY) {
+            const rooted_vote = self.votes.orderedRemove(0);
+            self.root = rooted_vote.slot;
+        }
+        try self.votes.append(
+            Lockout{ .slot = next_vote_slot, .confirmation_count = 1 },
+        );
+        try self.doubleLockouts();
+    }
+
+    // Pop all recent votes that are not locked out at the next vote slot.  This
+    // allows validators to switch forks once their votes for another fork have
+    // expired. This also allows validators continue voting on recent blocks in
+    // the same fork without increasing lockouts.
+    pub fn popExpiredVotes(self: *Tower, next_vote_slot: Slot) void {
+        while (self.lastLockout()) |vote| {
+            if (!vote.isLockedOutAtSlot(next_vote_slot)) {
+                _ = self.votes.pop();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn doubleLockouts(self: *Tower) !void {
+        const stack_depth = self.votes.len;
+
+        for (self.votes.slice(), 0..) |*vote, i| {
+            // Don't increase the lockout for this vote until we get more confirmations
+            // than the max number of confirmations this vote has seen
+            const confirmation_count = vote.confirmation_count;
+            if (stack_depth > std.math.add(usize, i, confirmation_count) catch
+                return error.ArithmeticOverflow)
+            {
+                vote.confirmation_count +|= 1;
+            }
+        }
+    }
 };
-
-pub fn lastVotedSlotInBank(
-    allocator: std.mem.Allocator,
-    accounts_db: *AccountsDB,
-    vote_account_pubkey: *const Pubkey,
-) !?Slot {
-    const vote_account = try accounts_db.getAccountLatest(allocator, vote_account_pubkey) orelse
-        return null;
-    defer vote_account.deinit(allocator);
-
-    const vote_state = stateFromAccount(
-        allocator,
-        &vote_account,
-    ) catch return null;
-    return vote_state.lastVotedSlot();
-}
-
-pub fn stateFromAccount(
-    allocator: std.mem.Allocator,
-    vote_account: *const Account,
-) (error{BincodeError} || std.mem.Allocator.Error)!VoteState {
-    var iter = vote_account.data.iterator();
-    const versioned_state = sig.bincode.read(
-        allocator,
-        VoteStateVersions,
-        iter.reader(),
-        .{},
-    ) catch return error.BincodeError;
-    return try versioned_state.convertToCurrent(allocator);
-}
-
-const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
-
-test "initializeLockoutsFromBank handles missing vote account" {
-    const allocator = std.testing.allocator;
-
-    var tower: Tower = .init(.noop);
-
-    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
-    const vote_pubkey: Pubkey = .initRandom(prng.random());
-
-    // Create an empty account map (vote account not found)
-    var account_map: std.AutoArrayHashMapUnmanaged(Pubkey, Account) = .empty;
-    defer account_map.deinit(allocator);
-
-    const slot_account_reader: sig.accounts_db.SlotAccountReader = .{
-        .account_map = &account_map,
-    };
-
-    const fork_root: Slot = 100;
-
-    try tower.initializeLockoutsFromBank(
-        allocator,
-        vote_pubkey,
-        fork_root,
-        slot_account_reader,
-    );
-
-    // Verify tower was initialized with the root
-    try std.testing.expectEqual(fork_root, tower.vote_state.root_slot);
-    try std.testing.expectEqual(0, tower.vote_state.votes.len);
-}
-
-test "initializeLockoutsFromBank handles invalid vote account owner" {
-    const allocator = std.testing.allocator;
-
-    var tower: Tower = .init(.noop);
-
-    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
-    const vote_pubkey: Pubkey = .initRandom(prng.random());
-    const wrong_owner: Pubkey = Pubkey.initRandom(prng.random());
-
-    // Create an account with wrong owner
-    const account_with_wrong_owner = Account{
-        .data = AccountDataHandle.initAllocated(&[_]u8{}),
-        .executable = false,
-        .lamports = 1000,
-        .owner = wrong_owner,
-        .rent_epoch = 0,
-    };
-
-    var account_map: std.AutoArrayHashMapUnmanaged(Pubkey, Account) = .empty;
-    defer {
-        var iter = account_map.iterator();
-        while (iter.next()) |entry| {
-            entry.value_ptr.deinit(allocator);
-        }
-        account_map.deinit(allocator);
-    }
-    try account_map.put(allocator, vote_pubkey, account_with_wrong_owner);
-
-    const slot_account_reader: sig.accounts_db.SlotAccountReader = .{
-        .account_map = &account_map,
-    };
-
-    // Should return InvalidVoteAccountOwner error
-    const result = tower.initializeLockoutsFromBank(
-        allocator,
-        vote_pubkey,
-        100,
-        slot_account_reader,
-    );
-
-    try std.testing.expectError(error.InvalidVoteAccountOwner, result);
-}
-
-test "initializeLockoutsFromBank handles invalid vote state" {
-    const allocator = std.testing.allocator;
-
-    var tower: Tower = .init(.noop);
-
-    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
-    const vote_pubkey: Pubkey = .initRandom(prng.random());
-
-    // Create an account with invalid vote state data (garbage bytes)
-    const invalid_data_bytes = try allocator.alloc(u8, 4);
-    defer allocator.free(invalid_data_bytes);
-    @memcpy(invalid_data_bytes, &[_]u8{ 0xFF, 0xFF, 0xFF, 0xFF });
-
-    const invalid_account = Account{
-        .data = AccountDataHandle.initAllocated(invalid_data_bytes),
-        .executable = false,
-        .lamports = 1000,
-        .owner = vote_program.ID,
-        .rent_epoch = 0,
-    };
-
-    var account_map: std.AutoArrayHashMapUnmanaged(Pubkey, Account) = .empty;
-    defer {
-        var iter = account_map.iterator();
-        while (iter.next()) |entry| {
-            entry.value_ptr.deinit(allocator);
-        }
-        account_map.deinit(allocator);
-    }
-    try account_map.put(allocator, vote_pubkey, invalid_account);
-
-    const slot_account_reader: sig.accounts_db.SlotAccountReader = .{
-        .account_map = &account_map,
-    };
-
-    // Should return BincodeError when trying to deserialize invalid vote state
-    const result = tower.initializeLockoutsFromBank(
-        allocator,
-        vote_pubkey,
-        100,
-        slot_account_reader,
-    );
-
-    try std.testing.expectError(error.BincodeError, result);
-}

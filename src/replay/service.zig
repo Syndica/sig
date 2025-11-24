@@ -1096,7 +1096,7 @@ pub const DependencyStubs = struct {
             .logger = logger,
             .identity = .{
                 .validator = .initRandom(prng),
-                .vote_account = .initRandom(prng),
+                .vote_account = null,
             },
             .signing = .{
                 .node = null,
