@@ -302,6 +302,7 @@ pub fn replaySlotSync(
             error.LockFailed => return .{ .invalid_transaction = .AccountInUse },
             error.OutOfMemory => return error.OutOfMemory,
         };
+        defer locks.unlockAll();
 
         switch (try replayBatch(
             allocator,
