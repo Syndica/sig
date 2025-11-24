@@ -224,6 +224,22 @@ pub fn main() !void {
             params.accountsdb_download.apply(&current_config);
             try mockRpcServer(gpa, current_config);
         },
+        .agave_migration_tool => |params| {
+            var app_base = try AppBase.init(gpa, current_config);
+            errdefer {
+                app_base.shutdown();
+                app_base.deinit();
+            }
+
+            const out_dir = params.out_dir orelse return error.NoOutDirSpecified;
+
+            try sig.ledger.agave_migration_tool.migrateLedgerToAgave(
+                gpa,
+                .from(app_base.logger),
+                params.in_dir,
+                out_dir,
+            );
+        },
     }
 }
 
@@ -245,6 +261,7 @@ const Cmd = struct {
         leader_schedule: LeaderScheduleSubCmd,
         test_transaction_sender: TestTransactionSender,
         mock_rpc_server: MockRpcServer,
+        agave_migration_tool: AgaveMigrationTool,
     },
 
     const cmd_info: cli.CommandInfo(@This()) = .{
@@ -271,6 +288,7 @@ const Cmd = struct {
                 .leader_schedule = LeaderScheduleSubCmd.cmd_info,
                 .test_transaction_sender = TestTransactionSender.cmd_info,
                 .mock_rpc_server = MockRpcServer.cmd_info,
+                .agave_migration_tool = AgaveMigrationTool.cmd_info,
             },
             .log_filters = .{
                 .kind = .named,
@@ -726,6 +744,42 @@ const Cmd = struct {
             ,
         },
         .sub = .{},
+    };
+
+    const in_dir_arg: cli.ArgumentInfo([]const u8) = .{
+        .kind = .named,
+        .name_override = "in-dir",
+        .alias = .i,
+        .default_value = sig.VALIDATOR_DIR ++ "ledger",
+        .config = .string,
+        .help = "path to Sig ledger directory",
+    };
+
+    const out_dir_arg: cli.ArgumentInfo(?[]const u8) = .{
+        .kind = .named,
+        .name_override = "out-dir",
+        .alias = .o,
+        .default_value = null,
+        .config = .string,
+        .help = "path to Agave ledger directory",
+    };
+
+    const AgaveMigrationTool = struct {
+        in_dir: []const u8,
+        out_dir: ?[]const u8,
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Convert a Sig ledger into an Agave ledger",
+                .long =
+                \\Migrates from Sig's RocksDb ledger format into Agave's RocksDb ledger format.
+                ,
+            },
+            .sub = .{
+                .in_dir = in_dir_arg,
+                .out_dir = out_dir_arg,
+            },
+        };
     };
 
     const Gossip = struct {
