@@ -256,6 +256,91 @@ pub const ForkChoice = struct {
         }
 
         self.metrics.current_root_slot.set(self.tree_root.slot);
+
+        // Calculate and set fork stake percentages for top 4 forks
+        self.updateForkStakePercentages(total_stake);
+    }
+
+    /// Updates metrics for top 4 forks by stake percentage
+    fn updateForkStakePercentages(self: *ForkChoice, total_stake: u64) void {
+        // Fixed-size array to track top 4 forks by stake (sorted descending)
+        var top_forks: [4]u64 = @splat(0);
+        var forks_count: usize = 0;
+
+        // Iterate through all active forks and maintain top 4
+        var iter = self.fork_infos.iterator();
+        while (iter.next()) |entry| {
+            const slot_hash = entry.key_ptr.*;
+            const fork_info = entry.value_ptr;
+            // Only consider candidate forks that are leaf nodes
+            if (fork_info.isCandidate() and fork_info.children.count() == 0) {
+                // Calculate total stake along the fork path from root to this leaf
+                const total_fork_stake = self.calculateForkPathStake(slot_hash);
+
+                if (forks_count < 4) {
+                    // Array not full yet, insert in sorted position
+                    top_forks[forks_count] = total_fork_stake;
+                    forks_count += 1;
+                    // Keep array sorted (descending) - insertion sort
+                    var j = forks_count - 1;
+                    while (j > 0 and top_forks[j] > top_forks[j - 1]) {
+                        const temp = top_forks[j];
+                        top_forks[j] = top_forks[j - 1];
+                        top_forks[j - 1] = temp;
+                        j -= 1;
+                    }
+                } else {
+                    // Array is full, replace smallest if this fork has more stake
+                    if (total_fork_stake > top_forks[3]) {
+                        top_forks[3] = total_fork_stake;
+                        // Re-sort: bubble up the new value
+                        var j: usize = 3;
+                        while (j > 0 and top_forks[j] > top_forks[j - 1]) {
+                            const temp = top_forks[j];
+                            top_forks[j] = top_forks[j - 1];
+                            top_forks[j - 1] = temp;
+                            j -= 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Calculate percentages and set metrics for top 4
+        var i: usize = 0;
+        while (i < 4) : (i += 1) {
+            const percentage: f64 = if (i < forks_count and total_stake > 0)
+                @as(f64, @floatFromInt(top_forks[i])) * 100.0 /
+                    @as(f64, @floatFromInt(total_stake))
+            else
+                0.0;
+
+            switch (i) {
+                0 => self.metrics.fork_stake_percentage_1st_heaviest.set(percentage),
+                1 => self.metrics.fork_stake_percentage_2nd_heaviest.set(percentage),
+                2 => self.metrics.fork_stake_percentage_3rd_heaviest.set(percentage),
+                3 => self.metrics.fork_stake_percentage_4th_heaviest.set(percentage),
+                else => unreachable,
+            }
+        }
+    }
+
+    /// Calculates the total stake along the fork path from root to the given leaf node.
+    /// This sums up stake_for_slot for all nodes along the path.
+    fn calculateForkPathStake(self: *const ForkChoice, leaf_slot_hash: SlotAndHash) u64 {
+        var total_stake: u64 = 0;
+        var current: ?SlotAndHash = leaf_slot_hash;
+
+        while (current) |slot_hash| {
+            if (self.fork_infos.get(slot_hash)) |fork_info| {
+                total_stake += fork_info.stake_for_slot;
+                current = fork_info.parent;
+            } else {
+                break;
+            }
+        }
+
+        return total_stake;
     }
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L452
@@ -5221,6 +5306,15 @@ pub const ForkChoiceMetrics = struct {
 
     /// Number of active forks (leaf nodes in the fork tree)
     number_of_active_forks: *sig.prometheus.Gauge(u64),
+
+    /// Percentage of stake on the 1st heaviest fork
+    fork_stake_percentage_1st_heaviest: *sig.prometheus.Gauge(f64),
+    /// Percentage of stake on the 2nd heaviest fork
+    fork_stake_percentage_2nd_heaviest: *sig.prometheus.Gauge(f64),
+    /// Percentage of stake on the 3rd heaviest fork
+    fork_stake_percentage_3rd_heaviest: *sig.prometheus.Gauge(f64),
+    /// Percentage of stake on the 4th heaviest fork
+    fork_stake_percentage_4th_heaviest: *sig.prometheus.Gauge(f64),
 
     /// Number of fork choice updates - indicates consensus activity and health
     fork_choice_updates: *sig.prometheus.Counter,
