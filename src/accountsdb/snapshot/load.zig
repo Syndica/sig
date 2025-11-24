@@ -9,11 +9,11 @@ const Allocator = std.mem.Allocator;
 
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
-const GenesisConfig = sig.core.GenesisConfig;
-
 const ThreadPool = sig.sync.ThreadPool;
-
 const Rooted = sig.accounts_db.Two.Rooted;
+const features = sig.core.features;
+const GenesisConfig = sig.core.GenesisConfig;
+const FeatureSet = sig.core.features.Set;
 const StatusCache = sig.accounts_db.snapshot.StatusCache;
 const Manifest = sig.accounts_db.snapshot.Manifest;
 const SnapshotFiles = sig.accounts_db.snapshot.SnapshotFiles;
@@ -31,6 +31,35 @@ pub const LoadedSnapshot = struct {
         self.combined_manifest.deinit(self.allocator);
         self.collapsed_manifest.deinit(self.allocator);
         self.genesis_config.deinit(self.allocator);
+    }
+
+    pub fn featureSet(
+        self: *LoadedSnapshot,
+        allocator: Allocator,
+        accounts_db: *sig.accounts_db.Two,
+    ) !FeatureSet {
+        const ancestors = self.collapsed_manifest.bank_fields.ancestors;
+
+        var feature_set = FeatureSet.ALL_DISABLED;
+        var inactive_iterator = feature_set.iterator(
+            self.collapsed_manifest.bank_fields.slot,
+            .inactive,
+        );
+        while (inactive_iterator.next()) |feature| {
+            const feature_id = features.map.get(feature).key;
+            if (try accounts_db.get(
+                allocator,
+                feature_id,
+                &ancestors,
+            )) |feature_account| {
+                defer feature_account.deinit(allocator);
+                if (try features.activationSlotFromAccount(feature_account)) |activation_slot| {
+                    feature_set.setSlot(feature, activation_slot);
+                }
+            }
+        }
+
+        return feature_set;
     }
 };
 

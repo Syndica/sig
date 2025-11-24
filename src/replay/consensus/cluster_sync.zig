@@ -1419,6 +1419,7 @@ const TestData = struct {
                     .feature_set = .ALL_DISABLED,
                     .reserved_accounts = .empty,
                     .inflation = .DEFAULT,
+                    .rent_collector = .DEFAULT,
                 },
                 .state = .{
                     .blockhash_queue = .init(.DEFAULT),
