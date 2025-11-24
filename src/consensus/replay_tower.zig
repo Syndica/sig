@@ -198,6 +198,8 @@ pub const ReplayTower = struct {
             slot_account_reader,
         );
 
+        logger.info().logf("ReplayTower initialized with root slot: {}", .{fork_root});
+
         return .{
             .logger = logger,
             .tower = tower,
