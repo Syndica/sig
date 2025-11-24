@@ -318,18 +318,24 @@ pub const Message = struct {
 
     pub fn clone(self: Message, allocator: std.mem.Allocator) !Message {
         const account_keys = try allocator.dupe(Pubkey, self.account_keys);
-        errdefer sig.bincode.free(allocator, account_keys);
+        errdefer allocator.free(account_keys);
 
         var instructions = try allocator.alloc(Instruction, self.instructions.len);
-        errdefer sig.bincode.free(allocator, instructions);
-        for (self.instructions, 0..) |instr, i|
-            instructions[i] = try instr.clone(allocator);
+        errdefer allocator.free(instructions);
 
-        const address_lookups =
-            try allocator.alloc(AddressLookup, self.address_lookups.len);
-        errdefer sig.bincode.free(allocator, address_lookups);
-        for (address_lookups, 0..) |*alt, i|
-            alt.* = try self.address_lookups[i].clone(allocator);
+        for (self.instructions, 0..) |instr, i| {
+            errdefer for (instructions[0..i]) |_instr| _instr.deinit(allocator);
+            instructions[i] = try instr.clone(allocator);
+        }
+        errdefer for (instructions) |instr| instr.deinit(allocator);
+
+        const address_lookups = try allocator.alloc(AddressLookup, self.address_lookups.len);
+        errdefer allocator.free(address_lookups);
+
+        for (self.address_lookups, 0..) |alt, i| {
+            errdefer for (address_lookups[0..i]) |_alt| _alt.deinit(allocator);
+            address_lookups[i] = try alt.clone(allocator);
+        }
 
         return .{
             .signature_count = self.signature_count,
@@ -483,21 +489,31 @@ pub const Message = struct {
         const readonly_unsigned_count = try reader.readByte();
 
         const account_keys = try allocator.alloc(Pubkey, try leb.readULEB128(u16, reader));
-        errdefer sig.bincode.free(allocator, account_keys);
-        for (account_keys) |*id| id.* = .{ .data = try reader.readBytesNoEof(Pubkey.SIZE) };
+        errdefer allocator.free(account_keys);
+
+        for (account_keys) |*id| {
+            id.* = .{ .data = try reader.readBytesNoEof(Pubkey.SIZE) };
+        }
 
         const recent_blockhash: Hash = .{ .data = try reader.readBytesNoEof(Hash.SIZE) };
 
         const instructions = try allocator.alloc(Instruction, try leb.readULEB128(u16, reader));
-        errdefer sig.bincode.free(allocator, instructions);
-        for (instructions) |*instr|
+        errdefer allocator.free(instructions);
+
+        for (instructions, 0..) |*instr, i| {
+            errdefer for (instructions[0..i]) |_instr| _instr.deinit(allocator);
             instr.* = try sig.bincode.readWithLimit(limit_allocator, Instruction, reader, .{});
+        }
+        errdefer for (instructions) |instr| instr.deinit(allocator);
 
         const address_lookups_len = if (version == .legacy) 0 else try leb.readULEB128(u16, reader);
         const address_lookups = try allocator.alloc(AddressLookup, address_lookups_len);
-        errdefer sig.bincode.free(allocator, address_lookups);
-        for (address_lookups) |*alt|
+        errdefer allocator.free(address_lookups);
+
+        for (address_lookups, 0..) |*alt, i| {
+            errdefer for (address_lookups[0..i]) |_alt| _alt.deinit(allocator);
             alt.* = try sig.bincode.readWithLimit(limit_allocator, AddressLookup, reader, .{});
+        }
 
         return .{
             .signature_count = signature_count,
@@ -824,6 +840,61 @@ fn sortCompiledKeys(
     key_meta_map.sort(sort_ctx);
 }
 
+test "transaction serialization" {
+    const allocator = std.testing.allocator;
+    const transaction = Transaction{
+        .signatures = &.{},
+        .version = .v0,
+        .msg = .{
+            .signature_count = 0,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{Pubkey.ZEROES},
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{
+                Instruction{
+                    .account_indexes = &.{0},
+                    .data = &.{0},
+                    .program_index = 0,
+                },
+            },
+            .address_lookups = &.{
+                AddressLookup{
+                    .readonly_indexes = &.{0},
+                    .writable_indexes = &.{0},
+                    .table_address = Pubkey.ZEROES,
+                },
+            },
+        },
+    };
+
+    const serialized = try sig.bincode.writeAlloc(allocator, transaction, .{});
+    defer sig.bincode.free(allocator, serialized);
+
+    const deserialized = try sig.bincode.readFromSlice(allocator, Transaction, serialized, .{});
+    defer deserialized.deinit(allocator);
+
+    try std.testing.expectEqualDeep(transaction, deserialized);
+
+    try std.testing.checkAllAllocationFailures(
+        allocator,
+        struct {
+            fn bincodeTest(gpa: std.mem.Allocator, data: []const u8) !void {
+                const txn = try sig.bincode.readFromSlice(gpa, Transaction, data, .{});
+                defer txn.deinit(gpa);
+            }
+        }.bincodeTest,
+        .{serialized},
+    );
+
+    for (0..serialized.len) |i| {
+        try std.testing.expectError(
+            error.EndOfStream,
+            sig.bincode.readFromSlice(allocator, Transaction, serialized[0..i], .{}),
+        );
+    }
+}
+
 test "clone transaction" {
     const allocator = std.testing.allocator;
     const transaction = Transaction{
@@ -835,8 +906,20 @@ test "clone transaction" {
             .readonly_unsigned_count = 0,
             .account_keys = &.{Pubkey.ZEROES},
             .recent_blockhash = Hash.ZEROES,
-            .instructions = &.{},
-            .address_lookups = &.{},
+            .instructions = &.{
+                Instruction{
+                    .account_indexes = &.{0},
+                    .data = &.{0},
+                    .program_index = 0,
+                },
+            },
+            .address_lookups = &.{
+                AddressLookup{
+                    .readonly_indexes = &.{0},
+                    .writable_indexes = &.{0},
+                    .table_address = Pubkey.ZEROES,
+                },
+            },
         },
     };
 
@@ -852,6 +935,17 @@ test "clone transaction" {
     try std.testing.expectEqual(transaction.msg.recent_blockhash, clone.msg.recent_blockhash);
     try std.testing.expectEqual(transaction.msg.instructions.len, clone.msg.instructions.len);
     try std.testing.expectEqual(transaction.msg.address_lookups.len, clone.msg.address_lookups.len);
+
+    try std.testing.checkAllAllocationFailures(
+        allocator,
+        struct {
+            fn cloneTest(gpa: std.mem.Allocator, txn: Transaction) !void {
+                const copy = try txn.clone(gpa);
+                defer copy.deinit(gpa);
+            }
+        }.cloneTest,
+        .{transaction},
+    );
 }
 
 test "sanitize succeeds minimal valid transaction" {

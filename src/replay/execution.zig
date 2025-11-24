@@ -149,7 +149,7 @@ fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
 
     var results = try std.ArrayListUnmanaged(ReplayResult)
         .initCapacity(allocator, active_slots.len);
-    errdefer results.deinit(allocator);
+    defer results.deinit(allocator);
 
     for (active_slots) |slot| {
         state.logger.debug().logf("replaying slot: {}", .{slot});
