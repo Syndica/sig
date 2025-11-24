@@ -1,18 +1,3 @@
-//! This file represents the data stored in agave's `Bank` struct. Sig does not
-//! have an analogous struct because `Bank` is a massive disorganized struct
-//! without unbounded responsibilities that makes the code hard to understand
-//! and makes dependencies difficult to manage.
-//!
-//! Instead we have more granular, digestible structs with clear scopes, like
-//! SlotConstants, SlotState, and EpochConstants. These store much of the same
-//! data that's stored in agave's Bank. Other heavyweight fields from agave's
-//! Bank like like `BankRc` (containing a pointer to accountsdb) and
-//! `TransactionBatchProcessor` are not included in any "bank" struct in sig.
-//! Instead, those large dependencies are managed independently.
-//!
-//! The philosophy is that breaking the Bank into separate pieces will enable us
-//! to write code with a more minimal, clearer set of dependencies, to make the
-//! code easier to understand and maintain.
 const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
@@ -82,10 +67,10 @@ pub const Cluster = struct {
             @as(f64, @floatFromInt(self.ticks_per_slot));
     }
 
-    pub fn nanosPerSlot(self: *const Cluster) u128 {
+    pub fn nanosPerSlot(self: *const Cluster) u64 {
         const seconds_per_slot = @as(f64, @floatFromInt(self.ticks_per_slot)) /
             @as(f64, @floatFromInt(self.ticks_per_second));
-        return @as(u128, @intFromFloat(std.time.ns_per_s * seconds_per_slot));
+        return @as(u64, @intFromFloat(std.time.ns_per_s * seconds_per_slot));
     }
 };
 

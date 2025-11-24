@@ -70,6 +70,12 @@ pub fn advanceReplay(
     var start_time = sig.time.Timer.start();
     replay_state.logger.debug().log("advancing replay");
 
+    var leader_schedules = try replay_state.magic_tracker.getLeaderSchedules();
+    const slot_leaders = SlotLeaders.init(
+        &leader_schedules,
+        sig.core.magic_leader_schedule.LeaderSchedules.getLeaderOrNull,
+    );
+
     // find slots in the ledger
     try trackNewSlots(
         allocator,
@@ -79,7 +85,7 @@ pub fn advanceReplay(
         &replay_state.slot_tracker,
         replay_state.magic_tracker,
         &replay_state.slot_tree,
-        replay_state.slot_leaders,
+        slot_leaders,
         &replay_state.hard_forks,
         &replay_state.progress_map,
     );
@@ -110,7 +116,7 @@ pub fn advanceReplay(
             .senders = consensus.senders,
             .receivers = consensus.receivers,
             .vote_sockets = consensus.vote_sockets,
-            .slot_leaders = replay_state.slot_leaders,
+            .slot_leaders = slot_leaders,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
             .results = slot_results,
@@ -139,14 +145,10 @@ pub const Dependencies = struct {
     logger: Logger,
     identity: sig.identity.ValidatorIdentity,
     signing: sig.identity.SigningKeys,
-    /// Used in the EpochManager
-    epoch_schedule: sig.core.EpochSchedule,
     account_store: sig.accounts_db.AccountStore,
     /// Reader used to get the entries to validate them and execute the transactions
     /// Writer used to update the ledger with consensus results
     ledger: *Ledger,
-    /// Used to get the entries to validate them and execute the transactions
-    slot_leaders: SlotLeaders,
     magic_tracker: *sig.core.magic_info.MagicTracker,
     /// The slot info to start replaying from.
     root: struct {
@@ -156,12 +158,6 @@ pub const Dependencies = struct {
         /// ownership transferred to replay; won't be freed if `ReplayState.init` returns an error.
         state: sig.core.SlotState,
     },
-    current_epoch: sig.core.Epoch,
-    next_epoch: ?sig.core.Epoch = null,
-    /// ownership transferred to replay
-    current_epoch_constants: sig.core.EpochConstants,
-    /// ownership transferred to replay
-    next_epoch_constants: ?sig.core.EpochConstants = null,
     /// ownership transferred to replay
     hard_forks: sig.core.HardForks,
     replay_threads: u32,
@@ -179,7 +175,6 @@ pub const ReplayState = struct {
     identity: sig.identity.ValidatorIdentity,
     signing: sig.identity.SigningKeys,
     thread_pool: ThreadPool,
-    slot_leaders: SlotLeaders,
     slot_tracker: SlotTracker,
     magic_tracker: *sig.core.magic_info.MagicTracker,
     slot_tree: SlotTree,
@@ -247,7 +242,6 @@ pub const ReplayState = struct {
             .identity = deps.identity,
             .signing = deps.signing,
             .thread_pool = .init(.{ .max_threads = deps.replay_threads }),
-            .slot_leaders = deps.slot_leaders,
             .slot_tracker = slot_tracker,
             .magic_tracker = deps.magic_tracker,
             .slot_tree = slot_tree,
@@ -393,20 +387,6 @@ pub fn trackNewSlots(
                 );
             }
 
-            const epoch_info = magic_tracker.getEpochInfo(slot) catch
-                return error.MissingEpoch;
-
-            const epoch_constants = sig.core.bank.EpochConstants{
-                .hashes_per_tick = magic_tracker.cluster.hashes_per_tick,
-                .ticks_per_slot = magic_tracker.cluster.ticks_per_slot,
-                .ns_per_slot = magic_tracker.cluster.nanosPerSlot(),
-                .genesis_creation_time = magic_tracker.cluster.genesis_creation_time,
-                .slots_per_year = magic_tracker.cluster.slotsPerYear(),
-                .stakes = try epoch_info.stakes.clone(allocator),
-                .rent_collector = constants.rent_collector,
-            };
-            defer epoch_constants.deinit(allocator);
-
             try replay.rewards.distribution.distributePartitionedEpochRewards(
                 allocator,
                 slot,
@@ -423,8 +403,7 @@ pub fn trackNewSlots(
             try updateSysvarsForNewSlot(
                 allocator,
                 account_store,
-                &epoch_constants,
-                magic_tracker.epoch_schedule,
+                magic_tracker,
                 &constants,
                 &state,
                 slot,
@@ -578,23 +557,10 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
             const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
             if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
                 state.logger.info().logf("finished replaying slot: {}", .{slot});
-                const epoch_info = try state.magic_tracker.getEpochInfo(slot);
-                const epoch_constants = sig.core.bank.EpochConstants{
-                    .hashes_per_tick = state.magic_tracker.cluster.hashes_per_tick,
-                    .ticks_per_slot = state.magic_tracker.cluster.ticks_per_slot,
-                    .ns_per_slot = state.magic_tracker.cluster.nanosPerSlot(),
-                    .genesis_creation_time = state.magic_tracker.cluster.genesis_creation_time,
-                    .slots_per_year = state.magic_tracker.cluster.slotsPerYear(),
-                    .stakes = try epoch_info.stakes.clone(state.allocator),
-                    .rent_collector = slot_info.constants.rent_collector,
-                };
-                defer epoch_constants.deinit(state.allocator);
-
                 try replay.freeze.freezeSlot(state.allocator, .init(
                     .from(state.logger),
                     state.account_store,
                     &state.thread_pool,
-                    &epoch_constants,
                     slot_info.state,
                     slot_info.constants,
                     slot,
@@ -950,27 +916,27 @@ test "advance calls consensus.process with empty replay results" {
     try std.testing.expectEqual(0, replay_state.slot_tracker.root);
 }
 
-// test "Execute testnet block single threaded" {
-//     if (!sig.build_options.long_tests) return error.SkipZigTest;
+test "Execute testnet block single threaded" {
+    if (!sig.build_options.long_tests) return error.SkipZigTest;
 
-//     try testExecuteBlock(std.testing.allocator, .{
-//         .num_threads = 1,
-//         .manifest_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/manifest.bin.gz",
-//         .shreds_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/shreds.json.gz",
-//         .accounts_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/accounts.json.gz",
-//     });
-// }
+    try testExecuteBlock(std.testing.allocator, .{
+        .num_threads = 1,
+        .manifest_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/manifest.bin.gz",
+        .shreds_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/shreds.json.gz",
+        .accounts_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/accounts.json.gz",
+    });
+}
 
-// test "Execute testnet block multi threaded" {
-//     if (!sig.build_options.long_tests) return error.SkipZigTest;
+test "Execute testnet block multi threaded" {
+    if (!sig.build_options.long_tests) return error.SkipZigTest;
 
-//     try testExecuteBlock(std.testing.allocator, .{
-//         .num_threads = 2,
-//         .manifest_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/manifest.bin.gz",
-//         .shreds_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/shreds.json.gz",
-//         .accounts_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/accounts.json.gz",
-//     });
-// }
+    try testExecuteBlock(std.testing.allocator, .{
+        .num_threads = 2,
+        .manifest_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/manifest.bin.gz",
+        .shreds_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/shreds.json.gz",
+        .accounts_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/accounts.json.gz",
+    });
+}
 
 test "freezeCompletedSlots handles errors correctly" {
     const allocator = std.testing.allocator;
@@ -1018,7 +984,7 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     defer dep_stubs.deinit();
 
     // get snapshot manifest
-    const fba_buf = try allocator.alloc(u8, 175_000_000);
+    const fba_buf = try allocator.alloc(u8, 350_000_000);
     defer allocator.free(fba_buf);
     var fba = std.heap.FixedBufferAllocator.init(fba_buf);
     // TODO: figure out why `Manifest.deinit` doesn't work for a Manifest that
@@ -1058,7 +1024,6 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     result.deinit();
 
     // get data about this test from snapshot + shreds
-    const epoch = manifest.bank_fields.epoch;
     const snapshot_slot = manifest.bank_fields.slot;
     const execution_slot = shreds.items(.shred)[0].commonHeader().slot;
 
@@ -1074,25 +1039,24 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
         try dep_stubs.accounts_db_state.db.put(snapshot_slot, address, account);
     }
 
-    // calculate leader schedule
-    const leader_schedule = try sig.core.leader_schedule.LeaderSchedule.fromVoteAccounts(
-        allocator,
-        epoch,
-        manifest.bank_fields.epoch_schedule.slots_per_epoch,
-        try manifest.epochVoteAccounts(epoch),
+    var epoch_stakes = manifest.bank_extra.versioned_epoch_stakes.get(
+        manifest.bank_fields.epoch,
+    ).?.current;
+
+    epoch_stakes.stakes.epoch += 1;
+    try manifest.bank_extra.versioned_epoch_stakes.put(
+        fba.allocator(),
+        manifest.bank_fields.epoch + 1,
+        .{ .current = try epoch_stakes.clone(fba.allocator()) },
     );
-    defer allocator.free(leader_schedule);
-    var slot_leaders = sig.core.leader_schedule.SingleEpochSlotLeaders{
-        .slot_leaders = leader_schedule,
-        .start_slot = manifest.bank_fields.epoch_schedule.getFirstSlotInEpoch(epoch),
-    };
+
+    manifest.bank_fields.stakes.deinit(fba.allocator());
+    manifest.bank_fields.stakes = try epoch_stakes.stakes.convert(fba.allocator(), .delegation);
 
     // init replay
     var replay_state = try dep_stubs.mockedState(
         allocator,
-        epoch,
         &manifest,
-        slot_leaders.slotLeaders(),
         config.num_threads,
     );
     defer {
@@ -1233,9 +1197,6 @@ pub const DependencyStubs = struct {
             try bhq.mut().insertGenesisHash(allocator, .ZEROES, 0);
         }
 
-        const epoch: sig.core.EpochConstants = .genesis(.default(allocator));
-        errdefer epoch.deinit(allocator);
-
         var prng_state = std.Random.DefaultPrng.init(24659);
         const prng = prng_state.random();
 
@@ -1261,26 +1222,14 @@ pub const DependencyStubs = struct {
                 .node = null,
                 .authorized_voters = &.{},
             },
-            .epoch_schedule = .INIT,
             .account_store = self.accountStore(),
             .ledger = &self.ledger,
-            .slot_leaders = .{
-                .state = undefined,
-                .getFn = struct {
-                    pub fn get(_: *anyopaque, slot: Slot) ?Pubkey {
-                        const four_slot: [4]Slot = @splat(slot +| 1);
-                        return .{ .data = @bitCast(four_slot) };
-                    }
-                }.get,
-            },
             .magic_tracker = magic_tracker,
             .root = .{
                 .slot = 0,
                 .constants = root_slot_constants,
                 .state = root_slot_state,
             },
-            .current_epoch = 0,
-            .current_epoch_constants = epoch,
             .hard_forks = .{},
 
             .replay_threads = 1,
@@ -1293,15 +1242,10 @@ pub const DependencyStubs = struct {
     fn mockedState(
         self: *DependencyStubs,
         allocator: std.mem.Allocator,
-        epoch: sig.core.Epoch,
         collapsed_manifest: *const sig.accounts_db.snapshot.Manifest,
-        slot_leaders: sig.core.leader_schedule.SlotLeaders,
         num_threads: u32,
     ) !ReplayState {
         const bank_fields = &collapsed_manifest.bank_fields;
-        const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
-        const epoch_stakes = epoch_stakes_map.get(epoch) orelse
-            return error.EpochStakesMissingFromSnapshot;
 
         const feature_set = try sig.replay.service.getActiveFeatures(
             allocator,
@@ -1352,19 +1296,12 @@ pub const DependencyStubs = struct {
             },
             .account_store = self.accountStore(),
             .ledger = &self.ledger,
-            .epoch_schedule = bank_fields.epoch_schedule,
-            .slot_leaders = slot_leaders,
             .magic_tracker = magic_tracker,
             .root = .{
                 .slot = bank_fields.slot,
                 .constants = root_slot_constants,
                 .state = root_slot_state,
             },
-            .current_epoch = epoch,
-            .current_epoch_constants = try .fromBankFields(
-                bank_fields,
-                try epoch_stakes.current.convert(allocator, .delegation),
-            ),
             .hard_forks = hard_forks,
 
             .replay_threads = num_threads,

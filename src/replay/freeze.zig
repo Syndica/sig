@@ -12,7 +12,6 @@ const assert = std.debug.assert;
 const Logger = sig.trace.Logger(@typeName(@This()));
 
 const Ancestors = core.Ancestors;
-const EpochConstants = core.EpochConstants;
 const Hash = core.Hash;
 const LtHash = core.LtHash;
 const Pubkey = core.Pubkey;
@@ -46,7 +45,6 @@ pub const FreezeParams = struct {
         logger: Logger,
         account_store: AccountStore,
         thread_pool: *sig.sync.ThreadPool,
-        epoch: *const EpochConstants,
         state: *SlotState,
         constants: *const SlotConstants,
         slot: Slot,
@@ -71,14 +69,14 @@ pub const FreezeParams = struct {
                 .update_sysvar = .{
                     .slot = slot,
                     .slot_store = account_store.forSlot(slot, &constants.ancestors),
-                    .rent = &epoch.rent_collector.rent,
+                    .rent = &constants.rent_collector.rent,
                     .capitalization = &state.capitalization,
                 },
                 .account_store = account_store,
                 .account_reader = account_store.reader().forSlot(&constants.ancestors),
                 .capitalization = &state.capitalization,
                 .blockhash_queue = &state.blockhash_queue,
-                .rent = epoch.rent_collector.rent,
+                .rent = constants.rent_collector.rent,
                 .slot = slot,
                 .blockhash = blockhash,
                 .lamports_per_signature = constants.fee_rate_governor.lamports_per_signature,
@@ -519,9 +517,6 @@ test "freezeSlot: trivial e2e merkle hash test" {
     defer test_state.deinit();
     const account_store: AccountStore = .{ .accounts_db_two = &test_state.db };
 
-    const epoch = EpochConstants.genesis(.default(allocator));
-    defer epoch.deinit(allocator);
-
     const constants = try SlotConstants.genesis(allocator, .DEFAULT);
     defer constants.deinit(allocator);
 
@@ -537,7 +532,6 @@ test "freezeSlot: trivial e2e merkle hash test" {
         .FOR_TESTS,
         account_store,
         &tp,
-        &epoch,
         &state,
         &constants,
         0,
@@ -583,9 +577,6 @@ test "freezeSlot: trivial e2e lattice hash test" {
 
     const account_store: sig.accounts_db.AccountStore = .{ .accounts_db_two = real_state };
 
-    const epoch = EpochConstants.genesis(.default(allocator));
-    defer epoch.deinit(allocator);
-
     var constants = try SlotConstants.genesis(allocator, .DEFAULT);
     defer constants.deinit(allocator);
     constants.feature_set.setSlot(.accounts_lt_hash, 0);
@@ -598,7 +589,6 @@ test "freezeSlot: trivial e2e lattice hash test" {
         .FOR_TESTS,
         account_store,
         &tp,
-        &epoch,
         &state,
         &constants,
         0,
