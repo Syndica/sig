@@ -1108,11 +1108,11 @@ pub const ReplayTower = struct {
             i += 1;
         }
 
-        var retained = std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY){};
-        for (self.tower.votes.constSlice(), 0..) |vote, index| {
-            if (flags.isSet(index)) retained.append(vote) catch unreachable;
+        const stale_votes = self.tower.votes.constSlice();
+        self.tower.votes.clear();
+        for (stale_votes, 0..) |vote, index| {
+            if (flags.isSet(index)) self.tower.votes.appendAssumeCapacity(vote);
         }
-        self.tower.votes = retained;
 
         if (self.tower.votes.len == 0) {
             // we might not have banks for those votes so just reset.

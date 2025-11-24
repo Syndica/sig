@@ -86,9 +86,9 @@ pub const Tower = struct {
 
         // this slice is overwritten in place, but the loop capture stays ahead of those writes
         const stale_votes = self.votes.constSlice();
-        self.votes.len = 0;
+        self.votes.clear();
         for (stale_votes) |vote| {
-            if (vote.slot > new_root) self.votes.append(vote) catch unreachable;
+            if (vote.slot > new_root) self.votes.appendAssumeCapacity(vote);
         }
     }
 
