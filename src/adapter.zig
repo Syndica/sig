@@ -80,6 +80,7 @@ pub const RpcEpochContextService = struct {
     logger: Logger,
     rpc_client: rpc.Client,
     state: *EpochContextManager,
+    magic_tracker: *sig.core.magic_info.MagicTracker,
 
     const Self = @This();
     const Logger = sig.trace.Logger(@typeName(Self));
@@ -88,6 +89,7 @@ pub const RpcEpochContextService = struct {
         allocator: Allocator,
         logger: Logger,
         state: *EpochContextManager,
+        magic_tracker: *sig.core.magic_info.MagicTracker,
         rpc_client: rpc.Client,
     ) Self {
         return .{
@@ -95,6 +97,7 @@ pub const RpcEpochContextService = struct {
             .logger = logger.withScope(@typeName(Self)),
             .rpc_client = rpc_client,
             .state = state,
+            .magic_tracker = magic_tracker,
         };
     }
 
@@ -110,7 +113,7 @@ pub const RpcEpochContextService = struct {
                 result catch |e|
                     self.logger.err().logf("failed to refresh epoch context via rpc: {}", .{e});
             }
-            std.Thread.sleep(100 * std.time.ns_per_ms);
+            std.Thread.sleep(std.time.ns_per_s);
             i += 1;
         }
     }
@@ -118,6 +121,43 @@ pub const RpcEpochContextService = struct {
     fn refresh(self: *Self) !void {
         const response = try self.rpc_client.getSlot(.{});
         defer response.deinit();
+        const slot = try response.result();
+
+        // Get the current epoch, and the epoch whose stakes were used to compute the leader schedule
+        // for the current epoch.
+        const epoch = self.state.schedule.getEpoch(slot);
+        const leader_schedule_epoch = self.magic_tracker.epoch_schedule.getEpoch(
+            slot -| self.magic_tracker.epoch_schedule.leader_schedule_slot_offset,
+        );
+
+        // Iterate from the leader schedule epoch to the current epoch, and populate any missing epochs in the magic tracker.
+        for (leader_schedule_epoch..epoch + 1) |e| {
+            if (self.magic_tracker.rooted_epochs.isNext(e)) {
+                const first_slot_in_epoch = self.magic_tracker.epoch_schedule.getFirstSlotInEpoch(e);
+                const epoch_leaders = try self.getLeaderSchedule(
+                    first_slot_in_epoch +|
+                        self.magic_tracker.epoch_schedule.leader_schedule_slot_offset,
+                );
+
+                var entry = try self.allocator.create(sig.core.magic_info.EpochInfo);
+                entry.* = .{
+                    .leaders = .{
+                        .leaders = epoch_leaders,
+                        .start = self.magic_tracker.epoch_schedule.getFirstSlotInEpoch(e),
+                        .end = self.magic_tracker.epoch_schedule.getLastSlotInEpoch(e),
+                    },
+                    .stakes = .EMPTY,
+                };
+                entry.stakes.stakes.epoch = e;
+                errdefer {
+                    entry.deinit(self.allocator);
+                    self.allocator.destroy(entry);
+                }
+
+                try self.magic_tracker.rooted_epochs.insert(self.allocator, entry);
+            }
+        }
+
         const this_slot = try response.result();
         const this_epoch = self.state.schedule.getEpoch(this_slot);
         const old_slot = this_slot -| self.state.schedule.slots_per_epoch;

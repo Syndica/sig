@@ -5,6 +5,8 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const EpochSchedule = sig.core.EpochSchedule;
 
+const failing_allocator = sig.utils.allocators.failing.allocator(.{});
+
 const ZonInfo = struct {
     name: [:0]const u8,
     pubkey: [:0]const u8,
@@ -170,6 +172,13 @@ pub const Set = struct {
         }
     };
 };
+
+pub fn activationSlotFromAccount(account: sig.core.Account) !?u64 {
+    if (!account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) return null;
+    var feature_bytes = [_]u8{0} ** 9;
+    account.data.readAll(&feature_bytes);
+    return sig.bincode.readFromSlice(failing_allocator, ?u64, &feature_bytes, .{});
+}
 
 test "full inflation enabled" {
     var feature_set: Set = .ALL_DISABLED;

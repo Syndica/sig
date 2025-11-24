@@ -7,6 +7,7 @@ const config = @import("config.zig");
 const tracy = @import("tracy");
 
 const replay = sig.replay;
+const magic_info = sig.core.magic_info;
 
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
@@ -1351,6 +1352,14 @@ fn validator(
     const epoch_schedule = bank_fields.epoch_schedule;
     const epoch = bank_fields.epoch;
 
+    const feature_set = try loaded_snapshot.featureSet(allocator, &new_db);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initFromManifest(
+        allocator,
+        collapsed_manifest,
+        &feature_set,
+    );
+    defer magic_tracker.deinit(allocator);
+
     const staked_nodes = try collapsed_manifest.epochStakes(epoch);
     var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
     defer epoch_context_manager.deinit();
@@ -1396,6 +1405,7 @@ fn validator(
         allocator,
         .from(app_base.logger),
         &epoch_context_manager,
+        &magic_tracker,
         rpc_client,
     );
 
@@ -1420,7 +1430,7 @@ fn validator(
             .exit = app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
-            .epoch_context_mgr = &epoch_context_manager,
+            .magic_tracker = &magic_tracker,
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = turbine_config.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
@@ -1466,6 +1476,7 @@ fn validator(
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
         .epoch_context_manager = &epoch_context_manager,
+        .magic_tracker = &magic_tracker,
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = voting_enabled,
@@ -1644,8 +1655,16 @@ fn replayOffline(
         app_base.exit,
     });
 
-    const epoch_schedule = bank_fields.epoch_schedule;
     const epoch = bank_fields.epoch;
+    const epoch_schedule = bank_fields.epoch_schedule;
+
+    const feature_set = try loaded_snapshot.featureSet(allocator, &new_db);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initFromManifest(
+        allocator,
+        collapsed_manifest,
+        &feature_set,
+    );
+    defer magic_tracker.deinit(allocator);
 
     const staked_nodes = try collapsed_manifest.epochStakes(epoch);
     var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
@@ -1716,6 +1735,7 @@ fn replayOffline(
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
         .epoch_context_manager = &epoch_context_manager,
+        .magic_tracker = &magic_tracker,
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = false,
@@ -1776,15 +1796,30 @@ fn shredNetwork(
         allocator.destroy(gossip_service);
     }
 
+    var magic_tracker = magic_info.MagicTracker.init(
+        .initFromGenesisConfig(&genesis_config),
+        shred_network_conf.root_slot,
+        genesis_config.epoch_schedule,
+    );
+    defer magic_tracker.deinit(allocator);
+
     var epoch_context_manager = try sig.adapter.EpochContextManager
         .init(allocator, genesis_config.epoch_schedule);
     var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService
-        .init(allocator, .from(app_base.logger), &epoch_context_manager, rpc_client);
+        .init(allocator, .from(app_base.logger), &epoch_context_manager, &magic_tracker, rpc_client);
     const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
         .{},
         sig.adapter.RpcEpochContextService.run,
         .{ &rpc_epoch_ctx_service, app_base.exit },
     );
+
+    var start = sig.time.Timer.start();
+    while (start.read().asSecs() < 60) {
+        _ = magic_tracker.getLeaderSchedules() catch {
+            std.Thread.sleep(1_000_000_000);
+            continue;
+        };
+    }
 
     var ledger = try Ledger.init(
         allocator,
@@ -1816,7 +1851,7 @@ fn shredNetwork(
         .exit = app_base.exit,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .my_shred_version = &gossip_service.my_shred_version,
-        .epoch_context_mgr = &epoch_context_manager,
+        .magic_tracker = &magic_tracker,
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,
@@ -2416,6 +2451,7 @@ const ReplayAndConsensusServiceState = struct {
             loaded_snapshot: *sig.accounts_db.snapshot.LoadedSnapshot,
             ledger: *Ledger,
             epoch_context_manager: *sig.adapter.EpochContextManager,
+            magic_tracker: *sig.core.magic_info.MagicTracker,
             replay_threads: u32,
             disable_consensus: bool,
             voting_enabled: bool,
@@ -2481,6 +2517,7 @@ const ReplayAndConsensusServiceState = struct {
                 .ledger = params.ledger,
                 .epoch_schedule = bank_fields.epoch_schedule,
                 .slot_leaders = params.epoch_context_manager.slotLeaders(),
+                .magic_tracker = params.magic_tracker,
                 .root = .{
                     .slot = bank_fields.slot,
                     .constants = root_slot_constants,

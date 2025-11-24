@@ -26,7 +26,6 @@ const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const Committer = replay.Committer;
-const EpochTracker = replay.trackers.EpochTracker;
 const ReplaySlotFuture = replay.exec_async.ReplaySlotFuture;
 const ReplayState = replay.service.ReplayState;
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
@@ -68,7 +67,7 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]const ReplayResult {
     defer zone.deinit();
 
     const slot_tracker = &state.slot_tracker;
-    const epoch_tracker = &state.epoch_tracker;
+    const magic_tracker = state.magic_tracker;
 
     var results = std.ArrayListUnmanaged(ReplaySlotFuture.Result){};
     defer results.deinit(state.allocator);
@@ -89,7 +88,7 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]const ReplayResult {
         for (active_slots) |slot| {
             state.logger.debug().logf("replaying slot: {}", .{slot});
 
-            const params = switch (try prepareSlot(state, slot_tracker, epoch_tracker, slot)) {
+            const params = switch (try prepareSlot(state, slot_tracker, magic_tracker, slot)) {
                 .confirm => |params| params,
                 .empty, .dead, .leader => continue,
             };
@@ -124,7 +123,7 @@ fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
     defer zone.deinit();
 
     const slot_tracker = &state.slot_tracker;
-    const epoch_tracker = &state.epoch_tracker;
+    const magic_tracker = state.magic_tracker;
 
     const active_slots = try slot_tracker.activeSlots(allocator);
     defer allocator.free(active_slots);
@@ -141,7 +140,7 @@ fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
     for (active_slots) |slot| {
         state.logger.debug().logf("replaying slot: {}", .{slot});
 
-        const params = switch (try prepareSlot(state, slot_tracker, epoch_tracker, slot)) {
+        const params = switch (try prepareSlot(state, slot_tracker, magic_tracker, slot)) {
             .confirm => |params| params,
             .empty, .dead, .leader => continue,
         };
@@ -406,7 +405,7 @@ const PreparedSlot = union(enum) {
 fn prepareSlot(
     state: *ReplayState,
     slot_tracker: *const SlotTracker,
-    epoch_tracker: *const EpochTracker,
+    magic_tracker: *const sig.core.magic_info.MagicTracker,
     slot: Slot,
 ) !PreparedSlot {
     var zone = tracy.Zone.init(@src(), .{ .name = "prepareSlot" });
@@ -420,7 +419,7 @@ fn prepareSlot(
         return .dead;
     }
 
-    const epoch_constants = epoch_tracker.getPtrForSlot(slot) orelse return error.MissingEpoch;
+    const epoch_info = try magic_tracker.getEpochInfo(slot);
     const slot_info = slot_tracker.get(slot) orelse return error.MissingSlot;
 
     const i_am_leader = slot_info.constants.collector_id.equals(&state.identity.validator);
@@ -438,7 +437,7 @@ fn prepareSlot(
             .last_entry = slot_info.state.blockhash_queue.readField("last_hash") orelse
                 return error.MissingLastHash,
             .i_am_leader = i_am_leader,
-            .epoch_stakes = &epoch_constants.stakes,
+            .epoch_stakes = &epoch_info.stakes,
             .now = sig.time.Instant.now(),
             .validator_vote_pubkey = null, // voting not currently supported
         });
@@ -495,7 +494,7 @@ fn prepareSlot(
 
     const new_rate_activation_epoch =
         if (slot_info.constants.feature_set.get(.reduce_stake_warmup_cooldown)) |active_slot|
-            epoch_tracker.schedule.getEpoch(active_slot)
+            magic_tracker.epoch_schedule.getEpoch(active_slot)
         else
             null;
 
@@ -530,8 +529,8 @@ fn prepareSlot(
         .account_store = state.account_store.forSlot(slot, &slot_info.constants.ancestors),
         .ancestors = &slot_info.constants.ancestors,
         .feature_set = slot_info.constants.feature_set,
-        .rent_collector = &epoch_constants.rent_collector,
-        .epoch_stakes = &epoch_constants.stakes,
+        .rent_collector = &slot_info.constants.rent_collector,
+        .epoch_stakes = &epoch_info.stakes,
         .status_cache = &state.status_cache,
     });
     errdefer svm_gateway.deinit(state.allocator);
@@ -548,7 +547,7 @@ fn prepareSlot(
     const verify_ticks_params = replay.execution.VerifyTicksParams{
         .tick_height = tick_height,
         .max_tick_height = slot_info.constants.max_tick_height,
-        .hashes_per_tick = epoch_constants.hashes_per_tick,
+        .hashes_per_tick = magic_tracker.cluster.hashes_per_tick,
         .slot = slot,
         .slot_is_full = slot_is_full,
         // TODO: come up with a better approach
@@ -910,15 +909,18 @@ test "prepareSlot: empty and dead slots are handled correctly" {
     defer dep_stubs.deinit();
 
     var state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
-    defer state.deinit();
+    defer {
+        state.deinit();
+        state.magic_tracker.deinit(allocator);
+        allocator.destroy(state.magic_tracker);
+    }
 
     const root = state.slot_tracker.get(0);
-    const epoch = state.epoch_tracker.getForSlot(0);
 
     const constants, const slot_state = try sig.replay.service.newSlotFromParent(
         allocator,
         .{ .accounts_db_two = &dep_stubs.accounts_db_state.db },
-        epoch.?.ticks_per_slot,
+        state.magic_tracker.cluster.ticks_per_slot,
         0,
         root.?.constants,
         root.?.state,
@@ -930,14 +932,14 @@ test "prepareSlot: empty and dead slots are handled correctly" {
 
     try std.testing.expectEqual(
         .empty,
-        try prepareSlot(&state, &state.slot_tracker, &state.epoch_tracker, 1),
+        try prepareSlot(&state, &state.slot_tracker, state.magic_tracker, 1),
     );
 
     try dep_stubs.ledger.resultWriter().setDeadSlot(1);
 
     try std.testing.expectEqual(
         .dead,
-        try prepareSlot(&state, &state.slot_tracker, &state.epoch_tracker, 1),
+        try prepareSlot(&state, &state.slot_tracker, state.magic_tracker, 1),
     );
 }
 
