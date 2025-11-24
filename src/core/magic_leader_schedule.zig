@@ -31,6 +31,10 @@ pub const LeaderSchedules = struct {
             else
                 error.SlotOutOfRange;
     }
+
+    pub fn getLeaderOrNull(self: *const LeaderSchedules, slot: Slot) ?Pubkey {
+        return self.getLeader(slot) catch null;
+    }
 };
 
 pub const LeaderSchedule = struct {

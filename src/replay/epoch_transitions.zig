@@ -75,11 +75,6 @@ pub fn processNewEpoch(
     );
 }
 
-/// Update the epoch stakes for the leader schedule epoch corresponding to the given slot.
-/// If the epoch tracker does not contain an entry for the leader schedule epoch,
-/// we need to compute the epoch stakes and create a new EpochConstants entry. The
-/// leader schedule epoch is typically E + 1, where E is the current epoch.
-/// This ensures that the epoch constants are available at the point of transition.
 pub fn updateEpochStakes(
     allocator: Allocator,
     slot: Slot,
