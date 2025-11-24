@@ -217,15 +217,20 @@ pub const ForkChoice = struct {
 
         // Calculate basic consensus metrics
         var total_stake: u64 = 0;
+        var active_forks_count: u64 = 0;
         var maybe_current_heaviest_slot: ?u64 = null;
         var maybe_current_deepest_slot: ?u64 = null;
 
         var it = self.fork_infos.valueIterator();
         while (it.next()) |fork_info| {
-            total_stake += fork_info.stake_for_slot;
-
             // Only consider candidates for heaviest/deepest slot tracking
             if (!fork_info.isCandidate()) continue;
+            total_stake += fork_info.stake_for_slot;
+
+            // Count active forks (leaf nodes - nodes with no children)
+            if (fork_info.children.count() == 0) {
+                active_forks_count += 1;
+            }
 
             if (maybe_current_heaviest_slot) |current_heaviest_slot| {
                 if (fork_info.heaviest_subtree_slot.slot > current_heaviest_slot) {
@@ -241,6 +246,7 @@ pub const ForkChoice = struct {
         }
 
         self.metrics.total_stake_in_tree.set(total_stake);
+        self.metrics.number_of_active_forks.set(active_forks_count);
 
         if (maybe_current_heaviest_slot) |slot| {
             self.metrics.current_heaviest_subtree_slot.set(slot);
@@ -5212,6 +5218,9 @@ pub const ForkChoiceMetrics = struct {
     current_deepest_slot: *sig.prometheus.Gauge(u64),
     /// Total stake in the fork choice tree
     total_stake_in_tree: *sig.prometheus.Gauge(u64),
+
+    /// Number of active forks (leaf nodes in the fork tree)
+    number_of_active_forks: *sig.prometheus.Gauge(u64),
 
     /// Number of fork choice updates - indicates consensus activity and health
     fork_choice_updates: *sig.prometheus.Counter,
