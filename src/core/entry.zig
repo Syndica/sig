@@ -78,7 +78,7 @@ pub fn verifyTickHashCount(
                 logger.warn().logf(
                     "invalid tick hash count!: entry: {any}, " ++
                         "tick_hash_count: {}, hashes_per_tick: {}",
-                    .{ entry, tick_hash_count, hashes_per_tick },
+                    .{ entry, tick_hash_count.*, hashes_per_tick },
                 );
                 return false;
             }
