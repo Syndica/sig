@@ -10,7 +10,6 @@ const Random = std.Random;
 const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;
-const EpochContextManager = sig.adapter.EpochContextManager;
 const GossipTable = sig.gossip.GossipTable;
 const Logger = sig.trace.Logger("shred_network.service");
 const Packet = sig.net.Packet;
@@ -222,9 +221,6 @@ test "start and stop gracefully" {
     var gossip_table = try GossipTable.init(allocator, allocator);
     defer gossip_table.deinit();
     var gossip_table_rw = RwMux(GossipTable).init(gossip_table);
-
-    var epoch_ctx = try EpochContextManager.init(allocator, sig.core.EpochSchedule.INIT);
-    defer epoch_ctx.deinit();
 
     var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
