@@ -658,12 +658,12 @@ pub const PropagatedStats = struct {
         self: *PropagatedStats,
         allocator: std.mem.Allocator,
         node_pubkey: Pubkey,
-        epoch_consts: sig.core.EpochConstants,
+        epoch_stakes: *const sig.core.EpochStakes,
     ) std.mem.Allocator.Error!void {
         if (self.propagated_node_ids.contains(node_pubkey)) return;
-        const node_id_to_vote_accounts = &epoch_consts.stakes.node_id_to_vote_accounts;
+        const node_id_to_vote_accounts = &epoch_stakes.node_id_to_vote_accounts;
         const nva = node_id_to_vote_accounts.getPtr(node_pubkey) orelse return;
-        const epoch_vote_accounts = &epoch_consts.stakes.stakes.vote_accounts.vote_accounts;
+        const epoch_vote_accounts = &epoch_stakes.stakes.vote_accounts.vote_accounts;
         try self.addNodePubkeyInternal(
             allocator,
             node_pubkey,
@@ -1261,19 +1261,14 @@ test "ForkProgress.init" {
     };
 
     const epoch_stakes = bank_data.epoch_stakes.get(bank_data.epoch).?;
-    const epoch_consts: sig.core.EpochConstants = try .fromBankFields(
-        &bank_data,
-        try epoch_stakes.clone(allocator),
-    );
-    defer epoch_consts.deinit(allocator);
 
     const vsi: ValidatorStakeInfo = .{
         .validator_vote_pubkey = slot_consts.collector_id,
         .stake = stake: {
-            const vote_accounts = &epoch_consts.stakes.stakes.vote_accounts;
+            const vote_accounts = &epoch_stakes.stakes.vote_accounts;
             break :stake vote_accounts.getDelegatedStake(slot_consts.collector_id);
         },
-        .total_epoch_stake = epoch_consts.stakes.total_stake,
+        .total_epoch_stake = epoch_stakes.total_stake,
     };
 
     var expected_propagated_validators: PubkeyArraySet = .{};
@@ -1338,7 +1333,7 @@ test "ForkProgress.init" {
 
     const actual_init_from_bank: ForkProgress = try .initFromInfo(allocator, .{
         .slot_info = slot_info,
-        .epoch_stakes = &epoch_consts.stakes,
+        .epoch_stakes = &epoch_stakes,
         .now = now,
         .validator_identity = &slot_consts.collector_id,
         .validator_vote_pubkey = vsi.validator_vote_pubkey,
@@ -1358,8 +1353,8 @@ test "ForkProgress.init" {
         .last_entry = bhq_last_hash.?,
         .i_am_leader = true,
         .epoch_stakes = &.{
-            .stakes = epoch_consts.stakes.stakes,
-            .total_stake = epoch_consts.stakes.total_stake,
+            .stakes = epoch_stakes.stakes,
+            .total_stake = epoch_stakes.total_stake,
             .node_id_to_vote_accounts = .empty,
             .epoch_authorized_voters = .empty,
         },
