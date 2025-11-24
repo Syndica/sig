@@ -1205,6 +1205,27 @@ fn validator(
 
     const turbine_config = cfg.turbine;
 
+    // Vote account. if not provided, disable voting
+    const maybe_vote_pubkey: ?Pubkey = if (cfg.voting_enabled) blk: {
+        const vote_keypair_path = cfg.vote_account_path orelse default_path: {
+            const app_data_dir_path = try std.fs.getAppDataDir(allocator, "sig");
+            defer allocator.free(app_data_dir_path);
+            break :default_path try std.fs.path.join(
+                allocator,
+                &.{ app_data_dir_path, "vote-account.key" },
+            );
+        };
+        defer if (cfg.vote_account_path == null) allocator.free(vote_keypair_path);
+
+        break :blk sig.identity.readBinaryKeypairPubkey(vote_keypair_path) catch |err| {
+            app_base.logger.err().logf(
+                "vote-account: failed to read {s}: {}; voting will be disabled",
+                .{ vote_keypair_path, err },
+            );
+            break :blk null;
+        };
+    } else null;
+
     const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (cfg.voting_enabled)
         try replay.consensus.core.VoteSockets.init()
     else
@@ -1218,6 +1239,7 @@ fn validator(
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = cfg.voting_enabled,
+        .vote_account_address = maybe_vote_pubkey,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -1247,50 +1269,6 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
-<<<<<<< HEAD
-=======
-    // Vote account. if not provided, disable voting
-    const maybe_vote_pubkey: ?Pubkey = if (cfg.voting_enabled) blk: {
-        const vote_keypair_path = cfg.vote_account_path orelse default_path: {
-            const app_data_dir_path = try std.fs.getAppDataDir(allocator, "sig");
-            defer allocator.free(app_data_dir_path);
-            break :default_path try std.fs.path.join(
-                allocator,
-                &.{ app_data_dir_path, "vote-account.key" },
-            );
-        };
-        defer if (cfg.vote_account_path == null) allocator.free(vote_keypair_path);
-
-        break :blk sig.identity.readBinaryKeypairPubkey(vote_keypair_path) catch |err| {
-            app_base.logger.err().logf(
-                "vote-account: failed to read {s}: {}; voting will be disabled",
-                .{ vote_keypair_path, err },
-            );
-            break :blk null;
-        };
-    } else null;
-
-    // If voting was enabled but no vote account is available, disable voting.
-    const voting_enabled = cfg.voting_enabled and maybe_vote_pubkey != null;
-
-    const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (voting_enabled)
-        try replay.consensus.core.VoteSockets.init()
-    else
-        null;
-
-    var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
-        .app_base = &app_base,
-        .loaded_snapshot = &loaded_snapshot,
-        .ledger = &ledger,
-        .epoch_context_manager = &epoch_context_manager,
-        .replay_threads = cfg.replay_threads,
-        .disable_consensus = cfg.disable_consensus,
-        .voting_enabled = voting_enabled,
-        .vote_account_address = maybe_vote_pubkey,
-    });
-    defer replay_service_state.deinit(allocator);
-
->>>>>>> main
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
         if (maybe_vote_sockets) |*vs| vs else null,
