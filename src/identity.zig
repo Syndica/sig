@@ -1,8 +1,10 @@
 const std = @import("std");
 const sig = @import("sig.zig");
 
-const Logger = sig.trace.Logger("identity");
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;
+
+const Logger = sig.trace.Logger("identity");
+const Pubkey = sig.core.Pubkey;
 
 pub const IDENTITY_KEYPAIR_PATH = "identity.json";
 
@@ -11,9 +13,9 @@ pub const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 pub const ValidatorIdentity = struct {
     /// Public key identifying this validator
-    validator: sig.core.Pubkey,
+    validator: Pubkey,
     /// Public key of the vote account
-    vote_account: sig.core.Pubkey,
+    vote_account: Pubkey,
 };
 
 pub const SigningKeys = struct {
@@ -60,21 +62,20 @@ pub fn getOrInit(allocator: std.mem.Allocator, logger: Logger) !KeyPair {
 }
 
 /// Reads a pubkey either as a base58 string or from a json keypair file
-pub fn readPubkeyFlexible(logger: Logger, base58_or_kp_path: []const u8) !sig.core.Pubkey {
-    const pk_err = if (sig.core.Pubkey.parseRuntime(base58_or_kp_path)) |p| return p else |e| e;
+pub fn readPubkeyFlexible(logger: Logger, base58_or_kp_path: []const u8) !Pubkey {
+    const pk_err = if (Pubkey.parseRuntime(base58_or_kp_path)) |p| return p else |e| e;
+
+    errdefer |e| logger.err().logf(
+        "Could not interpret '{s}' as a base58 pubkey due to {} or a json keypair file due to {}",
+        .{ base58_or_kp_path, pk_err, e },
+    );
 
     var file = try std.fs.cwd().openFile(base58_or_kp_path, .{});
     defer file.close();
 
-    const keypair = parseKeypairJson(file.reader()) catch |e| {
-        logger.err().logf(
-            "Could not interpret as a base58 pubkey due to {} or a json keypair file due to {}",
-            .{ pk_err, e },
-        );
-        return error.InvalidPubkeySource;
-    };
+    const keypair = try parseKeypairJson(file.reader());
 
-    return sig.core.Pubkey.fromPublicKey(&keypair.public_key);
+    return Pubkey.fromPublicKey(&keypair.public_key);
 }
 
 fn parseKeypairJson(reader: anytype) !KeyPair {
@@ -93,3 +94,33 @@ fn parseKeypairJson(reader: anytype) !KeyPair {
     const secret_key = try SecretKey.fromBytes(buf);
     return try KeyPair.fromSecretKey(secret_key);
 }
+
+test "readPubkeyFlexible for pubkey string" {
+    const parsed_pk = try readPubkeyFlexible(.FOR_TESTS, test_pubkey);
+    try std.testing.expectEqual(Pubkey.parse(test_pubkey), parsed_pk);
+}
+
+test "readPubkeyFlexible for keypair filename" {
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+    {
+        const file = try dir.dir.createFile("keypair.json", .{});
+        defer file.close();
+        try file.writeAll(test_json);
+    }
+    var buf: [256]u8 = undefined;
+    const path = try dir.dir.realpath("keypair.json", &buf);
+
+    const parsed_pk = try readPubkeyFlexible(.FOR_TESTS, path);
+
+    try std.testing.expectEqual(Pubkey.parse(test_pubkey), parsed_pk);
+}
+
+test "readPubkeyFlexible for nonsense string" {
+    try std.testing.expectError(error.FileNotFound, readPubkeyFlexible(.noop, "nonsense"));
+}
+
+const test_pubkey = "4gE1hGfMN781mVSpoRJwHdsbWLqZDWLNqTtrtimfhuWR";
+const test_json = "[96,2,20,47,167,83,64,68,207,145,30,186,117,222,119,39,159,95,60,168,48,53,8," ++
+    "129,248,248,156,77,86,181,231,139,54,159,108,205,206,110,182,234,135,178,145,110,60,88," ++
+    "140,170,68,154,85,26,181,166,209,244,173,161,100,35,124,28,126,218]";
