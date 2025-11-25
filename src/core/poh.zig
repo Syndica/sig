@@ -126,8 +126,10 @@ pub fn testPoh(
 
     var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
+    var seed: [32]u8 = undefined;
+    rng.random().bytes(&seed);
     const shared_payer: ?std.crypto.sign.Ed25519.KeyPair = if (include_account_conflict)
-        try .generateDeterministic(@splat(0))
+        try .generateDeterministic(seed)
     else
         null;
 
