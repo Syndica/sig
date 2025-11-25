@@ -4,7 +4,6 @@ pub const optimistic_vote_verifier = @import("optimistic_vote_verifier.zig");
 pub const progress_map = @import("progress_map.zig");
 pub const replay_tower = @import("replay_tower.zig");
 pub const tower = @import("tower.zig");
-pub const tower_state = @import("tower_state.zig");
 pub const tower_storage = @import("tower_storage.zig");
 pub const vote_listener = @import("vote_listener.zig");
 pub const vote_tracker = @import("vote_tracker.zig");
