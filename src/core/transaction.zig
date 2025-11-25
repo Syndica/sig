@@ -79,11 +79,15 @@ pub const Transaction = struct {
     ///
     /// The number of instructions, pubkeys, and program/writable/signer/readonly
     /// indexes are hardcoded, not randomized.
-    pub fn initRandom(allocator: std.mem.Allocator, random: std.Random) !Transaction {
-        const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+    pub fn initRandom(
+        allocator: std.mem.Allocator,
+        random: std.Random,
+        payer: ?std.crypto.sign.Ed25519.KeyPair,
+    ) !Transaction {
         var seed: [32]u8 = undefined;
         random.bytes(&seed);
-        const keypair = try KeyPair.generateDeterministic(seed);
+        const keypair = payer orelse
+            try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed);
         const signer = Pubkey.fromPublicKey(&keypair.public_key);
 
         const account_keys = try allocator.dupe(Pubkey, &.{
