@@ -86,9 +86,7 @@ pub const Transaction = struct {
     ) !Transaction {
         var seed: [32]u8 = undefined;
         random.bytes(&seed);
-        const keypair = if (payer) |p|
-            p
-        else
+        const keypair = payer orelse
             try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed);
         const signer = Pubkey.fromPublicKey(&keypair.public_key);
 
