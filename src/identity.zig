@@ -70,7 +70,7 @@ pub fn readPubkeyFlexible(logger: Logger, base58_or_kp_path: []const u8) !Pubkey
         .{ base58_or_kp_path, pk_err, e },
     );
 
-    var file = try std.fs.cwd().openFile(base58_or_kp_path, .{});
+    const file = try std.fs.cwd().openFile(base58_or_kp_path, .{});
     defer file.close();
 
     const keypair = try parseKeypairJson(file.reader());
