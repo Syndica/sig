@@ -372,7 +372,16 @@ const TransactionScheduler = struct {
 
         while (self.batches.len > self.batches_started) {
             const batch = self.batches[self.batches_started];
-            self.locks.lockStrict(self.allocator, batch.accounts) catch |e| switch (e) {
+
+            const lock_result = if (self.svm_gateway.params.feature_set.active(
+                .relax_intrabatch_account_locks,
+                self.svm_gateway.params.slot,
+            ))
+                self.locks.lockPermissive(self.allocator, batch.accounts)
+            else
+                self.locks.lockStrict(self.allocator, batch.accounts);
+
+            lock_result catch |e| switch (e) {
                 error.LockFailed => if (self.batches_started == self.batches_finished) {
                     return .AccountInUse;
                 } else {
@@ -445,12 +454,12 @@ test "TransactionScheduler: happy path" {
     var tx_arena = std.heap.ArenaAllocator.init(allocator);
     defer tx_arena.deinit();
     const transactions = [_]Transaction{
-        try .initRandom(tx_arena.allocator(), rng.random()),
-        try .initRandom(tx_arena.allocator(), rng.random()),
-        try .initRandom(tx_arena.allocator(), rng.random()),
-        try .initRandom(tx_arena.allocator(), rng.random()),
-        try .initRandom(tx_arena.allocator(), rng.random()),
-        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
     };
     try state.makeTransactionsPassable(allocator, &transactions);
 
@@ -492,12 +501,12 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
     var tx_arena = std.heap.ArenaAllocator.init(allocator);
     defer tx_arena.deinit();
     const transactions = [_]Transaction{
-        try .initRandom(tx_arena.allocator(), rng.random()),
-        try .initRandom(tx_arena.allocator(), rng.random()),
-        try .initRandom(tx_arena.allocator(), rng.random()),
-        try .initRandom(tx_arena.allocator(), rng.random()),
-        try .initRandom(tx_arena.allocator(), rng.random()),
-        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
     };
     try state.makeTransactionsPassable(allocator, &transactions);
 
@@ -541,7 +550,7 @@ test "TransactionScheduler: failed account locks" {
         thread_pool.deinit();
     }
 
-    const tx = try Transaction.initRandom(allocator, rng.random());
+    const tx = try Transaction.initRandom(allocator, rng.random(), null);
     defer tx.deinit(allocator);
 
     const unresolved_batch = [_]Transaction{ tx, tx };
@@ -585,12 +594,12 @@ test "TransactionScheduler: signature verification failure" {
     var tx_arena = std.heap.ArenaAllocator.init(allocator);
     defer tx_arena.deinit();
     var transactions = [_]Transaction{
-        try .initRandom(tx_arena.allocator(), rng.random()),
-        try .initRandom(tx_arena.allocator(), rng.random()),
-        try .initRandom(tx_arena.allocator(), rng.random()),
-        try .initRandom(tx_arena.allocator(), rng.random()),
-        try .initRandom(tx_arena.allocator(), rng.random()),
-        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
     };
     try state.makeTransactionsPassable(allocator, &transactions);
 

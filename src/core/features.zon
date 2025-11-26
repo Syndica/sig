@@ -242,4 +242,5 @@
     .{ .name = "enshrine_slashing_program", .pubkey = "sProgVaNWkYdP2eTRAy1CPrgb3b9p8yXCASrPEqo6VJ" },
     .{ .name = "enable_partitioned_epoch_reward", .pubkey = "9bn2vTJUsUcnpiZWbu2woSKtTGW3ErZC9ERv88SDqQjK" },
     .{ .name = "stricter_abi_and_runtime_constraints", .pubkey = "C37iaPi6VE4CZDueU1vL8y6pGp5i8amAbEsF31xzz723" },
+    .{ .name = "relax_intrabatch_account_locks", .pubkey = "ENTRYnPAoT5Swwx73YDGzMp3XnNH1kxacyvLosRHza1i" },
 }

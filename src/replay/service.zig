@@ -117,9 +117,11 @@ pub fn advanceReplay(
         });
     } else try bypassConsensus(replay_state);
 
-    const elapsed = start_time.read().asNanos();
-    metrics.slot_execution_time.observe(elapsed);
-    replay_state.logger.info().logf("advanced in {}", .{std.fmt.fmtDuration(elapsed)});
+    if (slot_results.len != 0) {
+        const elapsed = start_time.read().asNanos();
+        metrics.slot_execution_time.observe(elapsed);
+        replay_state.logger.info().logf("advanced in {}", .{std.fmt.fmtDuration(elapsed)});
+    }
 
     if (!processed_a_slot) try std.Thread.yield();
 }
@@ -267,7 +269,7 @@ pub fn initProgressMap(
     slot_tracker: *const SlotTracker,
     epoch_tracker: *const EpochTracker,
     my_pubkey: Pubkey,
-    vote_account: Pubkey,
+    vote_account: ?Pubkey,
 ) !ProgressMap {
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
@@ -286,7 +288,7 @@ pub fn initProgressMap(
             .epoch_stakes = &epoch_tracker.getPtrForSlot(slot).?.stakes,
             .now = .now(),
             .validator_identity = &my_pubkey,
-            .validator_vote_pubkey = &vote_account,
+            .validator_vote_pubkey = vote_account,
             .prev_leader_slot = prev_leader_slot,
             .num_blocks_on_fork = 0,
             .num_dropped_blocks_on_fork = 0,
@@ -1094,7 +1096,7 @@ pub const DependencyStubs = struct {
             .logger = logger,
             .identity = .{
                 .validator = .initRandom(prng),
-                .vote_account = .initRandom(prng),
+                .vote_account = null,
             },
             .signing = .{
                 .node = null,

@@ -248,6 +248,7 @@ fn tryPayoutFees(
                 .rent_epoch = old_account.rent_epoch,
             };
         } else AccountSharedData.EMPTY;
+    defer fee_collector_account.deinit(allocator);
 
     if (!fee_collector_account.owner.equals(&sig.runtime.program.system.ID)) {
         return error.InvalidAccountOwner;
@@ -258,6 +259,7 @@ fn tryPayoutFees(
         return error.InvalidRentPayingAccount;
     }
 
+    // duplicates fee_collector_account, so we need to free it.
     try account_store.put(slot, collector_id, fee_collector_account);
 
     return fee_collector_account.lamports;
