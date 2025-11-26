@@ -107,6 +107,7 @@ pub fn advanceReplay(
             .slot_tracker = &replay_state.slot_tracker,
             .epoch_tracker = &replay_state.epoch_tracker,
             .progress_map = &replay_state.progress_map,
+            .status_cache = &replay_state.status_cache,
             .senders = consensus.senders,
             .receivers = consensus.receivers,
             .vote_sockets = consensus.vote_sockets,
@@ -533,6 +534,8 @@ fn bypassConsensus(state: *ReplayState) !void {
         slot_tracker.root = new_root;
         slot_tracker.pruneNonRooted(state.allocator);
 
+        try state.status_cache.addRoot(state.allocator, new_root);
+
         try state.account_store.onSlotRooted(
             state.allocator,
             new_root,
@@ -818,6 +821,7 @@ test "process runs without error with no replay results" {
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = &replay_state.epoch_tracker,
         .progress_map = &replay_state.progress_map,
+        .status_cache = &replay_state.status_cache,
         .senders = consensus_senders,
         .receivers = consensus_receivers,
         .vote_sockets = null,
