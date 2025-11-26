@@ -1,5 +1,4 @@
 pub const accounts_db = @import("accountsdb/lib.zig");
-pub const adapter = @import("adapter.zig");
 pub const bincode = @import("bincode/bincode.zig");
 pub const bloom = @import("bloom/lib.zig");
 pub const core = @import("core/lib.zig");
