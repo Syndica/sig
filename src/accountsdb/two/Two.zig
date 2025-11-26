@@ -95,14 +95,12 @@ pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot) error{FailedToRoot}!void
         // If there are entries between the last rooted slot and the new one, we can just discard them.
         // These can be created from forks which were alive for multiple slots but are now dead. If we're
         // rooting a slot larger than the fork, we mustn't need these anymore.
-        if (self.rooted.largest_rooted_slot) |largest| if (index.slot > largest) {
+        if (self.rooted.largest_rooted_slot) |largest| if (index.slot >= largest) {
             // Get write lock on unrooted slot, remove from unrooted. There should be no contention on this
             // lock, no other threads are running right now. In the future when we offload rooting to a seperate
             // async unit, then it might come into play.
             index.lock.lock();
             defer index.lock.unlock();
-
-            std.debug.assert(index.slot < newly_rooted_slot);
 
             for (index.entries.values()) |data| data.deinit(self.allocator);
             index.entries.clearRetainingCapacity();
