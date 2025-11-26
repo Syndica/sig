@@ -2131,7 +2131,7 @@ const ReplayAndConsensusServiceState = struct {
                 .logger = .from(params.app_base.logger),
                 .identity = .{
                     .validator = .fromPublicKey(&params.app_base.my_keypair.public_key),
-                    .vote_account = params.vote_account_address orelse Pubkey.ZEROES,
+                    .vote_account = params.vote_account_address,
                 },
                 .signing = .{
                     .node = params.app_base.my_keypair,
