@@ -305,7 +305,7 @@ pub const ReplayTower = struct {
     }
 
     fn logTowerState(self: *const ReplayTower) void {
-        const votes = self.tower.vote_state.votes.constSlice();
+        const votes = self.tower.votes.constSlice();
 
         if (votes.len == 0) {
             self.logger.info().log("Tower is empty");
@@ -314,7 +314,7 @@ pub const ReplayTower = struct {
 
         self.logger.info().logf("Tower Vote Stack ({} votes, root: {})", .{
             votes.len,
-            self.tower.vote_state.root_slot orelse 0,
+            self.tower.root orelse 0,
         });
 
         self
