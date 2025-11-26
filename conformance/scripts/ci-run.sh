@@ -24,7 +24,7 @@ printf "%s\n" "${FIXTURES[@]}" \
 cd solana-conformance
 source test_suite_env/bin/activate
 
-export LD_PRELOAD=/lib/x86_64-linux-gnu/libasan.so.8
+export LD_PRELOAD=/lib/x86_64-linux-gnu/libasan.so.6
 export ASAN_OPTIONS=detect_leaks=0
 
 echo "Generating fixtures"
