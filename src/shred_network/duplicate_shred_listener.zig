@@ -47,7 +47,7 @@ pub fn recvLoop(
     logger: Logger,
     params: RecvLoopParams,
 ) !void {
-    var handler = DuplicateShredHandler.init(allocator, logger, params.handler);
+    var handler = GossipDuplicateShredHandler.init(allocator, logger, params.handler);
     defer handler.deinit();
 
     var cursor: usize = 0;
@@ -88,7 +88,7 @@ pub fn recvLoop(
     }
 }
 
-const DuplicateShredHandler = struct {
+const GossipDuplicateShredHandler = struct {
     allocator: Allocator,
     logger: Logger,
     params: HandlerParams,
@@ -112,7 +112,11 @@ const DuplicateShredHandler = struct {
     cached_staked_nodes: std.AutoHashMapUnmanaged(Pubkey, u64),
     cached_slots_in_epoch: u64,
 
-    pub fn init(allocator: Allocator, logger: Logger, params: HandlerParams) DuplicateShredHandler {
+    pub fn init(
+        allocator: Allocator,
+        logger: Logger,
+        params: HandlerParams,
+    ) GossipDuplicateShredHandler {
         return .{
             .allocator = allocator,
             .logger = logger,
@@ -126,7 +130,7 @@ const DuplicateShredHandler = struct {
         };
     }
 
-    pub fn deinit(self: *DuplicateShredHandler) void {
+    pub fn deinit(self: *GossipDuplicateShredHandler) void {
         for (self.dup_buffer.values()) |entry| {
             for (entry.chunks) |maybe_chunk| if (maybe_chunk) |chunk| self.allocator.free(chunk);
         }
@@ -135,13 +139,13 @@ const DuplicateShredHandler = struct {
         self.cached_staked_nodes.deinit(self.allocator);
     }
 
-    pub fn handle(self: *DuplicateShredHandler, dup_shred_data: DuplicateShred) !void {
+    pub fn handle(self: *GossipDuplicateShredHandler, dup_shred_data: DuplicateShred) !void {
         self.cacheRootInfo();
         try self.maybePruneBuffer();
         try self.handleShredData(dup_shred_data);
     }
 
-    fn cacheRootInfo(self: *DuplicateShredHandler) void {
+    fn cacheRootInfo(self: *GossipDuplicateShredHandler) void {
         const last_root = self.params.ledger_reader.maxRoot();
         // Early return if last_root unchanged and we have cached staked nodes
         if (last_root == self.last_root and self.cached_staked_nodes.count() > 0) return;
@@ -171,7 +175,7 @@ const DuplicateShredHandler = struct {
         }
     }
 
-    fn shouldConsumeSlot(self: *DuplicateShredHandler, slot: Slot) !bool {
+    fn shouldConsumeSlot(self: *GossipDuplicateShredHandler, slot: Slot) !bool {
         const max_slot = self.last_root +| self.cached_slots_in_epoch;
         const slot_in_range = slot > self.last_root and slot < max_slot;
         if (!slot_in_range) return false;
@@ -184,7 +188,7 @@ const DuplicateShredHandler = struct {
         return !gop.value_ptr.*;
     }
 
-    fn maybePruneBuffer(self: *DuplicateShredHandler) !void {
+    fn maybePruneBuffer(self: *GossipDuplicateShredHandler) !void {
         if (self.dup_buffer.count() < BUFFER_CAPACITY *| 2) return;
 
         // Prune consumed cache to only keep slots greater than last_root
@@ -263,7 +267,7 @@ const DuplicateShredHandler = struct {
         }
     }
 
-    fn handleShredData(self: *DuplicateShredHandler, dup_shred_data: DuplicateShred) !void {
+    fn handleShredData(self: *GossipDuplicateShredHandler, dup_shred_data: DuplicateShred) !void {
         if (!try self.shouldConsumeSlot(dup_shred_data.slot)) {
             return;
         }
@@ -343,7 +347,7 @@ const DuplicateShredHandler = struct {
         self.cleanupEntry(key);
     }
 
-    fn cleanupEntry(self: *DuplicateShredHandler, key: Key) void {
+    fn cleanupEntry(self: *GossipDuplicateShredHandler, key: Key) void {
         if (self.dup_buffer.fetchSwapRemove(key)) |kv| {
             const entry = kv.value;
             for (entry.chunks) |maybe_chunk| if (maybe_chunk) |chunk| self.allocator.free(chunk);
@@ -351,7 +355,7 @@ const DuplicateShredHandler = struct {
     }
 
     fn reconstructShredsFromData(
-        self: *DuplicateShredHandler,
+        self: *GossipDuplicateShredHandler,
         key: Key,
         data: []const u8,
     ) !struct { sig.ledger.shred.Shred, sig.ledger.shred.Shred } {
