@@ -60,14 +60,7 @@ pub fn commitTransactions(
 
         for (tx_result.writes.slice()) |account| {
             const gop = try accounts_to_store.getOrPut(allocator, account.pubkey);
-            if (gop.found_existing) {
-                self.logger.err()
-                    .logf("multiple writes in a batch for address: {}\n", .{account.pubkey});
-                // this error probably indicates a bug in the SVM or the account locking
-                // code, since the account locks should have already been checked before
-                // reaching this point.
-                return error.MultipleWritesInBatch;
-            }
+            if (gop.found_existing) gop.value_ptr.deinit(allocator);
             gop.value_ptr.* = account;
         }
         transaction_fees += tx_result.fees.transaction_fee;
