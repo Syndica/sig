@@ -16,11 +16,17 @@ const Logger = sig.trace.Logger("duplicate_shred_handler");
 pub const DUPLICATE_SHRED_HEADER_SIZE: u64 = 63;
 pub const DUPLICATE_SHRED_MAX_PAYLOAD_SIZE: u16 = 512;
 
+pub const GossipContext = struct {
+    allocator: Allocator,
+    gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
+    push_msg_queue_mux: *sig.gossip.GossipService.PushMessageQueue,
+};
+
 pub const DuplicateShredHandler = struct {
     ledger_reader: sig.ledger.Reader,
     result_writer: sig.ledger.ResultWriter,
     duplicate_slots_sender: ?*Channel(Slot),
-    gossip_service: ?*sig.gossip.GossipService,
+    gossip_context: ?*const GossipContext,
     keypair: *const KeyPair,
     logger: Logger,
 
@@ -122,9 +128,9 @@ pub const DuplicateShredHandler = struct {
         };
 
         // Broadcast duplicate shred proof via gossip
-        if (self.gossip_service) |gossip| {
+        if (self.gossip_context) |gossip_ctx| {
             self.pushDuplicateShredToGossip(
-                gossip,
+                gossip_ctx,
                 slot,
                 shred_payload,
                 duplicate_payload,
@@ -149,7 +155,7 @@ pub const DuplicateShredHandler = struct {
 
     pub fn pushDuplicateShredToGossip(
         self: *DuplicateShredHandler,
-        gossip: *sig.gossip.GossipService,
+        gossip_ctx: *const GossipContext,
         slot: Slot,
         shred_payload: []const u8,
         other_payload: []const u8,
@@ -157,33 +163,33 @@ pub const DuplicateShredHandler = struct {
         const my_pubkey = sig.core.Pubkey.fromPublicKey(&self.keypair.public_key);
 
         // Early return if we already have a duplicate for this slot.
-        if (hasDuplicateForSlot(&gossip.gossip_table_rw, my_pubkey, slot)) {
+        if (hasDuplicateForSlot(gossip_ctx.gossip_table_rw, my_pubkey, slot)) {
             return;
         }
 
         // Compute ring offset where new entries should be placed/overwritten.
-        const ring_offset = computeRingOffset(&gossip.gossip_table_rw, my_pubkey);
+        const ring_offset = computeRingOffset(gossip_ctx.gossip_table_rw, my_pubkey);
 
         // Serialize duplicate slot proof.
-        const allocator = gossip.allocator;
+        const allocator = gossip_ctx.allocator;
         const proof_bytes = try serializeDuplicateProof(allocator, shred_payload, other_payload);
         defer allocator.free(proof_bytes);
 
         // Build chunks that will be converted to CRDS.
         const chunks = try self.buildDuplicateShredChunks(
-            gossip.allocator,
+            gossip_ctx.allocator,
             slot,
             shred_payload,
             proof_bytes,
             DUPLICATE_SHRED_MAX_PAYLOAD_SIZE,
         );
         defer {
-            for (chunks) |dup| gossip.allocator.free(dup.chunk);
-            gossip.allocator.free(chunks);
+            for (chunks) |dup| gossip_ctx.allocator.free(dup.chunk);
+            gossip_ctx.allocator.free(chunks);
         }
 
         try enqueueDuplicateShredCrdsValues(
-            gossip,
+            gossip_ctx,
             ring_offset,
             chunks,
         );
@@ -322,13 +328,13 @@ pub fn serializeDuplicateProof(
 }
 
 fn enqueueDuplicateShredCrdsValues(
-    gossip: *sig.gossip.GossipService,
+    gossip_ctx: *const GossipContext,
     ring_offset: u16,
     chunks: []const sig.gossip.data.DuplicateShred,
 ) !void {
     const MAX_DUPLICATE_SHREDS = sig.gossip.data.MAX_DUPLICATE_SHREDS;
 
-    var push_queue, var lock = gossip.push_msg_queue_mux.writeWithLock();
+    var push_queue, var lock = gossip_ctx.push_msg_queue_mux.writeWithLock();
     defer lock.unlock();
 
     for (chunks, 0..) |duplicate_shred, i| {
@@ -357,6 +363,48 @@ const PossibleDuplicateShred = sig.ledger.shred_inserter.working_state.PossibleD
 const Shred = sig.ledger.shred.Shred;
 const schema = sig.ledger.schema.schema;
 
+const TestGossipState = struct {
+    gossip_table_rw: sig.sync.RwMux(sig.gossip.GossipTable),
+    push_msg_queue: sig.gossip.GossipService.PushMessageQueue,
+    allocator: Allocator,
+
+    pub fn init(allocator: Allocator) !TestGossipState {
+        const builtin = @import("builtin");
+        if (!builtin.is_test) @compileError("TestGossipState is only for testing");
+
+        const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+        const gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
+        const push_msg_queue = sig.gossip.GossipService.PushMessageQueue.init(.{
+            .queue = std.ArrayList(sig.gossip.data.GossipData).init(allocator),
+            .data_allocator = allocator,
+        });
+
+        return .{
+            .gossip_table_rw = gossip_table_rw,
+            .push_msg_queue = push_msg_queue,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn context(self: *TestGossipState) GossipContext {
+        return .{
+            .allocator = self.allocator,
+            .gossip_table_rw = &self.gossip_table_rw,
+            .push_msg_queue_mux = &self.push_msg_queue,
+        };
+    }
+
+    pub fn deinit(self: *TestGossipState) void {
+        var gossip_table, var lock = self.gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        gossip_table.deinit();
+
+        var push_queue, var pq_lock = self.push_msg_queue.writeWithLock();
+        defer pq_lock.unlock();
+        for (push_queue.queue.items) |*item| item.deinit(push_queue.data_allocator);
+        push_queue.queue.deinit();
+    }
+};
 test "handleDuplicateSlots: no sender configured" {
     const allocator = std.testing.allocator;
 
@@ -369,7 +417,7 @@ test "handleDuplicateSlots: no sender configured" {
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
         .duplicate_slots_sender = null, // No sender configured
-        .gossip_service = null,
+        .gossip_context = null,
         .keypair = &keypair,
         .logger = .noop,
     };
@@ -404,7 +452,7 @@ test "handleDuplicateSlots: no duplicate shreds" {
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
         .duplicate_slots_sender = &duplicate_slots_channel,
-        .gossip_service = null,
+        .gossip_context = null,
         .keypair = &keypair,
         .logger = .noop,
     };
@@ -436,7 +484,7 @@ test "handleDuplicateSlots: single duplicate shred" {
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
         .duplicate_slots_sender = &duplicate_slots_channel,
-        .gossip_service = null,
+        .gossip_context = null,
         .keypair = &keypair,
         .logger = .noop,
     };
@@ -498,7 +546,7 @@ test "handleDuplicateSlots: multiple duplicates same slot" {
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
         .duplicate_slots_sender = &duplicate_slots_channel,
-        .gossip_service = null,
+        .gossip_context = null,
         .keypair = &keypair,
         .logger = .noop,
     };
@@ -572,7 +620,7 @@ test "handleDuplicateSlots: Exists but slot already duplicate" {
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
         .duplicate_slots_sender = &duplicate_slots_channel,
-        .gossip_service = null,
+        .gossip_context = null,
         .keypair = &keypair,
         .logger = .noop,
     };
@@ -620,7 +668,7 @@ test "handleDuplicateSlots: emits and stores via handleDuplicateSlot" {
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
         .duplicate_slots_sender = &duplicate_slots_channel,
-        .gossip_service = null,
+        .gossip_context = null,
         .keypair = &keypair,
         .logger = .noop,
     };
@@ -643,29 +691,12 @@ test "pushDuplicateShredToGossip: enqueues chunks and ring indices" {
     const allocator = std.testing.allocator;
 
     const keypair: KeyPair = try .generateDeterministic(@splat(1));
-    const my_pubkey: sig.core.Pubkey = .fromPublicKey(&keypair.public_key);
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
 
-    var contact_info =
-        try sig.gossip.data.LegacyContactInfo.default(my_pubkey).toContactInfo(allocator);
-    try contact_info.setSocket(.gossip, .initIpv4(.{ 127, 0, 0, 1 }, 0));
-
-    const gossip_service = try sig.gossip.GossipService.create(
-        allocator,
-        allocator,
-        contact_info,
-        keypair,
-        null,
-        .noop,
-        .{},
-    );
-    defer {
-        gossip_service.shutdown();
-        gossip_service.deinit();
-        allocator.destroy(gossip_service);
-    }
+    var gossip_state = try TestGossipState.init(allocator);
+    defer gossip_state.deinit();
 
     const original_shred: Shred = try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
     defer original_shred.deinit();
@@ -678,21 +709,23 @@ test "pushDuplicateShredToGossip: enqueues chunks and ring indices" {
 
     var before_len: usize = 0;
     {
-        var pqlg = gossip_service.push_msg_queue_mux.lock();
+        var pqlg = gossip_state.push_msg_queue.lock();
         before_len = pqlg.get().queue.items.len;
         pqlg.unlock();
     }
+
+    const gossip_ctx = gossip_state.context();
 
     var handler: DuplicateShredHandler = .{
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
         .duplicate_slots_sender = null,
-        .gossip_service = gossip_service,
+        .gossip_context = &gossip_ctx,
         .keypair = &keypair,
         .logger = .noop,
     };
     try handler.pushDuplicateShredToGossip(
-        gossip_service,
+        &gossip_ctx,
         slot,
         shred_payload,
         other_payload,
@@ -711,7 +744,7 @@ test "pushDuplicateShredToGossip: enqueues chunks and ring indices" {
     var ring_ok = true;
     var have_dup_entries: usize = 0;
     {
-        var pqlg = gossip_service.push_msg_queue_mux.lock();
+        var pqlg = gossip_state.push_msg_queue.lock();
         defer pqlg.unlock();
         after_items_len = pqlg.get().queue.items.len;
 
@@ -747,24 +780,8 @@ test "pushDuplicateShredToGossip: no-op when duplicate for slot exists" {
     const keypair: KeyPair = try .generateDeterministic(@splat(2));
     const my_pubkey: sig.core.Pubkey = .fromPublicKey(&keypair.public_key);
 
-    var contact_info =
-        try sig.gossip.data.LegacyContactInfo.default(my_pubkey).toContactInfo(allocator);
-    try contact_info.setSocket(.gossip, .initIpv4(.{ 127, 0, 0, 1 }, 0));
-
-    const gossip_service = try sig.gossip.GossipService.create(
-        allocator,
-        allocator,
-        contact_info,
-        keypair,
-        null,
-        .noop,
-        .{},
-    );
-    defer {
-        gossip_service.shutdown();
-        gossip_service.deinit();
-        allocator.destroy(gossip_service);
-    }
+    var gossip_state = try TestGossipState.init(allocator);
+    defer gossip_state.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
@@ -783,10 +800,10 @@ test "pushDuplicateShredToGossip: no-op when duplicate for slot exists" {
             .shred_type = .Code,
             .num_chunks = 1,
             .chunk_index = 0,
-            .chunk = try gossip_service.gossip_data_allocator.dupe(u8, &.{0}),
+            .chunk = try allocator.dupe(u8, &.{0}),
         };
-        errdefer dup.deinit(gossip_service.gossip_data_allocator);
-        var lg = gossip_service.gossip_table_rw.write();
+        errdefer dup.deinit(allocator);
+        var lg = gossip_state.gossip_table_rw.write();
         defer lg.unlock();
         _ = try lg.mut().insert(
             .initSigned(&keypair, .{ .DuplicateShred = .{ 0, dup } }),
@@ -796,7 +813,7 @@ test "pushDuplicateShredToGossip: no-op when duplicate for slot exists" {
 
     var before_len: usize = 0;
     {
-        var pqlg = gossip_service.push_msg_queue_mux.lock();
+        var pqlg = gossip_state.push_msg_queue.lock();
         before_len = pqlg.get().queue.items.len;
         pqlg.unlock();
     }
@@ -804,16 +821,19 @@ test "pushDuplicateShredToGossip: no-op when duplicate for slot exists" {
     var other = try allocator.dupe(u8, shred.payload());
     defer allocator.free(other);
     if (other.len > 0) other[other.len - 1] +%= 1;
+
+    const gossip_ctx = gossip_state.context();
+
     var handler: DuplicateShredHandler = .{
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
         .duplicate_slots_sender = null,
-        .gossip_service = gossip_service,
+        .gossip_context = &gossip_ctx,
         .keypair = &keypair,
         .logger = .noop,
     };
     try handler.pushDuplicateShredToGossip(
-        gossip_service,
+        &gossip_ctx,
         slot,
         shred.payload(),
         other,
@@ -821,7 +841,7 @@ test "pushDuplicateShredToGossip: no-op when duplicate for slot exists" {
 
     var after_len: usize = 0;
     {
-        var pqlg = gossip_service.push_msg_queue_mux.lock();
+        var pqlg = gossip_state.push_msg_queue.lock();
         after_len = pqlg.get().queue.items.len;
         pqlg.unlock();
     }
