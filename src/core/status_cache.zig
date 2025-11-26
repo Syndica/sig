@@ -132,7 +132,17 @@ pub const StatusCache = struct {
         const forks = try hash_map.getOrPutValue(allocator, lookup_key, ForkStatus{});
         try forks.value_ptr.append(allocator, .{ .slot = slot });
 
-        try addToSlotDelta(allocator, state.mut(), blockhash, slot, key_index, &lookup_key);
+        // Add this key slice to the list of key slices for this slot and blockhash combo.
+        const fork_entry = try state.mut().slot_deltas.getOrPutValue(allocator, slot, .empty);
+        const fork_map: *StatusKv = fork_entry.value_ptr;
+
+        const hash_entry = try fork_map.getOrPutValue(
+            allocator,
+            blockhash.*,
+            .{ .status = .{}, .key_index = key_index },
+        );
+        const hash_entry_map: *StatusValues = &hash_entry.value_ptr.status;
+        try hash_entry_map.append(allocator, .{ .key = lookup_key });
     }
 
     pub fn addRoot(self: *StatusCache, allocator: std.mem.Allocator, fork: Slot) !void {
@@ -142,33 +152,29 @@ pub const StatusCache = struct {
         const roots = &state.mut().roots;
         try roots.put(allocator, fork, {});
 
-        try purgeRoots(allocator, state.mut());
-    }
-
-    /// remove roots older than MAX_CACHE_ENTRIES
-    fn purgeRoots(allocator: std.mem.Allocator, state: *State) !void {
-        if (state.roots.count() <= MAX_CACHE_ENTRIES) return;
+        // purgeRoot: when overflowing MAX_CACHE_ENTRIES, remove the smallest root slot from caches.
+        if (roots.count() <= MAX_CACHE_ENTRIES) return;
 
         const min_root = blk: {
             var slot: ?Slot = null;
-            for (state.roots.keys()) |rooted| slot = @min(rooted, slot orelse rooted);
+            for (roots.keys()) |rooted| slot = @min(rooted, slot orelse rooted);
             break :blk slot orelse return;
         };
-
-        std.debug.assert(state.roots.swapRemove(min_root));
+        std.debug.assert(roots.swapRemove(min_root));
 
         {
+            const cache = &state.mut().cache;
+            var entries = cache.values();
             var i: usize = 0;
-            var entries = state.cache.values();
 
-            while (i < state.cache.count()) {
+            while (i < cache.count()) {
                 if (entries[i].slot <= min_root) {
                     var purged_fork_map = entries[i].key_map;
                     for (purged_fork_map.values()) |*fork_status| fork_status.deinit(allocator);
                     purged_fork_map.deinit(allocator);
 
-                    state.cache.swapRemoveAt(i);
-                    entries = state.cache.values();
+                    cache.swapRemoveAt(i);
+                    entries = cache.values();
                 } else {
                     i += 1;
                 }
@@ -176,44 +182,23 @@ pub const StatusCache = struct {
         }
 
         {
+            const slot_deltas = &state.mut().slot_deltas;
+            var entries = slot_deltas.entries.slice();
             var i: usize = 0;
-            var entries = state.slot_deltas.entries.slice();
 
-            while (i < state.slot_deltas.count()) {
+            while (i < slot_deltas.count()) {
                 if (entries.items(.key)[i] <= min_root) {
                     var status_kv = entries.items(.value)[i];
                     for (status_kv.values()) |*value| value.status.deinit(allocator);
                     status_kv.deinit(allocator);
 
-                    state.slot_deltas.swapRemoveAt(i);
-                    entries = state.slot_deltas.entries.slice();
+                    slot_deltas.swapRemoveAt(i);
+                    entries = slot_deltas.entries.slice();
                 } else {
                     i += 1;
                 }
             }
         }
-    }
-
-    // Add this key slice to the list of key slices for this slot and blockhash
-    // combo.
-    fn addToSlotDelta(
-        allocator: std.mem.Allocator,
-        state: *State,
-        blockhash: *const Hash,
-        slot: Slot,
-        key_index: usize,
-        key: *const [CACHED_KEY_SIZE]u8,
-    ) error{OutOfMemory}!void {
-        const fork_entry = try state.slot_deltas.getOrPutValue(allocator, slot, .empty);
-        const fork_map: *StatusKv = fork_entry.value_ptr;
-
-        const hash_entry = try fork_map.getOrPutValue(
-            allocator,
-            blockhash.*,
-            .{ .status = .{}, .key_index = key_index },
-        );
-        const hash_entry_map: *StatusValues = &hash_entry.value_ptr.status;
-        try hash_entry_map.append(allocator, .{ .key = key.* });
     }
 };
 
