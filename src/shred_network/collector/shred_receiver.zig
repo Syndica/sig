@@ -336,7 +336,7 @@ test "handleBatch/handlePacket" {
             .ledger_reader = ledger.reader(),
             .result_writer = ledger.resultWriter(),
             .duplicate_slots_sender = null,
-            .gossip_service = null,
+            .gossip_context = null,
             .keypair = &keypair,
             .logger = .noop,
         },

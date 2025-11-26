@@ -24,6 +24,7 @@ const RepairPeerProvider = shred_network.repair_service.RepairPeerProvider;
 const RepairRequester = shred_network.repair_service.RepairRequester;
 const RepairService = shred_network.repair_service.RepairService;
 const ShredReceiver = shred_network.shred_receiver.ShredReceiver;
+const GossipContext = shred_network.duplicate_shred_handler.GossipContext;
 
 /// Settings which instruct the Shred Network how to behave.
 pub const ShredNetworkConfig = struct {
@@ -59,8 +60,8 @@ pub const ShredNetworkDependencies = struct {
     rpc_hooks: ?*sig.rpc.Hooks = null,
     /// Optional channel to send duplicate slot notifications to consensus
     duplicate_slots_sender: ?*Channel(Slot),
-    /// Gossip service for broadcasting duplicate shred proofs
-    gossip_service: ?*sig.gossip.GossipService,
+    /// Optional gossip context for broadcasting duplicate shred proofs
+    gossip_context: ?*const GossipContext,
 };
 
 /// Start the Shred Network.
@@ -111,7 +112,7 @@ pub fn start(
         .ledger_reader = deps.ledger.reader(),
         .result_writer = deps.ledger.resultWriter(),
         .duplicate_slots_sender = deps.duplicate_slots_sender,
-        .gossip_service = deps.gossip_service,
+        .gossip_context = deps.gossip_context,
         .keypair = deps.my_keypair,
         .logger = .from(deps.logger),
     };
@@ -286,7 +287,7 @@ test "start and stop gracefully" {
         .overwrite_turbine_stake_for_testing = true,
         .epoch_tracker = &epoch_tracker,
         .duplicate_slots_sender = null,
-        .gossip_service = null,
+        .gossip_context = null,
     };
 
     var timer = sig.time.Timer.start();
