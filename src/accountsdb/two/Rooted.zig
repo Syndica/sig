@@ -16,8 +16,8 @@ const ROW = sql.SQLITE_ROW;
 
 /// Handle to the underlying sqlite database.
 handle: *sql.sqlite3,
-/// Tracks the largest rooted slot. Only used in testing.
-largest_rooted_slot: if (builtin.is_test) ?Slot else void,
+/// Tracks the largest rooted slot.
+largest_rooted_slot: ?Slot,
 
 /// These aren't thread safe, but we can have as many as we want. Clean up with deinitThreadLocals
 /// on any threads that use put or get.
@@ -61,7 +61,7 @@ pub fn init(file_path: [:0]const u8) !Rooted {
 
     return .{
         .handle = db,
-        .largest_rooted_slot = if (builtin.is_test) null else {},
+        .largest_rooted_slot = null,
     };
 }
 
@@ -137,8 +137,6 @@ fn accountsHash(self: *Rooted) !sig.core.LtHash {
     defer err(self, sql.sqlite3_finalize(stmt)) catch {};
 
     var hash: sig.core.LtHash = .IDENTITY;
-
-    std.debug.print("starting hashing\n", .{});
 
     while (true) {
         const step_result = sql.sqlite3_step(stmt);
@@ -339,12 +337,15 @@ fn getInner(self: *Rooted, allocator: std.mem.Allocator, address: Pubkey) !?Acco
 /// TODO: we really don't want to be doing these clones, so some other solution would be good.
 pub fn get(self: *Rooted, allocator: std.mem.Allocator, address: Pubkey) !?AccountSharedData {
     return self.getInner(allocator, address) catch |e| switch (e) {
-        error.SqliteError => @panic(""),
+        // Something must have gone terrible wrong for sqlite to fail, we cannot recover from this.
+        error.SqliteError => std.debug.panic(
+            "sqlite err: '{s}'",
+            .{sql.sqlite3_errmsg(self.handle)},
+        ),
         else => |other_err| return other_err,
     };
 }
 
-/// Only used in tests.
 pub fn getLargestRootedSlot(self: *const Rooted) ?Slot {
     if (!builtin.is_test) @compileError("only used in tests");
     return self.largest_rooted_slot;

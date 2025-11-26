@@ -55,11 +55,8 @@ pub fn deinit(self: *Db) void {
 
 /// Clones the account shared data.
 pub fn put(self: *Db, slot: Slot, address: Pubkey, data: AccountSharedData) !void {
-    // used for tests, tracking what the largest slot is and
-    // making sure we don't write to something before that.
-    if (builtin.is_test)
-        if (self.rooted.largest_rooted_slot) |lrs|
-            if (lrs >= slot) return error.CannotWriteRootedSlot;
+    if (self.rooted.largest_rooted_slot) |lrs|
+        if (lrs >= slot) return error.CannotWriteRootedSlot;
 
     const cloned = try data.clone(self.allocator);
     errdefer cloned.deinit(self.allocator);
@@ -69,49 +66,48 @@ pub fn put(self: *Db, slot: Slot, address: Pubkey, data: AccountSharedData) !voi
 // TODO: this should be trivial to put on another thread; this currently blocks the main replay
 // thread for 30-40ms per slot on testnet.
 pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot) error{FailedToRoot}!void {
-    const rooted_index: *Unrooted.SlotIndex = for (self.unrooted.slots) |*index| {
+    for (self.unrooted.slots) |*index| {
         if (index.is_empty.load(.acquire)) continue;
-        if (index.slot != newly_rooted_slot) continue;
-        break index;
-    } else unreachable; // we can't root a slot that doesn't exist!
+        if (index.slot > newly_rooted_slot) continue; // not ready to be rooted yet!
 
-    // Get read lock on unrooted slot, commit to db
-    {
-        rooted_index.lock.lockShared();
-        defer rooted_index.lock.unlockShared();
+        // If this is the precise slot that we're rooting, then we can move it to the permanent storage.
+        if (index.slot == newly_rooted_slot) {
+            // Get read lock on unrooted slot, commit to db
+            index.lock.lockShared();
+            defer index.lock.unlockShared();
 
-        std.debug.assert(rooted_index.slot == newly_rooted_slot);
-        std.debug.assert(!rooted_index.is_empty.load(.acquire));
+            self.rooted.beginTransation() catch return error.FailedToRoot;
 
-        self.rooted.beginTransation() catch return error.FailedToRoot;
+            var entries = index.entries.iterator();
+            while (entries.next()) |entry| {
+                self.rooted.put(entry.key_ptr.*, newly_rooted_slot, entry.value_ptr.*) catch
+                    return error.FailedToRoot;
+            }
 
-        var entries = rooted_index.entries.iterator();
-        while (entries.next()) |entry| {
-            self.rooted.put(entry.key_ptr.*, newly_rooted_slot, entry.value_ptr.*) catch
-                return error.FailedToRoot;
+            self.rooted.commitTransation() catch return error.FailedToRoot;
+
+            self.rooted.largest_rooted_slot = @max(
+                self.rooted.largest_rooted_slot orelse 0,
+                newly_rooted_slot,
+            );
         }
 
-        self.rooted.commitTransation() catch return error.FailedToRoot;
-    }
+        // If there are entries between the last rooted slot and the new one, we can just discard them.
+        // These can be created from forks which were alive for multiple slots but are now dead. If we're
+        // rooting a slot larger than the fork, we mustn't need these anymore.
+        if (self.rooted.largest_rooted_slot) |largest| if (index.slot > largest) {
+            // Get write lock on unrooted slot, remove from unrooted. There should be no contention on this
+            // lock, no other threads are running right now. In the future when we offload rooting to a seperate
+            // async unit, then it might come into play.
+            index.lock.lock();
+            defer index.lock.unlock();
 
-    // Get write lock on unrooted slot, remove from unrooted
-    {
-        rooted_index.lock.lock();
-        defer rooted_index.lock.unlock();
+            std.debug.assert(index.slot < newly_rooted_slot);
 
-        std.debug.assert(rooted_index.slot == newly_rooted_slot);
-        std.debug.assert(!rooted_index.is_empty.load(.acquire));
-
-        for (rooted_index.entries.values()) |data| data.deinit(self.allocator);
-        rooted_index.entries.clearRetainingCapacity();
-        rooted_index.is_empty.store(true, .release);
-    }
-
-    if (builtin.is_test) {
-        self.rooted.largest_rooted_slot = @max(
-            self.rooted.largest_rooted_slot orelse 0,
-            newly_rooted_slot,
-        );
+            for (index.entries.values()) |data| data.deinit(self.allocator);
+            index.entries.clearRetainingCapacity();
+            index.is_empty.store(true, .release);
+        };
     }
 }
 

@@ -123,8 +123,7 @@ pub fn get(
         index.lock.lockShared();
         defer index.lock.unlockShared();
 
-        if (ancestors.containsSlot(index.slot)) {
-            if (index.slot < best_slot) continue;
+        if (index.slot >= best_slot and ancestors.containsSlot(index.slot)) {
             const data = index.entries.get(address) orelse continue;
             result = data.asAccount();
             best_slot = index.slot;
