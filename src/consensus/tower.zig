@@ -285,11 +285,8 @@ pub const Tower = struct {
 };
 
 test "isRecent with no votes checks root_slot" {
-    var tower: Tower = .init(.noop);
-
     // Set up tower with no votes but with a root
-    tower.vote_state.root_slot = 100;
-    tower.vote_state.votes = .{};
+    var tower: Tower = .{ .root = 100 };
 
     // Slots at or before root should NOT be recent
     try std.testing.expect(!tower.isRecent(99));
@@ -303,9 +300,7 @@ test "isRecent with no votes checks root_slot" {
 test "isLockedOut with no votes and root" {
     const allocator = std.testing.allocator;
 
-    var tower: Tower = .init(.noop);
-    tower.vote_state.root_slot = 100;
-    tower.vote_state.votes = .{};
+    var tower: Tower = .{ .root = 100 };
 
     // Create ancestors for a slot after root
     var ancestors_map: std.AutoArrayHashMapUnmanaged(Slot, void) = .empty;

@@ -4566,7 +4566,7 @@ test "switch threshold" {
         }
 
         // Set root to 43
-        tower.tower.vote_state.root_slot = 43;
+        tower.tower.root = 43;
 
         const decision = try tower.makeCheckSwitchThresholdDecision(
             allocator,
@@ -4863,7 +4863,7 @@ test "switch threshold use gossip votes" {
     // then the switch proof will now fail since that validator's vote can no longer be included
     {
         // Set root to 44 - this makes slot 112 (descendant of 43) unreachable
-        tower.tower.vote_state.root_slot = 44;
+        tower.tower.root = 44;
 
         // Update ancestors and descendants to reflect new root
         // Rebuild ancestors from root 44
