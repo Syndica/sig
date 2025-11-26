@@ -62,20 +62,26 @@ pub fn getOrInit(allocator: std.mem.Allocator, logger: Logger) !KeyPair {
 }
 
 /// Reads a pubkey either as a base58 string or from a json keypair file
-pub fn readPubkeyFlexible(logger: Logger, base58_or_kp_path: []const u8) !Pubkey {
+pub fn readPubkeyFlexible(
+    logger: Logger,
+    base58_or_kp_path: []const u8,
+) error{InvalidPubkeySource}!Pubkey {
     const pk_err = if (Pubkey.parseRuntime(base58_or_kp_path)) |p| return p else |e| e;
 
-    errdefer |e| logger.err().logf(
+    const kp_err = err: {
+        const file = std.fs.cwd().openFile(base58_or_kp_path, .{}) catch |e| break :err e;
+        defer file.close();
+
+        const keypair = parseKeypairJson(file.reader()) catch |e| break :err e;
+
+        return Pubkey.fromPublicKey(&keypair.public_key);
+    };
+
+    logger.err().logf(
         "Could not interpret '{s}' as a base58 pubkey due to {} or a json keypair file due to {}",
-        .{ base58_or_kp_path, pk_err, e },
+        .{ base58_or_kp_path, pk_err, kp_err },
     );
-
-    const file = try std.fs.cwd().openFile(base58_or_kp_path, .{});
-    defer file.close();
-
-    const keypair = try parseKeypairJson(file.reader());
-
-    return Pubkey.fromPublicKey(&keypair.public_key);
+    return error.InvalidPubkeySource;
 }
 
 fn parseKeypairJson(reader: anytype) !KeyPair {
@@ -117,7 +123,7 @@ test "readPubkeyFlexible for keypair filename" {
 }
 
 test "readPubkeyFlexible for nonsense string" {
-    try std.testing.expectError(error.FileNotFound, readPubkeyFlexible(.noop, "nonsense"));
+    try std.testing.expectError(error.InvalidPubkeySource, readPubkeyFlexible(.noop, "nonsense"));
 }
 
 const test_pubkey = "4gE1hGfMN781mVSpoRJwHdsbWLqZDWLNqTtrtimfhuWR";
