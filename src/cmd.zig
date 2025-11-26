@@ -1314,6 +1314,11 @@ fn validator(
     );
 
     // shred network
+    const gossip_context = sig.shred_network.duplicate_shred_handler.GossipContext{
+        .allocator = gossip_service.allocator,
+        .gossip_table_rw = &gossip_service.gossip_table_rw,
+        .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
+    };
     var shred_network_manager = try sig.shred_network.start(
         cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
         .{
@@ -1335,7 +1340,7 @@ fn validator(
             else
                 null,
             .rpc_hooks = null,
-            .gossip_service = gossip_service,
+            .gossip_context = &gossip_context,
         },
     );
     defer shred_network_manager.deinit();
@@ -1625,12 +1630,17 @@ fn shredNetwork(
         app_base.exit,
     });
 
-    var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
+    var prng: std.Random.DefaultPrng = .init(@bitCast(std.time.timestamp()));
 
-    const my_contact_info =
-        sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
+    const my_contact_info: sig.gossip.data.ThreadSafeContactInfo =
+        .fromContactInfo(gossip_service.my_contact_info);
 
     // shred networking
+    const gossip_context: sig.shred_network.duplicate_shred_handler.GossipContext = .{
+        .allocator = gossip_service.allocator,
+        .gossip_table_rw = &gossip_service.gossip_table_rw,
+        .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
+    };
     var shred_network_manager = try sig.shred_network.start(shred_network_conf, .{
         .allocator = allocator,
         .logger = .from(app_base.logger),
@@ -1648,7 +1658,7 @@ fn shredNetwork(
         // No consensus in the standalone mode, so duplicate slots are not reported
         .duplicate_slots_sender = null,
         .rpc_hooks = null,
-        .gossip_service = gossip_service,
+        .gossip_context = &gossip_context,
     });
     defer shred_network_manager.deinit();
 
