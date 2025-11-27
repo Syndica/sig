@@ -59,9 +59,7 @@ pub fn commitTransactions(
         signature_count += transaction.transaction.signatures.len;
 
         for (tx_result.writes.slice()) |account| {
-            const gop = try accounts_to_store.getOrPut(allocator, account.pubkey);
-            if (gop.found_existing) gop.value_ptr.deinit(allocator);
-            gop.value_ptr.* = account;
+            try accounts_to_store.put(allocator, account.pubkey, account);
         }
         transaction_fees += tx_result.fees.transaction_fee;
         priority_fees += tx_result.fees.prioritization_fee;
