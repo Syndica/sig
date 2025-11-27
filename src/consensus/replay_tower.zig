@@ -338,7 +338,7 @@ pub const ReplayTower = struct {
             const lockout_length = lockout.lockout();
 
             self.logger.info().logf(
-                "│  {d:10}  │      {d:2}        │    {d:10}    │   {d:8}   │",
+                "│  {d:10}  │      {d:2}        │    {d:10}    │ {d:10}   │",
                 .{ lockout.slot, lockout.confirmation_count, lockout_expiration, lockout_length },
             );
         }
