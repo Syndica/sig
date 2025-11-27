@@ -1119,21 +1119,26 @@ fn sendVoteToLeaders(
     );
     defer allocator.free(upcoming_leader_sockets);
 
+    var sent_to_any: bool = false;
     for (upcoming_leader_sockets) |tpu_vote_socket| {
         sendVoteTransaction(
             vote_tx,
             tpu_vote_socket,
             sockets,
         ) catch |err| {
-            logger.err().logf("Failed to send vote (slot: {}, hash: {f}) to leader (error: {s}).", .{
-                vote_slot, voted_hash, @errorName(err),
-            });
-            logger.debug().logf(
-                "Sent vote (slot: {}, hash: {f}) to leader ({f}).",
-                .{ vote_slot, voted_hash, tpu_vote_socket },
+            logger.err().logf(
+                "Failed to send vote (slot: {}, hash: {f}) to leader (error: {s}).",
+                .{ vote_slot, voted_hash, @errorName(err) },
             );
+            continue;
         };
-    } else {
+        sent_to_any = true;
+        logger.info().logf(
+            "Sent vote (slot: {}, hash: {f}) to leader ({f}).",
+            .{ vote_slot, voted_hash, tpu_vote_socket },
+        );
+    }
+    if (!sent_to_any) {
         // Fallback: send to our own TPU address if no leaders were found
         if (maybe_my_pubkey) |my_pubkey| {
             const gossip_table, var gossip_table_lg = gossip_table_rw.readWithLock();
@@ -1678,6 +1683,7 @@ fn resetFork(
 fn logForkStakeDistribution(
     logger: Logger,
     fork_choice: *const ForkChoice,
+    fork_stats: *const sig.consensus.progress_map.ForkStats,
 ) void {
     var total_stake: u64 = 0;
     var candidate_count: usize = 0;
@@ -1705,7 +1711,7 @@ fn logForkStakeDistribution(
     defer output.deinit();
 
     output.writer().print(
-        "=== Fork Stake Distribution (by subtree) ===\nRoot: slot={} | {} candidate forks\n",
+        "\n=== Fork Stake Distribution (by subtree) ===\nRoot: slot={} | {} candidate forks\n",
         .{ fork_choice.tree_root.slot, candidate_count },
     ) catch return;
 
@@ -1721,10 +1727,12 @@ fn logForkStakeDistribution(
 
         const is_heaviest = fork_choice.heaviestOverallSlot().equals(slot_hash);
         // Calculate total stake along the fork path from root to this leaf
-        const total_fork_stake = fork_choice.calculateForkPathStake(slot_hash);
-        const fork_percentage =
-            @as(f64, @floatFromInt(total_fork_stake)) * 100.0 /
-            @as(f64, @floatFromInt(total_stake));
+        // const total_fork_stake = fork_choice.calculateForkPathStake(slot_hash);
+        // const fork_percentage =
+        //     @as(f64, @floatFromInt(total_fork_stake)) * 100.0 /
+        //     @as(f64, @floatFromInt(total_stake));
+
+        const fork_percentage = fork_stats.forkWeight() * 100.0;
 
         const marker = if (is_heaviest) " [HEAVIEST]" else "";
 
@@ -1806,9 +1814,6 @@ fn computeConsensusInputs(
                 latest_validator_votes,
             );
 
-            // Log vote stake distribution across all candidate forks
-            logForkStakeDistribution(logger, fork_choice);
-
             const fork_stats = progress.getForkStats(slot) orelse return error.MissingForkStats;
             fork_stats.fork_stake = cluster_vote_state.fork_stake;
             fork_stats.total_stake = cluster_vote_state.total_stake;
@@ -1826,6 +1831,9 @@ fn computeConsensusInputs(
             fork_stats.my_latest_landed_vote = cluster_vote_state.my_latest_landed_vote;
             fork_stats.computed = true;
             try new_stats.append(allocator, slot);
+
+            // Log vote stake distribution across all candidate forks
+            logForkStakeDistribution(logger, fork_choice, fork_stats);
         }
         try cacheVotingSafetyChecks(
             allocator,
