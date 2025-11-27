@@ -30,6 +30,9 @@ const SlotState = sig.core.SlotState;
 const Transaction = sig.core.transaction.Transaction;
 const SocketAddr = sig.net.SocketAddr;
 
+const Tower = sig.consensus.tower.Tower;
+const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
+
 const AccountReader = sig.accounts_db.AccountReader;
 const AccountStore = sig.accounts_db.AccountStore;
 
@@ -135,14 +138,23 @@ pub const TowerConsensus = struct {
 
         const root_ref = deps.slot_tracker.get(deps.slot_tracker.root).?;
         const root_ancestors = &root_ref.constants.ancestors;
+
+        var tower: Tower = if (deps.identity.vote_account) |vote_account_address|
+            try loadTower(
+                allocator,
+                deps.logger,
+                deps.account_reader.forSlot(root_ancestors),
+                vote_account_address,
+            )
+        else
+            .{ .root = deps.slot_tracker.root };
+        tower.setRoot(deps.slot_tracker.root);
+
         const replay_tower: ReplayTower = try .init(
-            allocator,
             .from(deps.logger),
             deps.identity.validator,
-            deps.identity.vote_account,
-            deps.slot_tracker.root,
-            deps.account_reader.forSlot(root_ancestors),
-            sig.prometheus.globalRegistry(),
+            tower,
+            deps.registry,
         );
         errdefer replay_tower.deinit(allocator);
 
@@ -324,6 +336,7 @@ pub const TowerConsensus = struct {
             slot_tracker: *SlotTracker,
             epoch_tracker: *EpochTracker,
             progress_map: *ProgressMap,
+            status_cache: ?*sig.core.StatusCache,
             senders: Senders,
             receivers: Receivers,
             vote_sender: ?*sig.sync.Channel(sig.net.Packet),
@@ -420,6 +433,7 @@ pub const TowerConsensus = struct {
             params.slot_tracker,
             params.epoch_tracker,
             params.progress_map,
+            params.status_cache,
             params.account_store,
             params.slot_leaders,
             params.vote_sender,
@@ -470,11 +484,12 @@ pub const TowerConsensus = struct {
         slot_tracker: *SlotTracker,
         epoch_tracker: *const EpochTracker,
         progress_map: *ProgressMap,
+        status_cache: ?*sig.core.StatusCache,
         /// For reading the slot history account
         account_store: AccountStore,
         slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
         vote_sender: ?*sig.sync.Channel(sig.net.Packet),
-        vote_account: Pubkey,
+        vote_account: ?Pubkey,
         senders: Senders,
     ) !void {
         var epoch_stakes_map: EpochStakesMap = .empty;
@@ -618,6 +633,7 @@ pub const TowerConsensus = struct {
                 progress_map,
                 &self.fork_choice,
                 account_store,
+                status_cache,
                 self.signing.node,
                 self.signing.authorized_voters,
                 self.identity.vote_account,
@@ -811,6 +827,53 @@ fn maybeRefreshLastVote(
     };
 }
 
+/// Returns the Tower derived from the vote account at the provided address or
+/// returns an error if a Tower cannot be initialized.
+fn loadTower(
+    allocator: std.mem.Allocator,
+    logger: Logger,
+    slot_account_reader: sig.accounts_db.SlotAccountReader,
+    vote_account_address: Pubkey,
+) !Tower {
+    const vote_account = try slot_account_reader.get(allocator, vote_account_address) orelse {
+        logger.info().logf("Vote account not found", .{});
+        return error.VoteAccountNotFound;
+    };
+    defer vote_account.deinit(allocator);
+
+    // Validate that the account is owned by the vote program
+    if (!vote_account.owner.equals(&sig.runtime.program.vote.ID)) {
+        logger.err().logf(
+            "Invalid vote account owner. Expected: {}, Got: {}",
+            .{ sig.runtime.program.vote.ID, vote_account.owner },
+        );
+        return error.InvalidVoteAccountOwner;
+    }
+
+    logger.debug().logf(
+        "Vote account loaded: Pubkey={?}, Lamports={}, Owner={}, Data length={}",
+        .{
+            vote_account_address,
+            vote_account.lamports,
+            vote_account.owner,
+            vote_account.data.len(),
+        },
+    );
+
+    var iter = vote_account.data.iterator();
+    const versioned_state = sig.bincode.read(
+        allocator,
+        VoteStateVersions,
+        iter.reader(),
+        .{},
+    ) catch return error.BincodeError;
+
+    var vote_state = try versioned_state.convertToCurrent(allocator);
+    defer vote_state.deinit(allocator);
+
+    return try Tower.fromAccount(&vote_state);
+}
+
 pub const AncestorHashesReplayUpdate = union(enum) {
     dead: Slot,
     dead_duplicate_confirmed: Slot,
@@ -853,9 +916,10 @@ fn handleVotableBank(
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
     account_store: AccountStore,
+    status_cache: ?*sig.core.StatusCache,
     node_keypair: ?sig.identity.KeyPair,
     authorized_voter_keypairs: []const sig.identity.KeyPair,
-    vote_account_pubkey: Pubkey,
+    vote_account_pubkey: ?Pubkey,
     switch_fork_decision: SwitchForkDecision,
     gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
@@ -877,6 +941,7 @@ fn handleVotableBank(
             progress,
             fork_choice,
             account_store,
+            status_cache,
             new_root,
         );
     }
@@ -885,7 +950,7 @@ fn handleVotableBank(
 
     // Skip vote generation and sending if not configured to vote
     // Note: When voting is disabled, `authorized_voter_keypairs` is set to an empty slice
-    if (authorized_voter_keypairs.len == 0 or node_keypair == null) {
+    if (authorized_voter_keypairs.len == 0 or node_keypair == null or vote_account_pubkey == null) {
         replay_tower.markLastVoteTxBlockhashNonVoting();
         return;
     }
@@ -912,7 +977,7 @@ fn handleVotableBank(
             // Update the tower's last vote blockhash
             replay_tower.refreshLastVoteTxBlockhash(vote_tx.msg.recent_blockhash);
 
-            const last_tower_slot = replay_tower.tower.vote_state.lastVotedSlot();
+            const last_tower_slot = replay_tower.tower.lastVotedSlot();
             try sendVote(
                 logger,
                 allocator,
@@ -1240,7 +1305,7 @@ fn sendVote(
 /// Analogous to [generate_vote_tx](https://github.com/anza-xyz/agave/blob/8e696b9a6ec1dc84a9add834f25325b9e39cbcb4/core/src/replay_stage.rs#L2561)
 fn generateVoteTx(
     allocator: std.mem.Allocator,
-    vote_account_pubkey: Pubkey,
+    maybe_vote_account_pubkey: ?Pubkey,
     authorized_voter_keypairs: []const sig.identity.KeyPair,
     node_keypair: ?sig.identity.KeyPair,
     switch_fork_decision: SwitchForkDecision,
@@ -1257,6 +1322,11 @@ fn generateVoteTx(
 
     const node_kp = node_keypair orelse {
         logger.debug().log("No node keypair");
+        return .non_voting;
+    };
+
+    const vote_account_pubkey = maybe_vote_account_pubkey orelse {
+        logger.debug().log("No vote account address");
         return .non_voting;
     };
 
@@ -1293,7 +1363,7 @@ fn generateVoteTx(
 
     var vote_state_versions = sig.bincode.readFromSlice(
         allocator,
-        sig.runtime.program.vote.state.VoteStateVersions,
+        VoteStateVersions,
         vote_account_data,
         .{},
     ) catch |err| {
@@ -1489,6 +1559,7 @@ fn checkAndHandleNewRoot(
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
     account_store: AccountStore,
+    status_cache: ?*sig.core.StatusCache,
     new_root: Slot,
 ) !void {
     // get the root bank before squash.
@@ -1508,6 +1579,9 @@ fn checkAndHandleNewRoot(
     slot_tracker.root = new_root;
     // Prune non rooted slots
     slot_tracker.pruneNonRooted(allocator);
+
+    // Tell the status_cache about it for its tracking.
+    if (status_cache) |sc| try sc.addRoot(allocator, new_root);
     // Tell the account_store about it for its unrooted accounts
     try account_store.onSlotRooted(
         allocator,
@@ -1586,7 +1660,7 @@ fn resetFork(
 fn computeConsensusInputs(
     allocator: std.mem.Allocator,
     logger: Logger,
-    my_vote_pubkey: Pubkey,
+    my_vote_pubkey: ?Pubkey,
     ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
     slot_tracker: *const SlotTracker,
     epoch_schedule: *const EpochSchedule,
@@ -1618,7 +1692,7 @@ fn computeConsensusInputs(
                 break :blk try collectClusterVoteState(
                     allocator,
                     .from(logger),
-                    &my_vote_pubkey,
+                    my_vote_pubkey,
                     slot,
                     &stakes.vote_accounts.vote_accounts,
                     ancestors,
@@ -2437,6 +2511,7 @@ test "checkAndHandleNewRoot - missing slot" {
         &fixture.progress,
         &fixture.fork_choice,
         .noop,
+        null, // no need to update a StatusCache,
         123, // Non-existent slot
     );
 
@@ -2494,6 +2569,7 @@ test "checkAndHandleNewRoot - missing hash" {
         &fixture.progress,
         &fixture.fork_choice,
         .noop,
+        null, // no need to update a StatusCache,
         root.slot, // Non-existent hash
     );
 
@@ -2536,6 +2612,7 @@ test "checkAndHandleNewRoot - empty slot tracker" {
         &fixture.progress,
         &fixture.fork_choice,
         .noop,
+        null, // no need to update a StatusCache,
         root.slot,
     );
 
@@ -2636,6 +2713,7 @@ test "checkAndHandleNewRoot - success" {
             &fixture.progress,
             &fixture.fork_choice,
             .noop,
+            null, // no need to update a StatusCache,
             hash3.slot,
         );
     }
@@ -3184,7 +3262,7 @@ test "generateVoteTx - success with tower_sync vote" {
     defer allocator.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        sig.runtime.program.vote.state.VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .current = vote_state },
         .{},
     );
     const vote_account = sig.runtime.AccountSharedData{
@@ -3279,7 +3357,7 @@ test "generateVoteTx - success with vote_state_update compacted" {
     defer allocator.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        sig.runtime.program.vote.state.VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .current = vote_state },
         .{},
     );
 
@@ -3374,7 +3452,7 @@ test "generateVoteTx - success with switch proof" {
     defer allocator.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        sig.runtime.program.vote.state.VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .current = vote_state },
         .{},
     );
 
@@ -3471,7 +3549,7 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
     defer allocator.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        sig.runtime.program.vote.state.VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .current = vote_state },
         .{},
     );
 
@@ -3560,7 +3638,7 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
     defer allocator.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        sig.runtime.program.vote.state.VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .current = vote_state },
         .{},
     );
 
@@ -4778,6 +4856,7 @@ test "edge cases - duplicate slot" {
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = &replay_state.epoch_tracker,
         .progress_map = &replay_state.progress_map,
+        .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
         .receivers = tc_input_channels,
         .vote_sender = null,
@@ -4937,6 +5016,7 @@ test "edge cases - duplicate confirmed slot" {
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = &replay_state.epoch_tracker,
         .progress_map = &replay_state.progress_map,
+        .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
         .receivers = tc_input_channels,
         .vote_sender = null,
@@ -5108,6 +5188,7 @@ test "edge cases - gossip verified vote hashes" {
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = &replay_state.epoch_tracker,
         .progress_map = &replay_state.progress_map,
+        .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
         .receivers = tc_input_channels,
         .vote_sender = null,
@@ -5255,7 +5336,7 @@ test "vote on heaviest frozen descendant with no switch" {
     var consensus = try TowerConsensus.init(allocator, .{
         .logger = .noop,
         .identity = .{
-            .vote_account = .initRandom(std.crypto.random),
+            .vote_account = null,
             .validator = .initRandom(std.crypto.random),
         },
         .signing = .{
@@ -5289,6 +5370,7 @@ test "vote on heaviest frozen descendant with no switch" {
         .slot_tracker = &slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &progress,
+        .status_cache = null,
         .senders = stubs.senders,
         .receivers = stubs.receivers,
         .vote_sender = null,
@@ -5314,7 +5396,7 @@ test "vote on heaviest frozen descendant with no switch" {
     // 2. Assert the replay tower
     try std.testing.expectEqual(slot_1, consensus.replay_tower.lastVotedSlot());
     // Check that root has not changed (no vote is old enough to advance root)
-    try std.testing.expectEqual(root_slot, consensus.replay_tower.tower.vote_state.root_slot.?);
+    try std.testing.expectEqual(root_slot, consensus.replay_tower.tower.root.?);
     try std.testing.expectEqual(.non_voting, consensus.replay_tower.last_vote_tx_blockhash);
 
     // 3. Check lockout intervals.
@@ -5479,7 +5561,7 @@ test "vote accounts with landed votes populate bank stats" {
     var consensus = try TowerConsensus.init(allocator, .{
         .logger = .noop,
         .identity = .{
-            .vote_account = .initRandom(std.crypto.random),
+            .vote_account = null,
             .validator = .initRandom(std.crypto.random),
         },
         .signing = .{
@@ -5510,6 +5592,7 @@ test "vote accounts with landed votes populate bank stats" {
         .slot_tracker = &slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &progress,
+        .status_cache = null,
         .senders = stubs.senders,
         .receivers = stubs.receivers,
         .vote_sender = null,
@@ -5762,7 +5845,7 @@ test "root advances after vote satisfies lockouts" {
     var consensus = try TowerConsensus.init(allocator, .{
         .logger = .noop,
         .identity = .{
-            .vote_account = Pubkey.initRandom(std.crypto.random),
+            .vote_account = null,
             .validator = Pubkey.initRandom(std.crypto.random),
         },
         .signing = .{
@@ -5793,7 +5876,7 @@ test "root advances after vote satisfies lockouts" {
     }
 
     {
-        try std.testing.expectEqual(31, consensus.replay_tower.tower.vote_state.votes.len);
+        try std.testing.expectEqual(31, consensus.replay_tower.tower.votes.len);
         try std.testing.expectEqual(0, try consensus.replay_tower.tower.getRoot());
     }
 
@@ -5820,6 +5903,7 @@ test "root advances after vote satisfies lockouts" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sender = null,
@@ -5881,6 +5965,7 @@ test "root advances after vote satisfies lockouts" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sender = null,
@@ -5896,7 +5981,7 @@ test "root advances after vote satisfies lockouts" {
         try std.testing.expectEqual(1, new_root);
         try std.testing.expectEqual(
             MAX_LOCKOUT_HISTORY,
-            consensus.replay_tower.tower.vote_state.votes.len,
+            consensus.replay_tower.tower.votes.len,
         );
 
         try std.testing.expectEqual(1, slot_tracker.root);
@@ -5962,6 +6047,7 @@ test "root advances after vote satisfies lockouts" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sender = null,
@@ -5977,11 +6063,11 @@ test "root advances after vote satisfies lockouts" {
         try std.testing.expectEqual(2, new_root);
         try std.testing.expectEqual(
             MAX_LOCKOUT_HISTORY,
-            consensus.replay_tower.tower.vote_state.votes.len,
+            consensus.replay_tower.tower.votes.len,
         );
 
         try std.testing.expect(new_root > initial_root);
-        const last_voted = consensus.replay_tower.tower.vote_state.lastVotedSlot();
+        const last_voted = consensus.replay_tower.tower.lastVotedSlot();
         try std.testing.expectEqual(33, last_voted);
 
         try std.testing.expectEqual(2, slot_tracker.root);
@@ -6111,7 +6197,7 @@ test "vote refresh when no new vote available" {
     var consensus = try TowerConsensus.init(allocator, .{
         .logger = .noop,
         .identity = .{
-            .vote_account = .initRandom(std.crypto.random),
+            .vote_account = null,
             .validator = .initRandom(std.crypto.random),
         },
         .signing = .{
@@ -6143,6 +6229,7 @@ test "vote refresh when no new vote available" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sender = null,
@@ -6168,6 +6255,7 @@ test "vote refresh when no new vote available" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sender = null,
@@ -6188,7 +6276,7 @@ test "vote refresh when no new vote available" {
     try std.testing.expect(final_tx_blockhash == .non_voting);
 
     // The vote count in tower should remain the same (1 vote)
-    try std.testing.expectEqual(1, consensus.replay_tower.tower.vote_state.votes.len);
+    try std.testing.expectEqual(1, consensus.replay_tower.tower.votes.len);
 
     try std.testing.expectEqual(1, consensus.fork_choice.heaviestOverallSlot().slot);
 }
@@ -6398,7 +6486,7 @@ test "detect and mark duplicate confirmed fork" {
     var consensus = try TowerConsensus.init(allocator, .{
         .logger = .noop,
         .identity = .{
-            .vote_account = Pubkey.initRandom(std.crypto.random),
+            .vote_account = null,
             .validator = Pubkey.initRandom(std.crypto.random),
         },
         .signing = .{
@@ -6436,6 +6524,7 @@ test "detect and mark duplicate confirmed fork" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sender = null,
@@ -6573,7 +6662,7 @@ test "detect and mark duplicate slot" {
     var consensus = try TowerConsensus.init(allocator, .{
         .logger = .noop,
         .identity = .{
-            .vote_account = Pubkey.initRandom(std.crypto.random),
+            .vote_account = null,
             .validator = Pubkey.initRandom(std.crypto.random),
         },
         .signing = .{
@@ -6614,6 +6703,7 @@ test "detect and mark duplicate slot" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sender = null,
@@ -6882,7 +6972,7 @@ test "successful fork switch (switch_proof)" {
     var consensus = try TowerConsensus.init(allocator, .{
         .logger = .noop,
         .identity = .{
-            .vote_account = Pubkey.initRandom(std.crypto.random),
+            .vote_account = null,
             .validator = Pubkey.initRandom(std.crypto.random),
         },
         .signing = .{
@@ -6987,6 +7077,7 @@ test "successful fork switch (switch_proof)" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sender = null,
@@ -7027,6 +7118,7 @@ test "successful fork switch (switch_proof)" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sender = null,
@@ -7087,6 +7179,7 @@ test "successful fork switch (switch_proof)" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sender = null,
@@ -7159,6 +7252,7 @@ test "successful fork switch (switch_proof)" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sender = null,
@@ -7177,4 +7271,83 @@ test "successful fork switch (switch_proof)" {
         allocator.destroy(element);
     }
     slot_tracker.slots.deinit(allocator);
+}
+
+test "loadTower handles missing vote account" {
+    const allocator = std.testing.allocator;
+
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const vote_pubkey: Pubkey = .initRandom(prng.random());
+
+    try std.testing.expectError(
+        error.VoteAccountNotFound,
+        loadTower(allocator, .noop, .{ .account_map = &.empty }, vote_pubkey),
+    );
+}
+
+test "loadTower handles invalid vote account owner" {
+    const allocator = std.testing.allocator;
+
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const vote_pubkey: Pubkey = .initRandom(prng.random());
+    const wrong_owner: Pubkey = Pubkey.initRandom(prng.random());
+
+    // Create an account with wrong owner
+    const account_with_wrong_owner = sig.core.Account{
+        .data = sig.accounts_db.buffer_pool.AccountDataHandle.initAllocated(&[_]u8{}),
+        .executable = false,
+        .lamports = 1000,
+        .owner = wrong_owner,
+        .rent_epoch = 0,
+    };
+
+    var account_map: std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account) = .empty;
+    defer {
+        var iter = account_map.iterator();
+        while (iter.next()) |entry| {
+            entry.value_ptr.deinit(allocator);
+        }
+        account_map.deinit(allocator);
+    }
+    try account_map.put(allocator, vote_pubkey, account_with_wrong_owner);
+
+    // Should return InvalidVoteAccountOwner error
+    const result = loadTower(allocator, .noop, .{ .account_map = &account_map }, vote_pubkey);
+
+    try std.testing.expectError(error.InvalidVoteAccountOwner, result);
+}
+
+test "loadTower handles invalid vote state" {
+    const allocator = std.testing.allocator;
+
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const vote_pubkey: Pubkey = .initRandom(prng.random());
+
+    // Create an account with invalid vote state data (garbage bytes)
+    const invalid_data_bytes = try allocator.alloc(u8, 4);
+    defer allocator.free(invalid_data_bytes);
+    @memcpy(invalid_data_bytes, &[_]u8{ 0xFF, 0xFF, 0xFF, 0xFF });
+
+    const invalid_account = sig.core.Account{
+        .data = sig.accounts_db.buffer_pool.AccountDataHandle.initAllocated(invalid_data_bytes),
+        .executable = false,
+        .lamports = 1000,
+        .owner = vote_program.ID,
+        .rent_epoch = 0,
+    };
+
+    var account_map: std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account) = .empty;
+    defer {
+        var iter = account_map.iterator();
+        while (iter.next()) |entry| {
+            entry.value_ptr.deinit(allocator);
+        }
+        account_map.deinit(allocator);
+    }
+    try account_map.put(allocator, vote_pubkey, invalid_account);
+
+    // Should return BincodeError when trying to deserialize invalid vote state
+    const result = loadTower(allocator, .noop, .{ .account_map = &account_map }, vote_pubkey);
+
+    try std.testing.expectError(error.BincodeError, result);
 }

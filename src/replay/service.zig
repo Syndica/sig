@@ -107,6 +107,7 @@ pub fn advanceReplay(
             .slot_tracker = &replay_state.slot_tracker,
             .epoch_tracker = &replay_state.epoch_tracker,
             .progress_map = &replay_state.progress_map,
+            .status_cache = &replay_state.status_cache,
             .senders = consensus.senders,
             .receivers = consensus.receivers,
             .vote_sender = consensus.vote_sender,
@@ -117,9 +118,11 @@ pub fn advanceReplay(
         });
     } else try bypassConsensus(replay_state);
 
-    const elapsed = start_time.read().asNanos();
-    metrics.slot_execution_time.observe(elapsed);
-    replay_state.logger.info().logf("advanced in {}", .{std.fmt.fmtDuration(elapsed)});
+    if (slot_results.len != 0) {
+        const elapsed = start_time.read().asNanos();
+        metrics.slot_execution_time.observe(elapsed);
+        replay_state.logger.info().logf("advanced in {}", .{std.fmt.fmtDuration(elapsed)});
+    }
 
     if (!processed_a_slot) try std.Thread.yield();
 }
@@ -267,7 +270,7 @@ pub fn initProgressMap(
     slot_tracker: *const SlotTracker,
     epoch_tracker: *const EpochTracker,
     my_pubkey: Pubkey,
-    vote_account: Pubkey,
+    vote_account: ?Pubkey,
 ) !ProgressMap {
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
@@ -286,7 +289,7 @@ pub fn initProgressMap(
             .epoch_stakes = &epoch_tracker.getPtrForSlot(slot).?.stakes,
             .now = .now(),
             .validator_identity = &my_pubkey,
-            .validator_vote_pubkey = &vote_account,
+            .validator_vote_pubkey = vote_account,
             .prev_leader_slot = prev_leader_slot,
             .num_blocks_on_fork = 0,
             .num_dropped_blocks_on_fork = 0,
@@ -530,6 +533,8 @@ fn bypassConsensus(state: *ReplayState) !void {
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root = new_root;
         slot_tracker.pruneNonRooted(state.allocator);
+
+        try state.status_cache.addRoot(state.allocator, new_root);
 
         try state.account_store.onSlotRooted(
             state.allocator,
@@ -816,6 +821,7 @@ test "process runs without error with no replay results" {
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = &replay_state.epoch_tracker,
         .progress_map = &replay_state.progress_map,
+        .status_cache = &replay_state.status_cache,
         .senders = consensus_senders,
         .receivers = consensus_receivers,
         .vote_sender = null,
@@ -1094,7 +1100,7 @@ pub const DependencyStubs = struct {
             .logger = logger,
             .identity = .{
                 .validator = .initRandom(prng),
-                .vote_account = .initRandom(prng),
+                .vote_account = null,
             },
             .signing = .{
                 .node = null,

@@ -126,6 +126,12 @@ pub fn unlock(self: *AccountLocks, accounts: []const LockableAccount) u64 {
     return already_unlocked;
 }
 
+/// Releases all locks.
+pub fn unlockAll(self: *AccountLocks) void {
+    self.write_locks.clearRetainingCapacity();
+    self.readonly_locks.clearRetainingCapacity();
+}
+
 const expectError = std.testing.expectError;
 const expectEqual = std.testing.expectEqual;
 

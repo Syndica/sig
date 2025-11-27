@@ -18,13 +18,14 @@ const Fork = struct { slot: Slot, maybe_err: T = null };
 /// This is internally locking and thread safe.
 /// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/runtime/src/status_cache.rs#L39
 pub const StatusCache = struct {
-    cache: RwMux(HashMap(Hash, HighestFork)),
+    state: RwMux(State),
 
-    roots: RwMux(HashMap(Slot, void)),
-    min_root: std.atomic.Value(Slot),
-
-    /// all keys seen during a fork/slot
-    slot_deltas: RwMux(HashMap(Slot, StatusKv)),
+    const State = struct {
+        cache: HashMap(Hash, HighestFork),
+        roots: HashMap(Slot, void),
+        /// all keys seen during a fork/slot
+        slot_deltas: HashMap(Slot, StatusKv),
+    };
 
     const CACHED_KEY_SIZE = 20;
     const Key = [CACHED_KEY_SIZE]u8;
@@ -39,41 +40,36 @@ pub const StatusCache = struct {
     const MAX_CACHE_ENTRIES = sig.accounts_db.snapshot.data.MAX_RECENT_BLOCKHASHES;
 
     pub const DEFAULT = StatusCache{
-        .cache = .init(.empty),
-        .roots = .init(.empty),
-        .slot_deltas = .init(.empty),
-        .min_root = .init(std.math.maxInt(Slot)),
+        .state = .init(.{
+            .cache = .empty,
+            .roots = .empty,
+            .slot_deltas = .empty,
+        }),
     };
 
     pub fn deinit(self: *StatusCache, allocator: std.mem.Allocator) void {
-        var roots = self.roots.tryWrite() orelse
-            @panic("attempted to deinit StatusCache.roots while still in use");
-        var cache = self.cache.tryWrite() orelse
-            @panic("attempted to deinit StatusCache.cache while still in use");
-        var slot_deltas = self.slot_deltas.tryWrite() orelse
-            @panic("attempted to deinit StatusCache.slot_deltas while still in use");
-        defer roots.unlock();
-        defer cache.unlock();
-        defer slot_deltas.unlock();
+        var state = self.state.tryWrite() orelse
+            @panic("attempted to deinit StatusCache while still in use");
+        defer state.unlock();
 
-        roots.mut().deinit(allocator);
+        state.mut().roots.deinit(allocator);
 
-        for (cache.mut().values()) |*highest_fork| {
+        for (state.mut().cache.values()) |*highest_fork| {
             const highest_fork_map: *KeyMap = &highest_fork.key_map;
             for (highest_fork_map.values()) |*fork_status| {
                 fork_status.deinit(allocator);
             }
             highest_fork_map.deinit(allocator);
         }
-        cache.mut().deinit(allocator);
+        state.mut().cache.deinit(allocator);
 
-        for (slot_deltas.mut().values()) |*status_kv| {
+        for (state.mut().slot_deltas.values()) |*status_kv| {
             for (status_kv.values()) |*value| {
                 value.status.deinit(allocator);
             }
             status_kv.deinit(allocator);
         }
-        slot_deltas.mut().deinit(allocator);
+        state.mut().slot_deltas.deinit(allocator);
     }
 
     pub fn getStatus(
@@ -82,10 +78,10 @@ pub const StatusCache = struct {
         blockhash: *const Hash,
         ancestors: *const Ancestors,
     ) ?Fork {
-        var cache = self.cache.read();
-        defer cache.unlock();
+        var state = self.state.read();
+        defer state.unlock();
 
-        const map = cache.get().get(blockhash.*) orelse return null;
+        const map = state.get().cache.get(blockhash.*) orelse return null;
 
         const max_key_index = key.len -| (CACHED_KEY_SIZE + 1);
         const index = @min(map.index, max_key_index);
@@ -93,10 +89,8 @@ pub const StatusCache = struct {
         const lookup_key: [CACHED_KEY_SIZE]u8 = key[index..][0..CACHED_KEY_SIZE].*;
 
         const stored_forks: ArrayList(Fork) = map.key_map.get(lookup_key) orelse return null;
-        var roots = self.roots.read();
-        defer roots.unlock();
         return for (stored_forks.items) |fork| {
-            if (ancestors.ancestors.contains(fork.slot) or roots.get().contains(fork.slot)) {
+            if (ancestors.ancestors.contains(fork.slot) or state.get().roots.contains(fork.slot)) {
                 break fork;
             }
         } else null;
@@ -112,11 +106,11 @@ pub const StatusCache = struct {
     ) error{OutOfMemory}!void {
         const max_key_index = key.len -| (CACHED_KEY_SIZE + 1);
 
-        var cache = self.cache.write();
-        defer cache.unlock();
+        var state = self.state.write();
+        defer state.unlock();
 
         // Get the cache entry for this blockhash.
-        const entry = try cache.mut().getOrPut(allocator, blockhash.*);
+        const entry = try state.mut().cache.getOrPut(allocator, blockhash.*);
         if (!entry.found_existing) {
             entry.key_ptr.* = blockhash.*;
             entry.value_ptr.* = .{
@@ -138,72 +132,8 @@ pub const StatusCache = struct {
         const forks = try hash_map.getOrPutValue(allocator, lookup_key, ForkStatus{});
         try forks.value_ptr.append(allocator, .{ .slot = slot });
 
-        try self.addToSlotDelta(allocator, blockhash, slot, key_index, &lookup_key);
-    }
-
-    pub fn addRoot(self: *StatusCache, allocator: std.mem.Allocator, fork: Slot) !void {
-        {
-            var roots = self.roots.write();
-            defer roots.unlock();
-            try roots.mut().put(allocator, fork, {});
-        }
-
-        _ = self.min_root.fetchMin(fork, .monotonic);
-
-        self.purgeRoots(allocator);
-    }
-
-    /// remove roots older than MAX_CACHE_ENTRIES
-    pub fn purgeRoots(self: *StatusCache, allocator: std.mem.Allocator) void {
-        const min_root = self.min_root.load(.monotonic);
-        if (min_root == std.math.maxInt(Slot)) return;
-
-        {
-            var roots = self.roots.write();
-            defer roots.unlock();
-
-            if (roots.get().count() <= MAX_CACHE_ENTRIES) return;
-            _ = roots.mut().orderedRemove(min_root);
-        }
-
-        var cache = self.cache.write();
-        defer cache.unlock();
-
-        var cache_entries = cache.mut().entries.slice();
-
-        var i: usize = 0;
-        while (i < cache.mut().count()) {
-            const key = cache_entries.items(.key)[i];
-            const highest_fork = cache_entries.items(.value)[i];
-
-            if (highest_fork.slot <= min_root) {
-                var purged_fork: HighestFork = (cache.mut().fetchOrderedRemove(key) orelse
-                    unreachable).value; // we just found this key!
-
-                for (purged_fork.key_map.values()) |*fork_status| fork_status.deinit(allocator);
-                purged_fork.key_map.deinit(allocator);
-
-                cache_entries = cache.mut().entries.slice();
-            } else {
-                i += 1;
-            }
-        }
-    }
-
-    // Add this key slice to the list of key slices for this slot and blockhash
-    // combo.
-    fn addToSlotDelta(
-        self: *StatusCache,
-        allocator: std.mem.Allocator,
-        blockhash: *const Hash,
-        slot: Slot,
-        key_index: usize,
-        key: *const [CACHED_KEY_SIZE]u8,
-    ) error{OutOfMemory}!void {
-        var slot_deltas = self.slot_deltas.write();
-        defer slot_deltas.unlock();
-
-        const fork_entry = try slot_deltas.mut().getOrPutValue(allocator, slot, .empty);
+        // Add this key slice to the list of key slices for this slot and blockhash combo.
+        const fork_entry = try state.mut().slot_deltas.getOrPutValue(allocator, slot, .empty);
         const fork_map: *StatusKv = fork_entry.value_ptr;
 
         const hash_entry = try fork_map.getOrPutValue(
@@ -212,7 +142,63 @@ pub const StatusCache = struct {
             .{ .status = .{}, .key_index = key_index },
         );
         const hash_entry_map: *StatusValues = &hash_entry.value_ptr.status;
-        try hash_entry_map.append(allocator, .{ .key = key.* });
+        try hash_entry_map.append(allocator, .{ .key = lookup_key });
+    }
+
+    pub fn addRoot(self: *StatusCache, allocator: std.mem.Allocator, fork: Slot) !void {
+        var state = self.state.write();
+        defer state.unlock();
+
+        const roots = &state.mut().roots;
+        try roots.put(allocator, fork, {});
+
+        // purgeRoot: when overflowing MAX_CACHE_ENTRIES, remove the smallest root slot from caches.
+        if (roots.count() <= MAX_CACHE_ENTRIES) return;
+
+        const min_root = blk: {
+            var slot: ?Slot = null;
+            for (roots.keys()) |rooted| slot = @min(rooted, slot orelse rooted);
+            break :blk slot orelse return;
+        };
+        std.debug.assert(roots.swapRemove(min_root));
+
+        {
+            const cache = &state.mut().cache;
+            var entries = cache.values();
+            var i: usize = 0;
+
+            while (i < cache.count()) {
+                if (entries[i].slot <= min_root) {
+                    var purged_fork_map = entries[i].key_map;
+                    for (purged_fork_map.values()) |*fork_status| fork_status.deinit(allocator);
+                    purged_fork_map.deinit(allocator);
+
+                    cache.swapRemoveAt(i);
+                    entries = cache.values();
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        {
+            const slot_deltas = &state.mut().slot_deltas;
+            var entries = slot_deltas.entries.slice();
+            var i: usize = 0;
+
+            while (i < slot_deltas.count()) {
+                if (entries.items(.key)[i] <= min_root) {
+                    var status_kv = entries.items(.value)[i];
+                    for (status_kv.values()) |*value| value.status.deinit(allocator);
+                    status_kv.deinit(allocator);
+
+                    slot_deltas.swapRemoveAt(i);
+                    entries = slot_deltas.entries.slice();
+                } else {
+                    i += 1;
+                }
+            }
+        }
     }
 };
 
