@@ -12,13 +12,13 @@ get-repo-at-commit() {
 
     if [[ ! -d "$dir" ]]; then
         echo "Cloning $repo_url at $commit"
-        git clone --revision=$commit --depth=1 $repo_url $dir
-    else
-        echo "Resetting $dir to $commit"
-        pushd $dir
-        git reset --hard $commit
-        popd
+        git clone $repo_url $dir
     fi
+
+    echo "Resetting $dir to $commit"
+    pushd $dir
+    git reset --hard $commit
+    popd
 }
 
 mkdir -p env
