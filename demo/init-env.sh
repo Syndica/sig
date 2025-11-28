@@ -40,7 +40,7 @@ get-repo-at-commit \
 
 pushd env/sig
 git apply ../../replay-sig.patch
-zig build -Doptimize=ReleaseSafe
+zig build -Doptimize=ReleaseSafe -Dno-run sig
 popd
 
 # Create identity keypair
