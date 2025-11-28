@@ -1,0 +1,191 @@
+diff --git a/src/cmd.zig b/src/cmd.zig
+index 0cd39ff7..4c23f0f7 100644
+--- a/src/cmd.zig
++++ b/src/cmd.zig
+@@ -146,6 +146,7 @@ pub fn main() !void {
+             params.geyser.apply(&current_config);
+             current_config.replay_threads = params.replay_threads;
+             current_config.disable_consensus = params.disable_consensus;
++            current_config.stop_at_slot = params.stop_at_slot;
+             try replayOffline(gpa, current_config);
+         },
+         .shred_network => |params| {
+@@ -379,6 +380,15 @@ const Cmd = struct {
+         .help = "Disable running consensus in replay.",
+     };
+ 
++    const stop_at_slot_arg: cli.ArgumentInfo(?Slot) = .{
++        .kind = .named,
++        .name_override = "stop-at-slot",
++        .alias = .none,
++        .default_value = null,
++        .config = {},
++        .help = "Stop processing at this slot.",
++    };
++
+     const voting_enabled_arg: cli.ArgumentInfo(bool) = .{
+         .kind = .named,
+         .name_override = "voting-enabled",
+@@ -725,6 +735,7 @@ const Cmd = struct {
+         geyser: GeyserArgumentsBase,
+         replay_threads: u16,
+         disable_consensus: bool,
++        stop_at_slot: ?sig.core.Slot = null,
+         voting_enabled: bool,
+ 
+         const cmd_info: cli.CommandInfo(@This()) = .{
+@@ -746,6 +757,7 @@ const Cmd = struct {
+                 .geyser = GeyserArgumentsBase.cmd_info,
+                 .replay_threads = replay_threads_arg,
+                 .disable_consensus = disable_consensus_arg,
++                .stop_at_slot = stop_at_slot_arg,
+                 .voting_enabled = voting_enabled_arg,
+             },
+         };
+@@ -1230,7 +1242,7 @@ fn validator(
+         );
+     defer if (consensus_deps) |d| d.deinit();
+ 
+-    var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
++    var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads, cfg.stop_at_slot);
+     defer replay_service.deinit(allocator);
+ 
+     const replay_thread = try app_base.spawnService(
+@@ -1406,7 +1418,7 @@ fn replayOffline(
+         );
+     defer if (consensus_deps) |d| d.deinit();
+ 
+-    var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads);
++    var replay_service = try replay.Service.init(&replay_deps, consensus_deps, cfg.replay_threads, cfg.stop_at_slot);
+     defer replay_service.deinit(allocator);
+ 
+     const replay_thread = try app_base.spawnService(
+diff --git a/src/config.zig b/src/config.zig
+index a88c145c..d783a2c0 100644
+--- a/src/config.zig
++++ b/src/config.zig
+@@ -26,6 +26,7 @@ pub const Cmd = struct {
+     shred_version: ?u16 = null,
+     replay_threads: u16 = 4,
+     disable_consensus: bool = false,
++    stop_at_slot: ?sig.core.Slot = null,
+     voting_enabled: bool = true,
+ 
+     pub fn genesisFilePath(self: Cmd) error{UnknownCluster}!?[]const u8 {
+diff --git a/src/replay/freeze.zig b/src/replay/freeze.zig
+index c2165479..80dbdd29 100644
+--- a/src/replay/freeze.zig
++++ b/src/replay/freeze.zig
+@@ -92,7 +92,7 @@ pub const FreezeParams = struct {
+ /// hash for the slot.
+ ///
+ /// Analogous to [Bank::freeze](https://github.com/anza-xyz/agave/blob/b948b97d2a08850f56146074c0be9727202ceeff/runtime/src/bank.rs#L2620)
+-pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
++pub fn freezeSlot(allocator: Allocator, params: FreezeParams, stop_at_slot: ?Slot) !void {
+     var zone = tracy.Zone.init(@src(), .{ .name = "freezeSlot" });
+     zone.value(params.finalize_state.slot);
+     defer zone.deinit();
+@@ -112,7 +112,11 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
+         "froze slot {} with hash {s}",
+         .{ params.hash_slot.slot, slot_hash.get().*.?.base58String().slice() },
+     );
++    try std.io.getStdOut().writer().print("slot={} hash={}\n", .{ params.hash_slot.slot, slot_hash.get().*.? });
+ 
++    if (stop_at_slot) |stop| if (params.hash_slot.slot >= stop) {
++        std.process.exit(0);
++    };
+     // NOTE: agave updates hard_forks and hash_overrides here
+ }
+ 
+@@ -442,6 +446,7 @@ test "freezeSlot: trivial e2e merkle hash test" {
+     try freezeSlot(
+         allocator,
+         .init(.FOR_TESTS, account_store, &epoch, &state, &constants, 0, .ZEROES),
++        null,
+     );
+ 
+     try std.testing.expectEqual(
+@@ -501,6 +506,7 @@ test "freezeSlot: trivial e2e lattice hash test" {
+         try freezeSlot(
+             allocator,
+             .init(.FOR_TESTS, account_store, &epoch, &state, &constants, 0, .ZEROES),
++            null,
+         );
+ 
+         try std.testing.expectEqual(
+diff --git a/src/replay/service.zig b/src/replay/service.zig
+index d0ecae1e..a32759b6 100644
+--- a/src/replay/service.zig
++++ b/src/replay/service.zig
+@@ -38,6 +38,7 @@ pub const Service = struct {
+     consensus: ?TowerConsensus,
+     num_threads: u32,
+     metrics: Metrics,
++    stop_at_slot: ?Slot,
+ 
+     const Metrics = struct {
+         slot_execution_time: *sig.prometheus.Histogram,
+@@ -55,6 +56,7 @@ pub const Service = struct {
+         deps: *Dependencies,
+         enable_consensus: ?TowerConsensus.Dependencies.External,
+         num_threads: u32,
++        stop_at_slot: ?Slot,
+     ) !Service {
+         var state = try ReplayState.init(deps, num_threads);
+         errdefer state.deinit();
+@@ -87,6 +89,7 @@ pub const Service = struct {
+             .consensus = consensus,
+             .num_threads = num_threads,
+             .metrics = try sig.prometheus.globalRegistry().initStruct(Metrics),
++            .stop_at_slot = stop_at_slot,
+         };
+     }
+ 
+@@ -126,7 +129,7 @@ pub const Service = struct {
+         defer allocator.free(slot_results);
+ 
+         // freeze slots
+-        const processed_a_slot = try freezeCompletedSlots(&self.replay, slot_results);
++        const processed_a_slot = try freezeCompletedSlots(&self.replay, slot_results, self.stop_at_slot);
+ 
+         // run consensus
+         if (self.consensus) |*consensus|
+@@ -553,7 +556,7 @@ pub fn getActiveFeatures(
+ }
+ 
+ /// freezes any slots that were completed according to these replay results
+-fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !bool {
++fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult, stop_at_slot: ?Slot) !bool {
+     const epoch_tracker, var epoch_tracker_lg = state.epoch_tracker.readWithLock();
+     defer epoch_tracker_lg.unlock();
+ 
+@@ -581,7 +584,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
+                         slot_info.constants,
+                         slot,
+                         last_entry_hash,
+-                    ));
++                    ), stop_at_slot);
+                     processed_a_slot = true;
+                 } else {
+                     state.logger.info().logf("partially replayed slot: {}", .{slot});
+@@ -1214,7 +1217,7 @@ pub const DependencyStubs = struct {
+             .run_vote_listener = run_vote_listener,
+         };
+ 
+-        return try Service.init(&deps, consensus_deps, 1);
++        return try Service.init(&deps, consensus_deps, 1, null);
+     }
+ 
+     // TODO: consider deduplicating with above and similar function in cmd.zig
+diff --git a/src/shred_network/shred_tracker.zig b/src/shred_network/shred_tracker.zig
+index cc78818f..533d032e 100644
+--- a/src/shred_network/shred_tracker.zig
++++ b/src/shred_network/shred_tracker.zig
+@@ -270,6 +270,7 @@ pub const BasicShredTracker = struct {
+ 
+     /// assumes lock is held
+     fn setBottom(self: *Self, slot: usize) void {
++        self.logger.info().logf("collected_slot={}", .{slot});
+         for (self.current_bottom_slot..slot) |slot_to_wipe| {
+             const monitored_slot = self.getMonitoredSlot(slot_to_wipe) catch unreachable;
+             monitored_slot.* = .{};

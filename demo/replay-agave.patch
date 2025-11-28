@@ -1,0 +1,24 @@
+diff --git a/runtime/src/bank.rs b/runtime/src/bank.rs
+index 157f949507..37004ff0ca 100644
+--- a/runtime/src/bank.rs
++++ b/runtime/src/bank.rs
+@@ -2513,6 +2513,7 @@ impl Bank {
+             self.update_accounts_lt_hash();
+             *hash = self.hash_internal_state();
+             self.rc.accounts.accounts_db.mark_slot_frozen(self.slot());
++            println!("slot={} hash={}", self.slot(), *hash);
+         }
+     }
+ 
+diff --git a/validator/src/commands/run/execute.rs b/validator/src/commands/run/execute.rs
+index bbf5e5d98e..5c99cf8ae5 100644
+--- a/validator/src/commands/run/execute.rs
++++ b/validator/src/commands/run/execute.rs
+@@ -121,7 +121,6 @@ pub fn execute(
+     let logfile = if logfile == "-" {
+         None
+     } else {
+-        println!("log file: {logfile}");
+         Some(logfile)
+     };
+     let use_progress_bar = logfile.is_none();
