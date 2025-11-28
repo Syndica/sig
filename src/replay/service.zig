@@ -1207,6 +1207,7 @@ pub const DependencyStubs = struct {
             .hard_forks = hard_forks,
 
             .replay_threads = num_threads,
+            .stop_at_slot = null,
         }, .enabled);
     }
 };
