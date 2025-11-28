@@ -261,10 +261,21 @@ pub fn replaySlotSync(
     for (params.transactions) |transaction| {
         var exit = Atomic(bool).init(false);
 
+        var accounts = std.BoundedArray(
+            sig.replay.AccountLocks.LockableAccount,
+            sig.core.Transaction.MAX_ACCOUNTS,
+        ){};
+        for (
+            transaction.accounts.items(.pubkey),
+            transaction.accounts.items(.is_writable),
+        ) |pubkey, is_writable| {
+            try accounts.append(.{ .address = pubkey, .writable = is_writable });
+        }
+
         if (!svm_gateway.params.feature_set.active(
             .relax_intrabatch_account_locks,
             svm_gateway.params.slot,
-        )) locks.lockStrict(allocator, batch.accounts) catch |e| switch (e) {
+        )) locks.lockStrict(allocator, accounts.constSlice()) catch |e| switch (e) {
             error.LockFailed => return .{ .invalid_transaction = .AccountInUse },
             error.OutOfMemory => return error.OutOfMemory,
         };
