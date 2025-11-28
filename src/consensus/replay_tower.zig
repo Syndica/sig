@@ -285,12 +285,68 @@ pub const ReplayTower = struct {
             block_id,
         );
 
-        self.logger.info().logf(
-            "recorded vote in tower for slot {d}, new root: {?d}",
-            .{ vote_slot, new_root },
-        );
+        const current_root = try self.tower.getRoot();
+        if (new_root) |nr| {
+            self.logger.info().logf(
+                "recorded vote in tower for slot {d}, new root: {d}",
+                .{ vote_slot, nr },
+            );
+        } else {
+            self.logger.info().logf(
+                "recorded vote in tower for slot {d}, root unchanged: {d}",
+                .{ vote_slot, current_root },
+            );
+        }
+
+        // Log tower state after recording vote
+        self.logTowerState();
 
         return new_root;
+    }
+
+    fn logTowerState(self: *const ReplayTower) void {
+        const votes = self.tower.votes.constSlice();
+
+        if (votes.len == 0) {
+            self.logger.info().log("Tower is empty");
+            return;
+        }
+
+        self.logger.info().logf("Tower Vote Stack ({} votes, root: {})", .{
+            votes.len,
+            self.tower.root orelse 0,
+        });
+
+        self
+            .logger
+            .info()
+            .log("┌──────────────┬────────────────┬──────────────────┬──────────────┐");
+        self
+            .logger
+            .info()
+            .log("│     Slot     │ Confirmations  │  Lockout Expires │  Lockout Len │");
+        self
+            .logger
+            .info()
+            .log("├──────────────┼────────────────┼──────────────────┼──────────────┤");
+
+        // Iterate from newest (top of stack) to oldest
+        for (0..votes.len) |idx| {
+            const i = votes.len - 1 - idx;
+            const lockout = votes[i];
+            const lockout_expiration = lockout.lastLockedOutSlot();
+            const lockout_length = lockout.lockout();
+
+            self.logger.info().logf(
+                "│  {d:10}  │      {d:2}        │    {d:10}    │ {d:10}   │",
+                .{ lockout.slot, lockout.confirmation_count, lockout_expiration, lockout_length },
+            );
+        }
+
+        self
+            .logger
+            .info()
+            .log("└──────────────┴────────────────┴──────────────────┴──────────────┘");
     }
 
     pub fn updateLastVoteFromVoteState(
