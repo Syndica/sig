@@ -1,3 +1,5 @@
+This folder contains instructions on how to execute demos for both the [Runtime](#runtime) and [Consensus](#consensus)
+
 # Runtime
 
 The runtime demo has two main components: conformance and replay.
