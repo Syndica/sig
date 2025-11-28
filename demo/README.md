@@ -66,6 +66,9 @@ diff agave-ledger/run-offline-slot-hashes.log sig-ledger/run-offline-slot-hashes
 To demo consensus, run the sig validator with a valid vote account. Copy the validator key to `~/.local/share/sig/identity.json` and the vote account key to `~/.local/share/sig/vote-account.json`.
 
 ```bash
+# Optionally automate creation of identity and vote account
+./setup-vote-account.sh
+
 # Build sig
 zig build -Doptimize=ReleaseSafe sig
 
