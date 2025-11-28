@@ -313,7 +313,10 @@ const TransactionScheduler = struct {
                     transaction.accounts.items(.is_writable),
                 ) |pubkey, writable| {
                     // Verify that there's no conflicting writer accounts within a batch of txns.
-                    {
+                    if (!self.svm_gateway.params.feature_set.active(
+                        .relax_intrabatch_account_locks,
+                        self.svm_gateway.params.slot,
+                    )) {
                         const gop = try batch_locks.getOrPut(allocator, pubkey);
                         if (gop.found_existing and (gop.value_ptr.* or writable)) {
                             // Within batch: existing writer, or existing reader when writing.

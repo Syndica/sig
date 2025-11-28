@@ -232,6 +232,7 @@ pub fn loadAndExecuteTransaction(
         .ok => |x| x,
         .err => |err| {
             var writes = ProcessedTransaction.Writes{};
+            errdefer while (writes.pop()) |item| item.account.deinit(allocator);
             var loaded_accounts_data_size: u32 = 0;
             while (rollbacks.pop()) |rollback| {
                 const item = writes.addOne() catch unreachable;
@@ -682,7 +683,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     );
     defer allocator.free(transfer_instruction_data);
 
-    var accounts = std.MultiArrayList(AccountMeta){};
+    var accounts: std.MultiArrayList(AccountMeta) = .{};
     defer accounts.deinit(allocator);
     try accounts.append(allocator, .{
         .pubkey = sender_key,
@@ -700,7 +701,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .is_writable = false,
     });
 
-    var transaction = RuntimeTransaction{
+    var transaction: RuntimeTransaction = .{
         .signature_count = 1,
         .fee_payer = sender_key,
         .msg_hash = Hash.initRandom(prng.random()),
@@ -807,7 +808,10 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .rent_collector = &rent_collector,
         .blockhash_queue = &blockhash_queue,
         .epoch_stakes = &epoch_stakes,
-        .vm_environment = &vm.Environment{},
+        .vm_environment = &.{
+            .loader = .ALL_DISABLED,
+            .config = .{},
+        },
         .next_vm_environment = null,
         .slot = 0,
         .max_age = 0,

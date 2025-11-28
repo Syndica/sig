@@ -7,7 +7,7 @@ const MemoryMap = sig.vm.memory.MemoryMap;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
 const TransactionContext = sig.runtime.TransactionContext;
 const Error = sig.vm.syscalls.Error;
-const Syscall = sig.vm.syscalls.Syscall;
+const Syscall = sig.vm.syscalls.SyscallFn;
 const SyscallError = sig.vm.SyscallError;
 const memory = sig.vm.memory;
 
@@ -84,7 +84,7 @@ pub fn poseidon(
         }
 
         // If the input isn't 32-bytes long, we pad the rest with zeroes.
-        var buffer: [32]u8 = .{0} ** 32;
+        var buffer: [32]u8 = @splat(0);
         switch (endianness) {
             .little => @memcpy(buffer[0..slice.len], slice),
             .big => @memcpy(buffer[32 - slice.len ..], slice),
@@ -185,11 +185,11 @@ test poseidon {
         .{},
         sig.ELF_DATA_DIR ++ "poseidon_test.so",
         &.{
-            .{ .name = "sol_poseidon", .builtin_fn = poseidon },
-            .{ .name = "log", .builtin_fn = sig.vm.syscalls.log },
-            .{ .name = "sol_panic_", .builtin_fn = sig.vm.syscalls.panic },
+            .sol_poseidon,
+            .sol_log_,
+            .sol_panic_,
         },
-        .{ 0, 48596 },
+        .{ 0, 48526 },
     );
 }
 

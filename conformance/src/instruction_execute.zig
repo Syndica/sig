@@ -100,8 +100,7 @@ fn executeInstruction(
     }
 
     // Override vm environment in the tc context
-    vm_environment.* = try sig.vm.Environment.initV1(
-        allocator,
+    vm_environment.* = sig.vm.Environment.initV1(
         tc.feature_set,
         &tc.compute_budget,
         tc.slot,

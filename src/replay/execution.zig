@@ -136,7 +136,7 @@ fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
 
     var results = try std.ArrayListUnmanaged(ReplayResult)
         .initCapacity(allocator, active_slots.len);
-    errdefer results.deinit(allocator);
+    defer results.deinit(allocator);
 
     for (active_slots) |slot| {
         state.logger.debug().logf("replaying slot: {}", .{slot});
@@ -254,9 +254,22 @@ pub fn replaySlotSync(
         return .{ .invalid_block = .InvalidEntryHash };
     }
 
+    var locks = sig.replay.AccountLocks{};
+    defer locks.deinit(allocator);
+
     var svm_gateway = params.svm_gateway;
     for (params.transactions) |transaction| {
         var exit = Atomic(bool).init(false);
+
+        if (!svm_gateway.params.feature_set.active(
+            .relax_intrabatch_account_locks,
+            svm_gateway.params.slot,
+        )) locks.lockStrict(allocator, batch.accounts) catch |e| switch (e) {
+            error.LockFailed => return .{ .invalid_transaction = .AccountInUse },
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        defer locks.unlockAll();
+
         switch (try replayBatch(
             allocator,
             &svm_gateway,
@@ -681,9 +694,6 @@ pub const LogHelper = struct {
 test "replaySlot - happy path: trivial case" {
     const allocator = std.testing.allocator;
 
-    var state = try TestState.init(allocator);
-    defer state.deinit(allocator);
-
     var tick_hash_count: u64 = 0;
 
     const params = VerifyTicksParams{
@@ -694,18 +704,15 @@ test "replaySlot - happy path: trivial case" {
         .slot_is_full = false,
         .tick_hash_count = &tick_hash_count,
     };
-    try testReplaySlot(allocator, null, &.{}, params);
+    try testReplaySlot(allocator, null, &.{}, params, .ALL_DISABLED);
 }
 
 test "replaySlot - happy path: partial slot" {
     const allocator = std.testing.allocator;
 
-    var state = try TestState.init(allocator);
-    defer state.deinit(allocator);
-
     var tick_hash_count: u64 = 0;
 
-    const poh, const entry_array = try sig.core.poh.testPoh(true);
+    const poh, const entry_array = try sig.core.poh.testPoh(true, false);
     defer for (entry_array.slice()) |e| e.deinit(allocator);
     const entries: []const sig.core.Entry = entry_array.slice();
 
@@ -717,18 +724,50 @@ test "replaySlot - happy path: partial slot" {
         .slot_is_full = false,
         .tick_hash_count = &tick_hash_count,
     };
-    try testReplaySlot(allocator, null, entries[0 .. entries.len - 1], params);
+    try testReplaySlot(allocator, null, entries[0 .. entries.len - 1], params, .ALL_DISABLED);
+}
+
+test "replaySlot - conflicting accounts should fail until relax_intrabatch_account_locks is set" {
+    const allocator = std.testing.allocator;
+
+    const poh, var entry_array = try sig.core.poh.testPoh(true, true);
+    defer for (entry_array.slice()) |e| e.deinit(allocator);
+    const entries: []sig.core.Entry = entry_array.slice();
+
+    var features = sig.core.FeatureSet.ALL_DISABLED;
+    features.setSlot(.relax_intrabatch_account_locks, 0);
+
+    for ([2]struct { sig.core.FeatureSet, ?ReplaySlotError }{
+        .{ .ALL_DISABLED, .{ .invalid_transaction = .AccountInUse } },
+        .{ features, null },
+    }) |test_case| {
+        const feature_set, const expected_error = test_case;
+        var tick_hash_count: u64 = 0;
+
+        const params = VerifyTicksParams{
+            .hashes_per_tick = poh.hashes_per_tick,
+            .slot = 0,
+            .max_tick_height = poh.tick_count,
+            .tick_height = 0,
+            .slot_is_full = false,
+            .tick_hash_count = &tick_hash_count,
+        };
+        try testReplaySlot(
+            allocator,
+            expected_error,
+            entries[0 .. entries.len - 1],
+            params,
+            feature_set,
+        );
+    }
 }
 
 test "replaySlot - happy path: full slot" {
     const allocator = std.testing.allocator;
 
-    var state = try TestState.init(allocator);
-    defer state.deinit(allocator);
-
     var tick_hash_count: u64 = 0;
 
-    const poh, const entry_array = try sig.core.poh.testPoh(true);
+    const poh, const entry_array = try sig.core.poh.testPoh(true, false);
     defer for (entry_array.slice()) |e| e.deinit(allocator);
     const entries: []const sig.core.Entry = entry_array.slice();
 
@@ -740,18 +779,15 @@ test "replaySlot - happy path: full slot" {
         .slot_is_full = true,
         .tick_hash_count = &tick_hash_count,
     };
-    try testReplaySlot(allocator, null, entries, params);
+    try testReplaySlot(allocator, null, entries, params, .ALL_DISABLED);
 }
 
 test "replaySlot - fail: full slot not marked full -> .InvalidLastTick" {
     const allocator = std.testing.allocator;
 
-    var state = try TestState.init(allocator);
-    defer state.deinit(allocator);
-
     var tick_hash_count: u64 = 0;
 
-    const poh, const entry_array = try sig.core.poh.testPoh(true);
+    const poh, const entry_array = try sig.core.poh.testPoh(true, false);
     defer for (entry_array.slice()) |e| e.deinit(allocator);
     const entries: []const sig.core.Entry = entry_array.slice();
 
@@ -768,18 +804,16 @@ test "replaySlot - fail: full slot not marked full -> .InvalidLastTick" {
         ReplaySlotError{ .invalid_block = .InvalidLastTick },
         entries,
         params,
+        .ALL_DISABLED,
     );
 }
 
 test "replaySlot - fail: no trailing tick at max height -> .TrailingEntry" {
     const allocator = std.testing.allocator;
 
-    var state = try TestState.init(allocator);
-    defer state.deinit(allocator);
-
     var tick_hash_count: u64 = 0;
 
-    const poh, const entry_array = try sig.core.poh.testPoh(true);
+    const poh, const entry_array = try sig.core.poh.testPoh(true, false);
     defer for (entry_array.slice()) |e| e.deinit(allocator);
     const entries: []const sig.core.Entry = entry_array.slice();
 
@@ -796,18 +830,16 @@ test "replaySlot - fail: no trailing tick at max height -> .TrailingEntry" {
         ReplaySlotError{ .invalid_block = .TrailingEntry },
         entries[0 .. entries.len - 1],
         params,
+        .ALL_DISABLED,
     );
 }
 
 test "replaySlot - fail: invalid poh chain" {
     const allocator = std.testing.allocator;
 
-    var state = try TestState.init(allocator);
-    defer state.deinit(allocator);
-
     var tick_hash_count: u64 = 0;
 
-    const poh, var entry_array = try sig.core.poh.testPoh(true);
+    const poh, var entry_array = try sig.core.poh.testPoh(true, false);
     defer for (entry_array.slice()) |e| e.deinit(allocator);
     const entries: []sig.core.Entry = entry_array.slice();
 
@@ -826,18 +858,16 @@ test "replaySlot - fail: invalid poh chain" {
         ReplaySlotError{ .invalid_block = .InvalidEntryHash },
         entries,
         params,
+        .ALL_DISABLED,
     );
 }
 
 test "replaySlot - fail: sigverify" {
     const allocator = std.testing.allocator;
 
-    var state = try TestState.init(allocator);
-    defer state.deinit(allocator);
-
     var tick_hash_count: u64 = 0;
 
-    const poh, var entry_array = try sig.core.poh.testPoh(false);
+    const poh, var entry_array = try sig.core.poh.testPoh(false, false);
     defer for (entry_array.slice()) |e| e.deinit(allocator);
     const entries: []sig.core.Entry = entry_array.slice();
 
@@ -854,6 +884,7 @@ test "replaySlot - fail: sigverify" {
         ReplaySlotError{ .invalid_transaction = .SignatureFailure },
         entries,
         params,
+        .ALL_DISABLED,
     );
 }
 
@@ -900,12 +931,14 @@ fn testReplaySlot(
     expected: ?ReplaySlotError,
     entries: []const Entry,
     verify_ticks_params: VerifyTicksParams,
+    feature_set: sig.core.FeatureSet,
 ) !void {
     const logger: Logger = if (expected == null) .FOR_TESTS else .noop;
 
     const sync_result = result: {
         var state = try TestState.init(allocator);
         defer state.deinit(allocator);
+        state.feature_set = feature_set;
 
         const entries_copy = try allocator.dupe(Entry, entries);
         errdefer allocator.free(entries_copy);
@@ -940,6 +973,7 @@ fn testReplaySlot(
     const async_result = result: {
         var state = try TestState.init(allocator);
         defer state.deinit(allocator);
+        state.feature_set = feature_set;
 
         const entries_copy = try allocator.dupe(Entry, entries);
         errdefer allocator.free(entries_copy);
