@@ -115,9 +115,18 @@ pub const TowerConsensus = struct {
 
     vote_collector: sig.consensus.VoteCollector,
 
+    metrics: Metrics,
+
     /// this is used for some temporary allocations that don't outlive
     /// functions; ie, it isn't used for any persistent data
     arena_state: std.heap.ArenaAllocator.State,
+
+    pub const Metrics = struct {
+        current_root: *sig.prometheus.Gauge(Slot),
+        last_vote: *sig.prometheus.Gauge(Slot),
+
+        pub const prefix = "consensus";
+    };
 
     pub fn deinit(self: TowerConsensus, allocator: Allocator) void {
         self.replay_tower.deinit(allocator);
@@ -181,6 +190,9 @@ pub const TowerConsensus = struct {
             try .init(deps.now, deps.slot_tracker.root, deps.registry);
         errdefer vote_collector.deinit(allocator);
 
+        const metrics = try deps.registry.initStruct(Metrics);
+        metrics.current_root.set(deps.slot_tracker.root);
+
         return .{
             .logger = deps.logger,
             .identity = deps.identity,
@@ -193,6 +205,8 @@ pub const TowerConsensus = struct {
             .slot_data = .empty,
 
             .vote_collector = vote_collector,
+
+            .metrics = metrics,
 
             .arena_state = .{},
         };
@@ -431,9 +445,13 @@ pub const TowerConsensus = struct {
             for (params.slot_tracker.slots.keys(), params.slot_tracker.slots.values()) |slot, info| {
                 const slot_ancestors = &info.constants.ancestors.ancestors;
                 const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
+                // Ensure every slot has a descendants entry (even if empty)
+                _ = try descendants.getOrPutValue(arena, slot, .empty);
                 try ancestor_gop.value_ptr.ancestors
                     .ensureUnusedCapacity(arena, slot_ancestors.count());
                 for (slot_ancestors.keys()) |ancestor_slot| {
+                    // Exclude the slot itself from ancestors.
+                    if (ancestor_slot == slot) continue;
                     try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
                     const descendants_gop =
                         try descendants.getOrPutValue(arena, ancestor_slot, .empty);
@@ -660,6 +678,7 @@ pub const TowerConsensus = struct {
                 gossip_table,
                 slot_leaders,
                 vote_sockets,
+                self.metrics,
             );
         }
 
@@ -928,7 +947,7 @@ fn handleVotableBank(
     allocator: std.mem.Allocator,
     ledger_result_writer: Ledger.ResultWriter,
     vote_slot: Slot,
-    vote_hash: Hash,
+    voted_hash: Hash,
     slot_tracker: *SlotTracker,
     epoch_tracker: *const EpochTracker,
     replay_tower: *ReplayTower,
@@ -943,11 +962,12 @@ fn handleVotableBank(
     gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
     maybe_sockets: ?*const VoteSockets,
+    metrics: TowerConsensus.Metrics,
 ) !void {
     const maybe_new_root = try replay_tower.recordBankVote(
         allocator,
         vote_slot,
-        vote_hash,
+        voted_hash,
     );
 
     if (maybe_new_root) |new_root| {
@@ -963,6 +983,8 @@ fn handleVotableBank(
             status_cache,
             new_root,
         );
+        metrics.current_root.set(new_root);
+        logger.info().logf("new root: {}", .{new_root});
     }
 
     // TODO update_commitment_cache
@@ -1001,6 +1023,7 @@ fn handleVotableBank(
                 logger,
                 allocator,
                 vote_slot,
+                voted_hash,
                 .{
                     .push_vote = .{
                         .last_tower_slot = last_tower_slot,
@@ -1013,6 +1036,7 @@ fn handleVotableBank(
                 sig.time.getWallclockMs(),
                 maybe_sockets,
             );
+            metrics.last_vote.set(vote_slot);
         },
         .non_voting => {
             replay_tower.markLastVoteTxBlockhashNonVoting();
@@ -1062,7 +1086,6 @@ fn upcomingLeaderTpuVoteSockets(
 }
 
 fn sendVoteTransaction(
-    logger: Logger,
     vote_tx: Transaction,
     tpu_address: SocketAddr,
     sockets: *const VoteSockets,
@@ -1075,16 +1098,15 @@ fn sendVoteTransaction(
         .V6 => sockets.ipv6,
     };
 
-    _ = socket.sendTo(tpu_address.toEndpoint(), serialized) catch |err| {
-        logger.err().logf("Failed to send vote transaction: {}", .{err});
-        return err;
-    };
+    _ = try socket.sendTo(tpu_address.toEndpoint(), serialized);
 }
 
 fn sendVoteToLeaders(
     logger: Logger,
     allocator: Allocator,
     vote_slot: Slot,
+    /// Only used for logging vote info
+    voted_hash: Hash,
     vote_tx: Transaction,
     slot_leaders: sig.core.leader_schedule.SlotLeaders,
     gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
@@ -1103,18 +1125,26 @@ fn sendVoteToLeaders(
     );
     defer allocator.free(upcoming_leader_sockets);
 
-    if (upcoming_leader_sockets.len > 0) {
-        for (upcoming_leader_sockets) |tpu_vote_socket| {
-            sendVoteTransaction(
-                logger,
-                vote_tx,
-                tpu_vote_socket,
-                sockets,
-            ) catch |err| {
-                logger.err().logf("Failed to send vote to leader: {}", .{err});
-            };
-        }
-    } else {
+    var sent_to_any: bool = false;
+    for (upcoming_leader_sockets) |tpu_vote_socket| {
+        sendVoteTransaction(
+            vote_tx,
+            tpu_vote_socket,
+            sockets,
+        ) catch |err| {
+            logger.err().logf(
+                "Failed to send vote (slot: {}, hash: {f}) to leader (error: {s}).",
+                .{ vote_slot, voted_hash, @errorName(err) },
+            );
+            continue;
+        };
+        sent_to_any = true;
+        logger.info().logf(
+            "Sent vote (slot: {}, hash: {f}) to leader ({f}).",
+            .{ vote_slot, voted_hash, tpu_vote_socket },
+        );
+    }
+    if (!sent_to_any) {
         // Fallback: send to our own TPU address if no leaders were found
         if (maybe_my_pubkey) |my_pubkey| {
             const gossip_table, var gossip_table_lg = gossip_table_rw.readWithLock();
@@ -1132,7 +1162,6 @@ fn sendVoteToLeaders(
             };
 
             sendVoteTransaction(
-                logger,
                 vote_tx,
                 self_tpu_addr,
                 sockets,
@@ -1263,6 +1292,8 @@ fn sendVote(
     logger: Logger,
     allocator: Allocator,
     vote_slot: Slot,
+    /// Only used for logging vote info
+    voted_hash: Hash,
     vote_op: VoteOp,
     maybe_gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     maybe_slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
@@ -1291,6 +1322,7 @@ fn sendVote(
                 logger,
                 allocator,
                 vote_slot,
+                voted_hash,
                 vote_tx,
                 slot_leaders,
                 gossip_table_rw,
@@ -1657,6 +1689,74 @@ fn resetFork(
     _ = last_reset_bank_descendants;
 }
 
+/// Logs the percentage of vote stake distribution across all candidate fork subtrees.
+fn logForkStakeDistribution(
+    logger: Logger,
+    fork_choice: *const ForkChoice,
+    fork_stats: *const sig.consensus.progress_map.ForkStats,
+) void {
+    var total_stake: u64 = 0;
+    var candidate_count: usize = 0;
+
+    {
+        var count_iter = fork_choice.fork_infos.valueIterator();
+        while (count_iter.next()) |fork_info| {
+            total_stake += fork_info.stake_for_slot;
+            if (fork_info.isCandidate()) {
+                candidate_count += 1;
+            }
+        }
+    }
+
+    if (total_stake == 0) {
+        logger.info().log("Fork stake distribution: no stake found");
+        return;
+    }
+
+    var buffer: [4096]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer);
+    const allocator = fba.allocator();
+
+    var output = std.ArrayList(u8).init(allocator);
+    defer output.deinit();
+
+    output.writer().print(
+        "\n=== Fork Stake Distribution (by subtree) ===\nRoot: slot={} | {} candidate forks\n",
+        .{ fork_choice.tree_root.slot, candidate_count },
+    ) catch return;
+
+    var iter = fork_choice.fork_infos.iterator();
+    while (iter.next()) |entry| {
+        const slot_hash = entry.key_ptr.*;
+        const fork_info = entry.value_ptr;
+
+        // Only show leaf nodes (active forks), not intermediate nodes
+        if (!fork_info.isCandidate() or fork_info.children.count() != 0) {
+            continue;
+        }
+
+        const is_heaviest = fork_choice.heaviestOverallSlot().equals(slot_hash);
+        // Calculate total stake along the fork path from root to this leaf
+        // const total_fork_stake = fork_choice.calculateForkPathStake(slot_hash);
+        // const fork_percentage =
+        //     @as(f64, @floatFromInt(total_fork_stake)) * 100.0 /
+        //     @as(f64, @floatFromInt(total_stake));
+
+        const fork_percentage = fork_stats.forkWeight() * 100.0;
+
+        const marker = if (is_heaviest) " [HEAVIEST]" else "";
+
+        output.writer().print(
+            "  Slot {}: {d:.2}%{s}\n",
+            .{ slot_hash.slot, fork_percentage, marker },
+        ) catch return;
+    }
+
+    output.writer().writeAll("============================================") catch return;
+
+    logger.info().logf("{s}", .{output.items});
+}
+
 /// Compute consensus inputs for frozen slots that haven't been processed yet (where fork_stats.computed = false).
 /// The computed consensus inputs are needed for voting decisions and fork selection.
 ///
@@ -1689,8 +1789,9 @@ fn computeConsensusInputs(
 
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
-    // TODO agave sorts this by the slot first. Is this needed for the implementation to be correct?
-    // If not, then we can avoid sorting here which may be verbose given frozen_slots is a map.
+
+    frozen_slots.sort(replay.service.FrozenSlotsSortCtx{ .slots = frozen_slots.keys() });
+
     for (frozen_slots.keys()) |slot| {
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
         if (!fork_stat.computed) {
@@ -1722,6 +1823,7 @@ fn computeConsensusInputs(
                 epoch_schedule,
                 latest_validator_votes,
             );
+
             const fork_stats = progress.getForkStats(slot) orelse return error.MissingForkStats;
             fork_stats.fork_stake = cluster_vote_state.fork_stake;
             fork_stats.total_stake = cluster_vote_state.total_stake;
@@ -1739,6 +1841,9 @@ fn computeConsensusInputs(
             fork_stats.my_latest_landed_vote = cluster_vote_state.my_latest_landed_vote;
             fork_stats.computed = true;
             try new_stats.append(allocator, slot);
+
+            // Log vote stake distribution across all candidate forks
+            logForkStakeDistribution(logger, fork_choice, fork_stats);
         }
         try cacheVotingSafetyChecks(
             allocator,
@@ -1966,9 +2071,9 @@ test "cacheTowerStats - success sets flags and empty thresholds" {
 
     const stats = fixture.progress.getForkStats(root.slot).?;
     try testing.expectEqual(0, stats.vote_threshold.items.len);
-    try testing.expectEqual(false, stats.is_locked_out);
+    try testing.expectEqual(true, stats.is_locked_out);
     try testing.expectEqual(false, stats.has_voted);
-    try testing.expectEqual(true, stats.is_recent);
+    try testing.expectEqual(false, stats.is_recent);
 }
 
 test "cacheTowerStats - records failed threshold at depth 0" {
@@ -2006,9 +2111,9 @@ test "cacheTowerStats - records failed threshold at depth 0" {
     const t = stats.vote_threshold.items[0];
     try testing.expect(t == .failed_threshold);
     try testing.expectEqual(0, t.failed_threshold.vote_depth);
-    try testing.expectEqual(false, stats.is_locked_out);
+    try testing.expectEqual(true, stats.is_locked_out);
     try testing.expectEqual(false, stats.has_voted);
-    try testing.expectEqual(true, stats.is_recent);
+    try testing.expectEqual(false, stats.is_recent);
 }
 
 test "maybeRefreshLastVote - no heaviest slot on same fork" {
@@ -3716,6 +3821,7 @@ test "sendVote - without gossip table does not send and does not throw" {
         .noop,
         allocator,
         0,
+        .ZEROES,
         vote_op,
         null,
         leader_schedule_cache.slotLeaders(),
@@ -3756,6 +3862,7 @@ test "sendVote - without keypair does not send and does not throw" {
         .noop,
         allocator,
         0,
+        .ZEROES,
         vote_op,
         &gossip_table_rw,
         leader_schedule_cache.slotLeaders(),
@@ -3783,6 +3890,7 @@ test "sendVote - without leader schedule does not send and does not throw" {
         .noop,
         allocator,
         0,
+        .ZEROES,
         vote_op,
         &gossip_table_rw,
         null,
@@ -3871,6 +3979,7 @@ test "sendVote - sends to both gossip and upcoming leaders" {
         .noop,
         allocator,
         vote_slot,
+        .ZEROES,
         vote_op,
         &gossip_table_rw,
         leader_schedule_cache.slotLeaders(),
@@ -3976,6 +4085,7 @@ test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
         .noop,
         allocator,
         vote_slot,
+        .ZEROES,
         vote_op,
         &gossip_table_rw,
         leader_schedule_cache.slotLeaders(),
@@ -4087,6 +4197,7 @@ test "sendVote - falls back to self TPU when no leader sockets found" {
         .noop,
         allocator,
         vote_slot,
+        .ZEROES,
         vote_op,
         &gossip_table_rw,
         leader_schedule_cache.slotLeaders(),
@@ -4186,6 +4297,7 @@ test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
         .noop,
         allocator,
         vote_slot,
+        .ZEROES,
         vote_op,
         &gossip_table_rw,
         leader_schedule_cache.slotLeaders(),
@@ -4275,6 +4387,7 @@ test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
         .noop,
         allocator,
         vote_slot,
+        .ZEROES,
         vote_op,
         &gossip_table_rw,
         leader_schedule_cache.slotLeaders(),
@@ -4416,6 +4529,7 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
         .noop,
         allocator,
         vote_slot,
+        Hash.ZEROES,
         vote_tx,
         leader_schedule_cache.slotLeaders(),
         &gossip_table_rw,
@@ -4494,6 +4608,7 @@ test "sendVoteToLeaders - continues when sendVoteTransaction fails" {
         .noop,
         allocator,
         vote_slot,
+        Hash.ZEROES,
         vote_tx,
         leader_schedule_cache.slotLeaders(),
         &gossip_table_rw,
@@ -4544,6 +4659,7 @@ test "sendVoteToLeaders - fallback handles missing self TPU data" {
         .noop,
         allocator,
         vote_slot,
+        Hash.ZEROES,
         vote_tx,
         slot_leaders,
         &gossip_table_rw,
@@ -4578,6 +4694,7 @@ test "sendVoteToLeaders - fallback handles missing self TPU data" {
         .noop,
         allocator,
         vote_slot,
+        Hash.ZEROES,
         vote_tx,
         slot_leaders,
         &gossip_table_rw,
@@ -4596,6 +4713,7 @@ test "sendVoteToLeaders - fallback handles missing self TPU data" {
         .noop,
         allocator,
         vote_slot,
+        Hash.ZEROES,
         vote_tx,
         slot_leaders,
         &gossip_table_rw,
