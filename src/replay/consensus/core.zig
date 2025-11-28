@@ -431,9 +431,13 @@ pub const TowerConsensus = struct {
             for (params.slot_tracker.slots.keys(), params.slot_tracker.slots.values()) |slot, info| {
                 const slot_ancestors = &info.constants.ancestors.ancestors;
                 const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
+                // Ensure every slot has a descendants entry (even if empty)
+                _ = try descendants.getOrPutValue(arena, slot, .empty);
                 try ancestor_gop.value_ptr.ancestors
                     .ensureUnusedCapacity(arena, slot_ancestors.count());
                 for (slot_ancestors.keys()) |ancestor_slot| {
+                    // Exclude the slot itself from ancestors.
+                    if (ancestor_slot == slot) continue;
                     try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
                     const descendants_gop =
                         try descendants.getOrPutValue(arena, ancestor_slot, .empty);
@@ -1689,8 +1693,9 @@ fn computeConsensusInputs(
 
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
-    // TODO agave sorts this by the slot first. Is this needed for the implementation to be correct?
-    // If not, then we can avoid sorting here which may be verbose given frozen_slots is a map.
+
+    frozen_slots.sort(replay.service.FrozenSlotsSortCtx{ .slots = frozen_slots.keys() });
+
     for (frozen_slots.keys()) |slot| {
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
         if (!fork_stat.computed) {
@@ -1966,9 +1971,9 @@ test "cacheTowerStats - success sets flags and empty thresholds" {
 
     const stats = fixture.progress.getForkStats(root.slot).?;
     try testing.expectEqual(0, stats.vote_threshold.items.len);
-    try testing.expectEqual(false, stats.is_locked_out);
+    try testing.expectEqual(true, stats.is_locked_out);
     try testing.expectEqual(false, stats.has_voted);
-    try testing.expectEqual(true, stats.is_recent);
+    try testing.expectEqual(false, stats.is_recent);
 }
 
 test "cacheTowerStats - records failed threshold at depth 0" {
@@ -2006,9 +2011,9 @@ test "cacheTowerStats - records failed threshold at depth 0" {
     const t = stats.vote_threshold.items[0];
     try testing.expect(t == .failed_threshold);
     try testing.expectEqual(0, t.failed_threshold.vote_depth);
-    try testing.expectEqual(false, stats.is_locked_out);
+    try testing.expectEqual(true, stats.is_locked_out);
     try testing.expectEqual(false, stats.has_voted);
-    try testing.expectEqual(true, stats.is_recent);
+    try testing.expectEqual(false, stats.is_recent);
 }
 
 test "maybeRefreshLastVote - no heaviest slot on same fork" {
