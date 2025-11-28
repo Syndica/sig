@@ -63,7 +63,7 @@ diff agave-ledger/run-offline-slot-hashes.log sig-ledger/run-offline-slot-hashes
 
 # Consensus
 
-To demo consensus, run the sig validator.
+To demo consensus, run the sig validator with a valid vote account. Copy the validator key to `~/.local/share/sig/identity.json` and the vote account key to `~/.local/share/sig/vote-account.json`.
 
 ```bash
 # Build sig
