@@ -470,7 +470,7 @@ test resolveBatch {
         .{
             .slot = 1, // Greater than lookup tables' last_extended_slot
             .slot_hashes = slot_hashes,
-            .reserved_accounts = &.empty,
+            .reserved_accounts = &.EMPTY,
             .account_reader = map.accountReader().forSlot(&ancestors),
         },
     );

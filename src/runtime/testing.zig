@@ -269,7 +269,7 @@ pub fn createEpochStakes(
 
     for (params) |param| {
         self.total_stake += param.stake;
-        try self.stakes.stake_delegations.put(allocator, param.pubkey, .{
+        try self.stakes.stake_accounts.put(allocator, param.pubkey, .{
             .voter_pubkey = param.pubkey,
             .stake = param.stake,
             .activation_epoch = 0,
