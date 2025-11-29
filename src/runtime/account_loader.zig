@@ -223,6 +223,7 @@ fn loadTransactionAccountsSimd186(
                 if (additional_loaded_accounts.contains(programdata_address)) break :cont;
                 // ...and the programdata account exists (if it doesn't, it is *not* a load failure)...
                 if (try wrapDB(map.get(allocator, programdata_address))) |programdata_account| {
+                    defer programdata_account.deinit(allocator);
                     // ...count programdata toward this transaction's total size.
                     try loaded.increase(
                         TRANSACTION_ACCOUNT_BASE_SIZE +| programdata_account.data.len(),
