@@ -20,6 +20,7 @@ cd env/sig
     --skip-snapshot-validation \
     --max-shreds 100100100100 \
     --stop-at-slot $stop_at_slot \
+    --disable-consensus \
     2> validator/run-offline.log \
     | egrep --line-buffered "^(slot=)" \
     | tee validator/run-offline-slot-hashes.log
