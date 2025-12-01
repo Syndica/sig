@@ -143,7 +143,7 @@ fn accountsHash(self: *Rooted) !sig.core.LtHash {
         switch (step_result) {
             ROW => {},
             DONE => break,
-            else => try err(self, step_result),
+            else => err(self, step_result),
         }
 
         const pubkey = blk: {
@@ -198,7 +198,7 @@ fn insertFromSnapshot(
     const accounts_entries = try getEntries(allocator, accounts_dir);
     defer allocator.free(accounts_entries);
 
-    try self.err(sql.sqlite3_exec(self.handle, "BEGIN TRANSACTION;", null, null, null));
+    self.err(sql.sqlite3_exec(self.handle, "BEGIN TRANSACTION;", null, null, null));
 
     var bp = try sig.accounts_db.buffer_pool.BufferPool.init(allocator, 20480 + 2);
     defer bp.deinit(allocator);
@@ -282,7 +282,7 @@ fn insertFromSnapshot(
         defer commit_zone.deinit();
 
         std.debug.print("committing\n", .{});
-        try self.err(sql.sqlite3_exec(self.handle, "COMMIT;", null, null, null));
+        self.err(sql.sqlite3_exec(self.handle, "COMMIT;", null, null, null));
     }
 }
 
@@ -292,19 +292,19 @@ fn getInner(self: *Rooted, allocator: std.mem.Allocator, address: Pubkey) !?Acco
             \\SELECT lamports, data, owner, executable, rent_epoch 
             \\FROM entries WHERE address = ?;
         ;
-        try self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_stmt, null));
+        self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_stmt, null));
         break :blk get_stmt.?;
     };
     defer std.debug.assert(sql.sqlite3_reset(stmt) == OK);
 
-    try self.err(sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC));
+    self.err(sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC));
 
     const rc = sql.sqlite3_step(stmt);
 
     switch (rc) {
         ROW => {}, // ok
         DONE => return null, // not found
-        else => try self.err(rc),
+        else => self.err(rc),
     }
 
     const data = blk: {
@@ -335,15 +335,12 @@ fn getInner(self: *Rooted, allocator: std.mem.Allocator, address: Pubkey) !?Acco
 /// by the provided allocator.
 ///
 /// TODO: we really don't want to be doing these clones, so some other solution would be good.
-pub fn get(self: *Rooted, allocator: std.mem.Allocator, address: Pubkey) !?AccountSharedData {
-    return self.getInner(allocator, address) catch |e| switch (e) {
-        // Something must have gone terrible wrong for sqlite to fail, we cannot recover from this.
-        error.SqliteError => std.debug.panic(
-            "sqlite err: '{s}'",
-            .{sql.sqlite3_errmsg(self.handle)},
-        ),
-        else => |other_err| return other_err,
-    };
+pub fn get(
+    self: *Rooted,
+    allocator: std.mem.Allocator,
+    address: Pubkey,
+) error{OutOfMemory}!?AccountSharedData {
+    return try self.getInner(allocator, address);
 }
 
 pub fn getLargestRootedSlot(self: *const Rooted) ?Slot {
@@ -351,18 +348,17 @@ pub fn getLargestRootedSlot(self: *const Rooted) ?Slot {
     return self.largest_rooted_slot;
 }
 
-pub fn err(self: *Rooted, code: c_int) !void {
+fn err(self: *Rooted, code: c_int) void {
     if (code == OK) return;
-    std.debug.print("err ({}): {s}\n", .{ code, sql.sqlite3_errmsg(self.handle) });
-    return error.SqliteError;
+    std.debug.panic("internal accountsdb sqlite error ({}): {s}\n", .{ code, sql.sqlite3_errmsg(self.handle) });
 }
 
 pub fn beginTransation(self: *Rooted) !void {
-    try self.err(sql.sqlite3_exec(self.handle, "BEGIN TRANSACTION;", null, null, null));
+    self.err(sql.sqlite3_exec(self.handle, "BEGIN TRANSACTION;", null, null, null));
 }
 
 pub fn commitTransation(self: *Rooted) !void {
-    try self.err(sql.sqlite3_exec(self.handle, "COMMIT;", null, null, null));
+    self.err(sql.sqlite3_exec(self.handle, "COMMIT;", null, null, null));
 }
 
 /// Should not be called outside of snapshot loading or slot rooting.
@@ -374,31 +370,31 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
             \\(address, lamports, data, owner, executable, rent_epoch, last_modified_slot)
             \\VALUES (?, ?, ?, ?, ?, ?, ?);
         ;
-        try self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &put_stmt, null));
+        self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &put_stmt, null));
         break :blk put_stmt.?;
     };
     defer std.debug.assert(sql.sqlite3_reset(stmt) == OK);
 
-    try self.err(sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC));
-    try self.err(sql.sqlite3_bind_int64(stmt, 2, @bitCast(account.lamports)));
-    try self.err(sql.sqlite3_bind_blob(
+    self.err(sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC));
+    self.err(sql.sqlite3_bind_int64(stmt, 2, @bitCast(account.lamports)));
+    self.err(sql.sqlite3_bind_blob(
         stmt,
         3,
         account.data.ptr,
         @intCast(account.data.len),
         sql.SQLITE_STATIC,
     ));
-    try self.err(sql.sqlite3_bind_blob(
+    self.err(sql.sqlite3_bind_blob(
         stmt,
         4,
         &account.owner.data,
         Pubkey.SIZE,
         sql.SQLITE_STATIC,
     ));
-    try self.err(sql.sqlite3_bind_int(stmt, 5, @intFromBool(account.executable)));
-    try self.err(sql.sqlite3_bind_int64(stmt, 6, @bitCast(account.rent_epoch)));
+    self.err(sql.sqlite3_bind_int(stmt, 5, @intFromBool(account.executable)));
+    self.err(sql.sqlite3_bind_int64(stmt, 6, @bitCast(account.rent_epoch)));
 
-    try self.err(sql.sqlite3_bind_int64(stmt, 7, @bitCast(slot)));
+    self.err(sql.sqlite3_bind_int64(stmt, 7, @bitCast(slot)));
 
     if (sql.sqlite3_step(stmt) != DONE)
         return error.PutFailed;
