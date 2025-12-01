@@ -8,6 +8,7 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.Random;
 
 const Channel = sig.sync.Channel;
+const GossipService = sig.gossip.GossipService;
 const GossipTable = sig.gossip.GossipTable;
 const Logger = sig.trace.Logger("shred_network.service");
 const Packet = sig.net.Packet;
@@ -24,7 +25,6 @@ const RepairPeerProvider = shred_network.repair_service.RepairPeerProvider;
 const RepairRequester = shred_network.repair_service.RepairRequester;
 const RepairService = shred_network.repair_service.RepairService;
 const ShredReceiver = shred_network.shred_receiver.ShredReceiver;
-const GossipContext = shred_network.duplicate_shred_handler.GossipContext;
 
 /// Settings which instruct the Shred Network how to behave.
 pub const ShredNetworkConfig = struct {
@@ -60,8 +60,8 @@ pub const ShredNetworkDependencies = struct {
     rpc_hooks: ?*sig.rpc.Hooks = null,
     /// Optional channel to send duplicate slot notifications to consensus
     duplicate_slots_sender: ?*Channel(Slot),
-    /// Optional gossip context for broadcasting duplicate shred proofs
-    gossip_context: ?*const GossipContext,
+    /// Optional push message queue mux for broadcasting duplicate shred proofs
+    push_msg_queue_mux: ?*GossipService.PushMessageQueue,
 };
 
 /// Start the Shred Network.
@@ -112,7 +112,7 @@ pub fn start(
         .ledger_reader = deps.ledger.reader(),
         .result_writer = deps.ledger.resultWriter(),
         .duplicate_slots_sender = deps.duplicate_slots_sender,
-        .gossip_context = deps.gossip_context,
+        .push_msg_queue_mux = deps.push_msg_queue_mux,
         .keypair = deps.my_keypair,
         .logger = .from(deps.logger),
     };
@@ -287,7 +287,7 @@ test "start and stop gracefully" {
         .overwrite_turbine_stake_for_testing = true,
         .epoch_tracker = &epoch_tracker,
         .duplicate_slots_sender = null,
-        .gossip_context = null,
+        .push_msg_queue_mux = null,
     };
 
     var timer = sig.time.Timer.start();
