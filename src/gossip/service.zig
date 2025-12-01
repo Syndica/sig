@@ -170,14 +170,16 @@ pub const GossipService = struct {
     entrypoints: ArrayList(Entrypoint),
     /// manages ping/pong heartbeats for the network
     ping_cache_rw: RwMux(PingCache),
+    /// Only used to generate tokens for the `PingCache`; should only be accessed
+    /// on the same thread as `ping_cache_rw` is locked.
+    ping_token_prng: std.Random.Xoshiro256,
+
     thread_pool: ThreadPool,
     // TODO: fix when http server is working
     // echo_server: EchoServer,
     logger: Logger,
     metrics: GossipMetrics,
     service_manager: ServiceManager,
-
-    const Self = @This();
 
     pub const PushMessageQueue = Mux(struct {
         queue: ArrayList(GossipData),
@@ -195,9 +197,9 @@ pub const GossipService = struct {
         my_keypair: KeyPair,
         maybe_entrypoints: ?[]const SocketAddr,
         logger: Logger,
-    ) !*Self {
-        const self = try allocator.create(Self);
-        self.* = try Self.init(
+    ) !*GossipService {
+        const self = try allocator.create(GossipService);
+        self.* = try GossipService.init(
             allocator,
             gossip_data_allocator,
             my_contact_info,
@@ -219,7 +221,7 @@ pub const GossipService = struct {
         my_keypair: KeyPair,
         maybe_entrypoints: ?[]const SocketAddr,
         logger: Logger,
-    ) !Self {
+    ) !GossipService {
         // setup channels for communication between threads
         var packet_incoming_channel = try Channel(Packet).create(allocator);
         errdefer packet_incoming_channel.destroy();
@@ -314,6 +316,7 @@ pub const GossipService = struct {
             .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
             .entrypoints = entrypoints,
             .ping_cache_rw = RwMux(PingCache).init(ping_cache),
+            .ping_token_prng = .init(GOSSIP_PRNG_SEED),
             .logger = .from(logger),
             .thread_pool = thread_pool,
             .metrics = metrics,
@@ -325,7 +328,7 @@ pub const GossipService = struct {
 
     /// Starts the shutdown chain for all services. Does *not* block until
     /// the service manager is joined.
-    pub fn shutdown(self: *Self) void {
+    pub fn shutdown(self: *GossipService) void {
         std.debug.assert(!self.closed);
         defer self.closed = true;
 
@@ -335,7 +338,7 @@ pub const GossipService = struct {
         self.service_manager.exit.store(true, .release);
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *GossipService) void {
         std.debug.assert(self.closed); // call `self.shutdown()` first
 
         // wait for all threads to shutdown correctly
@@ -386,7 +389,7 @@ pub const GossipService = struct {
     };
 
     /// starts gossip and blocks until it exits (which can be signaled by calling `shutdown`)
-    pub fn run(self: *Self, params: RunThreadsParams) !void {
+    pub fn run(self: *GossipService, params: RunThreadsParams) !void {
         try self.start(params);
         self.service_manager.join();
     }
@@ -399,7 +402,7 @@ pub const GossipService = struct {
     ///     4) build message loop (to send outgoing message) (if a spy node, not active)
     ///     5) a socket responder (to send outgoing packets)
     pub fn start(
-        self: *Self,
+        self: *GossipService,
         params: RunThreadsParams,
     ) !void {
         // NOTE: this is stack copied on each spawn() call below so we can modify it without
@@ -510,7 +513,7 @@ pub const GossipService = struct {
     /// main logic for deserializing Packets into GossipMessage messages
     /// and verifing they have valid values, and have valid signatures.
     /// Verified GossipMessagemessages are then sent to the verified_channel.
-    fn verifyPackets(self: *Self, exit_condition: ExitCondition) !void {
+    fn verifyPackets(self: *GossipService, exit_condition: ExitCondition) !void {
         const zone = tracy.Zone.init(@src(), .{ .name = "gossip verifyPackets" });
         defer zone.deinit();
 
@@ -575,7 +578,7 @@ pub const GossipService = struct {
     };
 
     /// main logic for recieving and processing gossip messages.
-    pub fn processMessages(self: *Self, seed: u64, exit_condition: ExitCondition) !void {
+    pub fn processMessages(self: *GossipService, seed: u64, exit_condition: ExitCondition) !void {
         const zone = tracy.Zone.init(@src(), .{ .name = "gossip processMessages" });
         defer zone.deinit();
 
@@ -863,7 +866,7 @@ pub const GossipService = struct {
     /// then acquires a write lock to perform the trim.
     /// NOTE: in practice, trim is rare because the number of global validators is much <10k (the global constant
     /// used is UNIQUE_PUBKEY_CAPACITY)
-    pub fn attemptGossipTableTrim(self: *Self) !void {
+    pub fn attemptGossipTableTrim(self: *GossipService) !void {
         // first check with a read lock
         const should_trim = blk: {
             const gossip_table, var gossip_table_lock = self.gossip_table_rw.readWithLock();
@@ -896,7 +899,7 @@ pub const GossipService = struct {
     /// main gossip loop for periodically sending new GossipMessagemessages.
     /// this includes sending push messages, pull requests, and triming old
     /// gossip data (in the gossip_table, active_set, and failed_pull_hashes).
-    fn buildMessages(self: *Self, seed: u64, exit_condition: ExitCondition) !void {
+    fn buildMessages(self: *GossipService, seed: u64, exit_condition: ExitCondition) !void {
         const zone = tracy.Zone.init(@src(), .{ .name = "gossip buildMessages" });
         defer zone.deinit();
 
@@ -1009,7 +1012,7 @@ pub const GossipService = struct {
     }
 
     // collect gossip table metrics and pushes them to stats
-    pub fn collectGossipTableMetrics(self: *Self) !void {
+    pub fn collectGossipTableMetrics(self: *GossipService) !void {
         var gossip_table_lock = self.gossip_table_rw.read();
         defer gossip_table_lock.unlock();
 
@@ -1029,31 +1032,32 @@ pub const GossipService = struct {
         self.metrics.verified_channel_length.set(self.verified_incoming_channel.len());
     }
 
-    pub fn rotateActiveSet(self: *Self, random: std.Random) !void {
+    pub fn rotateActiveSet(self: *GossipService, random: std.Random) !void {
         const now = getWallclockMs();
         var buf: [NUM_ACTIVE_SET_ENTRIES]ThreadSafeContactInfo = undefined;
         const gossip_peers = try self.getThreadSafeGossipNodes(&buf, NUM_ACTIVE_SET_ENTRIES, now);
 
         // filter out peers who have responded to pings
-        const ping_cache_result = blk: {
+        var valid_gossip_indexs, var pings_to_send_out = blk: {
             var ping_cache_lock = self.ping_cache_rw.write();
             defer ping_cache_lock.unlock();
-            var ping_cache: *PingCache = ping_cache_lock.mut();
+            const ping_cache: *PingCache = ping_cache_lock.mut();
 
-            const result = try ping_cache.filterValidPeers(self.allocator, self.my_keypair, gossip_peers);
-            break :blk result;
+            const result = try ping_cache.filterValidPeers(self.allocator, random, self.my_keypair, gossip_peers);
+            break :blk .{ result.valid_peers, result.pings };
         };
-        var valid_gossip_indexs = ping_cache_result.valid_peers;
-        defer valid_gossip_indexs.deinit();
+        defer valid_gossip_indexs.deinit(self.allocator);
+        defer pings_to_send_out.deinit(self.allocator);
 
         var valid_gossip_peers: [NUM_ACTIVE_SET_ENTRIES]ThreadSafeContactInfo = undefined;
-        for (0.., valid_gossip_indexs.items) |i, valid_gossip_index| {
-            valid_gossip_peers[i] = gossip_peers[valid_gossip_index];
+        for (
+            valid_gossip_peers[0..valid_gossip_indexs.items.len],
+            valid_gossip_indexs.items,
+        ) |*valid_gossip_peer, valid_gossip_index| {
+            valid_gossip_peer.* = gossip_peers[valid_gossip_index];
         }
 
         // send pings to peers
-        var pings_to_send_out = ping_cache_result.pings;
-        defer pings_to_send_out.deinit();
         try self.sendPings(pings_to_send_out.items);
 
         // reset push active set
@@ -1065,7 +1069,7 @@ pub const GossipService = struct {
 
     /// logic for building new push messages which are sent to peers from the
     /// active set and serialized into packets.
-    fn buildPushMessages(self: *Self, push_cursor: *u64) !ArrayList(Packet) {
+    fn buildPushMessages(self: *GossipService, push_cursor: *u64) !ArrayList(Packet) {
         const zone = tracy.Zone.init(@src(), .{ .name = "gossip buildPushMessages" });
         defer zone.deinit();
 
@@ -1211,7 +1215,7 @@ pub const GossipService = struct {
     /// builds new pull request messages and serializes it into a list of Packets
     /// to be sent to a random set of gossip nodes.
     fn buildPullRequests(
-        self: *Self,
+        self: *GossipService,
         random: std.Random,
         /// the bloomsize of the pull request's filters
         bloom_size: usize,
@@ -1242,21 +1246,18 @@ pub const GossipService = struct {
         };
 
         // filter out peers who have responded to pings
-        const ping_cache_result = blk: {
+        var valid_gossip_peer_indexs, var pings_to_send_out = blk: {
             const ping_cache, var ping_cache_lg = self.ping_cache_rw.writeWithLock();
             defer ping_cache_lg.unlock();
-            break :blk try ping_cache.filterValidPeers(self.allocator, self.my_keypair, peers);
+            const result = try ping_cache.filterValidPeers(self.allocator, random, self.my_keypair, peers);
+            break :blk .{ result.valid_peers, result.pings };
         };
-        var valid_gossip_peer_indexs = ping_cache_result.valid_peers;
-        defer valid_gossip_peer_indexs.deinit();
+        defer valid_gossip_peer_indexs.deinit(self.allocator);
+        defer pings_to_send_out.deinit(self.allocator);
 
-        // send pings to peers
-        var pings_to_send_out = ping_cache_result.pings;
-        defer pings_to_send_out.deinit();
         try self.sendPings(pings_to_send_out.items);
 
         const num_peers = valid_gossip_peer_indexs.items.len;
-
         if (num_peers == 0 and entrypoint_index == null) {
             return error.NoPeers;
         }
@@ -1398,7 +1399,7 @@ pub const GossipService = struct {
     ///     - PullRequestMessage.value is inserted into the gossip table
     ///     - PullRequestMessage.filter is freed in process messages
     fn handleBatchPullRequest(
-        self: *Self,
+        self: *GossipService,
         seed: u64,
         pull_requests: []const PullRequestMessage,
     ) !void {
@@ -1423,7 +1424,7 @@ pub const GossipService = struct {
             }
         }
 
-        var valid_indexs = blk: {
+        var valid_indices = blk: {
             const ping_cache, var lock = self.ping_cache_rw.writeWithLock();
             defer lock.unlock();
 
@@ -1439,21 +1440,26 @@ pub const GossipService = struct {
                 peers.appendAssumeCapacity(threads_safe_contact_info);
             }
 
-            const result = try ping_cache.filterValidPeers(self.allocator, self.my_keypair, peers.items);
-            defer result.pings.deinit();
-
+            var result = try ping_cache.filterValidPeers(
+                self.allocator,
+                self.ping_token_prng.random(),
+                self.my_keypair,
+                peers.items,
+            );
+            defer result.pings.deinit(self.allocator);
+            errdefer result.valid_peers.deinit(self.allocator);
             try self.sendPings(result.pings.items);
 
             break :blk result.valid_peers;
         };
-        defer valid_indexs.deinit();
+        defer valid_indices.deinit(self.allocator);
 
-        if (valid_indexs.items.len == 0) {
+        if (valid_indices.items.len == 0) {
             return;
         }
 
         // create the pull requests
-        const n_valid_requests = valid_indexs.items.len;
+        const n_valid_requests = valid_indices.items.len;
         const tasks = try self.allocator.alloc(PullRequestTask, n_valid_requests);
         defer {
             for (tasks) |*task| {
@@ -1472,7 +1478,7 @@ pub const GossipService = struct {
             var wg = std.Thread.WaitGroup{};
             var output_limit = Atomic(i64).init(MAX_NUM_VALUES_PER_PULL_RESPONSE);
 
-            for (valid_indexs.items, 0..) |i, task_index| {
+            for (valid_indices.items, 0..) |valid_index, task_index| {
                 // create the thread task
                 tasks[task_index] = PullRequestTask{
                     .task = .{ .callback = PullRequestTask.callback },
@@ -1481,10 +1487,10 @@ pub const GossipService = struct {
                     .my_pubkey = &self.my_pubkey,
                     .gossip_table = gossip_table,
                     .output_limit = &output_limit,
-                    .seed = seed + i,
+                    .seed = seed + valid_index,
                     .output = ArrayList(Packet).init(self.allocator),
-                    .from_endpoint = &pull_requests[i].from_endpoint,
-                    .filter = &pull_requests[i].filter,
+                    .from_endpoint = &pull_requests[valid_index].from_endpoint,
+                    .filter = &pull_requests[valid_index].filter,
                 };
 
                 // prepare to run it.
@@ -1510,14 +1516,13 @@ pub const GossipService = struct {
     }
 
     pub fn handleBatchPongMessages(
-        self: *Self,
+        self: *GossipService,
         pong_messages: *const ArrayList(PongMessage),
     ) void {
         const now = std.time.Instant.now() catch @panic("time is not supported on the OS!");
 
-        var ping_cache_lock = self.ping_cache_rw.write();
-        defer ping_cache_lock.unlock();
-        var ping_cache: *PingCache = ping_cache_lock.mut();
+        const ping_cache, var ping_cache_lg = self.ping_cache_rw.writeWithLock();
+        defer ping_cache_lg.unlock();
 
         for (pong_messages.items) |*pong_message| {
             _ = ping_cache.receviedPong(
@@ -1529,7 +1534,7 @@ pub const GossipService = struct {
     }
 
     pub fn handleBatchPingMessages(
-        self: *Self,
+        self: *GossipService,
         ping_messages: *const ArrayList(PingMessage),
     ) !void {
         for (ping_messages.items) |*ping_message| {
@@ -1561,7 +1566,7 @@ pub const GossipService = struct {
     /// For all pull responses:
     ///     - PullResponseMessage.gossip_values are inserted into the gossip table or added to failed pull hashes and freed
     pub fn handleBatchPullResponses(
-        self: *Self,
+        self: *GossipService,
         pull_response_messages: []const PullResponseMessage,
     ) !void {
         if (pull_response_messages.len == 0) {
@@ -1651,7 +1656,7 @@ pub const GossipService = struct {
     /// is not too old, and that the destination pubkey is not the local node,
     /// then updates the active set to prune the list of origin Pubkeys.
     pub fn handleBatchPruneMessages(
-        self: *Self,
+        self: *GossipService,
         prune_messages: *const ArrayList(PruneData),
     ) void {
         var active_set_lock = self.active_set_rw.write();
@@ -1673,7 +1678,7 @@ pub const GossipService = struct {
     /// For each push messages:
     ///     - PushMessage.gossip_values are filtered and then inserted into the gossip table, filtered values and failed inserts are freed
     pub fn handleBatchPushMessages(
-        self: *Self,
+        self: *GossipService,
         batch_push_messages: *const ArrayList(PushMessage),
     ) !void {
         if (batch_push_messages.items.len == 0) {
@@ -1856,18 +1861,17 @@ pub const GossipService = struct {
     /// gossip table, triming the max number of pubkeys in the gossip table, and removing
     /// old labels from the gossip table.
     fn trimMemory(
-        self: *Self,
+        self: *GossipService,
         /// the current time
         now: u64,
     ) error{OutOfMemory}!void {
-        const purged_cutoff_timestamp = now -| PURGED_RETENTION.asMillis();
         {
             try self.attemptGossipTableTrim();
 
             var gossip_table, var gossip_table_lg = self.gossip_table_rw.writeWithLock();
             defer gossip_table_lg.unlock();
 
-            try gossip_table.purged.trim(purged_cutoff_timestamp);
+            try gossip_table.purged.trim(now -| PURGED_RETENTION.asMillis());
 
             // TODO: condition timeout on stake weight:
             // - values from nodes with non-zero stake: epoch duration
@@ -1891,7 +1895,7 @@ pub const GossipService = struct {
     /// Returns true if all entrypoints have been identified
     ///
     /// Acquires the gossip table lock regardless of whether the gossip table is used.
-    fn populateEntrypointsFromGossipTable(self: *Self) !bool {
+    fn populateEntrypointsFromGossipTable(self: *GossipService) !bool {
         var identified_all = true;
 
         var gossip_table_lock = self.gossip_table_rw.read();
@@ -1909,7 +1913,7 @@ pub const GossipService = struct {
 
     /// if we have no shred version, attempt to get one from an entrypoint.
     /// Returns true if the shred version is set to non-zero
-    fn assignDefaultShredVersionFromEntrypoint(self: *Self) bool {
+    fn assignDefaultShredVersionFromEntrypoint(self: *GossipService) bool {
         if (self.my_shred_version.load(.monotonic) != 0) return true;
         for (self.entrypoints.items) |entrypoint| {
             if (entrypoint.info) |info| {
@@ -1931,7 +1935,7 @@ pub const GossipService = struct {
     /// drains values from the push queue and inserts them into the gossip table.
     /// when inserting values in the gossip table, any errors are ignored.
     fn drainPushQueueToGossipTable(
-        self: *Self,
+        self: *GossipService,
         /// the current time to insert the values with
         now: u64,
     ) !void {
@@ -1986,7 +1990,7 @@ pub const GossipService = struct {
 
     /// serializes a list of ping messages into Packets and sends them out
     pub fn sendPings(
-        self: *Self,
+        self: *GossipService,
         pings: []const PingAndSocketAddr,
     ) error{ OutOfMemory, ChannelClosed, SerializationError }!void {
         for (pings) |ping_and_addr| {
@@ -2003,7 +2007,7 @@ pub const GossipService = struct {
     /// nodes that are 1) too old, 2) have a different shred version, or 3) have
     /// an invalid gossip address.
     pub fn getThreadSafeGossipNodes(
-        self: *Self,
+        self: *GossipService,
         /// the output slice which will be filled with gossip nodes
         nodes: []ThreadSafeContactInfo,
         /// the maximum number of nodes to return ( max_size == nodes.len but comptime for init of stack array)
@@ -2060,7 +2064,7 @@ pub const GossipService = struct {
     /// Sorts the incoming `gossip_values` slice to place the valid gossip data
     /// at the start, and returns the number of valid gossip values in that slice.
     pub fn filterBasedOnShredVersion(
-        self: *Self,
+        self: *GossipService,
         gossip_table: *const GossipTable,
         gossip_values: []SignedGossipData,
         sender_pubkey: Pubkey,
@@ -2322,6 +2326,9 @@ const TestingLogger = sig.trace.log.DirectPrintLogger;
 test "handle pong messages" {
     const allocator = std.testing.allocator;
 
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const random = prng_state.random();
+
     var keypair = try KeyPair.generateDeterministic(@splat(1));
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
     const contact_info = try localhostTestContactInfo(pubkey);
@@ -2357,7 +2364,7 @@ test "handle pong messages" {
         defer ping_cache_lg.unlock();
 
         const now = try std.time.Instant.now();
-        const ping = ping_cache_ptr_ptr.*.maybePing(now, pubkey_and_addr, &keypair);
+        const ping = ping_cache_ptr_ptr.maybePing(random, now, pubkey_and_addr, &keypair);
         break :blk ping.?;
     };
 
@@ -2383,7 +2390,7 @@ test "handle pong messages" {
         defer ping_cache_lg.unlock();
 
         const now = try std.time.Instant.now();
-        const r = ping_cache_ptr_ptr.*.check(now, pubkey_and_addr, &keypair);
+        const r = ping_cache_ptr_ptr.checkAndUpdate(random, now, pubkey_and_addr, &keypair);
         std.debug.assert(r.passes_ping_check);
     }
 }
