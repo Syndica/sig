@@ -254,32 +254,42 @@ pub fn replaySlotSync(
         return .{ .invalid_block = .InvalidEntryHash };
     }
 
-    var locks = sig.replay.AccountLocks{};
-    defer locks.deinit(allocator);
-
     var svm_gateway = params.svm_gateway;
+    if (!svm_gateway.params.feature_set.active(
+        .relax_intrabatch_account_locks,
+        svm_gateway.params.slot,
+    )) {
+        var locks = sig.replay.AccountLocks{};
+        defer locks.deinit(allocator);
+
+        var accounts = std.ArrayListUnmanaged(sig.replay.AccountLocks.LockableAccount){};
+        defer accounts.deinit(allocator);
+
+        var i: usize = 0;
+        for (params.entries) |entry| {
+            const transactions = params.transactions[i..][0..entry.transactions.len];
+            i += entry.transactions.len;
+
+            accounts.clearRetainingCapacity();
+            for (transactions) |transaction| {
+                for (
+                    transaction.accounts.items(.pubkey),
+                    transaction.accounts.items(.is_writable),
+                ) |pubkey, is_writable| {
+                    try accounts.append(allocator, .{ .address = pubkey, .writable = is_writable });
+                }
+            }
+
+            locks.lockStrict(allocator, accounts.items) catch |e| switch (e) {
+                error.LockFailed => return .{ .invalid_transaction = .AccountInUse },
+                error.OutOfMemory => return error.OutOfMemory,
+            };
+            std.debug.assert(0 == locks.unlock(accounts.items));
+        }
+    }
+
     for (params.transactions) |transaction| {
         var exit = Atomic(bool).init(false);
-
-        var accounts = std.BoundedArray(
-            sig.replay.AccountLocks.LockableAccount,
-            sig.core.Transaction.MAX_ACCOUNTS,
-        ){};
-        for (
-            transaction.accounts.items(.pubkey),
-            transaction.accounts.items(.is_writable),
-        ) |pubkey, is_writable| {
-            try accounts.append(.{ .address = pubkey, .writable = is_writable });
-        }
-
-        if (!svm_gateway.params.feature_set.active(
-            .relax_intrabatch_account_locks,
-            svm_gateway.params.slot,
-        )) locks.lockStrict(allocator, accounts.constSlice()) catch |e| switch (e) {
-            error.LockFailed => return .{ .invalid_transaction = .AccountInUse },
-            error.OutOfMemory => return error.OutOfMemory,
-        };
-        defer locks.unlockAll();
 
         switch (try replayBatch(
             allocator,
@@ -951,31 +961,7 @@ fn testReplaySlot(
         defer state.deinit(allocator);
         state.feature_set = feature_set;
 
-        const entries_copy = try allocator.dupe(Entry, entries);
-        errdefer allocator.free(entries_copy);
-
-        var i: usize = 0;
-        errdefer for (entries_copy[0..i]) |e| e.deinit(allocator);
-        for (entries_copy) |*entry| {
-            entry.* = try entry.clone(allocator);
-            i += 1;
-        }
-
-        for (entries_copy) |e| try state.makeTransactionsPassable(allocator, e.transactions);
-
-        const transactions = try replay.resolve_lookup
-            .resolveBlock(allocator, entries_copy, state.resolver());
-        const svm_gateway = try SvmGateway.init(allocator, state.svmParams());
-        const params = ReplaySlotParams{
-            .entries = entries_copy,
-            .transactions = transactions,
-            .last_entry = .ZEROES,
-            .svm_gateway = svm_gateway,
-            .committer = try state.committer(allocator),
-            .verify_ticks_params = verify_ticks_params,
-            .account_store = state.accountStore(),
-        };
-
+        const params = try state.prepareSlotParams(allocator, entries, verify_ticks_params);
         break :result try replaySlotSync(allocator, logger, params);
     };
 
@@ -986,30 +972,7 @@ fn testReplaySlot(
         defer state.deinit(allocator);
         state.feature_set = feature_set;
 
-        const entries_copy = try allocator.dupe(Entry, entries);
-        errdefer allocator.free(entries_copy);
-
-        var i: usize = 0;
-        errdefer for (entries_copy[0..i]) |e| e.deinit(allocator);
-        for (entries_copy) |*entry| {
-            entry.* = try entry.clone(allocator);
-            i += 1;
-        }
-
-        for (entries_copy) |e| try state.makeTransactionsPassable(allocator, e.transactions);
-
-        const transactions = try replay.resolve_lookup
-            .resolveBlock(allocator, entries_copy, state.resolver());
-        const svm_gateway = try SvmGateway.init(allocator, state.svmParams());
-        const params = ReplaySlotParams{
-            .entries = entries_copy,
-            .transactions = transactions,
-            .last_entry = .ZEROES,
-            .svm_gateway = svm_gateway,
-            .committer = try state.committer(allocator),
-            .verify_ticks_params = verify_ticks_params,
-            .account_store = state.accountStore(),
-        };
+        const params = try state.prepareSlotParams(allocator, entries, verify_ticks_params);
 
         var thread_pool = ThreadPool.init(.{});
         defer {
@@ -1165,6 +1128,44 @@ pub const TestState = struct {
             .account_reader = self.account_map.accountReader().forSlot(&self.ancestors),
             .reserved_accounts = &.empty,
             .slot_hashes = .INIT,
+        };
+    }
+
+    pub fn prepareSlotParams(
+        self: *TestState,
+        allocator: Allocator,
+        entries: []const Entry,
+        verify_ticks_params: VerifyTicksParams,
+    ) !ReplaySlotParams {
+        const entries_copy = try allocator.dupe(Entry, entries);
+        errdefer allocator.free(entries_copy);
+
+        var i: usize = 0;
+        errdefer for (entries_copy[0..i]) |e| e.deinit(allocator);
+        for (entries_copy) |*entry| {
+            entry.* = try entries[i].clone(allocator);
+            i += 1;
+            try self.makeTransactionsPassable(allocator, entry.transactions);
+        }
+
+        const transactions =
+            try replay.resolve_lookup.resolveBlock(allocator, entries_copy, self.resolver());
+        errdefer {
+            for (transactions) |t| t.deinit(allocator);
+            allocator.free(transactions);
+        }
+
+        const svm_gateway = try SvmGateway.init(allocator, self.svmParams());
+        errdefer svm_gateway.deinit(allocator);
+
+        return .{
+            .entries = entries_copy,
+            .transactions = transactions,
+            .last_entry = .ZEROES,
+            .svm_gateway = svm_gateway,
+            .committer = try self.committer(allocator),
+            .verify_ticks_params = verify_ticks_params,
+            .account_store = self.accountStore(),
         };
     }
 

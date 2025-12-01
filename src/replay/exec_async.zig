@@ -320,7 +320,8 @@ const TransactionScheduler = struct {
                         const gop = try batch_locks.getOrPut(allocator, pubkey);
                         if (gop.found_existing and (gop.value_ptr.* or writable)) {
                             // Within batch: existing writer, or existing reader when writing.
-                            return error.ConflictingBatchAccountLock;
+                            self.future.setError(.{ .invalid_transaction = .AccountInUse });
+                            return;
                         }
                         gop.value_ptr.* = writable;
                     }
