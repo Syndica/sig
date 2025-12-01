@@ -142,10 +142,10 @@ pub const Tower = struct {
         if (self.lastVotedSlot()) |last_voted_slot| {
             if (slot <= last_voted_slot) {
                 return false;
-            } else if (self.root) |root| {
-                if (slot <= root) {
-                    return false;
-                }
+            }
+        } else if (self.root) |root| {
+            if (slot <= root) {
+                return false;
             }
         }
         return true;
@@ -283,3 +283,42 @@ pub const Tower = struct {
         }
     }
 };
+
+test "isRecent with no votes checks root_slot" {
+    // Set up tower with no votes but with a root
+    var tower: Tower = .{ .root = 100 };
+
+    // Slots at or before root should NOT be recent
+    try std.testing.expect(!tower.isRecent(99));
+    try std.testing.expect(!tower.isRecent(100));
+
+    // Slots after root should be recent
+    try std.testing.expect(tower.isRecent(101));
+    try std.testing.expect(tower.isRecent(200));
+}
+
+test "isLockedOut with no votes and root" {
+    const allocator = std.testing.allocator;
+
+    var tower: Tower = .{ .root = 100 };
+
+    // Create ancestors for a slot after root
+    var ancestors_map: std.AutoArrayHashMapUnmanaged(Slot, void) = .empty;
+    defer ancestors_map.deinit(allocator);
+
+    // Slot 101 should have ancestors including the root (100)
+    try ancestors_map.put(allocator, 100, {});
+    try ancestors_map.put(allocator, 99, {});
+    try ancestors_map.put(allocator, 98, {});
+
+    const ancestors: Ancestors = .{ .ancestors = ancestors_map };
+
+    // Slot 101 (after root, has root as ancestor) should NOT be locked out
+    try std.testing.expect(!try tower.isLockedOut(101, &ancestors));
+
+    // Slot 100 (the root itself) SHOULD be locked out (not recent, already finalized)
+    try std.testing.expect(try tower.isLockedOut(100, &ancestors));
+
+    // Slot 99 (before root) SHOULD be locked out (not recent)
+    try std.testing.expect(try tower.isLockedOut(99, &ancestors));
+}

@@ -355,6 +355,7 @@ pub const TowerConsensus = struct {
             slot_tracker: *SlotTracker,
             epoch_tracker: *EpochTracker,
             progress_map: *ProgressMap,
+            status_cache: ?*sig.core.StatusCache,
             senders: Senders,
             receivers: Receivers,
             vote_sockets: ?*const VoteSockets,
@@ -430,9 +431,13 @@ pub const TowerConsensus = struct {
             for (params.slot_tracker.slots.keys(), params.slot_tracker.slots.values()) |slot, info| {
                 const slot_ancestors = &info.constants.ancestors.ancestors;
                 const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
+                // Ensure every slot has a descendants entry (even if empty)
+                _ = try descendants.getOrPutValue(arena, slot, .empty);
                 try ancestor_gop.value_ptr.ancestors
                     .ensureUnusedCapacity(arena, slot_ancestors.count());
                 for (slot_ancestors.keys()) |ancestor_slot| {
+                    // Exclude the slot itself from ancestors.
+                    if (ancestor_slot == slot) continue;
                     try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
                     const descendants_gop =
                         try descendants.getOrPutValue(arena, ancestor_slot, .empty);
@@ -451,6 +456,7 @@ pub const TowerConsensus = struct {
             params.slot_tracker,
             params.epoch_tracker,
             params.progress_map,
+            params.status_cache,
             params.account_store,
             params.slot_leaders,
             params.vote_sockets,
@@ -501,6 +507,7 @@ pub const TowerConsensus = struct {
         slot_tracker: *SlotTracker,
         epoch_tracker: *const EpochTracker,
         progress_map: *ProgressMap,
+        status_cache: ?*sig.core.StatusCache,
         /// For reading the slot history account
         account_store: AccountStore,
         slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
@@ -649,6 +656,7 @@ pub const TowerConsensus = struct {
                 progress_map,
                 &self.fork_choice,
                 account_store,
+                status_cache,
                 self.signing.node,
                 self.signing.authorized_voters,
                 self.identity.vote_account,
@@ -931,6 +939,7 @@ fn handleVotableBank(
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
     account_store: AccountStore,
+    status_cache: ?*sig.core.StatusCache,
     node_keypair: ?sig.identity.KeyPair,
     authorized_voter_keypairs: []const sig.identity.KeyPair,
     vote_account_pubkey: ?Pubkey,
@@ -955,6 +964,7 @@ fn handleVotableBank(
             progress,
             fork_choice,
             account_store,
+            status_cache,
             new_root,
         );
     }
@@ -1567,6 +1577,7 @@ fn checkAndHandleNewRoot(
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
     account_store: AccountStore,
+    status_cache: ?*sig.core.StatusCache,
     new_root: Slot,
 ) !void {
     // get the root bank before squash.
@@ -1586,6 +1597,9 @@ fn checkAndHandleNewRoot(
     slot_tracker.root = new_root;
     // Prune non rooted slots
     slot_tracker.pruneNonRooted(allocator);
+
+    // Tell the status_cache about it for its tracking.
+    if (status_cache) |sc| try sc.addRoot(allocator, new_root);
     // Tell the account_store about it for its unrooted accounts
     try account_store.onSlotRooted(
         allocator,
@@ -1679,8 +1693,9 @@ fn computeConsensusInputs(
 
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
-    // TODO agave sorts this by the slot first. Is this needed for the implementation to be correct?
-    // If not, then we can avoid sorting here which may be verbose given frozen_slots is a map.
+
+    frozen_slots.sort(replay.service.FrozenSlotsSortCtx{ .slots = frozen_slots.keys() });
+
     for (frozen_slots.keys()) |slot| {
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
         if (!fork_stat.computed) {
@@ -1956,9 +1971,9 @@ test "cacheTowerStats - success sets flags and empty thresholds" {
 
     const stats = fixture.progress.getForkStats(root.slot).?;
     try testing.expectEqual(0, stats.vote_threshold.items.len);
-    try testing.expectEqual(false, stats.is_locked_out);
+    try testing.expectEqual(true, stats.is_locked_out);
     try testing.expectEqual(false, stats.has_voted);
-    try testing.expectEqual(true, stats.is_recent);
+    try testing.expectEqual(false, stats.is_recent);
 }
 
 test "cacheTowerStats - records failed threshold at depth 0" {
@@ -1996,9 +2011,9 @@ test "cacheTowerStats - records failed threshold at depth 0" {
     const t = stats.vote_threshold.items[0];
     try testing.expect(t == .failed_threshold);
     try testing.expectEqual(0, t.failed_threshold.vote_depth);
-    try testing.expectEqual(false, stats.is_locked_out);
+    try testing.expectEqual(true, stats.is_locked_out);
     try testing.expectEqual(false, stats.has_voted);
-    try testing.expectEqual(true, stats.is_recent);
+    try testing.expectEqual(false, stats.is_recent);
 }
 
 test "maybeRefreshLastVote - no heaviest slot on same fork" {
@@ -2515,6 +2530,7 @@ test "checkAndHandleNewRoot - missing slot" {
         &fixture.progress,
         &fixture.fork_choice,
         .noop,
+        null, // no need to update a StatusCache,
         123, // Non-existent slot
     );
 
@@ -2572,6 +2588,7 @@ test "checkAndHandleNewRoot - missing hash" {
         &fixture.progress,
         &fixture.fork_choice,
         .noop,
+        null, // no need to update a StatusCache,
         root.slot, // Non-existent hash
     );
 
@@ -2614,6 +2631,7 @@ test "checkAndHandleNewRoot - empty slot tracker" {
         &fixture.progress,
         &fixture.fork_choice,
         .noop,
+        null, // no need to update a StatusCache,
         root.slot,
     );
 
@@ -2714,6 +2732,7 @@ test "checkAndHandleNewRoot - success" {
             &fixture.progress,
             &fixture.fork_choice,
             .noop,
+            null, // no need to update a StatusCache,
             hash3.slot,
         );
     }
@@ -4857,6 +4876,7 @@ test "edge cases - duplicate slot" {
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = &replay_state.epoch_tracker,
         .progress_map = &replay_state.progress_map,
+        .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
         .receivers = tc_input_channels,
         .vote_sockets = null,
@@ -5016,6 +5036,7 @@ test "edge cases - duplicate confirmed slot" {
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = &replay_state.epoch_tracker,
         .progress_map = &replay_state.progress_map,
+        .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
         .receivers = tc_input_channels,
         .vote_sockets = null,
@@ -5187,6 +5208,7 @@ test "edge cases - gossip verified vote hashes" {
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = &replay_state.epoch_tracker,
         .progress_map = &replay_state.progress_map,
+        .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
         .receivers = tc_input_channels,
         .vote_sockets = null,
@@ -5368,6 +5390,7 @@ test "vote on heaviest frozen descendant with no switch" {
         .slot_tracker = &slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &progress,
+        .status_cache = null,
         .senders = stubs.senders,
         .receivers = stubs.receivers,
         .vote_sockets = null,
@@ -5589,6 +5612,7 @@ test "vote accounts with landed votes populate bank stats" {
         .slot_tracker = &slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &progress,
+        .status_cache = null,
         .senders = stubs.senders,
         .receivers = stubs.receivers,
         .vote_sockets = null,
@@ -5899,6 +5923,7 @@ test "root advances after vote satisfies lockouts" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -5960,6 +5985,7 @@ test "root advances after vote satisfies lockouts" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -6041,6 +6067,7 @@ test "root advances after vote satisfies lockouts" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -6222,6 +6249,7 @@ test "vote refresh when no new vote available" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -6247,6 +6275,7 @@ test "vote refresh when no new vote available" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -6515,6 +6544,7 @@ test "detect and mark duplicate confirmed fork" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -6693,6 +6723,7 @@ test "detect and mark duplicate slot" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -7066,6 +7097,7 @@ test "successful fork switch (switch_proof)" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -7106,6 +7138,7 @@ test "successful fork switch (switch_proof)" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -7166,6 +7199,7 @@ test "successful fork switch (switch_proof)" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -7238,6 +7272,7 @@ test "successful fork switch (switch_proof)" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
+            .status_cache = null,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
