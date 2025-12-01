@@ -11,7 +11,6 @@ const builtin_programs = sig.runtime.program.builtin_programs;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const SlotAccountStore = sig.accounts_db.SlotAccountStore;
-const ThreadSafeAccountMap = sig.accounts_db.account_store.ThreadSafeAccountMap;
 const AccountSharedData = sig.runtime.AccountSharedData;
 
 const Ancestors = sig.core.Ancestors;
@@ -693,7 +692,7 @@ fn inheritLamportsAndRentEpoch(
 
 const TestEnvironment = struct {
     genesis_config: sig.core.GenesisConfig,
-    account_map: ThreadSafeAccountMap,
+    db_context: sig.accounts_db.Two.TestContext,
     ancestors: Ancestors,
     epoch_tracker: EpochTracker,
     slot_constants: SlotConstants,
@@ -703,8 +702,8 @@ const TestEnvironment = struct {
         var genesis_config = sig.core.GenesisConfig.default(allocator);
         errdefer genesis_config.deinit(allocator);
 
-        var account_map = ThreadSafeAccountMap.init(allocator);
-        errdefer account_map.deinit();
+        var db_context = try sig.accounts_db.Two.initTest(allocator);
+        errdefer db_context.deinit();
 
         var ancestors = Ancestors.EMPTY;
         errdefer ancestors.deinit(allocator);
@@ -724,7 +723,7 @@ const TestEnvironment = struct {
 
         return TestEnvironment{
             .genesis_config = genesis_config,
-            .account_map = account_map,
+            .db_context = db_context,
             .ancestors = ancestors,
             .epoch_tracker = epoch_tracker,
             .slot_constants = slot_constants,
@@ -734,7 +733,7 @@ const TestEnvironment = struct {
 
     pub fn deinit(self: *TestEnvironment, allocator: Allocator) void {
         self.genesis_config.deinit(allocator);
-        self.account_map.deinit();
+        self.db_context.deinit();
         self.ancestors.deinit(allocator);
         self.epoch_tracker.deinit(allocator);
         self.slot_constants.deinit(allocator);
@@ -772,8 +771,8 @@ const TestEnvironment = struct {
         self: *TestEnvironment,
         slot: Slot,
     ) SlotAccountStore {
-        return .{ .thread_safe_map = .{
-            &self.account_map,
+        return .{ .accounts_db_two = .{
+            &self.db_context.db,
             slot,
             &self.ancestors,
         } };
@@ -782,7 +781,7 @@ const TestEnvironment = struct {
     pub fn accountStore(
         self: *TestEnvironment,
     ) AccountStore {
-        return .{ .thread_safe_map = &self.account_map };
+        return .{ .accounts_db_two = &self.db_context.db };
     }
 };
 
