@@ -136,7 +136,7 @@ pub fn checkFeePayer(
 
     // NOTE: FeeDetails (transaction fee, prioritization fee) in Agave is set
     // at the same time that compute budget limits are calculated. This value
-    // does not actually come from the feerate governor, but rather a field
+    // does not actually come from the fee rate governor, but rather a field
     // in the bank (fee_structure.lamports_per_signature).
     // The bank initialises this field using impl default for FeeStructure,
     // and never actually mutates it, meaning it remains the default value.
