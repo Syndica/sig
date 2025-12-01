@@ -878,7 +878,7 @@ pub const GossipService = struct {
 
         // then trim with write lock
         const n_pubkeys_dropped: u64 = if (should_trim) blk: {
-            var gossip_table, var gossip_table_lock = self.gossip_table_rw.writeWithLock();
+            const gossip_table, var gossip_table_lock = self.gossip_table_rw.writeWithLock();
             defer gossip_table_lock.unlock();
 
             var x_timer = sig.time.Timer.start();
@@ -1013,10 +1013,9 @@ pub const GossipService = struct {
 
     // collect gossip table metrics and pushes them to stats
     pub fn collectGossipTableMetrics(self: *GossipService) !void {
-        var gossip_table_lock = self.gossip_table_rw.read();
-        defer gossip_table_lock.unlock();
+        const gossip_table, var gossip_table_lg = self.gossip_table_rw.readWithLock();
+        defer gossip_table_lg.unlock();
 
-        const gossip_table = gossip_table_lock.get();
         const n_entries = gossip_table.store.count();
         const n_pubkeys = gossip_table.pubkey_to_values.count();
 
@@ -1061,9 +1060,8 @@ pub const GossipService = struct {
         try self.sendPings(pings_to_send_out.items);
 
         // reset push active set
-        var active_set_lock = self.active_set_rw.write();
-        defer active_set_lock.unlock();
-        var active_set: *ActiveSet = active_set_lock.mut();
+        const active_set, var active_set_lg = self.active_set_rw.writeWithLock();
+        defer active_set_lg.unlock();
         try active_set.initRotate(random, valid_gossip_peers[0..valid_gossip_indexs.items.len]);
     }
 
@@ -2323,6 +2321,69 @@ pub fn getClusterEntrypoints(cluster: sig.core.Cluster) []const []const u8 {
 
 const TestingLogger = sig.trace.log.DirectPrintLogger;
 
+test "general coverage" {
+    const allocator = std.testing.allocator;
+
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    const keypair: KeyPair = try .generateDeterministic(seed: {
+        var seed: [KeyPair.seed_length]u8 = undefined;
+        prng.bytes(&seed);
+        break :seed seed;
+    });
+    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+    const contact_info = try localhostTestContactInfo(pubkey);
+
+    const gossip_service: *GossipService = try .create(
+        allocator,
+        allocator,
+        contact_info,
+        keypair,
+        null,
+        .noop,
+    );
+    defer {
+        gossip_service.shutdown();
+        gossip_service.deinit();
+        allocator.destroy(gossip_service);
+    }
+
+    {
+        const ping_cache, var ping_cache_lg = gossip_service.ping_cache_rw.writeWithLock();
+        defer ping_cache_lg.unlock();
+
+        const peer_pk_socket: sig.gossip.ping_pong.PubkeyAndSocketAddr = .{
+            .pubkey = .initRandom(prng),
+            .socket_addr = .initRandom(prng),
+        };
+
+        const result0 = ping_cache.checkAndUpdate(prng, try .now(), peer_pk_socket, &keypair);
+        try std.testing.expectEqual(false, result0.passes_ping_check);
+        try std.testing.expect(result0.maybe_ping != null);
+
+        ping_cache._setPong(peer_pk_socket.pubkey, peer_pk_socket.socket_addr);
+
+        const result1 = ping_cache.checkAndUpdate(prng, try .now(), peer_pk_socket, &keypair);
+        try std.testing.expectEqual(true, result1.passes_ping_check);
+    }
+
+    {
+        const gossip_table, var gossip_table_lg = gossip_service.gossip_table_rw.writeWithLock();
+        defer gossip_table_lg.unlock();
+
+        for (0..sig.gossip.service.UNIQUE_PUBKEY_CAPACITY * 2) |_| {
+            const value: sig.gossip.SignedGossipData = .initRandom(prng, &keypair);
+            (try gossip_table.insert(value, 1)).deinit(allocator);
+        }
+    }
+
+    try gossip_service.rotateActiveSet(prng);
+    try gossip_service.collectGossipTableMetrics();
+    try gossip_service.attemptGossipTableTrim();
+    try gossip_service.handleBatchPullRequest(prng.int(u64), &.{});
+}
+
 test "handle pong messages" {
     const allocator = std.testing.allocator;
 
@@ -2333,7 +2394,7 @@ test "handle pong messages" {
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
     const contact_info = try localhostTestContactInfo(pubkey);
 
-    var gossip_service = try GossipService.create(
+    const gossip_service = try GossipService.create(
         allocator,
         allocator,
         contact_info,
