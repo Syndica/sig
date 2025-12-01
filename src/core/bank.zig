@@ -117,6 +117,15 @@ pub const SlotConstants = struct {
         bank_fields: *const BankFields,
         feature_set: FeatureSet,
     ) Allocator.Error!SlotConstants {
+        const ancestors = try bank_fields.ancestors.clone(allocator);
+        errdefer ancestors.deinit(allocator);
+
+        const reserved_accounts = try ReservedAccounts.initForSlot(
+            allocator,
+            &feature_set,
+            bank_fields.slot,
+        );
+        errdefer reserved_accounts.deinit(allocator);
         return .{
             .parent_slot = bank_fields.parent_slot,
             .parent_hash = bank_fields.parent_hash,
@@ -125,13 +134,9 @@ pub const SlotConstants = struct {
             .collector_id = bank_fields.collector_id,
             .max_tick_height = bank_fields.max_tick_height,
             .fee_rate_governor = bank_fields.fee_rate_governor,
-            .ancestors = try bank_fields.ancestors.clone(allocator),
+            .ancestors = ancestors,
             .feature_set = feature_set,
-            .reserved_accounts = try ReservedAccounts.initForSlot(
-                allocator,
-                &feature_set,
-                bank_fields.slot,
-            ),
+            .reserved_accounts = reserved_accounts,
             .inflation = bank_fields.inflation,
         };
     }

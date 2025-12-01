@@ -109,3 +109,16 @@ pub fn toOwnedAccount(self: AccountSharedData) sig.core.Account {
         .rent_epoch = self.rent_epoch,
     };
 }
+
+pub fn fromAccount(
+    allocator: std.mem.Allocator,
+    account: *const sig.core.Account,
+) !AccountSharedData {
+    return .{
+        .lamports = account.lamports,
+        .data = try account.data.readAllAllocate(allocator),
+        .owner = account.owner,
+        .executable = account.executable,
+        .rent_epoch = account.rent_epoch,
+    };
+}

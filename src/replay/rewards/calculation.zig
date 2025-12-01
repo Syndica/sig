@@ -254,14 +254,8 @@ fn storeVoteAccountsPartitioned(
             return error.MissingVoteAccount;
         defer account.deinit(allocator);
 
-        // TODO: NO NEED TO CLONE
-        var account_shared_data = AccountSharedData{
-            .lamports = account.lamports,
-            .owner = account.owner,
-            .data = try account.data.readAllAllocate(allocator),
-            .executable = account.executable,
-            .rent_epoch = account.rent_epoch,
-        };
+        // TODO: NO NEED TO CLONE, CHANGE CHECK AND STORE TO USE ACCOUNT
+        var account_shared_data = try AccountSharedData.fromAccount(allocator, &account);
         defer account_shared_data.deinit(allocator);
 
         account_shared_data.lamports = vote_reward.account.lamports;

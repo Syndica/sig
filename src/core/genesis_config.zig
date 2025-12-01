@@ -338,9 +338,12 @@ fn yearsAsSlots(years: f64, tick_duration: RustDuration, ticks_per_slot: u64) f6
     return years * SLOTS_PER_YEAR;
 }
 
-/// Zig pow implemetation is incorrect
-/// Failure (zig):  0.85, 4.019250798563942 -> 7.805634650110366e-2
-/// Expected:       0.85, 4.019250798563942 -> 7.805634650110367e-2
+/// Floats are not ideal for consensus relevant computations.
+/// Zig and Rust implementations of pow are both complient yet can return different results.
+/// The C implementation is consistent with Rust, so we use it here for inflation rate calculations.
+/// Zig:        0.85, 4.019250798563942 -> 7.805634650110366e-2
+/// Rust:       0.85, 4.019250798563942 -> 7.805634650110367e-2
+/// C:          0.85, 4.019250798563942 -> 7.805634650110367e-2
 extern fn pow(f64, f64) f64;
 
 test "genesis_config deserialize development config" {
