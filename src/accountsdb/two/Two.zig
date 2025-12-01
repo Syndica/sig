@@ -65,7 +65,7 @@ pub fn put(self: *Db, slot: Slot, address: Pubkey, data: AccountSharedData) !voi
 
 // TODO: this should be trivial to put on another thread; this currently blocks the main replay
 // thread for 30-40ms per slot on testnet.
-pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot) error{FailedToRoot}!void {
+pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot) void {
     for (self.unrooted.slots) |*index| {
         if (index.is_empty.load(.acquire)) continue;
         if (index.slot > newly_rooted_slot) continue; // not ready to be rooted yet!
@@ -76,15 +76,14 @@ pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot) error{FailedToRoot}!void
             index.lock.lockShared();
             defer index.lock.unlockShared();
 
-            self.rooted.beginTransation() catch return error.FailedToRoot;
+            self.rooted.beginTransation();
 
             var entries = index.entries.iterator();
             while (entries.next()) |entry| {
-                self.rooted.put(entry.key_ptr.*, newly_rooted_slot, entry.value_ptr.*) catch
-                    return error.FailedToRoot;
+                self.rooted.put(entry.key_ptr.*, newly_rooted_slot, entry.value_ptr.*);
             }
 
-            self.rooted.commitTransation() catch return error.FailedToRoot;
+            self.rooted.commitTransation();
 
             self.rooted.largest_rooted_slot = @max(
                 self.rooted.largest_rooted_slot orelse 0,

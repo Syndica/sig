@@ -72,7 +72,7 @@ pub const AccountStore = union(enum) {
                 newly_rooted_slot,
                 lamports_per_signature,
             ),
-            .accounts_db_two => |db| try db.onSlotRooted(newly_rooted_slot),
+            .accounts_db_two => |db| db.onSlotRooted(newly_rooted_slot),
             .thread_safe_map => |db| try db.onSlotRooted(newly_rooted_slot),
             .noop => {},
         }
@@ -1142,7 +1142,7 @@ test "put and get across competing forks" {
     try putAccountIntoStores({}, &stores, slot1, pk, asd_a);
     setRootedLargestSlotForTest(&simple_state, &real_state, slot1);
     try simple_state.onSlotRooted(slot1);
-    try real_state.onSlotRooted(slot1);
+    real_state.onSlotRooted(slot1);
 
     // two unrooted entries, which will end up competing with the given ancestors
     try putAccountIntoStores({}, &stores, slot3, pk, asd_b);

@@ -760,7 +760,7 @@ fn insertSysvarCacheAccounts(
         );
         defer account.deinit(allocator); // rooted db clones the data
 
-        try db.rooted.put(Sysvar.ID, slot, .{
+        db.rooted.put(Sysvar.ID, slot, .{
             .lamports = account.lamports,
             .data = account.data,
             .owner = account.owner,
@@ -854,7 +854,7 @@ test "update all sysvars" {
         null,
     );
     defer allocator.free(account.data);
-    try accounts_db.rooted.put(SlotHistory.ID, slot, account);
+    accounts_db.rooted.put(SlotHistory.ID, slot, account);
 
     // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
     slot = slot + 1;

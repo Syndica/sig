@@ -253,7 +253,7 @@ fn insertFromSnapshot(
 
                 const data = @constCast(cloned_data.owned_allocation);
 
-                try self.put(
+                self.put(
                     account.store_info.pubkey,
                     accounts_file.slot,
                     .{
@@ -350,20 +350,23 @@ pub fn getLargestRootedSlot(self: *const Rooted) ?Slot {
 
 fn err(self: *Rooted, code: c_int) void {
     if (code == OK) return;
-    std.debug.panic("internal accountsdb sqlite error ({}): {s}\n", .{ code, sql.sqlite3_errmsg(self.handle) });
+    std.debug.panic(
+        "internal accountsdb sqlite error ({}): {s}\n",
+        .{ code, sql.sqlite3_errmsg(self.handle) },
+    );
 }
 
-pub fn beginTransation(self: *Rooted) !void {
+pub fn beginTransation(self: *Rooted) void {
     self.err(sql.sqlite3_exec(self.handle, "BEGIN TRANSACTION;", null, null, null));
 }
 
-pub fn commitTransation(self: *Rooted) !void {
+pub fn commitTransation(self: *Rooted) void {
     self.err(sql.sqlite3_exec(self.handle, "COMMIT;", null, null, null));
 }
 
 /// Should not be called outside of snapshot loading or slot rooting.
 /// TODO: write putRootedSlot(slot, []pk, []account) and make that public instead.
-pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedData) !void {
+pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedData) void {
     const stmt: *sql.sqlite3_stmt = if (put_stmt) |stmt| stmt else blk: {
         const query =
             \\INSERT OR REPLACE INTO entries 
@@ -396,8 +399,8 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
 
     self.err(sql.sqlite3_bind_int64(stmt, 7, @bitCast(slot)));
 
-    if (sql.sqlite3_step(stmt) != DONE)
-        return error.PutFailed;
+    const result = sql.sqlite3_step(stmt);
+    if (result != DONE) self.err(result);
 }
 
 const AccountFile = sig.accounts_db.accounts_file.AccountFile;
