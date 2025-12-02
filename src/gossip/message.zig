@@ -27,9 +27,7 @@ pub const GossipMessage = union(enum(u32)) {
     PingMessage: Ping,
     PongMessage: Pong,
 
-    const Self = @This();
-
-    pub fn verifySignature(self: *Self) !void {
+    pub fn verifySignature(self: *const GossipMessage) !void {
         switch (self.*) {
             .PullRequest => |*pull| {
                 var value = pull[1];
@@ -60,7 +58,7 @@ pub const GossipMessage = union(enum(u32)) {
         }
     }
 
-    pub fn sanitize(self: *Self) !void {
+    pub fn sanitize(self: *const GossipMessage) !void {
         switch (self.*) {
             .PullRequest => {},
             .PullResponse => {},
