@@ -975,7 +975,11 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     defer replay_state.deinit();
 
     // replay the block
-    try advanceReplay(&replay_state, try registry.initStruct(Metrics), null);
+    replay_state.stop_at_slot = execution_slot;
+    try std.testing.expectError(
+        error.ReachedEndSlot,
+        advanceReplay(&replay_state, try registry.initStruct(Metrics), null),
+    );
 
     // get slot hash
     const actual_slot_hash = tracker_lock: {
