@@ -1085,6 +1085,9 @@ fn validator(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
+    var gossip_votes = try sig.sync.Channel(sig.gossip.data.Vote).init(allocator);
+    defer gossip_votes.deinit();
+
     var gossip_service = try startGossip(
         allocator,
         gossip_value_allocator,
@@ -1094,7 +1097,7 @@ fn validator(
             .{ .tag = .repair, .port = repair_port },
             .{ .tag = .turbine_recv, .port = turbine_recv_port },
         },
-        .disconnected, // TODO
+        .{ .vote_collector = &gossip_votes },
     );
     defer {
         gossip_service.shutdown();
@@ -1282,7 +1285,7 @@ fn validator(
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
         if (maybe_vote_sockets) |*vs| vs else null,
-        &gossip_service.gossip_table_rw,
+        &gossip_votes,
         cfg,
     );
 
@@ -2215,7 +2218,7 @@ const ReplayAndConsensusServiceState = struct {
         self: *ReplayAndConsensusServiceState,
         app_base: *const AppBase,
         vote_sockets: ?*const replay.consensus.core.VoteSockets,
-        gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+        gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
         cfg: config.Cmd,
     ) !std.Thread {
         return try app_base.spawnService(
@@ -2227,7 +2230,7 @@ const ReplayAndConsensusServiceState = struct {
                 self.metrics,
                 if (cfg.disable_consensus) null else replay.service.AvanceReplayConsensusParams{
                     .tower = &self.tower_consensus,
-                    .gossip_table = gossip_table,
+                    .gossip_votes = gossip_votes,
                     .senders = self.senders,
                     .receivers = self.receivers,
                     .vote_sockets = vote_sockets,

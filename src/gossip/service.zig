@@ -2130,11 +2130,11 @@ pub const GossipService = struct {
 /// service.
 pub const InternalMessageBroker = struct {
     /// Pushes votes to VoteCollector in consensus.
-    vote_collector: ?*Channel(sig.gossip.data.Vote),
+    vote_collector: ?*Channel(sig.gossip.data.Vote) = null,
 
     /// Data from other validator components that gossip needs to share with the
     /// cluster.
-    receiver: ?*Channel(sig.gossip.data.GossipData),
+    receiver: ?*Channel(sig.gossip.data.GossipData) = null,
 
     pub const disconnected = InternalMessageBroker{
         .vote_collector = null,

@@ -163,11 +163,9 @@ test Senders {
 }
 
 const GossipVoteReceptor = struct {
-    cursor: u64,
     vote_tx_buffer: std.ArrayListUnmanaged(Transaction),
 
     const INIT: GossipVoteReceptor = .{
-        .cursor = 0,
         .vote_tx_buffer = .empty,
     };
 
@@ -198,22 +196,20 @@ const GossipVoteReceptor = struct {
         self: *GossipVoteReceptor,
         allocator: std.mem.Allocator,
         slot_data_provider: *const SlotDataProvider,
-        gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
+        gossip_votes: *sig.sync.Channel(sig.gossip.data.Vote),
         metrics: VoteListenerMetrics,
     ) ![]const Transaction {
         self.clearVoteTxBuffer(allocator);
         const vote_tx_buffer = &self.vote_tx_buffer;
         std.debug.assert(vote_tx_buffer.items.len == 0);
 
-        {
-            const gossip_table, var gossip_table_lg = gossip_table_rw.readWithLock();
-            defer gossip_table_lg.unlock();
-            self.cursor = try getVoteTransactionsAfterCursor(
-                allocator,
-                vote_tx_buffer,
-                self.cursor,
-                gossip_table,
-            );
+        const max_votes_to_process: usize = 4096;
+        var votes_processed: usize = 0;
+        while (gossip_votes.tryReceive()) |gossip_vote| {
+            const vote_tx = try gossip_vote.transaction.clone(allocator);
+            vote_tx_buffer.appendAssumeCapacity(vote_tx);
+            votes_processed += 1;
+            if (votes_processed >= max_votes_to_process) break;
         }
 
         // Update metrics for gossip votes received
@@ -234,40 +230,6 @@ const GossipVoteReceptor = struct {
         }
 
         return vote_tx_buffer.items;
-    }
-
-    /// Returns the updated value for the insertion index cursor.
-    fn getVoteTransactionsAfterCursor(
-        allocator: std.mem.Allocator,
-        /// Cleared and then filled with the most recent vote transactions.
-        unverified_votes_buffer: *std.ArrayListUnmanaged(Transaction),
-        /// Insertion index in the gossip table to begin reading vote transaction from.
-        start_cursor: u64,
-        gossip_table: *const sig.gossip.GossipTable,
-    ) std.mem.Allocator.Error!u64 {
-        unverified_votes_buffer.clearRetainingCapacity();
-        if (start_cursor >= gossip_table.cursor) return start_cursor;
-
-        try unverified_votes_buffer.ensureTotalCapacityPrecise(
-            allocator,
-            gossip_table.cursor - start_cursor,
-        );
-
-        var new_cursor = start_cursor;
-
-        // TODO: this seems like it might be a lot of unnecessary array hash map
-        // lookups, would be good if we did have an ordered map that could directly
-        // offer a way to iterate over a range of values without needing to check
-        // every single value in that range, like a btree map.
-        for (start_cursor..gossip_table.cursor) |insertion_index| {
-            const store_index = gossip_table.votes.get(insertion_index) orelse continue;
-            _, const vote = gossip_table.store.getByIndex(store_index).data.Vote;
-            const vote_cloned = try vote.transaction.clone(allocator);
-            unverified_votes_buffer.appendAssumeCapacity(vote_cloned);
-            new_cursor = @max(new_cursor, insertion_index + 1);
-        }
-
-        return new_cursor;
     }
 };
 
@@ -384,24 +346,23 @@ pub const VoteCollector = struct {
             senders: Senders,
             receivers: Receivers,
             ledger: *Ledger,
-            gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+            gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
         },
     ) !void {
         const slot_data_provider = params.slot_data_provider;
         const senders = params.senders;
         const receivers = params.receivers;
         const ledger = params.ledger;
-        const gossip_table_rw = params.gossip_table;
 
-        const gossip_vote_txs: []const Transaction = blk: {
-            const table = gossip_table_rw orelse break :blk &.{};
-            break :blk try self.gossip_vote_receptor.receiveVerifiedVotes(
+        const gossip_vote_txs = if (params.gossip_votes) |gossip_votes|
+            try self.gossip_vote_receptor.receiveVerifiedVotes(
                 allocator,
                 &slot_data_provider,
-                table,
+                gossip_votes,
                 self.metrics,
-            );
-        };
+            )
+        else
+            &.{};
 
         const root_slot = slot_data_provider.rootSlot();
         const root_hash = slot_data_provider.getSlotHash(root_slot);
