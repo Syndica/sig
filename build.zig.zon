@@ -50,8 +50,8 @@
             .hash = "secp256k1-0.5.0-2oLmGRAHAACjbp4BBLAoCU6Sotb_gqChbYOIIvBejN0V",
         },
         .tracy = .{
-            .url = "git+https://github.com/Syndica/tracy-zig#e4dfba6d9b2c6cbae9575c8f0df1794ca674514f",
-            .hash = "zig_tracy-0.12.2-4TLLRxFkAADqlI3jJRIfVpqKW99BKIjSi4aLKYGJnIYM",
+            .url = "git+https://github.com/Syndica/tracy-zig#fd2576ccbe1b2eff5557ad6d91f2834311c8009c",
+            .hash = "zig_tracy-0.13.0-4TLLRxFkAADP0fRkT2yR8jDk-2I4xg12GbfAF8Pgln_m",
         },
     },
 }
