@@ -887,6 +887,35 @@ test "Execute testnet block multi threaded" {
     });
 }
 
+test "freezeCompletedSlots handles errors correctly" {
+    const allocator = std.testing.allocator;
+
+    var logger = sig.trace.log.TestLogger.init(allocator, .warn);
+    defer logger.deinit();
+
+    var dep_stubs = try DependencyStubs.init(allocator, .from(logger.logger("")));
+    defer dep_stubs.deinit();
+
+    var replay_state = try dep_stubs.stubbedState(allocator, .from(logger.logger("")));
+    defer replay_state.deinit();
+
+    const processed_a_slot = try freezeCompletedSlots(&replay_state, &.{
+        .{ .slot = 1, .output = .{ .err = .{ .invalid_block = .TooFewTicks } } },
+        .{ .slot = 2, .output = .{ .err = .failed_to_load_meta } },
+    });
+
+    try std.testing.expectEqual(sig.trace.Level.warn, logger.messages.items[0].level);
+    try std.testing.expectEqualSlices(u8,
+        \\replayed slot 1 with error: replay.execution.ReplaySlotError{ .invalid_block = replay.execution.BlockError.TooFewTicks }
+    , logger.messages.items[0].content);
+    try std.testing.expectEqual(sig.trace.Level.err, logger.messages.items[1].level);
+    try std.testing.expectEqualSlices(u8,
+        \\replayed slot 2 with error: replay.execution.ReplaySlotError{ .failed_to_load_meta = void }
+    , logger.messages.items[1].content);
+
+    try std.testing.expectEqual(false, processed_a_slot);
+}
+
 fn testExecuteBlock(allocator: Allocator, config: struct {
     num_threads: u32,
     manifest_path: []const u8,

@@ -17,6 +17,7 @@ pub fn Logger(comptime scope: []const u8) type {
     return union(enum) {
         channel_print: *ChannelPrintLogger,
         direct_print: DirectPrintLogger,
+        test_logger: *TestLogger,
         noop: void,
 
         const Self = @This();
@@ -29,6 +30,7 @@ pub fn Logger(comptime scope: []const u8) type {
             return switch (self) {
                 .channel_print => |logger| .{ .channel_print = logger },
                 .direct_print => |logger| .{ .direct_print = logger },
+                .test_logger => |logger| .{ .test_logger = logger },
                 .noop => .noop,
             };
         }
@@ -40,6 +42,7 @@ pub fn Logger(comptime scope: []const u8) type {
         pub fn deinit(self: *const Self) void {
             switch (self.*) {
                 .channel_print => |logger| logger.deinit(),
+                .test_logger => |logger| logger.deinit(),
                 .direct_print, .noop => {},
             }
         }
@@ -252,6 +255,57 @@ pub const DirectPrintLogger = struct {
         std.debug.lockStdErr();
         defer std.debug.unlockStdErr();
         logfmt.writeLog(writer, scope, level, fields, fmt, args) catch {};
+    }
+};
+
+/// for use in tests where we want to capture and assert that messages were logged.
+pub const TestLogger = struct {
+    max_level: Level,
+    allocator: std.mem.Allocator,
+    messages: std.ArrayListUnmanaged(Message),
+
+    pub const Message = struct {
+        level: Level,
+        scope: []const u8,
+        content: []const u8,
+    };
+
+    const Self = @This();
+
+    pub fn init(allocator: std.mem.Allocator, max_level: Level) Self {
+        return .{
+            .allocator = allocator,
+            .max_level = max_level,
+            .messages = .empty,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        for (self.messages.items) |msg| self.allocator.free(msg.content);
+        self.messages.deinit(self.allocator);
+    }
+
+    pub fn logger(self: *Self, comptime scope: []const u8) Logger(scope) {
+        return .{ .test_logger = self };
+    }
+
+    pub fn log(
+        self: *Self,
+        comptime scope: ?[]const u8,
+        level: Level,
+        fields: anytype,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) void {
+        _ = fields; // we haven't needed to validate this in any tests yet.
+        const string = self.allocator.alloc(u8, std.fmt.count(fmt, args)) catch
+            @panic("allocation failed in test logger");
+        _ = std.fmt.bufPrint(string, fmt, args) catch unreachable;
+        self.messages.append(self.allocator, .{
+            .level = level,
+            .scope = scope orelse "",
+            .content = string,
+        }) catch @panic("allocation failed in test logger");
     }
 };
 
