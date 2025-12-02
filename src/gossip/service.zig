@@ -181,6 +181,9 @@ pub const GossipService = struct {
     metrics: GossipMetrics,
     service_manager: ServiceManager,
 
+    /// Communication with other validator components
+    broker: LocalMessageBroker,
+
     pub const PushMessageQueue = Mux(struct {
         queue: ArrayList(GossipData),
         data_allocator: std.mem.Allocator,
@@ -197,6 +200,7 @@ pub const GossipService = struct {
         my_keypair: KeyPair,
         maybe_entrypoints: ?[]const SocketAddr,
         logger: Logger,
+        broker: LocalMessageBroker,
     ) !*GossipService {
         const self = try allocator.create(GossipService);
         self.* = try GossipService.init(
@@ -206,6 +210,7 @@ pub const GossipService = struct {
             my_keypair,
             maybe_entrypoints,
             .from(logger),
+            broker,
         );
         return self;
     }
@@ -221,6 +226,7 @@ pub const GossipService = struct {
         my_keypair: KeyPair,
         maybe_entrypoints: ?[]const SocketAddr,
         logger: Logger,
+        broker: LocalMessageBroker,
     ) !GossipService {
         // setup channels for communication between threads
         var packet_incoming_channel = try Channel(Packet).create(allocator);
@@ -323,6 +329,7 @@ pub const GossipService = struct {
             .exit_counter = exit_counter,
             .service_manager = service_manager,
             .closed = false,
+            .broker = broker,
         };
     }
 
@@ -1607,8 +1614,9 @@ pub const GossipService = struct {
                 }
                 self.metrics.pull_response_n_invalid_shred_version.add(invalid_shred_count);
 
-                for (insert_results.items, 0..) |result, index| {
+                for (pull_message.gossip_values, insert_results.items, 0..) |value, result, index| {
                     if (result.wasInserted()) {
+                        try self.broker.publish(&value.data);
                         // update the contactInfo (and all other origin values) timestamps of
                         // successful inserts
                         const origin = pull_message.gossip_values[index].id();
@@ -1624,7 +1632,11 @@ pub const GossipService = struct {
                     } else if (result == .IgnoredTimeout) {
                         // silently insert the timeout values
                         // (without updating all associated origin values)
-                        _ = try gossip_table.insert(pull_message.gossip_values[index], now);
+                        const new_result =
+                            try gossip_table.insert(pull_message.gossip_values[index], now);
+                        if (new_result.wasInserted()) {
+                            try self.broker.publish(&pull_message.gossip_values[index].data);
+                        }
                     } else {
                         try failed_insert_ptrs.append(&pull_message.gossip_values[index]);
                     }
@@ -1740,7 +1752,7 @@ pub const GossipService = struct {
                 );
 
                 var insert_fail_count: u64 = 0;
-                for (insert_results.items) |result| {
+                for (push_message.gossip_values, insert_results.items) |value, result| {
                     switch (result) {
                         .InsertedNewEntry => self.metrics.push_message_n_new_inserts.inc(),
                         .OverwroteExistingEntry => |old_data| {
@@ -1753,7 +1765,9 @@ pub const GossipService = struct {
                         .IgnoredTimeout => self.metrics.push_message_n_timeouts.inc(),
                         .GossipTableFull => {},
                     }
-                    if (!result.wasInserted()) {
+                    if (result.wasInserted()) {
+                        try self.broker.publish(&value.data);
+                    } else {
                         insert_fail_count += 1;
                     }
                 }
@@ -2103,6 +2117,38 @@ pub const GossipService = struct {
     }
 };
 
+/// Manages messaging of gossip data with other validator components.
+///
+/// Other validator components need to receive gossip data as soon as it arrives
+/// from the network. Those components can register channels with this broker by
+/// populating the respective fields.
+///
+/// The word "local" here means "within the validator," to contrast with gossip
+/// messaging that happens between multiple validators over the network.
+pub const LocalMessageBroker = struct {
+    /// Pushes votes to VoteCollector in consensus.
+    vote_collector: ?*Channel(sig.gossip.data.Vote),
+
+    pub const disconnected = LocalMessageBroker{
+        .vote_collector = null,
+    };
+
+    /// Publishes new gossip data that was just received over the network to the
+    /// appropriate channels.
+    ///
+    /// Any allocated data is cloned using the channel's allocator before sending.
+    fn publish(self: *const LocalMessageBroker, data: *const GossipData) !void {
+        switch (data.*) {
+            .Vote => |vote| if (self.vote_collector) |channel| {
+                const cloned_vote = try vote[1].clone(channel.allocator);
+                errdefer cloned_vote.deinit(channel.allocator);
+                try channel.send(cloned_vote);
+            },
+            else => {},
+        }
+    }
+};
+
 /// stats that we publish to prometheus
 pub const GossipMetrics = struct {
     gossip_packets_received_total: *Counter,
@@ -2342,6 +2388,7 @@ test "general coverage" {
         keypair,
         null,
         .noop,
+        .disconnected,
     );
     defer {
         gossip_service.shutdown();
@@ -2401,6 +2448,7 @@ test "handle pong messages" {
         keypair,
         null,
         .noop,
+        .disconnected,
     );
     defer {
         gossip_service.shutdown();
@@ -2476,6 +2524,7 @@ test "build messages startup and shutdown" {
         my_keypair,
         null,
         .from(logger),
+        .disconnected,
     );
     defer {
         gossip_service.deinit();
@@ -2536,6 +2585,7 @@ test "handling prune messages" {
         my_keypair,
         null,
         .from(logger),
+        .disconnected,
     );
     defer {
         gossip_service.shutdown();
@@ -2610,6 +2660,7 @@ test "handling pull responses" {
         my_keypair,
         null,
         .from(logger),
+        .disconnected,
     );
     defer {
         gossip_service.shutdown();
@@ -2671,6 +2722,7 @@ test "handle old prune & pull request message" {
         my_keypair,
         null,
         .noop,
+        .disconnected,
     );
     defer {
         gossip_service.deinit();
@@ -2770,6 +2822,7 @@ test "handle pull request" {
         my_keypair,
         null,
         .from(logger),
+        .disconnected,
     );
     defer {
         gossip_service.shutdown();
@@ -2881,6 +2934,7 @@ test "test build prune messages and handle push messages" {
         my_keypair,
         null,
         .from(logger),
+        .disconnected,
     );
     defer {
         gossip_service.deinit();
@@ -2982,6 +3036,7 @@ fn testBuildPullRequests(
             my_keypair,
             maybe_entrypoints,
             .from(logger),
+            .disconnected,
         );
     };
     defer {
@@ -3043,6 +3098,7 @@ test "test build push messages" {
         my_keypair,
         null,
         .from(logger),
+        .disconnected,
     );
     defer {
         gossip_service.shutdown();
@@ -3115,6 +3171,7 @@ test "large push messages" {
         my_keypair,
         null,
         .noop,
+        .disconnected,
     );
     defer {
         gossip_service.shutdown();
@@ -3169,6 +3226,7 @@ test "test packet verification" {
         keypair,
         null,
         .noop,
+        .disconnected,
     );
     defer {
         gossip_service.deinit();
@@ -3289,6 +3347,7 @@ test "process contact info push packet" {
         my_keypair,
         null,
         .from(logger),
+        .disconnected,
     );
     defer {
         gossip_service.deinit();
@@ -3397,6 +3456,7 @@ test "init, exit, and deinit" {
         my_keypair,
         null,
         .from(logger),
+        .disconnected,
     );
     defer {
         gossip_service.deinit();
@@ -3427,6 +3487,7 @@ test "leak checked gossip init" {
                 my_keypair,
                 null,
                 .FOR_TESTS,
+                .disconnected,
             );
             gossip_service.shutdown();
             gossip_service.deinit();
@@ -3499,6 +3560,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
             keypair,
             null,
             .noop,
+            .disconnected,
         );
         defer {
             gossip_service.metrics.reset();
@@ -3610,6 +3672,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
             keypair,
             null,
             .from(logger),
+            .disconnected,
         );
         defer {
             gossip_service.metrics.reset();
