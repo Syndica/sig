@@ -802,7 +802,7 @@ test "process runs without error with no replay results" {
         .ledger = replay_state.ledger,
         .slot_tracker = &replay_state.slot_tracker,
         .registry = &registry,
-        .now = .UNIX_EPOCH,
+        .now = .EPOCH_ZERO,
     });
     defer consensus.deinit(allocator);
 

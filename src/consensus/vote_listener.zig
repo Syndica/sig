@@ -1812,7 +1812,7 @@ test "simple usage" {
     defer replay_votes_channel.destroy();
 
     var vote_collector: VoteCollector = try .init(
-        .UNIX_EPOCH,
+        .EPOCH_ZERO,
         slot_data_provider.rootSlot(),
         &registry,
     );
@@ -1920,7 +1920,7 @@ test "check trackers" {
     defer replay_votes_channel.destroy();
 
     var vote_collector: VoteCollector =
-        try .init(.UNIX_EPOCH, slot_data_provider.rootSlot(), &registry);
+        try .init(.EPOCH_ZERO, slot_data_provider.rootSlot(), &registry);
     defer vote_collector.deinit(allocator);
 
     var expected_trackers: std.ArrayListUnmanaged(struct { Slot, TestSlotVoteTracker }) = .empty;
