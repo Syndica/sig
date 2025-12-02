@@ -124,6 +124,13 @@ pub fn advanceReplay(
         replay_state.logger.info().logf("advanced in {}", .{std.fmt.fmtDuration(elapsed)});
     }
 
+    if (replay_state.stop_at_slot) |stop_slot| {
+        for (slot_results) |result| if (result.slot >= stop_slot) {
+            replay_state.logger.info().logf("Reached end slot {}, exiting replay", .{stop_slot});
+            return error.ReachedEndSlot;
+        };
+    }
+
     if (!processed_a_slot) try std.Thread.yield();
 }
 
@@ -156,6 +163,7 @@ pub const Dependencies = struct {
     hard_forks: sig.core.HardForks,
 
     replay_threads: u32,
+    stop_at_slot: ?Slot,
 };
 
 pub const ConsensusStatus = enum {
@@ -180,6 +188,7 @@ pub const ReplayState = struct {
     status_cache: sig.core.StatusCache,
     execution_log_helper: replay.execution.LogHelper,
     replay_votes_channel: ?*Channel(ParsedVote),
+    stop_at_slot: ?sig.core.Slot,
 
     pub fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
@@ -260,6 +269,7 @@ pub const ReplayState = struct {
             .status_cache = .DEFAULT,
             .execution_log_helper = .init(.from(deps.logger)),
             .replay_votes_channel = replay_votes_channel,
+            .stop_at_slot = deps.stop_at_slot,
         };
     }
 };
@@ -965,7 +975,11 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     defer replay_state.deinit();
 
     // replay the block
-    try advanceReplay(&replay_state, try registry.initStruct(Metrics), null);
+    replay_state.stop_at_slot = execution_slot;
+    try std.testing.expectError(
+        error.ReachedEndSlot,
+        advanceReplay(&replay_state, try registry.initStruct(Metrics), null),
+    );
 
     // get slot hash
     const actual_slot_hash = tracker_lock: {
@@ -1128,6 +1142,7 @@ pub const DependencyStubs = struct {
             .hard_forks = .{},
 
             .replay_threads = 1,
+            .stop_at_slot = null,
         }, .enabled);
     }
 
@@ -1196,6 +1211,7 @@ pub const DependencyStubs = struct {
             .hard_forks = hard_forks,
 
             .replay_threads = num_threads,
+            .stop_at_slot = null,
         }, .enabled);
     }
 };
