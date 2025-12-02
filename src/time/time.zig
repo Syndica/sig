@@ -606,19 +606,22 @@ pub const Duration = struct {
 };
 
 pub const Instant = struct {
-    inner: std.time.Instant,
+    uptime_ns: u64,
 
-    pub const EPOCH_ZERO = Instant{ .inner = .{
-        .timestamp = if (is_posix) .{ .sec = 0, .nsec = 0 } else 0,
-    } };
-
-    const is_posix = switch (builtin.os.tag) {
-        .windows, .uefi, .wasi => false,
-        else => true,
-    };
+    pub const EPOCH_ZERO = Instant{ .uptime_ns = 0 };
 
     pub fn now() Instant {
-        return .{ .inner = std.time.Instant.now() catch unreachable };
+        var ts: std.posix.timespec = undefined;
+        if (builtin.os.tag.isDarwin()) {
+            ts = std.posix.clock_gettime(.UPTIME_RAW) catch @panic("clock_gettime unsupported");
+        } else if (builtin.os.tag == .linux) {
+            ts = std.posix.clock_gettime(.BOOTTIME) catch @panic("clock_gettime unsupported");
+        } else {
+            @compileError("unsupported arch");
+        }
+
+        const ns = (@as(i64, ts.sec) *| std.time.ns_per_s) + @as(i64, ts.nsec);
+        return .{ .uptime_ns = std.math.lossyCast(u64, ns) };
     }
 
     pub fn elapsed(self: Instant) Duration {
@@ -626,31 +629,15 @@ pub const Instant = struct {
     }
 
     pub fn elapsedSince(self: Instant, earlier: Instant) Duration {
-        return Duration.fromNanos(self.inner.since(earlier.inner));
+        return Duration.fromNanos(self.uptime_ns -| earlier.uptime_ns);
     }
 
     pub fn plus(self: Instant, duration: Duration) Instant {
-        if (is_posix) {
-            const new_ns = self.inner.timestamp.nsec + @as(isize, @intCast(duration.ns));
-            return .{ .inner = .{ .timestamp = .{
-                .sec = self.inner.timestamp.sec + @divFloor(new_ns, std.time.ns_per_s),
-                .nsec = @mod(new_ns, std.time.ns_per_s),
-            } } };
-        } else {
-            return .{ .inner = .{ .timestamp = self.inner.timestamp + duration.ns } };
-        }
+        return .{ .uptime_ns = self.uptime_ns +| duration.asNanos() };
     }
 
     pub fn sub(self: Instant, duration: Duration) Instant {
-        if (is_posix) {
-            const new_ns = self.inner.timestamp.nsec - @as(isize, @intCast(duration.ns));
-            return .{ .inner = .{ .timestamp = .{
-                .sec = self.inner.timestamp.sec + @divFloor(new_ns, std.time.ns_per_s),
-                .nsec = @mod(new_ns, std.time.ns_per_s),
-            } } };
-        } else {
-            return .{ .inner = .{ .timestamp = self.inner.timestamp - duration.ns } };
-        }
+        return .{ .uptime_ns = self.uptime_ns -| duration.asNanos() };
     }
 
     pub fn format(
@@ -659,14 +646,7 @@ pub const Instant = struct {
         _: std.fmt.FormatOptions,
         writer: anytype,
     ) !void {
-        const a: u64 = switch (@TypeOf(self.inner.timestamp)) {
-            u64 => self.inner.timestamp,
-            std.posix.timespec => @intCast(
-                self.inner.timestamp.tv_sec * 1_000_000_000 + self.inner.timestamp.tv_nsec,
-            ),
-            else => @compileError("Instant: unknown timestamp type"),
-        };
-        return try writer.print("{s}", .{std.fmt.fmtDuration(a)});
+        return try writer.print("{s}", .{std.fmt.fmtDuration(self.uptime_ns)});
     }
 };
 
