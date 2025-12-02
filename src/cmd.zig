@@ -131,7 +131,7 @@ pub fn main() !void {
             params.geyser.apply(&current_config);
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
-            current_config.voting_enabled = params.voting_enabled;
+            current_config.voting_enabled = params.voting_enabled or params.vote_account != null;
             current_config.rpc_port = params.rpc_port;
             try validator(gpa, gossip_gpa, current_config);
         },
@@ -385,7 +385,7 @@ const Cmd = struct {
         .kind = .named,
         .name_override = "voting-enabled",
         .alias = .none,
-        .default_value = true,
+        .default_value = false,
         .config = {},
         .help = "Enable validator voting. When false, operate as non-voting.",
     };

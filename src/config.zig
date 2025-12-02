@@ -26,7 +26,7 @@ pub const Cmd = struct {
     shred_version: ?u16 = null,
     replay_threads: u16 = 4,
     disable_consensus: bool = false,
-    voting_enabled: bool = true,
+    voting_enabled: bool = false,
     rpc_port: ?u16 = null,
     vote_account: ?[]const u8 = null,
 
