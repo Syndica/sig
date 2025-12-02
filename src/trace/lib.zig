@@ -11,5 +11,8 @@ pub const DirectPrintLogger = log.DirectPrintLogger;
 pub const ChannelPrintLogger = log.ChannelPrintLogger;
 
 pub inline fn assert(ok: bool) void {
-    if (!ok) @import("std").debug.panic("assertion failed at {any}", .{@src()});
+    if (!ok) {
+        @branchHint(.cold);
+        @import("std").debug.panic("assertion failed", .{});
+    }
 }
