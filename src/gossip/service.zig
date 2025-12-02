@@ -2127,7 +2127,7 @@ pub const GossipService = struct {
 /// messaging that happens between multiple validators over the network.
 pub const LocalMessageBroker = struct {
     /// Pushes votes to VoteCollector in consensus.
-    vote_collector: ?*Channel(sig.gossip.data.Vote),
+    vote_collector: ?*Channel(sig.gossip.data.Vote) = null,
 
     pub const disconnected = LocalMessageBroker{
         .vote_collector = null,
