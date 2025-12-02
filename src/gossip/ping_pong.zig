@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 
 const testing = std.testing;
 
-const DefaultPrng = std.Random.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const LruCache = sig.utils.lru.LruCache;
 const Pubkey = sig.core.Pubkey;
@@ -38,7 +37,6 @@ pub const Ping = struct {
         var token: [PING_TOKEN_SIZE]u8 = undefined;
         random.bytes(&token);
         const signature = try keypair.sign(&token, null);
-
         return .{
             .from = Pubkey.fromPublicKey(&keypair.public_key),
             .token = token,
@@ -113,14 +111,12 @@ pub const PingCache = struct {
     // allocator
     allocator: std.mem.Allocator,
 
-    const Self = @This();
-
     pub fn init(
         allocator: std.mem.Allocator,
         ttl: sig.time.Duration,
         rate_limit_delay: sig.time.Duration,
         cache_capacity: usize,
-    ) error{OutOfMemory}!Self {
+    ) error{OutOfMemory}!PingCache {
         std.debug.assert(rate_limit_delay.asNanos() <= ttl.asNanos() / 2);
 
         var pings = try LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant).init(allocator, cache_capacity);
@@ -132,7 +128,7 @@ pub const PingCache = struct {
         var pending_cache = try LruCache(.non_locking, Hash, PubkeyAndSocketAddr).init(allocator, cache_capacity);
         errdefer pending_cache.deinit();
 
-        return Self{
+        return PingCache{
             .ttl = ttl,
             .rate_limit_delay = rate_limit_delay,
             .pings = pings,
@@ -142,14 +138,14 @@ pub const PingCache = struct {
         };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *PingCache) void {
         self.pending_cache.deinit();
         self.pings.deinit();
         self.pongs.deinit();
     }
 
     /// Records a `Pong` if corresponding `Ping` exists in `pending_cache`
-    pub fn receviedPong(self: *Self, pong: *const Pong, socket: SocketAddr, now: std.time.Instant) bool {
+    pub fn receviedPong(self: *PingCache, pong: *const Pong, socket: SocketAddr, now: std.time.Instant) bool {
         const peer_and_addr = PubkeyAndSocketAddr{ .pubkey = pong.from, .socket_addr = socket };
         if (self.pending_cache.peek(pong.hash)) |*pubkey_and_addr| {
             if (pubkey_and_addr.pubkey.equals(&pong.from) and pubkey_and_addr.socket_addr.eql(&socket)) {
@@ -163,7 +159,8 @@ pub const PingCache = struct {
     }
 
     pub fn maybePing(
-        self: *Self,
+        self: *PingCache,
+        random: std.Random,
         now: std.time.Instant,
         peer_and_addr: PubkeyAndSocketAddr,
         keypair: *const KeyPair,
@@ -177,17 +174,17 @@ pub const PingCache = struct {
                 return null;
             }
         }
-        var prng = DefaultPrng.init(std.testing.random_seed);
-        const ping = Ping.initRandom(prng.random(), keypair) catch return null;
+        const ping = Ping.initRandom(random, keypair) catch return null;
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
-        const hash = Hash.init(&token_with_prefix);
+        const hash: Hash = .init(&token_with_prefix);
         _ = self.pending_cache.put(hash, peer_and_addr);
         _ = self.pings.put(peer_and_addr, now);
         return ping;
     }
 
-    pub fn check(
-        self: *Self,
+    pub fn checkAndUpdate(
+        self: *PingCache,
+        random: std.Random,
         now: std.time.Instant,
         peer_and_addr: PubkeyAndSocketAddr,
         keypair: *const KeyPair,
@@ -204,32 +201,49 @@ pub const PingCache = struct {
             }
 
             // if age is greater than time-to-live divided by 8, we maybe ping again
-            return .{ .passes_ping_check = true, .maybe_ping = if (age > self.ttl.asNanos() / 8) self.maybePing(now, peer_and_addr, keypair) else null };
+            return .{
+                .passes_ping_check = true,
+                .maybe_ping = if (age > self.ttl.asNanos() / 8) self.maybePing(random, now, peer_and_addr, keypair) else null,
+            };
         }
-        return .{ .passes_ping_check = false, .maybe_ping = self.maybePing(now, peer_and_addr, keypair) };
+        return .{
+            .passes_ping_check = false,
+            .maybe_ping = self.maybePing(random, now, peer_and_addr, keypair),
+        };
     }
 
     /// Filters valid peers according to `PingCache` state and returns them along with any possible pings that need to be sent out.
     ///
     /// *Note*: caller is responsible for deinit `ArrayList`(s) returned!
     pub fn filterValidPeers(
-        self: *Self,
+        self: *PingCache,
         allocator: std.mem.Allocator,
+        random: std.Random,
         our_keypair: KeyPair,
         peers: []ThreadSafeContactInfo,
-    ) error{OutOfMemory}!struct { valid_peers: std.ArrayList(usize), pings: std.ArrayList(PingAndSocketAddr) } {
+    ) error{OutOfMemory}!struct {
+        valid_peers: std.ArrayListUnmanaged(usize),
+        pings: std.ArrayListUnmanaged(PingAndSocketAddr),
+    } {
         const now = std.time.Instant.now() catch @panic("time not supported by OS!");
-        var valid_peers = std.ArrayList(usize).init(allocator);
-        var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
+        var valid_peers: std.ArrayListUnmanaged(usize) = .empty;
+        errdefer valid_peers.deinit(allocator);
+
+        var pings: std.ArrayListUnmanaged(PingAndSocketAddr) = .empty;
+        errdefer valid_peers.deinit(allocator);
 
         for (peers, 0..) |*peer, i| {
             if (peer.gossip_addr) |gossip_addr| {
-                const result = self.check(now, PubkeyAndSocketAddr{ .pubkey = peer.pubkey, .socket_addr = gossip_addr }, &our_keypair);
+                const peer_pk_socket: PubkeyAndSocketAddr = .{
+                    .pubkey = peer.pubkey,
+                    .socket_addr = gossip_addr,
+                };
+                const result = self.checkAndUpdate(random, now, peer_pk_socket, &our_keypair);
                 if (result.passes_ping_check) {
-                    try valid_peers.append(i);
+                    try valid_peers.append(allocator, i);
                 }
                 if (result.maybe_ping) |ping| {
-                    try pings.append(.{ .ping = ping, .socket = gossip_addr });
+                    try pings.append(allocator, .{ .ping = ping, .socket = gossip_addr });
                 }
             }
         }
@@ -238,7 +252,7 @@ pub const PingCache = struct {
     }
 
     // only used in tests/benchmarks
-    pub fn _setPong(self: *Self, peer: Pubkey, socket_addr: SocketAddr) void {
+    pub fn _setPong(self: *PingCache, peer: Pubkey, socket_addr: SocketAddr) void {
         _ = self.pongs.put(PubkeyAndSocketAddr{
             .pubkey = peer,
             .socket_addr = socket_addr,
@@ -263,6 +277,7 @@ test "PingCache works" {
     var our_kp = KeyPair.generate();
 
     const ping = ping_cache.maybePing(
+        random,
         now1,
         the_node,
         &our_kp,
@@ -270,13 +285,13 @@ test "PingCache works" {
 
     const now2 = try std.time.Instant.now();
 
-    const resp = ping_cache.check(now2, the_node, &our_kp);
+    const resp = ping_cache.checkAndUpdate(random, now2, the_node, &our_kp);
     try testing.expect(!resp.passes_ping_check);
     try testing.expect(resp.maybe_ping != null);
 
-    var result = try ping_cache.filterValidPeers(testing.allocator, our_kp, &[_]ThreadSafeContactInfo{});
-    defer result.valid_peers.deinit();
-    defer result.pings.deinit();
+    var result = try ping_cache.filterValidPeers(testing.allocator, random, our_kp, &.{});
+    defer result.valid_peers.deinit(testing.allocator);
+    defer result.pings.deinit(testing.allocator);
 
     try testing.expect(ping != null);
 }

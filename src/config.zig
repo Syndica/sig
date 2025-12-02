@@ -29,6 +29,7 @@ pub const Cmd = struct {
     voting_enabled: bool = false,
     rpc_port: ?u16 = null,
     vote_account: ?[]const u8 = null,
+    stop_at_slot: ?sig.core.Slot = null,
 
     pub fn genesisFilePath(self: Cmd) error{UnknownCluster}!?[]const u8 {
         return if (self.genesis_file_path) |provided_path|

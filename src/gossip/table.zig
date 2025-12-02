@@ -843,10 +843,11 @@ pub const GossipTable = struct {
         timeout: u64,
     ) error{OutOfMemory}!std.ArrayList(GossipKey) {
         const cutoff_timestamp = now -| timeout;
-        const n_pubkeys = self.pubkey_to_values.count();
 
         var old_labels = std.ArrayList(GossipKey).init(self.allocator);
-        next_key: for (self.pubkey_to_values.keys()[0..n_pubkeys]) |key| {
+        errdefer old_labels.deinit();
+
+        next_key: for (self.pubkey_to_values.keys()) |key| {
             // get associated entries
             const entry = self.pubkey_to_values.getEntry(key).?;
 
@@ -879,7 +880,7 @@ pub const GossipTable = struct {
                     versioned_value.metadata.timestamp_on_insertion,
                 );
                 if (value_timestamp <= cutoff_timestamp) {
-                    old_labels.append(versioned_value.data.label()) catch unreachable;
+                    try old_labels.append(versioned_value.data.label());
                 }
             }
         }
