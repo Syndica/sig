@@ -1826,7 +1826,7 @@ test "processResult and handleDuplicateConfirmedFork" {
         .ledger = replay_state.ledger,
         .slot_tracker = &replay_state.slot_tracker,
         .registry = &registry,
-        .now = .UNIX_EPOCH,
+        .now = .EPOCH_ZERO,
     });
     defer consensus.deinit(allocator);
 
@@ -4824,7 +4824,7 @@ test "edge cases - duplicate slot" {
         .account_reader = replay_state.account_store.reader(),
         .ledger = replay_state.ledger,
         .slot_tracker = slot_tracker,
-        .now = .UNIX_EPOCH,
+        .now = .EPOCH_ZERO,
         .registry = &registry,
     });
     defer tower_consensus.deinit(gpa);
@@ -4983,7 +4983,7 @@ test "edge cases - duplicate confirmed slot" {
         .account_reader = replay_state.account_store.reader(),
         .ledger = replay_state.ledger,
         .slot_tracker = slot_tracker,
-        .now = .UNIX_EPOCH,
+        .now = .EPOCH_ZERO,
         .registry = &registry,
     });
     defer tower_consensus.deinit(gpa);
@@ -5081,7 +5081,7 @@ test "edge cases - gossip verified vote hashes" {
     std.debug.assert(slot_tracker.root == 0);
 
     var vote_collector: sig.consensus.vote_listener.VoteCollector =
-        try .init(.UNIX_EPOCH, slot_tracker.root, &registry);
+        try .init(.EPOCH_ZERO, slot_tracker.root, &registry);
     defer vote_collector.deinit(gpa);
 
     const root_slot0 = slot_tracker.root;
@@ -5147,7 +5147,7 @@ test "edge cases - gossip verified vote hashes" {
         .account_reader = replay_state.account_store.reader(),
         .ledger = replay_state.ledger,
         .slot_tracker = slot_tracker,
-        .now = .UNIX_EPOCH,
+        .now = .EPOCH_ZERO,
         .registry = &registry,
     });
     defer tower_consensus.deinit(gpa);
@@ -5366,7 +5366,7 @@ test "vote on heaviest frozen descendant with no switch" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
-        .now = .UNIX_EPOCH,
+        .now = .EPOCH_ZERO,
         .registry = &registry,
     });
     defer consensus.deinit(allocator);
@@ -5591,7 +5591,7 @@ test "vote accounts with landed votes populate bank stats" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
-        .now = .UNIX_EPOCH,
+        .now = .EPOCH_ZERO,
         .registry = &registry,
     });
     defer consensus.deinit(allocator);
@@ -5875,7 +5875,7 @@ test "root advances after vote satisfies lockouts" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
-        .now = .UNIX_EPOCH,
+        .now = .EPOCH_ZERO,
         .registry = &registry,
     });
     defer consensus.deinit(allocator);
@@ -6227,7 +6227,7 @@ test "vote refresh when no new vote available" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
-        .now = .UNIX_EPOCH,
+        .now = .EPOCH_ZERO,
         .registry = &registry,
     });
     defer consensus.deinit(allocator);
@@ -6516,7 +6516,7 @@ test "detect and mark duplicate confirmed fork" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
-        .now = .UNIX_EPOCH,
+        .now = .EPOCH_ZERO,
         .registry = &registry,
     });
     defer consensus.deinit(allocator);
@@ -6692,7 +6692,7 @@ test "detect and mark duplicate slot" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
-        .now = .UNIX_EPOCH,
+        .now = .EPOCH_ZERO,
         .registry = &registry,
     });
     defer consensus.deinit(allocator);
@@ -7002,7 +7002,7 @@ test "successful fork switch (switch_proof)" {
         .account_reader = stubs.accountsdb.accountReader(),
         .ledger = &stubs.ledger,
         .slot_tracker = &slot_tracker,
-        .now = .UNIX_EPOCH,
+        .now = .EPOCH_ZERO,
         .registry = &registry,
     });
     defer consensus.deinit(allocator);

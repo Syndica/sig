@@ -608,7 +608,7 @@ pub const Duration = struct {
 pub const Instant = struct {
     inner: std.time.Instant,
 
-    pub const UNIX_EPOCH = Instant{ .inner = .{
+    pub const EPOCH_ZERO = Instant{ .inner = .{
         .timestamp = if (is_posix) .{ .sec = 0, .nsec = 0 } else 0,
     } };
 

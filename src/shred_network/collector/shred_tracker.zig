@@ -410,8 +410,8 @@ const MonitoredSlot = struct {
     shreds: ShredSet = ShredSet.initEmpty(),
     max_seen: ?u32 = null,
     last_shred: ?u32 = null,
-    first_received_timestamp: Instant = Instant.UNIX_EPOCH,
-    last_unique_received_timestamp: Instant = Instant.UNIX_EPOCH,
+    first_received_timestamp: Instant = Instant.EPOCH_ZERO,
+    last_unique_received_timestamp: Instant = Instant.EPOCH_ZERO,
     is_complete: bool = false,
     /// this just means we've identified that another slot that claims to be
     /// skipping this one. it doesn't mean this slot is definitely being skipped.
@@ -495,7 +495,7 @@ test "trivial happy path" {
     var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry);
     defer tracker.deinit();
 
-    _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH.plus(Duration.fromSecs(1)));
+    _ = try tracker.identifyMissing(&msr, Instant.EPOCH_ZERO.plus(Duration.fromSecs(1)));
 
     try std.testing.expect(1 == msr.len);
     const report = msr.items()[0];
@@ -516,12 +516,12 @@ test "1 registered shred is identified" {
     var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry);
     defer tracker.deinit();
 
-    try tracker.registerShred(13579, 123, 13578, false, Instant.UNIX_EPOCH);
+    try tracker.registerShred(13579, 123, 13578, false, Instant.EPOCH_ZERO);
 
-    _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH);
+    _ = try tracker.identifyMissing(&msr, Instant.EPOCH_ZERO);
     try std.testing.expectEqual(0, msr.len);
 
-    _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH.plus(Duration.fromSecs(1)));
+    _ = try tracker.identifyMissing(&msr, Instant.EPOCH_ZERO.plus(Duration.fromSecs(1)));
     try std.testing.expectEqual(1, msr.len);
 
     const report = msr.items()[0];
@@ -544,7 +544,7 @@ test "slots are only skipped after a competing fork has developed sufficiently" 
     var tracker = try BasicShredTracker.init(std.testing.allocator, 1, .noop, &registry);
     defer tracker.deinit();
 
-    const start = Instant.UNIX_EPOCH;
+    const start = Instant.EPOCH_ZERO;
 
     // complete slots 1 and 3, where 3 skips 2.
     try tracker.registerShred(1, 0, 0, true, start);
@@ -593,7 +593,7 @@ test "slots are not skipped when the current fork is developed" {
     var tracker = try BasicShredTracker.init(std.testing.allocator, 1, .noop, &registry);
     defer tracker.deinit();
 
-    const start = Instant.UNIX_EPOCH;
+    const start = Instant.EPOCH_ZERO;
 
     // complete slots 1 and 3, where 3 skips 2.
     try tracker.registerShred(1, 0, 0, true, start);
