@@ -1049,6 +1049,7 @@ fn gossip(
         cfg,
         &app_base,
         &.{},
+        .disconnected,
     );
     defer {
         gossip_service.shutdown();
@@ -1084,10 +1085,17 @@ fn validator(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    var gossip_service = try startGossip(allocator, gossip_value_allocator, cfg, &app_base, &.{
-        .{ .tag = .repair, .port = repair_port },
-        .{ .tag = .turbine_recv, .port = turbine_recv_port },
-    });
+    var gossip_service = try startGossip(
+        allocator,
+        gossip_value_allocator,
+        cfg,
+        &app_base,
+        &.{
+            .{ .tag = .repair, .port = repair_port },
+            .{ .tag = .turbine_recv, .port = turbine_recv_port },
+        },
+        .disconnected, // TODO
+    );
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
@@ -1482,7 +1490,7 @@ fn shredNetwork(
     var gossip_service = try startGossip(allocator, gossip_value_allocator, cfg, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },
         .{ .tag = .turbine_recv, .port = turbine_recv_port },
-    });
+    }, .disconnected);
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
@@ -1741,7 +1749,14 @@ fn testTransactionSenderService(
     const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
 
     // start gossip (used to get TPU ports of leaders)
-    const gossip_service = try startGossip(allocator, gossip_value_allocator, cfg, &app_base, &.{});
+    const gossip_service = try startGossip(
+        allocator,
+        gossip_value_allocator,
+        cfg,
+        &app_base,
+        &.{},
+        .disconnected,
+    );
     defer {
         gossip_service.deinit();
         allocator.destroy(gossip_service);
@@ -1985,6 +2000,7 @@ fn startGossip(
     app_base: *AppBase,
     /// Extra sockets to publish in gossip, other than the gossip socket
     extra_sockets: []const struct { tag: SocketTag, port: u16 },
+    broker: sig.gossip.service.InternalMessageBroker,
 ) !*GossipService {
     const zone = tracy.Zone.init(@src(), .{ .name = "cmd startGossip" });
     defer zone.deinit();
@@ -2013,6 +2029,7 @@ fn startGossip(
         app_base.my_keypair, // TODO: consider security implication of passing keypair by value
         app_base.entrypoints,
         .from(app_base.logger),
+        broker,
     );
 
     try service.start(.{
@@ -2264,6 +2281,7 @@ fn downloadSnapshot(
         cfg,
         &app_base,
         &.{},
+        .disconnected,
     );
     defer {
         gossip_service.shutdown();
