@@ -111,7 +111,7 @@ pub const BasicShredTracker = struct {
         const monitored_slot = try self.observeSlot(slot);
 
         const slot_is_complete = monitored_slot
-            .record(shred_index, is_last_in_slot, timestamp);
+            .record(self.logger, shred_index, is_last_in_slot, timestamp);
 
         if (slot > self.max_slot_processed) {
             self.max_slot_processed = slot;
@@ -422,7 +422,13 @@ const MonitoredSlot = struct {
     const Self = @This();
 
     /// returns if the slot is *definitely* complete (there may be false negatives)
-    pub fn record(self: *Self, shred_index: u32, is_last_in_slot: bool, timestamp: Instant) bool {
+    pub fn record(
+        self: *Self,
+        logger: Logger,
+        shred_index: u32,
+        is_last_in_slot: bool,
+        timestamp: Instant,
+    ) bool {
         if (self.is_complete) return false;
         if (!bit_set.setAndWasSet(&self.shreds, shred_index)) {
             self.last_unique_received_timestamp = timestamp;
@@ -431,7 +437,13 @@ const MonitoredSlot = struct {
 
         if (is_last_in_slot) {
             if (self.last_shred) |old_last| {
-                self.last_shred = @min(old_last, shred_index);
+                self.last_shred = @max(old_last, shred_index);
+                if (shred_index != old_last) {
+                    logger.err().log(
+                        "The last shred index changed after already being set. " ++
+                            "A leader might have produced a duplicate/invalid block for a slot",
+                    );
+                }
             } else {
                 self.last_shred = shred_index;
             }
@@ -447,9 +459,8 @@ const MonitoredSlot = struct {
 
         if (self.last_shred) |last| {
             assert(last <= max_seen);
-            assert(self.unique_observed_count <= last + 1);
+
             if (self.unique_observed_count == last + 1) {
-                assert(last == max_seen);
                 self.is_complete = true;
                 return true;
             }
