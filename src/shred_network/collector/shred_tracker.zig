@@ -410,8 +410,8 @@ const MonitoredSlot = struct {
     shreds: ShredSet = ShredSet.initEmpty(),
     max_seen: ?u32 = null,
     last_shred: ?u32 = null,
-    first_received_timestamp: Instant = Instant.EPOCH_ZERO,
-    last_unique_received_timestamp: Instant = Instant.EPOCH_ZERO,
+    first_received_timestamp: Instant = .EPOCH_ZERO,
+    last_unique_received_timestamp: Instant = .EPOCH_ZERO,
     is_complete: bool = false,
     /// this just means we've identified that another slot that claims to be
     /// skipping this one. it doesn't mean this slot is definitely being skipped.
@@ -516,9 +516,9 @@ test "1 registered shred is identified" {
     var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry);
     defer tracker.deinit();
 
-    try tracker.registerShred(13579, 123, 13578, false, Instant.EPOCH_ZERO);
+    try tracker.registerShred(13579, 123, 13578, false, .EPOCH_ZERO);
 
-    _ = try tracker.identifyMissing(&msr, Instant.EPOCH_ZERO);
+    _ = try tracker.identifyMissing(&msr, .EPOCH_ZERO);
     try std.testing.expectEqual(0, msr.len);
 
     _ = try tracker.identifyMissing(&msr, Instant.EPOCH_ZERO.plus(Duration.fromSecs(1)));
