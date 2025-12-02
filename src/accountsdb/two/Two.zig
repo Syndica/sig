@@ -76,14 +76,14 @@ pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot) void {
             index.lock.lockShared();
             defer index.lock.unlockShared();
 
-            self.rooted.beginTransation();
+            self.rooted.beginTransaction();
 
             var entries = index.entries.iterator();
             while (entries.next()) |entry| {
                 self.rooted.put(entry.key_ptr.*, newly_rooted_slot, entry.value_ptr.*);
             }
 
-            self.rooted.commitTransation();
+            self.rooted.commitTransaction();
 
             self.rooted.largest_rooted_slot = @max(
                 self.rooted.largest_rooted_slot orelse 0,

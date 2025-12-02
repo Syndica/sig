@@ -170,8 +170,6 @@ fn accountsHash(self: *Rooted) !sig.core.LtHash {
         const lamports: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 3));
         const executable: bool = sql.sqlite3_column_int(stmt, 4) != 0;
         const rent_epoch: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 5));
-        const last_modified_slot: Slot = @bitCast(sql.sqlite3_column_int64(stmt, 6));
-        _ = last_modified_slot;
 
         const account: AccountSharedData = .{
             .lamports = lamports,
@@ -356,11 +354,11 @@ fn err(self: *Rooted, code: c_int) void {
     );
 }
 
-pub fn beginTransation(self: *Rooted) void {
+pub fn beginTransaction(self: *Rooted) void {
     self.err(sql.sqlite3_exec(self.handle, "BEGIN TRANSACTION;", null, null, null));
 }
 
-pub fn commitTransation(self: *Rooted) void {
+pub fn commitTransaction(self: *Rooted) void {
     self.err(sql.sqlite3_exec(self.handle, "COMMIT;", null, null, null));
 }
 
