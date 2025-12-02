@@ -160,7 +160,7 @@ pub const StatusCache = struct {
             for (roots.keys()) |rooted| slot = @min(rooted, slot orelse rooted);
             break :blk slot orelse return;
         };
-        std.debug.assert(roots.swapRemove(min_root));
+        sig.trace.assert(roots.swapRemove(min_root));
 
         {
             const cache = &state.mut().cache;

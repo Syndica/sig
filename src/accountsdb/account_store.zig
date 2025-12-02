@@ -456,7 +456,7 @@ pub const ThreadSafeAccountMap = struct {
 
             // there were accounts mutated in this slot => we must have an entry
             const pubkey_entries = self.pubkey_map.getPtr(pubkey) orelse unreachable;
-            std.debug.assert(pubkey_entries.items.len > 0);
+            sig.trace.assert(pubkey_entries.items.len > 0);
 
             // attempt removal from pubkey_entry, trying backwards (oldest first)
             var i = pubkey_entries.items.len;
@@ -469,8 +469,8 @@ pub const ThreadSafeAccountMap = struct {
                 // remove account from pubkey_map(pubkey)->accounts, and free the account
                 const slot_popped, const account_popped = pubkey_entries.pop().?;
                 defer account_popped.deinit(self.allocator);
-                std.debug.assert(slot_popped == old_slot);
-                std.debug.assert(account_popped.equals(&account));
+                sig.trace.assert(slot_popped == old_slot);
+                sig.trace.assert(account_popped.equals(&account));
 
                 // find the same account in slot_map(slot)->accounts, and remove it from the list
                 const slot_entries = self.slot_map.getPtr(old_slot).?;
@@ -480,8 +480,8 @@ pub const ThreadSafeAccountMap = struct {
                 } else unreachable;
                 const removed_pubkey, const removed_account =
                     slot_entries.orderedRemove(removal_idx);
-                std.debug.assert(removed_pubkey.equals(&pubkey));
-                std.debug.assert(removed_account.equals(&account_popped));
+                sig.trace.assert(removed_pubkey.equals(&pubkey));
+                sig.trace.assert(removed_account.equals(&account_popped));
 
                 // if the len of slot_entries has shrunk considerably, shrink the capacity
                 if (slot_entries.items.len > 0 and
@@ -493,7 +493,7 @@ pub const ThreadSafeAccountMap = struct {
                 // if the slot has no more entries, deinit and remove it
                 if (slot_entries.items.len == 0) {
                     slot_entries.deinit(self.allocator);
-                    std.debug.assert(self.slot_map.orderedRemove(old_slot));
+                    sig.trace.assert(self.slot_map.orderedRemove(old_slot));
                 }
             }
         }
@@ -541,7 +541,7 @@ pub const ThreadSafeAccountMap = struct {
             self: *ThreadSafeAccountMap.SlotModifiedIterator,
             allocator: std.mem.Allocator,
         ) !?struct { Pubkey, Account } {
-            std.debug.assert(self.cursor != std.math.maxInt(usize));
+            sig.trace.assert(self.cursor != std.math.maxInt(usize));
             defer self.cursor += 1;
             if (self.cursor >= self.slot_list.len) return null;
             const pubkey, const acc = self.slot_list[self.cursor];

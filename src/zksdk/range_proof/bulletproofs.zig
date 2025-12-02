@@ -24,8 +24,8 @@ pub const TWO = Scalar.fromBytes(.{2} ++ .{0} ** 31);
 const MAX_COMMITMENTS = 8;
 
 pub fn Proof(bit_size: comptime_int) type {
-    std.debug.assert(std.math.isPowerOfTwo(bit_size));
-    std.debug.assert(bit_size <= 256);
+    sig.trace.assert(std.math.isPowerOfTwo(bit_size));
+    sig.trace.assert(bit_size <= 256);
     const logn: u64 = std.math.log2_int(u64, bit_size);
     const max = (2 * bit_size) + (2 * logn) + 5 + 8;
 
@@ -137,15 +137,15 @@ pub fn Proof(bit_size: comptime_int) type {
             transcript: *Transcript,
         ) !Self {
             // amounts, bit_lengths, and opening must all be the same length
-            std.debug.assert(amounts.len == bit_lengths.len and openings.len == amounts.len);
+            sig.trace.assert(amounts.len == bit_lengths.len and openings.len == amounts.len);
 
             // should be checked before
             var nm: u64 = 0;
             for (bit_lengths) |len| {
-                std.debug.assert(len != 0 and len <= bit_size);
+                sig.trace.assert(len != 0 and len <= bit_size);
                 nm += len;
             }
-            std.debug.assert(nm == bit_size);
+            sig.trace.assert(nm == bit_size);
 
             transcript.appendRangeProof(.range, bit_size);
 
@@ -303,7 +303,7 @@ pub fn Proof(bit_size: comptime_int) type {
             bit_lengths: []const u64,
             transcript: *Transcript,
         ) !void {
-            std.debug.assert(commitments.len == bit_lengths.len);
+            sig.trace.assert(commitments.len == bit_lengths.len);
 
             transcript.appendRangeProof(.range, bit_size);
 
@@ -712,7 +712,7 @@ pub fn Data(bit_size: comptime_int) type {
 ///
 /// Asserts the length is the same.
 pub fn innerProduct(a: []const Scalar, b: []const Scalar) Scalar {
-    std.debug.assert(a.len == b.len);
+    sig.trace.assert(a.len == b.len);
     var out = Scalar.fromBytes(Edwards25519.scalar.zero);
     for (a, b) |c, d| out = out.add(c.mul(d));
     return out;

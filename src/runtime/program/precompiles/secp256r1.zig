@@ -131,7 +131,7 @@ pub fn newInstruction(
     message: []const u8,
 ) !sig.core.Instruction {
     if (!builtin.is_test) @compileError("newInstruction is only for use in tests");
-    std.debug.assert(message.len <= std.math.maxInt(u16));
+    sig.trace.assert(message.len <= std.math.maxInt(u16));
 
     const num_signatures: u8 = 1;
     const public_key_offset = DATA_START;
@@ -165,11 +165,11 @@ pub fn newInstruction(
     // add 2nd byte for padding, so that offset structure is aligned
     instruction_data.appendSliceAssumeCapacity(&.{ num_signatures, 0 });
     instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&offsets));
-    std.debug.assert(instruction_data.items.len == public_key_offset);
+    sig.trace.assert(instruction_data.items.len == public_key_offset);
     instruction_data.appendSliceAssumeCapacity(&public_key.toCompressedSec1());
-    std.debug.assert(instruction_data.items.len == signature_offset);
+    sig.trace.assert(instruction_data.items.len == signature_offset);
     instruction_data.appendSliceAssumeCapacity(&sanitized_signature.toBytes());
-    std.debug.assert(instruction_data.items.len == message_data_offset);
+    sig.trace.assert(instruction_data.items.len == message_data_offset);
     instruction_data.appendSliceAssumeCapacity(message);
 
     return .{
@@ -484,6 +484,6 @@ fn decode(comptime string: []const u8, comptime num: usize) [num]u8 {
     if (!builtin.is_test) @compileError("should only be used in tests");
     var buffer: [num]u8 = undefined;
     const result = std.fmt.hexToBytes(&buffer, string) catch unreachable;
-    std.debug.assert(result.len == num);
+    sig.trace.assert(result.len == num);
     return buffer;
 }

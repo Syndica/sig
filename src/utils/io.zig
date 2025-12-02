@@ -1,4 +1,5 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 const testing = std.testing;
 
 pub fn peekableReader(reader: anytype) PeekableReader(@TypeOf(reader)) {
@@ -100,7 +101,7 @@ pub const WindowedWriter = struct {
         buffer: []u8,
         start_bytes_to_ignore: u64,
     ) WindowedWriter {
-        std.debug.assert(buffer.len != 0);
+        sig.trace.assert(buffer.len != 0);
         return .{
             .remaining_to_ignore = start_bytes_to_ignore,
             .end_index = 0,

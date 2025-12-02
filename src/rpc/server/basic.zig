@@ -200,7 +200,7 @@ fn handleGetOrHead(
                             };
                         }
                     } else {
-                        std.debug.assert(
+                        sig.trace.assert(
                             response.transfer_encoding.content_length == archive_len,
                         );
                         // NOTE: in order to avoid needing to actually spend time writing the response body,

@@ -55,6 +55,7 @@
 //! `foo file/path --arg=a`, but not `foo --arg=a file/path`.
 
 const std = @import("std");
+const sig = @import("sig.zig");
 
 // -- API -- //
 
@@ -1193,7 +1194,7 @@ fn CmdHelper(
                                 arg,
                                 args_iter,
                             );
-                            std.debug.assert( // sanity check
+                            sig.trace.assert( // sanity check
                                 args_iter.index ==
                                     args_iter_index_guard //
                             );
@@ -1257,14 +1258,14 @@ fn CmdHelper(
                     },
                 }
             } else .subcmd_unset;
-            std.debug.assert(args_iter.peek() == null or parse_result == .help);
+            sig.trace.assert(args_iter.peek() == null or parse_result == .help);
 
             switch (parse_result) {
                 .help => {
                     freeArguments(allocator, result);
                     return null;
                 },
-                .subcmd_set => comptime std.debug.assert(maybe_sub_cmd_s_field_index != null),
+                .subcmd_set => comptime sig.trace.assert(maybe_sub_cmd_s_field_index != null),
                 .subcmd_unset => if (maybe_sub_cmd_s_field_index) |sub_cmd_s_field_index| {
                     const sub_cmd_s_field_info = cmd_fields[sub_cmd_s_field_index];
                     const sub_cmd_s_field_name = sub_cmd_s_field_info.name;

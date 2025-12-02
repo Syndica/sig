@@ -10,7 +10,7 @@ const ExtendedPoint = ed25519.ExtendedPoint;
 const LookupTable = ed25519.LookupTable;
 
 fn asRadix16(c: CompressedScalar) [64]i8 {
-    std.debug.assert(c[31] <= 127);
+    sig.trace.assert(c[31] <= 127);
 
     var output: [64]i8 = @splat(0);
 
@@ -37,9 +37,9 @@ pub fn mulMultiRuntime(
     points: []const ed25519.PointType(encoded, ristretto),
     scalars: []const CompressedScalar,
 ) ed25519.ReturnType(encoded, ristretto) {
-    std.debug.assert(points.len <= max);
-    std.debug.assert(scalars.len <= max);
-    std.debug.assert(points.len == scalars.len);
+    sig.trace.assert(points.len <= max);
+    sig.trace.assert(scalars.len <= max);
+    sig.trace.assert(points.len == scalars.len);
 
     var scalars_in_radix: std.BoundedArray([64]i8, max) = .{};
     for (scalars) |scalar| {

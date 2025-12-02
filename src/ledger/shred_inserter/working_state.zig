@@ -258,7 +258,7 @@ pub const PendingInsertShredsState = struct {
         var iter = self.slot_meta_working_set.iterator();
         while (iter.next()) |entry| {
             // Any slot that wasn't written to should have been filtered out by now.
-            std.debug.assert(entry.value_ptr.did_insert_occur);
+            sig.trace.assert(entry.value_ptr.did_insert_occur);
             const slot_meta = &entry.value_ptr.new_slot_meta;
             const backup = &entry.value_ptr.old_slot_meta;
             if (completed_slots_senders.len > 0 and isNewlyCompletedSlot(slot_meta, backup)) {

@@ -125,7 +125,7 @@ pub const SetDuplicateConfirmedSlotsAndHashesIncremental = struct {
 
     /// Asserts that either `self.cancel()` or `self.commit()` has been called.
     pub fn deinit(self: *SetDuplicateConfirmedSlotsAndHashesIncremental) void {
-        std.debug.assert(self.is_committed_or_cancelled);
+        sig.trace.assert(self.is_committed_or_cancelled);
         self.write_batch.deinit();
     }
 
@@ -138,13 +138,13 @@ pub const SetDuplicateConfirmedSlotsAndHashesIncremental = struct {
     ///
     /// Asserts `self.commit()` was not called before this.
     pub fn cancel(self: *SetDuplicateConfirmedSlotsAndHashesIncremental) void {
-        std.debug.assert(!self.is_committed_or_cancelled);
+        sig.trace.assert(!self.is_committed_or_cancelled);
         self.is_committed_or_cancelled = true;
     }
 
     /// Asserts `self.cancel()` was not called before this.
     pub fn commit(self: *SetDuplicateConfirmedSlotsAndHashesIncremental) !void {
-        std.debug.assert(!self.is_committed_or_cancelled);
+        sig.trace.assert(!self.is_committed_or_cancelled);
         try self.result_writer.ledger.db.commit(&self.write_batch);
         self.is_committed_or_cancelled = true;
     }
@@ -155,7 +155,7 @@ pub const SetDuplicateConfirmedSlotsAndHashesIncremental = struct {
         slot: Slot,
         frozen_hash: Hash,
     ) !void {
-        std.debug.assert(!self.is_committed_or_cancelled);
+        sig.trace.assert(!self.is_committed_or_cancelled);
         const data: FrozenHashVersioned = .{ .current = .{
             .frozen_hash = frozen_hash,
             .is_duplicate_confirmed = true,
@@ -191,7 +191,7 @@ pub const SetRootsIncremental = struct {
 
     /// Asserts that either `self.cancel()` or `self.commit()` has been called.
     pub fn deinit(self: *SetRootsIncremental) void {
-        std.debug.assert(self.is_committed_or_cancelled);
+        sig.trace.assert(self.is_committed_or_cancelled);
         self.write_batch.deinit();
     }
 
@@ -204,13 +204,13 @@ pub const SetRootsIncremental = struct {
     ///
     /// Asserts `self.commit()` was not called before this.
     pub fn cancel(self: *SetRootsIncremental) void {
-        std.debug.assert(!self.is_committed_or_cancelled);
+        sig.trace.assert(!self.is_committed_or_cancelled);
         self.is_committed_or_cancelled = true;
     }
 
     /// Asserts `self.cancel()` was not called before this.
     pub fn commit(self: *SetRootsIncremental) !void {
-        std.debug.assert(!self.is_committed_or_cancelled);
+        sig.trace.assert(!self.is_committed_or_cancelled);
         try self.result_writer.ledger.db.commit(&self.write_batch);
         _ = self.result_writer.ledger.max_root.fetchMax(self.max_new_rooted_slot, .monotonic);
         self.is_committed_or_cancelled = true;
@@ -218,7 +218,7 @@ pub const SetRootsIncremental = struct {
 
     /// Asserts that neither of `self.cancel()` and `self.commit()` was called before this.
     pub fn addRoot(self: *SetRootsIncremental, rooted_slot: Slot) !void {
-        std.debug.assert(!self.is_committed_or_cancelled);
+        sig.trace.assert(!self.is_committed_or_cancelled);
         self.max_new_rooted_slot = @max(self.max_new_rooted_slot, rooted_slot);
         try self.write_batch.put(schema.rooted_slots, rooted_slot, true);
     }
@@ -552,7 +552,7 @@ test "markSlotsAsIfRootedNormallyAtStartup without hash" {
 
     for (slot_maybe_hashes) |slot_maybe_hash| {
         const slot, const maybe_hash = slot_maybe_hash;
-        std.debug.assert(maybe_hash == null);
+        sig.trace.assert(maybe_hash == null);
 
         try std.testing.expectEqual(true, try isRoot(&result_writer, allocator, slot));
         try std.testing.expectEqual(null, try state.db.get(allocator, schema.bank_hash, slot));

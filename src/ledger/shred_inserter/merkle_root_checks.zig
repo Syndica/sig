@@ -118,7 +118,7 @@ pub const MerkleRootValidator = struct {
         erasure_meta: ErasureMeta,
         merkle_root_metas: MerkleRootMetaWorkingStore,
     ) !bool {
-        std.debug.assert(erasure_meta.checkCodeShred(shred));
+        sig.trace.assert(erasure_meta.checkCodeShred(shred));
         const slot = shred.common.slot;
 
         // If a shred from the next fec set has already been inserted, check the chaining

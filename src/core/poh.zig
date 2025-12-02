@@ -3,7 +3,7 @@ const sig = @import("../sig.zig");
 
 const Hash = sig.core.Hash;
 
-const assert = std.debug.assert;
+const assert = sig.trace.assert;
 
 /// Tracks the latest hash value and tick counts, and updates it with new hashes
 pub const Poh = struct {

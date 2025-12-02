@@ -6,7 +6,7 @@ const Mutex = std.Thread.Mutex;
 const RwLock = std.Thread.RwLock;
 const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
 
-const assert = std.debug.assert;
+const assert = sig.trace.assert;
 const testing = std.testing;
 
 const containsPointer = sig.utils.types.containsPointer;

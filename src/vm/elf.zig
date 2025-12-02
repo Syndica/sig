@@ -14,7 +14,7 @@ const Section = lib.Section;
 const SyscallMap = sig.vm.SyscallMap;
 
 const elf = std.elf;
-const assert = std.debug.assert;
+const assert = sig.trace.assert;
 
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;

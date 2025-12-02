@@ -30,7 +30,7 @@ pub const Proof = struct {
         transcript.appendDomSep(.@"pubkey-proof");
 
         const s = kp.secret.scalar;
-        std.debug.assert(!s.isZero());
+        sig.trace.assert(!s.isZero());
         var s_inv = s.invert();
         defer std.crypto.secureZero(u64, &s_inv.limbs);
 

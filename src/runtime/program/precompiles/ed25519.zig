@@ -24,9 +24,9 @@ pub const ED25519_SIGNATURE_OFFSETS_START = 2;
 pub const ED25519_SIGNATURE_SERIALIZED_SIZE = 64;
 
 comptime {
-    std.debug.assert(ED25519_PUBKEY_SERIALIZED_SIZE == Ed25519.PublicKey.encoded_length);
-    std.debug.assert(ED25519_SIGNATURE_SERIALIZED_SIZE == Ed25519.Signature.encoded_length);
-    std.debug.assert(ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE == @sizeOf(SignatureOffsets));
+    sig.trace.assert(ED25519_PUBKEY_SERIALIZED_SIZE == Ed25519.PublicKey.encoded_length);
+    sig.trace.assert(ED25519_SIGNATURE_SERIALIZED_SIZE == Ed25519.Signature.encoded_length);
+    sig.trace.assert(ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE == @sizeOf(SignatureOffsets));
 }
 
 pub const SignatureOffsets = extern struct {
@@ -126,7 +126,7 @@ pub fn newInstruction(
     message: []const u8,
 ) !sig.core.Instruction {
     if (!builtin.is_test) @compileError("newInstruction is only for use in tests");
-    std.debug.assert(message.len <= std.math.maxInt(u16));
+    sig.trace.assert(message.len <= std.math.maxInt(u16));
 
     const num_signatures: u8 = 1;
     const public_key_offset = ED25519_DATA_START;
@@ -152,11 +152,11 @@ pub fn newInstruction(
     // add 2nd byte for padding, so that offset structure is aligned
     instruction_data.appendSliceAssumeCapacity(&.{ num_signatures, 0 });
     instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&offsets));
-    std.debug.assert(instruction_data.items.len == public_key_offset);
+    sig.trace.assert(instruction_data.items.len == public_key_offset);
     instruction_data.appendSliceAssumeCapacity(&public_key.toBytes());
-    std.debug.assert(instruction_data.items.len == signature_offset);
+    sig.trace.assert(instruction_data.items.len == signature_offset);
     instruction_data.appendSliceAssumeCapacity(&signature.toBytes());
-    std.debug.assert(instruction_data.items.len == message_data_offset);
+    sig.trace.assert(instruction_data.items.len == message_data_offset);
     instruction_data.appendSliceAssumeCapacity(message);
 
     return .{

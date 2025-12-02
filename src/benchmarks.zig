@@ -1,5 +1,5 @@
 const std = @import("std");
-const cli = @import("cli");
+const cli = @import("cli.zig");
 const builtin = @import("builtin");
 const sig = @import("sig.zig");
 const pt = @import("prettytable");

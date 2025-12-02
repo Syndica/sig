@@ -114,7 +114,7 @@ pub fn LruCacheCustom(
             while (self.dbl_link_list.pop()) |node| {
                 self.deinitNode(node);
             }
-            std.debug.assert(self.len == 0); // no leaks
+            sig.trace.assert(self.len == 0); // no leaks
             self.hashmap.deinit();
         }
 
@@ -129,7 +129,7 @@ pub fn LruCacheCustom(
             if (self.dbl_link_list.len == self.max_items) {
                 const recycled_node = self.dbl_link_list.popFirst().?;
                 deinitFn(&recycled_node.data.value, self.deinit_context);
-                std.debug.assert(self.hashmap.swapRemove(recycled_node.data.key));
+                sig.trace.assert(self.hashmap.swapRemove(recycled_node.data.key));
                 // after swap, this node is thrown away
                 var node_to_swap: Node = .{
                     .data = LruEntry.init(key, value),

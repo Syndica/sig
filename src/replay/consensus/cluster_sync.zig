@@ -249,7 +249,7 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
             // frozen later
             const vps_gop = try self.votes_per_slot.getOrPut(allocator, vote_slot);
             errdefer if (!vps_gop.found_existing) {
-                std.debug.assert(self.votes_per_slot.orderedRemove(vps_gop.key_ptr.*));
+                sig.trace.assert(self.votes_per_slot.orderedRemove(vps_gop.key_ptr.*));
             };
             const hash_to_votes: *HashToVotesMap = vps_gop.value_ptr;
 
@@ -259,7 +259,7 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
 
             const htv_gop = try hash_to_votes.getOrPut(allocator, hash);
             errdefer if (!htv_gop.found_existing) {
-                std.debug.assert(hash_to_votes.swapRemove(htv_gop.key_ptr.*));
+                sig.trace.assert(hash_to_votes.swapRemove(htv_gop.key_ptr.*));
             };
 
             if (!htv_gop.found_existing) {
@@ -1207,7 +1207,7 @@ pub const check_slot_agrees_with_cluster = struct {
             .unprocessed => {
                 // If the slot was not popular pruned, we would never have made it here, as the slot is
                 // yet to be replayed
-                std.debug.assert(is_popular_pruned);
+                sig.trace.assert(is_popular_pruned);
                 // The cluster sample found the troublesome slot which caused this fork to be pruned
                 logger.warn().logf(
                     "EpochSlots sample returned slot {} with hash {}, " ++
@@ -1255,7 +1255,7 @@ const state_change = struct {
             slot: Slot,
             result_writer: sig.ledger.Ledger.ResultWriter,
         ) !void {
-            std.debug.assert(!self.finalized);
+            sig.trace.assert(!self.finalized);
             self.finalized = true;
             if (self.frozen_hash) |frozen_hash| {
                 try result_writer.insertBankHash(slot, frozen_hash, false);
@@ -1341,7 +1341,7 @@ const TestData = struct {
     descendants: Descendants,
 
     comptime {
-        std.debug.assert(@import("builtin").is_test);
+        sig.trace.assert(@import("builtin").is_test);
     }
 
     fn deinit(self: TestData, allocator: std.mem.Allocator) void {
@@ -1501,7 +1501,7 @@ const TestData = struct {
             var elem = try slot_info.toDummyElem(slot_infos[0..], random);
             const gop = try slot_tracker.getOrPut(allocator, slot_info.slot, elem);
             if (gop.found_existing) {
-                std.debug.assert(slot_info.slot == root_slot);
+                sig.trace.assert(slot_info.slot == root_slot);
                 elem.state.deinit(allocator);
                 elem.constants.deinit(allocator);
             }

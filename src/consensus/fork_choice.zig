@@ -145,7 +145,7 @@ pub const ForkInfo = struct {
         newly_duplicate_ancestor: Slot,
     ) void {
         // Should not be marking a duplicate confirmed slot as invalid
-        std.debug.assert(!self.is_duplicate_confirmed);
+        sig.trace.assert(!self.is_duplicate_confirmed);
 
         // Check if the newly invalid (duplicate) ancestor is greater than the current latest duplicate ancestor
         const should_update = if (self.latest_duplicate_ancestor) |duplicate_ancestor|
@@ -538,11 +538,11 @@ pub const ForkChoice = struct {
     /// Analogous to [add_root_parent](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L421)
     pub fn addRootParent(self: *ForkChoice, root_parent: SlotAndHash) std.mem.Allocator.Error!void {
         // Assert that the new root parent has a smaller slot than the current root
-        std.debug.assert(root_parent.slot < self.tree_root.slot);
+        sig.trace.assert(root_parent.slot < self.tree_root.slot);
         // Assert that the root parent doesn't already exist
-        std.debug.assert(!self.fork_infos.contains(root_parent));
+        sig.trace.assert(!self.fork_infos.contains(root_parent));
         // Assert that the current root exists in fork_infos
-        std.debug.assert(self.fork_infos.contains(self.tree_root));
+        sig.trace.assert(self.fork_infos.contains(self.tree_root));
 
         // Get the current root's fork info (safe due to previous assertion)
         const root_info = self.fork_infos.getPtr(self.tree_root).?;
@@ -1546,7 +1546,7 @@ pub const ForkChoice = struct {
         if (!builtin.is_test) {
             @compileError("splitOff should only be used in test");
         }
-        std.debug.assert(!self.tree_root.equals(slot_hash_key));
+        sig.trace.assert(!self.tree_root.equals(slot_hash_key));
 
         var split_tree_root = self.fork_infos.get(slot_hash_key) orelse
             return error.SlotHashKeyNotFound;
@@ -1561,7 +1561,7 @@ pub const ForkChoice = struct {
 
         // Remove child link so that this slot cannot be chosen as best or deepest
         const parent_info = self.fork_infos.getPtr(parent) orelse return error.ParentNotFound;
-        std.debug.assert(parent_info.children.orderedRemove(slot_hash_key));
+        sig.trace.assert(parent_info.children.orderedRemove(slot_hash_key));
 
         // Aggregate
         self.processUpdateOperations(&update_operations);
@@ -5032,8 +5032,8 @@ pub fn setupDuplicateForks() !struct {
     }).?;
 
     std.mem.sort(SlotAndHash, dup_children_4.mutableKeys(), {}, compareSlotHashKey);
-    std.debug.assert(dup_children_4.keys()[0].equals(duplicate_leaves_descended_from_4.items[0]));
-    std.debug.assert(dup_children_4.keys()[1].equals(duplicate_leaves_descended_from_4.items[1]));
+    sig.trace.assert(dup_children_4.keys()[0].equals(duplicate_leaves_descended_from_4.items[0]));
+    sig.trace.assert(dup_children_4.keys()[1].equals(duplicate_leaves_descended_from_4.items[1]));
 
     var dup_children_5 = std.ArrayList(SlotAndHash).init(test_allocator);
     defer dup_children_5.deinit();
@@ -5050,8 +5050,8 @@ pub fn setupDuplicateForks() !struct {
     }
 
     std.mem.sort(SlotAndHash, dup_children_5.items, {}, compareSlotHashKey);
-    std.debug.assert(dup_children_5.items[0].equals(duplicate_leaves_descended_from_5.items[0]));
-    std.debug.assert(dup_children_5.items[1].equals(duplicate_leaves_descended_from_5.items[1]));
+    sig.trace.assert(dup_children_5.items[0].equals(duplicate_leaves_descended_from_5.items[0]));
+    sig.trace.assert(dup_children_5.items[1].equals(duplicate_leaves_descended_from_5.items[1]));
 
     // Verify children of slot 6
     var dup_children_6 = std.ArrayList(SlotAndHash).init(test_allocator);
@@ -5069,8 +5069,8 @@ pub fn setupDuplicateForks() !struct {
     }
 
     std.mem.sort(SlotAndHash, dup_children_6.items, {}, compareSlotHashKey);
-    std.debug.assert(dup_children_6.items[0].equals(duplicate_leaves_descended_from_6.items[0]));
-    std.debug.assert(dup_children_6.items[1].equals(duplicate_leaves_descended_from_6.items[1]));
+    sig.trace.assert(dup_children_6.items[0].equals(duplicate_leaves_descended_from_6.items[0]));
+    sig.trace.assert(dup_children_6.items[1].equals(duplicate_leaves_descended_from_6.items[1]));
 
     return .{
         .fork_choice = fork_choice,

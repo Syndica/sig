@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const sig = @import("../../sig.zig");
 
 pub const HandleAcceptError = error{
     ProcessFdQuotaExceeded,
@@ -21,7 +22,7 @@ pub fn handleAcceptResult(
     /// Must be the result of `std.posix.accept` or equivalent (ie io_uring cqe.err()).
     rc: std.posix.E,
 ) HandleAcceptError!HandleAcceptResult {
-    comptime std.debug.assert( //
+    comptime sig.trace.assert( //
         builtin.target.os.tag.isDarwin() or builtin.target.os.tag == .linux //
     );
     return switch (rc) {
@@ -65,7 +66,7 @@ pub fn handleRecvResult(
     /// Must be the result of `std.posix.recv` or equivalent (ie io_uring cqe.err()).
     rc: std.posix.E,
 ) HandleRecvError!HandleRecvResult {
-    comptime std.debug.assert( //
+    comptime sig.trace.assert( //
         builtin.target.os.tag.isDarwin() or builtin.target.os.tag == .linux //
     );
     return switch (rc) {
@@ -108,7 +109,7 @@ pub fn handleSendResult(
     /// Must be the result of `std.posix.send` or equivalent (ie io_uring cqe.err()).
     rc: std.posix.E,
 ) HandleSendError!HandleSendResult {
-    comptime std.debug.assert( //
+    comptime sig.trace.assert( //
         builtin.target.os.tag.isDarwin() or builtin.target.os.tag == .linux //
     );
     return switch (rc) {
@@ -165,7 +166,7 @@ pub fn handleSpliceResult(
     /// Must be the result of calling the `splice` syscall or equivalent (ie io_uring cqe.err()).
     rc: std.posix.E,
 ) HandleSpliceError!HandleSpliceResult {
-    comptime std.debug.assert( //
+    comptime sig.trace.assert( //
         builtin.target.os.tag == .linux //
     );
     return switch (rc) {

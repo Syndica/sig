@@ -297,7 +297,7 @@ pub const SlotTree = struct {
         for (self.leaves.items, 0..) |leaf_to_check, i| {
             if (last_leaf -| leaf_to_check.slot > min_age) {
                 for (self.leaves.items[i..]) |leaf_to_prune| {
-                    std.debug.assert(leaf_to_prune.pruneUpstreamToFork(allocator));
+                    sig.trace.assert(leaf_to_prune.pruneUpstreamToFork(allocator));
                 }
                 self.leaves.shrinkRetainingCapacity(i);
                 break;
@@ -323,7 +323,7 @@ pub const SlotTree = struct {
         var root_candidate = if (maybe_common_ancestor) |ca| ca else blk: {
             // we couldn't find any nodes that branch out, which means there
             // must be only one leaf.
-            std.debug.assert(self.leaves.items.len == 1);
+            sig.trace.assert(self.leaves.items.len == 1);
             // in that case, we can just use the leaf itself as the root
             // candidate, because in the next step, we'll push it back by 32
             // slots to find a proper root.
@@ -341,7 +341,7 @@ pub const SlotTree = struct {
                 node = node.parent orelse break;
             }
             if (node.slot < root_candidate.slot) {
-                std.debug.assert(found_old_root_candidate); // must be a common ancestor
+                sig.trace.assert(found_old_root_candidate); // must be a common ancestor
                 root_candidate = node;
             }
         }
@@ -349,7 +349,7 @@ pub const SlotTree = struct {
         // we chose the new root. delete all prior slots and set the new root.
         var maybe_parent = root_candidate.parent;
         while (maybe_parent) |node_to_destroy| {
-            std.debug.assert(node_to_destroy.next.items.len == 1); // older forks were pruned
+            sig.trace.assert(node_to_destroy.next.items.len == 1); // older forks were pruned
             maybe_parent = node_to_destroy.parent;
             node_to_destroy.destroy(allocator);
         }
@@ -412,14 +412,14 @@ pub const SlotTree = struct {
             const parent = self.parent.?;
 
             const siblings = parent.next.items;
-            std.debug.assert(siblings.len > 0);
+            sig.trace.assert(siblings.len > 0);
 
             const index_in_parent = for (siblings, 0..) |sibling, i| {
                 if (sibling == self) break i;
             } else unreachable;
 
             const removed = parent.next.swapRemove(index_in_parent); // remove self from parent
-            std.debug.assert(self == removed);
+            sig.trace.assert(self == removed);
             self.destroy(allocator); // deinit self
             _ = parent.pruneUpstreamToFork(allocator); // prune parent from its parent, and so on
 
@@ -479,7 +479,7 @@ test "SlotTracker.prune removes all slots less than root" {
             .constants = testDummySlotConstants(slot),
             .state = .GENESIS,
         });
-        if (gop.found_existing) std.debug.assert(slot == root_slot);
+        if (gop.found_existing) sig.trace.assert(slot == root_slot);
     }
 
     // Prune slots less than root (4)

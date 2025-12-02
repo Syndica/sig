@@ -14,7 +14,7 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 const Executable = sig.vm.Executable;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
-const assert = std.debug.assert;
+const assert = sig.trace.assert;
 
 const AccountLoadError = sig.runtime.account_loader.AccountLoadError;
 const wrapDB = sig.runtime.account_loader.wrapDB;

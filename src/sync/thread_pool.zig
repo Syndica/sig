@@ -4,9 +4,10 @@
 // Thank you @kprotty:
 // https://github.com/kprotty/zap/blob/blog/src/thread_pool.zig
 
+const sig = @import("../sig.zig");
 const std = @import("std");
 const Futex = std.Thread.Futex;
-const assert = std.debug.assert;
+const assert = sig.trace.assert;
 const Atomic = std.atomic.Value;
 pub const OnSpawnCallback = *const fn (ctx: ?*anyopaque) ?*anyopaque;
 

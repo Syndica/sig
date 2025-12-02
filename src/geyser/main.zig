@@ -1,7 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("sig");
-const cli = @import("cli");
+const cli = @import("../cli.zig");
 
 const servePrometheus = sig.prometheus.servePrometheus;
 const globalRegistry = sig.prometheus.globalRegistry;

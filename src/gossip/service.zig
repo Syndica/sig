@@ -326,7 +326,7 @@ pub const GossipService = struct {
     /// Starts the shutdown chain for all services. Does *not* block until
     /// the service manager is joined.
     pub fn shutdown(self: *Self) void {
-        std.debug.assert(!self.closed);
+        sig.trace.assert(!self.closed);
         defer self.closed = true;
 
         // kick off the shutdown chain
@@ -336,7 +336,7 @@ pub const GossipService = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        std.debug.assert(self.closed); // call `self.shutdown()` first
+        sig.trace.assert(self.closed); // call `self.shutdown()` first
 
         // wait for all threads to shutdown correctly
         self.service_manager.deinit();
@@ -347,13 +347,13 @@ pub const GossipService = struct {
 
         // assert the channels are empty in order to make sure no data was lost.
         // everything should be cleaned up when the thread-pool joins.
-        std.debug.assert(self.packet_incoming_channel.isEmpty());
+        sig.trace.assert(self.packet_incoming_channel.isEmpty());
         self.packet_incoming_channel.destroy();
 
-        std.debug.assert(self.packet_outgoing_channel.isEmpty());
+        sig.trace.assert(self.packet_outgoing_channel.isEmpty());
         self.packet_outgoing_channel.destroy();
 
-        std.debug.assert(self.verified_incoming_channel.isEmpty());
+        sig.trace.assert(self.verified_incoming_channel.isEmpty());
         self.verified_incoming_channel.destroy();
 
         self.gossip_socket.close();
@@ -1458,7 +1458,7 @@ pub const GossipService = struct {
         defer {
             for (tasks) |*task| {
                 // assert: tasks are always consumed in the last for-loop of this method
-                std.debug.assert(task.output_consumed.load(.monotonic));
+                sig.trace.assert(task.output_consumed.load(.monotonic));
                 task.deinit();
             }
             self.allocator.free(tasks);
@@ -2011,7 +2011,7 @@ pub const GossipService = struct {
         /// current time (used to filter out nodes that are too old)
         now: u64,
     ) ![]ThreadSafeContactInfo {
-        std.debug.assert(MAX_SIZE == nodes.len);
+        sig.trace.assert(MAX_SIZE == nodes.len);
 
         // filter only valid gossip addresses
         const CONTACT_INFO_TIMEOUT_MS = 60 * std.time.ms_per_s;
@@ -2194,7 +2194,7 @@ pub const GossipMetrics = struct {
     pub fn init() GetMetricError!GossipMetrics {
         var self: GossipMetrics = undefined;
         const registry = globalRegistry();
-        std.debug.assert(try registry.initFields(&self) == 0);
+        sig.trace.assert(try registry.initFields(&self) == 0);
         return self;
     }
 
@@ -2384,7 +2384,7 @@ test "handle pong messages" {
 
         const now = try std.time.Instant.now();
         const r = ping_cache_ptr_ptr.*.check(now, pubkey_and_addr, &keypair);
-        std.debug.assert(r.passes_ping_check);
+        sig.trace.assert(r.passes_ping_check);
     }
 }
 

@@ -325,7 +325,7 @@ pub fn execute(
             const min_delegation = getMinimumDelegation(ic, ic.tc.feature_set);
             const bytes = std.mem.asBytes(&std.mem.nativeToLittle(u64, min_delegation));
 
-            std.debug.assert(bytes.len == 8);
+            sig.trace.assert(bytes.len == 8);
             const data = std.BoundedArray(u8, MAX_RETURN_DATA).fromSlice(bytes) catch unreachable;
 
             ic.tc.return_data = .{
@@ -1332,7 +1332,7 @@ fn withdraw(
         if (lamports != stake_account.account.lamports and
             lamports_and_reserve > stake_account.account.lamports)
         {
-            std.debug.assert(!is_staked);
+            sig.trace.assert(!is_staked);
             return error.InsufficientFunds;
         }
 

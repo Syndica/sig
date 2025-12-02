@@ -26,7 +26,7 @@ const FrameOffset = u10; // 0..=FRAME_SIZE
 
 comptime {
     // assert our FRAME_SIZE fits in FrameOffset
-    std.debug.assert(FRAME_SIZE <= std.math.maxInt(FrameOffset));
+    sig.trace.assert(FRAME_SIZE <= std.math.maxInt(FrameOffset));
 }
 
 const FrameRef = packed struct(u32) {
@@ -177,13 +177,13 @@ pub const BufferPool = struct {
 
             const frame_aligned_file_offset: FileOffset = @intCast((i * FRAME_SIZE) +
                 (file_offset_start - file_offset_start % FRAME_SIZE));
-            std.debug.assert(frame_aligned_file_offset % FRAME_SIZE == 0);
+            sig.trace.assert(frame_aligned_file_offset % FRAME_SIZE == 0);
 
             const bytes_read = try file.preadAll(
                 &self.frames[frame_ref.index],
                 frame_aligned_file_offset,
             );
-            std.debug.assert(bytes_read <= FRAME_SIZE);
+            sig.trace.assert(bytes_read <= FRAME_SIZE);
             self.frame_manager.contains_valid_data[frame_ref.index].store(true, .seq_cst);
         }
 
@@ -284,7 +284,7 @@ pub const BufferPool = struct {
 
                 const frame_aligned_file_offset: FileOffset = @intCast((i * FRAME_SIZE) +
                     (file_offset_start - file_offset_start % FRAME_SIZE));
-                std.debug.assert(frame_aligned_file_offset % FRAME_SIZE == 0);
+                sig.trace.assert(frame_aligned_file_offset % FRAME_SIZE == 0);
 
                 _ = threadlocal_io_uring.read(
                     frame_ref.index,
@@ -307,8 +307,8 @@ pub const BufferPool = struct {
             if (queue_full or i >= frame_refs.len) {
                 // Submit without blocking
                 const n_submitted = try threadlocal_io_uring.submit();
-                std.debug.assert(n_submitted <= IO_URING_ENTRIES);
-                if (queue_full) std.debug.assert(n_submitted == IO_URING_ENTRIES);
+                sig.trace.assert(n_submitted <= IO_URING_ENTRIES);
+                if (queue_full) sig.trace.assert(n_submitted == IO_URING_ENTRIES);
 
                 // Read whatever is still available
                 var cqe_buf: [IO_URING_ENTRIES]std.os.linux.io_uring_cqe = undefined;
@@ -323,7 +323,7 @@ pub const BufferPool = struct {
                     }
 
                     const bytes_read: FrameOffset = @intCast(cqe.res);
-                    std.debug.assert(bytes_read > 0);
+                    sig.trace.assert(bytes_read > 0);
                 }
 
                 for (frame_refs[n_read..][0..n_cqes_copied]) |*frame_ref| {
@@ -364,7 +364,7 @@ pub const FrameManager = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb.FrameManager init" });
         defer zone.deinit();
 
-        std.debug.assert(num_frames > 0);
+        sig.trace.assert(num_frames > 0);
 
         var frame_map: Map = .{};
         errdefer frame_map.deinit(allocator);
@@ -492,10 +492,10 @@ pub const FrameManager = struct {
 
             for (frame_refs, 0..) |*frame_ref, i| {
                 if (frame_ref.found_in_cache) {
-                    std.debug.assert(frame_ref.index != INVALID_FRAME);
+                    sig.trace.assert(frame_ref.index != INVALID_FRAME);
                     continue;
                 }
-                std.debug.assert(frame_ref.index == INVALID_FRAME); // missed frame with valid idx?
+                sig.trace.assert(frame_ref.index == INVALID_FRAME); // missed frame with valid idx?
 
                 const file_offset: FileOffset = @intCast(
                     (i * FRAME_SIZE) + (file_offset_start - file_offset_start % FRAME_SIZE),
@@ -528,14 +528,14 @@ pub const FrameManager = struct {
                 entry.value_ptr.* = frame_ref.index;
                 eviction_lfu.key[frame_ref.index] = key;
 
-                std.debug.assert(evicted_key != key); // inserted key we just evicted
+                sig.trace.assert(evicted_key != key); // inserted key we just evicted
 
                 const removed = frame_map.swapRemove(evicted_key);
-                std.debug.assert(removed); // evicted key was not in map
+                sig.trace.assert(removed); // evicted key was not in map
             }
         }
 
-        for (frame_refs) |frame_ref| std.debug.assert(frame_ref.index != INVALID_FRAME);
+        for (frame_refs) |frame_ref| sig.trace.assert(frame_ref.index != INVALID_FRAME);
 
         return frame_refs;
     }
@@ -654,7 +654,7 @@ pub const HierarchicalFIFO = struct {
                 self.freq[key] +|= 1;
             },
             .ghost => {
-                std.debug.assert(self.freq[key] == 0);
+                sig.trace.assert(self.freq[key] == 0);
                 self.freq[key] = 1;
                 // Add key to main too - important to note that the key *still*
                 // exists within ghost, but from now on we'll ignore that entry.
@@ -853,11 +853,11 @@ pub const AccountDataHandle = union(enum) {
         switch (self) {
             .buffer_pool_read => |*buffer_pool_read| {
                 for (buffer_pool_read.frame_refs) |frame_ref| {
-                    std.debug.assert(frame_ref.index != INVALID_FRAME);
+                    sig.trace.assert(frame_ref.index != INVALID_FRAME);
                     const prev_rc = buffer_pool_read.buffer_pool.frame_manager.frame_ref_counts[
                         frame_ref.index
                     ].fetchSub(1, .seq_cst);
-                    std.debug.assert(prev_rc != 0); // deinit of dead frame
+                    sig.trace.assert(prev_rc != 0); // deinit of dead frame
                 }
 
                 allocator.free(buffer_pool_read.frame_refs);
@@ -878,7 +878,7 @@ pub const AccountDataHandle = union(enum) {
 
     /// Copies all data into specified buffer. Buf.len === self.len()
     pub fn readAll(self: AccountDataHandle, buf: []u8) void {
-        std.debug.assert(buf.len == self.len());
+        sig.trace.assert(buf.len == self.len());
         _ = self.read(0, buf);
     }
 
@@ -895,7 +895,7 @@ pub const AccountDataHandle = union(enum) {
         start: FileOffset,
         buf: []u8,
     ) u32 {
-        std.debug.assert(start <= self.len());
+        sig.trace.assert(start <= self.len());
         const end: FileOffset = @intCast(start + buf.len);
 
         switch (self.*) {
@@ -919,7 +919,7 @@ pub const AccountDataHandle = union(enum) {
             bytes_copied += @intCast(copy_len);
         }
 
-        std.debug.assert(bytes_copied == @min(self.len() - start, buf.len));
+        sig.trace.assert(bytes_copied == @min(self.len() - start, buf.len));
         return bytes_copied;
     }
 
@@ -954,8 +954,8 @@ pub const AccountDataHandle = union(enum) {
         start: FileOffset,
         end: FileOffset,
     ) Iterator {
-        std.debug.assert(self.len() >= end);
-        std.debug.assert(end >= start);
+        sig.trace.assert(self.len() >= end);
+        sig.trace.assert(end >= start);
 
         return .{ .read_handle = self, .start = start, .end = end };
     }
@@ -990,7 +990,7 @@ pub const AccountDataHandle = union(enum) {
                     const prev_rc = buffer_pool_read.buffer_pool.frame_manager.frame_ref_counts[
                         ref.index
                     ].fetchAdd(1, .seq_cst);
-                    std.debug.assert(prev_rc > 0); // duplicated AccountDataHandle with dead frame
+                    sig.trace.assert(prev_rc > 0); // duplicated AccountDataHandle with dead frame
                 }
                 return AccountDataHandle.initBufferPoolRead(
                     buffer_pool_read.buffer_pool,

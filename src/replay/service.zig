@@ -228,7 +228,7 @@ pub const ReplayState = struct {
         errdefer epoch_tracker.deinit(deps.allocator);
         errdefer {
             // do not free the current epoch constants parameter, we don't own it unless the function returns successfully
-            std.debug.assert(epoch_tracker.epochs.swapRemove(deps.current_epoch));
+            sig.trace.assert(epoch_tracker.epochs.swapRemove(deps.current_epoch));
         }
 
         const progress_map = try initProgressMap(

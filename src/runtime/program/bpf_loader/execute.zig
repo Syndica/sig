@@ -3191,7 +3191,7 @@ test executeV3ExtendProgram {
     // Test with and without the payer helping out to pay for extend.
     for ([_]u32{ 0, 100 }) |help_pay| {
         inline for ([_]bool{ false, true }) |check_authority| {
-            std.debug.assert(help_pay < additional_bytes);
+            sig.trace.assert(help_pay < additional_bytes);
 
             const payer_balance = prng.random().uintAtMost(u32, 1024) + help_pay;
             const program_data_lamports =

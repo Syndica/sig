@@ -60,7 +60,7 @@ pub const VoteTracker = struct {
     };
 
     pub fn deinit(self: *VoteTracker, allocator: std.mem.Allocator) void {
-        std.debug.assert(self.map_rwlock.tryLock());
+        sig.trace.assert(self.map_rwlock.tryLock());
         const map = &self.map;
         for (map.values()) |rc_rw_svt| {
             rc_rw_svt.deinit(allocator);
@@ -72,7 +72,7 @@ pub const VoteTracker = struct {
         self.map_rwlock.lockShared();
         defer self.map_rwlock.unlockShared();
         const rc_rw_svt = self.map.get(slot) orelse return null;
-        std.debug.assert(rc_rw_svt.rc.acquire());
+        sig.trace.assert(rc_rw_svt.rc.acquire());
         return rc_rw_svt;
     }
 
@@ -87,7 +87,7 @@ pub const VoteTracker = struct {
             defer self.map_rwlock.unlockShared();
             const rc_rw_svt = self.map.get(slot) orelse break :blk;
             // we acquired a lock on the map, this should never trigger unless rc is mismanaged.
-            std.debug.assert(rc_rw_svt.rc.acquire());
+            sig.trace.assert(rc_rw_svt.rc.acquire());
             return rc_rw_svt;
         }
 
@@ -95,7 +95,7 @@ pub const VoteTracker = struct {
         defer self.map_rwlock.unlock();
 
         const gop = try self.map.getOrPut(allocator, slot);
-        errdefer std.debug.assert(self.map.pop().?.key == slot);
+        errdefer sig.trace.assert(self.map.pop().?.key == slot);
 
         if (!gop.found_existing) {
             gop.value_ptr.* = try RcRwSlotVoteTracker.create(allocator);
@@ -106,7 +106,7 @@ pub const VoteTracker = struct {
         // failure shouldn't be possible, because `deinit` and `purgeStaleState`
         // would be waiting for the lock, meaning the one and only reference
         // is still valid.
-        std.debug.assert(gop.value_ptr.*.rc.acquire());
+        sig.trace.assert(gop.value_ptr.*.rc.acquire());
         return gop.value_ptr.*;
     }
 
@@ -147,7 +147,7 @@ pub const VoteTracker = struct {
         const map = &self.map;
 
         const gop = try map.getOrPut(allocator, slot);
-        errdefer if (!gop.found_existing) std.debug.assert(map.pop().?.key == slot);
+        errdefer if (!gop.found_existing) sig.trace.assert(map.pop().?.key == slot);
         if (!gop.found_existing) gop.value_ptr.* = try RcRwSlotVoteTracker.create(allocator);
         errdefer if (!gop.found_existing) gop.value_ptr.*.deinit(allocator);
 
@@ -314,10 +314,10 @@ pub const VoteStakeTracker = struct {
                 @typeName(ReachedThresholds),
         );
 
-        std.debug.assert( // must reserve capacity for at least 1 more entry
+        sig.trace.assert( // must reserve capacity for at least 1 more entry
             self.voted.capacity() > self.voted.count(),
         );
-        std.debug.assert( // thresholds inputs & outputs must be equal lengths
+        sig.trace.assert( // thresholds inputs & outputs must be equal lengths
             thresholds_to_check.len == reached_thresholds.capacity(),
         );
 

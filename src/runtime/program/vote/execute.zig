@@ -1199,7 +1199,7 @@ fn testEpochSchedule(
     }
 
     const MINIMUM_SLOTS_PER_EPOCH = sig.core.epoch_schedule.MINIMUM_SLOTS_PER_EPOCH;
-    std.debug.assert(slots_per_epoch >= MINIMUM_SLOTS_PER_EPOCH);
+    sig.trace.assert(slots_per_epoch >= MINIMUM_SLOTS_PER_EPOCH);
 
     var first_normal_epoch: u64 = 0;
     var first_normal_slot: u64 = 0;

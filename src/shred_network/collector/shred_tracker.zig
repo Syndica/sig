@@ -11,7 +11,7 @@ const Instant = sig.time.Instant;
 const Registry = sig.prometheus.Registry;
 const Slot = sig.core.Slot;
 
-const assert = std.debug.assert;
+const assert = sig.trace.assert;
 
 const Logger = sig.trace.Logger("shred_tracker");
 

@@ -9,3 +9,10 @@ pub const Entry = entry.Entry;
 pub const Level = level.Level;
 pub const DirectPrintLogger = log.DirectPrintLogger;
 pub const ChannelPrintLogger = log.ChannelPrintLogger;
+
+pub inline fn assert(ok: bool) void {
+    if (!ok) {
+        @branchHint(.cold);
+        @import("std").debug.panic("assertion failed", .{});
+    }
+}

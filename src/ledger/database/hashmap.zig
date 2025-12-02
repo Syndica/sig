@@ -283,7 +283,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 key: cf.Key,
                 value: cf.Value,
             ) anyerror!void {
-                std.debug.assert(!self.executed.*);
+                sig.trace.assert(!self.executed.*);
                 const k_bytes = try key_serializer.serializeAlloc(self.storage_allocator, key);
                 errdefer self.storage_allocator.free(k_bytes);
                 const v_bytes = try serializeValue(self.storage_allocator, value);
@@ -299,7 +299,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 comptime cf: ColumnFamily,
                 key: cf.Key,
             ) anyerror!void {
-                std.debug.assert(!self.executed.*);
+                sig.trace.assert(!self.executed.*);
                 const k_bytes = try key_serializer.serializeAlloc(self.fast_allocator, key);
                 errdefer self.fast_allocator.free(k_bytes);
                 return try self.instructions.append(
@@ -314,7 +314,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 start: cf.Key,
                 end: cf.Key,
             ) anyerror!void {
-                std.debug.assert(!self.executed.*);
+                sig.trace.assert(!self.executed.*);
                 const start_bytes = try key_serializer.serializeAlloc(self.fast_allocator, start);
                 errdefer self.fast_allocator.free(start_bytes);
                 const end_bytes = try key_serializer.serializeAlloc(self.fast_allocator, end);
@@ -349,7 +349,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                     .reverse => map.rangeCustom(null, .{ .inclusive = search_bytes }),
                 };
             } else map.items();
-            std.debug.assert(keys.len == vals.len);
+            sig.trace.assert(keys.len == vals.len);
 
             const copied_keys = try self.storage_allocator.alloc([]const u8, keys.len);
             errdefer self.storage_allocator.free(copied_keys);
@@ -454,9 +454,9 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 fn serializeValue(allocator: Allocator, value: anytype) !RcSlice(u8) {
     const size = value_serializer.serializedSize(value);
     const rc_slice = try RcSlice(u8).alloc(allocator, size);
-    std.debug.assert(size == rc_slice.payload().len);
+    sig.trace.assert(size == rc_slice.payload().len);
     const written = try value_serializer.serializeToBuf(rc_slice.payload(), value);
-    std.debug.assert(size == written.len);
+    sig.trace.assert(size == written.len);
     return rc_slice;
 }
 

@@ -20,7 +20,7 @@ const SYSVAR_NOT_FOUND = 2;
 const OFFSET_LENGTH_EXCEEDS_SYSVAR = 1;
 
 fn getter(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMap) Error!void {
-    std.debug.assert(@typeInfo(T).@"struct".layout == .@"extern");
+    sig.trace.assert(@typeInfo(T).@"struct".layout == .@"extern");
 
     return struct {
         fn getSyscall(
@@ -100,7 +100,7 @@ fn callSysvarSyscall(
     comptime syscall_fn: fn (*TransactionContext, *MemoryMap, *RegisterMap) Error!void,
     args: anytype,
 ) !void {
-    comptime std.debug.assert(builtin.is_test);
+    comptime sig.trace.assert(builtin.is_test);
 
     var registers = RegisterMap.initFill(0);
     inline for (0..args.len) |i| registers.set(@enumFromInt(i + 1), args[i]);

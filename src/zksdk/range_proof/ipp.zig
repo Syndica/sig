@@ -203,8 +203,8 @@ pub fn Proof(comptime bit_size: u64) type {
             }
 
             // there should have been log(bit_size) reductions
-            std.debug.assert(L_vec.len == logn);
-            std.debug.assert(R_vec.len == logn);
+            sig.trace.assert(L_vec.len == logn);
+            sig.trace.assert(R_vec.len == logn);
             return .{
                 .L_vec = L_vec.buffer[0..logn].*,
                 .R_vec = R_vec.buffer[0..logn].*,
@@ -346,7 +346,7 @@ fn batchInvert(comptime N: u32, scalars: *[N]Scalar) Scalar {
         s.* = acc;
         acc = acc.mul(input);
     }
-    std.debug.assert(!acc.isZero());
+    sig.trace.assert(!acc.isZero());
 
     acc = acc.invert();
     const allinv = acc;

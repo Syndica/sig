@@ -240,7 +240,7 @@ pub const Region = struct {
         var vm_gap_shift: u64 = @bitSizeOf(u64) - 1;
         if (is_gapped) {
             vm_gap_shift -= @clz(vm_gap_size);
-            std.debug.assert(vm_gap_size == @as(u64, 1) << @intCast(vm_gap_shift));
+            sig.trace.assert(vm_gap_size == @as(u64, 1) << @intCast(vm_gap_shift));
         }
         return .{
             .host_memory = @unionInit(HostMemory, @tagName(state), slice),
@@ -358,7 +358,7 @@ pub const AlignedMemoryMap = struct {
         vm_addr: u64,
         value: T,
     ) !void {
-        comptime std.debug.assert(@sizeOf(T) <= @sizeOf(u64));
+        comptime sig.trace.assert(@sizeOf(T) <= @sizeOf(u64));
         const slice = try self.vmap(.mutable, vm_addr, @sizeOf(T));
         std.mem.writeInt(T, slice[0..@sizeOf(T)], value, .little);
     }
@@ -511,7 +511,7 @@ const UnalignedMemoryMap = struct {
     fn findRegion(self: *const UnalignedMemoryMap, vm_addr: u64) !*Region {
         var index: usize = 1;
         while (index <= self.region_addresses.len) {
-            std.debug.assert(index > 0); // safe: index started at 1 and only increases.
+            sig.trace.assert(index > 0); // safe: index started at 1 and only increases.
             index = (index << 1) + @intFromBool(self.region_addresses[index - 1] <= vm_addr);
         }
 
@@ -564,7 +564,7 @@ const UnalignedMemoryMap = struct {
         comptime T: type,
         vm_addr: u64,
     ) !T {
-        comptime std.debug.assert(@sizeOf(T) <= @sizeOf(u64));
+        comptime sig.trace.assert(@sizeOf(T) <= @sizeOf(u64));
         const err = accessViolation(vm_addr, self.version, self.config);
 
         var region = try self.findRegion(vm_addr);

@@ -51,9 +51,9 @@ pub const ReedSolomonCache = struct {
         }
         var rs = try ReedSolomon.init(self.cache.allocator, data_shards, parity_shards);
         const acquired = rs.acquire();
-        std.debug.assert(acquired);
+        sig.trace.assert(acquired);
         const old = self.cache.put(.{ .data = data_shards, .parity = parity_shards }, rs);
-        std.debug.assert(old == null);
+        sig.trace.assert(old == null);
         return rs;
     }
 };
@@ -161,8 +161,8 @@ fn getRecoveryMetadata(shreds: []const Shred) !RecoveryMetadata {
             };
         }
     } else return error.TooFewParityShards;
-    std.debug.assert(verifyErasureBatch(meta.common_header, meta.code_header, shreds));
-    std.debug.assert(!meta.common_header.variant.resigned or
+    sig.trace.assert(verifyErasureBatch(meta.common_header, meta.code_header, shreds));
+    sig.trace.assert(!meta.common_header.variant.resigned or
         meta.retransmitter_signature != null);
     return meta;
 }
@@ -231,7 +231,7 @@ fn reconstructShreds(
             if (!shreds.mask[i]) shred.deinit();
         }
     }
-    std.debug.assert(shreds.input_shreds.len == shreds.shards.len);
+    sig.trace.assert(shreds.input_shreds.len == shreds.shards.len);
     for (shreds.input_shreds, shreds.shards, 0..) |maybe_shred, maybe_shard, index| {
         if (maybe_shred) |shred| {
             all_shreds.appendAssumeCapacity(shred);
@@ -330,7 +330,7 @@ fn setMerkleProofs(
             }
         } else {
             try sig.ledger.shred.setMerkleProof(shred.mutablePayload(), proof);
-            std.debug.assert(!std.meta.isError(shred.sanitize())); // TODO error somewhere else
+            sig.trace.assert(!std.meta.isError(shred.sanitize())); // TODO error somewhere else
             // TODO: Assert that shred payload is fully populated.
         }
     }

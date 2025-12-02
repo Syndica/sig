@@ -159,7 +159,7 @@ pub const Transaction = struct {
     }
 
     pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
-        std.debug.assert(data.signatures.len <= std.math.maxInt(u16));
+        sig.trace.assert(data.signatures.len <= std.math.maxInt(u16));
         try leb.writeULEB128(writer, @as(u16, @intCast(data.signatures.len)));
         for (data.signatures) |sgn| try writer.writeAll(&sgn.toBytes());
         try data.msg.serialize(writer, data.version);
@@ -363,7 +363,7 @@ pub const Message = struct {
         /// when v0 compilation is implemented.
         lookup_tables: ?noreturn,
     ) Instruction.InstructionCompileError!Message {
-        comptime std.debug.assert(lookup_tables == null);
+        comptime sig.trace.assert(lookup_tables == null);
 
         const account_keys: []const Pubkey, const counts: AccountKindCounts = blk: {
             var compiled_keys = try compileKeys(allocator, payer, instructions);
@@ -467,20 +467,20 @@ pub const Message = struct {
         try writer.writeByte(self.readonly_unsigned_count);
 
         // WARN: Truncate okay if transaction is valid
-        std.debug.assert(self.account_keys.len <= std.math.maxInt(u16));
+        sig.trace.assert(self.account_keys.len <= std.math.maxInt(u16));
         try leb.writeULEB128(writer, @as(u16, @intCast(self.account_keys.len)));
         for (self.account_keys) |id| try writer.writeAll(&id.data);
 
         try writer.writeAll(&self.recent_blockhash.data);
 
         // WARN: Truncate okay if transaction is valid
-        std.debug.assert(self.instructions.len <= std.math.maxInt(u16));
+        sig.trace.assert(self.instructions.len <= std.math.maxInt(u16));
         try leb.writeULEB128(writer, @as(u16, @intCast(self.instructions.len)));
         for (self.instructions) |instr| try sig.bincode.write(writer, instr, .{});
 
         // WARN: Truncate okay if transaction is valid
         if (version != Version.legacy) {
-            std.debug.assert(self.address_lookups.len <= std.math.maxInt(u16));
+            sig.trace.assert(self.address_lookups.len <= std.math.maxInt(u16));
             try leb.writeULEB128(writer, @as(u16, @intCast(self.address_lookups.len)));
             for (self.address_lookups) |alt| try sig.bincode.write(writer, alt, .{});
         }
@@ -712,15 +712,15 @@ const SignerWritableFlags = packed struct(u2) {
         return std.math.order(a, b).invert();
     }
     comptime {
-        std.debug.assert(order(
+        sig.trace.assert(order(
             .{ .writable = true, .signer = true },
             .{ .writable = false, .signer = true },
         ) == .lt);
-        std.debug.assert(order(
+        sig.trace.assert(order(
             .{ .writable = false, .signer = true },
             .{ .writable = true, .signer = false },
         ) == .lt);
-        std.debug.assert(order(
+        sig.trace.assert(order(
             .{ .writable = true, .signer = false },
             .{ .writable = false, .signer = false },
         ) == .lt);
@@ -803,7 +803,7 @@ fn sortCompiledKeys(
     maybe_payer: ?Pubkey,
 ) void {
     if (maybe_payer) |payer| {
-        std.debug.assert(key_meta_map.contains(payer));
+        sig.trace.assert(key_meta_map.contains(payer));
     }
 
     const SortCtx = struct {
@@ -825,7 +825,7 @@ fn sortCompiledKeys(
                 const a_is_payer = payer.equals(&a_key);
                 const b_is_payer = payer.equals(&b_key);
                 if (a_is_payer or b_is_payer) {
-                    std.debug.assert(a_is_payer != b_is_payer); // weird sort bug?
+                    sig.trace.assert(a_is_payer != b_is_payer); // weird sort bug?
                 }
                 if (a_is_payer) return true;
                 if (b_is_payer) return false;

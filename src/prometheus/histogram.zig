@@ -1,5 +1,6 @@
 const std = @import("std");
 const prometheus = @import("lib.zig");
+const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -13,7 +14,7 @@ pub const DEFAULT_BUCKETS: [11]f64 = .{
 };
 
 pub fn exponentialBuckets(base: i64, comptime start: i64, comptime end: i64) [end - start]f64 {
-    std.debug.assert(end > start);
+    sig.trace.assert(end > start);
     const base_float = @as(f64, @floatFromInt(base));
     var buckets: [end - start]f64 = undefined;
     for (0..end - start) |i| {
@@ -203,7 +204,7 @@ pub const HistogramSnapshot = struct {
     allocator: Allocator,
 
     pub fn init(sum: f64, count: u64, buckets: ArrayList(Bucket)) @This() {
-        std.debug.assert(buckets.capacity == buckets.items.len);
+        sig.trace.assert(buckets.capacity == buckets.items.len);
         return .{
             .sum = sum,
             .count = count,

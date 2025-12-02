@@ -111,7 +111,7 @@ pub fn slotRangeConnected(
             defer slot_meta.deinit();
 
             if (slot_meta.isFull()) {
-                std.debug.assert(last_slot == slot - 1);
+                sig.trace.assert(last_slot == slot - 1);
                 // this append is the same as agave, but is it redundant?
                 // does the list already have these slots?
                 try child_slots.appendSlice(slot_meta.child_slots.items);
@@ -858,7 +858,7 @@ pub fn getConfirmedSignaturesForAddress(
     const signatures = try self.findAddressSignaturesForSlot(allocator, address, slot);
     for (1..signatures.items.len + 1) |i| {
         const this_slot, const signature = signatures.items[signatures.items.len - i];
-        std.debug.assert(slot == this_slot);
+        sig.trace.assert(slot == this_slot);
         if (!before_excluded_signatures.contains(signature) and
             !until_excluded_signatures.contains(signature))
         {
@@ -1145,7 +1145,7 @@ fn getCompletedDataRanges(
 ) Allocator.Error!CompletedRanges {
     // `consumed` is the next missing shred index, but shred `i` existing in
     // completed_data_end_indexes implies it's not missing
-    std.debug.assert(!completed_data_indexes.contains(consumed));
+    sig.trace.assert(!completed_data_indexes.contains(consumed));
     var ranges = CompletedRanges.init(allocator);
     var begin: u32 = start_index;
     for (completed_data_indexes.range(start_index, consumed)) |index| {
@@ -1253,7 +1253,7 @@ fn getSlotEntriesInBlock(
             data_shreds.items[range_start_index..range_end_index];
 
         const last_shred = range_shreds[range_shreds.len - 1];
-        std.debug.assert(last_shred.dataComplete() or last_shred.isLastInSlot());
+        sig.trace.assert(last_shred.dataComplete() or last_shred.isLastInSlot());
         // self.logger.tracef("{any} data shreds in last FEC set", data_shreds.items.len);
 
         const bytes = shredder.deshred(allocator, range_shreds) catch |e| {

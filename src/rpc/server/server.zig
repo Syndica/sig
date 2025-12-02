@@ -349,8 +349,8 @@ test "serveSpawn getSnapshot missing" {
             _: std.mem.Allocator,
             params: sig.rpc.methods.GetSnapshot,
         ) !sig.rpc.methods.GetSnapshot.Response {
-            std.debug.assert(params.get == .size);
-            std.debug.assert(std.mem.eql(u8, params.path, "test-snapshot"));
+            sig.trace.assert(params.get == .size);
+            sig.trace.assert(std.mem.eql(u8, params.path, "test-snapshot"));
             return error.Missing;
         }
     }{});

@@ -226,7 +226,7 @@ pub const GossipPullFilter = struct {
             return ~@as(u64, 0);
         }
 
-        std.debug.assert(index <= std.math.pow(u64, 2, mask_bits));
+        sig.trace.assert(index <= std.math.pow(u64, 2, mask_bits));
         // eg, with index = 2 and mask_bits = 3
         // shift_bits = 61 (ie, only look at first 2 bits)
         const shift_bits: u6 = @intCast(64 - mask_bits);

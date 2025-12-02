@@ -67,7 +67,7 @@ pub const StakeHistory = struct {
     }
 
     pub fn initWithEntries(entries: []const Entry) StakeHistory {
-        std.debug.assert(entries.len <= MAX_ENTRIES);
+        sig.trace.assert(entries.len <= MAX_ENTRIES);
         var self: StakeHistory = .INIT;
         self.entries.appendSliceAssumeCapacity(entries);
         std.sort.heap(Entry, self.entries.slice(), {}, Entry.sortCmp);

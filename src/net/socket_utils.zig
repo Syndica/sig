@@ -53,8 +53,8 @@ const XevThread = struct {
             @bitCast(RefCount{ .active = 1 }),
             .acquire,
         ));
-        std.debug.assert(!rc.shutdown);
-        std.debug.assert(rc.active < std.math.maxInt(@TypeOf(rc.active)));
+        sig.trace.assert(!rc.shutdown);
+        sig.trace.assert(rc.active < std.math.maxInt(@TypeOf(rc.active)));
 
         // Start xev thread if not running.
         if (rc.active == 0) {
@@ -100,18 +100,18 @@ const XevThread = struct {
             @bitCast(RefCount{ .active = 1 }),
             .release,
         ));
-        std.debug.assert(!rc.shutdown);
-        std.debug.assert(rc.active >= 1);
+        sig.trace.assert(!rc.shutdown);
+        sig.trace.assert(rc.active >= 1);
 
         // The last SocketThread to join will stop the xev thread.
         if (rc.active == 1) {
             // Lock the ref_count to detect if theres races (i.e. another spawn()) during shutdown.
             rc = @bitCast(ref_count.swap(@bitCast(RefCount{ .shutdown = true }), .acquire));
-            std.debug.assert(rc == .{});
+            sig.trace.assert(rc == .{});
 
             defer {
                 rc = @bitCast(ref_count.swap(@bitCast(RefCount{}), .release));
-                std.debug.assert(rc == .{ .shutdown = true });
+                sig.trace.assert(rc == .{ .shutdown = true });
             }
 
             notifyIoThread(); // wake up xev thread to see ref_count.shutdown to stop/shutdown
@@ -153,7 +153,7 @@ const XevThread = struct {
         result: xev.Async.WaitError!void,
     ) xev.CallbackAction {
         result catch |e| std.debug.panic("xev notify event failed: {}", .{e});
-        std.debug.assert(io_notified.swap(false, .acquire));
+        sig.trace.assert(io_notified.swap(false, .acquire));
 
         pollIo(loop);
         io_event.wait(loop, completion, void, null, onNotify);
@@ -301,7 +301,7 @@ const XevThread = struct {
         const st = node.data.st.?;
 
         if (result) |bytes_sent| {
-            std.debug.assert(node.data.packet.size == bytes_sent);
+            sig.trace.assert(node.data.packet.size == bytes_sent);
         } else |err| { // On send error, skip packet and proces next in pollNode
             st.logger.err().logf("send socket error: {}", .{err});
         }
@@ -430,7 +430,7 @@ const PerThread = struct {
                         },
                     };
                 };
-                std.debug.assert(bytes_sent == p.size);
+                sig.trace.assert(bytes_sent == p.size);
             }
         }
     }
@@ -475,7 +475,7 @@ const PerThread = struct {
                 }
 
                 defer msgs.clearRetainingCapacity();
-                std.debug.assert(msgs.len == 0);
+                sig.trace.assert(msgs.len == 0);
 
                 // setup for sending packet batch
                 for (packets.items) |packet| {
@@ -514,8 +514,8 @@ const PerThread = struct {
                     };
                 }
 
-                std.debug.assert(msgs.len == packets.items.len);
-                std.debug.assert(msgs.len <= PACKETS_PER_BATCH);
+                sig.trace.assert(msgs.len == packets.items.len);
+                sig.trace.assert(msgs.len <= PACKETS_PER_BATCH);
 
                 // send off packet batch
                 const messages_sent = sendmmsg(

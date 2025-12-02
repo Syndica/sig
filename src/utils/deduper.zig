@@ -49,7 +49,7 @@ pub fn Deduper(comptime n_hashers: usize, comptime T: type) type {
             false_positive_rate: f64,
             reset_cycle: Duration,
         ) bool {
-            std.debug.assert(0.0 < false_positive_rate and false_positive_rate < 1.0);
+            sig.trace.assert(0.0 < false_positive_rate and false_positive_rate < 1.0);
             const saturated = self.falsePositiveRate() >= false_positive_rate;
             if (saturated or
                 self.last_reset_instant.elapsed().asNanos() >= reset_cycle.asNanos())

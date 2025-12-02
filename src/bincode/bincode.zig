@@ -815,7 +815,7 @@ const ShredType = enum(u8) {
 /// Assert that bincode serializes the provided item to the provided bytes,
 /// and deserializes the bytes back to the item.
 pub fn testRoundTrip(deserialized_item: anytype, bincode_serialized_bytes: []const u8) !void {
-    comptime std.debug.assert(builtin.is_test);
+    comptime sig.trace.assert(builtin.is_test);
     const T = @TypeOf(deserialized_item);
     const allocator = std.testing.allocator;
 
@@ -1067,7 +1067,7 @@ test "default value" {
     };
 
     const fb = try bincode.readFromSlice(std.testing.allocator, FooBar, &.{}, .{});
-    std.debug.assert(fb.a.len == 0);
+    sig.trace.assert(fb.a.len == 0);
 }
 
 test "bincode: serialize and deserialize" {

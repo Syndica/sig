@@ -247,7 +247,7 @@ pub const GeyserWriter = struct {
             self.metrics.total_bytes.add(n_bytes_written);
         }
 
-        std.debug.assert(n_bytes_written_total == buf.len);
+        sig.trace.assert(n_bytes_written_total == buf.len);
         return n_bytes_written_total;
     }
 };

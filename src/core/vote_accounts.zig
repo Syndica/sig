@@ -74,7 +74,7 @@ pub const VoteAccounts = struct {
             // guaranteed to always have at least one reference remaining after the `release
             // since we release all ones up to the last one acquired. this means the caller
             // retains ownership of the vote accounts and we don't need to de-init anywhere.
-            errdefer for (accounts[0 .. i + 1]) |a| std.debug.assert(!a.account.rc.release());
+            errdefer for (accounts[0 .. i + 1]) |a| sig.trace.assert(!a.account.rc.release());
             value.account.acquire();
             try vote_accounts.put(allocator, key, value);
         }
@@ -310,7 +310,7 @@ pub const VoteAccount = struct {
     }
 
     pub fn acquire(self: *const VoteAccount) void {
-        std.debug.assert(self.rc.acquire());
+        sig.trace.assert(self.rc.acquire());
     }
 
     pub fn getLamports(self: *const VoteAccount) u64 {

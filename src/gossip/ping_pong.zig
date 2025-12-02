@@ -121,7 +121,7 @@ pub const PingCache = struct {
         rate_limit_delay: sig.time.Duration,
         cache_capacity: usize,
     ) error{OutOfMemory}!Self {
-        std.debug.assert(rate_limit_delay.asNanos() <= ttl.asNanos() / 2);
+        sig.trace.assert(rate_limit_delay.asNanos() <= ttl.asNanos() / 2);
 
         var pings = try LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant).init(allocator, cache_capacity);
         errdefer pings.deinit();
@@ -170,7 +170,7 @@ pub const PingCache = struct {
     ) ?Ping {
         if (self.pings.peek(peer_and_addr)) |earlier| {
             // to prevent integer overflow
-            std.debug.assert(now.order(earlier) != .lt);
+            sig.trace.assert(now.order(earlier) != .lt);
 
             const elapsed: u64 = now.since(earlier);
             if (elapsed < self.rate_limit_delay.asNanos()) {
@@ -194,7 +194,7 @@ pub const PingCache = struct {
     ) struct { passes_ping_check: bool, maybe_ping: ?Ping } {
         if (self.pongs.get(peer_and_addr)) |last_pong_time| {
             // to prevent integer overflow
-            std.debug.assert(now.order(last_pong_time) != .lt);
+            sig.trace.assert(now.order(last_pong_time) != .lt);
 
             const age = now.since(last_pong_time);
 

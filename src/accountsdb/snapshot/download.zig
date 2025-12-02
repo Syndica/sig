@@ -478,7 +478,7 @@ fn downloadFile(
 
         try buffered_out.writer().writeAll(download_buffer[0..bytes_read]);
         if (total_bytes_read == download_size) break;
-        std.debug.assert(total_bytes_read < download_size);
+        sig.trace.assert(total_bytes_read < download_size);
 
         const elapsed_since_start = full_timer.read();
         const elapsed_since_prev_lap = lap_timer.read();

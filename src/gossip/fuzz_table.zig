@@ -106,7 +106,7 @@ pub fn run(seed: u64, args: []const []const u8) !void {
                     // !
                     logger.trace().logf("putting pubkey: {}", .{pubkey});
                     const result = try gossip_table.insert(signed_data, now);
-                    std.debug.assert(result.wasInserted());
+                    sig.trace.assert(result.wasInserted());
 
                     try keys.append(GossipKey{ .ContactInfo = pubkey });
                     try keypairs.append(keypair);
@@ -156,7 +156,7 @@ pub fn run(seed: u64, args: []const []const u8) !void {
                     }
                     if (result == .IgnoredOldValue) {
                         logger.trace().logf("ignored old value: {}", .{pubkey});
-                        std.debug.assert(!should_overwrite);
+                        sig.trace.assert(!should_overwrite);
                     }
                     if (result == .IgnoredDuplicateValue) {
                         logger.trace().logf("duplicate value: {}", .{pubkey});
@@ -252,7 +252,7 @@ pub fn run(seed: u64, args: []const []const u8) !void {
                     _ = signatures.swapRemove(pubkey);
                     _ = keys.swapRemove(index);
 
-                    std.debug.assert(pk_removed.equals(&pubkey));
+                    sig.trace.assert(pk_removed.equals(&pubkey));
                 } else {
                     index += 1;
                 }

@@ -1,6 +1,6 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 const Allocator = std.mem.Allocator;
-const assert = std.debug.assert;
 
 /// fork of stdlib bit_set `ArrayBitSet` to allow for
 /// dynamic sizing of bitsets and different types of masks
@@ -112,7 +112,7 @@ pub fn DynamicArrayBitSet(comptime MaskIntType: type) type {
         /// Returns true if the bit at the specified index
         /// is present in the set, false otherwise.
         pub fn isSet(self: Self, index: usize) bool {
-            assert(index < self.bit_length);
+            sig.trace.assert(index < self.bit_length);
             if (self.num_masks == 0) return false; // doesn't compile in this case
             return (self.masks[maskIndex(index)] & maskBit(index)) != 0;
         }
@@ -129,7 +129,7 @@ pub fn DynamicArrayBitSet(comptime MaskIntType: type) type {
         /// Changes the value of the specified bit of the bit
         /// set to match the passed boolean.
         pub fn setValue(self: *Self, index: usize, value: bool) void {
-            assert(index < self.bit_length);
+            sig.trace.assert(index < self.bit_length);
             if (self.num_masks == 0) return; // doesn't compile in this case
             const bit = maskBit(index);
             const mask_index = maskIndex(index);
@@ -139,7 +139,7 @@ pub fn DynamicArrayBitSet(comptime MaskIntType: type) type {
 
         /// Adds a specific bit to the bit set
         pub fn set(self: *Self, index: usize) void {
-            assert(index < self.bit_length);
+            sig.trace.assert(index < self.bit_length);
             if (self.num_masks == 0) return; // doesn't compile in this case
             self.masks[maskIndex(index)] |= maskBit(index);
         }
@@ -147,8 +147,8 @@ pub fn DynamicArrayBitSet(comptime MaskIntType: type) type {
         /// Changes the value of all bits in the specified range to
         /// match the passed boolean.
         pub fn setRangeValue(self: *Self, range: Range, value: bool) void {
-            assert(range.end <= self.bit_length);
-            assert(range.start <= range.end);
+            sig.trace.assert(range.end <= self.bit_length);
+            sig.trace.assert(range.start <= range.end);
             if (range.start == range.end) return;
             if (self.num_masks == 0) return;
 
@@ -191,14 +191,14 @@ pub fn DynamicArrayBitSet(comptime MaskIntType: type) type {
 
         /// Removes a specific bit from the bit set
         pub fn unset(self: *Self, index: usize) void {
-            assert(index < self.bit_length);
+            sig.trace.assert(index < self.bit_length);
             if (self.num_masks == 0) return; // doesn't compile in this case
             self.masks[maskIndex(index)] &= ~maskBit(index);
         }
 
         /// Flips a specific bit in the bit set
         pub fn toggle(self: *Self, index: usize) void {
-            assert(index < self.bit_length);
+            sig.trace.assert(index < self.bit_length);
             if (self.num_masks == 0) return; // doesn't compile in this case
             self.masks[maskIndex(index)] ^= maskBit(index);
         }

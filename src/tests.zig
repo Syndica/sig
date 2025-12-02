@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("sig.zig");
+const sig = @import("sig");
 
 test {
     @setEvalBranchQuota(10_000);

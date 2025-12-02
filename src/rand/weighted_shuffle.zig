@@ -72,8 +72,8 @@ pub fn WeightedShuffle(comptime Int: type) type {
 
             // NOTE: datapointerror is recorded here in agave, should we parse a
             // logger and log an error or just ignore it?
-            // std.debug.assert(num_negative == 0);
-            // std.debug.assert(num_overflow == 0);
+            // sig.trace.assert(num_negative == 0);
+            // sig.trace.assert(num_overflow == 0);
 
             return .{
                 .allocator = allocator,
@@ -99,7 +99,7 @@ pub fn WeightedShuffle(comptime Int: type) type {
 
         // Removes given weight at the specified index
         pub fn remove(self: *Self, index: usize, weight: Int) void {
-            std.debug.assert(self.weight >= weight);
+            sig.trace.assert(self.weight >= weight);
             self.weight -= weight;
             // Traverse the tree from the leaf node upwards to the root,
             // updating the sub-tree sums along the way
@@ -108,7 +108,7 @@ pub fn WeightedShuffle(comptime Int: type) type {
                 const offset = curr_index & BIT_MASK;
                 curr_index = (curr_index - 1) >> BIT_SHIFT; // parent node
                 if (offset > 0) {
-                    std.debug.assert(self.tree.items[curr_index][offset - 1] >= weight);
+                    sig.trace.assert(self.tree.items[curr_index][offset - 1] >= weight);
                     self.tree.items[curr_index][offset - 1] -= weight;
                 }
             }
@@ -119,8 +119,8 @@ pub fn WeightedShuffle(comptime Int: type) type {
         pub fn search(self: *const Self, value: Int) struct { usize, Int } {
             var val = value;
 
-            std.debug.assert(val >= 0);
-            std.debug.assert(val < self.weight);
+            sig.trace.assert(val >= 0);
+            sig.trace.assert(val < self.weight);
 
             // Traverse the tree downwards from the root while maintaining the
             // weight of the subtree which contains the target leaf node.
@@ -134,7 +134,7 @@ pub fn WeightedShuffle(comptime Int: type) type {
                         index = (index << BIT_SHIFT) + j + 1;
                         break true;
                     }
-                    std.debug.assert(weight >= node);
+                    sig.trace.assert(weight >= node);
                     weight -= node;
                     val -= node;
                 } else false;

@@ -67,8 +67,8 @@ pub fn mulMultiRuntime(
     ed_points: []const PointType(encoded, ristretto),
     compressed_scalars: []const CompressedScalar,
 ) ReturnType(encoded, ristretto) {
-    std.debug.assert(compressed_scalars.len == ed_points.len);
-    std.debug.assert(compressed_scalars.len <= max_elements);
+    sig.trace.assert(compressed_scalars.len == ed_points.len);
+    sig.trace.assert(compressed_scalars.len <= max_elements);
 
     const w: u6 = switch (max_elements) {
         0...499 => 6,

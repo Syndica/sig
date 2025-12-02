@@ -483,7 +483,7 @@ test "spsc" {
             for (0..COUNT) |i| {
                 while (true) {
                     if (ch.tryReceive()) |x| {
-                        std.debug.assert(x == i);
+                        sig.trace.assert(x == i);
                         break;
                     }
                 }
@@ -509,7 +509,7 @@ test "send-hook" {
         fn afterSend(hook: *Channel(u64).SendHook, channel: *Channel(u64)) void {
             const self: *@This() = @alignCast(@fieldParentPtr("hook", hook));
             self.count += 1;
-            std.debug.assert(channel.len() == self.count);
+            sig.trace.assert(channel.len() == self.count);
         }
     };
 

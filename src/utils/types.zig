@@ -1,6 +1,7 @@
 //! Generic type reflection.
 
 const std = @import("std");
+const sig = @import("../sig.zig");
 
 pub fn getVariant(
     tagged_union: anytype,
@@ -192,7 +193,7 @@ pub const HashMapInfo = struct {
         return switch (info.kind) {
             .unordered => info.Type().Size,
             .array => {
-                comptime std.debug.assert(!@hasDecl(info.Type(), "Size"));
+                comptime sig.trace.assert(!@hasDecl(info.Type(), "Size"));
                 return usize;
             },
         };
