@@ -201,11 +201,11 @@ fn BorshStaticTaggedUnionHelper(comptime U: type) type {
             tag: Tag,
             payload_bytes: []const u8,
         ) ?ComputeBudgetInstruction {
-            std.debug.assert(payload_bytes.len == payloadEncodedSize(tag));
+            sig.trace.assert(payload_bytes.len == payloadEncodedSize(tag));
             switch (tag) {
                 inline else => |itag| {
                     const Payload = @FieldType(U, @tagName(itag));
-                    comptime std.debug.assert(@sizeOf(Payload) == payloadEncodedSize(itag));
+                    comptime sig.trace.assert(@sizeOf(Payload) == payloadEncodedSize(itag));
                     const payload: Payload = switch (Payload) {
                         void => {},
                         bool => switch (payload_bytes[0]) {

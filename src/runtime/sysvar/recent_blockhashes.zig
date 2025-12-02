@@ -76,7 +76,7 @@ pub const RecentBlockhashes = struct {
 
     pub fn initWithEntries(entries: []const Entry) RecentBlockhashes {
         if (!builtin.is_test) @compileError("only for tests");
-        std.debug.assert(entries.len <= MAX_ENTRIES);
+        sig.trace.assert(entries.len <= MAX_ENTRIES);
 
         var self: RecentBlockhashes = .INIT;
         self.entries.appendSliceAssumeCapacity(entries);

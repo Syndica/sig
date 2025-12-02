@@ -864,7 +864,7 @@ fn accountDataRegion(
     }
 
     const region = try memory_map.region(.constant, vm_data_addr);
-    std.debug.assert(region.vm_addr_start == vm_data_addr);
+    sig.trace.assert(region.vm_addr_start == vm_data_addr);
     return region;
 }
 
@@ -880,8 +880,8 @@ fn accountReallocRegion(
 
     const addr = vm_data_addr +| original_data_len;
     const region = try memory_map.region(.constant, addr);
-    std.debug.assert(region.vm_addr_start == addr);
-    std.debug.assert(
+    sig.trace.assert(region.vm_addr_start == addr);
+    sig.trace.assert(
         region.constSlice().len >= MAX_PERMITTED_DATA_INCREASE and
             region.constSlice().len < MAX_PERMITTED_DATA_INCREASE +| BPF_ALIGN_OF_U128,
     );
@@ -1079,7 +1079,7 @@ fn cpiCommon(
                 if (address_space > 0) {
                     const region = memory_map.findRegion(caller_account.vm_data_addr) catch
                         return InstructionError.MissingAccount;
-                    std.debug.assert(region.vm_addr_start == caller_account.vm_data_addr);
+                    sig.trace.assert(region.vm_addr_start == caller_account.vm_data_addr);
 
                     switch (callee_account.checkDataIsMutable() == null) {
                         inline true, false => |mutable| {
@@ -1185,7 +1185,7 @@ const TestContext = struct {
     ic: InstructionContext,
 
     fn init(allocator: std.mem.Allocator, prng: std.Random, account_data: []const u8) !TestContext {
-        comptime std.debug.assert(builtin.is_test);
+        comptime sig.trace.assert(builtin.is_test);
 
         const tc = try allocator.create(TransactionContext);
         errdefer allocator.destroy(tc);

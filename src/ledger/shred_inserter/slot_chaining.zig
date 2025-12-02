@@ -47,7 +47,7 @@ pub fn handleChaining(
             keys[delete_i] = entry.key_ptr.*;
         }
     }
-    std.debug.assert(keep_i == delete_i);
+    sig.trace.assert(keep_i == delete_i);
     for (keys[delete_i..count]) |k| {
         if (working_set.fetchRemove(k)) |entry| {
             var slot_meta_working_set_entry = entry.value;

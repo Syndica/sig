@@ -1,4 +1,5 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 
 const Atomic = std.atomic.Value;
 
@@ -64,7 +65,7 @@ pub const ReferenceCounter = extern struct {
             .release,
         ));
         // if this fails, the resource is already dead (analogous to double-free)
-        std.debug.assert(prior.refs > prior.acquirers);
+        sig.trace.assert(prior.refs > prior.acquirers);
 
         if (prior.refs == 1) {
             _ = self.state.load(.acquire);
@@ -221,7 +222,7 @@ fn RcBase(T: type) type {
         }
 
         pub fn acquire(self: Self) Self {
-            std.debug.assert(self.refCount().acquire());
+            sig.trace.assert(self.refCount().acquire());
             return self;
         }
 
@@ -271,7 +272,6 @@ test ReferenceCounter {
 }
 
 test "RcSlice payload has the correct data" {
-    const sig = @import("../sig.zig");
     const slice = try RcSlice(u8).alloc(std.testing.allocator, 5);
     defer slice.deinit(std.testing.allocator);
     @memcpy(slice.payload(), "hello");
@@ -281,8 +281,6 @@ test "RcSlice payload has the correct data" {
 }
 
 test "RcSlice reference counting" {
-    const sig = @import("../sig.zig");
-
     const TestAllocator = struct {
         arena: std.heap.ArenaAllocator,
         was_freed: bool = false,

@@ -9,7 +9,7 @@ const Mutex = std.Thread.Mutex;
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const Batch = ThreadPool.Batch;
 
-const assert = std.debug.assert;
+const assert = sig.trace.assert;
 
 pub const TaskParams = struct {
     start_index: usize,

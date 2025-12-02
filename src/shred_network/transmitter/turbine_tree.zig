@@ -59,7 +59,7 @@ pub const TurbineTreeCache = struct {
                 return gopr.value_ptr.turbine_tree.acquireUnsafe();
             } else {
                 gopr.value_ptr.turbine_tree.releaseUnsafe();
-                std.debug.assert(self.cache.swapRemove(epoch));
+                sig.trace.assert(self.cache.swapRemove(epoch));
             }
         }
 
@@ -207,7 +207,7 @@ pub const TurbineTree = struct {
     /// in a use after free in release fast mode.
     pub fn acquireUnsafe(self: *TurbineTree) *TurbineTree {
         const previous_references = self.reference_count.fetchAdd(1, .monotonic);
-        std.debug.assert(previous_references > 0);
+        sig.trace.assert(previous_references > 0);
         return self;
     }
 
@@ -884,7 +884,7 @@ pub fn makeTestCluster(params: struct {
         try stakes.put(params.my_pubkey, params.my_stake);
     }
 
-    std.debug.assert(params.num_staked_nodes == stakes.count());
+    sig.trace.assert(params.num_staked_nodes == stakes.count());
 
     return .{ stakes, RwMux(GossipTable).init(gossip_table) };
 }

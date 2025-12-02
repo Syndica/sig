@@ -213,7 +213,7 @@ pub const ChannelPrintLogger = struct {
             self.log_allocator.free(msg_buf);
             return;
         };
-        std.debug.assert(size == stream.pos);
+        sig.trace.assert(size == stream.pos);
 
         self.channel.send(msg_buf) catch |err| {
             std.debug.print("Send msg through channel failed with err: {any}", .{err});

@@ -24,7 +24,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
     collapse_sleep_ms: u32 = 100,
     min_split_size: u64 = 128,
 }) type {
-    std.debug.assert(config.min_split_size > 0);
+    sig.trace.assert(config.min_split_size > 0);
 
     return struct {
         records_allocator: Allocator,
@@ -790,10 +790,10 @@ pub const DiskMemoryAllocator = struct {
     ) ?[*]u8 {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
-        std.debug.assert(self.mmap_ratio != 0);
+        sig.trace.assert(self.mmap_ratio != 0);
 
         // the allocator interface shouldn't allow this (aside from the *Raw methods).
-        std.debug.assert(alignment.toByteUnits() <= std.heap.pageSize());
+        sig.trace.assert(alignment.toByteUnits() <= std.heap.pageSize());
 
         const file_aligned_size = alignedFileSize(requested_size);
         const aligned_mmap_size = alignedMmapSize(file_aligned_size, self.mmap_ratio);
@@ -829,7 +829,7 @@ pub const DiskMemoryAllocator = struct {
             return null;
         };
 
-        std.debug.assert(requested_size <= file_aligned_size - @sizeOf(Metadata)); // sanity check
+        sig.trace.assert(requested_size <= file_aligned_size - @sizeOf(Metadata)); // sanity check
         const metadata_start = file_aligned_size - @sizeOf(Metadata);
         std.mem.bytesAsValue(Metadata, full_alloc[metadata_start..][0..@sizeOf(Metadata)]).* = .{
             .file_index = file_index,
@@ -848,10 +848,10 @@ pub const DiskMemoryAllocator = struct {
     ) bool {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
-        std.debug.assert(self.mmap_ratio != 0);
+        sig.trace.assert(self.mmap_ratio != 0);
 
         // the allocator interface shouldn't allow this (aside from the *Raw methods).
-        std.debug.assert(alignment.toByteUnits() <= std.heap.pageSize());
+        sig.trace.assert(alignment.toByteUnits() <= std.heap.pageSize());
 
         const old_file_aligned_size = alignedFileSize(buf.len);
         const new_file_aligned_size = alignedFileSize(requested_size);
@@ -886,7 +886,7 @@ pub const DiskMemoryAllocator = struct {
 
         file.setEndPos(new_file_aligned_size) catch return false;
 
-        std.debug.assert(requested_size <= new_file_aligned_size - @sizeOf(Metadata));
+        sig.trace.assert(requested_size <= new_file_aligned_size - @sizeOf(Metadata));
         const new_metadata_start = new_file_aligned_size - @sizeOf(Metadata);
         std.mem.bytesAsValue(
             Metadata,
@@ -921,11 +921,11 @@ pub const DiskMemoryAllocator = struct {
     ) void {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
-        std.debug.assert(self.mmap_ratio != 0);
-        std.debug.assert(buf.len != 0); // should be ensured by the allocator interface
+        sig.trace.assert(self.mmap_ratio != 0);
+        sig.trace.assert(buf.len != 0); // should be ensured by the allocator interface
 
         // the allocator interface shouldn't allow this (aside from the *Raw methods).
-        std.debug.assert(alignment.toByteUnits() <= std.heap.pageSize());
+        sig.trace.assert(alignment.toByteUnits() <= std.heap.pageSize());
 
         const file_aligned_size = alignedFileSize(buf.len);
 
@@ -1510,7 +1510,7 @@ pub const LimitAllocator = struct {
 
     pub fn init(backing_alloc: std.mem.Allocator, byte_limit: usize) LimitAllocator {
         // NOTE: LimitAllocators must not be nested.
-        std.debug.assert(tryFrom(backing_alloc) == null);
+        sig.trace.assert(tryFrom(backing_alloc) == null);
         return .{
             .bytes_remaining = byte_limit,
             .backing_allocator = backing_alloc,

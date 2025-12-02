@@ -82,7 +82,7 @@ pub const BlockhashQueue = struct {
         hash: Hash,
         lamports_per_signature: u64,
     ) Allocator.Error!void {
-        std.debug.assert(self.last_hash_index == 0);
+        sig.trace.assert(self.last_hash_index == 0);
         try self.hash_infos.put(allocator, hash, .{
             .index = 0,
             .timestamp = @intCast(std.time.milliTimestamp()),
@@ -120,7 +120,7 @@ pub const BlockhashQueue = struct {
     }
 
     fn purge(self: *BlockhashQueue, last_hash_index: u64) Allocator.Error!void {
-        std.debug.assert(self.hash_infos.count() <= MAX_RECENT_BLOCKHASHES + 1);
+        sig.trace.assert(self.hash_infos.count() <= MAX_RECENT_BLOCKHASHES + 1);
         var keys = [_]Hash{Hash.ZEROES} ** (MAX_RECENT_BLOCKHASHES + 1);
         @memcpy(keys[0..self.hash_infos.count()], self.hash_infos.keys());
         for (keys[0..self.hash_infos.count()]) |key| {

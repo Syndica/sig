@@ -1173,7 +1173,7 @@ pub const SnapshotFiles = struct {
         maybe_incremental_info: ?IncrementalSnapshotFileInfo,
     ) SnapshotFiles {
         if (maybe_incremental_info) |inc| {
-            std.debug.assert(inc.base_slot == full_info.slot);
+            sig.trace.assert(inc.base_slot == full_info.slot);
         }
         return .{
             .full = full_info,
@@ -1469,7 +1469,7 @@ pub const generate = struct {
             counting_writer_state.bytes_written,
         ));
 
-        std.debug.assert(counting_writer_state.bytes_written % 512 == 0);
+        sig.trace.assert(counting_writer_state.bytes_written % 512 == 0);
     }
 
     /// Writes the accounts dir header. Do this after writing the metadata files.

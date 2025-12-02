@@ -100,7 +100,7 @@ pub const SlotMeta = struct {
 
     pub fn isFull(self: Self) bool {
         if (self.last_index) |last_index| {
-            std.debug.assert(self.consecutive_received_from_0 <= last_index + 1);
+            sig.trace.assert(self.consecutive_received_from_0 <= last_index + 1);
             return self.consecutive_received_from_0 == last_index + 1;
         } else {
             return false;
@@ -116,7 +116,7 @@ pub const SlotMeta = struct {
     }
 
     pub fn setConnected(self: *Self) void {
-        std.debug.assert(self.isParentConnected());
+        sig.trace.assert(self.isParentConnected());
         self.connected_flags.set(.connected);
     }
 
@@ -351,7 +351,7 @@ pub const MerkleRootMeta = struct {
     first_received_shred_type: sig.ledger.shred.ShredType,
 
     pub fn fromFirstReceivedShred(shred: anytype) MerkleRootMeta {
-        comptime std.debug.assert(
+        comptime sig.trace.assert(
             @TypeOf(shred) == sig.ledger.shred.DataShred or
                 @TypeOf(shred) == sig.ledger.shred.CodeShred,
         );

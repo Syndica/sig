@@ -47,9 +47,9 @@ pub fn verifyBatchOverSingleMessage(
     public_keys: []const sig.core.Pubkey,
     message: []const u8,
 ) !void {
-    std.debug.assert(signatures.len <= max);
-    std.debug.assert(public_keys.len <= max);
-    std.debug.assert(signatures.len == public_keys.len);
+    sig.trace.assert(signatures.len <= max);
+    sig.trace.assert(public_keys.len <= max);
+    sig.trace.assert(signatures.len == public_keys.len);
 
     var s_batch: std.BoundedArray(CompressedScalar, max) = .{};
     var a_batch: std.BoundedArray(Edwards25519, max) = .{};
@@ -257,8 +257,8 @@ pub const LookupTable = struct {
     /// NOTE: variable time!
     pub fn select(self: LookupTable, index: i8) callconv(convention) CachedPoint {
         // ensure we're in radix
-        std.debug.assert(index >= -8);
-        std.debug.assert(index <= 8);
+        sig.trace.assert(index >= -8);
+        sig.trace.assert(index <= 8);
 
         const abs = @abs(index);
 
@@ -285,8 +285,8 @@ const NafLookupTable5 = struct {
     }
 
     fn select(self: NafLookupTable5, index: u64) CachedPoint {
-        std.debug.assert(index & 1 == 1); // make sure the index is odd
-        std.debug.assert(index < 16); // fits inside
+        sig.trace.assert(index & 1 == 1); // make sure the index is odd
+        sig.trace.assert(index < 16); // fits inside
         return self.table[index / 2];
     }
 };
@@ -304,8 +304,8 @@ const NafLookupTable8 = struct {
     }
 
     fn select(self: NafLookupTable8, index: u64) CachedPoint {
-        std.debug.assert(index & 1 == 1); // make sure the index is odd
-        std.debug.assert(index < 128);
+        sig.trace.assert(index & 1 == 1); // make sure the index is odd
+        sig.trace.assert(index < 128);
         return self.table[index / 2];
     }
 };
@@ -358,8 +358,8 @@ pub fn doubleBaseMul(a: CompressedScalar, A: Edwards25519, b: CompressedScalar) 
 
 /// Ported from: https://github.com/dalek-cryptography/curve25519-dalek/blob/c3a82a8a38a58aee500a20bde1664012fcfa83ba/curve25519-dalek/src/scalar.rs#L958
 fn asNaf(a: CompressedScalar, w: comptime_int) [256]i8 {
-    std.debug.assert(w >= 2);
-    std.debug.assert(w <= 8);
+    sig.trace.assert(w >= 2);
+    sig.trace.assert(w <= 8);
 
     var naf: [256]i8 = @splat(0);
 

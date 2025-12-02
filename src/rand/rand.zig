@@ -182,10 +182,10 @@ pub fn shuffleFocusedRange(
 /// This implementationc is based on the implementation in the rust rand crate
 /// and ensures the same sequence is generated.
 pub fn uintLessThanRust(comptime T: type, random: Random, less_than: T) T {
-    comptime std.debug.assert(@typeInfo(T).int.signedness == .unsigned);
+    comptime sig.trace.assert(@typeInfo(T).int.signedness == .unsigned);
     const bits = @typeInfo(T).int.bits;
     const max = std.math.maxInt(T);
-    std.debug.assert(0 < less_than);
+    sig.trace.assert(0 < less_than);
 
     const z = (max - less_than + 1) % less_than;
     const zone = max - z;

@@ -203,7 +203,7 @@ const GossipVoteReceptor = struct {
     ) ![]const Transaction {
         self.clearVoteTxBuffer(allocator);
         const vote_tx_buffer = &self.vote_tx_buffer;
-        std.debug.assert(vote_tx_buffer.items.len == 0);
+        sig.trace.assert(vote_tx_buffer.items.len == 0);
 
         {
             const gossip_table, var gossip_table_lg = gossip_table_rw.readWithLock();
@@ -582,7 +582,7 @@ fn filterAndConfirmWithNewVotes(
                     index += 1;
                     continue;
                 }
-                std.debug.assert(slot_diff.map.fetchSwapRemove(pubkey).?.key.equals(&pubkey));
+                sig.trace.assert(slot_diff.map.fetchSwapRemove(pubkey).?.key.equals(&pubkey));
             }
         }
 
@@ -1431,7 +1431,7 @@ pub const vote_parser = struct {
 
             // Build a ResolvedTransaction with the first instruction expanded to InstructionInfo
             const message = vote_tx.msg;
-            std.debug.assert(message.instructions.len != 0);
+            sig.trace.assert(message.instructions.len != 0);
             const first_ix = message.instructions[0];
 
             var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
@@ -1511,7 +1511,7 @@ pub const vote_parser = struct {
         defer vote_tx.deinit(allocator);
 
         const message = vote_tx.msg;
-        std.debug.assert(message.instructions.len != 0);
+        sig.trace.assert(message.instructions.len != 0);
         const first_ix = message.instructions[0];
 
         var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
@@ -1559,7 +1559,7 @@ pub const vote_parser = struct {
         authorized_voter_keypair: sig.identity.KeyPair,
         maybe_switch_proof_hash: ?Hash,
     ) !Transaction {
-        comptime std.debug.assert(@import("builtin").is_test);
+        comptime sig.trace.assert(@import("builtin").is_test);
         const vote_ix = try newVoteInstruction(
             allocator,
             slots,

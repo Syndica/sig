@@ -1,6 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const cli = @import("cli");
+const cli = @import("../cli.zig");
 
 const Account = sig.runtime.AccountSharedData;
 const Pubkey = sig.core.pubkey.Pubkey;
@@ -220,7 +220,7 @@ pub fn run(
 
         const current_slot = if (!non_sequential_slots) top_slot else slot: {
             const ancestor_slots: []const Slot = ancestors.ancestors.keys();
-            std.debug.assert(ancestor_slots[ancestor_slots.len - 1] == top_slot);
+            sig.trace.assert(ancestor_slots[ancestor_slots.len - 1] == top_slot);
             const ancestor_index = random.intRangeLessThan(
                 usize,
                 ancestor_slots.len -| 10,

@@ -433,7 +433,7 @@ pub const AuthorizedVoters = struct {
         // 1) The check for whether the vote state is initialized
         // 2) How future authorized voters for uninitialized epochs are set
         //    by this function
-        std.debug.assert(self.voters.count() != 0);
+        sig.trace.assert(self.voters.count() != 0);
         return true;
     }
 
@@ -1629,7 +1629,7 @@ pub const VoteState = struct {
                             // 1. Because `root_to_check.is_some()`, then we know that
                             // we haven't checked the root yet in this loop, so
                             // `proposed_vote_slot` == `new_proposed_root` == `proposed_root`.
-                            std.debug.assert(new_proposed_root == proposed_vote_slot);
+                            sig.trace.assert(new_proposed_root == proposed_vote_slot);
                             // 2. We know from the assert earlier in the function that
                             // `proposed_vote_slot < earliest_slot_hash_in_history`,
                             // so from 1. we know that `new_proposed_root < earliest_slot_hash_in_history`.
@@ -1708,7 +1708,7 @@ pub const VoteState = struct {
         // `proposed_vote_slot < earliest_slot_hash_in_history` ran, which is equivalent to
         // `last_proposed_slot < earliest_slot_hash_in_history`, but this is impossible
         // due to assumption 3) above.
-        std.debug.assert(last_proposed_slot == slot_hash_entries[slot_hashes_index].slot);
+        sig.trace.assert(last_proposed_slot == slot_hash_entries[slot_hashes_index].slot);
 
         if (!slot_hash_entries[slot_hashes_index].hash.eql(proposed_hash)) {
             return VoteError.slot_hash_mismatch;
@@ -1792,7 +1792,7 @@ pub const VoteState = struct {
         epoch: Epoch,
         current_slot: Slot,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
-        std.debug.assert(new_state.len != 0);
+        sig.trace.assert(new_state.len != 0);
 
         if (new_state.len > MAX_LOCKOUT_HISTORY) {
             return VoteError.too_many_votes;

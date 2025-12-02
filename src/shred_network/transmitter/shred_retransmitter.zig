@@ -426,7 +426,7 @@ pub const RetransmitServiceMetrics = struct {
 
     pub fn init() !RetransmitServiceMetrics {
         var self: RetransmitServiceMetrics = undefined;
-        std.debug.assert(try globalRegistry().initFields(&self) == 1);
+        sig.trace.assert(try globalRegistry().initFields(&self) == 1);
         self.logging_fields = .{ .last_log_instant = sig.time.Instant.now() };
         return self;
     }

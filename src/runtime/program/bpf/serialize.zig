@@ -185,7 +185,7 @@ pub const Serializer = struct {
         std.ArrayListUnmanaged(Region),
     } {
         try self.pushRegion(true);
-        std.debug.assert(self.region_start == self.buffer.items.len);
+        sig.trace.assert(self.region_start == self.buffer.items.len);
         return .{
             self.buffer,
             self.regions,

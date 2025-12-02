@@ -194,14 +194,14 @@ fn consumeOurCqe(
             }
 
             const recv_len: usize = @intCast(cqe.res);
-            std.debug.assert(head.parser.state != .finished);
+            sig.trace.assert(head.parser.state != .finished);
 
             const recv_start = head.end;
             const recv_end = recv_start + recv_len;
             head.end += head.parser.feed(entry_data.buffer[recv_start..recv_end]);
 
             if (head.parser.state != .finished) {
-                std.debug.assert(head.end == recv_end);
+                sig.trace.assert(head.end == recv_end);
                 if (head.end == entry_data.buffer.len) {
                     entry.deinit(server_ctx.allocator);
                     return;
@@ -224,7 +224,7 @@ fn consumeOurCqe(
                 };
 
                 // at the time of writing, this always holds true for the result of `Head.parse`.
-                std.debug.assert(std_head.compression == .none);
+                sig.trace.assert(std_head.compression == .none);
                 break :head_info HeadInfo.parseFromStdHead(std_head) catch |err| {
                     defer entry.deinit(server_ctx.allocator);
                     switch (err) {
@@ -396,7 +396,7 @@ fn consumeOurCqe(
                     sfb.which = .to_pipe;
                     try sfb.prepSpliceFileToPipe(entry, &liou.io_uring);
                 } else {
-                    std.debug.assert(sfb.spliced_to_socket == sfb.spliced_to_pipe);
+                    sig.trace.assert(sfb.spliced_to_socket == sfb.spliced_to_pipe);
                     entry.deinit(server_ctx.allocator);
                     server_ctx.wait_group.finish();
                 }
@@ -422,7 +422,7 @@ fn consumeOurCqe(
             if (sss.end_index < sss.data.len) {
                 try sss.prepSend(entry, &liou.io_uring);
                 return;
-            } else std.debug.assert(sss.end_index == sss.data.len);
+            } else sig.trace.assert(sss.end_index == sss.data.len);
 
             entry.deinit(server_ctx.allocator);
             server_ctx.wait_group.finish();
@@ -449,7 +449,7 @@ fn handleRecvBody(
     const logger = server_ctx.logger.withScope(LOGGER_SCOPE);
 
     const entry_data = entry.ptr;
-    std.debug.assert(body == &entry_data.state.recv_body);
+    sig.trace.assert(body == &entry_data.state.recv_body);
 
     if (!body.head_info.method.requestHasBody()) {
         if (body.head_info.content_len) |content_len| {
@@ -689,7 +689,7 @@ const EntryState = union(enum) {
             io_uring: *IoUring,
         ) GetSqeRetryError!void {
             const entry_ptr = entry.ptr;
-            std.debug.assert(self == &entry_ptr.state.recv_head);
+            sig.trace.assert(self == &entry_ptr.state.recv_head);
 
             const usable_buffer = entry_ptr.buffer[self.end..];
             const sqe = try getSqeRetry(io_uring);
@@ -752,7 +752,7 @@ const EntryState = union(enum) {
             sending_more,
         } {
             const entry_data = entry.ptr;
-            std.debug.assert(self == &entry_data.state.send_file_head);
+            sig.trace.assert(self == &entry_data.state.send_file_head);
 
             const rendered_len = blk: {
                 // render segments of the head into our buffer,
@@ -779,7 +779,7 @@ const EntryState = union(enum) {
                 writer.writeAll("\r\n") catch |err| switch (err) {};
 
                 if (self.sent_bytes == cw.bytes_written) return .all_sent;
-                std.debug.assert(self.sent_bytes < cw.bytes_written);
+                sig.trace.assert(self.sent_bytes < cw.bytes_written);
                 break :blk ww.end_index;
             };
 
@@ -812,8 +812,8 @@ const EntryState = union(enum) {
             io_uring: *IoUring,
         ) GetSqeRetryError!void {
             const entry_ptr = entry.ptr;
-            std.debug.assert(self == &entry_ptr.state.send_file_body);
-            std.debug.assert(self.which == .to_pipe);
+            sig.trace.assert(self == &entry_ptr.state.send_file_body);
+            sig.trace.assert(self.which == .to_pipe);
 
             const sqe = try getSqeRetry(io_uring);
             sqe.prep_splice(
@@ -832,8 +832,8 @@ const EntryState = union(enum) {
             io_uring: *IoUring,
         ) GetSqeRetryError!void {
             const entry_ptr = entry.ptr;
-            std.debug.assert(self == &entry_ptr.state.send_file_body);
-            std.debug.assert(self.which == .to_socket);
+            sig.trace.assert(self == &entry_ptr.state.send_file_body);
+            sig.trace.assert(self.which == .to_socket);
 
             const stream = entry_ptr.stream;
 
@@ -895,7 +895,7 @@ const EntryState = union(enum) {
             io_uring: *IoUring,
         ) GetSqeRetryError!void {
             const entry_ptr = entry.ptr;
-            std.debug.assert(self == &entry_ptr.state.send_static_string);
+            sig.trace.assert(self == &entry_ptr.state.send_static_string);
 
             const sqe = try getSqeRetry(io_uring);
             sqe.prep_send(entry_ptr.stream.handle, self.data[self.end_index..], 0);

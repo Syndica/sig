@@ -160,7 +160,7 @@ fn loadTransactionAccountsSimd186(
     slot: sig.core.Slot,
     compute_budget_limits: *const ComputeBudgetLimits,
 ) InternalLoadError!LoadedTransactionAccounts {
-    std.debug.assert(compute_budget_limits.loaded_accounts_bytes != 0);
+    sig.trace.assert(compute_budget_limits.loaded_accounts_bytes != 0);
 
     var loaded = LoadedTransactionAccounts.DEFAULT;
     errdefer for (loaded.accounts.slice()) |account| account.deinit(allocator);
@@ -284,7 +284,7 @@ fn loadTransactionAccountsOld(
     slot: sig.core.Slot,
     compute_budget_limits: *const ComputeBudgetLimits,
 ) InternalLoadError!LoadedTransactionAccounts {
-    std.debug.assert(compute_budget_limits.loaded_accounts_bytes != 0);
+    sig.trace.assert(compute_budget_limits.loaded_accounts_bytes != 0);
 
     var loaded = LoadedTransactionAccounts.DEFAULT;
     errdefer for (loaded.accounts.slice()) |account| account.deinit(allocator);

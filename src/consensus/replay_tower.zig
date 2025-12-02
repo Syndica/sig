@@ -396,7 +396,7 @@ pub const ReplayTower = struct {
             // descends from. Thus it is safe to use `candidate_slot` in the switching proof.
             //
             // Note: the calling function should have already panicked if we do not have ancestors and the last vote is not stray.
-            std.debug.assert(self.isStrayLastVote());
+            sig.trace.assert(self.isStrayLastVote());
             return true;
         }
 
@@ -637,7 +637,7 @@ pub const ReplayTower = struct {
             // By the time we reach here, any ancestors of the `last_vote`,
             // should have been filtered out, as they all have a descendant,
             // namely the `last_vote` itself.
-            std.debug.assert(!last_vote_ancestors.containsSlot(candidate_slot));
+            sig.trace.assert(!last_vote_ancestors.containsSlot(candidate_slot));
             // Evaluate which vote accounts in the bank are locked out
             // in the interval candidate_slot..last_vote, which means
             // finding any lockout intervals in the `lockout_intervals` tree
@@ -910,7 +910,7 @@ pub const ReplayTower = struct {
             replayed_root,
         });
         // Sanity assertions for roots. Must be in the slot history
-        std.debug.assert(slot_history.check(replayed_root) == .found);
+        sig.trace.assert(slot_history.check(replayed_root) == .found);
 
         var default_vote = VoteTransaction.DEFAULT;
         defer default_vote.deinit(allocator);
@@ -922,7 +922,7 @@ pub const ReplayTower = struct {
         // then the only acceptable values for last_vote are:
         // - A default VoteStateUpdate or
         // - A default TowerSync
-        std.debug.assert(
+        sig.trace.assert(
             (self.last_vote.eql(&default_vote) and
                 self.tower.votes.len == 0) or
                 (self.last_vote.eql(&default_tower) and
@@ -988,7 +988,7 @@ pub const ReplayTower = struct {
             // This else clause is for newly created tower.
             // initializeLockoutsFromBank() should ensure the following invariant,
             // otherwise we're screwing something up.
-            std.debug.assert(tower_root == replayed_root);
+            sig.trace.assert(tower_root == replayed_root);
         }
     }
 
@@ -1094,7 +1094,7 @@ pub const ReplayTower = struct {
             return TowerError.FatallyInconsistent;
         }
 
-        std.debug.assert(
+        sig.trace.assert(
             slots_in_tower.items.len == retain_flags_for_each_vote_in_reverse.items.len,
         );
 
@@ -1130,7 +1130,7 @@ pub const ReplayTower = struct {
         } else {
             const voted_slots = try self.tower.votedSlots(allocator);
             defer allocator.free(voted_slots);
-            std.debug.assert(self.lastVotedSlot().? == voted_slots[voted_slots.len - 1]);
+            sig.trace.assert(self.lastVotedSlot().? == voted_slots[voted_slots.len - 1]);
             self.stray_restored_slot = self.last_vote.lastVotedSlot();
         }
 
@@ -1772,7 +1772,7 @@ pub fn collectClusterVoteState(
         // a vote for a slot >= bank_slot, so we are guaranteed that the last vote in
         // this vote stack is the simulated vote, so this fetch should be sufficient
         // to find the last unsimulated vote.
-        std.debug.assert(vote_state.nthRecentLockout(0).?.slot == bank_slot);
+        sig.trace.assert(vote_state.nthRecentLockout(0).?.slot == bank_slot);
 
         if (vote_state.nthRecentLockout(1)) |lockout| {
             // Update all the parents of this last vote with the stake of this vote account

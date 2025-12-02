@@ -33,7 +33,7 @@ const SvmGateway = replay.svm_gateway.SvmGateway;
 
 const verifyPoh = core.entry.verifyPoh;
 
-const assert = std.debug.assert;
+const assert = sig.trace.assert;
 
 const Logger = sig.trace.Logger("replay-async");
 

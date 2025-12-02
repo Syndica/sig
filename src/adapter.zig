@@ -127,7 +127,7 @@ pub const RpcEpochContextService = struct {
         for (0..3) |epoch_offset| {
             const selected_slot = old_slot + epoch_offset * self.state.schedule.slots_per_epoch;
             const selected_epoch = this_epoch + epoch_offset -| 1;
-            std.debug.assert(selected_epoch == self.state.schedule.getEpoch(selected_slot));
+            sig.trace.assert(selected_epoch == self.state.schedule.getEpoch(selected_slot));
 
             if (self.state.contains(selected_epoch)) {
                 continue;

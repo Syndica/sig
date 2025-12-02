@@ -1,4 +1,5 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 
 /// Tool for writing a series of non-contiguous bytes to a contiguous
 /// stream, encoded as base64 data.
@@ -69,7 +70,7 @@ pub const EncodingStream = struct {
             var encoded_buf: [max_encoded_len]u8 = undefined;
 
             const next_bytes = bytes[idx..direct_len];
-            std.debug.assert(next_bytes.len % 3 == 0);
+            sig.trace.assert(next_bytes.len % 3 == 0);
             const amt = @min(next_bytes.len, max_raw_len);
             idx += amt;
 

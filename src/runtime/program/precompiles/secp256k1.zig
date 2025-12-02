@@ -24,7 +24,7 @@ pub const SECP256K1_SIGNATURE_OFFSETS_START = 1;
 pub const SECP256K1_SIGNATURE_SERIALIZED_SIZE = 64;
 
 comptime {
-    std.debug.assert(SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE ==
+    sig.trace.assert(SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE ==
         @bitSizeOf(SignatureOffsets) / 8);
 }
 
@@ -127,7 +127,7 @@ pub fn verify(
         Keccak256.hash(msg, &msg_hash, .{});
 
         comptime {
-            std.debug.assert(Keccak256.digest_length == 32);
+            sig.trace.assert(Keccak256.digest_length == 32);
         }
 
         const pubkey = try recoverSecp256k1Pubkey(&msg_hash, &signature.to(), recovery_id);
@@ -237,7 +237,7 @@ fn signRecoverable(
         &recoverable_signature,
     ) == 0) return error.InvalidSignature;
 
-    std.debug.assert(_recovery_id <= 3);
+    sig.trace.assert(_recovery_id <= 3);
     const recovery_id: u2 = @intCast(_recovery_id);
 
     return .{ recovery_id, Ecdsa.Signature.fromBytes(signature) };
@@ -250,7 +250,7 @@ fn newSecp256k1Instruction(
     message: []const u8,
 ) !sig.core.Instruction {
     if (!builtin.is_test) @compileError("newSecp256k1Instruction is only for use in tests");
-    std.debug.assert(message.len <= std.math.maxInt(u16));
+    sig.trace.assert(message.len <= std.math.maxInt(u16));
 
     const eth_address = constructEthAddress(&keypair.public_key);
 

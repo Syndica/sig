@@ -171,7 +171,7 @@ pub const Id = union(enum) {
     ) std.json.ParseError(@TypeOf(source.*))!Id {
         return switch (try source.peekNextTokenType()) {
             .null => id: {
-                std.debug.assert(try source.next() == .null);
+                sig.trace.assert(try source.next() == .null);
                 break :id .null;
             },
             .string => id: {
@@ -195,11 +195,11 @@ pub const Id = union(enum) {
                 break :id .{ .number = str };
             },
             .object_end => {
-                std.debug.assert(try source.next() == .object_end);
+                sig.trace.assert(try source.next() == .object_end);
                 return error.UnexpectedToken;
             },
             .array_end => {
-                std.debug.assert(try source.next() == .array_end);
+                sig.trace.assert(try source.next() == .array_end);
                 return error.UnexpectedToken;
             },
             else => {

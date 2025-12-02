@@ -50,7 +50,7 @@ pub const GossipVersionedData = struct {
 
     pub fn overwrites(new_value: *const @This(), old_value: *const @This()) bool {
         // labels must match
-        std.debug.assert(@intFromEnum(new_value.data.label()) == @intFromEnum(old_value.data.label()));
+        sig.trace.assert(@intFromEnum(new_value.data.label()) == @intFromEnum(old_value.data.label()));
 
         const new_ts = new_value.data.wallclock();
         const old_ts = old_value.data.wallclock();
@@ -1187,7 +1187,7 @@ pub const SnapshotHashes = struct {
         /// Responsibility to `.deinit` the returned snapshot list falls to the caller in order to free `list`, if `list` was allocated.
         /// Asserts `list.len != 1`.
         pub fn initList(list: []const SlotAndHash) IncrementalSnapshotsList {
-            std.debug.assert(list.len != 1);
+            sig.trace.assert(list.len != 1);
             return .{ .multiple = list };
         }
 
@@ -1861,7 +1861,7 @@ test "ContactInfo bincode roundtrip maintains data integrity" {
 test "SocketEntry serializer works" {
     testing.log_level = .debug;
 
-    comptime std.debug.assert(@intFromEnum(SocketTag.rpc_pubsub) == 3);
+    comptime sig.trace.assert(@intFromEnum(SocketTag.rpc_pubsub) == 3);
     const se: SocketEntry = .{ .key = .rpc_pubsub, .index = 3, .offset = 30304 };
 
     var buf = std.ArrayList(u8).init(testing.allocator);

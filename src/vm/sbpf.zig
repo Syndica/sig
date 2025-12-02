@@ -1,7 +1,9 @@
 //! Constants to do with Solana's sbpf
 const std = @import("std");
 const memory = @import("memory.zig");
-const assert = std.debug.assert;
+const sig = @import("../sig.zig");
+
+const assert = sig.trace.assert;
 
 pub const EM_SBPF_V1: u32 = 0x20;
 

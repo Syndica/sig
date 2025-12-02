@@ -272,7 +272,7 @@ fn httpRespondError(
     status: std.http.Status,
     content: []const u8,
 ) !void {
-    std.debug.assert( //
+    sig.trace.assert( //
         status.class() == .client_error or
             status.class() == .server_error //
     );

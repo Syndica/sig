@@ -171,7 +171,7 @@ fn updateConsensusForFrozenSlot(params: ProcessResultParams, slot: Slot) !void {
 
     const hash = slot_info.state.hash.readCopy() orelse
         return error.MissingHash;
-    std.debug.assert(!hash.eql(Hash.ZEROES));
+    sig.trace.assert(!hash.eql(Hash.ZEROES));
 
     // Needs to be updated before `check_slot_agrees_with_cluster()` so that any
     // updates in `check_slot_agrees_with_cluster()` on fork choice take effect

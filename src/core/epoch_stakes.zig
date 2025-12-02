@@ -56,7 +56,7 @@ pub const VersionedEpochStakes = union(enum(u32)) {
 };
 
 pub fn EpochStakesMapGeneric(comptime stakes_type: StakesType) type {
-    std.debug.assert(stakes_type != .account);
+    sig.trace.assert(stakes_type != .account);
     return std.AutoArrayHashMapUnmanaged(Epoch, EpochStakesGeneric(stakes_type));
 }
 
@@ -86,7 +86,7 @@ pub fn epochStakeMapRandom(
 }
 
 pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
-    std.debug.assert(stakes_type != .account);
+    sig.trace.assert(stakes_type != .account);
     return struct {
         stakes: Stakes(stakes_type),
         total_stake: u64,

@@ -6,6 +6,7 @@
 const std = @import("std");
 const Ed25519 = std.crypto.ecc.Edwards25519;
 const Fe = Ed25519.Fe;
+const sig = @import("../../sig.zig");
 
 const u32x8 = @Vector(8, u32);
 const i32x8 = @Vector(8, i32);
@@ -156,7 +157,7 @@ pub const ExtendedPoint = struct {
     fn reduce64(input: [10]u64x4) ExtendedPoint {
         const S = struct {
             inline fn carry(z: *[10]u64x4, i: u64) void {
-                std.debug.assert(i < 9);
+                sig.trace.assert(i < 9);
                 if (i % 2 == 0) {
                     // Even limbs have 26 bits
                     z[i + 1] += z[i] >> @splat(26);

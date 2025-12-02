@@ -233,7 +233,7 @@ pub fn SwissMapUnmanaged(
                 const states = states_ptr[0..n_groups];
 
                 self._capacity = n_groups * GROUP_SIZE;
-                std.debug.assert(self._capacity >= n);
+                sig.trace.assert(self._capacity >= n);
                 self.groups = groups;
                 self.states = states;
                 self.memory = memory;
@@ -451,7 +451,7 @@ pub fn SwissMapUnmanaged(
         pub fn putAssumeCapacity(self: *Self, key: Key, value: Value) void {
             const hash = hash_fn(key);
             var group_index = hash & self.bit_mask;
-            std.debug.assert(self._capacity > self._count);
+            sig.trace.assert(self._capacity > self._count);
 
             // what we are searching for (get)
             const control_bytes: u7 = @intCast(hash >> (64 - 7));
@@ -516,7 +516,7 @@ pub fn SwissMapUnmanaged(
             const hash = hash_fn(key);
             var group_index = hash & self.bit_mask;
 
-            std.debug.assert(self._capacity > self._count);
+            sig.trace.assert(self._capacity > self._count);
 
             // what we are searching for (get)
             const control_bytes: u7 = @intCast(hash >> (64 - 7));

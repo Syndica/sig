@@ -343,7 +343,7 @@ pub fn altBn128GroupOp(
         } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
     };
     // Can never happen after SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES, which should always be enabled now.
-    std.debug.assert(result_point.len == output_length);
+    sig.trace.assert(result_point.len == output_length);
 
     @memcpy(call_result, result_point);
 }

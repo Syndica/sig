@@ -777,7 +777,7 @@ fn retransmitterSignatureOffset(variant: ShredVariant) !usize {
 }
 
 fn capacity(constants: ShredConstants, variant: ShredVariant) !usize {
-    std.debug.assert(variant.chained or !variant.resigned);
+    sig.trace.assert(variant.chained or !variant.resigned);
     return std.math.sub(
         usize,
         constants.payload_size,
@@ -1059,7 +1059,7 @@ pub const ShredFlags = BitFlags(enum(u8) {
     comptime {
         // This replaces a check that would otherwise
         // be ported from agave into DataShred.sanitize.
-        std.debug.assert(@intFromEnum(ShredFlags.Flag.data_complete_shred) ==
+        sig.trace.assert(@intFromEnum(ShredFlags.Flag.data_complete_shred) ==
             @intFromEnum(ShredFlags.Flag.last_shred_in_slot) &
                 @intFromEnum(ShredFlags.Flag.data_complete_shred));
     }
@@ -1142,7 +1142,7 @@ pub const layout = struct {
 
     /// must be a data shred, otherwise the return value will be corrupted and meaningless
     pub fn getParentSlotOffset(shred: []const u8) ?u16 {
-        std.debug.assert(getShredVariant(shred).?.shred_type == .data);
+        sig.trace.assert(getShredVariant(shred).?.shred_type == .data);
         return getInt(u16, shred, 83);
     }
 

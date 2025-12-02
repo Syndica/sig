@@ -181,7 +181,7 @@ pub fn insertShreds(
         .completed_data_set_infos = ArrayList(CompletedDataSetInfo).init(allocator),
         .duplicate_shreds = ArrayList(PossibleDuplicateShred).init(allocator),
     };
-    std.debug.assert(shreds.len == is_repaired.len);
+    sig.trace.assert(shreds.len == is_repaired.len);
     if (self.metrics) |m| m.num_shreds.add(shreds.len);
 
     ///////////////////////////
@@ -1195,7 +1195,7 @@ const initTestLedger = ledger_mod.tests.initTestLedger;
 const DirectPrintLogger = sig.trace.DirectPrintLogger;
 
 fn assertOk(result: anytype) void {
-    std.debug.assert(if (result) |_| true else |_| false);
+    sig.trace.assert(if (result) |_| true else |_| false);
 }
 
 const ShredInserterTestState = struct {

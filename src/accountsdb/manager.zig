@@ -160,7 +160,7 @@ pub fn onSlotRooted(
         //     defer gen_info_lg.unlock();
 
         //     const prev = gen_info.*.?; // value set in generateFullSnapshotWithCompressor
-        //     std.debug.assert(newly_rooted_slot == prev.full.slot);
+        //     sig.trace.assert(newly_rooted_slot == prev.full.slot);
 
         //     gen_info.* = .{
         //         .full = .{
@@ -179,7 +179,7 @@ pub fn onSlotRooted(
         // };
 
         // if (make_inc_snapshot and has_made_full_snapshot) {
-        //     std.debug.assert(!make_full_snapshot);
+        //     sig.trace.assert(!make_full_snapshot);
 
         //     db.logger.info().logf(
         //         "accountsdb[manager]: generating incremental snapshot from {d} to {d}",
@@ -336,7 +336,7 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
                 break true;
             }
         } else false;
-        std.debug.assert(did_update);
+        sig.trace.assert(did_update);
     }
 
     // TODO: prom metrics
@@ -350,7 +350,7 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
 
         // remove from cache map
         const did_remove = unrooted_accounts.remove(slot);
-        std.debug.assert(did_remove);
+        sig.trace.assert(did_remove);
 
         // free slices
         for (pubkeys_and_accounts.items(.account)) |account| account.data.deinit(db.allocator);
@@ -496,7 +496,7 @@ fn cleanAccountFiles(
                             };
                         }
                     };
-                    std.debug.assert(accounts_dead_count <= accounts_total_count);
+                    sig.trace.assert(accounts_dead_count <= accounts_total_count);
 
                     const dead_percentage = 100 * accounts_dead_count / accounts_total_count;
                     if (dead_percentage == 100) {
@@ -516,7 +516,7 @@ fn cleanAccountFiles(
             try db.account_index.removeReference(&ref.pubkey, ref.slot);
             // sanity check
             if (builtin.mode == .Debug) {
-                std.debug.assert(!db.account_index.exists(&ref.pubkey, ref.slot));
+                sig.trace.assert(!db.account_index.exists(&ref.pubkey, ref.slot));
             }
         }
         references_to_delete.clearRetainingCapacity();
@@ -576,7 +576,7 @@ fn deleteAccountFiles(
 
             // remove from file map
             const did_remove = file_map.swapRemove(file_id);
-            std.debug.assert(did_remove);
+            sig.trace.assert(did_remove);
 
             // NOTE: we can queue the actual removal of the account file without the lock because
             // because we know 1) no account files are being accessed and 2) no files are reading
@@ -708,9 +708,9 @@ fn shrinkAccountFiles(
             }
         }
         // if there are no alive accounts, it should have been queued for deletion
-        std.debug.assert(accounts_alive_count > 0);
+        sig.trace.assert(accounts_alive_count > 0);
         // if there are no dead accounts, it should have not been queued for shrink
-        std.debug.assert(accounts_dead_count > 0);
+        sig.trace.assert(accounts_dead_count > 0);
         total_accounts_deleted += accounts_dead_count;
         total_accounts_deleted_size += accounts_dead_size;
 
@@ -850,7 +850,7 @@ fn shrinkAccountFiles(
                 db.dead_accounts_counter.writeWithLock();
             defer dead_accounts_counter_lg.unlock();
             const removed = dead_accounts_counter.fetchSwapRemove(slot).?;
-            std.debug.assert(removed.value == accounts_dead_count);
+            sig.trace.assert(removed.value == accounts_dead_count);
         }
     }
 

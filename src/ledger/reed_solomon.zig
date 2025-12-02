@@ -559,7 +559,7 @@ const field = struct {
 
     // TODO perf: see reed_solomon_erasure::galois_8 for an approach with better performance
     fn mulSlice(elem: u8, input: []const u8, out: []u8) void {
-        // std.debug.assert(input.len == out.len);
+        // sig.trace.assert(input.len == out.len);
         for (input, out) |i, *o| {
             o.* = mul(elem, i);
         }
@@ -567,7 +567,7 @@ const field = struct {
 
     // TODO perf: see reed_solomon_erasure::galois_8 for an approach with better performance
     fn mulSliceAdd(elem: u8, input: []const u8, out: []u8) void {
-        // std.debug.assert(input.len == out.len);
+        // sig.trace.assert(input.len == out.len);
         for (input, out) |i, *o| {
             o.* = add(o.*, mul(elem, i));
         }

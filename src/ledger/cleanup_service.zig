@@ -285,7 +285,7 @@ fn writePurgeRange(write_batch: *LedgerDB.WriteBatch, from_slot: Slot, to_slot: 
     try purgeRangeWithCount(write_batch, schema.program_costs, Pubkey.ZEROES, Pubkey.ZEROES, &delete_count);
 
     // make sure we covered all the column families
-    std.debug.assert(delete_count == ledger.schema.list.len);
+    sig.trace.assert(delete_count == ledger.schema.list.len);
 }
 
 fn purgeRangeWithCount(
@@ -373,7 +373,7 @@ fn purgeFilesInRange(db: *LedgerDB, from_slot: Slot, to_slot: Slot) !void {
     );
 
     // make sure we covered all the column families
-    std.debug.assert(delete_count == ledger.schema.list.len);
+    sig.trace.assert(delete_count == ledger.schema.list.len);
 }
 
 fn purgeFileRangeWithCount(

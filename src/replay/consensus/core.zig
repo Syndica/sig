@@ -238,7 +238,7 @@ pub const TowerConsensus = struct {
             const frozen_hash = info.state.hash.readCopy().?;
             if (slot > root_slot) {
                 // Make sure the list is sorted
-                std.debug.assert(slot > prev_slot);
+                sig.trace.assert(slot > prev_slot);
                 prev_slot = slot;
                 const parent_bank_hash = info.constants.parent_hash;
                 try heaviest_subtree_fork_choice.addNewLeafSlot(
@@ -684,7 +684,7 @@ pub const TowerConsensus = struct {
         frozen_hash: Hash,
         ancestor_hashes_replay_update_sender: *Channel(AncestorHashesReplayUpdate),
     ) !void {
-        std.debug.assert(!frozen_hash.eql(Hash.ZEROES));
+        sig.trace.assert(!frozen_hash.eql(Hash.ZEROES));
         if (slot <= root) return;
 
         var f_stats = progress_map.getForkStats(slot) orelse
@@ -696,7 +696,7 @@ pub const TowerConsensus = struct {
             slot,
             frozen_hash,
         )) |prev_entry| {
-            std.debug.assert(prev_entry.value.eql(frozen_hash));
+            sig.trace.assert(prev_entry.value.eql(frozen_hash));
             // Already processed this signal
             return;
         }
@@ -4759,13 +4759,13 @@ test "edge cases - duplicate slot" {
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
-    std.debug.assert(slot_tracker.root == 0);
+    sig.trace.assert(slot_tracker.root == 0);
 
     const root_slot0 = slot_tracker.root;
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
 
-    std.debug.assert(root_slot0 == 0); // assert initial root value
-    std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
+    sig.trace.assert(root_slot0 == 0); // assert initial root value
+    sig.trace.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
     const slot1: Slot = 1;
@@ -4918,13 +4918,13 @@ test "edge cases - duplicate confirmed slot" {
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
-    std.debug.assert(slot_tracker.root == 0);
+    sig.trace.assert(slot_tracker.root == 0);
 
     const root_slot0 = slot_tracker.root;
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
 
-    std.debug.assert(root_slot0 == 0); // assert initial root value
-    std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
+    sig.trace.assert(root_slot0 == 0); // assert initial root value
+    sig.trace.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
     const slot1: Slot = 1;
@@ -5078,7 +5078,7 @@ test "edge cases - gossip verified vote hashes" {
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
-    std.debug.assert(slot_tracker.root == 0);
+    sig.trace.assert(slot_tracker.root == 0);
 
     var vote_collector: sig.consensus.vote_listener.VoteCollector =
         try .init(.UNIX_EPOCH, slot_tracker.root, &registry);
@@ -5087,8 +5087,8 @@ test "edge cases - gossip verified vote hashes" {
     const root_slot0 = slot_tracker.root;
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
 
-    std.debug.assert(root_slot0 == 0); // assert initial root value
-    std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
+    sig.trace.assert(root_slot0 == 0); // assert initial root value
+    sig.trace.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
     const slot1: Slot = 1;

@@ -219,7 +219,7 @@ const MemmoveContext = struct {
     extern fn memmove(dst: ?[*]u8, src: ?[*]const u8, len: usize) callconv(.c) ?[*]u8;
 
     fn run(_: *@This(), src: []const u8, dst: []u8) !void {
-        std.debug.assert(dst.len == src.len);
+        sig.trace.assert(dst.len == src.len);
         _ = @This().memmove(dst.ptr, src.ptr, src.len);
     }
 };

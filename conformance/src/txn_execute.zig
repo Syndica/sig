@@ -239,7 +239,7 @@ fn executeTxnContext(
             }
 
             // Insert genesis config rewards pool accounts
-            std.debug.assert(genesis_config.rewards_pools.count() == 0);
+            sig.trace.assert(genesis_config.rewards_pools.count() == 0);
 
             // Set the collector id
             // bank.collector_id = fee_collector;
@@ -271,14 +271,14 @@ fn executeTxnContext(
             // };
 
             // add builtin programs specefied in genesis config
-            std.debug.assert(genesis_config.native_instruction_processors.items.len == 0);
+            sig.trace.assert(genesis_config.native_instruction_processors.items.len == 0);
         }
 
         // Bank::finish_init(...)
         // https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/bank.rs#L4863
         {
             // Set reward pool pubkeys
-            std.debug.assert(genesis_config.rewards_pools.count() == 0);
+            sig.trace.assert(genesis_config.rewards_pools.count() == 0);
 
             try bank_methods.applyFeatureActivations(
                 allocator,
@@ -528,7 +528,7 @@ fn executeTxnContext(
                     const stakes, var stakes_guard = stakes_cache.stakes.writeWithLock();
                     defer stakes_guard.unlock();
                     stakes.epoch = epoch;
-                    std.debug.assert(stakes.stake_history.entries.len == 0);
+                    sig.trace.assert(stakes.stake_history.entries.len == 0);
                     stakes.stake_history.entries.appendAssumeCapacity(.{
                         .epoch = parent_slots_epoch,
                         .stake = .{

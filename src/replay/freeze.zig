@@ -7,7 +7,7 @@ const core = sig.core;
 const features = sig.core.features;
 
 const Allocator = std.mem.Allocator;
-const assert = std.debug.assert;
+const assert = sig.trace.assert;
 
 const Logger = sig.trace.Logger(@typeName(@This()));
 

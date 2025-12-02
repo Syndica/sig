@@ -32,7 +32,7 @@ pub fn lockStrict(
     accounts: []const LockableAccount,
 ) LockError!void {
     for (accounts, 0..) |account, i| {
-        errdefer std.debug.assert(0 == self.unlock(accounts[0..i]));
+        errdefer sig.trace.assert(0 == self.unlock(accounts[0..i]));
         if (account.writable) {
             if (self.readonly_locks.contains(account.address)) {
                 return error.LockFailed;
@@ -81,7 +81,7 @@ pub fn lockPermissive(
         }
     }
     for (accounts, 0..) |account, i| {
-        errdefer std.debug.assert(0 == self.unlock(accounts[0..i]));
+        errdefer sig.trace.assert(0 == self.unlock(accounts[0..i]));
         const locks = if (account.writable) &self.write_locks else &self.readonly_locks;
         const entry = try locks.getOrPut(allocator, account.address);
         if (entry.found_existing) {

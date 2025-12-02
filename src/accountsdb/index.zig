@@ -340,8 +340,8 @@ pub const AccountIndex = struct {
             .parent => |parent| &parent.next_ptr.?,
         };
         // sanity checks
-        std.debug.assert(ptr_to_ref_field.*.slot == slot);
-        std.debug.assert(ptr_to_ref_field.*.pubkey.equals(pubkey));
+        sig.trace.assert(ptr_to_ref_field.*.slot == slot);
+        sig.trace.assert(ptr_to_ref_field.*.pubkey.equals(pubkey));
         // update
         ptr_to_ref_field.* = new_ref;
     }
@@ -576,10 +576,10 @@ pub const PubkeyShardCalculator = struct {
         // u8 * 3 (ie, we consider on the first 3 bytes of a pubkey)
         const MAX_BITS: u32 = 24;
         // within bounds
-        std.debug.assert(n_shards > 0);
-        std.debug.assert(n_shards <= (1 << MAX_BITS));
+        sig.trace.assert(n_shards > 0);
+        sig.trace.assert(n_shards <= (1 << MAX_BITS));
         // power of two
-        std.debug.assert((n_shards & (n_shards - 1)) == 0);
+        sig.trace.assert((n_shards & (n_shards - 1)) == 0);
         // eg,
         // 8 shards
         // => leading zeros = 28

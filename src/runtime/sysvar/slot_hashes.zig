@@ -63,7 +63,7 @@ pub const SlotHashes = struct {
 
     pub fn initWithEntries(entries: []const Entry) SlotHashes {
         if (!builtin.is_test) @compileError("only for testing");
-        std.debug.assert(entries.len <= MAX_ENTRIES);
+        sig.trace.assert(entries.len <= MAX_ENTRIES);
 
         var self: SlotHashes = .INIT;
         self.entries.appendSlice(entries) catch unreachable;

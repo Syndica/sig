@@ -28,7 +28,7 @@ pub const Pubkey = struct {
     /// Derives a `Pubkey` that uniquely relates to a `Secret`.
     pub fn fromSecret(secret: Keypair.Secret) Pubkey {
         const scalar = secret.scalar;
-        std.debug.assert(!scalar.isZero());
+        sig.trace.assert(!scalar.isZero());
         return .{ .point = ed25519.mul(
             true,
             pedersen.H,

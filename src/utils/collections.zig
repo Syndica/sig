@@ -705,7 +705,7 @@ pub fn SortedMapUnmanagedCustom(
         /// - returns whether the key was the prior max.
         /// - don't call this unless an item was definitely removed.
         fn resetMaxOnRemove(self: *SortedMapSelf, removed_key: K) bool {
-            std.debug.assert(self.max != null);
+            sig.trace.assert(self.max != null);
             if (self.count() == 0) {
                 self.max = null;
                 return true;

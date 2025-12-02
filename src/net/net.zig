@@ -1,6 +1,7 @@
 const std = @import("std");
 const network = @import("zig-network");
 const builtin = @import("builtin");
+const sig = @import("../sig.zig");
 
 pub const SocketAddr = union(enum(u8)) {
     V4: SocketAddrV4,
@@ -588,7 +589,7 @@ pub fn resolveSocketAddr(allocator: std.mem.Allocator, host_and_port: []const u8
     const ipv4_addr = addr_list.addrs[0];
 
     const socket_addr = SocketAddr.fromIpV4Address(ipv4_addr);
-    std.debug.assert(socket_addr.port() == port);
+    sig.trace.assert(socket_addr.port() == port);
     return socket_addr;
 }
 

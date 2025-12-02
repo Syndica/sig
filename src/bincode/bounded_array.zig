@@ -24,7 +24,7 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
                 var data: List = .{};
                 data.len = @intCast(len);
                 const bytes_read = try reader.readAll(data.slice());
-                std.debug.assert(bytes_read <= len);
+                sig.trace.assert(bytes_read <= len);
                 if (bytes_read != len) return error.EndOfStream;
                 return data;
             } else {

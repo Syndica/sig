@@ -58,12 +58,12 @@ pub const Strobe128 = struct {
     pub fn beginOp(self: *Strobe128, flags: Flags, more: bool) void {
         // Check if we're continuing a previous operation.
         if (more) {
-            std.debug.assert(self.flags == flags);
+            sig.trace.assert(self.flags == flags);
             return;
         }
 
         // Skip adjusting direction information.
-        std.debug.assert(!flags.T);
+        sig.trace.assert(!flags.T);
 
         const old_begin = self.begin;
         self.begin = self.position + 1;
@@ -408,8 +408,8 @@ pub const Transcript = struct {
         };
 
         fn check(self: Input, t: Type, label: []const u8) void {
-            std.debug.assert(self.type == t);
-            std.debug.assert(std.mem.eql(u8, self.label, label));
+            sig.trace.assert(self.type == t);
+            sig.trace.assert(std.mem.eql(u8, self.label, label));
         }
     };
 
@@ -449,7 +449,7 @@ pub const Transcript = struct {
         comptime {
             // contract should always end in a challenge
             const last_contract = contract[contract.len - 1];
-            std.debug.assert(last_contract.type == .challenge);
+            sig.trace.assert(last_contract.type == .challenge);
             return .{ .i = 0, .contract = contract, .err = false };
         }
     }

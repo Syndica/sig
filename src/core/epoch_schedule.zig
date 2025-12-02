@@ -1,4 +1,5 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 const core = @import("lib.zig");
 
 const Epoch = core.Epoch;
@@ -77,7 +78,7 @@ pub const EpochSchedule = extern struct {
     }
 
     pub fn getSlotsInEpoch(self: *const EpochSchedule, epoch: Epoch) u64 {
-        comptime std.debug.assert(std.math.isPowerOfTwo(MINIMUM_SLOTS_PER_EPOCH));
+        comptime sig.trace.assert(std.math.isPowerOfTwo(MINIMUM_SLOTS_PER_EPOCH));
         return if (epoch < self.first_normal_epoch)
             @as(Slot, 1) <<| epoch +| @ctz(MINIMUM_SLOTS_PER_EPOCH)
         else
@@ -140,11 +141,11 @@ pub const EpochSchedule = extern struct {
         const leader_schedule_slot_offset = params.leader_schedule_slot_offset;
         const warmup = params.warmup;
 
-        std.debug.assert(slots_per_epoch >= MINIMUM_SLOTS_PER_EPOCH);
+        sig.trace.assert(slots_per_epoch >= MINIMUM_SLOTS_PER_EPOCH);
         var first_normal_epoch: Epoch = 0;
         var first_normal_slot: Slot = 0;
         if (warmup) {
-            std.debug.assert(slots_per_epoch <= std.math.maxInt(u63));
+            sig.trace.assert(slots_per_epoch <= std.math.maxInt(u63));
             const next_power_of_two = std.math.ceilPowerOfTwoAssert(u64, slots_per_epoch);
             const log2_slots_per_epoch = @ctz(next_power_of_two) -| @ctz(MINIMUM_SLOTS_PER_EPOCH);
             first_normal_epoch = log2_slots_per_epoch;

@@ -100,7 +100,7 @@ pub const AccountInFile = struct {
         pubkey: Pubkey,
 
         pub fn serialize(self: *const StorageInfo, buf: []u8) usize {
-            std.debug.assert(buf.len >= @sizeOf(StorageInfo));
+            sig.trace.assert(buf.len >= @sizeOf(StorageInfo));
 
             var offset: usize = 0;
             offset += writeIntLittleMem(self.write_version_obsolete, buf[offset..]);
@@ -122,7 +122,7 @@ pub const AccountInFile = struct {
         executable: bool,
 
         pub fn serialize(self: *const AccountInfo, buf: []u8) usize {
-            std.debug.assert(buf.len >= @sizeOf(AccountInfo));
+            sig.trace.assert(buf.len >= @sizeOf(AccountInfo));
 
             var offset: usize = 0;
             offset += writeIntLittleMem(self.lamports, buf[offset..]);
@@ -206,7 +206,7 @@ pub const AccountInFile = struct {
     }
 
     pub fn serialize(self: *const AccountInFile, buf: []u8) usize {
-        std.debug.assert(buf.len >= STATIC_SIZE + self.data.len());
+        sig.trace.assert(buf.len >= STATIC_SIZE + self.data.len());
 
         var offset: usize = 0;
         offset += self.store_info.serialize(buf[offset..]);
@@ -406,7 +406,7 @@ pub const AccountFile = struct {
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
 
         const header_byte_len = offset - start_offset;
-        std.debug.assert(header_byte_len <= max_header_buf_len);
+        sig.trace.assert(header_byte_len <= max_header_buf_len);
 
         var offset_restarted = start_offset;
         var buf: [max_header_buf_len]u8 = undefined;
@@ -418,7 +418,7 @@ pub const AccountFile = struct {
                 header_byte_len,
             );
             defer read.deinit(metadata_allocator);
-            std.debug.assert(offset == offset_restarted);
+            sig.trace.assert(offset == offset_restarted);
             read.readAll(buf[0..header_byte_len]);
         }
 
@@ -484,7 +484,7 @@ pub const AccountFile = struct {
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
 
         const header_byte_len = offset - start_offset;
-        std.debug.assert(header_byte_len <= max_header_buf_len);
+        sig.trace.assert(header_byte_len <= max_header_buf_len);
 
         var offset_restarted = start_offset;
         const read = try self.getSlice(
@@ -493,7 +493,7 @@ pub const AccountFile = struct {
             &offset_restarted,
             header_byte_len,
         );
-        std.debug.assert(offset == offset_restarted);
+        sig.trace.assert(offset == offset_restarted);
         defer read.deinit(metadata_allocator);
 
         var buf: [max_header_buf_len]u8 = undefined;

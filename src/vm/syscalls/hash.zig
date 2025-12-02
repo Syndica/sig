@@ -22,7 +22,7 @@ pub fn poseidon(
 ) Error!void {
     const parameters = std.meta.intToEnum(Parameters, registers.get(.r1)) catch
         return error.InvalidParameters;
-    std.debug.assert(parameters == .Bn254X5);
+    sig.trace.assert(parameters == .Bn254X5);
     const endianness = std.meta.intToEnum(std.builtin.Endian, registers.get(.r2)) catch
         return error.InvalidEndianness;
     const addr = registers.get(.r3);

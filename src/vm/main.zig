@@ -1,7 +1,7 @@
 const std = @import("std");
 const sig = @import("sig");
 const builtin = @import("builtin");
-const cli = @import("cli");
+const cli = @import("../cli.zig");
 
 const vm = sig.vm;
 

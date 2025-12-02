@@ -1,8 +1,8 @@
 //! Mostly copied from https://github.com/firedancer-io/firedancer/blob/9068496fbf7d211a01b535039e876ffbf84fcc6e/src/ballet/bn254/fd_bn254_pairing.c#L68
 
-const std = @import("std");
 const bn254 = @import("lib.zig");
 const fields = @import("fields.zig");
+const sig = @import("../../sig.zig");
 
 const G1 = bn254.G1;
 const G2 = bn254.G2;
@@ -13,7 +13,7 @@ const Fp12 = fields.Fp12;
 pub const BATCH_SIZE = 16;
 
 pub fn millerLoop(a: []const G1, b: []const G2) Fp12 {
-    std.debug.assert(a.len == b.len);
+    sig.trace.assert(a.len == b.len);
     const size = a.len;
 
     var t: [BATCH_SIZE]G2 = undefined;

@@ -1,9 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build-options");
-const cli = @import("cli");
+const cli = @import("cli.zig");
 const sig = @import("sig.zig");
-const config = @import("config.zig");
+pub const config = @import("config.zig");
 const tracy = @import("tracy");
 
 const replay = sig.replay;
@@ -1962,13 +1962,13 @@ const AppBase = struct {
 
     /// Signals the shutdown, however it does not block.
     pub fn shutdown(self: *AppBase) void {
-        std.debug.assert(!self.closed);
+        sig.trace.assert(!self.closed);
         defer self.closed = true;
         self.exit.store(true, .release);
     }
 
     pub fn deinit(self: *AppBase) void {
-        std.debug.assert(self.closed); // call `self.shutdown()` first
+        sig.trace.assert(self.closed); // call `self.shutdown()` first
         self.allocator.free(self.entrypoints);
         self.rpc_hooks.deinit(self.allocator);
         self.metrics_thread.detach();

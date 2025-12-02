@@ -226,7 +226,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             account: VoteAccount,
             new_rate_activation_epoch: ?Epoch,
         ) !void {
-            std.debug.assert(account.account.lamports > 0);
+            sig.trace.assert(account.account.lamports > 0);
             var maybe_old_account = try self.vote_accounts.insert(
                 allocator,
                 pubkey,
@@ -248,7 +248,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             account: StakeAccount,
             new_rate_activation_epoch: ?Epoch,
         ) !void {
-            std.debug.assert(account.account.lamports > 0);
+            sig.trace.assert(account.account.lamports > 0);
             defer if (stakes_type != .account) account.deinit(allocator);
             errdefer if (stakes_type == .account) account.deinit(allocator);
 

@@ -126,7 +126,7 @@ fn randomAccountsDbFields(
     random: std.Random,
     params: AccountsDbFieldsRandomConfig,
 ) std.mem.Allocator.Error!AccountsDbFields {
-    std.debug.assert(params.file_map_len.min >= 1);
+    sig.trace.assert(params.file_map_len.min >= 1);
 
     const FileIdAdapter = struct {
         file_map: *const AccountsDbFields.FileMap,

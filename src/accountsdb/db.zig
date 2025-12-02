@@ -58,7 +58,7 @@ const WeightedAliasSampler = sig.rand.WeightedAliasSampler;
 
 const RwMux = sig.sync.RwMux;
 
-const assert = std.debug.assert;
+const assert = sig.trace.assert;
 
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshot.data.parallelUnpackZstdTarBall;
 const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
@@ -497,7 +497,7 @@ pub const AccountsDB = struct {
 
         const n_account_files = snapshot_manifest.file_map.count();
         self.logger.info().logf("found {d} account files", .{n_account_files});
-        std.debug.assert(n_account_files > 0);
+        sig.trace.assert(n_account_files > 0);
 
         // prealloc the references
         const n_accounts_estimate = n_account_files * accounts_per_file_estimate;
@@ -810,7 +810,7 @@ pub const AccountsDB = struct {
                 }
             };
 
-            std.debug.assert(accounts_file.number_of_accounts <= n_accounts_this_slot);
+            sig.trace.assert(accounts_file.number_of_accounts <= n_accounts_this_slot);
 
             const file_id = file_info.id;
             file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
@@ -1266,7 +1266,7 @@ pub const AccountsDB = struct {
         defer first_snapshot_info_lg.unlock();
 
         if (maybe_first_snapshot_info.*) |first| {
-            std.debug.assert( // already validated against a different set of snapshot info
+            sig.trace.assert( // already validated against a different set of snapshot info
                 first.full.slot == params.full_slot);
         }
 
@@ -1292,8 +1292,8 @@ pub const AccountsDB = struct {
             // after calling it once should not produce any mutations.
             // The assertion may also trip if any mutations to accountsdb
             // have occurred since the first call to this function.
-            std.debug.assert(latest_snapshot_info.full.slot == params.full_slot);
-            std.debug.assert(latest_snapshot_info.full.hash.eql(accounts_hash));
+            sig.trace.assert(latest_snapshot_info.full.slot == params.full_slot);
+            sig.trace.assert(latest_snapshot_info.full.hash.eql(accounts_hash));
         }
 
         maybe_first_snapshot_info.* = .{
@@ -1339,8 +1339,8 @@ pub const AccountsDB = struct {
             // ASSERTION: same idea as the previous assertion, but applied to
             // the incremental snapshot info.
             if (p_maybe_first_inc.*) |first_inc| {
-                std.debug.assert(first_inc.slot == inc_slot);
-                std.debug.assert(first_inc.hash.eql(accounts_delta_hash));
+                sig.trace.assert(first_inc.slot == inc_slot);
+                sig.trace.assert(first_inc.hash.eql(accounts_delta_hash));
             }
 
             p_maybe_first_inc.* = .{
@@ -1409,7 +1409,7 @@ pub const AccountsDB = struct {
 
             var iter = shard.iterator();
             while (iter.next()) |key| {
-                defer std.debug.assert(arena.reset(.retain_capacity));
+                defer sig.trace.assert(arena.reset(.retain_capacity));
 
                 const ref_head = key.value_ptr;
 
@@ -1429,7 +1429,7 @@ pub const AccountsDB = struct {
                 // "mix out" previous latest version of account from hash (if applicable)
                 if (config.minSlot()) |min_slot| {
                     // we are calculating the incremental hash
-                    std.debug.assert(config == .IncrementalAccountHash);
+                    sig.trace.assert(config == .IncrementalAccountHash);
 
                     // We've just mixed in the latest entry within our range, i.e. the latest
                     // account modification in our incremental snapshot. We should mix out the
@@ -2062,7 +2062,7 @@ pub const AccountsDB = struct {
         pubkeys: []const Pubkey,
         slot_ref_map: *AccountIndex.SlotRefMap,
     ) !void {
-        std.debug.assert(pubkeys.len > 0);
+        sig.trace.assert(pubkeys.len > 0);
         const reference_manager = self.account_index.reference_manager;
 
         const slot_gop = try slot_ref_map.getOrPut(slot);
@@ -2151,7 +2151,7 @@ pub const AccountsDB = struct {
                     return error.InsertIndexFailed;
                 }
 
-                std.debug.assert(self.account_index.exists(&pubkey, slot));
+                sig.trace.assert(self.account_index.exists(&pubkey, slot));
             }
 
             // replace + free old ref
@@ -2168,7 +2168,7 @@ pub const AccountsDB = struct {
             }
         } else {
             // no realloc necessary
-            std.debug.assert(slot_ref_val.refs.capacity >= new_len);
+            sig.trace.assert(slot_ref_val.refs.capacity >= new_len);
             slot_ref_val.refs.items.len = new_len;
             for (0.., slot_ref_val.refs.items) |i, *ref| {
                 if (i < old_refs.len) continue;
@@ -2198,7 +2198,7 @@ pub const AccountsDB = struct {
                     return error.InsertIndexFailed;
                 }
 
-                std.debug.assert(self.account_index.exists(&pubkey, slot));
+                sig.trace.assert(self.account_index.exists(&pubkey, slot));
             }
         }
     }
@@ -2215,7 +2215,7 @@ pub const AccountsDB = struct {
         pubkeys: []const Pubkey,
         slot: Slot,
     ) !void {
-        std.debug.assert(accounts.len == pubkeys.len);
+        sig.trace.assert(accounts.len == pubkeys.len);
         if (accounts.len == 0) return;
 
         if (self.geyser_writer) |geyser_writer| {
@@ -2432,8 +2432,8 @@ pub const AccountsDB = struct {
     //     = self.latest_snapshot_gen_info.writeWithLock();
     //     defer latest_snapshot_info_lg.unlock();
 
-    //     std.debug.assert(zstd_buffer.len != 0);
-    //     std.debug.assert(params.target_slot <= self.getLargestRootedSlot() orelse 0);
+    //     sig.trace.assert(zstd_buffer.len != 0);
+    //     sig.trace.assert(params.target_slot <= self.getLargestRootedSlot() orelse 0);
 
     //     const full_lt_hash, const full_capitalization = compute: {
     //         check_first: {
@@ -2550,7 +2550,7 @@ pub const AccountsDB = struct {
     //     // update tracking for new snapshot
 
     //     if (maybe_latest_snapshot_info.*) |old_snapshot_info| {
-    //         std.debug.assert(old_snapshot_info.full.slot <= params.target_slot);
+    //         sig.trace.assert(old_snapshot_info.full.slot <= params.target_slot);
 
     //         switch (params.old_snapshot_action) {
     //             .ignore_old => {},
@@ -2812,7 +2812,7 @@ pub const AccountsDB = struct {
     //     // update tracking for new snapshot
 
     //     if (latest_snapshot_info.inc) |old_inc_snapshot_info| {
-    //         std.debug.assert(old_inc_snapshot_info.slot <= params.target_slot);
+    //         sig.trace.assert(old_inc_snapshot_info.slot <= params.target_slot);
 
     //         switch (params.old_snapshot_action) {
     //             .ignore_old => {},
@@ -3331,8 +3331,8 @@ pub fn writeSnapshotTarWithFields(
     const file_info_map = manifest.accounts_db_fields.file_map;
     for (file_info_map.keys(), file_info_map.values()) |file_slot, file_info| {
         const account_file = file_map.getPtr(file_info.id).?;
-        std.debug.assert(account_file.id == file_info.id);
-        std.debug.assert(account_file.length == file_info.length);
+        sig.trace.assert(account_file.id == file_info.id);
+        sig.trace.assert(account_file.length == file_info.length);
 
         try snapgen.writeAccountFileHeader(archive_writer_counted, file_slot, file_info);
 
@@ -3345,7 +3345,7 @@ pub fn writeSnapshotTarWithFields(
 
     try archive_writer_counted.writeAll(&sig.utils.tar.sentinel_blocks);
     if (std.debug.runtime_safety) {
-        std.debug.assert(counting_state.bytes_written % 512 == 0);
+        sig.trace.assert(counting_state.bytes_written % 512 == 0);
     }
 }
 
@@ -3502,7 +3502,7 @@ pub fn findAndUnpackTestSnapshots(
     /// are located.
     output_dir: std.fs.Dir,
 ) !SnapshotFiles {
-    comptime std.debug.assert(builtin.is_test); // should only be used in tests
+    comptime sig.trace.assert(builtin.is_test); // should only be used in tests
     const allocator = std.testing.allocator;
     var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     defer test_data_dir.close();
@@ -3573,7 +3573,7 @@ fn loadTestAccountsDBFromSnapshot(
     snapshot_dir: std.fs.Dir,
     accounts_per_file_estimate: u64,
 ) !struct { AccountsDB, FullAndIncrementalManifest } {
-    comptime std.debug.assert(builtin.is_test); // should only be used in tests
+    comptime sig.trace.assert(builtin.is_test); // should only be used in tests
 
     const snapshot_files = try findAndUnpackTestSnapshots(n_threads, snapshot_dir);
 
@@ -4753,7 +4753,7 @@ fn expectedAccountSharedDataEqualsAccount(
         std.debug.print("actual:   {any}\n\n", .{account});
     } else {
         // we know where this data came from (not from the disk), so we can take its slice directly
-        std.debug.assert(account.data == .owned_allocation);
+        sig.trace.assert(account.data == .owned_allocation);
 
         try std.testing.expectEqual(expected.lamports, account.lamports);
         try std.testing.expectEqualSlices(u8, expected.data, account.data.owned_allocation);
@@ -4957,7 +4957,7 @@ test "insert many duplicate individual accounts, get latest with ancestors" {
 
             try accounts_db.putAccount(slot, pubkey, account);
 
-            std.debug.assert(slot >= max_slot_so_far);
+            sig.trace.assert(slot >= max_slot_so_far);
 
             expected_latest[i] = .{ .slot = slot, .account = account };
         }

@@ -12,7 +12,7 @@ const GossipKey = gossip.data.GossipKey;
 const GossipMetadata = gossip.data.GossipMetadata;
 const GossipVersionedData = gossip.data.GossipVersionedData;
 
-const assert = std.debug.assert;
+const assert = sig.trace.assert;
 
 /// Hashmap specialized for storing GossipVersionedValue.
 ///

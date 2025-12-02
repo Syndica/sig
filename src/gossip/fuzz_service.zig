@@ -127,7 +127,7 @@ pub fn fuzz(
     random: std.Random,
     fuzz_client: *GossipService,
 ) !void {
-    std.debug.assert(fuzz_client.entrypoints.items.len > 0);
+    sig.trace.assert(fuzz_client.entrypoints.items.len > 0);
 
     const keypair = &fuzz_client.my_keypair;
     const to_endpoint = fuzz_client.entrypoints.items[0].addr.toEndpoint();
