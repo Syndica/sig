@@ -496,10 +496,25 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
 
     var processed_a_slot = false;
     for (results) |result| switch (result.output) {
-        .err => |err| state.logger.err().logf(
-            "replayed slot {} with error: {}",
-            .{ result.slot, err },
-        ),
+        .err => |err| {
+            state.logger.logf(
+                switch (err) {
+                    // invalid_block may be a non-issue and simply indicate that
+                    // the leader produced a malformed block that will be
+                    // skipped. To be safe/thorough, we're logging them all as
+                    // error, unless we observe it often and confirm it to
+                    // routinely not be a problem.
+                    .invalid_block => |e| switch (e) {
+                        // TooFewTicks is typical during forks and should not require intervention.
+                        .TooFewTicks => .warn,
+                        else => .err,
+                    },
+                    else => .err,
+                },
+                "replayed slot {} with error: {}",
+                .{ result.slot, err },
+            );
+        },
         .last_entry_hash => |last_entry_hash| {
             const slot = result.slot;
             const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
