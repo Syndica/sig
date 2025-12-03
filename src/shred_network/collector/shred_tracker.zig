@@ -111,7 +111,7 @@ pub const BasicShredTracker = struct {
         const monitored_slot = try self.observeSlot(slot);
 
         const slot_is_complete = monitored_slot
-            .record(shred_index, is_last_in_slot, timestamp);
+            .record(self.logger, shred_index, is_last_in_slot, timestamp);
 
         if (slot > self.max_slot_processed) {
             self.max_slot_processed = slot;
@@ -410,8 +410,8 @@ const MonitoredSlot = struct {
     shreds: ShredSet = ShredSet.initEmpty(),
     max_seen: ?u32 = null,
     last_shred: ?u32 = null,
-    first_received_timestamp: Instant = Instant.UNIX_EPOCH,
-    last_unique_received_timestamp: Instant = Instant.UNIX_EPOCH,
+    first_received_timestamp: Instant = .EPOCH_ZERO,
+    last_unique_received_timestamp: Instant = .EPOCH_ZERO,
     is_complete: bool = false,
     /// this just means we've identified that another slot that claims to be
     /// skipping this one. it doesn't mean this slot is definitely being skipped.
@@ -422,7 +422,13 @@ const MonitoredSlot = struct {
     const Self = @This();
 
     /// returns if the slot is *definitely* complete (there may be false negatives)
-    pub fn record(self: *Self, shred_index: u32, is_last_in_slot: bool, timestamp: Instant) bool {
+    pub fn record(
+        self: *Self,
+        logger: Logger,
+        shred_index: u32,
+        is_last_in_slot: bool,
+        timestamp: Instant,
+    ) bool {
         if (self.is_complete) return false;
         if (!bit_set.setAndWasSet(&self.shreds, shred_index)) {
             self.last_unique_received_timestamp = timestamp;
@@ -431,7 +437,13 @@ const MonitoredSlot = struct {
 
         if (is_last_in_slot) {
             if (self.last_shred) |old_last| {
-                self.last_shred = @min(old_last, shred_index);
+                self.last_shred = @max(old_last, shred_index);
+                if (shred_index != old_last) {
+                    logger.err().log(
+                        "The last shred index changed after already being set. " ++
+                            "A leader might have produced a duplicate/invalid block for a slot",
+                    );
+                }
             } else {
                 self.last_shred = shred_index;
             }
@@ -447,9 +459,8 @@ const MonitoredSlot = struct {
 
         if (self.last_shred) |last| {
             assert(last <= max_seen);
-            assert(self.unique_observed_count <= last + 1);
+
             if (self.unique_observed_count == last + 1) {
-                assert(last == max_seen);
                 self.is_complete = true;
                 return true;
             }
@@ -484,6 +495,12 @@ const MonitoredSlot = struct {
     }
 };
 
+test "MonitoredSlot.record" {
+    var monitor = MonitoredSlot{};
+    _ = monitor.record(.noop, 10, true, Instant.now()); // last index
+    _ = monitor.record(.noop, 0, true, Instant.now()); // invalid/mismatching last index
+}
+
 test "trivial happy path" {
     const allocator = std.testing.allocator;
 
@@ -495,7 +512,7 @@ test "trivial happy path" {
     var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry);
     defer tracker.deinit();
 
-    _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH.plus(Duration.fromSecs(1)));
+    _ = try tracker.identifyMissing(&msr, Instant.EPOCH_ZERO.plus(Duration.fromSecs(1)));
 
     try std.testing.expect(1 == msr.len);
     const report = msr.items()[0];
@@ -516,12 +533,12 @@ test "1 registered shred is identified" {
     var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry);
     defer tracker.deinit();
 
-    try tracker.registerShred(13579, 123, 13578, false, Instant.UNIX_EPOCH);
+    try tracker.registerShred(13579, 123, 13578, false, .EPOCH_ZERO);
 
-    _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH);
+    _ = try tracker.identifyMissing(&msr, .EPOCH_ZERO);
     try std.testing.expectEqual(0, msr.len);
 
-    _ = try tracker.identifyMissing(&msr, Instant.UNIX_EPOCH.plus(Duration.fromSecs(1)));
+    _ = try tracker.identifyMissing(&msr, Instant.EPOCH_ZERO.plus(Duration.fromSecs(1)));
     try std.testing.expectEqual(1, msr.len);
 
     const report = msr.items()[0];
@@ -544,7 +561,7 @@ test "slots are only skipped after a competing fork has developed sufficiently" 
     var tracker = try BasicShredTracker.init(std.testing.allocator, 1, .noop, &registry);
     defer tracker.deinit();
 
-    const start = Instant.UNIX_EPOCH;
+    const start = Instant.EPOCH_ZERO;
 
     // complete slots 1 and 3, where 3 skips 2.
     try tracker.registerShred(1, 0, 0, true, start);
@@ -593,7 +610,7 @@ test "slots are not skipped when the current fork is developed" {
     var tracker = try BasicShredTracker.init(std.testing.allocator, 1, .noop, &registry);
     defer tracker.deinit();
 
-    const start = Instant.UNIX_EPOCH;
+    const start = Instant.EPOCH_ZERO;
 
     // complete slots 1 and 3, where 3 skips 2.
     try tracker.registerShred(1, 0, 0, true, start);

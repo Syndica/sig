@@ -484,7 +484,8 @@ fn GenericShred(shred_type: ShredType) type {
         fn sanitize(self: *const Self) !void {
             _ = try merkleProof(self);
 
-            if (self.common.index > constants.max_per_slot) {
+            // Shred index must be 0 <= index < max_per_slot
+            if (self.common.index >= constants.max_per_slot) {
                 return error.InvalidShredIndex;
             }
             if (constants.payload_size != self.payload.len) {
