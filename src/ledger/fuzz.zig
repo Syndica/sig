@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const ledger = @import("lib.zig");
+const cli = @import("cli");
 
 const ColumnFamily = sig.ledger.database.ColumnFamily;
 
@@ -62,18 +63,36 @@ fn createLedgerDB() !LedgerDB {
     );
 }
 
-pub fn run(initial_seed: u64, args: []const []const u8, log: bool) !void {
-    const maybe_max_actions_string: ?[]const u8 = if (args.len == 0) null else args[0];
+pub const RunCmd = struct {
+    max_actions: ?u64,
 
-    const maybe_max_actions = if (maybe_max_actions_string) |max_actions_str|
-        try std.fmt.parseInt(usize, max_actions_str, 10)
-    else
-        null;
+    pub const cmd_info: cli.CommandInfo(RunCmd) = .{
+        .help = .{
+            .short = "Fuzz the ledger.",
+            .long = null,
+        },
+        .sub = .{
+            .max_actions = .{
+                .kind = .named,
+                .name_override = null,
+                .alias = .m,
+                .default_value = null,
+                .config = {},
+                .help = "Maximum number of actions to take before exiting the fuzzer.",
+            },
+        },
+    };
+};
 
-    try runInner(initial_seed, maybe_max_actions, log);
+pub fn run(
+    initial_seed: u64,
+    log: bool,
+    run_cmd: RunCmd,
+) !void {
+    try runInner(initial_seed, run_cmd.max_actions, log);
 }
 
-fn runInner(initial_seed: u64, maybe_max_actions: ?usize, log: bool) !void {
+fn runInner(initial_seed: u64, maybe_max_actions: ?u64, log: bool) !void {
     var seed = initial_seed;
 
     const ledger_path =
@@ -348,5 +367,7 @@ fn batchAPI(data_map: *std.AutoHashMap(u32, Data), db: *LedgerDB, random: std.Ra
 }
 
 test run {
-    try run(std.testing.random_seed, &.{"100"}, false);
+    try run(std.testing.random_seed, false, .{
+        .max_actions = 100,
+    });
 }
