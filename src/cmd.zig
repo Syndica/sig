@@ -131,6 +131,7 @@ pub fn main() !void {
             params.geyser.apply(&current_config);
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
+            current_config.stop_at_slot = params.stop_at_slot;
             current_config.voting_enabled = params.voting_enabled;
             current_config.rpc_port = params.rpc_port;
             try validator(gpa, gossip_gpa, current_config);
@@ -148,6 +149,7 @@ pub fn main() !void {
             params.geyser.apply(&current_config);
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
+            current_config.stop_at_slot = params.stop_at_slot;
             try replayOffline(gpa, current_config);
         },
         .shred_network => |params| {
@@ -379,6 +381,15 @@ const Cmd = struct {
         .default_value = false,
         .config = {},
         .help = "Disable running consensus in replay.",
+    };
+
+    const stop_at_slot_arg: cli.ArgumentInfo(?Slot) = .{
+        .kind = .named,
+        .name_override = "stop-at-slot",
+        .alias = .none,
+        .default_value = null,
+        .config = {},
+        .help = "Stop processing at this slot.",
     };
 
     const voting_enabled_arg: cli.ArgumentInfo(bool) = .{
@@ -747,6 +758,7 @@ const Cmd = struct {
         geyser: GeyserArgumentsBase,
         replay_threads: u16,
         disable_consensus: bool,
+        stop_at_slot: ?sig.core.Slot,
         voting_enabled: bool,
         rpc_port: ?u16,
 
@@ -772,6 +784,7 @@ const Cmd = struct {
                 .disable_consensus = disable_consensus_arg,
                 .voting_enabled = voting_enabled_arg,
                 .rpc_port = rpc_port_arg,
+                .stop_at_slot = stop_at_slot_arg,
             },
         };
     };
@@ -1244,6 +1257,7 @@ fn validator(
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = cfg.voting_enabled,
         .vote_account_address = maybe_vote_pubkey,
+        .stop_at_slot = cfg.stop_at_slot,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -1435,6 +1449,7 @@ fn replayOffline(
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = false,
         .vote_account_address = Pubkey.ZEROES,
+        .stop_at_slot = cfg.stop_at_slot,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -2093,6 +2108,7 @@ const ReplayAndConsensusServiceState = struct {
             disable_consensus: bool,
             voting_enabled: bool,
             vote_account_address: ?Pubkey,
+            stop_at_slot: ?Slot,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
@@ -2161,6 +2177,7 @@ const ReplayAndConsensusServiceState = struct {
                 .current_epoch_constants = current_epoch_constants,
                 .hard_forks = hard_forks,
                 .replay_threads = params.replay_threads,
+                .stop_at_slot = params.stop_at_slot,
             }, if (params.disable_consensus) .disabled else .enabled);
         };
         errdefer replay_state.deinit();
@@ -2208,7 +2225,13 @@ const ReplayAndConsensusServiceState = struct {
     ) !std.Thread {
         return try app_base.spawnService(
             "replay",
-            .loop,
+            .{
+                .return_handler = .{ .log_return = false },
+                .error_handler = .{
+                    .max_iterations = 0,
+                    .set_exit_on_completion = true,
+                },
+            },
             replay.service.advanceReplay,
             .{
                 &self.replay_state,
