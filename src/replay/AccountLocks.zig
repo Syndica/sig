@@ -8,8 +8,8 @@ const Pubkey = sig.core.Pubkey;
 const AccountLocks = @This();
 pub const LockableAccount = struct { address: Pubkey, writable: bool };
 
-write_locks: std.AutoArrayHashMapUnmanaged(Pubkey, u64) = .{},
-readonly_locks: std.AutoArrayHashMapUnmanaged(Pubkey, u64) = .{},
+write_locks: sig.utils.collections.PubkeyMap(u64) = .{},
+readonly_locks: sig.utils.collections.PubkeyMap(u64) = .{},
 
 const LockError = Allocator.Error || error{LockFailed};
 

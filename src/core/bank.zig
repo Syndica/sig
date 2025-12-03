@@ -590,9 +590,9 @@ pub fn ancestorsRandom(
 
 /// Analogous to [UnusedAccounts](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L123)
 pub const UnusedAccounts = struct {
-    unused1: std.AutoArrayHashMapUnmanaged(Pubkey, void),
-    unused2: std.AutoArrayHashMapUnmanaged(Pubkey, void),
-    unused3: std.AutoArrayHashMapUnmanaged(Pubkey, u64),
+    unused1: sig.utils.collections.PubkeyMap(void),
+    unused2: sig.utils.collections.PubkeyMap(void),
+    unused3: sig.utils.collections.PubkeyMap(u64),
 
     pub const EMPTY: UnusedAccounts = .{
         .unused1 = .{},

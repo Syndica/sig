@@ -22,8 +22,8 @@ const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 
-pub const StakeAndVoteAccountsMap = std.AutoArrayHashMapUnmanaged(Pubkey, StakeAndVoteAccount);
-pub const StakedNodesMap = std.AutoArrayHashMapUnmanaged(Pubkey, u64);
+pub const StakeAndVoteAccountsMap = sig.utils.collections.PubkeyMap(StakeAndVoteAccount);
+pub const StakedNodesMap = sig.utils.collections.PubkeyMap(u64);
 
 pub const StakeAndVoteAccount = struct {
     stake: u64,

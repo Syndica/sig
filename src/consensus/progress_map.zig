@@ -6,7 +6,7 @@ const replay = sig.replay;
 const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
-const PubkeyArraySet = std.AutoArrayHashMapUnmanaged(Pubkey, void);
+const PubkeyArraySet = sig.utils.collections.PubkeyMap(void);
 const ThresholdDecision = sig.consensus.tower.ThresholdDecision;
 
 /// TODO: any uses of these types are to be evaluated in their context, and
@@ -772,7 +772,7 @@ pub const cluster_info_vote_listener = struct {
         voted_slot_updates: ?std.ArrayListUnmanaged(Pubkey),
         gossip_only_stake: u64,
 
-        pub const Voted = std.AutoArrayHashMapUnmanaged(Pubkey, bool);
+        pub const Voted = sig.utils.collections.PubkeyMap(bool);
 
         pub fn deinit(self: SlotVoteTracker, allocator: std.mem.Allocator) void {
             var voted = self.voted;
@@ -1149,7 +1149,7 @@ pub const timings = struct {
     };
 
     pub const PerProgramTimings = struct {
-        map: std.AutoArrayHashMapUnmanaged(Pubkey, ProgramTiming),
+        map: sig.utils.collections.PubkeyMap(ProgramTiming),
 
         pub const EMPTY: PerProgramTimings = .{ .map = .empty };
 

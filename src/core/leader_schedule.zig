@@ -89,7 +89,7 @@ pub const LeaderScheduleCache = struct {
         const leader_schedules, var leader_schedules_lg = self.leader_schedules.readWithLock();
         defer leader_schedules_lg.unlock();
 
-        var unique_leaders = std.AutoArrayHashMap(Pubkey, void).init(allocator);
+        var unique_leaders = sig.utils.collections.PubkeyMapManaged(void).init(allocator);
         defer unique_leaders.deinit();
         for (leader_schedules.values()) |leader_schedule| {
             for (leader_schedule.slot_leaders) |leader| {
@@ -121,7 +121,7 @@ pub const LeaderSchedule = struct {
 
     pub fn fromMap(
         allocator: Allocator,
-        leader_to_slots: std.AutoArrayHashMapUnmanaged(Pubkey, []const u64),
+        leader_to_slots: sig.utils.collections.PubkeyMap([]const u64),
     ) !LeaderSchedule {
         var num_leaders: u64 = 0;
         for (leader_to_slots.values()) |leader_slots| {
@@ -171,7 +171,7 @@ pub const LeaderSchedule = struct {
         // this implementation is naive and performs unnecessay allocations to construct and
         // input compatable with fromStakedNodes and re-key results.
         // It should be addressed as part of issue #945
-        var stakes = std.AutoArrayHashMapUnmanaged(Pubkey, u64){};
+        var stakes = sig.utils.collections.PubkeyMap(u64){};
         defer stakes.deinit(allocator);
 
         for (vote_accounts.keys(), vote_accounts.values()) |key, value| {
@@ -192,9 +192,9 @@ pub const LeaderSchedule = struct {
         allocator: std.mem.Allocator,
         epoch: Epoch,
         slots_in_epoch: Slot,
-        staked_nodes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
+        staked_nodes: *const sig.utils.collections.PubkeyMap(u64),
     ) ![]Pubkey {
-        const Entry = std.AutoArrayHashMap(Pubkey, u64).Entry;
+        const Entry = sig.utils.collections.PubkeyMapManaged(u64).Entry;
 
         const nodes = try allocator.alloc(Entry, staked_nodes.count());
         defer allocator.free(nodes);
@@ -319,7 +319,7 @@ test "leaderSchedule calculation matches agave" {
     var rng = ChaChaRng(20).fromSeed(.{0} ** 32);
     const random = rng.random();
     var pubkey_bytes: [32]u8 = undefined;
-    var staked_nodes = std.AutoArrayHashMap(Pubkey, u64).init(std.testing.allocator);
+    var staked_nodes = sig.utils.collections.PubkeyMapManaged(u64).init(std.testing.allocator);
     defer staked_nodes.deinit();
     for (0..100) |_| {
         random.bytes(&pubkey_bytes);

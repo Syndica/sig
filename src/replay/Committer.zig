@@ -9,7 +9,6 @@ const Channel = sig.sync.Channel;
 const Logger = sig.trace.Logger("replay.committer");
 
 const Hash = sig.core.Hash;
-const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Transaction = sig.core.Transaction;
 
@@ -45,7 +44,7 @@ pub fn commitTransactions(
 
     var rng = std.Random.DefaultPrng.init(slot + transactions.len);
 
-    var accounts_to_store = std.AutoArrayHashMapUnmanaged(Pubkey, LoadedAccount).empty;
+    var accounts_to_store = sig.utils.collections.PubkeyMap(LoadedAccount).empty;
     defer accounts_to_store.deinit(allocator);
 
     var signature_count: usize = 0;

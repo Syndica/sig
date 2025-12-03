@@ -574,7 +574,7 @@ fn bypassConsensus(state: *ReplayState) !void {
 
 test "getActiveFeatures rejects wrong ownership" {
     const allocator = std.testing.allocator;
-    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
+    var accounts = sig.utils.collections.PubkeyMap(sig.core.Account).empty;
     defer accounts.deinit(allocator);
     // bincode for a feature that activated at slot 0
     var slot_0_bytes: [9]u8 = .{ 1, 0, 0, 0, 0, 0, 0, 0, 0 };

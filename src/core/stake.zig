@@ -132,7 +132,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
 
     return struct {
         vote_accounts: VoteAccounts,
-        stake_delegations: std.AutoArrayHashMapUnmanaged(Pubkey, T),
+        stake_delegations: sig.utils.collections.PubkeyMap(T),
         unused: u64,
         epoch: Epoch,
         stake_history: StakeHistory,
@@ -172,14 +172,14 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             const vote_accounts = try self.vote_accounts.clone(allocator);
             errdefer vote_accounts.deinit(allocator);
 
-            var stake_delegations: std.AutoArrayHashMapUnmanaged(Pubkey, output_type.T()) = .empty;
+            var stake_delegations: sig.utils.collections.PubkeyMap(output_type.T()) = .empty;
+            errdefer stake_delegations.deinit(allocator);
             try stake_delegations.ensureTotalCapacity(allocator, self.stake_delegations.count());
             errdefer {
                 // Only the .account type contains allocated data in the stake_delegations.
                 if (output_type == .account) {
                     for (stake_delegations.values()) |*v| v.deinit(allocator);
                 }
-                stake_delegations.deinit(allocator);
             }
 
             {
@@ -331,7 +331,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             const vote_accounts = try VoteAccounts.initRandom(allocator, random, max_list_entries);
             errdefer vote_accounts.deinit(allocator);
 
-            var stake_delegations = std.AutoArrayHashMapUnmanaged(Pubkey, T).empty;
+            var stake_delegations = sig.utils.collections.PubkeyMap(T).empty;
             errdefer {
                 if (stakes_type == .account) {
                     for (stake_delegations.values()) |*v| v.deinit(allocator);

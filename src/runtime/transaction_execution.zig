@@ -741,7 +741,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     transaction.compute_budget_instruction_details.num_non_compute_budget_instructions = 1;
     transaction.compute_budget_instruction_details.num_non_migratable_builtin_instructions = 1;
 
-    var account_map = std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData){};
+    var account_map = sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData){};
     defer sig.runtime.testing.deinitAccountMap(account_map, allocator);
     try account_map.put(
         allocator,

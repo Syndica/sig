@@ -29,7 +29,7 @@ pub const LeaderInfo = struct {
     logger: Logger,
     rpc_client: RpcClient,
     leader_schedule_cache: LeaderScheduleCache,
-    leader_addresses_cache: std.AutoArrayHashMapUnmanaged(Pubkey, SocketAddr),
+    leader_addresses_cache: sig.utils.collections.PubkeyMap(SocketAddr),
     gossip_table_rw: *RwMux(GossipTable),
 
     const Self = @This();

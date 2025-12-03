@@ -7342,7 +7342,7 @@ test "loadTower handles invalid vote account owner" {
         .rent_epoch = 0,
     };
 
-    var account_map: std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account) = .empty;
+    var account_map: sig.utils.collections.PubkeyMap(sig.core.Account) = .empty;
     defer {
         var iter = account_map.iterator();
         while (iter.next()) |entry| {
@@ -7377,7 +7377,7 @@ test "loadTower handles invalid vote state" {
         .rent_epoch = 0,
     };
 
-    var account_map: std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account) = .empty;
+    var account_map: sig.utils.collections.PubkeyMap(sig.core.Account) = .empty;
     defer {
         var iter = account_map.iterator();
         while (iter.next()) |entry| {

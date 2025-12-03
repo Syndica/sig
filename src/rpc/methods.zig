@@ -406,7 +406,7 @@ pub const GetLeaderSchedule = struct {
     };
 
     pub const Response = struct {
-        value: std.AutoArrayHashMapUnmanaged(Pubkey, []const u64),
+        value: sig.utils.collections.PubkeyMap([]const u64),
 
         pub fn deinit(self: Response, allocator: std.mem.Allocator) void {
             self.value.deinit(allocator);
@@ -422,7 +422,7 @@ pub const GetLeaderSchedule = struct {
                 else => return error.UnexpectedToken,
             };
 
-            var map = std.AutoArrayHashMapUnmanaged(Pubkey, []const u64){};
+            var map = sig.utils.collections.PubkeyMap([]const u64){};
             for (json_object.keys(), json_object.values()) |key, value| {
                 const slots = try allocator.alloc(u64, value.array.items.len);
                 for (value.array.items, 0..) |slot, i| {

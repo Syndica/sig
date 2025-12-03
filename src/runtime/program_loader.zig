@@ -20,7 +20,7 @@ const AccountLoadError = sig.runtime.account_loader.AccountLoadError;
 const wrapDB = sig.runtime.account_loader.wrapDB;
 
 pub const ProgramMap = struct {
-    inner: std.AutoArrayHashMapUnmanaged(Pubkey, LoadedProgram),
+    inner: sig.utils.collections.PubkeyMap(LoadedProgram),
     lock: std.Thread.RwLock,
 
     pub const empty = ProgramMap{
@@ -223,7 +223,7 @@ test "loadPrograms: load v1, v2 program" {
     );
     defer allocator.free(program_elf);
 
-    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var accounts = sig.utils.collections.PubkeyMap(AccountSharedData){};
     defer accounts.deinit(allocator);
 
     const program_v1_key = Pubkey.initRandom(prng.random());
@@ -292,7 +292,7 @@ test "loadPrograms: load v3 program" {
         program_elf,
     );
 
-    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var accounts = sig.utils.collections.PubkeyMap(AccountSharedData){};
     defer {
         for (accounts.values()) |account| allocator.free(account.data);
         accounts.deinit(allocator);
@@ -406,7 +406,7 @@ test "loadPrograms: load v4 program" {
     );
     defer allocator.free(program_elf);
 
-    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var accounts = sig.utils.collections.PubkeyMap(AccountSharedData){};
     defer {
         for (accounts.values()) |account| allocator.free(account.data);
         accounts.deinit(allocator);
@@ -479,7 +479,7 @@ test "loadPrograms: bad owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var accounts = sig.utils.collections.PubkeyMap(AccountSharedData){};
     defer {
         for (accounts.values()) |account| allocator.free(account.data);
         accounts.deinit(allocator);
@@ -557,7 +557,7 @@ pub fn createV3ProgramAccountData(
 /// helper function to load programs for tests
 pub fn testLoad(
     allocator: std.mem.Allocator,
-    accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    accounts: *const sig.utils.collections.PubkeyMap(AccountSharedData),
     environment: *const vm.Environment,
     slot: u64,
 ) AccountLoadError!ProgramMap {
