@@ -971,7 +971,11 @@ pub const AccountDataHandle = union(enum) {
     pub fn toOwned(self: AccountDataHandle, allocator: std.mem.Allocator) ![]u8 {
         return switch (self) {
             .owned_allocation => |data| data,
-            else => (try self.dupeAllocatedOwned(allocator)).owned_allocation,
+            else => {
+                const new_data_handle = try self.dupeAllocatedOwned(allocator);
+                self.deinit(allocator);
+                return new_data_handle.owned_allocation;
+            },
         };
     }
 

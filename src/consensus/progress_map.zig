@@ -1738,7 +1738,7 @@ fn forkProgressInitRandom(
     errdefer propagated_stats.deinit(allocator);
 
     const replay_stats = try replaySlotStatsInitRandom(allocator, random, .{
-        .started = .UNIX_EPOCH,
+        .started = .EPOCH_ZERO,
         .totals = .{
             .per_program_timings_len = 4,
             .program_timings_len = .{
@@ -1771,7 +1771,7 @@ fn forkProgressInitRandom(
         .replay_stats = .{ .arc_ed = .{ .rwlock_ed = replay_stats } },
         .replay_progress = .{ .arc_ed = .{ .rwlock_ed = replay_progress } },
         .retransmit_info = .{
-            .retry_time = .UNIX_EPOCH,
+            .retry_time = .EPOCH_ZERO,
             .retry_iteration = random.int(u32),
         },
         .num_blocks_on_fork = random.int(u64),
