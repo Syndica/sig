@@ -3647,7 +3647,7 @@ test "geyser stream on load" {
 
     const reader_handle = try std.Thread.spawn(.{}, sig.geyser.core.streamReader, .{
         &reader,
-        .noop,
+        sig.trace.Logger("geyser").noop,
         &geyser_exit,
         null,
     });
@@ -4193,8 +4193,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         validate_time: u64,
     } {
         const allocator = std.heap.c_allocator;
-        var print_logger = sig.trace.DirectPrintLogger.init(allocator, .debug);
-        const logger = print_logger.logger("accountsdb.benchmark");
+        const logger = sig.trace.direct_print.logger("accountsdb.benchmark", .debug);
 
         // unpack the snapshot
         var snapshot_dir = std.fs.cwd().openDir(
@@ -4465,10 +4464,9 @@ pub const BenchmarkAccountsDB = struct {
             .parent => @panic("invalid benchmark argument"),
         };
 
-        const logger = .noop;
         var accounts_db: AccountsDB = try AccountsDB.init(.{
             .allocator = allocator,
-            .logger = logger,
+            .logger = .noop,
             .snapshot_dir = snapshot_dir,
             .geyser_writer = null,
             .gossip_view = null,
@@ -5013,7 +5011,7 @@ test "expandSlotRefsAndInsert double insert failure" {
 
     try accounts_db.expandSlotRefsAndInsert(1, &.{Pubkey.ZEROES});
 
-    accounts_db.logger = .{ .noop = {} };
+    accounts_db.logger = .noop;
     try std.testing.expectError(
         error.InsertIndexFailed,
         accounts_db.expandSlotRefsAndInsert(1, &.{Pubkey.ZEROES}),

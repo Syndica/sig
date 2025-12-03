@@ -180,12 +180,11 @@ pub fn getAccountFilters(
 pub fn csvDump(allocator: std.mem.Allocator, config: Cmd.Csv) !void {
     var std_logger = try sig.trace.ChannelPrintLogger.init(.{
         .allocator = std.heap.c_allocator,
-        .max_level = sig.trace.Level.debug,
         .max_buffer = 1 << 20,
     }, null);
     defer std_logger.deinit();
 
-    const logger = std_logger.logger("csvDump");
+    const logger = std_logger.logger("csvDump", .debug);
 
     const metrics_thread = try std.Thread
         .spawn(.{}, servePrometheus, .{ allocator, globalRegistry(), 12355 });
@@ -344,11 +343,10 @@ pub fn benchmark(config: Cmd.Benchmark) !void {
     const allocator = std.heap.c_allocator;
     var std_logger = try sig.trace.ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = .debug,
         .max_buffer = 1 << 15,
     }, null);
     defer std_logger.deinit();
-    const logger = std_logger.logger("geyser.benchmark");
+    const logger = std_logger.logger("geyser.benchmark", .debug);
 
     const pipe_path = config.pipe_path;
     logger.info().logf("using pipe path: {s}", .{pipe_path});
