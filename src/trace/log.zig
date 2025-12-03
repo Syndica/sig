@@ -119,8 +119,6 @@ pub const ChannelPrintLogger = struct {
     handle: ?std.Thread,
     write_stderr: bool,
 
-    const Self = @This();
-
     pub const Config = struct {
         max_level: Level = Level.debug,
         allocator: std.mem.Allocator,
@@ -129,7 +127,7 @@ pub const ChannelPrintLogger = struct {
         write_stderr: bool = true,
     };
 
-    pub fn init(config: Config, maybe_writer: anytype) !*Self {
+    pub fn init(config: Config, maybe_writer: anytype) !*ChannelPrintLogger {
         const max_buffer = config.max_buffer;
         const recycle_fba = try config.allocator.create(RecycleFBA(.{}));
         errdefer config.allocator.destroy(recycle_fba);
@@ -139,7 +137,7 @@ pub const ChannelPrintLogger = struct {
         }, max_buffer);
         errdefer recycle_fba.deinit();
 
-        const self = try config.allocator.create(Self);
+        const self = try config.allocator.create(ChannelPrintLogger);
         errdefer config.allocator.destroy(self);
         self.* = .{
             .allocator = config.allocator,
@@ -159,7 +157,7 @@ pub const ChannelPrintLogger = struct {
         return self;
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *ChannelPrintLogger) void {
         if (self.handle) |handle| {
             std.Thread.sleep(std.time.ns_per_ms * 5);
             self.exit.store(true, .seq_cst);
@@ -172,11 +170,11 @@ pub const ChannelPrintLogger = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn logger(self: *Self, comptime scope: []const u8) Logger(scope) {
+    pub fn logger(self: *ChannelPrintLogger, comptime scope: []const u8) Logger(scope) {
         return .{ .channel_print = self };
     }
 
-    pub fn run(self: *Self, maybe_writer: anytype) void {
+    pub fn run(self: *ChannelPrintLogger, maybe_writer: anytype) void {
         const stderr_writer = std.io.getStdErr().writer();
         while (true) {
             self.channel.waitToReceive(.{ .unordered = &self.exit }) catch break;
@@ -196,7 +194,7 @@ pub const ChannelPrintLogger = struct {
     }
 
     pub fn log(
-        self: *Self,
+        self: *ChannelPrintLogger,
         comptime scope: ?[]const u8,
         level: Level,
         fields: anytype,
@@ -232,18 +230,16 @@ pub const ChannelPrintLogger = struct {
 pub const DirectPrintLogger = struct {
     max_level: Level,
 
-    const Self = @This();
-
-    pub fn init(_: std.mem.Allocator, max_level: Level) Self {
+    pub fn init(_: std.mem.Allocator, max_level: Level) DirectPrintLogger {
         return .{ .max_level = max_level };
     }
 
-    pub fn logger(self: Self, comptime scope: []const u8) Logger(scope) {
+    pub fn logger(self: DirectPrintLogger, comptime scope: []const u8) Logger(scope) {
         return .{ .direct_print = self };
     }
 
     pub fn log(
-        self: Self,
+        self: DirectPrintLogger,
         comptime scope: ?[]const u8,
         level: Level,
         fields: anytype,
@@ -270,9 +266,7 @@ pub const TestLogger = struct {
         content: []const u8,
     };
 
-    const Self = @This();
-
-    pub fn init(allocator: std.mem.Allocator, max_level: Level) Self {
+    pub fn init(allocator: std.mem.Allocator, max_level: Level) TestLogger {
         return .{
             .allocator = allocator,
             .max_level = max_level,
@@ -280,17 +274,17 @@ pub const TestLogger = struct {
         };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *TestLogger) void {
         for (self.messages.items) |msg| self.allocator.free(msg.content);
         self.messages.deinit(self.allocator);
     }
 
-    pub fn logger(self: *Self, comptime scope: []const u8) Logger(scope) {
+    pub fn logger(self: *TestLogger, comptime scope: []const u8) Logger(scope) {
         return .{ .test_logger = self };
     }
 
     pub fn log(
-        self: *Self,
+        self: *TestLogger,
         comptime scope: ?[]const u8,
         level: Level,
         fields: anytype,
