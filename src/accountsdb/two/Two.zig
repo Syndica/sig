@@ -66,6 +66,11 @@ pub fn put(self: *Db, slot: Slot, address: Pubkey, data: AccountSharedData) !voi
 // TODO: this should be trivial to put on another thread; this currently blocks the main replay
 // thread for 30-40ms per slot on testnet.
 pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot) void {
+    // The previous slot we rooted (or 0, if we haven't rooted one).
+    const old_rooted_slot = self.rooted.largest_rooted_slot orelse 0;
+    // Seperate condition to the one above, since we only want to assert this after the first slot rooted.
+    if (self.rooted.largest_rooted_slot) |slot| std.debug.assert(newly_rooted_slot >= slot);
+
     for (self.unrooted.slots) |*index| {
         if (index.is_empty.load(.acquire)) continue;
         if (index.slot > newly_rooted_slot) continue; // not ready to be rooted yet!
@@ -77,24 +82,17 @@ pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot) void {
             defer index.lock.unlockShared();
 
             self.rooted.beginTransaction();
-
             var entries = index.entries.iterator();
             while (entries.next()) |entry| {
                 self.rooted.put(entry.key_ptr.*, newly_rooted_slot, entry.value_ptr.*);
             }
-
             self.rooted.commitTransaction();
 
-            self.rooted.largest_rooted_slot = @max(
-                self.rooted.largest_rooted_slot orelse 0,
-                newly_rooted_slot,
-            );
+            // Update the latest known rooted slot, to be used next rooting round.
+            self.rooted.largest_rooted_slot = @max(newly_rooted_slot, old_rooted_slot);
         }
 
-        // If there are entries between the last rooted slot and the new one, we can just discard them.
-        // These can be created from forks which were alive for multiple slots but are now dead. If we're
-        // rooting a slot larger than the fork, we mustn't need these anymore.
-        if (self.rooted.largest_rooted_slot) |largest| if (index.slot >= largest) {
+        if (index.slot >= old_rooted_slot) {
             // Get write lock on unrooted slot, remove from unrooted. There should be no contention on this
             // lock, no other threads are running right now. In the future when we offload rooting to a seperate
             // async unit, then it might come into play.
@@ -104,7 +102,7 @@ pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot) void {
             for (index.entries.values()) |data| data.deinit(self.allocator);
             index.entries.clearRetainingCapacity();
             index.is_empty.store(true, .release);
-        };
+        }
     }
 }
 
@@ -165,4 +163,65 @@ pub fn slotModifiedIterator(self: *Db, slot: Slot) ?SlotModifiedIterator {
         .slot = entry,
         .cursor = 0,
     };
+}
+
+test "rooting edge cases" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const S = struct {
+        fn convert(account: Account) AccountSharedData {
+            return .{
+                .data = account.data.owned_allocation,
+                .executable = account.executable,
+                .lamports = account.lamports,
+                .owner = account.owner,
+                .rent_epoch = account.rent_epoch,
+            };
+        }
+    };
+
+    // many slots, many accounts
+    {
+        var db, var tmp_dir = try Db.initTest(allocator);
+        defer {
+            Rooted.deinitThreadLocals();
+            db.deinit();
+            tmp_dir.cleanup();
+        }
+        for (0..Unrooted.MAX_SLOTS * 2) |i| {
+            defer if (i > 50) db.onSlotRooted(i); // start rooting after 50 slots
+            const random_account = try Account.initRandom(allocator, random, 30);
+            defer random_account.deinit(allocator);
+            const random_pubkey = Pubkey.initRandom(random);
+            try db.put(i, random_pubkey, S.convert(random_account));
+        }
+        // Ensure we end up with a clean slate, not leaking any entries.
+        db.onSlotRooted(Unrooted.MAX_SLOTS * 2);
+        for (db.unrooted.slots) |entry| {
+            std.debug.assert(entry.is_empty.load(.acquire));
+        }
+    }
+    // many slot, same account
+    {
+        var db, var tmp_dir = try Db.initTest(allocator);
+        defer {
+            Rooted.deinitThreadLocals();
+            db.deinit();
+            tmp_dir.cleanup();
+        }
+        const random_pubkey = Pubkey.initRandom(random);
+        for (0..Unrooted.MAX_SLOTS * 2) |i| {
+            defer if (i % 64 == 0) db.onSlotRooted(i); // root every 64 slots
+            const random_account = try Account.initRandom(allocator, random, 30);
+            defer random_account.deinit(allocator);
+            try db.put(i, random_pubkey, S.convert(random_account));
+        }
+        db.onSlotRooted(Unrooted.MAX_SLOTS * 2);
+        for (db.unrooted.slots) |entry| {
+            std.debug.assert(entry.is_empty.load(.acquire));
+        }
+    }
 }
