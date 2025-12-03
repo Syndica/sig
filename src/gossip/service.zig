@@ -2319,8 +2319,6 @@ pub fn getClusterEntrypoints(cluster: sig.core.Cluster) []const []const u8 {
     };
 }
 
-const TestingLogger = sig.trace.log.DirectPrintLogger;
-
 test "general coverage" {
     const allocator = std.testing.allocator;
 
@@ -2462,20 +2460,13 @@ test "build messages startup and shutdown" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var test_logger = TestingLogger.init(
-        std.testing.allocator,
-        Logger.TEST_DEFAULT_LEVEL,
-    );
-
-    const logger = test_logger.logger("gossip.test");
-
     var gossip_service = try GossipService.create(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        .from(logger),
+        .FOR_TESTS,
     );
     defer {
         gossip_service.deinit();
@@ -2525,17 +2516,13 @@ test "handling prune messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-
-    const logger = test_logger.logger("gossip.test");
-
     var gossip_service = try GossipService.create(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        .from(logger),
+        .FOR_TESTS,
     );
     defer {
         gossip_service.shutdown();
@@ -2599,17 +2586,13 @@ test "handling pull responses" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-
-    const logger = test_logger.logger("gossip.test");
-
     var gossip_service = try GossipService.create(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        .from(logger),
+        .FOR_TESTS,
     );
     defer {
         gossip_service.shutdown();
@@ -2760,16 +2743,13 @@ test "handle pull request" {
     var contact_info = try localhostTestContactInfo(my_pubkey);
     contact_info.shred_version = 99;
 
-    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-
-    const logger = test_logger.logger("gossip.test");
     var gossip_service = try GossipService.create(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        .from(logger),
+        .FOR_TESTS,
     );
     defer {
         gossip_service.shutdown();
@@ -2870,17 +2850,13 @@ test "test build prune messages and handle push messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-
-    const logger = test_logger.logger("gossip.test");
-
     var gossip_service = try GossipService.create(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        .from(logger),
+        .FOR_TESTS,
     );
     defer {
         gossip_service.deinit();
@@ -2969,9 +2945,6 @@ fn testBuildPullRequests(
 ) !void {
     const allocator = std.testing.allocator;
 
-    const test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    const logger = test_logger.logger("gossip.test");
-
     const gossip_service = blk: {
         const contact_info_clone = try contact_info.clone();
         errdefer contact_info_clone.deinit();
@@ -2981,7 +2954,7 @@ fn testBuildPullRequests(
             contact_info_clone,
             my_keypair,
             maybe_entrypoints,
-            .from(logger),
+            .FOR_TESTS,
         );
     };
     defer {
@@ -3032,17 +3005,13 @@ test "test build push messages" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-
-    const logger = test_logger.logger("gossip.test");
-
     var gossip_service = try GossipService.create(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        .from(logger),
+        .FOR_TESTS,
     );
     defer {
         gossip_service.shutdown();
@@ -3278,17 +3247,13 @@ test "process contact info push packet" {
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var test_logger = TestingLogger.init(allocator, Logger.TEST_DEFAULT_LEVEL);
-
-    const logger = test_logger.logger("gossip.test");
-
     var gossip_service = try GossipService.create(
         allocator,
         allocator,
         contact_info,
         my_keypair,
         null,
-        .from(logger),
+        .FOR_TESTS,
     );
     defer {
         gossip_service.deinit();
@@ -3386,17 +3351,13 @@ test "init, exit, and deinit" {
     var contact_info = try LegacyContactInfo.initRandom(prng.random()).toContactInfo(std.testing.allocator);
     try contact_info.setSocket(.gossip, gossip_address);
 
-    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-
-    const logger = test_logger.logger("gossip.test");
-
     const gossip_service = try GossipService.create(
         std.testing.allocator,
         std.testing.allocator,
         contact_info,
         my_keypair,
         null,
-        .from(logger),
+        .FOR_TESTS,
     );
     defer {
         gossip_service.deinit();

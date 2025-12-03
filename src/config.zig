@@ -19,7 +19,7 @@ pub const Cmd = struct {
     leader_schedule_path: ?[]const u8 = null,
     genesis_file_path: ?[]const u8 = null,
     // general config
-    log_level: sig.trace.Level = .debug,
+    log_filters: sig.trace.Filters = .debug,
     log_file: ?[]const u8 = null,
     tee_logs: bool = false,
     metrics_port: u16 = 12345,

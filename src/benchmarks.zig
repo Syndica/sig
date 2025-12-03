@@ -168,11 +168,7 @@ pub fn main() !void {
     defer _ = gpa_state.deinit();
     const gpa = if (builtin.mode == .Debug) gpa_state.allocator() else std.heap.smp_allocator;
 
-    var std_logger = sig.trace.DirectPrintLogger.init(
-        gpa,
-        .info, // NOTE: change to debug to see all logs
-    );
-    const logger = std_logger.logger("benchmarks");
+    const logger = sig.trace.direct_print.logger("benchmarks", .info);
 
     const argv = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, argv);
