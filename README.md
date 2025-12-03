@@ -44,5 +44,5 @@ scripts/
 - [Official Website](https://www.syndica.io/sig)
 - [Docs Page](https://sig.fun/)
 - [Code Docs](https://syndica.github.io/sig/)
-- [Discord](https://discord.gg/vUF4pexE)
+- [Discord](https://discord.gg/ucDSeZCmxH)
 - [Engineering Blogposts](https://blog.syndica.io/tag/engineering/)
