@@ -292,9 +292,8 @@ pub const TestLogger = struct {
         args: anytype,
     ) void {
         _ = fields; // we haven't needed to validate this in any tests yet.
-        const string = self.allocator.alloc(u8, std.fmt.count(fmt, args)) catch
+        const string = std.fmt.allocPrint(self.allocator, fmt, args) catch
             @panic("allocation failed in test logger");
-        _ = std.fmt.bufPrint(string, fmt, args) catch unreachable;
         self.messages.append(self.allocator, .{
             .level = level,
             .scope = scope orelse "",
