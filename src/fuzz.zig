@@ -112,11 +112,10 @@ pub fn main() !void {
 
     const std_logger: *sig.trace.ChannelPrintLogger = try .init(.{
         .allocator = gpa,
-        .max_level = .debug,
         .max_buffer = 1 << 20,
     }, null);
     defer std_logger.deinit();
-    const logger = std_logger.logger("fuzz");
+    const logger = std_logger.logger("fuzz", .debug);
 
     const data_dir_name = cmd.data_dir orelse sig.FUZZ_DATA_DIR;
     const seed = cmd.seed orelse std.crypto.random.int(u64);

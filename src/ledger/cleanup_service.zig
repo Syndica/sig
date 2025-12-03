@@ -392,8 +392,7 @@ const Ledger = ledger.Ledger;
 test cleanLedger {
     // test setup
     const allocator = std.testing.allocator;
-    const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger("ledger.tests");
-    var state = try ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
     // insert data
@@ -407,7 +406,7 @@ test cleanLedger {
     try state.db.flush(ledger.schema.schema.data_shred);
 
     // run test subject
-    const slot = try cleanLedger(.from(logger), &state, 100, 0, 0);
+    const slot = try cleanLedger(.FOR_TESTS, &state, 100, 0, 0);
     try std.testing.expectEqual(899, slot);
 
     // verify correct data was purged
@@ -425,9 +424,8 @@ test cleanLedger {
 
 test "findSlotsToClean" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
 
-    var state = try ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer state.deinit();
 
     // set highest and lowest slot by inserting slot_meta
@@ -481,9 +479,8 @@ test "findSlotsToClean" {
 
 test "purgeSlots" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
 
-    var state = try ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer state.deinit();
 
     // write some roots
@@ -539,9 +536,8 @@ test "purgeSlots" {
 
 test "run exits promptly" {
     const allocator = std.testing.allocator;
-    const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger("ledger.tests");
 
-    var state = try ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
     var exit = std.atomic.Value(bool).init(false);
@@ -550,7 +546,7 @@ test "run exits promptly" {
     const thread = try std.Thread.spawn(
         .{},
         run,
-        .{ .noop, &state, 0, &exit },
+        .{ Logger.noop, &state, 0, &exit },
     );
     std.Thread.sleep(10 * std.time.ns_per_ms);
     exit.store(true, .monotonic);

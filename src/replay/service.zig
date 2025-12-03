@@ -903,13 +903,13 @@ test "Execute testnet block multi threaded" {
 test "freezeCompletedSlots handles errors correctly" {
     const allocator = std.testing.allocator;
 
-    var logger = sig.trace.log.TestLogger.init(allocator, .warn);
+    var logger = sig.trace.log.TestLogger.init(allocator);
     defer logger.deinit();
 
-    var dep_stubs = try DependencyStubs.init(allocator, .from(logger.logger("")));
+    var dep_stubs = try DependencyStubs.init(allocator, .from(logger.logger("", .warn)));
     defer dep_stubs.deinit();
 
-    var replay_state = try dep_stubs.stubbedState(allocator, .from(logger.logger("")));
+    var replay_state = try dep_stubs.stubbedState(allocator, .from(logger.logger("", .warn)));
     defer replay_state.deinit();
 
     const processed_a_slot = try freezeCompletedSlots(&replay_state, &.{
