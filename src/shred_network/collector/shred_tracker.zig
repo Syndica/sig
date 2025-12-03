@@ -495,6 +495,12 @@ const MonitoredSlot = struct {
     }
 };
 
+test "MonitoredSlot.record" {
+    var monitor = MonitoredSlot{};
+    _ = monitor.record(.noop, 10, true, Instant.now()); // last index
+    _ = monitor.record(.noop, 0, true, Instant.now()); // invalid/mismatching last index
+}
+
 test "trivial happy path" {
     const allocator = std.testing.allocator;
 
