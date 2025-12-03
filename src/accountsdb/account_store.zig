@@ -65,6 +65,9 @@ pub const AccountStore = union(enum) {
         newly_rooted_slot: Slot,
         lamports_per_signature: u64,
     ) !void {
+        var zone = tracy.Zone.init(@src(), .{ .name = "onSlotRooted" });
+        defer zone.deinit();
+
         switch (self) {
             .accounts_db => |db| try accounts_db.manager.onSlotRooted(
                 allocator,

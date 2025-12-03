@@ -160,7 +160,10 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         const Self = @This();
 
         fn run(pool_task: *ThreadPool.Task) void {
-            const zone = tracy.Zone.init(@src(), .{ .name = "HomogeneousThreadPool.run" });
+            const zone = tracy.Zone.init(
+                @src(),
+                .{ .name = "HomogeneousThreadPool.run: " ++ @typeName(TaskType) },
+            );
             defer zone.deinit();
 
             var self: *Self = @fieldParentPtr("pool_task", pool_task);

@@ -474,6 +474,9 @@ pub fn getActiveFeatures(
     account_reader: sig.accounts_db.SlotAccountReader,
     slot: Slot,
 ) !sig.core.FeatureSet {
+    const zone = tracy.Zone.init(@src(), .{ .name = "getActiveFeatures" });
+    defer zone.deinit();
+
     var features: sig.core.FeatureSet = .ALL_DISABLED;
     for (0..sig.core.features.NUM_FEATURES) |i| {
         const possible_feature: sig.core.features.Feature = @enumFromInt(i);

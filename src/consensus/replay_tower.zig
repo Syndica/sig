@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const AutoArrayHashMapUnmanaged = std.AutoArrayHashMapUnmanaged;
 
@@ -1690,6 +1691,9 @@ pub fn collectClusterVoteState(
     progress_map: *const ProgressMap,
     latest_validator_votes: *LatestValidatorVotes,
 ) !ClusterVoteState {
+    var zone = tracy.Zone.init(@src(), .{ .name = "collectClusterVoteState" });
+    defer zone.deinit();
+
     // The state we are interested in.
     var vote_slots: SortedSetUnmanaged(Slot) = .empty;
     defer vote_slots.deinit(allocator);

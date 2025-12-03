@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const vote_program = sig.runtime.program.vote;
 const vote_instruction = vote_program.vote_instruction;
@@ -201,6 +202,9 @@ const GossipVoteReceptor = struct {
         gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
         metrics: VoteListenerMetrics,
     ) ![]const Transaction {
+        const zone = tracy.Zone.init(@src(), .{ .name = "receiveVerifiedVotes" });
+        defer zone.deinit();
+
         self.clearVoteTxBuffer(allocator);
         const vote_tx_buffer = &self.vote_tx_buffer;
         std.debug.assert(vote_tx_buffer.items.len == 0);
@@ -245,6 +249,9 @@ const GossipVoteReceptor = struct {
         start_cursor: u64,
         gossip_table: *const sig.gossip.GossipTable,
     ) std.mem.Allocator.Error!u64 {
+        const zone = tracy.Zone.init(@src(), .{ .name = "getVoteTransactionsAfterCursor" });
+        defer zone.deinit();
+
         unverified_votes_buffer.clearRetainingCapacity();
         if (start_cursor >= gossip_table.cursor) return start_cursor;
 
@@ -280,6 +287,9 @@ fn verifyVoteTransaction(
     /// Should be associated with the root bank.
     epoch_tracker: *const EpochTracker,
 ) std.mem.Allocator.Error!enum { verified, unverified } {
+    const zone = tracy.Zone.init(@src(), .{ .name = "verifyVoteTransaction" });
+    defer zone.deinit();
+
     vote_tx.verify() catch return .unverified;
     const parsed_vote =
         try vote_parser.parseVoteTransaction(allocator, vote_tx) orelse return .unverified;

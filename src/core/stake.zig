@@ -1,6 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
@@ -165,6 +166,9 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             allocator: Allocator,
             comptime output_type: StakesType,
         ) Allocator.Error!Stakes(output_type) {
+            const zone = tracy.Zone.init(@src(), .{ .name = "Stakes.convert" });
+            defer zone.deinit();
+
             const vote_accounts = try self.vote_accounts.clone(allocator);
             errdefer vote_accounts.deinit(allocator);
 
@@ -177,18 +181,27 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
                 }
                 stake_delegations.deinit(allocator);
             }
-            for (self.stake_delegations.keys(), self.stake_delegations.values()) |key, value| {
-                const new_value: output_type.T() = switch (stakes_type) {
-                    .account => try value.clone(allocator),
-                    .delegation => value,
-                    .stake => switch (output_type) {
-                        .stake => value,
-                        .delegation => value.delegation,
-                        else => unreachable,
-                    },
-                };
 
-                stake_delegations.putAssumeCapacity(key, new_value);
+            {
+                const delegations_zone = tracy.Zone.init(
+                    @src(),
+                    .{ .name = "Stakes.convert: stake_delegations" },
+                );
+                defer delegations_zone.deinit();
+
+                for (self.stake_delegations.keys(), self.stake_delegations.values()) |key, value| {
+                    const new_value: output_type.T() = switch (stakes_type) {
+                        .account => try value.clone(allocator),
+                        .delegation => value,
+                        .stake => switch (output_type) {
+                            .stake => value,
+                            .delegation => value.delegation,
+                            else => unreachable,
+                        },
+                    };
+
+                    stake_delegations.putAssumeCapacity(key, new_value);
+                }
             }
 
             return .{

@@ -1,6 +1,7 @@
 pub const std = @import("std");
 pub const sig = @import("../sig.zig");
 pub const ledger_mod = @import("lib.zig");
+const tracy = @import("tracy");
 
 // std
 const Allocator = std.mem.Allocator;
@@ -1081,6 +1082,9 @@ pub fn getSlotEntriesWithShredInfo(
     start_index: u64,
     allow_dead_slots: bool,
 ) !struct { []Entry, u64, bool } {
+    const zone = tracy.Zone.init(@src(), .{ .name = "getSlotEntriesWithShredInfo" });
+    defer zone.deinit();
+
     const completed_ranges, const maybe_slot_meta =
         try self.getCompletedRanges(allocator, slot, start_index);
     defer completed_ranges.deinit();
@@ -1187,6 +1191,9 @@ fn getSlotEntriesInBlock(
     completed_ranges: CompletedRanges,
     maybe_slot_meta: ?*const SlotMeta,
 ) ![]Entry {
+    const zone = tracy.Zone.init(@src(), .{ .name = "getSlotEntriesInBlock" });
+    defer zone.deinit();
+
     if (completed_ranges.items.len == 0) {
         return &.{};
     }
@@ -1242,37 +1249,45 @@ fn getSlotEntriesInBlock(
         for (entries.items) |entry| entry.deinit(allocator);
         entries.deinit(allocator);
     }
-    for (completed_ranges.items) |range| {
-        const start_index, const end_index = range;
+    {
+        const deserializing_zone = tracy.Zone.init(
+            @src(),
+            .{ .name = "getSlotEntriesInBlock: deserializing" },
+        );
+        defer deserializing_zone.deinit();
 
-        // The indices from completed_ranges refer to shred indices in the
-        // entire block; map those indices to indices within data_shreds
-        const range_start_index: usize = @intCast(start_index - all_ranges_start_index);
-        const range_end_index: usize = @intCast(end_index - all_ranges_start_index);
-        const range_shreds: []DataShred =
-            data_shreds.items[range_start_index..range_end_index];
+        for (completed_ranges.items) |range| {
+            const start_index, const end_index = range;
 
-        const last_shred = range_shreds[range_shreds.len - 1];
-        std.debug.assert(last_shred.dataComplete() or last_shred.isLastInSlot());
-        // self.logger.tracef("{any} data shreds in last FEC set", data_shreds.items.len);
+            // The indices from completed_ranges refer to shred indices in the
+            // entire block; map those indices to indices within data_shreds
+            const range_start_index: usize = @intCast(start_index - all_ranges_start_index);
+            const range_end_index: usize = @intCast(end_index - all_ranges_start_index);
+            const range_shreds: []DataShred =
+                data_shreds.items[range_start_index..range_end_index];
 
-        const bytes = shredder.deshred(allocator, range_shreds) catch |e| {
-            self.logger.err().logf("failed to deshred entries buffer from shreds: {}", .{e});
-            return e;
-        };
-        defer bytes.deinit();
-        const these_entries = bincode.readFromSlice(
-            allocator,
-            []Entry,
-            bytes.items,
-            .{},
-        ) catch |e| {
-            self.logger.err().logf("failed to deserialize entries from shreds: {}", .{e});
-            return e;
-        };
-        defer allocator.free(these_entries);
-        errdefer for (these_entries) |e| e.deinit(allocator);
-        try entries.appendSlice(allocator, these_entries);
+            const last_shred = range_shreds[range_shreds.len - 1];
+            std.debug.assert(last_shred.dataComplete() or last_shred.isLastInSlot());
+            // self.logger.tracef("{any} data shreds in last FEC set", data_shreds.items.len);
+
+            const bytes = shredder.deshred(allocator, range_shreds) catch |e| {
+                self.logger.err().logf("failed to deshred entries buffer from shreds: {}", .{e});
+                return e;
+            };
+            defer bytes.deinit();
+            const these_entries = bincode.readFromSlice(
+                allocator,
+                []Entry,
+                bytes.items,
+                .{},
+            ) catch |e| {
+                self.logger.err().logf("failed to deserialize entries from shreds: {}", .{e});
+                return e;
+            };
+            defer allocator.free(these_entries);
+            errdefer for (these_entries) |e| e.deinit(allocator);
+            try entries.appendSlice(allocator, these_entries);
+        }
     }
     return entries.toOwnedSlice(allocator);
 }
@@ -1286,6 +1301,9 @@ pub fn getSlotsSince(
     allocator: Allocator,
     slots: []const Slot,
 ) !std.AutoArrayHashMapUnmanaged(Slot, std.ArrayListUnmanaged(Slot)) {
+    const zone = tracy.Zone.init(@src(), .{ .name = "getSlotsSince" });
+    defer zone.deinit();
+
     // TODO perf: support multi_get in db
     var map = std.AutoArrayHashMapUnmanaged(Slot, std.ArrayListUnmanaged(Slot)).empty;
     errdefer {

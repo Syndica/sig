@@ -1,6 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -60,6 +61,9 @@ pub fn updateSysvarsForNewSlot(
     slot: Slot,
     hard_forks: *const sig.core.HardForks,
 ) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "updateSysvarsForNewSlot" });
+    defer zone.deinit();
+
     const epoch = epoch_schedule.getEpoch(slot);
     const parent_slots_epoch = epoch_schedule.getEpoch(constants.parent_slot);
 
@@ -228,6 +232,9 @@ pub fn updateLastRestartSlot(
 }
 
 pub fn updateSlotHistory(allocator: Allocator, deps: UpdateSysvarAccountDeps) !void {
+    var zone = tracy.Zone.init(@src(), .{ .name = "updateSlotHistory" });
+    defer zone.deinit();
+
     var slot_history: SlotHistory = try getSysvarFromAccount(
         SlotHistory,
         allocator,
@@ -293,6 +300,9 @@ pub fn updateRecentBlockhashes(
     blockhash_queue: *const BlockhashQueue,
     deps: UpdateSysvarAccountDeps,
 ) !void {
+    var zone = tracy.Zone.init(@src(), .{ .name = "updateRecentBlockhashes" });
+    defer zone.deinit();
+
     const recent_blockhashes = try RecentBlockhashes.fromBlockhashQueue(
         allocator,
         blockhash_queue,

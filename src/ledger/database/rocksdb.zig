@@ -2,6 +2,7 @@ const std = @import("std");
 const rocks = @import("rocksdb");
 const sig = @import("../../sig.zig");
 const database = @import("lib.zig");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
@@ -131,12 +132,18 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             comptime cf: ColumnFamily,
             key: cf.Key,
         ) anyerror!?cf.Value {
+            const zone = tracy.Zone.init(@src(), .{ .name = "RocksDb.get" });
+            defer zone.deinit();
+
             const val_bytes = try self.getBytes(cf, key) orelse return null;
             defer val_bytes.deinit();
             return try value_serializer.deserialize(cf.Value, allocator, val_bytes.data);
         }
 
         pub fn getBytes(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!?BytesRef {
+            const zone = tracy.Zone.init(@src(), .{ .name = "RocksDb.getBytes" });
+            defer zone.deinit();
+
             const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
             defer key_bytes.deinit();
             const val_bytes: rocks.Data = try callRocks(

@@ -368,6 +368,9 @@ pub const TowerConsensus = struct {
             results: []const ReplayResult,
         },
     ) !void {
+        var zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.process" });
+        defer zone.deinit();
+
         var arena_state = self.arena_state.promote(allocator);
         defer {
             _ = arena_state.reset(.retain_capacity);
@@ -424,6 +427,12 @@ pub const TowerConsensus = struct {
             params.gossip_verified_vote_hashes.clearRetainingCapacity();
 
             const SlotSet = SortedSetUnmanaged(Slot);
+
+            const asc_desc_zone = tracy.Zone.init(
+                @src(),
+                .{ .name = "TowerConsensus.process: ancestors/descendants" },
+            );
+            defer asc_desc_zone.deinit();
 
             // arena-allocated
             var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
@@ -515,6 +524,9 @@ pub const TowerConsensus = struct {
         vote_account: ?Pubkey,
         senders: Senders,
     ) !void {
+        var zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.executeProtocol" });
+        defer zone.deinit();
+
         var epoch_stakes_map: EpochStakesMap = .empty;
         defer epoch_stakes_map.deinit(allocator);
 
@@ -1580,6 +1592,9 @@ fn checkAndHandleNewRoot(
     status_cache: ?*sig.core.StatusCache,
     new_root: Slot,
 ) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "checkAndHandleNewRoot" });
+    defer zone.deinit();
+
     // get the root bank before squash.
     if (slot_tracker.slots.count() == 0) return error.EmptySlotTracker;
     const root_tracker = slot_tracker.get(new_root) orelse return error.MissingSlot;
@@ -1688,6 +1703,9 @@ fn computeConsensusInputs(
     replay_tower: *const ReplayTower,
     latest_validator_votes: *LatestValidatorVotes,
 ) ![]Slot {
+    var zone = tracy.Zone.init(@src(), .{ .name = "computeConsensusInputs" });
+    defer zone.deinit();
+
     var new_stats = std.ArrayListUnmanaged(Slot).empty;
     errdefer new_stats.deinit(allocator);
 
@@ -1775,6 +1793,9 @@ fn cacheVotingSafetyChecks(
     slot: Slot,
     ancestors: *const std.AutoArrayHashMapUnmanaged(Slot, Ancestors),
 ) !void {
+    var zone = tracy.Zone.init(@src(), .{ .name = "cacheVotingSafetyChecks" });
+    defer zone.deinit();
+
     const stats = progress.getForkStats(slot) orelse return error.MissingSlot;
 
     const slice = try replay_tower.checkVoteStakeThresholds(

@@ -93,7 +93,7 @@ fn executeInstruction(
 
     // Create an accounts map for loading programs, account data is owned by transaction context
     // so does not need to be freed
-    var accounts_map = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var accounts_map = sig.utils.collections.PubkeyMap(AccountSharedData){};
     errdefer accounts_map.deinit(allocator);
     for (tc.accounts) |tc_account| {
         try accounts_map.put(allocator, tc_account.pubkey, tc_account.account.*);

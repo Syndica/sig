@@ -155,7 +155,7 @@ fn executeSyscall(
     // Program Cache Load Builtins
     // https://github.com/firedancer-io/solfuzz-agave/blob/0b8a7971055d822df3f602c287c368400a784c15/src/vm_syscalls.rs#L128-L130
     {
-        var accounts: std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData) = .{};
+        var accounts: sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData) = .{};
         defer accounts.deinit(allocator);
 
         for (tc.accounts) |acc| {

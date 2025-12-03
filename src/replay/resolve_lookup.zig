@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
+const tracy = @import("tracy");
 
 const core = sig.core;
 const compute_budget_program = sig.runtime.program.compute_budget;
@@ -87,6 +88,9 @@ pub fn resolveBlock(
     entries: []const sig.core.Entry,
     resolver: SlotResolver,
 ) ![]const replay.resolve_lookup.ResolvedTransaction {
+    const zone = tracy.Zone.init(@src(), .{ .name = "resolveBlock" });
+    defer zone.deinit();
+
     var transaction_count: usize = 0;
     for (entries) |entry| {
         if (!entry.isTick()) transaction_count += entry.transactions.len;
