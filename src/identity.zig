@@ -2,14 +2,12 @@ const std = @import("std");
 const sig = @import("sig.zig");
 
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;
+pub const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const Logger = sig.trace.Logger("identity");
 const Pubkey = sig.core.Pubkey;
 
 pub const IDENTITY_KEYPAIR_PATH = "identity.json";
-
-/// Re-export of stdlib's Ed25519 KeyPair.
-pub const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 pub const ValidatorIdentity = struct {
     /// Public key identifying this validator
@@ -25,105 +23,98 @@ pub const SigningKeys = struct {
     authorized_voters: []const KeyPair,
 };
 
-/// Returns the keypair from {app data directory}/{IDENTITY_KEYPAIR_PATH} or creates a new one
+/// Returns the keypair from $APP_DATA/IDENTITY_KEYPAIR_PATH or creates a new one
 /// if the file does not exist. If the file is invalid, an error is returned.
 pub fn getOrInit(allocator: std.mem.Allocator, logger: Logger) !KeyPair {
-    const app_data_dir_path = try std.fs.getAppDataDir(allocator, "sig");
-    defer allocator.free(app_data_dir_path);
+    const data_directory_path = try std.fs.getAppDataDir(allocator, "sig");
+    defer allocator.free(data_directory_path);
 
-    if (!std.fs.path.isAbsolute(app_data_dir_path)) {
-        return error.DataDirPathIsNotAbsolute;
-    }
+    logger.info().logf(
+        "searching for identity key at {s}/{s}",
+        .{ data_directory_path, IDENTITY_KEYPAIR_PATH },
+    );
 
-    var app_data_dir = try std.fs.cwd().makeOpenPath(app_data_dir_path, .{});
-    defer app_data_dir.close();
+    var data_directory = try std.fs.cwd().makeOpenPath(data_directory_path, .{});
+    defer data_directory.close();
 
-    if (app_data_dir.openFile(IDENTITY_KEYPAIR_PATH, .{ .mode = .read_only })) |file| {
-        defer file.close();
-        return parseKeypairJson(file.reader()) catch |e| {
-            logger.err().logf("Invalid identity.json: {}", .{e});
-            return error.InvalidIdentityFile;
-        };
-    } else |err| switch (err) {
-        else => |e| return e,
-        error.FileNotFound => {
-            // create the file with a new keypair
-            const file = try app_data_dir.createFile(IDENTITY_KEYPAIR_PATH, .{
-                .truncate = true,
-            });
-            defer file.close();
-
-            const keypair = KeyPair.generate();
-            try std.json.stringify(&keypair.secret_key.toBytes(), .{}, file.writer());
-
-            return keypair;
+    const file = try data_directory.createFile(
+        IDENTITY_KEYPAIR_PATH,
+        .{
+            .read = true,
+            .truncate = false,
+            .lock = .exclusive, // no way to check size twice atomically without a lock
         },
+    );
+    defer file.close();
+
+    const size = (try file.stat()).size;
+    if (size == 0) {
+        const new_kp: KeyPair = .generate();
+        try std.json.stringify(&new_kp.secret_key.toBytes(), .{}, file.writer());
+        return new_kp;
     }
+
+    return try parseFromFile(file);
 }
 
-/// Reads a pubkey either as a base58 string or from a json keypair file
-pub fn readPubkeyFlexible(
-    logger: Logger,
-    base58_or_kp_path: []const u8,
-) error{InvalidPubkeySource}!Pubkey {
-    const pk_err = if (Pubkey.parseRuntime(base58_or_kp_path)) |p| return p else |e| e;
-
-    const kp_err = err: {
-        const file = std.fs.cwd().openFile(base58_or_kp_path, .{}) catch |e| break :err e;
+pub fn readPubkey(logger: Logger, source: []const u8) error{InvalidPubkeySource}!Pubkey {
+    // Try to read the source as a base58 encoded public key.
+    const base58_err = if (Pubkey.parseRuntime(source)) |p| return p else |e| e;
+    // Try to open a path, read the secret from it, and parse the public key from it.
+    const file_err = err: {
+        const file = std.fs.cwd().openFile(source, .{ .lock = .exclusive }) catch |e| break :err e;
         defer file.close();
-
-        const keypair = parseKeypairJson(file.reader()) catch |e| break :err e;
-
-        return Pubkey.fromPublicKey(&keypair.public_key);
+        const kp = parseFromFile(file) catch |e| break :err e;
+        return .fromPublicKey(&kp.public_key);
     };
 
     logger.err().logf(
         "Could not interpret '{s}' as a base58 pubkey due to {} or a json keypair file due to {}",
-        .{ base58_or_kp_path, pk_err, kp_err },
+        .{ source, base58_err, file_err },
     );
     return error.InvalidPubkeySource;
 }
 
-fn parseKeypairJson(reader: anytype) !KeyPair {
-    var fba_buf: [SecretKey.encoded_length * 10]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
-    var json_buf: [SecretKey.encoded_length * 10]u8 = undefined;
-    const string_len = try reader.readAll(&json_buf);
+fn parseFromFile(file: std.fs.File) !KeyPair {
+    // The json parsing only needs a bit of memory to perform state management.
+    var fba_buffer: [0x100]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&fba_buffer);
 
-    const buf = try std.json.parseFromSliceLeaky(
+    var json_buffer: [SecretKey.encoded_length * 10]u8 = undefined;
+    const json_length = try file.readAll(&json_buffer);
+    const parsed = try std.json.parseFromSliceLeaky(
         [SecretKey.encoded_length]u8,
         fba.allocator(),
-        json_buf[0..string_len],
+        json_buffer[0..json_length],
         .{},
     );
-
-    const secret_key = try SecretKey.fromBytes(buf);
-    return try KeyPair.fromSecretKey(secret_key);
+    const secret_key = try SecretKey.fromBytes(parsed);
+    return try .fromSecretKey(secret_key);
 }
 
-test "readPubkeyFlexible for pubkey string" {
-    const parsed_pk = try readPubkeyFlexible(.FOR_TESTS, test_pubkey);
+test "readPubkey for pubkey string" {
+    const parsed_pk = try readPubkey(.FOR_TESTS, test_pubkey);
     try std.testing.expectEqual(Pubkey.parse(test_pubkey), parsed_pk);
 }
 
-test "readPubkeyFlexible for keypair filename" {
-    var dir = std.testing.tmpDir(.{});
-    defer dir.cleanup();
+test "readPubkey for keypair filename" {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
     {
-        const file = try dir.dir.createFile("keypair.json", .{});
+        const file = try tmp_dir.dir.createFile("keypair.json", .{});
         defer file.close();
         try file.writeAll(test_json);
     }
     var buf: [256]u8 = undefined;
-    const path = try dir.dir.realpath("keypair.json", &buf);
+    const path = try tmp_dir.dir.realpath("keypair.json", &buf);
 
-    const parsed_pk = try readPubkeyFlexible(.FOR_TESTS, path);
+    const parsed_pk = try readPubkey(.FOR_TESTS, path);
 
     try std.testing.expectEqual(Pubkey.parse(test_pubkey), parsed_pk);
 }
 
-test "readPubkeyFlexible for nonsense string" {
-    try std.testing.expectError(error.InvalidPubkeySource, readPubkeyFlexible(.noop, "nonsense"));
+test "readPubkey for nonsense string" {
+    try std.testing.expectError(error.InvalidPubkeySource, readPubkey(.noop, "nonsense"));
 }
 
 const test_pubkey = "4gE1hGfMN781mVSpoRJwHdsbWLqZDWLNqTtrtimfhuWR";
