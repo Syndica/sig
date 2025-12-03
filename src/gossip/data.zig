@@ -624,7 +624,16 @@ pub const Vote = struct {
 
     pub fn sanitize(self: *const Vote) !void {
         try sanitizeWallclock(self.wallclock);
-        try self.transaction.validate();
+        // Use the looser transaction sanitization rules for vote transactions within gossip
+        // Matches Agave Transactions impl of the Sanitize trait.
+        // [solana-sdk] https://github.com/anza-xyz/solana-sdk/blob/6efc4078ab7652ab6a1a08754d5c324cb26746ea/transaction/src/lib.rs#L202
+        if (self.transaction.msg.signature_count > self.transaction.signatures.len) {
+            return error.NotEnoughSignatures;
+        }
+        if (self.transaction.signatures.len > self.transaction.msg.account_keys.len) {
+            return error.TooManySignatures;
+        }
+        try self.transaction.msg.validate();
     }
 };
 
@@ -2152,4 +2161,35 @@ test "sanitize SnapshotHashes full > incremental has error" {
     instance.incremental = SnapshotHashes.IncrementalSnapshotsList.initSingle(.{ .slot = 1, .hash = Hash.ZEROES });
     const data = GossipData{ .SnapshotHashes = instance };
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}
+}
+
+test "sanitize vote" {
+    var vote = Vote{
+        .from = .ZEROES,
+        .transaction = .{
+            .signatures = &.{ Signature.ZEROES, Signature.ZEROES },
+            .version = .legacy,
+            .msg = .{
+                .signature_count = 1,
+                .readonly_signed_count = 0,
+                .readonly_unsigned_count = 0,
+                .account_keys = &.{ Pubkey.ZEROES, Pubkey.ZEROES },
+                .recent_blockhash = Hash.ZEROES,
+                .instructions = &.{},
+                .address_lookups = &.{},
+            },
+        },
+        .wallclock = 0,
+        .slot = 0,
+    };
+
+    try vote.sanitize();
+    try std.testing.expectError(error.TooManySignatures, vote.transaction.validate());
+
+    vote.transaction.msg.signature_count = 3;
+    try std.testing.expectError(error.NotEnoughSignatures, vote.sanitize());
+    vote.transaction.msg.signature_count = 1;
+
+    vote.transaction.signatures = &[_]Signature{Signature.ZEROES} ** 3;
+    try std.testing.expectError(error.TooManySignatures, vote.sanitize());
 }
