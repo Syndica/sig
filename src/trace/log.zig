@@ -204,7 +204,12 @@ pub const ChannelPrintLogger = struct {
         if (@intFromEnum(self.max_level) < @intFromEnum(level)) return;
         const size = logfmt.countLog(scope, level, fields, fmt, args);
         const msg_buf = self.log_allocator.alloc(u8, size) catch |err| {
-            std.debug.print("allocBuff failed with err: {any}", .{err});
+            std.debug.lockStdErr();
+            defer std.debug.unlockStdErr();
+            const stderr = std.io.getStdErr().writer();
+            const err_msg = "failed to allocate {} bytes for log message - {}";
+            logfmt.writeLog(stderr, "logger", .err, .{}, err_msg, .{ size, err }) catch {};
+            logfmt.writeLog(stderr, scope, level, fields, fmt, args) catch {};
             return;
         };
 
