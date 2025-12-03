@@ -175,6 +175,7 @@ pub const ReplayTower = struct {
     stray_restored_slot: ?Slot,
     last_switch_threshold_check: ?struct { Slot, SwitchForkDecision },
     metrics: ReplayTowerMetrics,
+    rpc_client: *sig.rpc.Client,
 
     const Self = @This();
 
@@ -183,6 +184,7 @@ pub const ReplayTower = struct {
         node_pubkey: Pubkey,
         tower: Tower,
         registry: *sig.prometheus.Registry(.{}),
+        rpc_client: *sig.rpc.Client,
     ) !ReplayTower {
         return .{
             .logger = logger,
@@ -196,6 +198,7 @@ pub const ReplayTower = struct {
             .stray_restored_slot = null,
             .last_switch_threshold_check = null,
             .metrics = try ReplayTowerMetrics.init(registry),
+            .rpc_client = rpc_client,
         };
     }
 
@@ -1359,8 +1362,8 @@ pub const ReplayTower = struct {
 
         if (can_vote) {
             self.logger.info().logf(
-                "Can vote on: {d} {d:.1}%",
-                .{ candidate_vote_bank_slot, 100.0 * fork_weight },
+                "Can vote on: {d} {d:.1}% ({d}/{d})",
+                .{ candidate_vote_bank_slot, 100.0 * fork_weight, fork_stats.fork_stake, fork_stats.total_stake },
             );
         } else {
             self.logger.info().logf(

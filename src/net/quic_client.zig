@@ -142,8 +142,7 @@ pub fn Client(
             self.tick_event.run(&loop, &tick_complete, 500, Self, self, onTick);
 
             var packets_in_complete: xev.Completion = undefined;
-            // 1500 is the interface's MTU, so we'll never receive more bytes than that
-            // from UDP.
+            // 1500 is the interface's MTU, so we'll never receive more bytes than that from UDP.
             const read_buffer = try self.allocator.alloc(u8, 1500);
             defer self.allocator.free(read_buffer);
             var state: xev.UDP.State = undefined;
@@ -271,6 +270,7 @@ pub fn Client(
                 .ipv6 => @panic("add ipv6 support"),
             };
 
+            var token: [0x10]u8 = @splat(0);
             if (lsquic.lsquic_engine_connect(
                 self.lsquic_engine,
                 lsquic.N_LSQVER,
@@ -282,8 +282,8 @@ pub fn Client(
                 0,
                 null,
                 0,
-                null,
-                0,
+                &token,
+                token.len,
             ) == null) {
                 @panic("lsquic_engine_connect failed");
             }
@@ -583,6 +583,7 @@ fn packetsOut(
     n_specs: u32,
 ) callconv(.c) i32 {
     var msg: std.posix.msghdr_const = undefined;
+    @memset(std.mem.asBytes(&msg), 0);
     const socket: *network.Socket = @alignCast(@ptrCast(ctx.?));
 
     for (specs.?[0..n_specs]) |spec| {
@@ -593,6 +594,7 @@ fn packetsOut(
         msg.flags = 0;
         msg.control = null;
         msg.controllen = 0;
+
         _ = std.posix.sendmsg(socket.internal, &msg, 0) catch |err| {
             std.debug.panic("sendmsgPosix failed with: {s}", .{@errorName(err)});
         };

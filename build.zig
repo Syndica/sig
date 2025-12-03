@@ -234,6 +234,8 @@ pub fn build(b: *Build) !void {
         .optimize = config.optimize,
     });
     const lsquic_mod = lsquic_dep.module("lsquic");
+    lsquic_dep.artifact("lsquic").bundle_ubsan_rt = true;
+    lsquic_dep.artifact("lsquic").root_module.sanitize_c = false;
 
     const zstd_mod = b.dependency("zstd", .{
         .target = config.target,

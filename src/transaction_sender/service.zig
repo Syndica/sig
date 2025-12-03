@@ -50,8 +50,6 @@ pub const Service = struct {
     exit: *AtomicBool,
     logger: Logger,
 
-    const Self = @This();
-
     pub fn init(
         allocator: std.mem.Allocator,
         logger: Logger,
@@ -311,6 +309,11 @@ pub const Service = struct {
         for (leader_addresses) |leader_address| {
             for (transactions) |tx| {
                 self.logger.info().logf("sending transaction to leader: address={} signature={}", .{ leader_address, tx.signature });
+
+                var buffer: [0x1000]u8 = undefined;
+                const encoded = std.base64.standard.Encoder.encode(&buffer, tx.wire_transaction[0..tx.wire_transaction_size]);
+                std.debug.print("encoded: {s}\n", .{encoded});
+
                 try self.send_channel.send(Packet.init(
                     leader_address.toEndpoint(),
                     tx.wire_transaction,
@@ -342,7 +345,7 @@ pub const Config = struct {
     // Time waited between processing the transaction pool
     pool_process_rate: Duration = Duration.fromSecs(1),
     // Maximum number of leaders to forward to ahead of the current leader
-    max_leaders_to_send_to: usize = 5,
+    max_leaders_to_send_to: usize = 20,
     // Number of consecutive leader slots (TODO: this should come from other config somewhere)
     number_of_consecutive_leader_slots: u64 = 4,
     // Maximum number of retries for a transaction whoes max_retries is null

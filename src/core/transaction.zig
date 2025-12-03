@@ -4,6 +4,7 @@ const sig = @import("../sig.zig");
 const leb = std.leb;
 
 const Blake3 = std.crypto.hash.Blake3;
+const base64 = std.base64.standard.Encoder;
 
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
@@ -143,12 +144,21 @@ pub const Transaction = struct {
         const msg_bytes_bounded = message.serializeBounded(version) catch return error.BadMessage;
         const msg_bytes = msg_bytes_bounded.constSlice();
 
-        const signatures = try allocator.alloc(Signature, keypairs.len);
+        // TODO: remove these allocations, we have well-known bounds on all the numbers
+        const signatures = try allocator.alloc(Signature, message.signature_count);
         errdefer allocator.free(signatures);
 
-        for (signatures, keypairs) |*signature, keypair| {
-            const msg_signature = keypair.sign(msg_bytes, null) catch return error.SigningError;
-            signature.* = .fromSignature(msg_signature);
+        // TODO: This method can result in us signing the same message for the same keypair more than once.
+        // Should investigate whether a hashmap to amortize the signing is faster. The current only usecase
+        // is when we send votes, and that *does* sign the same message twice.
+        const signing_keys = message.account_keys[0..message.signature_count];
+        for (signing_keys, 0..) |key, i| {
+            for (keypairs) |kp| {
+                const public_key: Pubkey = .fromPublicKey(&kp.public_key);
+                if (!key.equals(&public_key)) continue;
+                const msg_signature = kp.sign(msg_bytes, null) catch return error.SigningError;
+                signatures[i] = .fromSignature(msg_signature);
+            }
         }
 
         return .{
@@ -158,7 +168,7 @@ pub const Transaction = struct {
         };
     }
 
-    pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
+    pub fn serialize(writer: anytype, data: Transaction, _: sig.bincode.Params) !void {
         std.debug.assert(data.signatures.len <= std.math.maxInt(u16));
         try leb.writeULEB128(writer, @as(u16, @intCast(data.signatures.len)));
         for (data.signatures) |sgn| try writer.writeAll(&sgn.toBytes());
@@ -247,6 +257,17 @@ pub const Transaction = struct {
         }
 
         try self.msg.validate();
+    }
+
+    pub fn jsonStringify(self: Transaction, writer: anytype) @TypeOf(writer.*).Error!void {
+        var buffer: [MAX_BYTES]u8 = undefined;
+        const bytes = sig.bincode.writeToSlice(&buffer, self, .{}) catch
+            return error.OutOfMemory;
+        try writer.beginWriteRaw();
+        try writer.stream.writeByte('"');
+        try base64.encodeWriter(writer.stream, bytes);
+        try writer.stream.writeByte('"');
+        writer.endWriteRaw();
     }
 };
 

@@ -478,7 +478,11 @@ pub const GetSignatureStatuses = struct {
             confirmations: ?usize = null,
             // TODO: should transaction_status move to core?
             err: ?sig.ledger.transaction_status.TransactionError = null,
-            confirmationStatus: ?[]const u8 = null,
+            status: union(enum) {
+                Ok: ?u8,
+                Err: []const u8,
+            },
+            confirmationStatus: ?common.Commitment = null,
         };
     };
 };
@@ -615,15 +619,30 @@ pub const RequestAirdrop = struct {
 
 pub const SendTransaction = struct {
     transaction: sig.core.Transaction,
-    config: ?Config = null,
+    // We default to sending transcations encoded as base64, as recommeneded by Solana.
+    config: ?Config = .{ .encoding = .base64 },
 
     pub const Config = struct {
-        encoding: ?enum { base58, bas64 } = null,
+        encoding: ?enum { base58, base64 } = null,
         skipPreflight: ?bool = null,
         preflightCommitment: ?common.Commitment = null,
         maxRetries: ?usize = null,
         minContextSlot: ?Slot = null,
     };
+
+    pub fn jsonStringify(self: SendTransaction, jw: anytype) !void {
+        try jw.beginArray();
+        try jw.write(self.transaction);
+        if (self.config) |config| {
+            try jw.beginObject();
+            if (config.encoding) |encoding| {
+                try jw.objectField("encoding");
+                try jw.write(encoding);
+            }
+            try jw.endObject();
+        }
+        try jw.endArray();
+    }
 
     pub const Response = sig.core.Signature;
 };

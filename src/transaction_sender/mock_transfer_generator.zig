@@ -84,9 +84,6 @@ pub const MockTransferService = struct {
     pub fn run(self: *MockTransferService, n_transactions: u64, n_lamports_per_tx: u64) !void {
         errdefer self.exit.store(true, .monotonic);
 
-        var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-        const random = prng.random();
-
         if (n_lamports_per_tx < MIN_LAMPORTS_FOR_RENT) {
             @panic("transaction amount is less than MIN_LAMPORTS_FOR_RENT");
         }
@@ -97,7 +94,6 @@ pub const MockTransferService = struct {
         });
 
         const required_bank_balance = n_transactions * (n_lamports_per_tx + TRANSFER_FEE_LAMPORTS);
-
         if (required_bank_balance > MAX_AIRDROP_LAMPORTS) {
             @panic("requested transfer amount exceeds MAX_AIRDROP_LAMPORTS");
         }
@@ -110,7 +106,7 @@ pub const MockTransferService = struct {
 
         if (balances.alice > 0) {
             self.logger.debug().log("closing alice's account");
-            try self.closeAccount(random, self.accounts.alice.keypair);
+            try self.closeAccount(self.accounts.alice.keypair);
         }
 
         _ = try self.getBalances("initial balances");
@@ -118,7 +114,6 @@ pub const MockTransferService = struct {
         for (0..n_transactions) |tx_i| {
             self.logger.info().logf("transfering {} lamports from bank to alice ({}/{})", .{ n_lamports_per_tx, tx_i + 1, n_transactions });
             try self.sigTransferAndWait(
-                random,
                 self.accounts.bank.keypair,
                 self.accounts.alice.pubkey,
                 n_lamports_per_tx,
@@ -128,7 +123,7 @@ pub const MockTransferService = struct {
 
         _ = try self.getBalances("final balances");
 
-        try self.closeAccount(random, self.accounts.alice.keypair);
+        try self.closeAccount(self.accounts.alice.keypair);
 
         self.exit.store(false, .monotonic);
     }
@@ -163,7 +158,7 @@ pub const MockTransferService = struct {
     }
 
     /// Transfer lamports via rpc from one account to another, retries transaction 5 times
-    pub fn rpcTransferAndWait(self: *MockTransferService, random: std.Random, from_keypair: KeyPair, to_pubkey: Pubkey, lamports: u64) !void {
+    pub fn rpcTransferAndWait(self: *MockTransferService, from_keypair: KeyPair, to_pubkey: Pubkey, lamports: u64) !void {
         const from_pubkey = Pubkey.fromPublicKey(&from_keypair.public_key);
         for (0..MAX_RPC_RETRIES) |_| {
             self.logger.debug().logf(
@@ -183,7 +178,6 @@ pub const MockTransferService = struct {
 
             const transaction = try buildTransferTansaction(
                 self.allocator,
-                random,
                 from_keypair,
                 to_pubkey,
                 lamports,
@@ -213,7 +207,6 @@ pub const MockTransferService = struct {
     /// Transfer lamports via sig from one account to another, retries transaction max
     pub fn sigTransferAndWait(
         self: *MockTransferService,
-        random: std.Random,
         from_keypair: KeyPair,
         to_pubkey: Pubkey,
         lamports: u64,
@@ -238,7 +231,6 @@ pub const MockTransferService = struct {
 
             const transaction = try buildTransferTansaction(
                 self.allocator,
-                random,
                 from_keypair,
                 to_pubkey,
                 lamports,
@@ -302,7 +294,7 @@ pub const MockTransferService = struct {
     }
 
     /// Closes an account by transferring all SOL to the bank (using rpc methods)
-    pub fn closeAccount(self: *MockTransferService, random: std.Random, keypair: KeyPair) !void {
+    pub fn closeAccount(self: *MockTransferService, keypair: KeyPair) !void {
         const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
         const balance = try self.getBalance(pubkey);
         if (balance == 0) return;
@@ -312,7 +304,6 @@ pub const MockTransferService = struct {
             .{ balance - TRANSFER_FEE_LAMPORTS, pubkey, self.accounts.bank.pubkey },
         );
         try self.rpcTransferAndWait(
-            random,
             keypair,
             self.accounts.bank.pubkey,
             balance - TRANSFER_FEE_LAMPORTS,
@@ -376,7 +367,6 @@ pub const MockTransferService = struct {
 
     pub fn buildTransferTansaction(
         allocator: std.mem.Allocator,
-        random: std.Random,
         from_keypair: KeyPair,
         to_pubkey: Pubkey,
         lamports: u64,
@@ -384,55 +374,40 @@ pub const MockTransferService = struct {
     ) !sig.core.Transaction {
         const from_pubkey = Pubkey.fromPublicKey(&from_keypair.public_key);
 
-        const addresses = try allocator.dupe(Pubkey, &.{
-            from_pubkey,
-            to_pubkey,
-            sig.runtime.program.system.ID,
+        const addresses = try allocator.dupe(sig.core.instruction.InstructionAccount, &.{
+            .{ .pubkey = from_pubkey, .is_signer = true, .is_writable = true },
+            .{ .pubkey = to_pubkey, .is_signer = false, .is_writable = true },
         });
         errdefer allocator.free(addresses);
 
-        const account_indexes = try allocator.dupe(u8, &.{ 0, 1 });
-        errdefer allocator.free(account_indexes);
+        var data: [12]u8 = @splat(0);
+        const txn: sig.runtime.program.system.Instruction = .{ .transfer = .{ .lamports = lamports } };
+        const serializd = try sig.bincode.writeToSlice(&data, txn, .{});
 
-        var data = [_]u8{0} ** 12;
-        var fbs = std.io.fixedBufferStream(&data);
-        const writer = fbs.writer();
-        try writer.writeInt(u32, 2, .little);
-        try writer.writeInt(u64, lamports, .little);
-
-        const instructions = try allocator.alloc(sig.core.transaction.Instruction, 1);
+        const instructions = try allocator.alloc(sig.core.Instruction, 1);
         errdefer allocator.free(instructions);
         instructions[0] = .{
-            .program_index = 2,
-            .account_indexes = account_indexes,
-            .data = try allocator.dupe(u8, &data),
+            .program_id = sig.runtime.program.system.ID,
+            .accounts = addresses,
+            .data = try allocator.dupe(u8, serializd),
         };
 
-        const signature: Signature = blk: {
-            const buffer = [_]u8{0} ** sig.core.Transaction.MAX_BYTES;
-            const signable = &buffer; //try transaction.msgwriteSignableToSlice(&buffer);
+        const tx = try sig.core.transaction.Message.initCompile(
+            allocator,
+            instructions,
+            from_pubkey,
+            recent_blockhash,
+            null,
+        );
+        errdefer tx.deinit(allocator);
 
-            var noise: [KeyPair.seed_length]u8 = undefined;
-            random.bytes(&noise);
+        const transfer_tx = try sig.core.Transaction.initOwnedMessageWithSigningKeypairs(
+            allocator,
+            .legacy,
+            tx,
+            &.{from_keypair},
+        );
 
-            const signature = try from_keypair.sign(signable, noise);
-            break :blk .fromSignature(signature);
-        };
-
-        const signatures = try allocator.dupe(Signature, &.{signature});
-        errdefer allocator.free(signatures);
-
-        return .{
-            .signatures = signatures,
-            .version = .legacy,
-            .msg = .{
-                .signature_count = @intCast(signatures.len),
-                .readonly_signed_count = 0,
-                .readonly_unsigned_count = 1,
-                .account_keys = addresses,
-                .recent_blockhash = recent_blockhash,
-                .instructions = instructions,
-            },
-        };
+        return transfer_tx;
     }
 };

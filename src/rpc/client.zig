@@ -47,7 +47,7 @@ pub const Client = struct {
         defer allocator.free(request_json);
 
         const response_json = try self.fetcher.fetchWithRetries(allocator, request_json);
-        defer allocator.free(response_json);
+        // defer allocator.free(response_json);
 
         return try Response(@TypeOf(params).Response).fromJson(allocator, response_json);
     }

@@ -142,6 +142,7 @@ pub const TowerConsensus = struct {
             /// Usually `.now()`.
             now: sig.time.Instant,
             registry: *sig.prometheus.Registry(.{}),
+            rpc_client: *sig.rpc.Client,
         },
     ) !TowerConsensus {
         const zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.init" });
@@ -174,6 +175,7 @@ pub const TowerConsensus = struct {
             deps.identity.validator,
             tower,
             deps.registry,
+            deps.rpc_client,
         );
         errdefer replay_tower.deinit(allocator);
 
@@ -460,7 +462,7 @@ pub const TowerConsensus = struct {
             params.account_store,
             params.slot_leaders,
             params.vote_sender,
-            self.identity.vote_account,
+            self.identity.vote_account.?,
             params.senders,
         );
     }
@@ -911,13 +913,13 @@ pub const AncestorHashesReplayUpdate = union(enum) {
 };
 
 pub const GenerateVoteTxResult = union(enum) {
-    // non voting validator, not eligible for refresh
-    // until authorized keypair is overriden
+    /// non voting validator, not eligible for refresh
+    /// until authorized keypair is overriden
     non_voting,
-    // hot spare validator, not eligble for refresh
-    // until set identity is invoked
+    /// hot spare validator, not eligble for refresh
+    /// until set identity is invoked
     hot_spare,
-    // failed generation, eligible for refresh
+    /// failed generation, eligible for refresh
     failed,
     // TODO add Transaction
     tx: Transaction,
@@ -995,6 +997,8 @@ fn handleVotableBank(
         epoch_tracker,
     );
 
+    std.debug.print("vote txn: {any}\n", .{vote_tx_result});
+
     switch (vote_tx_result) {
         .tx => |vote_tx| {
             // Update the tower's last vote blockhash
@@ -1018,9 +1022,7 @@ fn handleVotableBank(
                 maybe_sender,
             );
         },
-        .non_voting => {
-            replay_tower.markLastVoteTxBlockhashNonVoting();
-        },
+        .non_voting => replay_tower.markLastVoteTxBlockhashNonVoting(),
         else => {
             // Do nothing
         },
@@ -1078,6 +1080,10 @@ fn sendVoteTransaction(
     var buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
     const written = try sig.bincode.writeToSlice(&buf, vote_tx, .{});
 
+    var encoded: [0x1000]u8 = undefined;
+    const bytes = std.base64.standard.Encoder.encode(&encoded, written);
+    std.debug.print("base64: {s}\n", .{bytes});
+
     sender.send(.{
         .buffer = buf,
         .size = written.len,
@@ -1111,6 +1117,8 @@ fn sendVoteToLeaders(
         UPCOMING_LEADER_FANOUT_SLOTS,
     );
     defer allocator.free(upcoming_leader_sockets);
+
+    logger.debug().logf("sending vote to {d} leaders", .{upcoming_leader_sockets.len});
 
     if (upcoming_leader_sockets.len > 0) {
         for (upcoming_leader_sockets) |tpu_vote_socket| {
@@ -1289,6 +1297,12 @@ fn sendVote(
         .refresh_vote => |refresh_vote_data| refresh_vote_data.tx,
     };
 
+    if (std.debug.runtime_safety) {
+        vote_tx.validate() catch |err|
+            std.debug.panic("sending invalid vote tx: {s}", .{@errorName(err)});
+        vote_tx.verify() catch @panic("sending vote tx with invalid sigs");
+    }
+
     // Send to upcoming leaders
     if (maybe_slot_leaders) |slot_leaders| {
         const maybe_my_pubkey = if (maybe_my_keypair) |kp|
@@ -1407,21 +1421,15 @@ fn generateVoteTx(
     }
 
     const current_epoch = epoch_tracker.schedule.getEpoch(last_voted_slot);
-
     const authorized_voter_pubkey = vote_state.voters.getAuthorizedVoter(current_epoch) orelse {
         logger.err().logf("No authorized voter for epoch {}", .{current_epoch});
         return .failed;
     };
 
-    const auth_voter_kp = blk: {
-        for (authorized_voter_keypairs) |voter_keypair| {
-            const pubkey = Pubkey.fromPublicKey(&voter_keypair.public_key);
-            if (pubkey.equals(&authorized_voter_pubkey)) {
-                break :blk voter_keypair;
-            }
-        }
-        return .non_voting;
-    };
+    const authorized_voter_kp = for (authorized_voter_keypairs) |kp| {
+        const pubkey = Pubkey.fromPublicKey(&kp.public_key);
+        if (pubkey.equals(&authorized_voter_pubkey)) break kp;
+    } else return .non_voting;
 
     // Send our last few votes along with the new one
     // Compact the vote state update before sending
@@ -1452,16 +1460,31 @@ fn generateVoteTx(
     );
     defer vote_ix.deinit(allocator);
 
-    const blockhash = slot_info.state.hash.readCopy() orelse {
-        logger.warn().logf("Blockhash is null for slot {}", .{last_voted_slot});
-        return .failed;
+    // const blockhash = slot_info.state.hash.readCopy() orelse {
+    //     logger.warn().logf("Blockhash is null for slot {}", .{last_voted_slot});
+    //     return .failed;
+    // };
+
+    var rpc_client: sig.rpc.Client = try .init(allocator, .Testnet, .{});
+    defer rpc_client.deinit();
+
+    const latest_blockhash, _ = blk: {
+        const blockhash_response = try rpc_client.getLatestBlockhash(.{});
+        defer blockhash_response.deinit();
+        const blockhash = try blockhash_response.result();
+        break :blk .{
+            try Hash.parseRuntime(blockhash.value.blockhash),
+            blockhash.value.lastValidBlockHeight,
+        };
     };
+
+    std.debug.print("using blockhash: {}\n", .{latest_blockhash});
 
     const vote_tx_msg = try sig.core.transaction.Message.initCompile(
         allocator,
         &.{vote_ix},
         Pubkey.fromPublicKey(&node_kp.public_key),
-        blockhash,
+        latest_blockhash,
         null,
     );
     errdefer vote_tx_msg.deinit(allocator);
@@ -1470,7 +1493,7 @@ fn generateVoteTx(
         allocator,
         .legacy,
         vote_tx_msg,
-        &.{ node_kp, auth_voter_kp },
+        &.{ node_kp, authorized_voter_kp },
     );
 
     return GenerateVoteTxResult{ .tx = vote_tx };

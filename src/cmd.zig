@@ -1311,6 +1311,7 @@ fn validator(
         .voting_enabled = voting_enabled,
         .vote_account_address = maybe_vote_pubkey,
         .stop_at_slot = cfg.stop_at_slot,
+        .rpc_client = &rpc_epoch_ctx_service.rpc_client,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -1493,6 +1494,9 @@ fn replayOffline(
         });
     }
 
+    var rpc_client: sig.rpc.Client = try .init(allocator, .Testnet, .{});
+    defer rpc_client.deinit();
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db_two = &new_db },
@@ -1504,6 +1508,7 @@ fn replayOffline(
         .voting_enabled = false,
         .vote_account_address = null,
         .stop_at_slot = cfg.stop_at_slot,
+        .rpc_client = &rpc_client,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -2172,6 +2177,7 @@ const ReplayAndConsensusServiceState = struct {
             voting_enabled: bool,
             vote_account_address: ?Pubkey,
             stop_at_slot: ?Slot,
+            rpc_client: *sig.rpc.Client,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
@@ -2255,6 +2261,7 @@ const ReplayAndConsensusServiceState = struct {
                 .slot_tracker = &replay_state.slot_tracker,
                 .now = .now(),
                 .registry = params.app_base.metrics_registry,
+                .rpc_client = params.rpc_client,
             });
             errdefer tower_consensus.deinit(allocator);
 
@@ -2307,8 +2314,8 @@ const ReplayAndConsensusServiceState = struct {
                 if (self.consensus) |*c| replay.service.AvanceReplayConsensusParams{
                     .tower = &c.tower,
                     .gossip_table = gossip_table,
-                    .senders = self.senders,
-                    .receivers = self.receivers,
+                    .senders = c.senders,
+                    .receivers = c.receivers,
                     .vote_sender = vote_sender,
                 } else null,
             },

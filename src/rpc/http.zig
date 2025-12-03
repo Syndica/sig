@@ -18,7 +18,7 @@ pub const HttpPostFetcher = struct {
     max_retries: usize,
 
     pub const Options = struct {
-        max_retries: usize = 0,
+        max_retries: usize = 5,
         logger: Logger = .noop,
     };
 
