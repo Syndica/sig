@@ -391,10 +391,25 @@ test resolveBatch {
         },
     };
 
-    var map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
-    defer map.deinit();
-    try put(&map, lookup_table_addresses[0], lookup_tables[0]);
-    try put(&map, lookup_table_addresses[1], lookup_tables[1]);
+    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    for (lookup_table_addresses, lookup_tables) |address, table| {
+        var buf: [AddressLookupTable.MAX_SERIALIZED_SIZE]u8 = undefined;
+        try AddressLookupTable.overwriteMetaData(&buf, table.meta);
+        const src = std.mem.sliceAsBytes(table.addresses);
+        const dst = buf[sig.runtime.program.address_lookup_table.state.LOOKUP_TABLE_META_SIZE..];
+        @memcpy(dst[0..src.len], src);
+
+        try db.put(0, address, .{
+            .lamports = 1,
+            .data = &buf,
+            .owner = sig.runtime.program.address_lookup_table.ID,
+            .executable = false,
+            .rent_epoch = 0,
+        });
+    }
 
     const tx = Transaction{
         .signatures = &.{},
@@ -480,7 +495,7 @@ test resolveBatch {
             .slot = 1, // Greater than lookup tables' last_extended_slot
             .slot_hashes = slot_hashes,
             .reserved_accounts = &.empty,
-            .account_reader = map.accountReader().forSlot(&ancestors),
+            .account_reader = .{ .accounts_db_two = .{ db, &ancestors } },
         },
     );
     defer resolved.deinit(allocator);
@@ -536,47 +551,28 @@ test resolveBatch {
     }
 }
 
-fn put(
-    map: *sig.accounts_db.ThreadSafeAccountMap,
-    address: Pubkey,
-    lookup_table: AddressLookupTable,
-) !void {
-    var buf: [AddressLookupTable.MAX_SERIALIZED_SIZE]u8 = undefined;
-
-    try AddressLookupTable.overwriteMetaData(&buf, lookup_table.meta);
-
-    const src = std.mem.sliceAsBytes(lookup_table.addresses);
-    const dst = buf[sig.runtime.program.address_lookup_table.state.LOOKUP_TABLE_META_SIZE..];
-    @memcpy(dst[0..src.len], src);
-
-    try map.put(0, address, .{
-        .lamports = 1,
-        .data = &buf,
-        .owner = sig.runtime.program.address_lookup_table.ID,
-        .executable = false,
-        .rent_epoch = 0,
-    });
-}
-
 test getLookupTable {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    var map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
-    defer map.deinit();
+    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
 
-    var ancestors = sig.core.Ancestors{};
+    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
     defer ancestors.deinit(allocator);
-    try ancestors.addSlot(allocator, 0);
 
-    const account_reader = map.accountReader().forSlot(&ancestors);
+    const account_reader: sig.accounts_db.SlotAccountReader = .{ .accounts_db_two = .{
+        db,
+        &ancestors,
+    } };
 
     { // Invalid owner
         const pubkey = Pubkey.initRandom(random);
 
-        try map.put(0, pubkey, .{
+        try db.put(0, pubkey, .{
             .lamports = 1,
             .data = &.{},
             .owner = Pubkey.initRandom(random),
@@ -595,7 +591,7 @@ test getLookupTable {
         const data = try allocator.alloc(u8, AddressLookupTable.MAX_SERIALIZED_SIZE + 1);
         defer allocator.free(data);
 
-        try map.put(0, pubkey, .{
+        try db.put(0, pubkey, .{
             .lamports = 1,
             .data = data,
             .owner = sig.runtime.program.address_lookup_table.ID,
@@ -614,7 +610,7 @@ test getLookupTable {
         const data = try allocator.alloc(u8, AddressLookupTable.MAX_SERIALIZED_SIZE);
         defer allocator.free(data);
 
-        try map.put(0, pubkey, .{
+        try db.put(0, pubkey, .{
             .lamports = 1,
             .data = data,
             .owner = sig.runtime.program.address_lookup_table.ID,
@@ -635,7 +631,19 @@ test getLookupTable {
             .addresses = &.{Pubkey.initRandom(random)},
         };
 
-        try put(&map, pubkey, lookup_table);
+        var buf: [AddressLookupTable.MAX_SERIALIZED_SIZE]u8 = undefined;
+        try AddressLookupTable.overwriteMetaData(&buf, lookup_table.meta);
+        const src = std.mem.sliceAsBytes(lookup_table.addresses);
+        const dst = buf[sig.runtime.program.address_lookup_table.state.LOOKUP_TABLE_META_SIZE..];
+        @memcpy(dst[0..src.len], src);
+
+        try db.put(0, pubkey, .{
+            .lamports = 1,
+            .data = &buf,
+            .owner = sig.runtime.program.address_lookup_table.ID,
+            .executable = false,
+            .rent_epoch = 0,
+        });
 
         const loaded_lookup_table = try getLookupTable(allocator, account_reader, pubkey);
         defer allocator.free(loaded_lookup_table.addresses);
