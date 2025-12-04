@@ -731,14 +731,6 @@ fn insertSysvarCacheAccounts(
     inherit_from_old_account: bool,
 ) !void {
     if (!builtin.is_test) @compileError("only for testing");
-    var sysvar_accounts: std.MultiArrayList(struct {
-        pubkey: Pubkey,
-        account: Account,
-    }) = .{};
-    defer {
-        for (sysvar_accounts.slice().items(.account)) |acc| acc.deinit(allocator);
-        sysvar_accounts.deinit(allocator);
-    }
 
     inline for (.{
         Clock,
@@ -767,7 +759,7 @@ fn insertSysvarCacheAccounts(
         );
         defer account.deinit(allocator); // rooted db clones the data
 
-        db.rooted.put(Sysvar.ID, slot, .{
+        try db.put(slot, Sysvar.ID, .{
             .lamports = account.lamports,
             .data = account.data,
             .owner = account.owner,
@@ -858,7 +850,7 @@ test "update all sysvars" {
         null,
     );
     defer allocator.free(account.data);
-    db.rooted.put(SlotHistory.ID, slot, account);
+    try db.put(slot, SlotHistory.ID, account);
 
     // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
     slot = slot + 1;

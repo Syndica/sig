@@ -428,6 +428,11 @@ pub fn newSlotFromParent(
 
     var ancestors = try parent_constants.ancestors.clone(allocator);
     errdefer ancestors.deinit(allocator);
+
+    // TODO: Ponder on this number some more. We need to move to using a bitset
+    // for ancestors, which will solve the issue where it just keeps growing forever.
+    // The unrooted db also requires us to cap the length of ancestors at below MAX_SLOTS.
+    if (ancestors.ancestors.count() > 512) ancestors.ancestors.orderedRemoveAt(0);
     try ancestors.ancestors.put(allocator, slot, {});
 
     var feature_set = try getActiveFeatures(allocator, account_reader.forSlot(&ancestors), slot);
@@ -565,10 +570,10 @@ fn bypassConsensus(state: *ReplayState) !void {
 
         try state.status_cache.addRoot(state.allocator, new_root);
 
+        const slot_constants = slot_tracker.get(new_root).?;
         try state.account_store.onSlotRooted(
-            state.allocator,
             new_root,
-            slot_tracker.get(new_root).?.constants.fee_rate_governor.lamports_per_signature,
+            &slot_constants.constants.ancestors,
         );
     }
 }
