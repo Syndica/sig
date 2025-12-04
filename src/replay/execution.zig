@@ -1104,13 +1104,12 @@ pub const TestState = struct {
         const entries_copy = try allocator.dupe(Entry, entries);
         errdefer allocator.free(entries_copy);
 
-        var i: usize = 0;
-        errdefer for (entries_copy[0..i]) |e| e.deinit(allocator);
-        for (entries_copy) |*entry| {
+        for (entries_copy, 0..) |*entry, i| {
+            errdefer for (entries_copy[0..i]) |e| e.deinit(allocator);
             entry.* = try entries[i].clone(allocator);
-            i += 1;
             try self.makeTransactionsPassable(allocator, entry.transactions);
         }
+        errdefer for (entries_copy) |e| e.deinit(allocator);
 
         const transactions =
             try replay.resolve_lookup.resolveBlock(allocator, entries_copy, self.resolver());
