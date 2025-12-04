@@ -10,6 +10,7 @@ const Atomic = std.atomic.Value;
 
 const ThreadPool = sig.sync.ThreadPool;
 
+const Transaction = core.Transaction;
 const Pubkey = core.Pubkey;
 const Entry = core.Entry;
 const Hash = core.Hash;
@@ -19,6 +20,8 @@ const ReplayResult = replay.execution.ReplayResult;
 const ReplaySlotError = replay.execution.ReplaySlotError;
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 const SvmGateway = replay.svm_gateway.SvmGateway;
+
+const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 const assert = std.debug.assert;
 
@@ -422,3 +425,432 @@ const TransactionScheduler = struct {
         }
     };
 };
+
+fn testSchedulerForBatches(
+    allocator: Allocator,
+    state: *replay.execution.TestState,
+    batches: []const []const Transaction,
+) !?ReplaySlotError {
+    comptime std.debug.assert(@import("builtin").is_test);
+
+    var resolved: std.ArrayListUnmanaged(replay.resolve_lookup.ResolvedTransaction) = .{};
+    defer {
+        for (resolved.items) |tx| tx.deinit(allocator);
+        resolved.deinit(allocator);
+    }
+
+    for (batches) |transactions| {
+        try state.makeTransactionsPassable(allocator, transactions);
+        try resolved.ensureUnusedCapacity(allocator, transactions.len);
+        for (transactions) |tx| resolved.appendAssumeCapacity(
+            try replay.resolve_lookup.resolveTransaction(allocator, tx, .{
+                .slot = 0,
+                .account_reader = .noop,
+                .reserved_accounts = &.empty,
+                .slot_hashes = .INIT,
+            }),
+        );
+    }
+
+    var thread_pool = ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
+
+    var result: ReplaySlotFuture.Result = undefined;
+    {
+        var wg = std.Thread.WaitGroup{};
+        defer wg.wait();
+
+        const entries = try allocator.alloc(Entry, batches.len);
+        errdefer allocator.free(entries);
+        for (batches, 0..) |transactions, i| {
+            errdefer for (entries[0..i]) |e| e.deinit(allocator);
+
+            const duped = try allocator.alloc(Transaction, transactions.len);
+            errdefer allocator.free(duped);
+            for (transactions, 0..) |tx, j| {
+                errdefer for (duped[0..j]) |duped_tx| duped_tx.deinit(allocator);
+                duped[j] = try tx.clone(allocator);
+            }
+
+            entries[i] = .{
+                .num_hashes = 0,
+                .hash = .ZEROES,
+                .transactions = duped,
+            };
+        }
+
+        const future = try allocator.create(ReplaySlotFuture);
+        errdefer allocator.destroy(future);
+
+        const committer = try state.committer(allocator);
+        const resolved_transactions = try resolved.toOwnedSlice(allocator);
+
+        const svm_params = state.svmParams();
+        const svm_gateway = try SvmGateway.init(allocator, svm_params);
+        errdefer svm_gateway.deinit(allocator);
+
+        future.* = .{
+            .allocator = allocator,
+            .arena = .init(allocator),
+            .logger = .noop,
+            .entries = entries,
+            .poh_verifier = .{ .future = future },
+            .txn_scheduler = .{
+                .future = future,
+                .transactions = resolved_transactions,
+                .svm_gateway = svm_gateway,
+                .committer = committer,
+            },
+            .pending = .init(1), // start with 1 for this scope's future.finish()
+            .thread_pool = &thread_pool,
+            .exit = .init(false),
+            .result_ptr = .init(&result),
+            .wait_group = &wg,
+        };
+
+        wg.start();
+        defer future.finish();
+
+        future.txn_scheduler.start() catch |e| future.setError(e);
+    }
+
+    return switch ((try result).output) {
+        .last_entry_hash => null,
+        .err => |err| err,
+    };
+}
+
+test "TransactionScheduler: happy path" {
+    const allocator = std.testing.allocator;
+
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    var tx_arena = std.heap.ArenaAllocator.init(allocator);
+    defer tx_arena.deinit();
+
+    const transactions = [_]Transaction{
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+    };
+
+    var state = try replay.execution.TestState.init(allocator);
+    defer state.deinit(allocator);
+
+    try std.testing.expectEqual(
+        null,
+        try testSchedulerForBatches(allocator, &state, &.{
+            transactions[0..3],
+            transactions[3..6],
+        }),
+    );
+}
+
+test "TransactionScheduler: duplicate batch passes through to svm" {
+    const allocator = std.testing.allocator;
+
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    var tx_arena = std.heap.ArenaAllocator.init(allocator);
+    defer tx_arena.deinit();
+
+    const transactions = [_]Transaction{
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+    };
+
+    var state = try replay.execution.TestState.init(allocator);
+    defer state.deinit(allocator);
+
+    try std.testing.expectEqual(
+        ReplaySlotError{ .invalid_transaction = .AlreadyProcessed },
+        try testSchedulerForBatches(allocator, &state, &.{
+            transactions[0..3],
+            // should be no failures on account collision with  first time this batch was scheduled.
+            // scheduler should just know to run it separately
+            transactions[0..3],
+        }),
+    );
+}
+
+test "TransactionScheduler: failed account locks" {
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const tx = try Transaction.initRandom(allocator, rng.random(), null);
+    defer tx.deinit(allocator);
+
+    var state = try replay.execution.TestState.init(allocator);
+    defer state.deinit(allocator);
+
+    try std.testing.expectEqual(
+        ReplaySlotError{ .invalid_transaction = .AccountInUse },
+        try testSchedulerForBatches(allocator, &state, &.{
+            &.{ tx, tx }, // same txn in same batch
+        }),
+    );
+}
+
+test "TransactionScheduler: signature verification failure" {
+    const allocator = std.testing.allocator;
+
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    var tx_arena = std.heap.ArenaAllocator.init(allocator);
+    defer tx_arena.deinit();
+
+    var transactions = [_]Transaction{
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+        try .initRandom(tx_arena.allocator(), rng.random(), null),
+    };
+
+    const replaced_sigs = try tx_arena.allocator()
+        .dupe(sig.core.Signature, transactions[5].signatures);
+    replaced_sigs[0].r[0] +%= 1;
+    transactions[5].signatures = replaced_sigs;
+
+    var state = try replay.execution.TestState.init(allocator);
+    defer state.deinit(allocator);
+
+    try std.testing.expectEqual(
+        ReplaySlotError{ .invalid_transaction = .SignatureFailure },
+        try testSchedulerForBatches(allocator, &state, &.{
+            transactions[0..3],
+            transactions[3..6],
+        }),
+    );
+}
+
+test "TransactionScheduler: does not send replay vote for failed execution" {
+    const allocator = std.testing.allocator;
+    const vote_program = sig.runtime.program.vote;
+    const vote_instruction = vote_program.vote_instruction;
+
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    var tx_arena = std.heap.ArenaAllocator.init(allocator);
+    defer tx_arena.deinit();
+
+    // Build a simple vote transaction (first instruction is vote program)
+    const node_kp = try sig.identity.KeyPair.generateDeterministic(@splat(1));
+    const auth_kp = try sig.identity.KeyPair.generateDeterministic(@splat(2));
+    const vote_pubkey = sig.core.Pubkey.initRandom(rng.random());
+    const vote_state_inner = vote_program.state.Vote{
+        .slots = &.{42},
+        .hash = sig.core.Hash.ZEROES,
+        .timestamp = null,
+    };
+    const vote_state = vote_instruction.Vote{ .vote = vote_state_inner };
+    var vote_ix = try vote_instruction.createVote(
+        allocator,
+        vote_pubkey,
+        sig.core.Pubkey.fromPublicKey(&auth_kp.public_key),
+        vote_state,
+    );
+    defer vote_ix.deinit(allocator);
+
+    const tx_msg: sig.core.transaction.Message = try .initCompile(
+        allocator,
+        &.{vote_ix},
+        sig.core.Pubkey.fromPublicKey(&node_kp.public_key),
+        sig.core.Hash.ZEROES,
+        null,
+    );
+
+    const vote_tx = try Transaction.initOwnedMessageWithSigningKeypairs(
+        allocator,
+        .legacy,
+        tx_msg,
+        &.{ node_kp, auth_kp },
+    );
+    defer vote_tx.deinit(allocator);
+
+    var state = try replay.execution.TestState.init(allocator);
+    defer state.deinit(allocator);
+
+    // Make transaction passable (valid recent blockhash and fees)
+    var txs = [_]Transaction{vote_tx};
+    try std.testing.expectEqual(
+        null,
+        try testSchedulerForBatches(allocator, &state, &.{
+            &txs,
+        }),
+    );
+
+    try std.testing.expectEqual(null, state.replay_votes_channel.tryReceive());
+}
+
+test "TransactionScheduler: sends replay vote after successful execution" {
+    const allocator = std.testing.allocator;
+    const vote_program = sig.runtime.program.vote;
+    const vote_instruction = vote_program.vote_instruction;
+
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    var state = try replay.execution.TestState.init(allocator);
+    defer state.deinit(allocator);
+
+    // Keys
+    const node_kp = try sig.identity.KeyPair.generateDeterministic(@splat(11));
+    const auth_kp = try sig.identity.KeyPair.generateDeterministic(@splat(12));
+    const node_pubkey = sig.core.Pubkey.fromPublicKey(&node_kp.public_key);
+    const authorized_voter = sig.core.Pubkey.fromPublicKey(&auth_kp.public_key);
+    const vote_pubkey = sig.core.Pubkey.initRandom(rng.random());
+
+    // 1) Create and store a valid on-chain vote account with owner set
+    // and initialized vote state authorizing auth_kp.
+    {
+        var account = sig.runtime.AccountSharedData.NEW;
+        account.owner = sig.runtime.program.vote.ID;
+        account.data = try allocator.alloc(u8, vote_program.state.VoteState.MAX_VOTE_STATE_SIZE);
+        defer allocator.free(account.data);
+        @memset(account.data, 0);
+
+        var vote_state = try vote_program.state.createTestVoteState(
+            allocator,
+            node_pubkey,
+            authorized_voter,
+            node_pubkey,
+            0,
+        );
+        defer vote_state.deinit(allocator);
+
+        // Seed the vote state with a prior slot so lastVotedSlot() can be non-null after process
+        try vote_program.state.processSlotVoteUnchecked(allocator, &vote_state, 1);
+
+        _ = try sig.bincode.writeToSlice(
+            account.data,
+            vote_program.state.VoteStateVersions{ .current = vote_state },
+            .{},
+        );
+        // Ensure rent-exempt balance
+        const rent = sig.runtime.sysvar.Rent.INIT;
+        account.lamports = rent.minimumBalance(account.data.len);
+
+        // Insert account into the test map so committer can update stakes
+        try state.account_map.put(state.slot, vote_pubkey, account);
+    }
+
+    // 2) Make a Vote instruction (includes SlotHashes and Clock accounts)
+    const vote_hash = sig.core.Hash.initRandom(rng.random());
+    const vote_state_inner = vote_program.state.Vote{
+        .slots = &.{2},
+        .hash = vote_hash,
+        .timestamp = null,
+    };
+    const vote_state_ix = vote_instruction.Vote{ .vote = vote_state_inner };
+    var vote_ix = try vote_instruction.createVote(
+        allocator,
+        vote_pubkey,
+        authorized_voter,
+        vote_state_ix,
+    );
+    defer vote_ix.deinit(allocator);
+
+    // 3) Ensure SlotHashes contains the voted slot so vote processor accepts it
+    var slot_hashes: SlotHashes = .INIT;
+    slot_hashes.add(1, sig.core.Hash.initRandom(rng.random()));
+    slot_hashes.add(2, vote_hash);
+
+    // Insert SlotHashes sysvar account so SVM's sysvar_cache sees these entries
+    {
+        const sysvar_len = SlotHashes.STORAGE_SIZE;
+        var sysvar_account = sig.runtime.AccountSharedData.NEW;
+        sysvar_account.data = try allocator.alloc(u8, sysvar_len);
+        @memset(sysvar_account.data, 0);
+        _ = try sig.bincode.writeToSlice(sysvar_account.data, slot_hashes, .{});
+        const rent = sig.runtime.sysvar.Rent.INIT;
+        sysvar_account.lamports = rent.minimumBalance(sysvar_account.data.len);
+        sysvar_account.owner = sig.runtime.sysvar.OWNER_ID;
+        try state.account_map.put(state.slot, SlotHashes.ID, sysvar_account);
+        allocator.free(sysvar_account.data);
+    }
+
+    // Insert Clock sysvar account to satisfy vote processor's clock access
+    {
+        const clock = sig.runtime.sysvar.Clock{
+            .slot = 3,
+            .epoch_start_timestamp = 0,
+            .epoch = 0,
+            .leader_schedule_epoch = 0,
+            .unix_timestamp = 0,
+        };
+        const sysvar_len = sig.runtime.sysvar.Clock.STORAGE_SIZE;
+        var sysvar_account = sig.runtime.AccountSharedData.NEW;
+        sysvar_account.data = try allocator.alloc(u8, sysvar_len);
+        @memset(sysvar_account.data, 0);
+        _ = try sig.bincode.writeToSlice(sysvar_account.data, clock, .{});
+        const rent = sig.runtime.sysvar.Rent.INIT;
+        sysvar_account.lamports = rent.minimumBalance(sysvar_account.data.len);
+        sysvar_account.owner = sig.runtime.sysvar.OWNER_ID;
+        try state.account_map.put(state.slot, sig.runtime.sysvar.Clock.ID, sysvar_account);
+        allocator.free(sysvar_account.data);
+    }
+
+    // Insert builtin program accounts for loader checks
+    {
+        var vote_prog_acc = sig.runtime.AccountSharedData.NEW;
+        vote_prog_acc.lamports = 1;
+        vote_prog_acc.owner = sig.runtime.ids.NATIVE_LOADER_ID;
+        vote_prog_acc.executable = true;
+        try state.account_map.put(state.slot, sig.runtime.program.vote.ID, vote_prog_acc);
+
+        var native_loader_acc = sig.runtime.AccountSharedData.NEW;
+        native_loader_acc.lamports = 1;
+        native_loader_acc.owner = sig.runtime.ids.NATIVE_LOADER_ID;
+        native_loader_acc.executable = true;
+        try state.account_map.put(state.slot, sig.runtime.ids.NATIVE_LOADER_ID, native_loader_acc);
+    }
+
+    // Insert Rent sysvar account
+    {
+        const rent = sig.runtime.sysvar.Rent.INIT;
+        const sysvar_len = sig.runtime.sysvar.Rent.STORAGE_SIZE;
+        var sysvar_account = sig.runtime.AccountSharedData.NEW;
+        sysvar_account.data = try allocator.alloc(u8, sysvar_len);
+        @memset(sysvar_account.data, 0);
+        _ = try sig.bincode.writeToSlice(sysvar_account.data, rent, .{});
+        sysvar_account.lamports = rent.minimumBalance(sysvar_account.data.len);
+        sysvar_account.owner = sig.runtime.sysvar.OWNER_ID;
+        try state.account_map.put(state.slot, sig.runtime.sysvar.Rent.ID, sysvar_account);
+        allocator.free(sysvar_account.data);
+    }
+
+    // Build and sign the transaction with the authorized voter; fund fee payer
+    const tx_msg: sig.core.transaction.Message = try .initCompile(
+        allocator,
+        &.{vote_ix},
+        node_pubkey,
+        sig.core.Hash.ZEROES,
+        null,
+    );
+
+    const vote_tx = try Transaction.initOwnedMessageWithSigningKeypairs(
+        allocator,
+        .legacy,
+        tx_msg,
+        &.{ node_kp, auth_kp },
+    );
+    defer vote_tx.deinit(allocator);
+
+    var txs = [_]Transaction{vote_tx};
+
+    // Await completion and assert a replay vote was emitted
+    try std.testing.expectEqual(
+        null,
+        try testSchedulerForBatches(allocator, &state, &.{&txs}),
+    );
+    const maybe_vote = state.replay_votes_channel.tryReceive();
+    try std.testing.expect(maybe_vote != null);
+    if (maybe_vote) |pv| pv.deinit(allocator);
+}

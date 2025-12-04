@@ -973,16 +973,6 @@ fn testReplaySlot(
     try std.testing.expectEqual(expected, sync_result);
 }
 
-pub fn testAwait(future: anytype) !@typeInfo(@TypeOf(future.poll())).error_union.payload.Result {
-    var i: usize = 0;
-    while (try future.poll() == .pending) {
-        std.time.sleep(std.time.ns_per_ms);
-        i += 1;
-        if (i > 100) return error.TooSlow;
-    }
-    return (try future.poll()).done;
-}
-
 pub const TestState = struct {
     // shared for multiple things
     account_map: sig.accounts_db.ThreadSafeAccountMap,
