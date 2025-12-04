@@ -233,7 +233,7 @@ pub const GossipService = struct {
 
         const verified_incoming_channel: *Channel(GossipMessageWithEndpoint) = try .create(allocator);
         errdefer verified_incoming_channel.destroy();
-        packet_outgoing_channel.name = "gossip verified incoming channel";
+        verified_incoming_channel.name = "gossip verified incoming channel";
 
         // setup the socket (bind with read-timeout)
         const gossip_address = my_contact_info.getSocket(.gossip) orelse return error.GossipAddrUnspecified;
@@ -525,10 +525,12 @@ pub const GossipService = struct {
             while (self.packet_incoming_channel.tryReceive()) |packet| {
                 defer self.metrics.gossip_packets_received_total.inc();
 
-                const message = verifyMessage(self.gossip_data_allocator, self.logger, &packet) catch |err| switch (err) {
-                    error.DeserializeFail => continue,
-                    error.SanitizeFail => continue,
-                    error.VerifyFail => continue,
+                const message = verifyMessage(
+                    self.gossip_data_allocator,
+                    self.logger,
+                    &packet,
+                ) catch |err| switch (err) {
+                    error.DeserializeFail, error.SanitizeFail, error.VerifyFail => continue,
                 };
                 errdefer bincode.free(self.gossip_data_allocator, message);
                 try self.verified_incoming_channel.send(.{
