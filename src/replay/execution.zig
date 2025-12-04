@@ -95,7 +95,7 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]const ReplayResult {
             };
 
             const result_ptr = results.addOneAssumeCapacity();
-            replaySlotAsync(
+            ReplaySlotFuture.startAsync(
                 state.allocator,
                 .from(state.logger),
                 &state.thread_pool,
@@ -182,40 +182,6 @@ pub const ReplaySlotParams = struct {
         self.svm_gateway.deinit(allocator);
     }
 };
-
-/// Asynchronously validate and execute entries from a single slot.
-/// Holds a reference to the WaitGroup while computing the result asynchronously.
-/// When completed, writes the result (or error) into the `result_ptr`.
-///
-/// Takes ownership of the entries. Pass the same allocator that was used for
-/// the entry allocation.
-///
-/// Analogous to:
-/// - agave: confirm_slot_entries
-/// - fd: runtime_process_txns_in_microblock_stream
-pub fn replaySlotAsync(
-    allocator: Allocator,
-    logger: Logger,
-    thread_pool: *ThreadPool,
-    wait_group: *std.Thread.WaitGroup,
-    params: ReplaySlotParams,
-    result_ptr: *ReplaySlotFuture.Result,
-) void {
-    var zone = tracy.Zone.init(@src(), .{ .name = "replaySlotAsync" });
-    zone.value(params.svm_gateway.params.slot);
-    defer zone.deinit();
-
-    logger.info().log("confirming slot");
-
-    ReplaySlotFuture.startAsync(
-        allocator,
-        .from(logger),
-        thread_pool,
-        wait_group,
-        params,
-        result_ptr,
-    );
-}
 
 /// Synchronous version of replaySlotAsync -- The main benefit of this function
 /// is to simplify debugging when the multithreading overhead causes issues. It
@@ -984,7 +950,15 @@ fn testReplaySlot(
         {
             var wg = std.Thread.WaitGroup{};
             defer wg.wait();
-            replaySlotAsync(allocator, logger, &thread_pool, &wg, params, &result);
+
+            ReplaySlotFuture.startAsync(
+                allocator,
+                .from(logger),
+                &thread_pool,
+                &wg,
+                params,
+                &result,
+            );
         }
 
         break :result switch ((try result).output) {
