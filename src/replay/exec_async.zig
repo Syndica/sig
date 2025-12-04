@@ -24,7 +24,6 @@ const assert = std.debug.assert;
 
 const verifyTicks = replay.execution.verifyTicks;
 const verifyPoh = core.entry.verifyPoh;
-const resolveTransaction = replay.resolve_lookup.resolveTransaction;
 const replayBatch = replay.execution.replayBatch;
 
 const Logger = sig.trace.Logger("replay-async");
@@ -54,9 +53,7 @@ pub const ReplaySlotFuture = struct {
     wait_group: *std.Thread.WaitGroup,
 
     pub const Result = Error!ReplayResult;
-    pub const Error =
-        PohVerifier.Error ||
-        TransactionScheduler.Error;
+    pub const Error = PohVerifier.Error || TransactionScheduler.Error;
 
     pub fn startAsync(
         allocator: Allocator,
@@ -183,7 +180,7 @@ const PohVerifier = struct {
         self.workers.deinit(allocator);
     }
 
-    fn start(self: *PohVerifier, last_entry: Hash) !void {
+    fn start(self: *PohVerifier, last_entry: Hash) Error!void {
         const future = self.future;
         const entries = future.entries;
 
@@ -253,13 +250,7 @@ const TransactionScheduler = struct {
     committer: Committer,
     workers: std.ArrayListUnmanaged(Worker) = .{},
 
-    // zig fmt: off
-    const Error =
-        Allocator.Error ||
-        error { ConflictingBatchAccountLock } ||
-        @typeInfo(@typeInfo(@TypeOf(resolveTransaction)).@"fn".return_type.?).error_union.error_set ||
-        @typeInfo(@typeInfo(@TypeOf(replayBatch)).@"fn".return_type.?).error_union.error_set;
-    // zig fmt: on
+    const Error = Allocator.Error || error{ReplayBatchFailed};
 
     fn deinit(const_self: TransactionScheduler) void {
         var self = const_self;
@@ -273,7 +264,7 @@ const TransactionScheduler = struct {
         self.workers.deinit(allocator);
     }
 
-    fn start(self: *TransactionScheduler) !void {
+    fn start(self: *TransactionScheduler) Error!void {
         const zone = tracy.Zone.init(@src(), .{ .name = "replaySchedule" });
         defer zone.deinit();
 
@@ -405,7 +396,7 @@ const TransactionScheduler = struct {
                 &future.exit,
             ) catch |err| {
                 future.logger.err().logf("replayBatch failed with error: {}", .{err});
-                future.setError(err);
+                future.setError(Error.ReplayBatchFailed);
                 return;
             };
 
