@@ -1613,11 +1613,8 @@ fn checkAndHandleNewRoot(
     // Tell the status_cache about it for its tracking.
     if (status_cache) |sc| try sc.addRoot(allocator, new_root);
     // Tell the account_store about it for its unrooted accounts
-    try account_store.onSlotRooted(
-        allocator,
-        new_root,
-        slot_tracker.get(new_root).?.constants.fee_rate_governor.lamports_per_signature,
-    );
+    const slot_constants = slot_tracker.get(new_root).?;
+    try account_store.onSlotRooted(new_root, &slot_constants.constants.ancestors);
 
     // TODO
     // - Prune program cache bank_forks.read().unwrap().prune_program_cache(new_root);
@@ -3275,8 +3272,9 @@ test "generateVoteTx - success with tower_sync vote" {
 
     const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
 
-    var account_map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
-    defer account_map.deinit();
+    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
 
     var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
         allocator,
@@ -3305,11 +3303,11 @@ test "generateVoteTx - success with tower_sync vote" {
         .rent_epoch = 0,
     };
 
-    const account_store = account_map.accountStore();
-    try account_store.put(0, vote_account_pubkey, vote_account);
-    try account_store.onSlotRooted(allocator, 0, 0);
+    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
+    defer ancestors.deinit(allocator);
 
-    const account_reader = account_map.accountReader();
+    try db.put(0, vote_account_pubkey, vote_account);
+    db.onSlotRooted(0, &ancestors);
 
     const result = try generateVoteTx(
         allocator,
@@ -3318,7 +3316,7 @@ test "generateVoteTx - success with tower_sync vote" {
         node_kp,
         .same_fork,
         &replay_tower,
-        account_reader,
+        .{ .accounts_db_two = db },
         &fixture.slot_tracker,
         &epoch_tracker,
     );
@@ -3370,8 +3368,9 @@ test "generateVoteTx - success with vote_state_update compacted" {
 
     const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
 
-    var account_map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
-    defer account_map.deinit();
+    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
 
     var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
         allocator,
@@ -3401,11 +3400,11 @@ test "generateVoteTx - success with vote_state_update compacted" {
         .rent_epoch = 0,
     };
 
-    const account_store = account_map.accountStore();
-    try account_store.put(0, vote_account_pubkey, vote_account);
-    try account_store.onSlotRooted(allocator, 0, 0);
+    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
+    defer ancestors.deinit(allocator);
 
-    const account_reader = account_map.accountReader();
+    try db.put(0, vote_account_pubkey, vote_account);
+    db.onSlotRooted(0, &ancestors);
 
     const result = try generateVoteTx(
         allocator,
@@ -3414,7 +3413,7 @@ test "generateVoteTx - success with vote_state_update compacted" {
         node_kp,
         .same_fork,
         &replay_tower,
-        account_reader,
+        .{ .accounts_db_two = db },
         &fixture.slot_tracker,
         &epoch_tracker,
     );
@@ -3465,8 +3464,9 @@ test "generateVoteTx - success with switch proof" {
 
     const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
 
-    var account_map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
-    defer account_map.deinit();
+    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
 
     var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
         allocator,
@@ -3496,11 +3496,11 @@ test "generateVoteTx - success with switch proof" {
         .rent_epoch = 0,
     };
 
-    const account_store = account_map.accountStore();
-    try account_store.put(0, vote_account_pubkey, vote_account);
-    try account_store.onSlotRooted(allocator, 0, 0);
+    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
+    defer ancestors.deinit(allocator);
 
-    const account_reader = account_map.accountReader();
+    try db.put(0, vote_account_pubkey, vote_account);
+    db.onSlotRooted(0, &ancestors);
 
     const switch_proof_hash = Hash.initRandom(random);
     const result = try generateVoteTx(
@@ -3510,7 +3510,7 @@ test "generateVoteTx - success with switch proof" {
         node_kp,
         .{ .switch_proof = switch_proof_hash },
         &replay_tower,
-        account_reader,
+        .{ .accounts_db_two = db },
         &fixture.slot_tracker,
         &epoch_tracker,
     );
@@ -3562,8 +3562,9 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
 
     const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
 
-    var account_map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
-    defer account_map.deinit();
+    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
 
     var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
         allocator,
@@ -3593,11 +3594,11 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
         .rent_epoch = 0,
     };
 
-    const account_store = account_map.accountStore();
-    try account_store.put(0, vote_account_pubkey, vote_account);
-    try account_store.onSlotRooted(allocator, 0, 0);
+    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
+    defer ancestors.deinit(allocator);
 
-    const account_reader = account_map.accountReader();
+    try db.put(0, vote_account_pubkey, vote_account);
+    db.onSlotRooted(0, &ancestors);
 
     const result = try generateVoteTx(
         allocator,
@@ -3606,7 +3607,7 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
         node_kp,
         .same_fork,
         &replay_tower,
-        account_reader,
+        .{ .accounts_db_two = db },
         &fixture.slot_tracker,
         &epoch_tracker,
     );
@@ -3651,8 +3652,9 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
 
     const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
 
-    var account_map = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
-    defer account_map.deinit();
+    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
 
     var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
         allocator,
@@ -3682,11 +3684,11 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
         .rent_epoch = 0,
     };
 
-    const account_store = account_map.accountStore();
-    try account_store.put(0, vote_account_pubkey, vote_account);
-    try account_store.onSlotRooted(allocator, 0, 0);
+    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
+    defer ancestors.deinit(allocator);
 
-    const account_reader = account_map.accountReader();
+    try db.put(0, vote_account_pubkey, vote_account);
+    db.onSlotRooted(0, &ancestors);
 
     const result = try generateVoteTx(
         allocator,
@@ -3695,7 +3697,7 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
         node_kp,
         .same_fork,
         &replay_tower,
-        account_reader,
+        .{ .accounts_db_two = db },
         &fixture.slot_tracker,
         &epoch_tracker,
     );
@@ -5746,7 +5748,8 @@ test "root advances after vote satisfies lockouts" {
             .executable = false,
             .rent_epoch = 0,
         };
-        stubs.accounts_db_state.db.rooted.put(SlotHistory.ID, 0, account);
+        const account_store = stubs.accountStore();
+        try account_store.put(0, SlotHistory.ID, account);
     }
 
     const initial_root: Slot = 0;

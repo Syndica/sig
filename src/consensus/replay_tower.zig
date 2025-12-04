@@ -5824,9 +5824,7 @@ pub fn extendForkTreeAncestors(
     original: *std.AutoArrayHashMapUnmanaged(Slot, Ancestors),
     extension: std.AutoArrayHashMapUnmanaged(Slot, Ancestors),
 ) !void {
-    if (!builtin.is_test) {
-        @compileError("extendForkTree should only be used in test");
-    }
+    if (!builtin.is_test) @compileError("extendForkTree should only be used in test");
     if (extension.count() == 0) {
         return;
     }

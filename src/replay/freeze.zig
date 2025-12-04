@@ -506,9 +506,9 @@ test "deltaMerkleHash for 0 accounts" {
 test "freezeSlot: trivial e2e merkle hash test" {
     const allocator = std.testing.allocator;
 
-    var accounts = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
-    defer accounts.deinit();
-    const account_store = accounts.accountStore();
+    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const account_store: AccountStore = .{ .accounts_db_two = &test_state.db };
 
     const epoch = EpochConstants.genesis(.default(allocator));
     defer epoch.deinit(allocator);
