@@ -86,22 +86,27 @@ pub fn resolveBlock(
     allocator: Allocator,
     entries: []const sig.core.Entry,
     resolver: SlotResolver,
-) ![]const replay.resolve_lookup.ResolvedBatch {
-    var batch_count: usize = 0;
+) ![]const replay.resolve_lookup.ResolvedTransaction {
+    var transaction_count: usize = 0;
     for (entries) |entry| {
-        if (!entry.isTick()) batch_count += 1;
+        if (!entry.isTick()) transaction_count += entry.transactions.len;
     }
-    const resolved_batches =
-        try allocator.alloc(replay.resolve_lookup.ResolvedBatch, batch_count);
-    errdefer allocator.free(resolved_batches);
+    const resolved_transactions =
+        try allocator.alloc(replay.resolve_lookup.ResolvedTransaction, transaction_count);
+    errdefer allocator.free(resolved_transactions);
+
     var i: usize = 0;
+    errdefer for (resolved_transactions[0..i]) |transaction| transaction.deinit(allocator);
     for (entries) |*entry| {
         if (!entry.isTick()) {
-            resolved_batches[i] = try resolveBatch(allocator, entry.transactions, resolver);
-            i += 1;
+            for (entry.transactions) |txn| {
+                resolved_transactions[i] = try resolveTransaction(allocator, txn, resolver);
+                i += 1;
+            }
         }
     }
-    return resolved_batches;
+
+    return resolved_transactions;
 }
 
 pub fn resolveBatch(
