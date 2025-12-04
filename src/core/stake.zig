@@ -172,14 +172,14 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             const vote_accounts = try self.vote_accounts.clone(allocator);
             errdefer vote_accounts.deinit(allocator);
 
+            var values_copied: usize = 0;
             var stake_delegations: sig.utils.collections.PubkeyMap(output_type.T()) = .empty;
-            errdefer stake_delegations.deinit(allocator);
-            try stake_delegations.ensureTotalCapacity(allocator, self.stake_delegations.count());
             errdefer {
                 // Only the .account type contains allocated data in the stake_delegations.
                 if (output_type == .account) {
-                    for (stake_delegations.values()) |*v| v.deinit(allocator);
+                    for (stake_delegations.values()[0..values_copied]) |*v| v.deinit(allocator);
                 }
+                stake_delegations.deinit(allocator);
             }
 
             {
@@ -189,21 +189,39 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
                 );
                 defer delegations_zone.deinit();
 
-                for (self.stake_delegations.keys(), self.stake_delegations.values()) |key, value| {
-                    const new_value: output_type.T() = switch (stakes_type) {
-                        .account => try value.clone(allocator),
-                        .delegation => value,
+                // Instead of constructing a new hashmap from scratch, lets copy over the keys and their
+                // hashes. This is much faster than constructing a new map and repeatedly using put.
+
+                try stake_delegations.entries.ensureTotalCapacity(
+                    allocator,
+                    self.stake_delegations.entries.capacity,
+                );
+                stake_delegations.entries.len = self.stake_delegations.entries.len;
+                @memcpy(
+                    stake_delegations.entries.items(.key),
+                    self.stake_delegations.entries.items(.key),
+                );
+                @memcpy(
+                    stake_delegations.entries.items(.hash),
+                    self.stake_delegations.entries.items(.hash),
+                );
+
+                for (
+                    stake_delegations.entries.items(.value),
+                    self.stake_delegations.entries.items(.value),
+                ) |*dst_val, src_val| {
+                    dst_val.* = switch (stakes_type) {
+                        .account => try src_val.clone(allocator),
+                        .delegation => src_val,
                         .stake => switch (output_type) {
-                            .stake => value,
-                            .delegation => value.delegation,
+                            .stake => src_val,
+                            .delegation => src_val.delegation,
                             else => unreachable,
                         },
                     };
-
-                    stake_delegations.putAssumeCapacity(key, new_value);
+                    values_copied += 1;
                 }
             }
-
             return .{
                 .vote_accounts = vote_accounts,
                 .stake_delegations = stake_delegations,
