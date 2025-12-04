@@ -103,6 +103,8 @@ pub fn checkFeePayer(
     FeeDetails,
     std.BoundedArray(LoadedAccount, 2),
 }) {
+    _ = lamports_per_signature; // ignored here - see comment below
+
     var zone = tracy.Zone.init(@src(), .{ .name = "checkFeePayer" });
     defer zone.deinit();
 
@@ -132,16 +134,31 @@ pub fn checkFeePayer(
         rent_collector,
     ).rent_amount;
 
+    // NOTE: FeeDetails (transaction fee, prioritization fee) in Agave is set
+    // at the same time that compute budget limits are calculated. This value
+    // does not actually come from the fee rate governor, but rather a field
+    // in the bank (fee_structure.lamports_per_signature).
+    // The bank initialises this field using impl default for FeeStructure,
+    // and never actually mutates it, meaning it remains the default value.
+    // This means that lamports_per_signature is in effect *always* 5000, even
+    // when the fee rate governor disagrees.
+    //
+    // The other fields of FeeStructure, lamports_per_write_lock and
+    // compute_fee_bins, are also effectively unused.
+    //
+    // TODO: Stop hardcoding this value.
+    // This will probably be fixed in Agave at some point, we should fix this
+    // when they do.
+    //
+    // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank/check_transactions.rs#L106-L112
+
     const fee_budget_limits = FeeBudgetLimits.fromComputeBudgetLimits(compute_budget_limits.*);
-    const fee_details = if (lamports_per_signature == 0) FeeDetails.DEFAULT else fee: {
-        const signature_counts = SignatureCounts.fromTransaction(transaction);
-        break :fee FeeDetails.init(
-            signature_counts,
-            lamports_per_signature,
-            enable_secp256r1,
-            fee_budget_limits.prioritization_fee,
-        );
-    };
+    const fee_details = FeeDetails.init(
+        SignatureCounts.fromTransaction(transaction),
+        5_000,
+        enable_secp256r1,
+        fee_budget_limits.prioritization_fee,
+    );
 
     if (validateFeePayer(
         fee_payer_key,

@@ -1028,7 +1028,7 @@ pub const TestState = struct {
             .ancestors = ancestors,
             .slot = 0,
             .max_age = max_age,
-            .lamports_per_signature = 1,
+            .lamports_per_signature = 5000,
             .blockhash_queue = .init(blockhash_queue),
             .feature_set = .ALL_DISABLED,
             .rent_collector = .DEFAULT,
@@ -1149,7 +1149,7 @@ pub const TestState = struct {
         for (transactions) |transaction| {
             try bhq.mut().insertHash(allocator, transaction.msg.recent_blockhash, 1);
             var account = sig.runtime.AccountSharedData.EMPTY;
-            account.lamports = 1_000;
+            account.lamports = 100_000;
             try self.account_map.put(self.slot, transaction.msg.account_keys[0], account);
         }
     }

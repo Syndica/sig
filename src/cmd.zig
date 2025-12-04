@@ -131,7 +131,8 @@ pub fn main() !void {
             params.geyser.apply(&current_config);
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
-            current_config.voting_enabled = params.voting_enabled;
+            current_config.stop_at_slot = params.stop_at_slot;
+            current_config.voting_enabled = params.voting_enabled or params.vote_account != null;
             current_config.rpc_port = params.rpc_port;
             try validator(gpa, gossip_gpa, current_config);
         },
@@ -148,6 +149,7 @@ pub fn main() !void {
             params.geyser.apply(&current_config);
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
+            current_config.stop_at_slot = params.stop_at_slot;
             try replayOffline(gpa, current_config);
         },
         .shred_network => |params| {
@@ -381,11 +383,20 @@ const Cmd = struct {
         .help = "Disable running consensus in replay.",
     };
 
+    const stop_at_slot_arg: cli.ArgumentInfo(?Slot) = .{
+        .kind = .named,
+        .name_override = "stop-at-slot",
+        .alias = .none,
+        .default_value = null,
+        .config = {},
+        .help = "Stop processing at this slot.",
+    };
+
     const voting_enabled_arg: cli.ArgumentInfo(bool) = .{
         .kind = .named,
         .name_override = "voting-enabled",
         .alias = .none,
-        .default_value = true,
+        .default_value = false,
         .config = {},
         .help = "Enable validator voting. When false, operate as non-voting.",
     };
@@ -747,6 +758,7 @@ const Cmd = struct {
         geyser: GeyserArgumentsBase,
         replay_threads: u16,
         disable_consensus: bool,
+        stop_at_slot: ?sig.core.Slot,
         voting_enabled: bool,
         rpc_port: ?u16,
 
@@ -772,6 +784,7 @@ const Cmd = struct {
                 .disable_consensus = disable_consensus_arg,
                 .voting_enabled = voting_enabled_arg,
                 .rpc_port = rpc_port_arg,
+                .stop_at_slot = stop_at_slot_arg,
             },
         };
     };
@@ -1118,9 +1131,26 @@ fn validator(
             .gossip_service = gossip_service,
             .geyser_writer = geyser_writer,
             .validate_snapshot = !cfg.accounts_db.skip_snapshot_validation,
+            .metadata_only = true,
         },
     );
     defer loaded_snapshot.deinit();
+
+    const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
+    defer allocator.free(rooted_file);
+
+    var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+    defer accounts_dir.close();
+
+    var rooted_db: sig.accounts_db.Two.Rooted = try .initSnapshot(
+        allocator,
+        rooted_file,
+        accounts_dir,
+    );
+    defer rooted_db.deinit();
+
+    var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
+    defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
     const bank_fields = &collapsed_manifest.bank_fields;
@@ -1239,7 +1269,7 @@ fn validator(
         };
         defer if (cfg.vote_account == null) allocator.free(vote_keypair_path);
 
-        break :blk sig.identity.readPubkeyFlexible(
+        break :blk sig.identity.readPubkey(
             .from(app_base.logger),
             vote_keypair_path,
         ) catch |err| {
@@ -1261,6 +1291,7 @@ fn validator(
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
+        .account_store = .{ .accounts_db_two = &new_db },
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
         .epoch_context_manager = &epoch_context_manager,
@@ -1268,6 +1299,7 @@ fn validator(
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = voting_enabled,
         .vote_account_address = maybe_vote_pubkey,
+        .stop_at_slot = cfg.stop_at_slot,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -1275,7 +1307,6 @@ fn validator(
         &app_base,
         if (maybe_vote_sockets) |*vs| vs else null,
         &gossip_service.gossip_table_rw,
-        cfg,
     );
 
     const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
@@ -1355,9 +1386,26 @@ fn replayOffline(
             .gossip_service = null,
             .geyser_writer = null,
             .validate_snapshot = !cfg.accounts_db.skip_snapshot_validation,
+            .metadata_only = true,
         },
     );
     defer loaded_snapshot.deinit();
+
+    const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
+    defer allocator.free(rooted_file);
+
+    var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+    defer accounts_dir.close();
+
+    var rooted_db: sig.accounts_db.Two.Rooted = try .initSnapshot(
+        allocator,
+        rooted_file,
+        accounts_dir,
+    );
+    defer rooted_db.deinit();
+
+    var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
+    defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
     const bank_fields = &collapsed_manifest.bank_fields;
@@ -1423,16 +1471,17 @@ fn replayOffline(
         });
     }
 
-    // Replay-offline does not vote, so we use ZEROES and disable voting
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
+        .account_store = .{ .accounts_db_two = &new_db },
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
         .epoch_context_manager = &epoch_context_manager,
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = false,
-        .vote_account_address = Pubkey.ZEROES,
+        .vote_account_address = null,
+        .stop_at_slot = cfg.stop_at_slot,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -1440,7 +1489,6 @@ fn replayOffline(
         &app_base,
         null,
         null,
-        cfg,
     );
 
     replay_thread.join();
@@ -1956,8 +2004,14 @@ const AppBase = struct {
         function: anytype,
         args: anytype,
     ) std.Thread.SpawnError!std.Thread {
-        return try sig.utils.service_manager
-            .spawnService(.from(self.logger), self.exit, name, run_config, function, args);
+        return try sig.utils.service_manager.spawnService(
+            .from(self.logger),
+            self.exit,
+            name,
+            run_config,
+            function,
+            args,
+        );
     }
 
     /// Signals the shutdown, however it does not block.
@@ -2064,16 +2118,22 @@ fn startGossip(
 
 const ReplayAndConsensusServiceState = struct {
     replay_state: replay.service.ReplayState,
-    tower_consensus: replay.TowerConsensus,
-    senders: replay.TowerConsensus.Senders,
-    receivers: replay.TowerConsensus.Receivers,
+    consensus: ?Consensus,
     metrics: replay.service.Metrics,
+
+    const Consensus = struct {
+        tower: replay.TowerConsensus,
+        senders: replay.TowerConsensus.Senders,
+        receivers: replay.TowerConsensus.Receivers,
+    };
 
     fn deinit(self: *ReplayAndConsensusServiceState, allocator: std.mem.Allocator) void {
         self.replay_state.deinit();
-        self.tower_consensus.deinit(allocator);
-        self.senders.destroy();
-        self.receivers.destroy();
+        if (self.consensus) |*c| {
+            c.tower.deinit(allocator);
+            c.senders.destroy();
+            c.receivers.destroy();
+        }
     }
 
     /// Helper for initializing replay state from relevant data.
@@ -2081,6 +2141,7 @@ const ReplayAndConsensusServiceState = struct {
         allocator: std.mem.Allocator,
         params: struct {
             app_base: *const AppBase,
+            account_store: sig.accounts_db.AccountStore,
             loaded_snapshot: *sig.accounts_db.snapshot.LoadedSnapshot,
             ledger: *Ledger,
             epoch_context_manager: *sig.adapter.EpochContextManager,
@@ -2088,10 +2149,11 @@ const ReplayAndConsensusServiceState = struct {
             disable_consensus: bool,
             voting_enabled: bool,
             vote_account_address: ?Pubkey,
+            stop_at_slot: ?Slot,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
-            const account_store = params.loaded_snapshot.accounts_db.accountStore();
+            const account_store = params.account_store;
             const manifest = &params.loaded_snapshot.collapsed_manifest;
             const bank_fields = &manifest.bank_fields;
             const epoch = bank_fields.epoch;
@@ -2156,39 +2218,46 @@ const ReplayAndConsensusServiceState = struct {
                 .current_epoch_constants = current_epoch_constants,
                 .hard_forks = hard_forks,
                 .replay_threads = params.replay_threads,
+                .stop_at_slot = params.stop_at_slot,
             }, if (params.disable_consensus) .disabled else .enabled);
         };
         errdefer replay_state.deinit();
 
-        var tower_consensus: replay.TowerConsensus = try .init(allocator, .{
-            .logger = .from(replay_state.logger),
-            .identity = replay_state.identity,
-            .signing = replay_state.signing,
-            .account_reader = replay_state.account_store.reader(),
-            .ledger = replay_state.ledger,
-            .slot_tracker = &replay_state.slot_tracker,
-            .now = .now(),
-            .registry = params.app_base.metrics_registry,
-        });
-        errdefer tower_consensus.deinit(allocator);
+        const consensus: ?Consensus = if (params.disable_consensus) null else c: {
+            var tower_consensus: replay.TowerConsensus = try .init(allocator, .{
+                .logger = .from(replay_state.logger),
+                .identity = replay_state.identity,
+                .signing = replay_state.signing,
+                .account_reader = replay_state.account_store.reader(),
+                .ledger = replay_state.ledger,
+                .slot_tracker = &replay_state.slot_tracker,
+                .now = .now(),
+                .registry = params.app_base.metrics_registry,
+            });
+            errdefer tower_consensus.deinit(allocator);
 
-        const senders: replay.TowerConsensus.Senders = try .create(allocator);
-        errdefer senders.destroy();
+            const senders: replay.TowerConsensus.Senders = try .create(allocator);
+            errdefer senders.destroy();
 
-        // Create receivers, passing the replay_votes channel owned by ReplayState
-        const receivers: replay.TowerConsensus.Receivers = try .create(
-            allocator,
-            replay_state.replay_votes_channel,
-        );
-        errdefer receivers.destroy();
+            // Create receivers, passing the replay_votes channel owned by ReplayState
+            const receivers: replay.TowerConsensus.Receivers = try .create(
+                allocator,
+                replay_state.replay_votes_channel,
+            );
+            errdefer receivers.destroy();
+
+            break :c .{
+                .tower = tower_consensus,
+                .senders = senders,
+                .receivers = receivers,
+            };
+        };
 
         const metrics = try params.app_base.metrics_registry.initStruct(replay.service.Metrics);
 
         return .{
             .replay_state = replay_state,
-            .tower_consensus = tower_consensus,
-            .senders = senders,
-            .receivers = receivers,
+            .consensus = consensus,
             .metrics = metrics,
         };
     }
@@ -2199,22 +2268,27 @@ const ReplayAndConsensusServiceState = struct {
         app_base: *const AppBase,
         vote_sockets: ?*const replay.consensus.core.VoteSockets,
         gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
-        cfg: config.Cmd,
     ) !std.Thread {
         return try app_base.spawnService(
             "replay",
-            .loop,
+            .{
+                .return_handler = .{ .log_return = false },
+                .error_handler = .{
+                    .max_iterations = 0,
+                    .set_exit_on_completion = true,
+                },
+            },
             replay.service.advanceReplay,
             .{
                 &self.replay_state,
                 self.metrics,
-                if (cfg.disable_consensus) null else replay.service.AvanceReplayConsensusParams{
-                    .tower = &self.tower_consensus,
+                if (self.consensus) |*c| replay.service.AvanceReplayConsensusParams{
+                    .tower = &c.tower,
                     .gossip_table = gossip_table,
-                    .senders = self.senders,
-                    .receivers = self.receivers,
+                    .senders = c.senders,
+                    .receivers = c.receivers,
                     .vote_sockets = vote_sockets,
-                },
+                } else null,
             },
         );
     }

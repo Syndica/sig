@@ -124,6 +124,13 @@ pub fn advanceReplay(
         replay_state.logger.info().logf("advanced in {}", .{std.fmt.fmtDuration(elapsed)});
     }
 
+    if (replay_state.stop_at_slot) |stop_slot| {
+        for (slot_results) |result| if (result.slot >= stop_slot) {
+            replay_state.logger.info().logf("Reached end slot {}, exiting replay", .{stop_slot});
+            return error.ReachedEndSlot;
+        };
+    }
+
     if (!processed_a_slot) try std.Thread.yield();
 }
 
@@ -156,6 +163,7 @@ pub const Dependencies = struct {
     hard_forks: sig.core.HardForks,
 
     replay_threads: u32,
+    stop_at_slot: ?Slot,
 };
 
 pub const ConsensusStatus = enum {
@@ -180,6 +188,7 @@ pub const ReplayState = struct {
     status_cache: sig.core.StatusCache,
     execution_log_helper: replay.execution.LogHelper,
     replay_votes_channel: ?*Channel(ParsedVote),
+    stop_at_slot: ?sig.core.Slot,
 
     pub fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
@@ -260,6 +269,7 @@ pub const ReplayState = struct {
             .status_cache = .DEFAULT,
             .execution_log_helper = .init(.from(deps.logger)),
             .replay_votes_channel = replay_votes_channel,
+            .stop_at_slot = deps.stop_at_slot,
         };
     }
 };
@@ -496,10 +506,25 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
 
     var processed_a_slot = false;
     for (results) |result| switch (result.output) {
-        .err => |err| state.logger.err().logf(
-            "replayed slot {} with error: {}",
-            .{ result.slot, err },
-        ),
+        .err => |err| {
+            state.logger.logf(
+                switch (err) {
+                    // invalid_block may be a non-issue and simply indicate that
+                    // the leader produced a malformed block that will be
+                    // skipped. To be safe/thorough, we're logging them all as
+                    // error, unless we observe it often and confirm it to
+                    // routinely not be a problem.
+                    .invalid_block => |e| switch (e) {
+                        // TooFewTicks is typical during forks and should not require intervention.
+                        .TooFewTicks => .warn,
+                        else => .err,
+                    },
+                    else => .err,
+                },
+                "replayed slot {} with error: {}",
+                .{ result.slot, err },
+            );
+        },
         .last_entry_hash => |last_entry_hash| {
             const slot = result.slot;
             const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
@@ -792,7 +817,7 @@ test "process runs without error with no replay results" {
         .ledger = replay_state.ledger,
         .slot_tracker = &replay_state.slot_tracker,
         .registry = &registry,
-        .now = .UNIX_EPOCH,
+        .now = .EPOCH_ZERO,
     });
     defer consensus.deinit(allocator);
 
@@ -870,6 +895,35 @@ test "Execute testnet block multi threaded" {
         .shreds_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/shreds.json.gz",
         .accounts_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/accounts.json.gz",
     });
+}
+
+test "freezeCompletedSlots handles errors correctly" {
+    const allocator = std.testing.allocator;
+
+    var logger = sig.trace.log.TestLogger.init(allocator, .warn);
+    defer logger.deinit();
+
+    var dep_stubs = try DependencyStubs.init(allocator, .from(logger.logger("")));
+    defer dep_stubs.deinit();
+
+    var replay_state = try dep_stubs.stubbedState(allocator, .from(logger.logger("")));
+    defer replay_state.deinit();
+
+    const processed_a_slot = try freezeCompletedSlots(&replay_state, &.{
+        .{ .slot = 1, .output = .{ .err = .{ .invalid_block = .TooFewTicks } } },
+        .{ .slot = 2, .output = .{ .err = .failed_to_load_meta } },
+    });
+
+    try std.testing.expectEqual(sig.trace.Level.warn, logger.messages.items[0].level);
+    try std.testing.expectEqualSlices(u8,
+        \\replayed slot 1 with error: replay.execution.ReplaySlotError{ .invalid_block = replay.execution.BlockError.TooFewTicks }
+    , logger.messages.items[0].content);
+    try std.testing.expectEqual(sig.trace.Level.err, logger.messages.items[1].level);
+    try std.testing.expectEqualSlices(u8,
+        \\replayed slot 2 with error: replay.execution.ReplaySlotError{ .failed_to_load_meta = void }
+    , logger.messages.items[1].content);
+
+    try std.testing.expectEqual(false, processed_a_slot);
 }
 
 fn testExecuteBlock(allocator: Allocator, config: struct {
@@ -965,7 +1019,11 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     defer replay_state.deinit();
 
     // replay the block
-    try advanceReplay(&replay_state, try registry.initStruct(Metrics), null);
+    replay_state.stop_at_slot = execution_slot;
+    try std.testing.expectError(
+        error.ReachedEndSlot,
+        advanceReplay(&replay_state, try registry.initStruct(Metrics), null),
+    );
 
     // get slot hash
     const actual_slot_hash = tracker_lock: {
@@ -1128,6 +1186,7 @@ pub const DependencyStubs = struct {
             .hard_forks = .{},
 
             .replay_threads = 1,
+            .stop_at_slot = null,
         }, .enabled);
     }
 
@@ -1196,6 +1255,7 @@ pub const DependencyStubs = struct {
             .hard_forks = hard_forks,
 
             .replay_threads = num_threads,
+            .stop_at_slot = null,
         }, .enabled);
     }
 };
