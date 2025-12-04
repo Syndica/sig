@@ -562,10 +562,10 @@ fn bypassConsensus(state: *ReplayState) !void {
 
         try state.status_cache.addRoot(state.allocator, new_root);
 
+        const slot_constants = slot_tracker.get(new_root).?;
         try state.account_store.onSlotRooted(
-            state.allocator,
             new_root,
-            slot_tracker.get(new_root).?.constants.fee_rate_governor.lamports_per_signature,
+            &slot_constants.constants.ancestors,
         );
     }
 }
