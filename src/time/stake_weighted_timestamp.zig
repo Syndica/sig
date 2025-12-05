@@ -5,7 +5,7 @@ const Allocator = std.mem.Allocator;
 
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
-const StakeAndVoteAccountsMap = sig.core.vote_accounts.StakeAndVoteAccountsMap;
+const StakeAndVoteAccountsMap = sig.core.stakes.StakeAndVoteAccountsMap;
 
 const SortedMap = sig.utils.collections.SortedMapUnmanaged;
 
@@ -74,28 +74,27 @@ pub fn calculateStakeWeightedTimestamp(
 
     if (epoch_start_timstamp) |epoch_timestamp| {
         const poh_estimate_offset_ns = (ns_per_slot *| (slot -| epoch_timestamp.slot));
-        const poh_estimate_offset_s = poh_estimate_offset_ns / 1_000_000_000;
-        const estimate_offset_s = if (fix_estimate_into_u64)
+        const estimate_offset_ns = 1_000_000_000 *| if (fix_estimate_into_u64)
             @as(u64, @intCast(estimate_s)) -| @as(u64, @intCast(epoch_timestamp.timestamp))
         else
             // Executed if WARP_TIMESTAMP_AGAIN feature is not active.
             @as(u64, @bitCast(estimate_s -| epoch_timestamp.timestamp));
 
-        const max_allowable_drift_fast_s = poh_estimate_offset_s *| max_allowable_drift.fast / 100;
-        const max_allowable_drift_slow_s = poh_estimate_offset_s *| max_allowable_drift.slow / 100;
+        const max_allowable_drift_fast_ns = poh_estimate_offset_ns *| max_allowable_drift.fast / 100;
+        const max_allowable_drift_slow_ns = poh_estimate_offset_ns *| max_allowable_drift.slow / 100;
 
-        if (estimate_offset_s > poh_estimate_offset_s and
-            (estimate_offset_s -| poh_estimate_offset_s) > max_allowable_drift_slow_s)
+        if (estimate_offset_ns > poh_estimate_offset_ns and
+            (estimate_offset_ns -| poh_estimate_offset_ns) > max_allowable_drift_slow_ns)
         {
             estimate_s = epoch_timestamp.timestamp +|
-                @as(i64, @intCast(poh_estimate_offset_s)) +|
-                @as(i64, @intCast(max_allowable_drift_slow_s));
-        } else if (estimate_offset_s < poh_estimate_offset_s and
-            (poh_estimate_offset_s -| estimate_offset_s) > max_allowable_drift_fast_s)
+                @as(i64, @intCast(poh_estimate_offset_ns / 1_000_000_000)) +|
+                @as(i64, @intCast(max_allowable_drift_slow_ns / 1_000_000_000));
+        } else if (estimate_offset_ns < poh_estimate_offset_ns and
+            (poh_estimate_offset_ns -| estimate_offset_ns) > max_allowable_drift_fast_ns)
         {
             estimate_s = epoch_timestamp.timestamp +|
-                @as(i64, @intCast(poh_estimate_offset_s)) -|
-                @as(i64, @intCast(max_allowable_drift_fast_s));
+                @as(i64, @intCast(poh_estimate_offset_ns / 1_000_000_000)) -|
+                @as(i64, @intCast(max_allowable_drift_fast_ns / 1_000_000_000));
         }
     }
 
@@ -103,7 +102,7 @@ pub fn calculateStakeWeightedTimestamp(
 }
 
 test "uses median: low-staked outliers" {
-    const VoteAccount = sig.core.vote_accounts.VoteAccount;
+    const VoteAccount = sig.core.stakes.VoteAccount;
     const denintMapAndValues = sig.utils.collections.deinitMapAndValues;
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
@@ -239,7 +238,7 @@ test "uses median: low-staked outliers" {
 }
 
 test "uses median: high-staked outliers" {
-    const VoteAccount = sig.core.vote_accounts.VoteAccount;
+    const VoteAccount = sig.core.stakes.VoteAccount;
     const denintMapAndValues = sig.utils.collections.deinitMapAndValues;
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
@@ -326,7 +325,7 @@ test "uses median: high-staked outliers" {
 }
 
 test "poh" {
-    const VoteAccount = sig.core.vote_accounts.VoteAccount;
+    const VoteAccount = sig.core.stakes.VoteAccount;
     const denintMapAndValues = sig.utils.collections.deinitMapAndValues;
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
@@ -451,7 +450,7 @@ test "poh" {
 }
 
 test "levels" {
-    const VoteAccount = sig.core.vote_accounts.VoteAccount;
+    const VoteAccount = sig.core.stakes.VoteAccount;
     const denintMapAndValues = sig.utils.collections.deinitMapAndValues;
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
@@ -569,7 +568,7 @@ test "levels" {
 }
 
 test "fast slow" {
-    const VoteAccount = sig.core.vote_accounts.VoteAccount;
+    const VoteAccount = sig.core.stakes.VoteAccount;
     const denintMapAndValues = sig.utils.collections.deinitMapAndValues;
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
@@ -677,7 +676,7 @@ test "fast slow" {
 }
 
 test "early" {
-    const VoteAccount = sig.core.vote_accounts.VoteAccount;
+    const VoteAccount = sig.core.stakes.VoteAccount;
     const denintMapAndValues = sig.utils.collections.deinitMapAndValues;
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 

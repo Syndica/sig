@@ -8,18 +8,15 @@ const tracy = @import("tracy");
 
 const bincode = sig.bincode;
 
-const Account = sig.core.account.Account;
 const BankFields = sig.core.BankFields;
 const Epoch = sig.core.time.Epoch;
 const Hash = sig.core.hash.Hash;
 const InstructionError = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.pubkey.Pubkey;
-const Rent = sig.core.genesis_config.Rent;
 const Slot = sig.core.time.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const VersionedEpochStakes = sig.core.VersionedEpochStakes;
-const UnixTimestamp = sig.core.UnixTimestamp;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
 
@@ -59,66 +56,6 @@ pub const ObsoleteIncrementalSnapshotPersistence = struct {
             .full_capitalization = full_capitalization,
             .incremental_hash = Hash.initRandom(random),
             .incremental_capitalization = random.uintAtMost(u64, full_capitalization),
-        };
-    }
-};
-
-/// Analogous to [StakeReward](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/accounts-db/src/stake_rewards.rs#L12)
-pub const StakeReward = struct {
-    stake_pubkey: Pubkey,
-    stake_reward_info: RewardInfo,
-    stake_account: Account,
-};
-
-/// Analogous to [RewardInfo](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/reward_info.rs#L5)
-pub const RewardInfo = struct {
-    reward_type: RewardType,
-    /// Reward amount
-    lamports: i64,
-    /// Account balance in lamports after `lamports` was applied
-    post_balance: u64,
-    /// Vote account commission when the reward was credited, only present for voting and staking rewards
-    commission: ?u8,
-};
-
-/// Analogous to [RewardType](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/reward_type.rs#L7)
-pub const RewardType = enum {
-    Fee,
-    Rent,
-    Staking,
-    Voting,
-};
-
-/// Analogous to [Authorized](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L362)
-pub const Authorized = struct {
-    staker: Pubkey,
-    withdrawer: Pubkey,
-
-    pub fn initRandom(random: std.Random) Authorized {
-        return .{
-            .staker = Pubkey.initRandom(random),
-            .withdrawer = Pubkey.initRandom(random),
-        };
-    }
-};
-
-/// Analogous to [Lockup](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L273)
-pub const Lockup = struct {
-    /// UnixTimestamp at which this stake will allow withdrawal, unless the
-    ///   transaction is signed by the custodian
-    unix_timestamp: UnixTimestamp,
-    /// epoch height at which this stake will allow withdrawal, unless the
-    ///   transaction is signed by the custodian
-    epoch: Epoch,
-    /// custodian signature on a transaction exempts the operation from
-    ///  lockup constraints
-    custodian: Pubkey,
-
-    pub fn initRandom(random: std.Random) Lockup {
-        return .{
-            .unix_timestamp = random.int(UnixTimestamp),
-            .epoch = random.int(Epoch),
-            .custodian = Pubkey.initRandom(random),
         };
     }
 };
@@ -606,7 +543,7 @@ pub const Manifest = struct {
     pub fn epochVoteAccounts(
         self: *const Manifest,
         epoch: Epoch,
-    ) !*const sig.core.vote_accounts.StakeAndVoteAccountsMap {
+    ) !*const sig.core.stakes.StakeAndVoteAccountsMap {
         if (self.bank_fields.epoch_stakes.getPtr(epoch)) |_| {
             // Agave simply ignores this field. I've added this log message just
             // as a sanity check, but I don't expect to ever see it.

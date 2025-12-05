@@ -157,11 +157,13 @@ pub const Dependencies = struct {
         state: sig.core.SlotState,
     },
     current_epoch: sig.core.Epoch,
-    /// ownership transferred to replay; won't be freed if `ReplayState.init` returns an error.
+    next_epoch: ?sig.core.Epoch = null,
+    /// ownership transferred to replay
     current_epoch_constants: sig.core.EpochConstants,
-    /// ownership transferred to replay; won't be freed if `ReplayState.init` returns an error.
+    /// ownership transferred to replay
+    next_epoch_constants: ?sig.core.EpochConstants = null,
+    /// ownership transferred to replay
     hard_forks: sig.core.HardForks,
-
     replay_threads: u32,
     stop_at_slot: ?Slot,
 };
@@ -234,6 +236,13 @@ pub const ReplayState = struct {
             deps.current_epoch,
             deps.current_epoch_constants,
         );
+        if (deps.next_epoch_constants) |next_constants| {
+            try epoch_tracker.epochs.put(
+                deps.allocator,
+                deps.next_epoch orelse return error.MissingNextEpoch,
+                next_constants,
+            );
+        }
         errdefer epoch_tracker.deinit(deps.allocator);
         errdefer {
             // do not free the current epoch constants parameter, we don't own it unless the function returns successfully
@@ -364,13 +373,15 @@ pub fn trackNewSlots(
             if (slot_tracker.contains(slot)) continue;
             logger.info().logf("tracking new slot: {}", .{slot});
 
-            const epoch_info = epoch_tracker.getPtrForSlot(slot) orelse
-                return error.MissingEpoch;
+            const ticks_per_slot = (epoch_tracker.getPtrForSlot(slot) orelse
+                return error.MissingEpoch).ticks_per_slot;
 
-            const constants, var state = try newSlotFromParent(
+            // Constants are not constant at this point since processing new epochs
+            // may modify the feature set.
+            var constants, var state = try newSlotFromParent(
                 allocator,
                 account_store.reader(),
-                epoch_info.ticks_per_slot,
+                ticks_per_slot,
                 parent_slot,
                 parent_info.constants,
                 parent_info.state,
@@ -379,6 +390,44 @@ pub fn trackNewSlots(
             );
             errdefer constants.deinit(allocator);
             errdefer state.deinit(allocator);
+
+            const parent_epoch = epoch_tracker.schedule.getEpoch(parent_slot);
+            const slot_epoch = epoch_tracker.schedule.getEpoch(slot);
+            const store = account_store.forSlot(slot, &constants.ancestors);
+
+            if (parent_epoch < slot_epoch) {
+                try replay.epoch_transitions.processNewEpoch(
+                    allocator,
+                    slot,
+                    &constants,
+                    &state,
+                    store,
+                    epoch_tracker,
+                );
+            } else {
+                try replay.epoch_transitions.updateEpochStakes(
+                    allocator,
+                    slot,
+                    &state.stakes_cache,
+                    epoch_tracker,
+                );
+            }
+
+            const epoch_info = epoch_tracker.getPtrForSlot(slot) orelse
+                return error.MissingEpoch;
+
+            try replay.rewards.distribution.distributePartitionedEpochRewards(
+                allocator,
+                slot,
+                slot_epoch,
+                constants.block_height,
+                epoch_tracker.schedule,
+                &state.reward_status,
+                &state.stakes_cache,
+                &state.capitalization,
+                &epoch_info.rent_collector.rent,
+                store,
+            );
 
             try updateSysvarsForNewSlot(
                 allocator,
@@ -423,7 +472,7 @@ pub fn newSlotFromParent(
     var state = try SlotState.fromFrozenParent(allocator, parent_state);
     errdefer state.deinit(allocator);
 
-    const epoch_reward_status = try parent_constants.epoch_reward_status.clone(allocator);
+    const epoch_reward_status = parent_state.reward_status.clone();
     errdefer epoch_reward_status.deinit(allocator);
 
     var ancestors = try parent_constants.ancestors.clone(allocator);
@@ -437,7 +486,7 @@ pub fn newSlotFromParent(
     // This is inefficient, reserved accounts could live in epoch constants along with
     // the feature set since feature activations are only applied at epoch boundaries.
     // Then we only need to clone the map and update the reserved accounts once per epoch.
-    const reserved_accounts = try sig.core.reserved_accounts.initForSlot(
+    const reserved_accounts = try sig.core.ReservedAccounts.initForSlot(
         allocator,
         &feature_set,
         slot,
@@ -455,10 +504,10 @@ pub fn newSlotFromParent(
             &parent_constants.fee_rate_governor,
             parent_state.signature_count.load(.monotonic),
         ),
-        .epoch_reward_status = epoch_reward_status,
         .ancestors = ancestors,
         .feature_set = feature_set,
         .reserved_accounts = reserved_accounts,
+        .inflation = parent_constants.inflation,
     };
 
     return .{ constants, state };
@@ -534,6 +583,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                 try replay.freeze.freezeSlot(state.allocator, .init(
                     .from(state.logger),
                     state.account_store,
+                    &state.thread_pool,
                     &epoch,
                     slot_info.state,
                     slot_info.constants,
@@ -561,10 +611,10 @@ fn bypassConsensus(state: *ReplayState) !void {
 
         try state.status_cache.addRoot(state.allocator, new_root);
 
+        const slot_constants = slot_tracker.get(new_root).?;
         try state.account_store.onSlotRooted(
-            state.allocator,
             new_root,
-            slot_tracker.get(new_root).?.constants.fee_rate_governor.lamports_per_signature,
+            &slot_constants.constants.ancestors,
         );
     }
 }
@@ -840,7 +890,7 @@ test "process runs without error with no replay results" {
     // TODO: run consensus in the tests that actually execute blocks for better
     // coverage. currently consensus panics or hangs if you run it with actual data
     try consensus.process(allocator, .{
-        .account_store = .{ .thread_safe_map = &dep_stubs.accountsdb },
+        .account_store = dep_stubs.accountStore(),
         .ledger = &dep_stubs.ledger,
         .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,
@@ -992,7 +1042,7 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     defer accounts.deinit();
     for (accounts.value) |test_account| {
         _, const address, const account = try test_account.toAccount();
-        try dep_stubs.accountsdb.put(snapshot_slot, address, account);
+        try dep_stubs.accounts_db_state.db.put(snapshot_slot, address, account);
     }
 
     // calculate leader schedule
@@ -1074,16 +1124,14 @@ fn parseBincodeFromGzipFile(
 /// outlive replay, and is used by replay.
 pub const DependencyStubs = struct {
     allocator: Allocator,
-    accountsdb: sig.accounts_db.ThreadSafeAccountMap,
-    dir: std.testing.TmpDir,
+    accounts_db_state: sig.accounts_db.Two.TestContext,
     ledger: Ledger,
     senders: TowerConsensus.Senders,
     receivers: TowerConsensus.Receivers,
     replay_votes_channel: *Channel(ParsedVote),
 
     pub fn deinit(self: *DependencyStubs) void {
-        self.accountsdb.deinit();
-        self.dir.cleanup();
+        self.accounts_db_state.deinit();
         self.ledger.deinit();
         self.senders.destroy();
         self.receivers.destroy();
@@ -1092,13 +1140,11 @@ pub const DependencyStubs = struct {
     }
 
     pub fn init(allocator: Allocator, logger: Logger) !DependencyStubs {
-        var accountsdb = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
-        errdefer accountsdb.deinit();
+        var test_state = try sig.accounts_db.Two.initTest(allocator);
+        errdefer test_state.deinit();
 
-        var dir = std.testing.tmpDir(.{});
-        errdefer dir.cleanup();
-
-        const ledger_path = try dir.dir.realpathAlloc(allocator, ".");
+        try test_state.tmp.dir.makeDir("ledger");
+        const ledger_path = try test_state.tmp.dir.realpathAlloc(allocator, "ledger/");
         defer allocator.free(ledger_path);
 
         var ledger = try Ledger.init(allocator, .from(logger), ledger_path, null);
@@ -1115,13 +1161,20 @@ pub const DependencyStubs = struct {
 
         return .{
             .allocator = allocator,
-            .accountsdb = accountsdb,
-            .dir = dir,
+            .accounts_db_state = test_state,
             .ledger = ledger,
             .senders = senders,
             .receivers = receivers,
             .replay_votes_channel = replay_votes_channel,
         };
+    }
+
+    pub fn accountStore(self: *DependencyStubs) AccountStore {
+        return .{ .accounts_db_two = &self.accounts_db_state.db };
+    }
+
+    pub fn accountReader(self: *DependencyStubs) AccountReader {
+        return .{ .accounts_db_two = &self.accounts_db_state.db };
     }
 
     /// Initialize replay service with stubbed inputs.
@@ -1165,7 +1218,7 @@ pub const DependencyStubs = struct {
                 .authorized_voters = &.{},
             },
             .epoch_schedule = .INIT,
-            .account_store = self.accountsdb.accountStore(),
+            .account_store = self.accountStore(),
             .ledger = &self.ledger,
             .slot_leaders = .{
                 .state = undefined,
@@ -1207,7 +1260,7 @@ pub const DependencyStubs = struct {
 
         const feature_set = try sig.replay.service.getActiveFeatures(
             allocator,
-            self.accountsdb.accountReader().forSlot(&bank_fields.ancestors),
+            .{ .accounts_db_two = .{ &self.accounts_db_state.db, &bank_fields.ancestors } },
             bank_fields.slot,
         );
 
@@ -1220,8 +1273,12 @@ pub const DependencyStubs = struct {
 
         const lt_hash = collapsed_manifest.bank_extra.accounts_lt_hash;
 
+        const account_store = sig.accounts_db.AccountStore{
+            .accounts_db_two = &self.accounts_db_state.db,
+        };
+        const account_reader = account_store.reader().forSlot(&bank_fields.ancestors);
         var root_slot_state =
-            try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash);
+            try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash, account_reader);
         errdefer root_slot_state.deinit(allocator);
 
         const hard_forks = try bank_fields.hard_forks.clone(allocator);
@@ -1238,7 +1295,7 @@ pub const DependencyStubs = struct {
                 .node = null,
                 .authorized_voters = &.{},
             },
-            .account_store = self.accountsdb.accountStore(),
+            .account_store = self.accountStore(),
             .ledger = &self.ledger,
             .epoch_schedule = bank_fields.epoch_schedule,
             .slot_leaders = slot_leaders,

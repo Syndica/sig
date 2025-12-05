@@ -1415,9 +1415,12 @@ fn replayOffline(
     if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule| {
         try leader_schedule_cache.put(bank_fields.epoch, leader_schedule[1]);
     } else {
-        const schedule = try collapsed_manifest.leaderSchedule(allocator, null);
-        errdefer schedule.deinit();
-        try leader_schedule_cache.put(bank_fields.epoch, schedule);
+        const schedule_1 = try collapsed_manifest.leaderSchedule(allocator, null);
+        errdefer schedule_1.deinit();
+        try leader_schedule_cache.put(bank_fields.epoch, schedule_1);
+        const schedule_2 = try collapsed_manifest.leaderSchedule(allocator, bank_fields.epoch + 1);
+        errdefer schedule_2.deinit();
+        try leader_schedule_cache.put(bank_fields.epoch + 1, schedule_2);
     }
 
     // ledger
@@ -1449,7 +1452,7 @@ fn replayOffline(
         // TODO: Implement feature gating for vote keyed leader schedule.
         // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
         // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
-        const leader_schedule = if (true)
+        const leader_schedule_0 = if (true)
             try LeaderSchedule.fromVoteAccounts(
                 allocator,
                 epoch,
@@ -1463,11 +1466,39 @@ fn replayOffline(
                 epoch_schedule.slots_per_epoch,
                 staked_nodes,
             );
-        errdefer allocator.free(leader_schedule);
+        errdefer allocator.free(leader_schedule_0);
 
         try epoch_context_manager.put(epoch, .{
             .staked_nodes = staked_nodes_cloned,
-            .leader_schedule = leader_schedule,
+            .leader_schedule = leader_schedule_0,
+        });
+    }
+    { // TODO: This was a quick ugly fix, needs to be handled correctly before merging
+        var staked_nodes_cloned = try staked_nodes.clone(allocator);
+        errdefer staked_nodes_cloned.deinit(allocator);
+
+        // TODO: Implement feature gating for vote keyed leader schedule.
+        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
+        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
+        const leader_schedule_1 = if (true)
+            try LeaderSchedule.fromVoteAccounts(
+                allocator,
+                epoch + 1,
+                epoch_schedule.slots_per_epoch,
+                try collapsed_manifest.epochVoteAccounts(epoch + 1),
+            )
+        else
+            try LeaderSchedule.fromStakedNodes(
+                allocator,
+                epoch,
+                epoch_schedule.slots_per_epoch,
+                staked_nodes,
+            );
+        errdefer allocator.free(leader_schedule_1);
+
+        try epoch_context_manager.put(epoch + 1, .{
+            .staked_nodes = staked_nodes_cloned,
+            .leader_schedule = leader_schedule_1,
         });
     }
 
@@ -2174,8 +2205,9 @@ const ReplayAndConsensusServiceState = struct {
 
             const lt_hash = manifest.bank_extra.accounts_lt_hash;
 
+            const account_reader = account_store.reader().forSlot(&bank_fields.ancestors);
             var root_slot_state: sig.core.SlotState =
-                try .fromBankFields(allocator, bank_fields, lt_hash);
+                try .fromBankFields(allocator, bank_fields, lt_hash, account_reader);
             errdefer root_slot_state.deinit(allocator);
 
             const hard_forks = try bank_fields.hard_forks.clone(allocator);
@@ -2390,4 +2422,139 @@ fn loggingPanic(message: []const u8, first_trace_addr: ?usize) noreturn {
     const writer = std.io.getStdErr().writer();
     sig.trace.logfmt.writeLog(writer, "panic", .err, .{}, "{s}", .{message}) catch {};
     std.debug.defaultPanic(message, first_trace_addr);
+}
+
+// https://github.com/facebook/folly/blob/1c8bc50e88804e2a7361a57cd9b551dd10f6c5fd/folly/memcpy.S
+export fn memcpy(maybe_dest: ?[*]u8, maybe_src: ?[*]const u8, len: usize) callconv(.C) ?[*]u8 {
+    if (len == 0) {
+        @branchHint(.unlikely);
+        return maybe_dest;
+    }
+
+    const dest = maybe_dest.?;
+    const src = maybe_src.?;
+
+    if (len < 8) {
+        @branchHint(.unlikely);
+        if (len == 1) {
+            @branchHint(.unlikely);
+            dest[0] = src[0];
+        } else if (len >= 4) {
+            @branchHint(.unlikely);
+            blockCopy(dest, src, 4, len);
+        } else {
+            blockCopy(dest, src, 2, len);
+        }
+        return dest;
+    }
+
+    if (len > 32) {
+        @branchHint(.unlikely);
+        if (len > 256) {
+            @branchHint(.unlikely);
+            copyMove(dest, src, len);
+            return dest;
+        }
+        copyLong(dest, src, len);
+        return dest;
+    }
+
+    if (len > 16) {
+        @branchHint(.unlikely);
+        blockCopy(dest, src, 16, len);
+        return dest;
+    }
+
+    blockCopy(dest, src, 8, len);
+
+    return dest;
+}
+
+inline fn blockCopy(dest: [*]u8, src: [*]const u8, block_size: comptime_int, len: usize) void {
+    const first: @Vector(block_size, u8) = src[0..block_size].*;
+    const second: @Vector(block_size, u8) = src[len - block_size ..][0..block_size].*;
+    dest[0..block_size].* = first;
+    dest[len - block_size ..][0..block_size].* = second;
+}
+
+inline fn copyLong(dest: [*]u8, src: [*]const u8, len: usize) void {
+    var array: [8]@Vector(32, u8) = undefined;
+
+    inline for (.{ 64, 128, 192, 256 }, 0..) |N, i| {
+        array[i * 2] = src[(N / 2) - 32 ..][0..32].*;
+        array[(i * 2) + 1] = src[len - N / 2 ..][0..32].*;
+
+        if (len <= N) {
+            @branchHint(.unlikely);
+            for (0..i + 1) |j| {
+                dest[j * 32 ..][0..32].* = array[j * 2];
+                dest[len - ((j * 32) + 32) ..][0..32].* = array[(j * 2) + 1];
+            }
+            return;
+        }
+    }
+}
+
+inline fn copyMove(dest: [*]u8, src: [*]const u8, len: usize) void {
+    if (@intFromPtr(src) >= @intFromPtr(dest)) {
+        @branchHint(.unlikely);
+        copyForward(dest, src, len);
+    } else if (@intFromPtr(src) + len > @intFromPtr(dest)) {
+        @branchHint(.unlikely);
+        overlapBwd(dest, src, len);
+    } else {
+        copyForward(dest, src, len);
+    }
+}
+
+inline fn copyForward(dest: [*]u8, src: [*]const u8, len: usize) void {
+    const tail: @Vector(32, u8) = src[len - 32 ..][0..32].*;
+
+    const N: usize = len & ~@as(usize, 127);
+    var i: usize = 0;
+
+    while (i < N) : (i += 128) {
+        dest[i..][0..32].* = src[i..][0..32].*;
+        dest[i + 32 ..][0..32].* = src[i + 32 ..][0..32].*;
+        dest[i + 64 ..][0..32].* = src[i + 64 ..][0..32].*;
+        dest[i + 96 ..][0..32].* = src[i + 96 ..][0..32].*;
+    }
+
+    if (len - i <= 32) {
+        @branchHint(.unlikely);
+        dest[len - 32 ..][0..32].* = tail;
+    } else {
+        copyLong(dest[i..], src[i..], len - i);
+    }
+}
+
+inline fn overlapBwd(dest: [*]u8, src: [*]const u8, len: usize) void {
+    var array: [5]@Vector(32, u8) = undefined;
+    array[0] = src[len - 32 ..][0..32].*;
+    inline for (1..5) |i| array[i] = src[(i - 1) << 5 ..][0..32].*;
+
+    const end: usize = (@intFromPtr(dest) + len - 32) & 31;
+    const range = len - end;
+    var s = src + range;
+    var d = dest + range;
+
+    while (@intFromPtr(s) > @intFromPtr(src + 128)) {
+        // zig fmt: off
+        const first:  @Vector(32, u8) = (s - 32) [0..32].*;
+        const second: @Vector(32, u8) = (s - 64) [0..32].*;
+        const third:  @Vector(32, u8) = (s - 96) [0..32].*;
+        const fourth: @Vector(32, u8) = (s - 128)[0..32].*;
+
+        (d - 32) [0..32].*  = first;
+        (d - 64) [0..32].*  = second;
+        (d - 96) [0..32].*  = third;
+        (d - 128)[0..32].*  = fourth;
+        // zig fmt: on
+
+        s -= 128;
+        d -= 128;
+    }
+
+    inline for (array[1..], 0..) |vec, i| dest[i * 32 ..][0..32].* = vec;
+    dest[len - 32 ..][0..32].* = array[0];
 }

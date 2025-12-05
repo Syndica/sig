@@ -3,6 +3,8 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 const builtin = @import("builtin");
 
+const Allocator = std.mem.Allocator;
+
 const vote_program = sig.runtime.program.vote;
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteError = vote_program.VoteError;
@@ -11,8 +13,8 @@ const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.hash.Hash;
 const SortedMap = sig.utils.collections.SortedMapUnmanaged;
+const AccountSharedData = sig.runtime.AccountSharedData;
 
-const Clock = sig.runtime.sysvar.Clock;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 pub const MAX_PRIOR_VOTERS: usize = 32;
@@ -120,11 +122,11 @@ pub const Vote = struct {
         .timestamp = null,
     };
 
-    pub fn deinit(vote: Vote, allocator: std.mem.Allocator) void {
+    pub fn deinit(vote: Vote, allocator: Allocator) void {
         allocator.free(vote.slots);
     }
 
-    pub fn clone(self: Vote, allocator: std.mem.Allocator) std.mem.Allocator.Error!Vote {
+    pub fn clone(self: Vote, allocator: Allocator) Allocator.Error!Vote {
         return .{
             .slots = try allocator.dupe(Slot, self.slots),
             .hash = self.hash,
@@ -151,7 +153,7 @@ pub const VoteStateUpdate = struct {
         .timestamp = null,
     };
 
-    pub fn deinit(self: VoteStateUpdate, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: VoteStateUpdate, allocator: Allocator) void {
         var lockouts = self.lockouts;
         lockouts.deinit(allocator);
     }
@@ -255,15 +257,15 @@ pub const TowerSync = struct {
         .block_id = Hash.ZEROES,
     };
 
-    pub fn deinit(self: TowerSync, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: TowerSync, allocator: Allocator) void {
         var lockouts = self.lockouts;
         lockouts.deinit(allocator);
     }
 
     pub fn fromLockouts(
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         lockouts: []const Lockout,
-    ) std.mem.Allocator.Error!TowerSync {
+    ) Allocator.Error!TowerSync {
         if (!@import("builtin").is_test) @compileError("Not allowed");
         var result: TowerSync = .ZEROES;
         errdefer result.deinit(allocator);
@@ -357,17 +359,17 @@ pub const AuthorizedVoters = struct {
         .serializer = serialize,
     };
 
-    pub fn init(allocator: std.mem.Allocator, epoch: Epoch, pubkey: Pubkey) !AuthorizedVoters {
+    pub fn init(allocator: Allocator, epoch: Epoch, pubkey: Pubkey) !AuthorizedVoters {
         var authorized_voters: SortedMap(Epoch, Pubkey) = .empty;
         try authorized_voters.put(allocator, epoch, pubkey);
         return .{ .voters = authorized_voters };
     }
 
-    pub fn deinit(self: AuthorizedVoters, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: AuthorizedVoters, allocator: Allocator) void {
         self.voters.deinit(allocator);
     }
 
-    pub fn clone(self: *const AuthorizedVoters, allocator: std.mem.Allocator) !AuthorizedVoters {
+    pub fn clone(self: *const AuthorizedVoters, allocator: Allocator) !AuthorizedVoters {
         return .{ .voters = try self.voters.clone(allocator) };
     }
 
@@ -387,7 +389,7 @@ pub const AuthorizedVoters = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L27
     pub fn getAndCacheAuthorizedVoterForEpoch(
         self: *AuthorizedVoters,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         epoch: Epoch,
     ) !?Pubkey {
         if (self.getOrCalculateAuthorizedVoterForEpoch(epoch)) |entry| {
@@ -401,7 +403,7 @@ pub const AuthorizedVoters = struct {
 
     pub fn insert(
         self: *AuthorizedVoters,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         epoch: Epoch,
         authorized_voter: Pubkey,
     ) !void {
@@ -411,7 +413,7 @@ pub const AuthorizedVoters = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L42
     pub fn purgeAuthorizedVoters(
         self: *AuthorizedVoters,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         current_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!bool {
         var expired_keys = std.ArrayList(Epoch).init(allocator);
@@ -603,7 +605,7 @@ pub const VoteStateVersions = union(enum) {
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L80
     pub fn landedVotesFromLockouts(
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         lockouts: []const Lockout,
     ) ![]LandedVote {
         const landed_votes = try allocator.alloc(LandedVote, lockouts.len);
@@ -619,7 +621,7 @@ pub const VoteStateVersions = union(enum) {
         return landed_votes;
     }
 
-    pub fn deinit(self: *VoteStateVersions, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *VoteStateVersions, allocator: Allocator) void {
         switch (self.*) {
             .v0_23_5 => |*vote_state| vote_state.deinit(allocator),
             .v1_14_11 => |*vote_state| vote_state.deinit(allocator),
@@ -635,7 +637,7 @@ pub const VoteStateVersions = union(enum) {
     /// Clones the owned data within the vote state.
     ///
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
-    pub fn convertToCurrent(self: VoteStateVersions, allocator: std.mem.Allocator) !VoteState {
+    pub fn convertToCurrent(self: VoteStateVersions, allocator: Allocator) !VoteState {
         switch (self) {
             .v0_23_5 => |state| {
                 const authorized_voters = try AuthorizedVoters.init(
@@ -744,12 +746,12 @@ pub const VoteState0_23_5 = struct {
         authorized_voter: Pubkey,
         withdrawer: Pubkey,
         commission: u8,
-        clock: Clock,
+        voter_epoch: Epoch,
     ) !VoteState0_23_5 {
         return .{
             .node_pubkey = node_pubkey,
             .voter = authorized_voter,
-            .voter_epoch = clock.epoch,
+            .voter_epoch = voter_epoch,
             .prior_voters = CircBufV0.init(),
             .withdrawer = withdrawer,
             .commission = commission,
@@ -760,7 +762,7 @@ pub const VoteState0_23_5 = struct {
         };
     }
 
-    pub fn deinit(self: *VoteState0_23_5, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *VoteState0_23_5, allocator: Allocator) void {
         self.votes.deinit(allocator);
         self.epoch_credits.deinit(allocator);
     }
@@ -807,16 +809,16 @@ pub const VoteState1_14_11 = struct {
     const DEFAULT_PRIOR_VOTERS_OFFSET: usize = 82;
 
     pub fn init(
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         node_pubkey: Pubkey,
         authorized_voter: Pubkey,
         withdrawer: Pubkey,
         commission: u8,
-        clock: Clock,
+        voter_epoch: Epoch,
     ) !VoteState1_14_11 {
         const authorized_voters = try AuthorizedVoters.init(
             allocator,
-            clock.epoch,
+            voter_epoch,
             authorized_voter,
         );
         errdefer authorized_voters.deinit(allocator);
@@ -834,7 +836,7 @@ pub const VoteState1_14_11 = struct {
         };
     }
 
-    pub fn deinit(self: *VoteState1_14_11, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *VoteState1_14_11, allocator: Allocator) void {
         self.votes.deinit(allocator);
         self.voters.deinit(allocator);
         self.epoch_credits.deinit(allocator);
@@ -898,16 +900,16 @@ pub const VoteState = struct {
     };
 
     pub fn init(
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         node_pubkey: Pubkey,
         authorized_voter: Pubkey,
         withdrawer: Pubkey,
         commission: u8,
-        clock: Clock,
-    ) std.mem.Allocator.Error!VoteState {
+        voter_epoch: Epoch,
+    ) Allocator.Error!VoteState {
         const authorized_voters = try AuthorizedVoters.init(
             allocator,
-            clock.epoch,
+            voter_epoch,
             authorized_voter,
         );
         errdefer authorized_voters.deinit(allocator);
@@ -925,13 +927,13 @@ pub const VoteState = struct {
         };
     }
 
-    pub fn deinit(self: *VoteState, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *VoteState, allocator: Allocator) void {
         self.votes.deinit(allocator);
         self.voters.deinit(allocator);
         self.epoch_credits.deinit(allocator);
     }
 
-    pub fn clone(self: VoteState, allocator: std.mem.Allocator) std.mem.Allocator.Error!VoteState {
+    pub fn clone(self: VoteState, allocator: Allocator) Allocator.Error!VoteState {
         var votes = try self.votes.clone(allocator);
         errdefer votes.deinit(allocator);
 
@@ -971,6 +973,13 @@ pub const VoteState = struct {
             std.meta.eql(self.last_timestamp, other.last_timestamp);
     }
 
+    pub fn epochCredits(self: *const VoteState) u64 {
+        return if (self.epoch_credits.getLastOrNull()) |epoch_credit|
+            epoch_credit.credits
+        else
+            0;
+    }
+
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
     pub fn isUninitialized(self: VoteState) bool {
         return self.voters.count() == 0;
@@ -984,7 +993,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L862
     pub fn setNewAuthorizedVoter(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         new_authorized_voter: Pubkey,
         target_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
@@ -1027,7 +1036,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L922
     pub fn getAndUpdateAuthorizedVoter(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         current_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!Pubkey {
         const maybe_pubkey = self.voters.getAndCacheAuthorizedVoterForEpoch(
@@ -1103,7 +1112,7 @@ pub const VoteState = struct {
     /// increment credits, record credits for last epoch if new epoch
     pub fn incrementCredits(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         epoch: Epoch,
         credits: u64,
     ) error{OutOfMemory}!void {
@@ -1241,7 +1250,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L709
     pub fn processNextVoteSlot(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         next_vote_slot: Slot,
         epoch: Epoch,
         current_slot: Slot,
@@ -1330,7 +1339,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/a0717a15d349dc5e0c30384bee6d039377b92167/programs/vote/src/vote_state/mod.rs#L618
     pub fn processVote(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         vote: *const Vote,
         slot_hashes: SlotHashes,
         epoch: Epoch,
@@ -1372,7 +1381,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/a0717a15d349dc5e0c30384bee6d039377b92167/programs/vote/src/vote_state/mod.rs#L603
     pub fn processVoteUnfiltered(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         recent_vote_slots: []const Slot,
         vote: *const Vote,
         slot_hashes: *const SlotHashes,
@@ -1425,7 +1434,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L1014
     pub fn processTowerSync(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         slot_hashes: *const SlotHashes,
         epoch: Epoch,
         slot: Slot,
@@ -1459,7 +1468,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L964
     pub fn processVoteStateUpdate(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         slot_hashes: *const SlotHashes,
         epoch: Epoch,
         slot: Slot,
@@ -1785,7 +1794,7 @@ pub const VoteState = struct {
     /// popped off.
     pub fn processNewVoteState(
         self: *VoteState,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         new_state: []LandedVote,
         new_root: ?Slot,
         timestamp: ?i64,
@@ -1982,7 +1991,7 @@ pub const VoteState = struct {
 pub const VoteAuthorize = vote_program.vote_instruction.VoteAuthorize;
 
 pub fn createTestVoteState(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     node_pubkey: Pubkey,
     maybe_authorized_voter: ?Pubkey,
     withdrawer: Pubkey,
@@ -2008,28 +2017,65 @@ pub fn createTestVoteState(
     };
 }
 
-pub fn verifyAndGetVoteState(
-    allocator: std.mem.Allocator,
-    ic: *sig.runtime.InstructionContext,
-    vote_account: *sig.runtime.BorrowedAccount,
-    clock: *const Clock,
-) (error{OutOfMemory} || InstructionError)!VoteState {
-    const versioned_state = try vote_account.deserializeFromAccountData(
+pub fn createTestVoteAccount(
+    allocator: Allocator,
+    node_pubkey: Pubkey,
+    vote_pubkey: Pubkey,
+    commission: u8,
+    lamports: u64,
+    voter_epoch: Epoch,
+) Allocator.Error!AccountSharedData {
+    if (!builtin.is_test) @compileError("only for test");
+
+    return createTestVoteAccountWithAuthorized(
         allocator,
-        VoteStateVersions,
+        node_pubkey,
+        vote_pubkey,
+        vote_pubkey,
+        commission,
+        lamports,
+        voter_epoch,
     );
+}
 
-    if (!versioned_state.isUninitialized()) {
-        return (InstructionError.UninitializedAccount);
-    }
-    var vote_state = try versioned_state.convertToCurrent(allocator);
+pub fn createTestVoteAccountWithAuthorized(
+    allocator: Allocator,
+    node_pubkey: Pubkey,
+    authorized_voter: Pubkey,
+    authorized_withdrawer: Pubkey,
+    commission: u8,
+    lamports: u64,
+    voter_epoch: Epoch,
+) Allocator.Error!AccountSharedData {
+    if (!builtin.is_test) @compileError("only for test");
 
-    const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, clock.epoch);
-    if (!ic.ixn_info.isPubkeySigner(authorized_voter)) {
-        return InstructionError.MissingRequiredSignature;
-    }
+    var vote_state = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        voter_epoch,
+    );
+    defer vote_state.deinit(allocator);
 
-    return vote_state;
+    const vote_state_data = try allocator.alloc(u8, VoteState.MAX_VOTE_STATE_SIZE);
+    errdefer allocator.free(vote_state_data);
+    @memset(vote_state_data, 0);
+
+    _ = sig.bincode.writeToSlice(
+        vote_state_data,
+        VoteStateVersions{ .current = vote_state },
+        .{},
+    ) catch unreachable;
+
+    return .{
+        .lamports = lamports,
+        .owner = vote_program.ID,
+        .data = vote_state_data,
+        .executable = false,
+        .rent_epoch = 0,
+    };
 }
 
 test "AuthorizeVoters.serialize" {
@@ -2200,13 +2246,7 @@ test "state.VoteState.convertToCurrent" {
             Pubkey.ZEROES,
             Pubkey.ZEROES,
             10,
-            .{
-                .slot = 0,
-                .epoch_start_timestamp = 0,
-                .epoch = 0,
-                .leader_schedule_epoch = 0,
-                .unix_timestamp = 0,
-            },
+            0,
         ) };
         defer vote_state_0_23_5.deinit(allocator);
 
@@ -2233,13 +2273,7 @@ test "state.VoteState.convertToCurrent" {
             Pubkey.ZEROES,
             Pubkey.ZEROES,
             10,
-            Clock{
-                .slot = 0,
-                .epoch_start_timestamp = 0,
-                .epoch = 0,
-                .leader_schedule_epoch = 0,
-                .unix_timestamp = 0,
-            },
+            0,
         ) };
         defer vote_state_1_14_1.deinit(allocator);
 
@@ -2267,13 +2301,7 @@ test "state.VoteState.convertToCurrent" {
             Pubkey.ZEROES,
             Pubkey.ZEROES,
             10,
-            Clock{
-                .slot = 0,
-                .epoch_start_timestamp = 0,
-                .epoch = 0,
-                .leader_schedule_epoch = 0,
-                .unix_timestamp = 0,
-            },
+            0,
         );
         defer expected.deinit(allocator);
 
@@ -2323,14 +2351,7 @@ test "state.VoteState.setNewAuthorizedVoter: success" {
     const new_voter = Pubkey.initRandom(prng.random());
     const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 0,
-        .leader_schedule_epoch = 0,
-        .unix_timestamp = 0,
-    };
+    const epoch = 0;
 
     var vote_state = try VoteState.init(
         allocator,
@@ -2338,7 +2359,7 @@ test "state.VoteState.setNewAuthorizedVoter: success" {
         authorized_voter,
         withdrawer,
         commission,
-        clock,
+        epoch,
     );
     defer vote_state.deinit(allocator);
 
@@ -2357,14 +2378,7 @@ test "state.VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
     const new_voter = Pubkey.initRandom(prng.random());
     const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 0,
-        .leader_schedule_epoch = 0,
-        .unix_timestamp = 0,
-    };
+    const epoch = 0;
 
     var vote_state = try VoteState.init(
         allocator,
@@ -2372,7 +2386,7 @@ test "state.VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
         authorized_voter,
         withdrawer,
         commission,
-        clock,
+        epoch,
     );
     defer vote_state.deinit(allocator);
 
@@ -2394,14 +2408,7 @@ test "state.VoteState.setNewAuthorizedVoter: invalid account data" {
     const new_voter = Pubkey.initRandom(prng.random());
     const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 2, // epoch of current authorized voter
-        .leader_schedule_epoch = 1,
-        .unix_timestamp = 0,
-    };
+    const epoch = 2; // epoch of current authorized voter
 
     var vote_state = try VoteState.init(
         allocator,
@@ -2409,7 +2416,7 @@ test "state.VoteState.setNewAuthorizedVoter: invalid account data" {
         authorized_voter,
         withdrawer,
         commission,
-        clock,
+        epoch,
     );
     defer vote_state.deinit(allocator);
 
@@ -2428,21 +2435,14 @@ test "state.VoteState.isUninitialized: VoteState0_23_5 invalid account data" {
     const authorized_voter = Pubkey.initRandom(prng.random());
     const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 2, // epoch of current authorized voter
-        .leader_schedule_epoch = 1,
-        .unix_timestamp = 0,
-    };
+    const epoch = 2; // epoch of current authorized voter
 
     var vote_state = VoteStateVersions{ .v0_23_5 = try VoteState0_23_5.init(
         node_publey,
         authorized_voter,
         withdrawer,
         commission,
-        clock,
+        epoch,
     ) };
     defer vote_state.deinit(allocator);
 
@@ -2469,14 +2469,7 @@ test "state.VoteState.isUninitialized: VoteStatev1_14_11 invalid account data" {
     const authorized_voter = Pubkey.initRandom(prng.random());
     const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 2, // epoch of current authorized voter
-        .leader_schedule_epoch = 1,
-        .unix_timestamp = 0,
-    };
+    const epoch = 2; // epoch of current authorized voter
 
     var vote_state = VoteStateVersions{ .v1_14_11 = try VoteState1_14_11.init(
         allocator,
@@ -2484,7 +2477,7 @@ test "state.VoteState.isUninitialized: VoteStatev1_14_11 invalid account data" {
         authorized_voter,
         withdrawer,
         commission,
-        clock,
+        epoch,
     ) };
     defer vote_state.deinit(allocator);
 
@@ -2511,14 +2504,7 @@ test "state.VoteState.isUninitialized: current invalid account data" {
     const authorized_voter = Pubkey.initRandom(prng.random());
     const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 2, // epoch of current authorized voter
-        .leader_schedule_epoch = 1,
-        .unix_timestamp = 0,
-    };
+    const epoch = 2; // epoch of current authorized voter
 
     var vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
@@ -2526,7 +2512,7 @@ test "state.VoteState.isUninitialized: current invalid account data" {
         authorized_voter,
         withdrawer,
         commission,
-        clock,
+        epoch,
     ) };
     defer vote_state.deinit(allocator);
 
@@ -2671,14 +2657,7 @@ test "state.AuthorizedVoters.contains" {
 test "state.VoteState.lastLockout" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 2,
-        .leader_schedule_epoch = 1,
-        .unix_timestamp = 0,
-    };
+    const epoch = 2; // epoch of current authorized voter
 
     var vote_state = try VoteState.init(
         allocator,
@@ -2686,7 +2665,7 @@ test "state.VoteState.lastLockout" {
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         0,
-        clock,
+        epoch,
     );
     defer vote_state.deinit(allocator);
 
@@ -2728,14 +2707,7 @@ test "state.VoteState.lastLockout" {
 test "state.VoteState.lastVotedSlot" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 2,
-        .leader_schedule_epoch = 1,
-        .unix_timestamp = 0,
-    };
+    const epoch = 2; // epoch of current authorized voter
 
     var vote_state = try VoteState.init(
         allocator,
@@ -2743,7 +2715,7 @@ test "state.VoteState.lastVotedSlot" {
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         0,
-        clock,
+        epoch,
     );
     defer vote_state.deinit(allocator);
 
@@ -2778,14 +2750,7 @@ test "state.VoteState.lastVotedSlot" {
 test "state.VoteState.lastLockout extended" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-
-    const clock = Clock{
-        .slot = 0,
-        .epoch_start_timestamp = 0,
-        .epoch = 2, // epoch of current authorized voter
-        .leader_schedule_epoch = 1,
-        .unix_timestamp = 0,
-    };
+    const epoch = 2; // epoch of current authorized voter
 
     var vote_state = try VoteState.init(
         allocator,
@@ -2793,7 +2758,7 @@ test "state.VoteState.lastLockout extended" {
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         0,
-        clock,
+        epoch,
     );
     defer vote_state.deinit(allocator);
 
@@ -2821,15 +2786,13 @@ test "state.VoteState.lockout double lockout after expiration" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.INIT;
-
     var vote_state = try VoteState.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         0,
-        clock,
+        0,
     );
     defer vote_state.deinit(allocator);
 
@@ -2860,15 +2823,13 @@ test "state.VoteState.lockout expire multiple votes" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.INIT;
-
     var vote_state = try VoteState.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         0,
-        clock,
+        0,
     );
     defer vote_state.deinit(allocator);
 
@@ -2906,15 +2867,13 @@ test "state.VoteState.getCredits" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.INIT;
-
     var vote_state = try VoteState.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         0,
-        clock,
+        0,
     );
     defer vote_state.deinit(allocator);
 
@@ -2937,15 +2896,13 @@ test "state.VoteState duplicate vote" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.INIT;
-
     var vote_state = try VoteState.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         0,
-        clock,
+        0,
     );
     defer vote_state.deinit(allocator);
 
@@ -2963,15 +2920,13 @@ test "state.VoteState nth recent lockout" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const clock = Clock.INIT;
-
     var vote_state = try VoteState.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
         0,
-        clock,
+        0,
     );
     defer vote_state.deinit(allocator);
 
@@ -5067,7 +5022,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot hashes mismatch" {
 }
 
 pub fn processSlotVoteUnchecked(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     vote_state: *VoteState,
     slot: Slot,
 ) !void {
@@ -5102,7 +5057,7 @@ pub fn processSlotVoteUnchecked(
 }
 
 fn processSlotVotesUnchecked(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     vote_state: *VoteState,
     slots: []Slot,
 ) !void {
@@ -5118,7 +5073,7 @@ fn processSlotVotesUnchecked(
 }
 
 fn processNewVoteStateFromLockouts(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     vote_state: *VoteState,
     new_state: []const Lockout,
     new_root: ?Slot,
@@ -5188,7 +5143,7 @@ fn buildSlotHashes(random: std.Random, slots: []const Slot) !SlotHashes {
 }
 
 fn buildVoteState(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     vote_slots: []const Slot,
     slot_hashes: SlotHashes,
 ) !VoteState {
@@ -5226,7 +5181,7 @@ fn buildVoteState(
     return vote_state;
 }
 
-fn testTowerSync(allocator: std.mem.Allocator, lockouts_slice: []const Lockout) !TowerSync {
+fn testTowerSync(allocator: Allocator, lockouts_slice: []const Lockout) !TowerSync {
     if (!builtin.is_test) {
         @panic("testTowerSync should only be called in test mode");
     }
@@ -5257,7 +5212,7 @@ fn testTowerSync(allocator: std.mem.Allocator, lockouts_slice: []const Lockout) 
 }
 
 fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     random: std.Random,
     earliest_slot_in_history: Slot,
     current_vote_state_slots: []const Slot,
@@ -5373,7 +5328,7 @@ fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
 
 const MAX_RECENT_VOTES: usize = 16;
 fn recentVotes(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     vote_state: *const VoteState,
 ) ![]const Vote {
     if (!builtin.is_test) {
