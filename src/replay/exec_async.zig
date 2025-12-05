@@ -186,26 +186,45 @@ const PohVerifier = struct {
     fn start(self: *PohVerifier, last_entry: Hash) Error!void {
         const future = self.future;
         const entries = future.entries;
+        const allocator = self.future.arena.allocator();
 
         var task_batch = ThreadPool.Batch{};
         defer future.schedule(task_batch);
 
-        // TODO: investigate if this can just be 1 as it runs concurrently to TransactionScheduler
+        var total_hashes: u64 = 0;
+        for (entries) |entry| total_hashes += entry.num_hashes;
+
         const num_workers = @min(future.thread_pool.max_threads, entries.len);
+        const per_worker_target = @max(1, total_hashes / num_workers);
 
-        try self.workers.ensureTotalCapacity(self.future.arena.allocator(), num_workers);
-        const entries_per_worker = entries.len / num_workers;
+        var begin: usize = 0;
+        var num_hashes: usize = 0;
+        var initial_hash = last_entry;
 
-        var batch_initial_hash = last_entry;
-        for (0..num_workers) |i| {
-            const end = if (i == num_workers - 1) entries.len else (i + 1) * entries_per_worker;
-            defer batch_initial_hash = entries[end - 1].hash;
+        try self.workers.ensureUnusedCapacity(allocator, num_workers + 1); // +1 for div rounding
+        for (entries, 0..) |entry, i| {
+            num_hashes += entry.num_hashes;
+            if (num_hashes >= per_worker_target) {
+                const worker = self.workers.addOneAssumeCapacity();
+                worker.* = .{
+                    .future = self.future,
+                    .entries = entries[begin .. i + 1],
+                    .initial_hash = initial_hash,
+                };
+                task_batch.push(.from(&worker.task));
 
+                begin = i + 1;
+                num_hashes = 0;
+                initial_hash = entry.hash;
+            }
+        }
+
+        if (num_hashes > 0) {
             const worker = self.workers.addOneAssumeCapacity();
             worker.* = .{
                 .future = self.future,
-                .entries = entries[i * entries_per_worker .. end],
-                .initial_hash = batch_initial_hash,
+                .entries = entries[begin..],
+                .initial_hash = initial_hash,
             };
             task_batch.push(.from(&worker.task));
         }
