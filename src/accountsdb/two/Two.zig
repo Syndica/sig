@@ -1,7 +1,6 @@
 //! Thin wrapper around Rooted and Unrooted that ties everything together to be used by the account store.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 pub const Rooted = @import("Rooted.zig");
 pub const Unrooted = @import("Unrooted.zig");
