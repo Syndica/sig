@@ -172,7 +172,7 @@ pub const ReplaySlotFuture = struct {
 
 const PohVerifier = struct {
     future: *ReplaySlotFuture,
-    workers: std.SegmentedList(Worker, 0) = .{},
+    workers: std.ArrayListUnmanaged(Worker) = .{},
 
     const Error = Allocator.Error;
 
@@ -201,10 +201,11 @@ const PohVerifier = struct {
         var num_hashes: usize = 0;
         var initial_hash = last_entry;
 
+        try self.workers.ensureUnusedCapacity(allocator, num_workers + 1); // +1 for div rounding
         for (entries, 0..) |entry, i| {
             num_hashes += entry.num_hashes;
             if (num_hashes >= per_worker_target) {
-                const worker = try self.workers.addOne(allocator);
+                const worker = self.workers.addOneAssumeCapacity();
                 worker.* = .{
                     .future = self.future,
                     .entries = entries[begin .. i + 1],
@@ -219,7 +220,7 @@ const PohVerifier = struct {
         }
 
         if (num_hashes > 0) {
-            const worker = try self.workers.addOne(allocator);
+            const worker = self.workers.addOneAssumeCapacity();
             worker.* = .{
                 .future = self.future,
                 .entries = entries[begin..],
