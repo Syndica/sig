@@ -398,7 +398,7 @@ fn cleanAccountFiles(
     defer references_to_delete.deinit();
 
     // track so we dont double delete
-    var cleaned_pubkeys = std.AutoArrayHashMap(Pubkey, void).init(db.allocator);
+    var cleaned_pubkeys = sig.utils.collections.PubkeyMapManaged(void).init(db.allocator);
     defer cleaned_pubkeys.deinit();
 
     for (unclean_account_files) |file_id| {
@@ -652,7 +652,7 @@ fn shrinkAccountFiles(
     const number_of_files = shrink_account_files.len;
     defer db.metrics.number_files_shrunk.add(number_of_files);
 
-    var alive_pubkeys = std.AutoArrayHashMap(Pubkey, void).init(db.allocator);
+    var alive_pubkeys = sig.utils.collections.PubkeyMapManaged(void).init(db.allocator);
     defer alive_pubkeys.deinit();
 
     try delete_account_files.ensureUnusedCapacity(allocator, shrink_account_files.len);

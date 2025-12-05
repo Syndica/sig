@@ -1180,7 +1180,7 @@ pub fn invokeSignedRust(
 const testing = sig.runtime.testing;
 
 const TestContext = struct {
-    cache: std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData),
+    cache: sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData),
     tc: *TransactionContext,
     ic: InstructionContext,
 

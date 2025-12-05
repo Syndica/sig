@@ -30,7 +30,7 @@ pub fn prepareBpfV3Test(
     const program_update_authority = null;
 
     const feature_set = try sig.runtime.testing.createFeatureSet(feature_params);
-    var accounts: std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData) = .{};
+    var accounts: sig.utils.collections.PubkeyMap(AccountSharedData) = .{};
     defer {
         for (accounts.values()) |account| allocator.free(account.data);
         accounts.deinit(allocator);

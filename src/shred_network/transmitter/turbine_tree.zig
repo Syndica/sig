@@ -90,7 +90,7 @@ pub const TurbineTree = struct {
     /// sorted by (stake, pubkey) in descending order.
     nodes: std.ArrayList(Node),
     /// Pubkey -> index in nodes
-    index: std.AutoArrayHashMap(Pubkey, usize),
+    index: sig.utils.collections.PubkeyMapManaged(usize),
     /// Weighted shuffle of node stakes
     weighted_shuffle: WeightedShuffle,
     /// The reference count is used to facilitate deallocation, it does not
@@ -148,7 +148,7 @@ pub const TurbineTree = struct {
         allocator: std.mem.Allocator,
         my_contact_info: ThreadSafeContactInfo,
         gossip_table_rw: *RwMux(GossipTable),
-        staked_nodes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
+        staked_nodes: *const sig.utils.collections.PubkeyMap(u64),
         use_stake_hack_for_testing: bool,
     ) !TurbineTree {
         const gossip_peers = blk: {
@@ -173,7 +173,7 @@ pub const TurbineTree = struct {
         );
         errdefer nodes.deinit();
 
-        var index = std.AutoArrayHashMap(Pubkey, usize).init(allocator);
+        var index = sig.utils.collections.PubkeyMapManaged(usize).init(allocator);
         errdefer index.deinit();
 
         var node_stakes = try std.ArrayList(u64).initCapacity(allocator, nodes.items.len);
@@ -363,7 +363,7 @@ pub const TurbineTree = struct {
         allocator: std.mem.Allocator,
         my_contact_info: ThreadSafeContactInfo,
         gossip_peers: []const ThreadSafeContactInfo,
-        staked_nodes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
+        staked_nodes: *const sig.utils.collections.PubkeyMap(u64),
         use_stake_hack_for_testing: bool,
     ) !std.ArrayList(Node) {
         var nodes = try std.ArrayList(Node).initCapacity(
@@ -372,7 +372,7 @@ pub const TurbineTree = struct {
         );
         defer nodes.deinit();
 
-        var pubkeys = std.AutoArrayHashMap(Pubkey, void).init(allocator);
+        var pubkeys = sig.utils.collections.PubkeyMapManaged(void).init(allocator);
         defer pubkeys.deinit();
 
         const my_stake = if (use_stake_hack_for_testing) blk: {
@@ -463,7 +463,7 @@ const TestEnvironment = struct {
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
     gossip_table_rw: RwMux(GossipTable),
-    staked_nodes: std.AutoArrayHashMap(Pubkey, u64),
+    staked_nodes: sig.utils.collections.PubkeyMapManaged(u64),
 
     pub fn init(params: struct {
         allocator: std.mem.Allocator,
@@ -472,7 +472,7 @@ const TestEnvironment = struct {
         num_unknown_staked_nodes: usize,
         known_nodes_unstaked_ratio: struct { u64, u64 },
     }) !TestEnvironment {
-        var staked_nodes = std.AutoArrayHashMap(Pubkey, u64).init(params.allocator);
+        var staked_nodes = sig.utils.collections.PubkeyMapManaged(u64).init(params.allocator);
         errdefer staked_nodes.deinit();
 
         var gossip_table = try GossipTable.init(params.allocator, params.allocator);
@@ -573,7 +573,7 @@ fn testCheckRetransmitNodes(
     node_expected_children: []const []const TurbineTree.Node,
 ) !void {
     // Create an index of the nodes
-    var index = std.AutoArrayHashMap(Pubkey, usize).init(allocator);
+    var index = sig.utils.collections.PubkeyMapManaged(usize).init(allocator);
     defer index.deinit();
     for (nodes, 0..) |node, i| try index.put(node.pubkey(), i);
 
@@ -624,7 +624,7 @@ fn testCheckRetransmitNodesRoundTrip(
 
     var nodes = testGetRandomNodes(size, rand);
 
-    var index = std.AutoArrayHashMap(Pubkey, usize).init(allocator);
+    var index = sig.utils.collections.PubkeyMapManaged(usize).init(allocator);
     defer index.deinit();
     for (nodes, 0..) |node, i| try index.put(node.pubkey(), i);
 
@@ -705,7 +705,7 @@ test "agave: cluster nodes retransmit" {
 
     // Assert that all nodes keep their contact-info.
     // and, all staked nodes are also included.
-    var node_map = std.AutoArrayHashMap(Pubkey, TurbineTree.Node).init(allocator);
+    var node_map = sig.utils.collections.PubkeyMapManaged(TurbineTree.Node).init(allocator);
     defer node_map.deinit();
 
     const known_nodes = try env.getKnownNodes();
@@ -839,10 +839,10 @@ pub fn makeTestCluster(params: struct {
     n_staked_nodes_in_gossip_table: usize,
     n_unstaked_nodes_in_gossip_table: usize,
 }) !struct {
-    std.AutoArrayHashMap(Pubkey, u64),
+    sig.utils.collections.PubkeyMapManaged(u64),
     RwMux(GossipTable),
 } {
-    var stakes = std.AutoArrayHashMap(Pubkey, u64).init(params.allocator);
+    var stakes = sig.utils.collections.PubkeyMapManaged(u64).init(params.allocator);
     errdefer stakes.deinit();
 
     var gossip_table = try GossipTable.init(
@@ -892,7 +892,7 @@ pub fn makeTestCluster(params: struct {
 pub fn writeStakes(
     allocator: std.mem.Allocator,
     writer: std.fs.File.Writer,
-    staked_nodes: std.AutoArrayHashMap(Pubkey, u64),
+    staked_nodes: sig.utils.collections.PubkeyMapManaged(u64),
 ) !void {
     const SNode = struct { Pubkey, u64 };
     var entries = std.ArrayList(SNode).init(allocator);

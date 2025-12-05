@@ -90,8 +90,8 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
     return struct {
         stakes: Stakes(stakes_type),
         total_stake: u64,
-        node_id_to_vote_accounts: std.AutoArrayHashMapUnmanaged(Pubkey, NodeVoteAccounts),
-        epoch_authorized_voters: std.AutoArrayHashMapUnmanaged(Pubkey, Pubkey),
+        node_id_to_vote_accounts: sig.utils.collections.PubkeyMap(NodeVoteAccounts),
+        epoch_authorized_voters: sig.utils.collections.PubkeyMap(Pubkey),
 
         const Self = @This();
 
@@ -164,10 +164,7 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
             const stakes = try Stakes(stakes_type).initRandom(allocator, random, max_list_entries);
             errdefer stakes.deinit(allocator);
 
-            var node_id_to_vote_accounts: std.AutoArrayHashMapUnmanaged(
-                Pubkey,
-                NodeVoteAccounts,
-            ) = .{};
+            var node_id_to_vote_accounts: sig.utils.collections.PubkeyMap(NodeVoteAccounts) = .{};
             errdefer deinitMapAndValues(allocator, node_id_to_vote_accounts);
 
             for (0..random.uintAtMost(usize, max_list_entries)) |_| {
@@ -176,7 +173,7 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
                 try node_id_to_vote_accounts.put(allocator, Pubkey.initRandom(random), value);
             }
 
-            var epoch_authorized_voters: std.AutoArrayHashMapUnmanaged(Pubkey, Pubkey) = .{};
+            var epoch_authorized_voters: sig.utils.collections.PubkeyMap(Pubkey) = .{};
             errdefer epoch_authorized_voters.deinit(allocator);
             for (0..random.uintAtMost(usize, max_list_entries)) |_| {
                 try epoch_authorized_voters.put(

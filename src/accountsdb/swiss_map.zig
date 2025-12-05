@@ -878,7 +878,7 @@ pub fn BenchHashMap(T: type) type {
 
         // other T types that might be useful
         // const T = std.AutoHashMap(Pubkey, *AccountRef);
-        // const T = std.AutoArrayHashMap(Pubkey, *AccountRef);
+        // const T = sig.utils.collections.PubkeyMapManaged(*AccountRef);
         // const T = std.ArrayHashMap(Pubkey, *AccountRef, struct {
         //     pub fn hash(self: @This(), key: Pubkey) u32 {
         //         _ = self;

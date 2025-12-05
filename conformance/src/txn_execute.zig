@@ -1081,10 +1081,10 @@ fn loadBlockhashes(
 fn loadAccountsMap(
     allocator: std.mem.Allocator,
     pb_txn_ctx: *const pb.TxnContext,
-) !std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData) {
+) !sig.utils.collections.PubkeyMap(AccountSharedData) {
     const pb_accounts = pb_txn_ctx.account_shared_data.items;
 
-    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var accounts = sig.utils.collections.PubkeyMap(AccountSharedData){};
     errdefer deinitMapAndValues(allocator, accounts);
 
     for (pb_accounts) |pb_account| {
@@ -1217,7 +1217,7 @@ fn loadTransactionMesssage(
 pub fn getSysvarFromAccounts(
     allocator: std.mem.Allocator,
     comptime T: type,
-    accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    accounts: *const sig.utils.collections.PubkeyMap(AccountSharedData),
 ) ?T {
     const account = accounts.getPtr(T.ID) orelse return null;
     if (account.lamports == 0) return null;

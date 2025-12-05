@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const replay = @import("../lib.zig");
+const tracy = @import("tracy");
 
 const collections = sig.utils.collections;
 
@@ -49,6 +50,9 @@ pub fn processClusterSync(
         receivers: replay.TowerConsensus.Receivers,
     },
 ) !ProcessClusterSyncTimings {
+    const zone = tracy.Zone.init(@src(), .{ .name = "processClusterSync" });
+    defer zone.deinit();
+
     var timer = sig.time.Timer.start();
 
     // Process cluster-agreed versions of duplicate slots for which we potentially

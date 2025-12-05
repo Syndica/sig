@@ -8,7 +8,7 @@ const Feature = sig.core.features.Feature;
 const FeatureSet = sig.core.FeatureSet;
 const Slot = sig.core.Slot;
 
-pub const ReservedAccounts = std.AutoArrayHashMapUnmanaged(Pubkey, void);
+pub const ReservedAccounts = sig.utils.collections.PubkeyMap(void);
 
 pub fn init(allocator: Allocator) Allocator.Error!ReservedAccounts {
     var reserved_accounts = ReservedAccounts{};

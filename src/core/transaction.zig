@@ -686,7 +686,7 @@ pub const AddressLookup = struct {
     }
 };
 
-const KeyMetaMap = std.AutoArrayHashMapUnmanaged(Pubkey, SignerWritableFlags);
+const KeyMetaMap = sig.utils.collections.PubkeyMap(SignerWritableFlags);
 
 const SignerWritableFlags = packed struct(u2) {
     writable: bool,

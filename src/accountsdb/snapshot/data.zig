@@ -591,7 +591,7 @@ pub const Manifest = struct {
     pub fn epochStakes(
         self: *const Manifest,
         epoch: Epoch,
-    ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
+    ) !*const sig.utils.collections.PubkeyMap(u64) {
         if (self.bank_fields.epoch_stakes.getPtr(epoch)) |_| {
             // Agave simply ignores this field. I've added this log message just
             // as a sanity check, but I don't expect to ever see it.

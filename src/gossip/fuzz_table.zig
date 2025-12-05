@@ -61,7 +61,7 @@ pub fn run(seed: u64, args: []const []const u8) !void {
     var keypairs = try std.ArrayList(KeyPair).initCapacity(allocator, 100);
     defer keypairs.deinit();
 
-    var signatures = std.AutoArrayHashMap(Pubkey, Signature).init(allocator);
+    var signatures = sig.utils.collections.PubkeyMapManaged(Signature).init(allocator);
     defer signatures.deinit();
 
     var keys = try std.ArrayList(GossipKey).initCapacity(allocator, 100);

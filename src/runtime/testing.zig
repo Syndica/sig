@@ -99,7 +99,7 @@ pub fn createTransactionContext(
     random: std.Random,
     params: ExecuteContextsParams,
 ) !struct {
-    std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData),
+    sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData),
     TransactionContext,
 } {
     var transaction_context: TransactionContext = undefined;
@@ -112,7 +112,7 @@ pub fn createTransactionContextPtr(
     random: std.Random,
     params: ExecuteContextsParams,
 ) !struct {
-    std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData),
+    sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData),
     *TransactionContext,
 } {
     const transaction_context = try allocator.create(TransactionContext);
@@ -126,7 +126,7 @@ fn initTransactionContext(
     random: std.Random,
     params: ExecuteContextsParams,
     transaction_context: *TransactionContext,
-) !std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData) {
+) !sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData) {
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
 
@@ -162,7 +162,7 @@ fn initTransactionContext(
     );
     errdefer accounts.deinit(allocator);
 
-    var account_map = std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData){};
+    var account_map = sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData){};
     errdefer sig.runtime.testing.deinitAccountMap(account_map, allocator);
 
     var account_keys = try std.ArrayListUnmanaged(Pubkey).initCapacity(
@@ -489,7 +489,7 @@ pub fn expectTransactionAccountEqual(
 }
 
 pub fn deinitAccountMap(
-    map: std.AutoArrayHashMapUnmanaged(Pubkey, sig.runtime.AccountSharedData),
+    map: sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData),
     allocator: std.mem.Allocator,
 ) void {
     for (map.values()) |account| account.deinit(allocator);

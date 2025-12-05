@@ -28,28 +28,7 @@ pub const SlotIndex = struct {
     lock: std.Thread.RwLock,
     slot: Slot,
     is_empty: Atomic(bool),
-    entries: std.ArrayHashMapUnmanaged(Pubkey, AccountSharedData, Context, true),
-
-    const Context = struct {
-        // Applies a Murmur-like LCG to the public key, in order to alivate a
-        // bit of the bucketing that may happen if we load many vanity public keys,
-        // where the first bytes are mined.
-        pub fn hash(_: Context, pubkey: Pubkey) u32 {
-            var h: u32 = 0;
-            const pk: [8]u32 = @bitCast(pubkey.data);
-            for (pk) |k| h ^= k + 1;
-            h ^= h >> 16;
-            h *%= 0x85ebca6b;
-            h ^= h >> 13;
-            h *%= 0xc2b2ae35;
-            h ^= h >> 16;
-            return h;
-        }
-
-        pub fn eql(_: Context, a: Pubkey, b: Pubkey, _: usize) bool {
-            return a.equals(&b);
-        }
-    };
+    entries: sig.utils.collections.PubkeyMap(AccountSharedData),
 
     const empty: SlotIndex = .{
         .lock = .{},

@@ -619,7 +619,7 @@ test "checkAge: nonce account" {
         .rent_epoch = 0,
     };
 
-    var account_map = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var account_map = sig.utils.collections.PubkeyMap(AccountSharedData){};
     defer deinitAccountMap(account_map, allocator);
     try account_map.put(allocator, nonce_key, nonce_account);
 
@@ -751,7 +751,7 @@ test "checkFeePayer: happy path fee payer only" {
         .{ .pubkey = transaction.fee_payer, .is_signer = true, .is_writable = true },
     );
 
-    var account_map = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var account_map = sig.utils.collections.PubkeyMap(AccountSharedData){};
     defer deinitAccountMap(account_map, allocator);
 
     try account_map.put(allocator, transaction.fee_payer, .{
@@ -807,7 +807,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         .{ .pubkey = transaction.fee_payer, .is_signer = true, .is_writable = true },
     );
 
-    var account_map = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var account_map = sig.utils.collections.PubkeyMap(AccountSharedData){};
     defer deinitAccountMap(account_map, allocator);
 
     try account_map.put(allocator, transaction.fee_payer, .{
@@ -875,7 +875,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         .{ .pubkey = transaction.fee_payer, .is_signer = true, .is_writable = true },
     );
 
-    var account_map = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    var account_map = sig.utils.collections.PubkeyMap(AccountSharedData){};
     defer deinitAccountMap(account_map, allocator);
 
     try account_map.put(allocator, transaction.fee_payer, .{

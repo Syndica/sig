@@ -177,7 +177,7 @@ pub const SlotVoteTracker = struct {
     /// Maps pubkeys that have voted for this slot
     /// to whether or not we've seen the vote on gossip.
     /// True if seen on gossip, false if only seen in replay.
-    voted: std.AutoArrayHashMapUnmanaged(Pubkey, bool),
+    voted: sig.utils.collections.PubkeyMap(bool),
     optimistic_votes_tracker: std.AutoArrayHashMapUnmanaged(Hash, VoteStakeTracker),
     voted_slot_updates: ?std.ArrayListUnmanaged(Pubkey),
     gossip_only_stake: u64,
@@ -227,7 +227,7 @@ pub const SlotVoteTracker = struct {
 };
 
 pub const VoteStakeTracker = struct {
-    voted: std.AutoArrayHashMapUnmanaged(Pubkey, void),
+    voted: sig.utils.collections.PubkeyMap(void),
     stake: u64,
 
     pub const EMPTY_ZEROES: VoteStakeTracker = .{

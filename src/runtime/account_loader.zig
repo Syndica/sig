@@ -609,7 +609,7 @@ fn emptyTxWithKeys(allocator: Allocator, keys: []const Pubkey) !RuntimeTransacti
 
 test "loadTransactionAccounts empty transaction" {
     const allocator = std.testing.allocator;
-    const accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
+    const accountsdb = sig.utils.collections.PubkeyMap(sig.core.Account).empty;
     const env = newTestingEnv();
 
     const empty_tx = RuntimeTransaction{
@@ -636,7 +636,7 @@ test "loadTransactionAccounts empty transaction" {
 
 test "loadTransactionAccounts sysvar instruction" {
     const allocator = std.testing.allocator;
-    var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
+    var accountsdb = sig.utils.collections.PubkeyMap(sig.core.Account).empty;
     const env = newTestingEnv();
 
     var accounts = std.MultiArrayList(AccountMeta).empty;
@@ -702,7 +702,7 @@ test "accumulated size" {
 test "load accounts rent paid" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-    var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
+    var accountsdb = sig.utils.collections.PubkeyMap(sig.core.Account).empty;
     defer accountsdb.deinit(allocator);
     var env = newTestingEnv();
     env.compute_budget_limits.loaded_accounts_bytes = 2_000;
@@ -808,7 +808,7 @@ test "load accounts rent paid" {
 test "load accounts with simd 186 and loaderv3 program" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-    var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
+    var accountsdb = sig.utils.collections.PubkeyMap(sig.core.Account).empty;
     defer accountsdb.deinit(allocator);
     var env = newTestingEnv();
     env.compute_budget_limits.loaded_accounts_bytes = 20_000;
@@ -1000,7 +1000,7 @@ test "loadAccount allocations" {
 
     const helper = struct {
         fn check(allocator: Allocator) !void {
-            var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
+            var accountsdb = sig.utils.collections.PubkeyMap(sig.core.Account).empty;
             defer accountsdb.deinit(allocator);
 
             try accountsdb.put(allocator, NATIVE_LOADER_ID, .{
@@ -1032,7 +1032,7 @@ test "loadAccount allocations" {
 
 test "load tx too large" {
     const allocator = std.testing.allocator;
-    var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
+    var accountsdb = sig.utils.collections.PubkeyMap(sig.core.Account).empty;
     defer accountsdb.deinit(allocator);
     var env = newTestingEnv();
     env.compute_budget_limits.loaded_accounts_bytes = 1000;
@@ -1072,7 +1072,7 @@ test "load tx too large" {
 
 test "dont double count program owner account data size" {
     const allocator = std.testing.allocator;
-    var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
+    var accountsdb = sig.utils.collections.PubkeyMap(sig.core.Account).empty;
     defer accountsdb.deinit(allocator);
     const env = newTestingEnv();
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -1173,7 +1173,7 @@ test "load, create new account" {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
     const new_account_pk = Pubkey.initRandom(random);
-    var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
+    var accountsdb = sig.utils.collections.PubkeyMap(sig.core.Account).empty;
     defer accountsdb.deinit(allocator);
     const env = newTestingEnv();
 
@@ -1200,7 +1200,7 @@ test "invalid program owner owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
-    var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
+    var accountsdb = sig.utils.collections.PubkeyMap(sig.core.Account).empty;
     defer accountsdb.deinit(allocator);
     const env = newTestingEnv();
 
@@ -1252,7 +1252,7 @@ test "missing program owner account" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
-    var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
+    var accountsdb = sig.utils.collections.PubkeyMap(sig.core.Account).empty;
     defer accountsdb.deinit(allocator);
     const env = newTestingEnv();
 
@@ -1296,7 +1296,7 @@ test "deallocate account" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
-    var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
+    var accountsdb = sig.utils.collections.PubkeyMap(sig.core.Account).empty;
     defer accountsdb.deinit(allocator);
     const env = newTestingEnv();
 
@@ -1342,7 +1342,7 @@ test "load v3 program" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
-    var accountsdb = std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account).empty;
+    var accountsdb = sig.utils.collections.PubkeyMap(sig.core.Account).empty;
     defer accountsdb.deinit(allocator);
     const env = newTestingEnv();
 

@@ -196,6 +196,9 @@ fn distributeTransactionFees(
     collected_transaction_fees: u64,
     collected_priority_fees: u64,
 ) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "distributeTransactionFees" });
+    defer zone.deinit();
+
     var burn = collected_transaction_fees * rent.burn_percent / 100;
     const total_fees = collected_priority_fees + collected_transaction_fees;
     const payout = total_fees -| burn;
@@ -278,6 +281,9 @@ pub const HashSlotParams = struct {
 
 /// Calculates the slot hash (known as the "bank hash" in agave)
 pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash, Hash } {
+    var zone = tracy.Zone.init(@src(), .{ .name = "hashSlot" });
+    defer zone.deinit();
+
     var signature_count_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &signature_count_bytes, params.signature_count, .little);
 

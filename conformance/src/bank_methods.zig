@@ -214,7 +214,7 @@ fn computeActiveFeatureSet(
     allow_new_activations: bool,
 ) !FeatureSet {
     // TODO: requires reimplementation of feature_set.inactive or some other solution
-    // var inactive = std.AutoArrayHashMapUnmanaged(Pubkey, void){};
+    // var inactive = sig.utils.collections.PubkeyMap(void){};
     var pending: FeatureSet = .ALL_DISABLED;
 
     var iterator = feature_set.iterator(slot);

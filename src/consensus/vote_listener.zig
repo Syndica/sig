@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const vote_program = sig.runtime.program.vote;
 const vote_instruction = vote_program.vote_instruction;
@@ -201,6 +202,9 @@ const GossipVoteReceptor = struct {
         gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
         metrics: VoteListenerMetrics,
     ) ![]const Transaction {
+        const zone = tracy.Zone.init(@src(), .{ .name = "receiveVerifiedVotes" });
+        defer zone.deinit();
+
         self.clearVoteTxBuffer(allocator);
         const vote_tx_buffer = &self.vote_tx_buffer;
         std.debug.assert(vote_tx_buffer.items.len == 0);
@@ -245,6 +249,9 @@ const GossipVoteReceptor = struct {
         start_cursor: u64,
         gossip_table: *const sig.gossip.GossipTable,
     ) std.mem.Allocator.Error!u64 {
+        const zone = tracy.Zone.init(@src(), .{ .name = "getVoteTransactionsAfterCursor" });
+        defer zone.deinit();
+
         unverified_votes_buffer.clearRetainingCapacity();
         if (start_cursor >= gossip_table.cursor) return start_cursor;
 
@@ -280,6 +287,9 @@ fn verifyVoteTransaction(
     /// Should be associated with the root bank.
     epoch_tracker: *const EpochTracker,
 ) std.mem.Allocator.Error!enum { verified, unverified } {
+    const zone = tracy.Zone.init(@src(), .{ .name = "verifyVoteTransaction" });
+    defer zone.deinit();
+
     vote_tx.verify() catch return .unverified;
     const parsed_vote =
         try vote_parser.parseVoteTransaction(allocator, vote_tx) orelse return .unverified;
@@ -346,7 +356,7 @@ pub const VoteCollector = struct {
     gossip_vote_receptor: GossipVoteReceptor,
     vote_tracker: sig.consensus.VoteTracker,
     confirmation_verifier: OptimisticConfirmationVerifier,
-    latest_vote_slot_per_validator: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+    latest_vote_slot_per_validator: sig.utils.collections.PubkeyMap(Slot),
     last_process_root: sig.time.Instant,
     vote_processing_time: VoteProcessingTiming,
     metrics: VoteListenerMetrics,
@@ -452,7 +462,7 @@ fn listenAndConfirmVotes(
     receivers: Receivers,
     gossip_vote_txs: []const Transaction,
     vote_processing_time: ?*VoteProcessingTiming,
-    latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+    latest_vote_slot_per_validator: *sig.utils.collections.PubkeyMap(Slot),
     metrics: VoteListenerMetrics,
 ) std.mem.Allocator.Error![]const ThresholdConfirmedSlot {
     var replay_votes_buffer: std.ArrayListUnmanaged(vote_parser.ParsedVote) = .empty;
@@ -498,7 +508,7 @@ fn filterAndConfirmWithNewVotes(
     slot_data_provider: *const SlotDataProvider,
     senders: Senders,
     vote_processing_time: ?*VoteProcessingTiming,
-    latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+    latest_vote_slot_per_validator: *sig.utils.collections.PubkeyMap(Slot),
     gossip_vote_txs: []const Transaction,
     replayed_votes: []const vote_parser.ParsedVote,
     metrics: VoteListenerMetrics,
@@ -761,7 +771,7 @@ const SlotsDiff = struct {
     }
 
     const PubkeysDiff = struct {
-        map: std.AutoArrayHashMapUnmanaged(Pubkey, bool),
+        map: sig.utils.collections.PubkeyMap(bool),
 
         pub const EMPTY: PubkeysDiff = .{ .map = .{} };
 
@@ -805,7 +815,7 @@ fn trackNewVotesAndNotifyConfirmations(
     diff: *SlotsDiff,
     new_optimistic_confirmed_slots: *std.ArrayListUnmanaged(ThresholdConfirmedSlot),
     is_gossip_vote: bool,
-    latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+    latest_vote_slot_per_validator: *sig.utils.collections.PubkeyMap(Slot),
 ) std.mem.Allocator.Error!void {
     if (vote.isEmpty()) return;
     const root = slot_data_provider.rootSlot();
@@ -1029,7 +1039,7 @@ test "trackNewVotesAndNotifyConfirmations filter" {
     var vote_tracker: VoteTracker = .EMPTY;
     defer vote_tracker.deinit(allocator);
 
-    var latest_vote_slot_per_validator: std.AutoArrayHashMapUnmanaged(Pubkey, Slot) = .empty;
+    var latest_vote_slot_per_validator: sig.utils.collections.PubkeyMap(Slot) = .empty;
     defer latest_vote_slot_per_validator.deinit(allocator);
 
     var diff: SlotsDiff = .EMPTY;

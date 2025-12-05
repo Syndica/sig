@@ -12,7 +12,7 @@ const IncrementalSnapshotFileInfo = sig.accounts_db.snapshot.data.IncrementalSna
 
 const N_RANDOM_THREADS = 8;
 
-const TrackedAccountsMap = std.AutoArrayHashMapUnmanaged(Pubkey, TrackedAccount);
+const TrackedAccountsMap = sig.utils.collections.PubkeyMap(TrackedAccount);
 
 pub const TrackedAccount = struct {
     pubkey: Pubkey,

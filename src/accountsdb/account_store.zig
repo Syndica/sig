@@ -65,6 +65,9 @@ pub const AccountStore = union(enum) {
         newly_rooted_slot: Slot,
         lamports_per_signature: u64,
     ) !void {
+        var zone = tracy.Zone.init(@src(), .{ .name = "onSlotRooted" });
+        defer zone.deinit();
+
         switch (self) {
             .accounts_db => |db| try accounts_db.manager.onSlotRooted(
                 allocator,
@@ -225,7 +228,7 @@ pub const SlotAccountStore = union(enum) {
     thread_safe_map: struct { *ThreadSafeAccountMap, Slot, *const Ancestors },
     account_shared_data_map: struct {
         Allocator,
-        *std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+        *sig.utils.collections.PubkeyMap(AccountSharedData),
     },
     noop,
 
@@ -275,9 +278,9 @@ pub const SlotAccountReader = union(enum) {
     thread_safe_map: struct { *ThreadSafeAccountMap, *const Ancestors },
     /// Only stores the current slot's version of each account.
     /// Should only store borrowed accounts, or else it will panic on deinit.
-    account_map: *const std.AutoArrayHashMapUnmanaged(Pubkey, Account),
+    account_map: *const sig.utils.collections.PubkeyMap(Account),
     /// same as `account_map` but stores AccountSharedData
-    account_shared_data_map: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    account_shared_data_map: *const sig.utils.collections.PubkeyMap(AccountSharedData),
     noop,
 
     pub fn get(self: SlotAccountReader, alloc: std.mem.Allocator, address: Pubkey) !?Account {
@@ -1279,10 +1282,10 @@ fn expectEqualDatabaseWithAncestors(
         try actual_account.expectEquals(expected_account);
     }
 
-    var expected_map: std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData) = .empty;
+    var expected_map: sig.utils.collections.PubkeyMap(AccountSharedData) = .empty;
     defer expected_map.deinit(allocator);
 
-    var actual_map: std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData) = .empty;
+    var actual_map: sig.utils.collections.PubkeyMap(AccountSharedData) = .empty;
     defer actual_map.deinit(allocator);
 
     for (ancestors.ancestors.keys()) |slot| {
@@ -1313,7 +1316,7 @@ fn expectEqualDatabaseWithAncestors(
 
 fn collectModifiedSlotsIntoMap(
     allocator: std.mem.Allocator,
-    map: *std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    map: *sig.utils.collections.PubkeyMap(AccountSharedData),
     account_reader: sig.accounts_db.AccountReader,
     slot: Slot,
 ) !bool {

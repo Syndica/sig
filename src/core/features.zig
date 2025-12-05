@@ -63,14 +63,14 @@ pub const Set = struct {
     pub const ALL_ENABLED_AT_GENESIS: Set = .{ .array = .initFill(0) };
 
     /// Check whether `feature` is enabled at or before the provided slot.
-    pub fn active(self: Set, feature: Feature, slot: Slot) bool {
+    pub fn active(self: *const Set, feature: Feature, slot: Slot) bool {
         if (self.array.get(feature)) |activated|
             return slot >= activated;
         return false;
     }
 
     /// Gets the activation slot for a feature, if one has been set.
-    pub fn get(self: Set, feature: Feature) ?Slot {
+    pub fn get(self: *const Set, feature: Feature) ?Slot {
         return self.array.get(feature);
     }
 

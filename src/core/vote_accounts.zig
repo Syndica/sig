@@ -22,8 +22,8 @@ const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 
-pub const StakeAndVoteAccountsMap = std.AutoArrayHashMapUnmanaged(Pubkey, StakeAndVoteAccount);
-pub const StakedNodesMap = std.AutoArrayHashMapUnmanaged(Pubkey, u64);
+pub const StakeAndVoteAccountsMap = sig.utils.collections.PubkeyMap(StakeAndVoteAccount);
+pub const StakedNodesMap = sig.utils.collections.PubkeyMap(u64);
 
 pub const StakeAndVoteAccount = struct {
     stake: u64,
@@ -68,6 +68,7 @@ pub const VoteAccounts = struct {
 
         var vote_accounts: StakeAndVoteAccountsMap = .{};
         errdefer vote_accounts.deinit(allocator);
+        try vote_accounts.ensureTotalCapacity(allocator, self.vote_accounts.count());
 
         const accounts = self.vote_accounts.values();
         for (self.vote_accounts.keys(), accounts, 0..) |key, value, i| {
@@ -76,7 +77,7 @@ pub const VoteAccounts = struct {
             // retains ownership of the vote accounts and we don't need to de-init anywhere.
             errdefer for (accounts[0 .. i + 1]) |a| std.debug.assert(!a.account.rc.release());
             value.account.acquire();
-            try vote_accounts.put(allocator, key, value);
+            vote_accounts.putAssumeCapacityNoClobber(key, value);
         }
 
         return .{
