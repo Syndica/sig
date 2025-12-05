@@ -903,7 +903,6 @@ test "insertion out of order" {
         break :slot slots[random.uintLessThan(usize, slots.len)];
     };
     const pk_of_ones: Pubkey = .{ .data = @splat(1) };
-    // setRootedLargestSlotForTest(&simple_state, real_state, slot_to_try_write_while_rooted);
 
     var ancestors_subset: Ancestors = .EMPTY;
     defer ancestors_subset.deinit(allocator);
