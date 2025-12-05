@@ -42,8 +42,6 @@ pub const TestContext = struct {
 
 /// Initializes a temporary empty rooted storage. Call tmp.cleanup() when done with it.
 pub fn initTest(allocator: std.mem.Allocator) !TestContext {
-    if (!builtin.is_test) @compileError("only used in tests");
-
     const tmp = std.testing.tmpDir(.{});
     var tmp_dir_buffer: [std.fs.max_path_bytes]u8 = undefined;
     const tmp_path = try tmp.dir.realpath(".", &tmp_dir_buffer);
@@ -173,3 +171,9 @@ pub fn slotModifiedIterator(self: *Db, slot: Slot) ?SlotModifiedIterator {
         .cursor = 0,
     };
 }
+
+// The behaviour of the db is mostly tested via:
+// - `replay/consensus/core.zig`
+// - `replay/update_sysvar.zig`
+// - `accountsdb/account_store.zig`
+// We can consider adding some more specific tests into this file.
