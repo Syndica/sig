@@ -20,7 +20,7 @@ const MapContext = struct {
     pub fn hash(_: MapContext, pubkey: sig.core.Pubkey) u32 {
         var h: u32 = 0;
         const pk: [8]u32 = @bitCast(pubkey.data);
-        for (pk) |k| h ^= k + 1;
+        for (pk) |k| h ^= k +% 1;
         h ^= h >> 16;
         h *%= 0x85ebca6b;
         h ^= h >> 13;
