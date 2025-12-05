@@ -75,7 +75,7 @@ const vm = sig.vm;
 const transaction_execution = sig.runtime.transaction_execution;
 const update_sysvar = sig.replay.update_sysvar;
 
-const AccountsDb = sig.accounts_db.AccountsDB;
+const AccountStore = sig.accounts_db.AccountStore;
 
 const Account = sig.core.Account;
 const Ancestors = sig.core.Ancestors;
@@ -172,10 +172,10 @@ fn executeTxnContext(
     );
 
     // Bank::new_with_paths(...)
-    var accounts_db, var tmp_dir_root = try sig.accounts_db.AccountsDB.initForTest(allocator);
-    defer tmp_dir_root.cleanup();
-    defer accounts_db.deinit();
-    const account_store = accounts_db.accountStore();
+    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+    const account_store: AccountStore = .{ .accounts_db_two = db };
 
     var slot: Slot = 0;
     var epoch: Epoch = 0;
@@ -777,7 +777,7 @@ fn executeTxnContext(
     // Resolve transaction
     const resolved_transaction = resolveTransaction(allocator, transaction, .{
         .slot = slot,
-        .account_reader = accounts_db.accountReader().forSlot(&ancestors),
+        .account_reader = .{ .accounts_db_two = .{ db, &ancestors } },
         .reserved_accounts = &reserved_accounts,
         .slot_hashes = try sysvar_cache.get(sig.runtime.sysvar.SlotHashes),
     }) catch |err| return serializeSanitizationError(switch (err) {
@@ -846,7 +846,7 @@ fn executeTxnContext(
         allocator,
         allocator,
         &runtime_transaction,
-        accounts_db.accountStore().forSlot(slot, &ancestors),
+        account_store.forSlot(slot, &ancestors),
         &environment,
         &config,
         &program_map,
@@ -1326,75 +1326,75 @@ pub fn hashSlot(
         .{ .data = initial_hash };
 }
 
-const State = struct {
-    slot: Slot,
-    epoch: Epoch,
-    hash: Hash,
-    parent_slot: Slot,
-    parent_hash: Hash,
-    ancestors: Ancestors,
-    rent: Rent,
-    epoch_schedule: EpochSchedule,
-    accounts_db: *AccountsDb,
-};
+// const State = struct {
+//     slot: Slot,
+//     epoch: Epoch,
+//     hash: Hash,
+//     parent_slot: Slot,
+//     parent_hash: Hash,
+//     ancestors: Ancestors,
+//     rent: Rent,
+//     epoch_schedule: EpochSchedule,
+//     accounts_db: *AccountsDb,
+// };
 
-fn writeState(allocator: Allocator, state: State) !void {
-    var file = std.fs.cwd().openFile(
-        "output-state-sig.txt",
-        .{ .mode = .read_write },
-    ) catch |err| switch (err) {
-        error.FileNotFound => try std.fs.cwd().createFile("output-state-sig.txt", .{}),
-        else => return err,
-    };
-    defer file.close();
+// fn writeState(allocator: Allocator, state: State) !void {
+//     var file = std.fs.cwd().openFile(
+//         "output-state-sig.txt",
+//         .{ .mode = .read_write },
+//     ) catch |err| switch (err) {
+//         error.FileNotFound => try std.fs.cwd().createFile("output-state-sig.txt", .{}),
+//         else => return err,
+//     };
+//     defer file.close();
 
-    try file.seekFromEnd(0);
+//     try file.seekFromEnd(0);
 
-    const writer = file.writer();
+//     const writer = file.writer();
 
-    try writer.print("Slot:  {}\n", .{state.slot});
-    try writer.print("Epoch: {}\n", .{state.epoch});
-    try writer.print("Hash:  {}\n", .{state.hash});
-    try writer.print("Parent Slot: {}\n", .{state.parent_slot});
-    try writer.print("Parent Hash: {any}\n", .{state.parent_hash});
-    try writeSlice(allocator, writer, "Ancestors: ", "\n", Slot, state.ancestors.ancestors.keys());
-    try writeAccounts(allocator, writer, state.accounts_db);
-    try writer.print("\n", .{});
-}
+//     try writer.print("Slot:  {}\n", .{state.slot});
+//     try writer.print("Epoch: {}\n", .{state.epoch});
+//     try writer.print("Hash:  {}\n", .{state.hash});
+//     try writer.print("Parent Slot: {}\n", .{state.parent_slot});
+//     try writer.print("Parent Hash: {any}\n", .{state.parent_hash});
+//     try writeSlice(allocator, writer, "Ancestors: ", "\n", Slot, state.ancestors.ancestors.keys());
+//     try writeAccounts(allocator, writer, state.accounts_db);
+//     try writer.print("\n", .{});
+// }
 
-fn writeAccounts(
-    allocator: Allocator,
-    writer: anytype,
-    accounts_db: *AccountsDb,
-) !void {
-    const accounts = try accounts_db.getAllPubkeysSorted(allocator);
-    defer allocator.free(accounts);
-    try writer.print("Accounts:\n", .{});
-    for (accounts) |pubkey| {
-        const maybe_slot_and_account = accounts_db.getSlotAndAccount(&pubkey) catch null;
-        if (maybe_slot_and_account) |slot_and_account| {
-            const slot, const account = slot_and_account;
-            defer account.deinit(allocator);
-            if (account.lamports == 0) continue;
-            const data = try account.data.dupeAllocatedOwned(allocator);
-            defer data.deinit(allocator);
+// fn writeAccounts(
+//     allocator: Allocator,
+//     writer: anytype,
+//     accounts_db: *AccountsDb,
+// ) !void {
+//     const accounts = try accounts_db.getAllPubkeysSorted(allocator);
+//     defer allocator.free(accounts);
+//     try writer.print("Accounts:\n", .{});
+//     for (accounts) |pubkey| {
+//         const maybe_slot_and_account = accounts_db.getSlotAndAccount(&pubkey) catch null;
+//         if (maybe_slot_and_account) |slot_and_account| {
+//             const slot, const account = slot_and_account;
+//             defer account.deinit(allocator);
+//             if (account.lamports == 0) continue;
+//             const data = try account.data.dupeAllocatedOwned(allocator);
+//             defer data.deinit(allocator);
 
-            try writer.print(
-                "  {}: slot={}, lamports={}, owner={}, executable={}, rent_epoch={}",
-                .{
-                    pubkey,
-                    slot,
-                    account.lamports,
-                    account.owner,
-                    account.executable,
-                    account.rent_epoch,
-                },
-            );
+//             try writer.print(
+//                 "  {}: slot={}, lamports={}, owner={}, executable={}, rent_epoch={}",
+//                 .{
+//                     pubkey,
+//                     slot,
+//                     account.lamports,
+//                     account.owner,
+//                     account.executable,
+//                     account.rent_epoch,
+//                 },
+//             );
 
-            try writeSlice(allocator, writer, ", data=", "\n", u8, data.owned_allocation);
-        }
-    }
-}
+//             try writeSlice(allocator, writer, ", data=", "\n", u8, data.owned_allocation);
+//         }
+//     }
+// }
 
 fn writeSlice(
     allocator: Allocator,
