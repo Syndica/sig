@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const tracy = @import("tracy");
 
-const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
+const ScopedThreadPool = sig.utils.thread.ScopedThreadPool;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;
 
 /// Unpack tarball is related to accounts_db so we reuse it's progress bar
@@ -27,37 +27,38 @@ fn stripComponents(path: []const u8, count: u32) ![]const u8 {
 /// Two zeroed out blocks representing the end of an archive.
 pub const sentinel_blocks: [512 * 2]u8 = .{0} ** (512 * 2);
 
-pub const UnTarTask = struct {
+fn writeToFile(
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,
     file_name: []const u8,
     contents: []u8,
+) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "writeToFile" });
+    defer zone.deinit();
 
-    pub fn run(self: *UnTarTask) !void {
-        defer {
-            self.allocator.free(self.file_name);
-            self.allocator.free(self.contents);
-        }
-
-        var file = try self.dir.createFile(self.file_name, .{ .read = true });
-        defer file.close();
-
-        const file_size = self.contents.len;
-        try file.seekTo(file_size - 1);
-        _ = try file.write(&[_]u8{1});
-        try file.seekTo(0);
-
-        const memory = try std.posix.mmap(
-            null,
-            file_size,
-            std.posix.PROT.WRITE,
-            std.posix.MAP{ .TYPE = .SHARED },
-            file.handle,
-            0,
-        );
-        @memcpy(memory, self.contents);
+    defer {
+        allocator.free(file_name);
+        allocator.free(contents);
     }
-};
+
+    var file = try dir.createFile(file_name, .{ .read = true });
+    defer file.close();
+
+    const file_size = contents.len;
+    try file.seekTo(file_size - 1);
+    _ = try file.write(&[_]u8{1});
+    try file.seekTo(0);
+
+    const memory = try std.posix.mmap(
+        null,
+        file_size,
+        std.posix.PROT.WRITE,
+        std.posix.MAP{ .TYPE = .SHARED },
+        file.handle,
+        0,
+    );
+    @memcpy(memory, contents);
+}
 
 pub fn parallelUntarToFileSystem(
     allocator: std.mem.Allocator,
@@ -72,12 +73,9 @@ pub fn parallelUntarToFileSystem(
 
     logger.info().logf("using {d} threads to unpack snapshot", .{n_threads});
 
-    var pool =
-        try HomogeneousThreadPool(UnTarTask).init(allocator, @intCast(n_threads), n_threads);
-    defer {
-        if (!pool.joinForDeinit(.fromSecs(1))) logger.warn().log("failed to join for deinit");
-        pool.deinit(allocator);
-    }
+    const pool = try ScopedThreadPool(writeToFile).init(allocator, n_threads);
+    defer pool.deinit(allocator);
+
     var timer = sig.time.Timer.start();
     var progress_timer = sig.time.Timer.start();
     var file_count: usize = 0;
@@ -153,12 +151,7 @@ pub fn parallelUntarToFileSystem(
                 const file_name = try allocator.dupe(u8, file_name_stripped);
                 errdefer allocator.free(file_name);
 
-                try pool.schedule(allocator, .{
-                    .allocator = allocator,
-                    .contents = contents,
-                    .dir = dir,
-                    .file_name = file_name,
-                });
+                try pool.schedule(allocator, .{ allocator, dir, file_name, contents });
             },
             .global_extended_header, .extended_header => {
                 return error.TarUnsupportedFileType;
@@ -170,7 +163,7 @@ pub fn parallelUntarToFileSystem(
     }
 
     // wait for all tasks
-    pool.joinFallible() catch |err|
+    pool.join() catch |err|
         logger.err().logf("UnTarTask encountered error: {s}", .{@errorName(err)});
 }
 
