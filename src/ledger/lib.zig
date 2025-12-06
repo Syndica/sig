@@ -10,6 +10,7 @@ pub const shred_inserter = @import("shred_inserter/lib.zig");
 pub const shredder = @import("shredder.zig");
 pub const tests = @import("tests.zig");
 pub const transaction_status = @import("transaction_status.zig");
+pub const agave_migration_tool = @import("agave_migration_tool.zig");
 
 pub const Ledger = @import("Ledger.zig");
 pub const Reader = @import("Reader.zig");
