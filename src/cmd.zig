@@ -1236,27 +1236,6 @@ fn validator(
 
     const turbine_config = cfg.turbine;
 
-    // shred network
-    var shred_network_manager = try sig.shred_network.start(
-        cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
-        .{
-            .allocator = allocator,
-            .logger = .from(app_base.logger),
-            .registry = app_base.metrics_registry,
-            .random = prng.random(),
-            .ledger = &ledger,
-            .my_keypair = &app_base.my_keypair,
-            .exit = app_base.exit,
-            .gossip_table_rw = &gossip_service.gossip_table_rw,
-            .my_shred_version = &gossip_service.my_shred_version,
-            .epoch_context_mgr = &epoch_context_manager,
-            .my_contact_info = my_contact_info,
-            .n_retransmit_threads = turbine_config.num_retransmit_threads,
-            .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
-        },
-    );
-    defer shred_network_manager.deinit();
-
     // Vote account. if not provided, disable voting
     const maybe_vote_pubkey: ?Pubkey = if (cfg.voting_enabled) blk: {
         const vote_keypair_path = cfg.vote_account orelse default_path: {
@@ -1281,10 +1260,7 @@ fn validator(
         };
     } else null;
 
-    // If voting was enabled but no vote account is available, disable voting.
-    const voting_enabled = cfg.voting_enabled and maybe_vote_pubkey != null;
-
-    const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (voting_enabled)
+    const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (cfg.voting_enabled)
         try replay.consensus.core.VoteSockets.init()
     else
         null;
@@ -1297,11 +1273,37 @@ fn validator(
         .epoch_context_manager = &epoch_context_manager,
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
-        .voting_enabled = voting_enabled,
+        .voting_enabled = cfg.voting_enabled,
         .vote_account_address = maybe_vote_pubkey,
         .stop_at_slot = cfg.stop_at_slot,
     });
     defer replay_service_state.deinit(allocator);
+
+    // shred network
+    var shred_network_manager = try sig.shred_network.start(
+        cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
+        .{
+            .allocator = allocator,
+            .logger = .from(app_base.logger),
+            .registry = app_base.metrics_registry,
+            .random = prng.random(),
+            .ledger = &ledger,
+            .my_keypair = &app_base.my_keypair,
+            .exit = app_base.exit,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+            .my_shred_version = &gossip_service.my_shred_version,
+            .epoch_context_mgr = &epoch_context_manager,
+            .my_contact_info = my_contact_info,
+            .n_retransmit_threads = turbine_config.num_retransmit_threads,
+            .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
+            .duplicate_slots_sender = if (cfg.disable_consensus)
+                null
+            else
+                replay_service_state.receivers.duplicate_slots,
+            .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
+        },
+    );
+    defer shred_network_manager.deinit();
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
@@ -1581,6 +1583,9 @@ fn shredNetwork(
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,
+        // No consensus in the standalone mode, so duplicate slots are not reported
+        .duplicate_slots_sender = null,
+        .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
     });
     defer shred_network_manager.deinit();
 
