@@ -41,14 +41,6 @@ pub fn run(seed: u64, args: []const []const u8) !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // logs
-    var std_logger = try sig.trace.ChannelPrintLogger.init(.{
-        .allocator = std.heap.c_allocator,
-        .max_level = sig.trace.Level.debug,
-        .max_buffer = 1 << 20,
-    }, null);
-    defer std_logger.deinit();
-
     // setup randomness
     var prng = std.Random.DefaultPrng.init(seed);
 

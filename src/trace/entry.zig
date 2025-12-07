@@ -26,7 +26,7 @@ pub fn Entry(comptime Fields: type, comptime scope: []const u8) type {
             comptime name: [:0]const u8,
             value: anytype,
         ) Entry(FieldsPlus(name, @TypeOf(value)), scope) {
-            if (self.logger == .noop) return .{
+            if (self.logger.impl == .noop) return .{
                 .logger = .noop,
                 .level = undefined,
                 .fields = undefined,
