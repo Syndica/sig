@@ -7,6 +7,7 @@ const config = @import("config.zig");
 const tracy = @import("tracy");
 
 const replay = sig.replay;
+const magic_info = sig.core.magic_info;
 
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
@@ -17,7 +18,6 @@ const GeyserWriter = sig.geyser.GeyserWriter;
 const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
-const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SnapshotFiles = sig.accounts_db.snapshot.SnapshotFiles;
@@ -1153,7 +1153,6 @@ fn validator(
     defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
-    const bank_fields = &collapsed_manifest.bank_fields;
 
     // ledger
     var ledger = try Ledger.init(
@@ -1177,60 +1176,28 @@ fn validator(
     const my_contact_info =
         sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
 
-    const epoch_schedule = bank_fields.epoch_schedule;
-    const epoch = bank_fields.epoch;
-
-    const staked_nodes = try collapsed_manifest.epochStakes(epoch);
-    var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
-    defer epoch_context_manager.deinit();
-    try epoch_context_manager.contexts.realign(epoch);
-    {
-        var staked_nodes_cloned = try staked_nodes.clone(allocator);
-        errdefer staked_nodes_cloned.deinit(allocator);
-
-        const leader_schedule = if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule|
-            leader_schedule[1].slot_leaders
-        else ls: {
-            // TODO: Implement feature gating for vote keyed leader schedule.
-            // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
-            // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
-            break :ls if (true)
-                try LeaderSchedule.fromVoteAccounts(
-                    allocator,
-                    epoch,
-                    epoch_schedule.slots_per_epoch,
-                    try collapsed_manifest.epochVoteAccounts(epoch),
-                )
-            else
-                try LeaderSchedule.fromStakedNodes(
-                    allocator,
-                    epoch,
-                    epoch_schedule.slots_per_epoch,
-                    staked_nodes,
-                );
-        };
-        errdefer allocator.free(leader_schedule);
-
-        try epoch_context_manager.put(epoch, .{
-            .staked_nodes = staked_nodes_cloned,
-            .leader_schedule = leader_schedule,
-        });
-    }
+    const feature_set = try loaded_snapshot.featureSet(allocator);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initFromManifest(
+        allocator,
+        collapsed_manifest,
+        &feature_set,
+    );
+    defer magic_tracker.deinit(allocator);
 
     const rpc_cluster_type = loaded_snapshot.genesis_config.cluster_type;
     var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
     defer rpc_client.deinit();
 
-    var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService.init(
+    var rpc_epoch_ctx_service = RpcLeaderScheduleService.init(
         allocator,
         .from(app_base.logger),
-        &epoch_context_manager,
+        &magic_tracker,
         rpc_client,
     );
 
     const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
         .{},
-        sig.adapter.RpcEpochContextService.run,
+        RpcLeaderScheduleService.run,
         .{ &rpc_epoch_ctx_service, app_base.exit },
     );
 
@@ -1249,7 +1216,7 @@ fn validator(
             .exit = app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
-            .epoch_context_mgr = &epoch_context_manager,
+            .magic_tracker = &magic_tracker,
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = turbine_config.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
@@ -1294,7 +1261,7 @@ fn validator(
         .account_store = .{ .accounts_db_two = &new_db },
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
-        .epoch_context_manager = &epoch_context_manager,
+        .magic_tracker = &magic_tracker,
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = voting_enabled,
@@ -1408,20 +1375,6 @@ fn replayOffline(
     defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
-    const bank_fields = &collapsed_manifest.bank_fields;
-
-    // leader schedule
-    var leader_schedule_cache = LeaderScheduleCache.init(allocator, bank_fields.epoch_schedule);
-    if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule| {
-        try leader_schedule_cache.put(bank_fields.epoch, leader_schedule[1]);
-    } else {
-        const schedule_1 = try collapsed_manifest.leaderSchedule(allocator, null);
-        errdefer schedule_1.deinit();
-        try leader_schedule_cache.put(bank_fields.epoch, schedule_1);
-        const schedule_2 = try collapsed_manifest.leaderSchedule(allocator, bank_fields.epoch + 1);
-        errdefer schedule_2.deinit();
-        try leader_schedule_cache.put(bank_fields.epoch + 1, schedule_2);
-    }
 
     // ledger
     var ledger = try Ledger.init(
@@ -1438,76 +1391,20 @@ fn replayOffline(
         app_base.exit,
     });
 
-    const epoch_schedule = bank_fields.epoch_schedule;
-    const epoch = bank_fields.epoch;
-
-    const staked_nodes = try collapsed_manifest.epochStakes(epoch);
-    var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
-    defer epoch_context_manager.deinit();
-    try epoch_context_manager.contexts.realign(epoch);
-    {
-        var staked_nodes_cloned = try staked_nodes.clone(allocator);
-        errdefer staked_nodes_cloned.deinit(allocator);
-
-        // TODO: Implement feature gating for vote keyed leader schedule.
-        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
-        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
-        const leader_schedule_0 = if (true)
-            try LeaderSchedule.fromVoteAccounts(
-                allocator,
-                epoch,
-                epoch_schedule.slots_per_epoch,
-                try collapsed_manifest.epochVoteAccounts(epoch),
-            )
-        else
-            try LeaderSchedule.fromStakedNodes(
-                allocator,
-                epoch,
-                epoch_schedule.slots_per_epoch,
-                staked_nodes,
-            );
-        errdefer allocator.free(leader_schedule_0);
-
-        try epoch_context_manager.put(epoch, .{
-            .staked_nodes = staked_nodes_cloned,
-            .leader_schedule = leader_schedule_0,
-        });
-    }
-    { // TODO: This was a quick ugly fix, needs to be handled correctly before merging
-        var staked_nodes_cloned = try staked_nodes.clone(allocator);
-        errdefer staked_nodes_cloned.deinit(allocator);
-
-        // TODO: Implement feature gating for vote keyed leader schedule.
-        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
-        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
-        const leader_schedule_1 = if (true)
-            try LeaderSchedule.fromVoteAccounts(
-                allocator,
-                epoch + 1,
-                epoch_schedule.slots_per_epoch,
-                try collapsed_manifest.epochVoteAccounts(epoch + 1),
-            )
-        else
-            try LeaderSchedule.fromStakedNodes(
-                allocator,
-                epoch,
-                epoch_schedule.slots_per_epoch,
-                staked_nodes,
-            );
-        errdefer allocator.free(leader_schedule_1);
-
-        try epoch_context_manager.put(epoch + 1, .{
-            .staked_nodes = staked_nodes_cloned,
-            .leader_schedule = leader_schedule_1,
-        });
-    }
+    const feature_set = try loaded_snapshot.featureSet(allocator);
+    var magic_tracker = try sig.core.magic_info.MagicTracker.initFromManifest(
+        allocator,
+        collapsed_manifest,
+        &feature_set,
+    );
+    defer magic_tracker.deinit(allocator);
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db_two = &new_db },
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
-        .epoch_context_manager = &epoch_context_manager,
+        .magic_tracker = &magic_tracker,
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = false,
@@ -1568,15 +1465,28 @@ fn shredNetwork(
         allocator.destroy(gossip_service);
     }
 
-    var epoch_context_manager = try sig.adapter.EpochContextManager
-        .init(allocator, genesis_config.epoch_schedule);
-    var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService
-        .init(allocator, .from(app_base.logger), &epoch_context_manager, rpc_client);
+    var magic_tracker = magic_info.MagicTracker.init(
+        .initFromGenesisConfig(&genesis_config),
+        shred_network_conf.root_slot,
+        genesis_config.epoch_schedule,
+    );
+    defer magic_tracker.deinit(allocator);
+
+    var rpc_epoch_ctx_service = RpcLeaderScheduleService
+        .init(allocator, .from(app_base.logger), &magic_tracker, rpc_client);
     const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
         .{},
-        sig.adapter.RpcEpochContextService.run,
+        RpcLeaderScheduleService.run,
         .{ &rpc_epoch_ctx_service, app_base.exit },
     );
+
+    var start = sig.time.Timer.start();
+    while (start.read().asSecs() < 60) {
+        _ = magic_tracker.getLeaderSchedules() catch {
+            std.Thread.sleep(1_000_000_000);
+            continue;
+        };
+    }
 
     var ledger = try Ledger.init(
         allocator,
@@ -1608,7 +1518,7 @@ fn shredNetwork(
         .exit = app_base.exit,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .my_shred_version = &gossip_service.my_shred_version,
-        .epoch_context_mgr = &epoch_context_manager,
+        .magic_tracker = &magic_tracker,
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,
@@ -2175,7 +2085,7 @@ const ReplayAndConsensusServiceState = struct {
             account_store: sig.accounts_db.AccountStore,
             loaded_snapshot: *sig.accounts_db.snapshot.LoadedSnapshot,
             ledger: *Ledger,
-            epoch_context_manager: *sig.adapter.EpochContextManager,
+            magic_tracker: *sig.core.magic_info.MagicTracker,
             replay_threads: u32,
             disable_consensus: bool,
             voting_enabled: bool,
@@ -2187,11 +2097,6 @@ const ReplayAndConsensusServiceState = struct {
             const account_store = params.account_store;
             const manifest = &params.loaded_snapshot.collapsed_manifest;
             const bank_fields = &manifest.bank_fields;
-            const epoch = bank_fields.epoch;
-
-            const epoch_stakes_map = &manifest.bank_extra.versioned_epoch_stakes;
-            const epoch_stakes = epoch_stakes_map.get(epoch) orelse
-                return error.EpochStakesMissingFromSnapshot;
 
             const feature_set = try sig.replay.service.getActiveFeatures(
                 allocator,
@@ -2213,12 +2118,6 @@ const ReplayAndConsensusServiceState = struct {
             const hard_forks = try bank_fields.hard_forks.clone(allocator);
             errdefer hard_forks.deinit(allocator);
 
-            const current_epoch_constants: sig.core.EpochConstants = try .fromBankFields(
-                bank_fields,
-                try epoch_stakes.current.convert(allocator, .delegation),
-            );
-            errdefer current_epoch_constants.deinit(allocator);
-
             break :replay_state try .init(.{
                 .allocator = allocator,
                 .logger = .from(params.app_base.logger),
@@ -2239,15 +2138,12 @@ const ReplayAndConsensusServiceState = struct {
                 },
                 .account_store = account_store,
                 .ledger = params.ledger,
-                .epoch_schedule = bank_fields.epoch_schedule,
-                .slot_leaders = params.epoch_context_manager.slotLeaders(),
+                .magic_tracker = params.magic_tracker,
                 .root = .{
                     .slot = bank_fields.slot,
                     .constants = root_slot_constants,
                     .state = root_slot_state,
                 },
-                .current_epoch = epoch,
-                .current_epoch_constants = current_epoch_constants,
                 .hard_forks = hard_forks,
                 .replay_threads = params.replay_threads,
                 .stop_at_slot = params.stop_at_slot,
@@ -2423,3 +2319,96 @@ fn loggingPanic(message: []const u8, first_trace_addr: ?usize) noreturn {
     sig.trace.logfmt.writeLog(writer, "panic", .err, .{}, "{s}", .{message}) catch {};
     std.debug.defaultPanic(message, first_trace_addr);
 }
+
+pub const RpcLeaderScheduleService = struct {
+    allocator: std.mem.Allocator,
+    logger: RpcLeaderScheduleServiceLogger,
+    rpc_client: sig.rpc.Client,
+    magic_tracker: *sig.core.magic_info.MagicTracker,
+
+    const Self = @This();
+    const RpcLeaderScheduleServiceLogger = sig.trace.Logger(@typeName(Self));
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        logger: RpcLeaderScheduleServiceLogger,
+        magic_tracker: *sig.core.magic_info.MagicTracker,
+        rpc_client: sig.rpc.Client,
+    ) Self {
+        return .{
+            .allocator = allocator,
+            .logger = logger.withScope(@typeName(Self)),
+            .rpc_client = rpc_client,
+            .magic_tracker = magic_tracker,
+        };
+    }
+
+    pub fn run(self: *Self, exit: *std.atomic.Value(bool)) void {
+        var i: usize = 0;
+        while (!exit.load(.monotonic)) {
+            if (i % 1000 == 0) {
+                var result: anyerror!void = undefined;
+                for (0..3) |_| {
+                    result = self.refresh();
+                    if (result != error.EndOfStream) break;
+                }
+                result catch |e|
+                    self.logger.err().logf("failed to refresh epoch context via rpc: {}", .{e});
+            }
+            std.Thread.sleep(std.time.ns_per_s);
+            i += 1;
+        }
+    }
+
+    fn refresh(self: *Self) !void {
+        const response = try self.rpc_client.getSlot(.{});
+        defer response.deinit();
+        const slot = try response.result();
+
+        // Get the current epoch, and the epoch whose stakes were used to compute the leader schedule
+        // for the current epoch.
+        const epoch = self.magic_tracker.epoch_schedule.getEpoch(slot);
+        const leader_schedule_epoch = self.magic_tracker.epoch_schedule.getEpoch(
+            slot -| self.magic_tracker.epoch_schedule.leader_schedule_slot_offset,
+        );
+
+        // Iterate from the leader schedule epoch to the current epoch, and populate any missing epochs in the magic tracker.
+        for (leader_schedule_epoch..epoch + 1) |e| {
+            if (self.magic_tracker.rooted_epochs.isNext(e)) {
+                const first_slot_in_epoch = self.magic_tracker.epoch_schedule.getFirstSlotInEpoch(e);
+                const epoch_leaders = try self.getLeaderSchedule(
+                    first_slot_in_epoch +|
+                        self.magic_tracker.epoch_schedule.leader_schedule_slot_offset,
+                );
+
+                var entry = try self.allocator.create(sig.core.magic_info.EpochInfo);
+                entry.* = .{
+                    .leaders = .{
+                        .leaders = epoch_leaders,
+                        .start = self.magic_tracker.epoch_schedule.getFirstSlotInEpoch(e),
+                        .end = self.magic_tracker.epoch_schedule.getLastSlotInEpoch(e),
+                    },
+                    .stakes = .EMPTY,
+                };
+                entry.stakes.stakes.epoch = e;
+                errdefer {
+                    entry.deinit(self.allocator);
+                    self.allocator.destroy(entry);
+                }
+
+                try self.magic_tracker.rooted_epochs.insert(self.allocator, entry);
+            }
+        }
+    }
+
+    fn getLeaderSchedule(self: *Self, slot: sig.core.Slot) ![]const sig.core.Pubkey {
+        const response = try self.rpc_client.getLeaderSchedule(.{ .slot = slot });
+        defer response.deinit();
+        const rpc_schedule = (try response.result()).value;
+        const schedule = try sig.core.leader_schedule.LeaderSchedule.fromMap(
+            self.allocator,
+            rpc_schedule,
+        );
+        return schedule.slot_leaders;
+    }
+};
