@@ -1,7 +1,7 @@
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
-const state = @import("state.zig");
+pub const state = @import("state.zig");
 const instruction = @import("instruction.zig");
 const program = @import("lib.zig");
 
@@ -23,7 +23,7 @@ const Instruction = instruction.Instruction;
 const InstructionContext = runtime.InstructionContext;
 const BorrowedAccount = runtime.BorrowedAccount;
 
-const StakeStateV2 = state.StakeStateV2;
+pub const StakeStateV2 = state.StakeStateV2;
 const Authorized = StakeStateV2.Authorized;
 const Lockup = StakeStateV2.Lockup;
 const StakeAuthorize = StakeStateV2.StakeAuthorize;
@@ -322,7 +322,7 @@ pub fn execute(
             try setLockup(allocator, &me, &lockup, ic.ixn_info.getSigners().slice(), &clock);
         },
         .get_minimum_delegation => {
-            const min_delegation = getMinimumDelegation(ic, ic.tc.feature_set);
+            const min_delegation = getMinimumDelegation(ic.tc.slot, ic.tc.feature_set);
             const bytes = std.mem.asBytes(&std.mem.nativeToLittle(u64, min_delegation));
 
             std.debug.assert(bytes.len == 8);
@@ -552,9 +552,9 @@ fn authorizeWithSeed(
     );
 }
 
-fn getMinimumDelegation(ic: *InstructionContext, feature_set: *const FeatureSet) u64 {
+pub fn getMinimumDelegation(slot: Slot, feature_set: *const FeatureSet) u64 {
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
-    return if (feature_set.active(.stake_raise_minimum_delegation_to_1_sol, ic.tc.slot))
+    return if (feature_set.active(.stake_raise_minimum_delegation_to_1_sol, slot))
         1 * LAMPORTS_PER_SOL
     else
         1;
@@ -569,7 +569,7 @@ fn validateDelegatedAmount(
     feature_set: *const FeatureSet,
 ) InstructionError!ValidatedDelegatedInfo {
     const stake_amount = account.account.lamports -| meta.rent_exempt_reserve;
-    if (stake_amount < getMinimumDelegation(ic, feature_set)) {
+    if (stake_amount < getMinimumDelegation(ic.tc.slot, feature_set)) {
         ic.tc.custom_error = @intFromEnum(StakeError.insufficient_delegation);
         return error.Custom;
     }
@@ -596,15 +596,7 @@ fn newStake(
 fn newWarmupCooldownRateEpoch(ic: *InstructionContext) ?Epoch {
     const epoch_schedule = ic.tc.sysvar_cache.get(sysvar.EpochSchedule) catch
         @panic("failed to get epoch schedule"); // agave calls .unwrap here (!!).
-
-    // Originally on FeatureSet, inlined here.
-    if (ic.tc.feature_set.get(.reduce_stake_warmup_cooldown)) |activated_slot| {
-        if (ic.tc.slot >= activated_slot) {
-            return epoch_schedule.getEpoch(activated_slot);
-        }
-    }
-
-    return null;
+    return ic.tc.feature_set.newWarmupCooldownRateEpoch(&epoch_schedule);
 }
 
 fn redelegateStake(
@@ -618,7 +610,7 @@ fn redelegateStake(
 ) ?StakeError {
     const new_rate_activation_epoch = newWarmupCooldownRateEpoch(ic);
 
-    if (stake.delegation.effectiveStake(
+    if (stake.delegation.getEffectiveStake(
         clock.epoch,
         stake_history,
         new_rate_activation_epoch,
@@ -732,7 +724,7 @@ fn getStakeStatus(
     clock: *const sysvar.Clock,
 ) InstructionError!sysvar.StakeHistory.StakeState {
     const stake_history = try ic.tc.sysvar_cache.get(sysvar.StakeHistory);
-    return stake.delegation.stakeActivatingAndDeactivating(
+    return stake.delegation.getStakeState(
         clock.epoch,
         &stake_history,
         newWarmupCooldownRateEpoch(ic),
@@ -834,7 +826,7 @@ fn split(
             var args = stake_args;
             try args.meta.authorized.check(signers, .staker);
 
-            const minimum_delegation = getMinimumDelegation(ic, feature_set);
+            const minimum_delegation = getMinimumDelegation(ic.tc.slot, feature_set);
             const is_active = blk: {
                 const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
                 const status = try getStakeStatus(ic, &args.stake, &clock);
@@ -1016,7 +1008,7 @@ const MergeKind = union(enum) {
     ) (error{OutOfMemory} || InstructionError)!MergeKind {
         switch (stake_state.*) {
             .stake => |args| {
-                const status = args.stake.delegation.stakeActivatingAndDeactivating(
+                const status = args.stake.delegation.getStakeState(
                     clock.epoch,
                     stake_history,
                     newWarmupCooldownRateEpoch(ic),
@@ -1282,7 +1274,7 @@ fn withdraw(
                 try args.meta.authorized.check(signers, .withdrawer);
 
                 const staked = if (clock.epoch >= args.stake.delegation.deactivation_epoch)
-                    args.stake.delegation.effectiveStake(
+                    args.stake.delegation.getEffectiveStake(
                         clock.epoch,
                         stake_history,
                         new_rate_activation_epoch,
@@ -1555,7 +1547,7 @@ fn moveStake(
     var source_stake = source_merge_kind.fully_active.@"1";
     const source_meta = source_merge_kind.fully_active.@"0";
 
-    const min_delegation = getMinimumDelegation(ic, ic.tc.feature_set);
+    const min_delegation = getMinimumDelegation(ic.tc.slot, ic.tc.feature_set);
     const source_effective_stake = source_stake.delegation.stake;
 
     const source_final_stake = std.math.sub(u64, source_effective_stake, lamports) catch

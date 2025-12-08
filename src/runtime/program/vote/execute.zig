@@ -5,6 +5,7 @@ const vote_program = sig.runtime.program.vote;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const vote_instruction = vote_program.vote_instruction;
 
+const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteState = vote_program.state.VoteState;
@@ -239,7 +240,7 @@ fn intializeAccount(
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
     defer vote_state.deinit(allocator);
 
@@ -812,7 +813,7 @@ fn processVoteWithAccount(
         allocator,
         ic,
         vote_account,
-        clock,
+        clock.epoch,
     );
     defer vote_state.deinit(allocator);
 
@@ -895,7 +896,7 @@ fn voteStateUpdate(
         allocator,
         ic,
         vote_account,
-        clock,
+        clock.epoch,
     );
     defer vote_state.deinit(allocator);
 
@@ -959,7 +960,7 @@ fn towerSync(
         allocator,
         ic,
         vote_account,
-        clock,
+        clock.epoch,
     );
     defer vote_state.deinit(allocator);
 
@@ -990,7 +991,7 @@ fn verifyAndGetVoteState(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
-    clock: Clock,
+    epoch: Epoch,
 ) (error{OutOfMemory} || InstructionError)!VoteState {
     var versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
@@ -1004,7 +1005,7 @@ fn verifyAndGetVoteState(
     var vote_state = try versioned_state.convertToCurrent(allocator);
     errdefer vote_state.deinit(allocator);
 
-    const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, clock.epoch);
+    const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, epoch);
     if (!ic.ixn_info.isPubkeySigner(authorized_voter)) {
         return InstructionError.MissingRequiredSignature;
     }
@@ -1250,7 +1251,7 @@ test "vote_program: executeIntializeAccount" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer final_vote_state.deinit(allocator);
 
@@ -1344,7 +1345,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer initial_vote_state.deinit(allocator);
 
@@ -1354,7 +1355,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
         authorized_voter,
         new_authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer final_vote_state.deinit(allocator);
 
@@ -1444,7 +1445,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer initial_vote_state.deinit(allocator);
 
@@ -1454,7 +1455,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
     try final_vote_state.voters.insert(allocator, 1, new_authorized_voter);
     final_vote_state.prior_voters.append(.{
@@ -1561,7 +1562,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer initial_vote_state.deinit(allocator);
 
@@ -1571,7 +1572,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
         authorized_voter,
         new_authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer final_vote_state.deinit(allocator);
 
@@ -1671,7 +1672,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer initial_vote_state.deinit(allocator);
 
@@ -1681,7 +1682,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
         authorized_voter,
         new_authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer final_vote_state.deinit(allocator);
 
@@ -1774,7 +1775,7 @@ test "vote_program: authorizeChecked withdrawer" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer initial_vote_state.deinit(allocator);
 
@@ -1784,7 +1785,7 @@ test "vote_program: authorizeChecked withdrawer" {
         authorized_voter,
         new_authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer final_vote_state.deinit(allocator);
 
@@ -1872,7 +1873,7 @@ test "vote_program: update_validator_identity" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer initial_vote_state.deinit(allocator);
 
@@ -1882,7 +1883,7 @@ test "vote_program: update_validator_identity" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer final_vote_state.deinit(allocator);
 
@@ -1962,7 +1963,7 @@ test "vote_program: update_validator_identity new authority did not sign" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer initial_vote_state.deinit(allocator);
 
@@ -1972,7 +1973,7 @@ test "vote_program: update_validator_identity new authority did not sign" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer final_vote_state.deinit(allocator);
 
@@ -2055,7 +2056,7 @@ test "vote_program: update_validator_identity current authority did not sign" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer initial_vote_state.deinit(allocator);
 
@@ -2065,7 +2066,7 @@ test "vote_program: update_validator_identity current authority did not sign" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer final_vote_state.deinit(allocator);
 
@@ -2156,7 +2157,7 @@ test "vote_program: update_commission increasing commission" {
         authorized_voter,
         authorized_withdrawer,
         initial_commission,
-        clock,
+        clock.epoch,
     ) };
     defer initial_vote_state.deinit(allocator);
 
@@ -2166,7 +2167,7 @@ test "vote_program: update_commission increasing commission" {
         authorized_voter,
         authorized_withdrawer,
         final_commission,
-        clock,
+        clock.epoch,
     ) };
     defer final_vote_state.deinit(allocator);
 
@@ -2267,7 +2268,7 @@ test "vote_program: update_commission decreasing commission" {
         authorized_voter,
         authorized_withdrawer,
         initial_commission,
-        clock,
+        clock.epoch,
     ) };
     defer initial_vote_state.deinit(allocator);
 
@@ -2277,7 +2278,7 @@ test "vote_program: update_commission decreasing commission" {
         authorized_voter,
         authorized_withdrawer,
         final_commission,
-        clock,
+        clock.epoch,
     ) };
     defer final_vote_state.deinit(allocator);
 
@@ -2378,7 +2379,7 @@ test "vote_program: update_commission commission update too late passes with fea
         authorized_voter,
         authorized_withdrawer,
         initial_commission,
-        clock,
+        clock.epoch,
     ) };
     defer initial_vote_state.deinit(allocator);
 
@@ -2388,7 +2389,7 @@ test "vote_program: update_commission commission update too late passes with fea
         authorized_voter,
         authorized_withdrawer,
         final_commission,
-        clock,
+        clock.epoch,
     ) };
     defer final_vote_state.deinit(allocator);
 
@@ -2480,7 +2481,7 @@ test "vote_program: update_commission error commission update too late failure" 
         authorized_voter,
         authorized_withdrawer,
         initial_commission,
-        clock,
+        clock.epoch,
     ) };
     defer initial_vote_state.deinit(allocator);
 
@@ -2490,7 +2491,7 @@ test "vote_program: update_commission error commission update too late failure" 
         authorized_voter,
         authorized_withdrawer,
         final_commission,
-        clock,
+        clock.epoch,
     ) };
     defer final_vote_state.deinit(allocator);
 
@@ -2595,7 +2596,7 @@ test "vote_program: update_commission missing signature" {
         authorized_voter,
         authorized_withdrawer,
         initial_commission,
-        clock,
+        clock.epoch,
     ) };
     defer initial_vote_state.deinit(allocator);
 
@@ -2605,7 +2606,7 @@ test "vote_program: update_commission missing signature" {
         authorized_voter,
         authorized_withdrawer,
         final_commission,
-        clock,
+        clock.epoch,
     ) };
     defer final_vote_state.deinit(allocator);
 
@@ -2699,7 +2700,7 @@ test "vote_program: widthdraw no changes" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer vote_state.deinit(allocator);
 
@@ -2783,7 +2784,7 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer vote_state.deinit(allocator);
 
@@ -2875,7 +2876,7 @@ test "vote_program: widthdraw all and close account with active vote account" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
     try state.epoch_credits.append(allocator, .{
         // Condition for account close down not met.
@@ -2977,7 +2978,7 @@ test "vote_program: widthdraw some amount below with balance below rent exempt" 
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer vote_state.deinit(allocator);
 
@@ -3064,7 +3065,7 @@ test "vote_program: widthdraw insufficient funds" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer vote_state.deinit(allocator);
 
@@ -3149,7 +3150,7 @@ test "vote_program: widthdraw with missing signature" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer vote_state.deinit(allocator);
 
@@ -3231,7 +3232,7 @@ test "vote_program: vote" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer vote_state.deinit(allocator);
 
@@ -3257,7 +3258,7 @@ test "vote_program: vote" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
 
     const landed_vote: LandedVote = .{
@@ -3346,7 +3347,7 @@ test "vote_program: vote switch" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer vote_state.deinit(allocator);
 
@@ -3372,7 +3373,7 @@ test "vote_program: vote switch" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
 
     const landed_vote: LandedVote = .{
@@ -3461,7 +3462,7 @@ test "vote_program: vote missing signature" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer vote_state.deinit(allocator);
 
@@ -3487,7 +3488,7 @@ test "vote_program: vote missing signature" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
 
     const landed_vote: LandedVote = .{
@@ -3579,7 +3580,7 @@ test "vote_program: empty vote" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     ) };
     defer vote_state.deinit(allocator);
 
@@ -3606,7 +3607,7 @@ test "vote_program: empty vote" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
 
     const landed_vote: LandedVote = .{
@@ -3700,7 +3701,7 @@ test "vote_program: vote state update" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
 
     try vote_state_init.votes.appendSlice(
@@ -3742,7 +3743,7 @@ test "vote_program: vote state update" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
 
     try final_state_init.votes.appendSlice(
@@ -3840,7 +3841,7 @@ test "vote_program: vote state update switch" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
 
     try vote_state_init.votes.appendSlice(
@@ -3882,7 +3883,7 @@ test "vote_program: vote state update switch" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
 
     try final_state_init.votes.appendSlice(
@@ -3981,7 +3982,7 @@ test "vote_program: compact vote state update" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
 
     try vote_state_init.votes.appendSlice(
@@ -4023,7 +4024,7 @@ test "vote_program: compact vote state update" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
 
     try final_state_init.votes.appendSlice(
@@ -4121,7 +4122,7 @@ test "vote_program: compact vote state update switch" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
 
     try vote_state_init.votes.appendSlice(
@@ -4163,7 +4164,7 @@ test "vote_program: compact vote state update switch" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
 
     try final_state_init.votes.appendSlice(
@@ -4262,7 +4263,7 @@ test "vote_program: tower sync" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
 
     try vote_state_init.votes.appendSlice(
@@ -4305,7 +4306,7 @@ test "vote_program: tower sync" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
 
     try final_state_init.votes.appendSlice(
@@ -4409,7 +4410,7 @@ test "vote_program: tower sync switch" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
 
     try vote_state_init.votes.appendSlice(
@@ -4452,7 +4453,7 @@ test "vote_program: tower sync switch" {
         authorized_voter,
         authorized_withdrawer,
         commission,
-        clock,
+        clock.epoch,
     );
 
     try final_state_init.votes.appendSlice(

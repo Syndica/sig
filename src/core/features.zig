@@ -3,6 +3,7 @@ const sig = @import("../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
+const EpochSchedule = sig.core.EpochSchedule;
 
 const ZonInfo = struct {
     name: [:0]const u8,
@@ -127,6 +128,16 @@ pub const Set = struct {
                 set.active(.full_inflation_devnet_and_testnet, slot)) return true;
             return false;
         }
+
+        pub fn mainnetSlot(self: FullInflationFeatures, set: *const Set) ?Slot {
+            if (self.mainnet) return set.get(.full_inflation_mainnet_enable);
+            return null;
+        }
+
+        pub fn devnetAndTestnetSlot(self: FullInflationFeatures, set: *const Set) ?Slot {
+            if (self.devnet_and_testnet) return set.get(.full_inflation_devnet_and_testnet);
+            return null;
+        }
     };
 
     pub fn fullInflationFeatures(self: *const Set, slot: Slot) FullInflationFeatures {
@@ -137,8 +148,16 @@ pub const Set = struct {
         };
     }
 
-    pub fn iterator(set: *const Set, slot: Slot) Iterator {
+    pub fn newWarmupCooldownRateEpoch(self: *const Set, epoch_schedule: *const EpochSchedule) ?u64 {
+        return if (self.get(.reduce_stake_warmup_cooldown)) |slot|
+            epoch_schedule.getEpoch(slot)
+        else
+            null;
+    }
+
+    pub fn iterator(set: *const Set, slot: Slot, state: Iterator.State) Iterator {
         return .{
+            .state = state,
             .set = set,
             .slot = slot,
             .index = 0,
@@ -146,15 +165,21 @@ pub const Set = struct {
     }
 
     const Iterator = struct {
+        state: State,
         set: *const Set,
         slot: Slot,
         index: std.math.IntFittingRange(0, NUM_FEATURES),
+
+        const State = enum { active, inactive };
 
         pub fn next(self: *Iterator) ?Feature {
             while (true) : (self.index += 1) {
                 if (self.index == NUM_FEATURES - 1) return null;
                 const feature: Feature = @enumFromInt(self.index);
-                if (self.set.active(feature, self.slot)) {
+                const is_active = self.set.active(feature, self.slot);
+                if ((self.state == .active and is_active) or
+                    (self.state == .inactive and !is_active))
+                {
                     self.index += 1;
                     return feature;
                 }
