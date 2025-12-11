@@ -1588,57 +1588,49 @@ pub const GossipService = struct {
 
             for (pull_response_messages) |*pull_message| {
                 const full_len = pull_message.gossip_values.len;
-                const valid_len = self.filterBasedOnShredVersion(
+                const values_to_insert = self.filterBasedOnShredVersion(
                     gossip_table,
                     pull_message.gossip_values,
                     pull_message.from_pubkey.*,
                 );
-                const invalid_shred_count = full_len - valid_len;
+                const invalid_shred_count = full_len - values_to_insert.len;
 
                 const insert_results = try gossip_table.insertValues(
                     now,
-                    pull_message.gossip_values[0..valid_len],
+                    values_to_insert,
                     PULL_RESPONSE_TIMEOUT.asMillis(),
                 );
                 defer insert_results.deinit();
 
-                for (insert_results.items) |result| {
-                    switch (result) {
-                        .InsertedNewEntry => self.metrics.pull_response_n_new_inserts.inc(),
-                        .OverwroteExistingEntry => self.metrics.pull_response_n_overwrite_existing.inc(),
-                        .IgnoredOldValue => self.metrics.pull_response_n_old_value.inc(),
-                        .IgnoredDuplicateValue => self.metrics.pull_response_n_duplicate_value.inc(),
-                        .IgnoredTimeout => self.metrics.pull_response_n_timeouts.inc(),
-                        .GossipTableFull => {},
-                    }
-                }
                 self.metrics.pull_response_n_invalid_shred_version.add(invalid_shred_count);
 
-                for (pull_message.gossip_values, insert_results.items, 0..) |value, result, index| {
+                for (values_to_insert, insert_results.items) |value, result| {
+                    switch (result) {
+                        .InsertedNewEntry => self.metrics.pull_response_n_new_inserts.inc(),
+                        .OverwroteExistingEntry => |old_data| {
+                            self.metrics.pull_response_n_overwrite_existing.inc();
+                            old_data.deinit(self.gossip_data_allocator);
+                        },
+                        .IgnoredOldValue => self.metrics.pull_response_n_old_value.inc(),
+                        .IgnoredDuplicateValue => self.metrics.pull_response_n_duplicate_value.inc(),
+                        .IgnoredTimeout => {
+                            self.metrics.pull_response_n_timeouts.inc();
+                            // silently insert the timeout values
+                            // (without updating all associated origin values)
+                            const new_result = try gossip_table.insert(value, now);
+                            if (new_result.wasInserted()) {
+                                try self.broker.publish(&value.data);
+                            }
+                        },
+                        .GossipTableFull => {},
+                    }
                     if (result.wasInserted()) {
                         try self.broker.publish(&value.data);
                         // update the contactInfo (and all other origin values) timestamps of
                         // successful inserts
-                        const origin = pull_message.gossip_values[index].id();
-                        gossip_table.updateRecordTimestamp(origin, now);
-
-                        switch (result) {
-                            .OverwroteExistingEntry => |old_data| {
-                                // if the value was overwritten, we need to free the old value
-                                old_data.deinit(self.gossip_data_allocator);
-                            },
-                            else => {},
-                        }
-                    } else if (result == .IgnoredTimeout) {
-                        // silently insert the timeout values
-                        // (without updating all associated origin values)
-                        const new_result =
-                            try gossip_table.insert(pull_message.gossip_values[index], now);
-                        if (new_result.wasInserted()) {
-                            try self.broker.publish(&pull_message.gossip_values[index].data);
-                        }
+                        gossip_table.updateRecordTimestamp(value.id(), now);
                     } else {
-                        try failed_insert_ptrs.append(&pull_message.gossip_values[index]);
+                        try failed_insert_ptrs.append(&value);
                     }
                 }
 
@@ -1737,22 +1729,22 @@ pub const GossipService = struct {
             for (batch_push_messages.items) |*push_message| {
                 // Filtered values are freed
                 const full_len = push_message.gossip_values.len;
-                const valid_len = self.filterBasedOnShredVersion(
+                const values_to_insert = self.filterBasedOnShredVersion(
                     gossip_table,
                     push_message.gossip_values,
                     push_message.from_pubkey.*,
                 );
-                const invalid_shred_count = full_len - valid_len;
+                const invalid_shred_count = full_len - values_to_insert.len;
 
                 try gossip_table.insertValuesWithResults(
                     now,
-                    push_message.gossip_values[0..valid_len],
+                    values_to_insert,
                     PUSH_MSG_TIMEOUT.asMillis(),
                     &insert_results,
                 );
 
                 var insert_fail_count: u64 = 0;
-                for (push_message.gossip_values, insert_results.items) |value, result| {
+                for (values_to_insert, insert_results.items) |value, result| {
                     switch (result) {
                         .InsertedNewEntry => self.metrics.push_message_n_new_inserts.inc(),
                         .OverwroteExistingEntry => |old_data| {
@@ -2075,17 +2067,17 @@ pub const GossipService = struct {
 
     /// Sorts the incoming `gossip_values` slice to place the valid gossip data
     /// at the start, and returns the number of valid gossip values in that slice.
-    pub fn filterBasedOnShredVersion(
+    fn filterBasedOnShredVersion(
         self: *GossipService,
         gossip_table: *const GossipTable,
         gossip_values: []SignedGossipData,
         sender_pubkey: Pubkey,
-    ) usize {
+    ) []const SignedGossipData {
         // we use swap remove which just reorders the array
         // (order dm), so we just track the new len -- ie, no allocations/frees
         const my_shred_version = self.my_shred_version.load(.monotonic);
         if (my_shred_version == 0) {
-            return gossip_values.len;
+            return gossip_values;
         }
 
         var gossip_values_array = ArrayList(SignedGossipData).fromOwnedSlice(self.allocator, gossip_values);
@@ -2113,7 +2105,7 @@ pub const GossipService = struct {
             }
             i += 1;
         }
-        return gossip_values_array.items.len;
+        return gossip_values_array.items;
     }
 };
 
