@@ -202,7 +202,7 @@ const GossipVoteReceptor = struct {
     ) ![]const vote_parser.ParsedVote {
         const zone = tracy.Zone.init(@src(), .{ .name = "receiveVerifiedVotes" });
         defer zone.deinit();
-        
+
         self.clearVoteTxBuffer(allocator);
         const vote_tx_buffer = &self.vote_tx_buffer;
         std.debug.assert(vote_tx_buffer.items.len == 0);

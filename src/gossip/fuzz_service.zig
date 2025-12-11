@@ -296,7 +296,7 @@ pub fn newGossipClient(
         keypair,
         entrypoints,
         .from(logger),
-        .disconnected,
+        .{},
     );
 }
 

@@ -1062,7 +1062,7 @@ fn gossip(
         cfg,
         &app_base,
         &.{},
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.shutdown();
@@ -1541,7 +1541,7 @@ fn shredNetwork(
     var gossip_service = try startGossip(allocator, gossip_value_allocator, cfg, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },
         .{ .tag = .turbine_recv, .port = turbine_recv_port },
-    }, .disconnected);
+    }, .{});
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
@@ -1806,7 +1806,7 @@ fn testTransactionSenderService(
         cfg,
         &app_base,
         &.{},
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.deinit();
@@ -2358,7 +2358,7 @@ fn downloadSnapshot(
         cfg,
         &app_base,
         &.{},
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.shutdown();

@@ -2129,10 +2129,6 @@ pub const LocalMessageBroker = struct {
     /// Pushes votes to VoteCollector in consensus.
     vote_collector: ?*Channel(sig.gossip.data.Vote) = null,
 
-    pub const disconnected = LocalMessageBroker{
-        .vote_collector = null,
-    };
-
     /// Publishes new gossip data that was just received over the network to the
     /// appropriate channels.
     ///
@@ -2388,7 +2384,7 @@ test "general coverage" {
         keypair,
         null,
         .noop,
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.shutdown();
@@ -2448,7 +2444,7 @@ test "handle pong messages" {
         keypair,
         null,
         .noop,
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.shutdown();
@@ -2524,7 +2520,7 @@ test "build messages startup and shutdown" {
         my_keypair,
         null,
         .from(logger),
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.deinit();
@@ -2585,7 +2581,7 @@ test "handling prune messages" {
         my_keypair,
         null,
         .from(logger),
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.shutdown();
@@ -2660,7 +2656,7 @@ test "handling pull responses" {
         my_keypair,
         null,
         .from(logger),
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.shutdown();
@@ -2722,7 +2718,7 @@ test "handle old prune & pull request message" {
         my_keypair,
         null,
         .noop,
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.deinit();
@@ -2822,7 +2818,7 @@ test "handle pull request" {
         my_keypair,
         null,
         .from(logger),
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.shutdown();
@@ -2934,7 +2930,7 @@ test "test build prune messages and handle push messages" {
         my_keypair,
         null,
         .from(logger),
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.deinit();
@@ -3036,7 +3032,7 @@ fn testBuildPullRequests(
             my_keypair,
             maybe_entrypoints,
             .from(logger),
-            .disconnected,
+            .{},
         );
     };
     defer {
@@ -3098,7 +3094,7 @@ test "test build push messages" {
         my_keypair,
         null,
         .from(logger),
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.shutdown();
@@ -3171,7 +3167,7 @@ test "large push messages" {
         my_keypair,
         null,
         .noop,
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.shutdown();
@@ -3226,7 +3222,7 @@ test "test packet verification" {
         keypair,
         null,
         .noop,
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.deinit();
@@ -3347,7 +3343,7 @@ test "process contact info push packet" {
         my_keypair,
         null,
         .from(logger),
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.deinit();
@@ -3456,7 +3452,7 @@ test "init, exit, and deinit" {
         my_keypair,
         null,
         .from(logger),
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.deinit();
@@ -3487,7 +3483,7 @@ test "leak checked gossip init" {
                 my_keypair,
                 null,
                 .FOR_TESTS,
-                .disconnected,
+                .{},
             );
             gossip_service.shutdown();
             gossip_service.deinit();
@@ -3560,7 +3556,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
             keypair,
             null,
             .noop,
-            .disconnected,
+            .{},
         );
         defer {
             gossip_service.metrics.reset();
@@ -3672,7 +3668,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
             keypair,
             null,
             .from(logger),
-            .disconnected,
+            .{},
         );
         defer {
             gossip_service.metrics.reset();

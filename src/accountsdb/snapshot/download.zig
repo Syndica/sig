@@ -1175,7 +1175,7 @@ test "can't download snapshot" {
         my_keypair,
         null,
         .noop,
-        .disconnected,
+        .{},
     );
     defer {
         gossip_service.shutdown();
