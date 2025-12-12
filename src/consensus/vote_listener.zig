@@ -207,7 +207,9 @@ const GossipVoteReceptor = struct {
         const vote_tx_buffer = &self.vote_tx_buffer;
         std.debug.assert(vote_tx_buffer.items.len == 0);
 
-        const max_votes_to_process: usize = 4096;
+        // this limit ensures the loop will eventually exit. it is set to MAX_VALIDATORS
+        // to ensure we can process at least 1 vote per validator per slot
+        const max_votes_to_process: usize = sig.MAX_VALIDATORS;
         try vote_tx_buffer.ensureTotalCapacityPrecise(allocator, max_votes_to_process);
         var votes_processed: usize = 0;
         while (gossip_votes.tryReceive()) |gossip_vote| {

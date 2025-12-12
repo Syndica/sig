@@ -39,6 +39,12 @@ pub const BENCHMARK_RESULTS_DIR = "results/";
 pub const GENESIS_DIR = "data/genesis-files/";
 pub const ELF_DATA_DIR = "data/test-elfs/";
 
+/// The maximum cluster size supported by sig. Raise this number to support
+/// larger clusters. It's used in cases when we need to assume an upper bound,
+/// for example to limit loop iterations to guarantee liveness of certain
+/// validator subsystems.
+pub const MAX_VALIDATORS = 20_000;
+
 comptime {
     // sig's global assertions/assumptions
 
