@@ -1419,13 +1419,7 @@ pub const GossipService = struct {
                 const result = gossip_table.insert(req.value, now) catch {
                     @panic("gossip table insertion failed");
                 };
-                switch (result) {
-                    .InsertedNewEntry => {},
-                    .OverwroteExistingEntry => |x| x.deinit(self.gossip_data_allocator),
-                    else => {
-                        req.value.deinit(self.gossip_data_allocator);
-                    },
-                }
+                if (result == .fail) req.value.deinit(self.gossip_data_allocator);
             }
         }
 
@@ -1605,32 +1599,15 @@ pub const GossipService = struct {
                 self.metrics.pull_response_n_invalid_shred_version.add(invalid_shred_count);
 
                 for (values_to_insert, insert_results.items) |value, result| {
+                    self.metrics.observeInsertResult(result);
                     switch (result) {
-                        .InsertedNewEntry => self.metrics.pull_response_n_new_inserts.inc(),
-                        .OverwroteExistingEntry => |old_data| {
-                            self.metrics.pull_response_n_overwrite_existing.inc();
-                            old_data.deinit(self.gossip_data_allocator);
-                        },
-                        .IgnoredOldValue => self.metrics.pull_response_n_old_value.inc(),
-                        .IgnoredDuplicateValue => self.metrics.pull_response_n_duplicate_value.inc(),
-                        .IgnoredTimeout => {
-                            self.metrics.pull_response_n_timeouts.inc();
-                            // silently insert the timeout values
-                            // (without updating all associated origin values)
-                            const new_result = try gossip_table.insert(value, now);
-                            if (new_result.wasInserted()) {
-                                try self.broker.publish(&value.data);
+                        .success => |success| {
+                            if (!success.timeout) {
+                                gossip_table.updateRecordTimestamp(value.id(), now);
                             }
+                            try self.broker.publish(&value.data);
                         },
-                        .GossipTableFull => {},
-                    }
-                    if (result.wasInserted()) {
-                        try self.broker.publish(&value.data);
-                        // update the contactInfo (and all other origin values) timestamps of
-                        // successful inserts
-                        gossip_table.updateRecordTimestamp(value.id(), now);
-                    } else {
-                        try failed_insert_ptrs.append(&value);
+                        .fail => try failed_insert_ptrs.append(&value),
                     }
                 }
 
@@ -1745,22 +1722,10 @@ pub const GossipService = struct {
 
                 var insert_fail_count: u64 = 0;
                 for (values_to_insert, insert_results.items) |value, result| {
+                    self.metrics.observeInsertResult(result);
                     switch (result) {
-                        .InsertedNewEntry => self.metrics.push_message_n_new_inserts.inc(),
-                        .OverwroteExistingEntry => |old_data| {
-                            self.metrics.push_message_n_overwrite_existing.inc();
-                            // if the value was overwritten, we need to free the old value
-                            old_data.deinit(self.gossip_data_allocator);
-                        },
-                        .IgnoredOldValue => self.metrics.push_message_n_old_value.inc(),
-                        .IgnoredDuplicateValue => self.metrics.push_message_n_duplicate_value.inc(),
-                        .IgnoredTimeout => self.metrics.push_message_n_timeouts.inc(),
-                        .GossipTableFull => {},
-                    }
-                    if (result.wasInserted()) {
-                        try self.broker.publish(&value.data);
-                    } else {
-                        insert_fail_count += 1;
+                        .success => try self.broker.publish(&value.data),
+                        .fail => insert_fail_count += 1,
                     }
                 }
                 self.metrics.push_message_n_invalid_shred_version.add(invalid_shred_count);
@@ -1778,10 +1743,8 @@ pub const GossipService = struct {
                 }
                 // free failed inserts
                 defer {
-                    for (insert_results.items, 0..) |result, index| {
-                        if (!result.wasInserted()) {
-                            push_message.gossip_values[index].deinit(self.gossip_data_allocator);
-                        }
+                    for (insert_results.items, values_to_insert) |result, value| {
+                        if (result == .fail) value.deinit(self.gossip_data_allocator);
                     }
                 }
 
@@ -1811,11 +1774,8 @@ pub const GossipService = struct {
                     break :blk lookup_result.value_ptr;
                 };
 
-                for (insert_results.items, 0..) |result, index| {
-                    if (!result.wasInserted()) {
-                        const origin = push_message.gossip_values[index].id();
-                        try failed_origins.put(origin, {});
-                    }
+                for (insert_results.items, values_to_insert) |result, value| {
+                    if (result == .fail) try failed_origins.put(value.id(), {});
                 }
             }
         }
@@ -1957,31 +1917,25 @@ pub const GossipService = struct {
 
             var gossip_data_unsigned = data.*;
             gossip_data_unsigned.wallclockPtr().* = now;
-            const signed_gossip_data = SignedGossipData.initSigned(&self.my_keypair, gossip_data_unsigned);
+            const signed = SignedGossipData.initSigned(&self.my_keypair, gossip_data_unsigned);
 
-            const result = gossip_table.insert(signed_gossip_data, now) catch |err| break .{ i, err };
+            const result = gossip_table.insert(signed, now) catch |err| break .{ i, err };
 
-            switch (result) {
-                // good and expected
-                .InsertedNewEntry => {},
-                .OverwroteExistingEntry => |*v| v.deinit(deinit_allocator),
-
-                // concerning
-                .IgnoredOldValue => {
+            if (result == .fail) switch (result.fail) {
+                .too_old => {
                     data.deinit(deinit_allocator);
-                    self.logger.warn().logf("DrainPushMessages: Ignored old value ({})", .{signed_gossip_data});
+                    self.logger.warn().logf("DrainPushMessages: Ignored old value ({})", .{signed});
                 },
-                .IgnoredDuplicateValue => {
+                .duplicate => {
                     data.deinit(deinit_allocator);
-                    self.logger.warn().logf("DrainPushMessages: Ignored duplicate value ({})", .{signed_gossip_data});
+                    self.logger.warn().logf(
+                        "DrainPushMessages: Ignored duplicate value ({})",
+                        .{signed},
+                    );
                 },
-
-                // not possible to reach from `insert`.
-                .IgnoredTimeout => unreachable,
-
                 // retry this value
-                .GossipTableFull => break .{ i, {} },
-            }
+                .table_full => break .{ i, {} },
+            };
         } else .{ push_msg_queue.queue.items.len, {} };
 
         // remove the gossip values which were inserted
@@ -2239,6 +2193,24 @@ pub const GossipMetrics = struct {
             @field(self, field.name).reset();
         }
     }
+
+    fn observeInsertResult(
+        metrics: GossipMetrics,
+        result: GossipTable.InsertResult,
+    ) void {
+        switch (result) {
+            .success => |success| if (success.replaced) {
+                metrics.pull_response_n_overwrite_existing.inc();
+            } else {
+                metrics.pull_response_n_new_inserts.inc();
+            },
+            .fail => |reason| switch (reason) {
+                .too_old => metrics.pull_response_n_old_value.inc(),
+                .duplicate => metrics.pull_response_n_duplicate_value.inc(),
+                .table_full => {},
+            },
+        }
+    }
 };
 
 pub const ChunkType = enum(u8) {
@@ -2409,7 +2381,7 @@ test "general coverage" {
 
         for (0..sig.gossip.service.UNIQUE_PUBKEY_CAPACITY * 2) |_| {
             const value: sig.gossip.SignedGossipData = .initRandom(prng, &keypair);
-            (try gossip_table.insert(value, 1)).deinit(allocator);
+            _ = try gossip_table.insert(value, 1);
         }
     }
 
