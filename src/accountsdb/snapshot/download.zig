@@ -1168,7 +1168,15 @@ test "can't download snapshot" {
     var me = try sig.gossip.ContactInfo.initRandom(allocator, random, my_pubkey, 0, 0, 1);
     try me.setSocket(.gossip, .{ .V4 = .{ .ip = .{ .octets = .{ 127, 0, 0, 1 } }, .port = 0 } });
 
-    var gossip_service = try GossipService.init(allocator, allocator, me, my_keypair, null, .noop);
+    var gossip_service = try GossipService.init(
+        allocator,
+        allocator,
+        me,
+        my_keypair,
+        null,
+        .noop,
+        .{},
+    );
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
