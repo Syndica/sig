@@ -3729,3 +3729,26 @@ test "benchmarkGossipService" {
         },
     });
 }
+
+test LocalMessageBroker {
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0);
+    var vote_collector: Channel(sig.gossip.data.Vote) = try .init(allocator);
+    defer vote_collector.deinit();
+    const broker: LocalMessageBroker = .{ .vote_collector = &vote_collector };
+    var signer: Pubkey = undefined;
+    {
+        var txn = try sig.core.Transaction.initRandom(allocator, rng.random(), null);
+        defer txn.deinit(allocator);
+        signer = txn.msg.account_keys[0];
+        try broker.publish(&.{ .Vote = .{ 0, .{
+            .from = .ZEROES,
+            .transaction = txn,
+            .wallclock = 0,
+            .slot = 0,
+        } } });
+    }
+    const vote = vote_collector.tryReceive().?;
+    defer vote.deinit(allocator);
+    try std.testing.expectEqualSlices(u8, &signer.data, &vote.transaction.msg.account_keys[0].data);
+}
