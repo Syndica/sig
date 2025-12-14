@@ -1598,7 +1598,7 @@ pub const GossipService = struct {
 
                 self.metrics.pull_response_n_invalid_shred_version.add(invalid_shred_count);
 
-                for (values_to_insert, insert_results.items) |value, result| {
+                for (values_to_insert, insert_results.items) |*value, result| {
                     self.metrics.observeInsertResult(result);
                     switch (result) {
                         .success => |success| {
@@ -1607,7 +1607,7 @@ pub const GossipService = struct {
                             }
                             try self.broker.publish(&value.data);
                         },
-                        .fail => try failed_insert_ptrs.append(&value),
+                        .fail => try failed_insert_ptrs.append(value),
                     }
                 }
 
