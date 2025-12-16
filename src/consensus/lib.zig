@@ -10,8 +10,6 @@ pub const vote_tracker = @import("vote_tracker.zig");
 pub const vote_transaction = @import("vote_transaction.zig");
 
 pub const HeaviestSubtreeForkChoice = fork_choice.ForkChoice;
-pub const ForkWeight = fork_choice.ForkWeight;
-pub const ForkInfo = fork_choice.ForkInfo;
 
 pub const ProgressMap = progress_map.ProgressMap;
 pub const ReplayTower = replay_tower.ReplayTower;

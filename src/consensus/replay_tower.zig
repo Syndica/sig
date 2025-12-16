@@ -4075,6 +4075,9 @@ test "isValidSwitchingProofVote common ancestor" {
 test "switch threshold" {
     const allocator = std.testing.allocator;
 
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
     // Setup fork structure:
     //        /- 10 - 11 - 12 - 13 - 14  (minor fork 1)
     // 0 - 1 - 2
@@ -4295,8 +4298,8 @@ test "switch threshold" {
     const fork_choice: HeaviestSubtreeForkChoice = try .init(
         allocator,
         .noop,
-        SlotAndHash{ .slot = 0, .hash = progress.getHash(0).? },
-        sig.prometheus.globalRegistry(),
+        .{ .slot = 0, .hash = progress.getHash(0).? },
+        &registry,
     );
     defer fork_choice.deinit();
 
@@ -4604,6 +4607,9 @@ test "switch threshold" {
 test "switch threshold use gossip votes" {
     const allocator = std.testing.allocator;
 
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
     // Setup: Use same fork structure as test_switch_threshold
     //        /- 10 - 11 - 12 - 13 - 14  (minor fork 1)
     // 0 - 1 - 2
@@ -4779,8 +4785,8 @@ test "switch threshold use gossip votes" {
     const fork_choice: HeaviestSubtreeForkChoice = try .init(
         allocator,
         .noop,
-        SlotAndHash{ .slot = 0, .hash = progress.getHash(0).? },
-        sig.prometheus.globalRegistry(),
+        .{ .slot = 0, .hash = progress.getHash(0).? },
+        &registry,
     );
     defer fork_choice.deinit();
 
@@ -4963,22 +4969,25 @@ const Stakes = sig.core.Stakes;
 test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     const allocator = std.testing.allocator;
 
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
     const random = prng.random();
 
-    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
 
-    const hash4 = SlotAndHash{ .slot = 4, .hash = Hash.initRandom(random) };
-    const hash3 = SlotAndHash{ .slot = 3, .hash = Hash.initRandom(random) };
-    const hash2 = SlotAndHash{ .slot = 2, .hash = Hash.initRandom(random) };
-    const hash5 = SlotAndHash{ .slot = 5, .hash = Hash.initRandom(random) };
-    const hash1 = SlotAndHash{ .slot = 1, .hash = Hash.initRandom(random) };
+    const root: SlotAndHash = .{ .slot = 0, .hash = .initRandom(random) };
 
-    const hash6 = SlotAndHash{ .slot = 6, .hash = Hash.initRandom(random) };
-    const hash7 = SlotAndHash{ .slot = 7, .hash = Hash.initRandom(random) };
-    const hash8 = SlotAndHash{ .slot = 8, .hash = Hash.initRandom(random) };
-    const hash9 = SlotAndHash{ .slot = 9, .hash = Hash.initRandom(random) };
-    const hash10 = SlotAndHash{ .slot = 10, .hash = Hash.initRandom(random) };
+    const hash4: SlotAndHash = .{ .slot = 4, .hash = .initRandom(random) };
+    const hash3: SlotAndHash = .{ .slot = 3, .hash = .initRandom(random) };
+    const hash2: SlotAndHash = .{ .slot = 2, .hash = .initRandom(random) };
+    const hash5: SlotAndHash = .{ .slot = 5, .hash = .initRandom(random) };
+    const hash1: SlotAndHash = .{ .slot = 1, .hash = .initRandom(random) };
+
+    const hash6: SlotAndHash = .{ .slot = 6, .hash = .initRandom(random) };
+    const hash7: SlotAndHash = .{ .slot = 7, .hash = .initRandom(random) };
+    const hash8: SlotAndHash = .{ .slot = 8, .hash = .initRandom(random) };
+    const hash9: SlotAndHash = .{ .slot = 9, .hash = .initRandom(random) };
+    const hash10: SlotAndHash = .{ .slot = 10, .hash = .initRandom(random) };
 
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
@@ -5027,8 +5036,6 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     });
     defer accountsdb.deinit();
 
-    var registry = sig.prometheus.Registry(.{}).init(allocator);
-    defer registry.deinit();
     var replay_tower = try ReplayTower.init(
         .noop,
         Pubkey.ZEROES,
@@ -5219,9 +5226,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         else => try std.testing.expect(false), // Fail if not LockedOut
     }
 
-    var test_registry = sig.prometheus.Registry(.{}).init(allocator);
-    defer test_registry.deinit();
-    var split = try fixture.fork_choice.splitOff(allocator, &test_registry, hash6);
+    var split = try fixture.fork_choice.splitOff(allocator, &registry, hash6);
     defer split.deinit();
 
     const forks5 = try fixture.select_fork_slots(&replay_tower);
