@@ -130,9 +130,7 @@ fn markDeadSlot(
         params.allocator.free(proof.shred1);
         params.allocator.free(proof.shred2);
     };
-    if (!params.duplicate_slots_tracker.contains(dead_slot) and
-        maybe_duplicate_proof != null)
-    {
+    if (!params.duplicate_slots_tracker.contains(dead_slot) and maybe_duplicate_proof != null) {
         const slot_info =
             params.slot_tracker.get(dead_slot) orelse return error.MissingSlotInTracker;
         const slot_hash = slot_info.state.hash.readCopy();
