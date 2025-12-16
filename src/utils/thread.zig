@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
@@ -139,6 +140,9 @@ pub fn ScopedThreadPool(comptime func: anytype) type {
             args: Args,
 
             fn run(pool_task: *ThreadPool.Task) void {
+                const zone = tracy.Zone.init(@src(), .{ .name = "ScopedTask.run" });
+                defer zone.deinit();
+
                 const self: *ScopedTask = @alignCast(@fieldParentPtr("pool_task", pool_task));
                 switch (@typeInfo(ReturnType)) {
                     .error_union => @call(.auto, func, self.args) catch |e| {
