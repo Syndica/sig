@@ -4301,7 +4301,7 @@ test "switch threshold" {
         .{ .slot = 0, .hash = progress.getHash(0).? },
         &registry,
     );
-    defer fork_choice.deinit();
+    defer fork_choice.deinit(allocator);
 
     // Test 1: Trying to switch to a descendant of last vote should always work (SameFork)
     {
@@ -4788,7 +4788,7 @@ test "switch threshold use gossip votes" {
         .{ .slot = 0, .hash = progress.getHash(0).? },
         &registry,
     );
-    defer fork_choice.deinit();
+    defer fork_choice.deinit(allocator);
 
     // Test 1: Trying to switch to another fork at 110 should fail
     {
@@ -4932,7 +4932,7 @@ test "selectVoteAndResetForks stake not found" {
         allocator,
         fork_tuples[0..],
     );
-    defer fork_choice.deinit();
+    defer fork_choice.deinit(allocator);
 
     var tower = try createTestReplayTower(8, 0.66);
     defer tower.deinit(allocator);
@@ -5227,7 +5227,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     }
 
     var split = try fixture.fork_choice.splitOff(allocator, &registry, hash6);
-    defer split.deinit();
+    defer split.deinit(allocator);
 
     const forks5 = try fixture.select_fork_slots(&replay_tower);
 
@@ -5483,7 +5483,7 @@ pub const TestFixture = struct {
     }
 
     pub fn deinit(self: *TestFixture, allocator: std.mem.Allocator) void {
-        self.fork_choice.deinit();
+        self.fork_choice.deinit(allocator);
         self.progress.deinit(allocator);
         self.slot_tracker.deinit(allocator);
         self.node_pubkeys.deinit(allocator);
@@ -5591,7 +5591,7 @@ pub const TestFixture = struct {
             }
 
             // Populate forkchoice
-            try self.fork_choice.addNewLeafSlot(tree[0], tree[1]);
+            try self.fork_choice.addNewLeafSlot(allocator, tree[0], tree[1]);
             // Populate progress map
             {
                 try self.progress.map.ensureUnusedCapacity(allocator, 1);

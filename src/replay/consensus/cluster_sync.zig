@@ -819,6 +819,7 @@ pub const check_slot_agrees_with_cluster = struct {
                         // set to account for the case where it was removed earlier
                         // by the `on_duplicate_slot()` handler
                         try state_change.markAllNewConfirmedAndDuplicateSlots(
+                            allocator,
                             slot,
                             fork_choice,
                             duplicate_slots_to_repair,
@@ -837,7 +838,7 @@ pub const check_slot_agrees_with_cluster = struct {
                             .{ slot, duplicate_confirmed_hash, frozen_hash },
                         );
                         // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
-                        try fork_choice.markForkInvalidCandidate(&.{
+                        try fork_choice.markForkInvalidCandidate(allocator, &.{
                             .slot = slot,
                             .hash = frozen_hash,
                         });
@@ -866,7 +867,7 @@ pub const check_slot_agrees_with_cluster = struct {
                         );
                         // If the slot is not already pruned notify fork choice to mark as invalid
                         // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
-                        try fork_choice.markForkInvalidCandidate(&.{
+                        try fork_choice.markForkInvalidCandidate(allocator, &.{
                             .slot = slot,
                             .hash = frozen_hash,
                         });
@@ -879,7 +880,10 @@ pub const check_slot_agrees_with_cluster = struct {
             // If `cluster_confirmed_hash` is Some above we should have already pushed a
             // `MarkSlotDuplicate` state change
             // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
-            try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = frozen_hash });
+            try fork_choice.markForkInvalidCandidate(allocator, &.{
+                .slot = slot,
+                .hash = frozen_hash,
+            });
         }
 
         try confirmed_non_dupe_frozen_hash.finalize(slot, result_writer);
@@ -955,6 +959,7 @@ pub const check_slot_agrees_with_cluster = struct {
                     // set to account for the case where it was removed earlier
                     // by the `on_duplicate_slot()` handler
                     try state_change.markAllNewConfirmedAndDuplicateSlots(
+                        allocator,
                         slot,
                         fork_choice,
                         duplicate_slots_to_repair,
@@ -973,7 +978,7 @@ pub const check_slot_agrees_with_cluster = struct {
                         .{ slot, duplicate_confirmed_hash, frozen_hash },
                     );
                     // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
-                    try fork_choice.markForkInvalidCandidate(&.{
+                    try fork_choice.markForkInvalidCandidate(allocator, &.{
                         .slot = slot,
                         .hash = frozen_hash,
                     });
@@ -1098,7 +1103,10 @@ pub const check_slot_agrees_with_cluster = struct {
             // the slot as duplicate
             if (slot_status.slotHash()) |hash| {
                 // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
-                try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = hash });
+                try fork_choice.markForkInvalidCandidate(allocator, &.{
+                    .slot = slot,
+                    .hash = hash,
+                });
             }
         }
     }
@@ -1193,7 +1201,7 @@ pub const check_slot_agrees_with_cluster = struct {
                     if (!is_popular_pruned) {
                         // If the slot is not already pruned notify fork choice to mark as invalid
                         // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
-                        try fork_choice.markForkInvalidCandidate(&.{
+                        try fork_choice.markForkInvalidCandidate(allocator, &.{
                             .slot = slot,
                             .hash = slot_frozen_hash,
                         });
@@ -1296,6 +1304,7 @@ const state_change = struct {
 
     /// AKA: `ResultingStateChange::DuplicateConfirmedSlotMatchesCluster` in agave.
     fn markAllNewConfirmedAndDuplicateSlots(
+        allocator: std.mem.Allocator,
         slot: u64,
         fork_choice: *HeaviestSubtreeForkChoice,
         duplicate_slots_to_repair: *SlotData.DuplicateSlotsToRepair,
@@ -1308,18 +1317,25 @@ const state_change = struct {
         // When we detect that our frozen slot matches the cluster version (note this
         // will catch both slot frozen first -> confirmation, or confirmation first ->
         // slot frozen), mark all the newly duplicate confirmed slots in ledger
-        const new_duplicate_and_confirmed_slot_hashes = try fork_choice.markForkValidCandidate(&.{
-            .slot = slot,
-            .hash = slot_frozen_hash,
-        });
-        defer new_duplicate_and_confirmed_slot_hashes.deinit();
 
         {
             var setter = try result_writer.setDuplicateConfirmedSlotsAndHashesIncremental();
             defer setter.deinit();
-            for (new_duplicate_and_confirmed_slot_hashes.items) |confirmed| {
-                try setter.addSlotAndHash(confirmed.slot, confirmed.hash);
-            }
+
+            const newly_duplicate_confirmed_ancestors_ctx: struct {
+                setter: *@TypeOf(setter),
+
+                pub fn register(ctx: @This(), slot_hash: sig.core.hash.SlotAndHash) !void {
+                    try ctx.setter.addSlotAndHash(slot_hash.slot, slot_hash.hash);
+                }
+            } = .{ .setter = &setter };
+
+            try fork_choice.markForkValidCandidate(
+                allocator,
+                &.{ .slot = slot, .hash = slot_frozen_hash },
+                newly_duplicate_confirmed_ancestors_ctx,
+            );
+
             try setter.commit();
         }
 
@@ -1352,7 +1368,7 @@ const TestData = struct {
         self.slot_tracker.deinit(allocator);
 
         var fork_choice = self.heaviest_subtree_fork_choice;
-        fork_choice.deinit();
+        fork_choice.deinit(allocator);
 
         descendantsDeinit(allocator, self.descendants);
 
@@ -1482,7 +1498,7 @@ const TestData = struct {
             },
             sig.prometheus.globalRegistry(),
         );
-        errdefer fork_choice.deinit();
+        errdefer fork_choice.deinit(allocator);
 
         var progress: ProgressMap = .INIT;
         errdefer progress.deinit(allocator);
@@ -1495,6 +1511,7 @@ const TestData = struct {
             );
 
             try fork_choice.addNewLeafSlot(
+                allocator,
                 .{ .slot = slot_info.slot, .hash = slot_info.hash },
                 if (slot_info.parent_slot) |parent_slot| .{
                     .slot = parent_slot,
@@ -1548,7 +1565,7 @@ test "apply state changes" {
     const duplicate_slot = slot_tracker.root + 1;
     const duplicate_slot_hash = slot_tracker.get(duplicate_slot).?.state.hash.readCopy().?;
     // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
-    try heaviest_subtree_fork_choice.markForkInvalidCandidate(&.{
+    try heaviest_subtree_fork_choice.markForkInvalidCandidate(allocator, &.{
         .slot = duplicate_slot,
         .hash = duplicate_slot_hash,
     });
@@ -1648,6 +1665,7 @@ test "apply state changes slot frozen" {
         };
     };
     try heaviest_subtree_fork_choice.addNewLeafSlot(
+        allocator,
         .{
             .slot = duplicate_slot,
             .hash = new_slot_hash,
@@ -1723,6 +1741,7 @@ test "apply state changes duplicate confirmed matches frozen" {
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
         var confirmed_non_dupe_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
         try state_change.markAllNewConfirmedAndDuplicateSlots(
+            allocator,
             duplicate_slot,
             heaviest_subtree_fork_choice,
             &duplicate_slots_to_repair,
@@ -1813,6 +1832,7 @@ test "apply state changes slot frozen and duplicate confirmed matches frozen" {
         var confirmed_non_dupe_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
 
         try state_change.markAllNewConfirmedAndDuplicateSlots(
+            allocator,
             duplicate_slot,
             heaviest_subtree_fork_choice,
             &duplicate_slots_to_repair,
