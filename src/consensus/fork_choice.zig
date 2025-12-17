@@ -169,8 +169,8 @@ const ForkInfo = struct {
 /// Analogous to [HeaviestSubtreeForkChoice](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L187)
 pub const ForkChoice = struct {
     logger: Logger,
-    fork_infos: std.AutoHashMapUnmanaged(SlotAndHash, ForkInfo),
-    latest_votes: std.AutoHashMapUnmanaged(Pubkey, SlotAndHash),
+    fork_infos: std.AutoArrayHashMapUnmanaged(SlotAndHash, ForkInfo),
+    latest_votes: std.AutoArrayHashMapUnmanaged(Pubkey, SlotAndHash),
     tree_root: SlotAndHash,
     last_root_time: Instant,
     metrics: ForkChoiceMetrics,
@@ -194,9 +194,8 @@ pub const ForkChoice = struct {
     }
 
     pub fn deinit(self: *const ForkChoice, allocator: std.mem.Allocator) void {
-        var it = self.fork_infos.iterator();
-        while (it.next()) |fork_info| {
-            fork_info.value_ptr.deinit(allocator);
+        for (self.fork_infos.values()) |fork_info| {
+            fork_info.deinit(allocator);
         }
 
         var fork_infos = self.fork_infos;
@@ -207,7 +206,7 @@ pub const ForkChoice = struct {
     }
 
     /// Updates fork choice metrics based on current state
-    fn updateMetrics(self: *ForkChoice) void {
+    fn updateMetrics(self: *const ForkChoice) void {
         const now = Instant.now();
         const update_interval = now.elapsedSince(self.last_root_time);
         self.metrics.fork_choice_update_interval.observe(update_interval.asMicros());
@@ -219,8 +218,7 @@ pub const ForkChoice = struct {
         var maybe_current_heaviest_slot: ?u64 = null;
         var maybe_current_deepest_slot: ?u64 = null;
 
-        var it = self.fork_infos.valueIterator();
-        while (it.next()) |fork_info| {
+        for (self.fork_infos.values()) |*fork_info| {
             total_stake += fork_info.stake_for_slot;
 
             // Count active forks (those that are candidates)
@@ -513,7 +511,7 @@ pub const ForkChoice = struct {
 
         for (remove_set.keys()) |node_key| {
             // SAFETY: Previous contains check ensures this won't panic.
-            const kv = self.fork_infos.fetchRemove(node_key).?;
+            const kv = self.fork_infos.fetchSwapRemove(node_key).?;
             kv.value.deinit(allocator);
         }
 
@@ -1598,16 +1596,15 @@ pub const ForkChoice = struct {
         self.processUpdateOperations(&update_operations);
 
         // Remove node + all children and add to new tree
-        var split_tree_fork_infos: std.AutoHashMapUnmanaged(SlotAndHash, ForkInfo) = .empty;
+        var split_tree_fork_infos: std.AutoArrayHashMapUnmanaged(SlotAndHash, ForkInfo) = .empty;
         errdefer split_tree_fork_infos.deinit(allocator);
 
         var to_visit: std.ArrayListUnmanaged(SlotAndHash) = .empty;
         defer to_visit.deinit(allocator);
 
         try to_visit.append(allocator, slot_hash_key);
-
         while (to_visit.pop()) |current_node| {
-            const current_kv = self.fork_infos.fetchRemove(current_node) orelse
+            const current_kv = self.fork_infos.fetchSwapRemove(current_node) orelse
                 return error.NodeNotFound;
             var current_fork_info = current_kv.value;
 
@@ -1628,18 +1625,22 @@ pub const ForkChoice = struct {
         // Split off the relevant votes to the new tree
         var split_tree_latest_votes = try self.latest_votes.clone(allocator);
         errdefer split_tree_latest_votes.deinit(allocator);
-        var it = split_tree_latest_votes.iterator();
-        while (it.next()) |entry| {
-            if (!split_tree_fork_infos.contains(entry.value_ptr.*)) {
-                _ = split_tree_latest_votes.remove(entry.key_ptr.*);
+
+        for (self.latest_votes.keys(), self.latest_votes.values()) |key, val| {
+            if (!split_tree_fork_infos.contains(val)) {
+                _ = split_tree_latest_votes.swapRemove(key);
             }
         }
 
-        var it_self = self.latest_votes.iterator();
-        while (it_self.next()) |entry| {
-            if (!self.fork_infos.contains(entry.value_ptr.*)) {
-                _ = self.latest_votes.remove(entry.key_ptr.*);
+        var index: usize = 0;
+        while (index < self.latest_votes.count()) {
+            const value = self.latest_votes.values()[index];
+            if (self.fork_infos.contains(value)) {
+                index += 1;
+                continue;
             }
+            const key = self.latest_votes.keys()[index];
+            _ = self.latest_votes.swapRemove(key);
         }
 
         // Create a new tree from the split
@@ -1657,7 +1658,7 @@ pub const ForkChoice = struct {
 /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1390
 const AncestorIterator = struct {
     current_slot_hash_key: SlotAndHash,
-    fork_infos: *const std.AutoHashMapUnmanaged(SlotAndHash, ForkInfo),
+    fork_infos: *const std.AutoArrayHashMapUnmanaged(SlotAndHash, ForkInfo),
 
     pub fn next(self: *AncestorIterator) ?SlotAndHash {
         const fork_info = self.fork_infos.get(self.current_slot_hash_key) orelse return null;
@@ -2767,18 +2768,14 @@ test "HeaviestSubtreeForkChoice.markForkValidCandidate" {
         .hash = duplicate_confirmed_key,
     }, {});
 
-    {
-        var it = fork_choice.fork_infos.keyIterator();
-
-        while (it.next()) |slot_hash_key| {
-            const slot = slot_hash_key.slot;
-            if (slot <= duplicate_confirmed_slot) {
-                try std.testing.expect(fork_choice.isDuplicateConfirmed(slot_hash_key).?);
-            } else {
-                try std.testing.expect(!fork_choice.isDuplicateConfirmed(slot_hash_key).?);
-            }
-            try std.testing.expect(fork_choice.latestDuplicateAncestor(slot_hash_key.*) == null);
+    for (fork_choice.fork_infos.keys()) |*slot_hash_key| {
+        const slot = slot_hash_key.slot;
+        if (slot <= duplicate_confirmed_slot) {
+            try std.testing.expect(fork_choice.isDuplicateConfirmed(slot_hash_key).?);
+        } else {
+            try std.testing.expect(!fork_choice.isDuplicateConfirmed(slot_hash_key).?);
         }
+        try std.testing.expect(fork_choice.latestDuplicateAncestor(slot_hash_key.*) == null);
     }
 
     // Mark a later descendant invalid
@@ -2789,8 +2786,7 @@ test "HeaviestSubtreeForkChoice.markForkValidCandidate" {
         .hash = invalid_descendant_key,
     });
 
-    var it = fork_choice.fork_infos.keyIterator();
-    while (it.next()) |slot_hash_key| {
+    for (fork_choice.fork_infos.keys()) |*slot_hash_key| {
         const slot = slot_hash_key.slot;
         if (slot <= duplicate_confirmed_slot) {
             // All ancestors of the duplicate confirmed slot should:
