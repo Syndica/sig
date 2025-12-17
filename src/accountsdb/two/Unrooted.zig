@@ -167,3 +167,170 @@ test "sanity check" {
     const result = db.get(account_a, &ancestors).?;
     try std.testing.expectEqual(result.lamports, 250_000); // should return slot 3
 }
+
+test "forked behaviour" {
+    const allocator = std.testing.allocator;
+    var db: Unrooted = try .init(allocator);
+    defer db.deinit(allocator);
+
+    const account_a: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    const account_b: Pubkey = .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk");
+
+    // write a slot 1
+    try db.put(
+        allocator,
+        1,
+        account_a,
+        .{
+            .data = &.{},
+            .executable = true,
+            .lamports = 1_000_000,
+            .owner = account_b,
+            .rent_epoch = 30,
+        },
+    );
+
+    try db.put(
+        allocator,
+        2,
+        account_a,
+        .{
+            .data = &.{},
+            .executable = true,
+            .lamports = 500_000,
+            .owner = account_b,
+            .rent_epoch = 30,
+        },
+    );
+    // allowed to write to same slot multiple times
+    try db.put(
+        allocator,
+        2,
+        account_a,
+        .{
+            .data = &.{},
+            .executable = true,
+            .lamports = 750_000,
+            .owner = account_b,
+            .rent_epoch = 30,
+        },
+    );
+
+    var ancestors: Ancestors = try .initWithSlots(allocator, &.{ 1, 2 });
+    defer ancestors.deinit(allocator);
+
+    const result = db.get(account_a, &ancestors).?;
+    try std.testing.expectEqual(result.lamports, 750_000);
+}
+
+test "account not in ancestor set" {
+    const allocator = std.testing.allocator;
+    var db: Unrooted = try .init(allocator);
+    defer db.deinit(allocator);
+
+    const account_a: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    const account_b: Pubkey = .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk");
+
+    // Write to slot 5
+    try db.put(
+        allocator,
+        5,
+        account_a,
+        .{
+            .data = &.{},
+            .executable = true,
+            .lamports = 1_000_000,
+            .owner = account_b,
+            .rent_epoch = 30,
+        },
+    );
+
+    var ancestors: Ancestors = try .initWithSlots(allocator, &.{ 1, 2, 3 });
+    defer ancestors.deinit(allocator);
+
+    const result = db.get(account_a, &ancestors);
+    try std.testing.expectEqual(result, null);
+}
+
+test "multiple accounts across slots" {
+    const allocator = std.testing.allocator;
+    var db: Unrooted = try .init(allocator);
+    defer db.deinit(allocator);
+
+    const account_a: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    const account_b: Pubkey = .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk");
+    const account_c: Pubkey = .parse("7EqfdGiB5UZgLWc1U9xYbKdy9Ky9NoYcMbEwUq9aAWR6");
+
+    try db.put(
+        allocator,
+        1,
+        account_a,
+        .{
+            .data = &.{},
+            .executable = true,
+            .lamports = 1_000_000,
+            .owner = account_b,
+            .rent_epoch = 30,
+        },
+    );
+
+    try db.put(
+        allocator,
+        2,
+        account_b,
+        .{
+            .data = &.{},
+            .executable = false,
+            .lamports = 2_000_000,
+            .owner = account_c,
+            .rent_epoch = 20,
+        },
+    );
+
+    try db.put(
+        allocator,
+        3,
+        account_a,
+        .{
+            .data = &.{},
+            .executable = true,
+            .lamports = 500_000,
+            .owner = account_b,
+            .rent_epoch = 30,
+        },
+    );
+
+    try db.put(
+        allocator,
+        3,
+        account_c,
+        .{
+            .data = &.{},
+            .executable = false,
+            .lamports = 3_000_000,
+            .owner = account_b,
+            .rent_epoch = 15,
+        },
+    );
+
+    {
+        var ancestors: Ancestors = try .initWithSlots(allocator, &.{ 1, 2, 3 });
+        defer ancestors.deinit(allocator);
+
+        const result_a = db.get(account_a, &ancestors).?;
+        try std.testing.expectEqual(result_a.lamports, 500_000);
+
+        const result_b = db.get(account_b, &ancestors).?;
+        try std.testing.expectEqual(result_b.lamports, 2_000_000);
+
+        const result_c = db.get(account_c, &ancestors).?;
+        try std.testing.expectEqual(result_c.lamports, 3_000_000);
+    }
+    {
+        var ancestors: Ancestors = try .initWithSlots(allocator, &.{ 1, 2 });
+        defer ancestors.deinit(allocator);
+
+        const result_a = db.get(account_a, &ancestors).?;
+        try std.testing.expectEqual(result_a.lamports, 1_000_000);
+    }
+}
