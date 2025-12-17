@@ -615,12 +615,9 @@ test fillMissingSysvarCacheEntries {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     // Create accounts db
-    var accounts_db, var tmp_dir = try AccountsDB.initTest(allocator);
-    defer {
-        AccountsDB.Rooted.deinitThreadLocals();
-        accounts_db.deinit();
-        tmp_dir.cleanup();
-    }
+    var test_state = try AccountsDB.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
 
     // Set slot and ancestors
     const slot = 10;
@@ -635,7 +632,7 @@ test fillMissingSysvarCacheEntries {
     // Write all sysvars to accounts db. Do not inherit from old accounts.
     try insertSysvarCacheAccounts(
         allocator,
-        &accounts_db,
+        db,
         &expected,
         slot,
         false,
@@ -648,7 +645,7 @@ test fillMissingSysvarCacheEntries {
     // Fill missing entries in the sysvar cache from accounts db.
     try fillMissingSysvarCacheEntries(
         allocator,
-        .{ .accounts_db_two = .{ &accounts_db, &ancestors } },
+        .{ .accounts_db_two = .{ db, &ancestors } },
         &actual,
     );
 
@@ -734,14 +731,6 @@ fn insertSysvarCacheAccounts(
     inherit_from_old_account: bool,
 ) !void {
     if (!builtin.is_test) @compileError("only for testing");
-    var sysvar_accounts: std.MultiArrayList(struct {
-        pubkey: Pubkey,
-        account: Account,
-    }) = .{};
-    defer {
-        for (sysvar_accounts.slice().items(.account)) |acc| acc.deinit(allocator);
-        sysvar_accounts.deinit(allocator);
-    }
 
     inline for (.{
         Clock,
@@ -770,7 +759,7 @@ fn insertSysvarCacheAccounts(
         );
         defer account.deinit(allocator); // rooted db clones the data
 
-        db.rooted.put(Sysvar.ID, slot, .{
+        try db.put(slot, Sysvar.ID, .{
             .lamports = account.lamports,
             .data = account.data,
             .owner = account.owner,
@@ -828,12 +817,9 @@ test "update all sysvars" {
     const random = prng.random();
 
     // Create values for update sysvar deps
-    var accounts_db, var tmp_dir = try AccountsDB.initTest(allocator);
-    defer {
-        AccountsDB.Rooted.deinitThreadLocals();
-        accounts_db.deinit();
-        tmp_dir.cleanup();
-    }
+    var test_state = try AccountsDB.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
 
     var capitalization = Atomic(u64).init(0);
     var slot: Slot = 10;
@@ -847,7 +833,7 @@ test "update all sysvars" {
     defer initial_sysvars.deinit(allocator);
     try insertSysvarCacheAccounts(
         allocator,
-        &accounts_db,
+        db,
         &initial_sysvars,
         slot,
         false,
@@ -864,12 +850,12 @@ test "update all sysvars" {
         null,
     );
     defer allocator.free(account.data);
-    accounts_db.rooted.put(SlotHistory.ID, slot, account);
+    try db.put(slot, SlotHistory.ID, account);
 
     // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
     slot = slot + 1;
     const update_sysvar_deps: UpdateSysvarAccountDeps = .{
-        .account_store = .{ .accounts_db_two = &accounts_db },
+        .account_store = .{ .accounts_db_two = db },
         .capitalization = &capitalization,
         .ancestors = &ancestors,
         .rent = &rent,

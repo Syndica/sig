@@ -133,8 +133,7 @@ fn accountsHash(self: *Rooted) !sig.core.LtHash {
     var stmt: ?*sql.sqlite3_stmt = undefined;
     if (sql.sqlite3_prepare_v2(self.handle, query, -1, &stmt, null) != OK)
         return error.FailedToPrepareGet;
-
-    defer err(self, sql.sqlite3_finalize(stmt)) catch {};
+    defer err(self, sql.sqlite3_finalize(stmt));
 
     var hash: sig.core.LtHash = .IDENTITY;
 
