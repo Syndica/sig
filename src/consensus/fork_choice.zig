@@ -504,8 +504,9 @@ pub const ForkChoice = struct {
         }
 
         // Root to be made the new root should already exist in fork choice.
-        const root_fork_info = self.fork_infos.getPtr(new_root.*) orelse
+        if (!self.fork_infos.contains(new_root.*)) {
             return error.MissingForkInfo;
+        }
 
         // At this point, both the subtree to be removed and new root
         // are confirmed to be in the fork choice.
@@ -516,6 +517,8 @@ pub const ForkChoice = struct {
             kv.value.deinit(allocator);
         }
 
+        const root_fork_info = self.fork_infos.getPtr(new_root.*) orelse
+            return error.MissingForkInfo;
         root_fork_info.parent = null;
         self.tree_root = new_root.*;
         self.last_root_time = .now();
