@@ -170,9 +170,3 @@ pub fn slotModifiedIterator(self: *Db, slot: Slot) ?SlotModifiedIterator {
         .cursor = 0,
     };
 }
-
-// The behaviour of the db is mostly tested via:
-// - `replay/consensus/core.zig`
-// - `replay/update_sysvar.zig`
-// - `accountsdb/account_store.zig`
-// We can consider adding some more specific tests into this file.
