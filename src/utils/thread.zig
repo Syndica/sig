@@ -1,13 +1,10 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
 const tracy = @import("tracy");
+const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
-const Condition = std.Thread.Condition;
-const Mutex = std.Thread.Mutex;
 
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
-const Batch = ThreadPool.Batch;
 
 const assert = std.debug.assert;
 
@@ -82,16 +79,12 @@ pub fn spawnThreadTasks(
         task_params: TaskParams,
         fcn_params: @TypeOf(config).Params,
 
-        fn run(self: *const @This()) @typeInfo(@TypeOf(taskFn)).@"fn".return_type.? {
+        fn run(self: @This()) @typeInfo(@TypeOf(taskFn)).@"fn".return_type.? {
             return @call(.auto, taskFn, self.fcn_params ++ .{self.task_params});
         }
     };
 
-    var thread_pool = try HomogeneousThreadPool(S).init(
-        allocator,
-        @intCast(n_threads),
-        @intCast(n_threads),
-    );
+    const thread_pool = try ScopedThreadPool(S.run).init(allocator, n_threads);
     defer thread_pool.deinit(allocator);
 
     var start_index: usize = 0;
@@ -100,251 +93,122 @@ pub fn spawnThreadTasks(
             config.data_len
         else
             (start_index + chunk_size);
-        try thread_pool.schedule(allocator, .{
+        try thread_pool.schedule(allocator, .{.{
             .task_params = .{
                 .start_index = start_index,
                 .end_index = end_index,
                 .thread_id = thread_id,
             },
             .fcn_params = config.params,
-        });
+        }});
 
         start_index = end_index;
     }
 
-    try thread_pool.joinFallible();
+    try thread_pool.join();
 }
 
-/// Wrapper for ThreadPool to run many tasks of the same type.
-///
-/// TaskType should have a method `run (*TaskType) void`
-///
-/// This struct should only be used in a single thread. All the interactions
-/// with the child threads are safe, but it's not safe to call this struct's
-/// methods from multiple threads.
-///
-/// TODO: Support the max tasks constraint without blocking the current thread.
-/// This will require changes the underlying ThreadPool implementation.
-pub fn HomogeneousThreadPool(comptime TaskType: type) type {
-    // the task's return type
-    const TaskResult = @typeInfo(@TypeOf(TaskType.run)).@"fn".return_type.?;
-
-    // compatibility layer between user-defined TaskType and ThreadPool's Task type,
-    const TaskAdapter = struct {
-        /// logic to pass to underlying thread pool
-        pool_task: ThreadPool.Task = .{ .callback = Self.run },
-
-        /// whether the task has completed.
-        /// do not touch without locking the mutex.
-        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-        /// locks done to avoid infinite wait on the condition
-        /// due to a potential race condition.
-        done_lock: Mutex = .{},
-        /// broadcasts to joiners when done becomes true
-        done_notifier: Condition = .{},
-
-        /// The task's inputs and state.
-        /// TaskType.run is the task's logic, which uses the data in this struct.
-        typed_task: TaskType,
-
-        /// the return value of the task
-        /// - points to undefined data until the task is complete
-        /// - memory address may become invalid after task is joined, if caller
-        ///   decides to deinit results
-        result: TaskResult = undefined,
-
-        /// It was already incremented when this task was scheduled, and it
-        /// needs to be decremented when this task is completed.
-        num_running_tasks: *std.atomic.Value(usize),
-
-        const Self = @This();
-
-        fn run(pool_task: *ThreadPool.Task) void {
-            const zone = tracy.Zone.init(
-                @src(),
-                .{ .name = "HomogeneousThreadPool.run: " ++ @typeName(TaskType) },
-            );
-            defer zone.deinit();
-
-            var self: *Self = @fieldParentPtr("pool_task", pool_task);
-
-            self.result = self.typed_task.run();
-
-            // signal completion
-            assert(0 != self.num_running_tasks.fetchSub(1, .acq_rel));
-            self.done_lock.lock();
-            self.done.store(true, .release);
-            self.done_notifier.broadcast();
-            self.done_lock.unlock();
-        }
-
-        /// blocks until the task is complete.
-        fn join(self: *Self) void {
-            self.done_lock.lock();
-            while (!self.done.load(.acquire)) self.done_notifier.wait(&self.done_lock);
-            self.done_lock.unlock();
-        }
+/// A thread pool wrapper for a function.
+/// TODO: investigate all uses of this and replace them with direct ThreadPool.zig usage.
+pub fn ScopedThreadPool(comptime func: anytype) type {
+    const Args = std.meta.ArgsTuple(@TypeOf(func));
+    const ReturnType = @typeInfo(@TypeOf(func)).@"fn".return_type.?;
+    const Error = switch (@typeInfo(ReturnType)) {
+        .error_union => |e| e.error_set,
+        else => error{},
     };
 
     return struct {
-        pool_allocator: ?Allocator,
-        task_pool: std.heap.MemoryPool(TaskAdapter),
-        pool: *ThreadPool,
-        tasks: std.ArrayListUnmanaged(*TaskAdapter) = .{},
-        num_running_tasks: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-        max_concurrent_tasks: ?usize,
+        // task dispatch/sync
+        thread_pool: ThreadPool,
+        wait_group: std.Thread.WaitGroup = .{},
 
-        pub const Task = TaskType;
-        pub const TaskError = @typeInfo(TaskResult).error_union.error_set;
+        // task allocation
+        scoped_tasks: std.SegmentedList(ScopedTask, 0) = .{},
+        free_list: ?*ScopedTask = null,
+        incoming_free_list: std.atomic.Value(?*ScopedTask) = .init(null),
+
+        // error tracking
+        has_error: std.atomic.Value(bool) = .init(false),
+        set_error: Error = undefined,
 
         const Self = @This();
+        const ScopedTask = struct {
+            pool_task: ThreadPool.Task = .{ .callback = run },
+            next: ?*ScopedTask = null,
+            pool: *Self,
+            args: Args,
 
-        pub fn init(
-            allocator: Allocator,
-            num_threads: u32,
-            max_concurrent_tasks: ?usize,
-        ) !Self {
-            const pool = try allocator.create(ThreadPool);
-            pool.* = ThreadPool.init(.{ .max_threads = num_threads });
+            fn run(pool_task: *ThreadPool.Task) void {
+                const zone = tracy.Zone.init(@src(), .{ .name = "ScopedTask.run" });
+                defer zone.deinit();
 
-            return .{
-                .pool_allocator = allocator,
-                .task_pool = std.heap.MemoryPool(TaskAdapter).init(allocator),
-                .pool = pool,
-                .max_concurrent_tasks = max_concurrent_tasks,
-            };
-        }
-
-        pub fn initBorrowed(
-            allocator: Allocator,
-            pool: *ThreadPool,
-            max_concurrent_tasks: ?usize,
-        ) !Self {
-            return .{
-                .pool_allocator = null,
-                .task_pool = std.heap.MemoryPool(TaskAdapter).init(allocator),
-                .pool = pool,
-                .max_concurrent_tasks = max_concurrent_tasks,
-            };
-        }
-
-        /// join before calling this
-        pub fn deinit(const_self: Self, schedule_allocator: Allocator) void {
-            var self = const_self;
-            if (self.tasks.items.len != 0) {
-                @panic("Did not join before deiniting thread pool.");
-            }
-            if (self.pool_allocator) |pool_allocator| {
-                self.pool.shutdown();
-                self.pool.deinit();
-                pool_allocator.destroy(self.pool);
-            }
-            self.tasks.deinit(schedule_allocator);
-            assert(self.task_pool.reset(.free_all));
-        }
-
-        /// Blocks until the task is scheduled. It will be immediate unless
-        /// you've already scheduled max_concurrent_tasks and none have
-        /// finished.
-        pub fn schedule(self: *Self, allocator: Allocator, typed_task: TaskType) !void {
-            while (true) {
-                if (try self.trySchedule(allocator, typed_task)) return;
-                try std.Thread.yield();
-            }
-        }
-
-        /// Attempt to schedule the task and return whether the task was
-        /// scheduled.
-        ///
-        /// Returns false if max_concurrent_tasks were already
-        /// scheduled, and they're all still running.
-        ///
-        /// Never returns false if max_concurrent_tasks == null
-        pub fn trySchedule(
-            self: *Self,
-            allocator: Allocator,
-            typed_task: TaskType,
-        ) Allocator.Error!bool {
-            const zone = tracy.Zone.init(@src(), .{ .name = "HomogeneousThreadPool trySchedule" });
-            defer zone.deinit();
-
-            if (self.max_concurrent_tasks) |max| {
-                const running = self.num_running_tasks.load(.monotonic);
-                assert(running <= max);
-                if (running == max) {
-                    return false;
+                const self: *ScopedTask = @alignCast(@fieldParentPtr("pool_task", pool_task));
+                switch (@typeInfo(ReturnType)) {
+                    .error_union => @call(.auto, func, self.args) catch |e| {
+                        if (!self.pool.has_error.swap(true, .monotonic))
+                            self.pool.set_error = e;
+                    },
+                    else => @call(.auto, func, self.args),
                 }
-                assert(max >= self.num_running_tasks.fetchAdd(1, .monotonic));
-            } else {
-                _ = self.num_running_tasks.fetchAdd(1, .monotonic);
-            }
 
-            const task = try self.task_pool.create();
-            errdefer self.task_pool.destroy(task);
-            task.* = .{ .typed_task = typed_task, .num_running_tasks = &self.num_running_tasks };
+                // Read out *WaitGroup from self as, after pushing to free list, task may be reused.
+                const wg = &self.pool.wait_group;
+                defer wg.finish();
 
-            try self.tasks.append(allocator, task);
-
-            self.pool.schedule(Batch.from(&task.pool_task));
-            return true;
-        }
-
-        /// Checks if all tasks are complete.
-        /// Returns a result indicating the outcome:
-        /// - done: all succeeded.
-        /// - pending: some are still running.
-        /// - err: all completed, and at least one failed.
-        pub fn pollFallible(self: *Self) union(enum) { done, pending, err: TaskError } {
-            for (self.tasks.items) |task| {
-                if (!task.done.load(.acquire)) {
-                    return .pending;
+                const free_list = &self.pool.incoming_free_list;
+                var top = free_list.load(.monotonic);
+                while (true) {
+                    self.next = top;
+                    top = free_list.cmpxchgWeak(top, self, .release, .monotonic) orelse break;
                 }
             }
-            return if (self.joinFallible()) |_| .done else |err| .{ .err = err };
+        };
+
+        pub fn init(allocator: Allocator, max_threads: usize) !*Self {
+            const self = try allocator.create(Self);
+            self.* = .{ .thread_pool = .init(.{ .max_threads = @intCast(max_threads) }) };
+            return self;
         }
 
-        /// Blocks until all tasks are complete.
-        /// Returns a list of all return values.
-        pub fn join(self: *Self, allocator: Allocator) Allocator.Error![]TaskResult {
-            for (self.tasks.items) |task| task.join();
+        pub fn deinit(self: *Self, allocator: Allocator) void {
+            self.wait_group.wait();
+            self.scoped_tasks.deinit(allocator);
 
-            const results = try allocator.alloc(TaskResult, self.tasks.items.len);
-            errdefer allocator.free(results);
+            self.thread_pool.shutdown();
+            self.thread_pool.deinit();
 
-            for (self.tasks.items, 0..) |task, i| {
-                results[i] = task.result;
-            }
-
-            assert(self.task_pool.reset(.retain_capacity));
-            self.tasks.clearRetainingCapacity();
-
-            return results;
+            allocator.destroy(self);
         }
 
-        /// Like join, but it returns an error if any tasks failed, and otherwise discards task output.
-        /// This will return the first error encountered which may be inconsistent between runs.
-        pub fn joinFallible(self: *Self) !void {
-            defer {
-                assert(self.task_pool.reset(.retain_capacity));
-                self.tasks.clearRetainingCapacity();
-            }
+        /// Spawn a task to the function using the given args.
+        /// Must be called by the single init/deinit thread.
+        pub fn schedule(self: *Self, allocator: Allocator, args: Args) !void {
+            const free_task = self.free_list orelse self.incoming_free_list.swap(null, .acquire);
+            if (free_task) |task| self.free_list = task.next;
 
-            for (self.tasks.items) |task| task.join();
-            for (self.tasks.items) |task| _ = try task.result;
+            const task = free_task orelse try self.scoped_tasks.addOne(allocator);
+            task.* = .{ .args = args, .pool = self };
+
+            self.wait_group.start();
+            self.thread_pool.schedule(.from(&task.pool_task));
         }
 
-        /// - Attempt to join and clean up all tasks.
-        /// - Discard the results of the threads as we're doing this purely for cleanup.
-        /// - Returns whether we successfully joined.
-        pub fn joinForDeinit(self: *Self, timeout: sig.time.Duration) bool {
-            var timer = sig.time.Timer.start();
-            while (self.pollFallible() == .pending) {
-                std.Thread.yield() catch std.atomic.spinLoopHint();
-                if (timer.read().gt(timeout)) {
-                    return false;
-                }
+        /// Wait for all previously scheduled tasks to finish. If any of the scheduled tasks fails,
+        /// this consumes their error and returns it. The pool remains usable after.
+        /// Must be called by the single init/deinit thread.
+        pub fn join(self: *Self) Error!void {
+            self.wait_group.wait();
+            self.wait_group = .{};
+
+            self.scoped_tasks.clearRetainingCapacity();
+            self.incoming_free_list = .init(null);
+            self.free_list = null;
+
+            if (self.has_error.load(.monotonic)) {
+                self.has_error.store(false, .monotonic);
+                return self.set_error;
             }
-            return true;
         }
     };
 }
@@ -390,31 +254,27 @@ test spawnThreadTasks {
 }
 
 test "typed thread pool" {
+    const allocator = std.testing.allocator;
     const AdditionTask = struct {
-        a: u64,
-        b: u64,
-        pub fn run(self: *const @This()) u64 {
-            return self.a + self.b;
+        var global: std.atomic.Value(u64) = .init(0);
+
+        pub fn inc(value: u64) void {
+            _ = global.fetchAdd(value, .monotonic);
         }
     };
 
-    var pool = try HomogeneousThreadPool(AdditionTask).init(
-        std.testing.allocator,
-        2,
-        3,
-    );
-    defer pool.deinit(std.testing.allocator);
-    try pool.schedule(std.testing.allocator, .{ .a = 1, .b = 1 });
-    try pool.schedule(std.testing.allocator, .{ .a = 1, .b = 2 });
-    try pool.schedule(std.testing.allocator, .{ .a = 1, .b = 4 });
+    const pool = try ScopedThreadPool(AdditionTask.inc).init(allocator, 3);
+    defer pool.deinit(allocator);
 
-    const results = try pool.join(std.testing.allocator);
-    defer std.testing.allocator.free(results);
+    try pool.schedule(allocator, .{1});
+    try pool.schedule(allocator, .{2});
+    try pool.schedule(allocator, .{3});
+    try pool.join();
+    try std.testing.expectEqual(6, AdditionTask.global.load(.monotonic));
 
-    try std.testing.expect(3 == results.len);
-    try std.testing.expect(2 == results[0]);
-    try std.testing.expect(3 == results[1]);
-    try std.testing.expect(5 == results[2]);
+    try pool.schedule(allocator, .{4});
+    try pool.join();
+    try std.testing.expectEqual(10, AdditionTask.global.load(.monotonic));
 }
 
 test sleep {
