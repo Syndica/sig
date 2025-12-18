@@ -221,10 +221,7 @@ pub fn applyFeatureActivations(
         slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
         epoch_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.
     }
-    if (feature_set
-        .fullInflationFeatures(slot)
-        .enabled(new_feature_activations, slot))
-    {
+    if (feature_set.fullInflationFeaturesEnabled(slot, &new_feature_activations)) {
         slot_constants.inflation = .FULL;
         slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
         epoch_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.

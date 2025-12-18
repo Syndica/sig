@@ -302,7 +302,7 @@ pub const SlotState = struct {
             .stakes_cache = .{ .stakes = .init(stakes) },
             .collected_transaction_fees = .init(0),
             .collected_priority_fees = .init(0),
-            .reward_status = parent.reward_status,
+            .reward_status = parent.reward_status.clone(),
         };
     }
 

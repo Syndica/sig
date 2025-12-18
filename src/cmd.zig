@@ -1487,7 +1487,9 @@ fn replayOffline(
             .leader_schedule = leader_schedule_0,
         });
     }
-    { // TODO: This was a quick ugly fix, needs to be handled correctly before merging
+    {
+        // TODO: This was a quick ugly fix to support single transitions. The proper fix requires
+        // correct fork tracking which is addressed in a follow up PR. https://github.com/Syndica/sig/pull/1113
         var staked_nodes_cloned = try staked_nodes.clone(allocator);
         errdefer staked_nodes_cloned.deinit(allocator);
 
