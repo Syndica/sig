@@ -252,7 +252,7 @@ pub fn createInstructionInfo(
     }
 
     var instruction_accounts = InstructionInfo.AccountMetas{};
-    defer instruction_accounts.deinit(allocator);
+    errdefer instruction_accounts.deinit(allocator);
 
     for (pb_instruction_accounts) |account| {
         const tc_acc = tc.getAccountAtIndex(@intCast(account.index)) orelse
