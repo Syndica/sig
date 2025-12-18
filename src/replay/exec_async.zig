@@ -449,7 +449,7 @@ fn testSchedulerForBatches(
             try replay.resolve_lookup.resolveTransaction(allocator, tx, .{
                 .slot = 0,
                 .account_reader = .noop,
-                .reserved_accounts = &.EMPTY,
+                .reserved_accounts = &.empty,
                 .slot_hashes = .INIT,
             }),
         );

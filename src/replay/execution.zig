@@ -1110,7 +1110,7 @@ pub const TestState = struct {
         return .{
             .slot = self.slot,
             .account_reader = .{ .accounts_db_two = .{ &self.accounts_db.db, &self.ancestors } },
-            .reserved_accounts = &.EMPTY,
+            .reserved_accounts = &.empty,
             .slot_hashes = .INIT,
         };
     }
