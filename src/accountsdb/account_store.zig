@@ -300,7 +300,7 @@ pub const SlotAccountReader = union(enum) {
             },
             .accounts_db_two => |pair| {
                 const account = try pair[0].get(
-                    pair[0].allocator,
+                    alloc,
                     address,
                     pair[1],
                 ) orelse return null;
