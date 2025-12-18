@@ -478,7 +478,7 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
         .fee_rate_governor = .DEFAULT,
         .ancestors = .{ .ancestors = .empty },
         .feature_set = .ALL_DISABLED,
-        .reserved_accounts = .EMPTY,
+        .reserved_accounts = .empty,
         .inflation = .DEFAULT,
     };
 }

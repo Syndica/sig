@@ -12,7 +12,7 @@ pub const ReservedAccounts = @This();
 
 map: sig.utils.collections.PubkeyMap(void),
 
-pub const EMPTY: ReservedAccounts = .{ .map = .empty };
+pub const empty: ReservedAccounts = .{ .map = .empty };
 
 pub fn init(allocator: Allocator) Allocator.Error!ReservedAccounts {
     var reserved_accounts = ReservedAccounts{ .map = .empty };
