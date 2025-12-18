@@ -1401,7 +1401,7 @@ const TestData = struct {
                     .fee_rate_governor = .initRandom(random),
                     .ancestors = .{ .ancestors = .empty },
                     .feature_set = .ALL_DISABLED,
-                    .reserved_accounts = .EMPTY,
+                    .reserved_accounts = .empty,
                     .inflation = .DEFAULT,
                 },
                 .state = .{

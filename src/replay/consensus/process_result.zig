@@ -532,7 +532,7 @@ test "processResult: confirm status with done poll and slot complete - success p
         .fee_rate_governor = sig.core.FeeRateGovernor.DEFAULT,
         .ancestors = .{ .ancestors = .empty },
         .feature_set = .ALL_DISABLED,
-        .reserved_accounts = .EMPTY,
+        .reserved_accounts = .empty,
         .inflation = .DEFAULT,
     };
 
@@ -639,7 +639,7 @@ test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot"
         .fee_rate_governor = sig.core.FeeRateGovernor.DEFAULT,
         .ancestors = .{ .ancestors = .empty },
         .feature_set = .ALL_DISABLED,
-        .reserved_accounts = .EMPTY,
+        .reserved_accounts = .empty,
         .inflation = .DEFAULT,
     };
     try test_resources.slot_tracker.put(allocator, slot, .{
@@ -729,7 +729,7 @@ test "updateConsensusForFrozenSlot: moves gossip votes with gossip vote_kind" {
         .ancestors = .{ .ancestors = .empty },
         .inflation = .DEFAULT,
         .feature_set = .ALL_DISABLED,
-        .reserved_accounts = .EMPTY,
+        .reserved_accounts = .empty,
     };
     var slot_state: sig.core.SlotState = .GENESIS;
     slot_state.hash.set(slot_hash);
