@@ -227,7 +227,7 @@ pub const NodeVoteAccounts = struct {
             .initCapacity(allocator, max_list_entries);
         errdefer vote_accounts.deinit(allocator);
         for (0..random.uintAtMost(usize, max_list_entries)) |_| {
-            try vote_accounts.append(allocator, Pubkey.initRandom(random));
+            vote_accounts.appendAssumeCapacity(Pubkey.initRandom(random));
         }
         return .{
             .vote_accounts = vote_accounts,
