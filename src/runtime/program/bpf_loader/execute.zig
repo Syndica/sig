@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../../../sig.zig");
 
 const ids = sig.runtime.ids;
@@ -28,6 +29,9 @@ pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "bpf_loader: execute" });
+    defer zone.deinit();
+
     // The borrowed program cannot be held during calls to other execute functions.
     // Agave originally drops it at the relevant sites, but we can just extract needed fields here.
     const program_owner = blk: {

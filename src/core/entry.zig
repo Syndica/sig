@@ -107,6 +107,10 @@ pub fn verifyPoh(
     const zone = tracy.Zone.init(@src(), .{ .name = "verifyPoh" });
     defer zone.deinit();
 
+    var total_entry_hashes: usize = 0;
+    for (entries) |entry| total_entry_hashes += entry.num_hashes;
+    zone.value(total_entry_hashes);
+
     var current_hash = initial_hash;
 
     for (entries) |entry| {

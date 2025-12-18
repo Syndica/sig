@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 
 const bpf_loader = sig.runtime.program.bpf_loader;
@@ -107,6 +108,9 @@ fn loadProgram(
     environment: *const vm.Environment,
     slot: u64,
 ) AccountLoadError!LoadedProgram {
+    const zone = tracy.Zone.init(@src(), .{ .name = "loadProgram" });
+    defer zone.deinit();
+
     const maybe_deployment_slot, var executable_bytes = try loadDeploymentSlotAndExecutableBytes(
         allocator,
         account,

@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 
 const leb = std.leb;
@@ -208,6 +209,9 @@ pub const Transaction = struct {
     /// Does *not* ensure total internal consistency. Only does the minimum to
     /// verify signatures. Call `validate` to ensure full consistency.
     pub fn verifySignatures(self: Transaction, serialized_message: []const u8) VerifyError!void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "verifySignatures" });
+        defer zone.deinit();
+
         if (self.msg.account_keys.len < self.signatures.len) return error.NotEnoughAccounts;
 
         sig.crypto.ed25519.verifyBatchOverSingleMessage(
@@ -568,6 +572,9 @@ pub const Message = struct {
 
     /// Return the blake3 hash of the pre-serialized message.
     pub fn hash(serialized_message: []const u8) Hash {
+        const zone = tracy.Zone.init(@src(), .{ .name = "Message.hash" });
+        defer zone.deinit();
+
         var hasher = Blake3.init(.{});
         hasher.update("solana-tx-message-v1");
         hasher.update(serialized_message);

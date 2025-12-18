@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 
 const program = sig.runtime.program;
@@ -110,6 +111,9 @@ pub const TransactionContext = struct {
     }, MAX_INSTRUCTION_TRACE_LENGTH);
 
     pub fn deinit(self: TransactionContext) void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "TransactionContext.deinit" });
+        defer zone.deinit();
+
         self.allocator.free(self.accounts);
         if (self.log_collector) |*lc| lc.deinit(self.allocator);
     }
