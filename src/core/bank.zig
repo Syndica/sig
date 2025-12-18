@@ -117,6 +117,15 @@ pub const SlotConstants = struct {
         bank_fields: *const BankFields,
         feature_set: FeatureSet,
     ) Allocator.Error!SlotConstants {
+        const ancestors = try bank_fields.ancestors.clone(allocator);
+        errdefer ancestors.deinit(allocator);
+
+        const reserved_accounts = try ReservedAccounts.initForSlot(
+            allocator,
+            &feature_set,
+            bank_fields.slot,
+        );
+        errdefer reserved_accounts.deinit(allocator);
         return .{
             .parent_slot = bank_fields.parent_slot,
             .parent_hash = bank_fields.parent_hash,
@@ -125,13 +134,9 @@ pub const SlotConstants = struct {
             .collector_id = bank_fields.collector_id,
             .max_tick_height = bank_fields.max_tick_height,
             .fee_rate_governor = bank_fields.fee_rate_governor,
-            .ancestors = try bank_fields.ancestors.clone(allocator),
+            .ancestors = ancestors,
             .feature_set = feature_set,
-            .reserved_accounts = try ReservedAccounts.initForSlot(
-                allocator,
-                &feature_set,
-                bank_fields.slot,
-            ),
+            .reserved_accounts = reserved_accounts,
             .inflation = bank_fields.inflation,
         };
     }
@@ -350,13 +355,17 @@ pub fn parseStakes(
     var stake_accounts = std.AutoArrayHashMapUnmanaged(Pubkey, StakeStateV2.Stake){};
     errdefer stake_accounts.deinit(allocator);
 
+    // Validate stake accounts cache against accounts DB
+    // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/stakes.rs#L196-L236
     const keys = stakes.stake_accounts.keys();
     const values = stakes.stake_accounts.values();
     for (keys, values) |key, value| {
+        // Check that the stake account exists in accounts DB
         const account = try account_reader.get(allocator, key) orelse
             return error.StakeAccountNotFound;
         defer account.deinit(allocator);
 
+        // If the vote account is not cached, it must be unintialized or invalid in accounts DB
         const voter_pubkey = value.voter_pubkey;
         if (stakes.vote_accounts.getAccount(voter_pubkey) == null) {
             if (try account_reader.get(allocator, voter_pubkey)) |vote_account| {
@@ -373,7 +382,9 @@ pub fn parseStakes(
                         .executable = vote_account.executable,
                         .rent_epoch = vote_account.rent_epoch,
                     });
-                    if (!std.meta.isError(deserialize_result)) {
+                    if (deserialize_result == error.OutOfMemory) {
+                        return error.OutOfMemory;
+                    } else if (!std.meta.isError(deserialize_result)) {
                         var deserialized = deserialize_result catch unreachable;
                         defer deserialized.deinit(allocator);
                         return error.VoteAccountNotCached;
@@ -383,7 +394,7 @@ pub fn parseStakes(
         }
 
         var state_buffer = [_]u8{0} ** StakeStateV2.SIZE;
-        _ = account.data.readRange(0, StakeStateV2.SIZE, &state_buffer);
+        _ = account.data.read(0, &state_buffer);
 
         const state = try sig.bincode.readFromSlice(
             allocator,
