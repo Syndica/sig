@@ -64,7 +64,7 @@ pub fn applyFeatureActivations(
     if (new_feature_activations.active(.pico_inflation, slot))
         return error.PicoInflationActivationNotImplemented;
 
-    if (feature_set.fullInflationFeatures(slot).enabled(new_feature_activations, slot)) {
+    if (feature_set.fullInflationFeaturesEnabled(slot, &new_feature_activations)) {
         return error.FullInflationActivationNotImplemented;
     }
 
