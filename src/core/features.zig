@@ -64,14 +64,14 @@ pub const Set = struct {
 
     /// Check whether `feature` is enabled at or before the provided slot.
     pub fn active(self: *const Set, feature: Feature, slot: Slot) bool {
-        if (self.array.get(feature)) |activated|
+        if (self.array.getPtrConst(feature).*) |activated|
             return slot >= activated;
         return false;
     }
 
     /// Gets the activation slot for a feature, if one has been set.
     pub fn get(self: *const Set, feature: Feature) ?Slot {
-        return self.array.get(feature);
+        return self.array.getPtrConst(feature).*;
     }
 
     /// Updates the set to update the feature whos pubkey was provided. Possible input values for
@@ -85,7 +85,7 @@ pub const Set = struct {
     pub fn setSlotPubkey(self: *Set, pubkey: Pubkey, slot: Slot) !void {
         for (&self.array.values, 0..) |*destination, i| {
             const feature: Feature = @enumFromInt(i);
-            const info = map.get(feature);
+            const info = map.getPtrConst(feature).*;
             if (!info.pubkey.equals(&pubkey)) continue;
             destination.* = slot;
             return;
@@ -99,7 +99,7 @@ pub const Set = struct {
     pub fn setSlotId(self: *Set, id: u64, slot: Slot) !void {
         for (&self.array.values, 0..) |*destination, i| {
             const feature: Feature = @enumFromInt(i);
-            const pubkey = map.get(feature).key;
+            const pubkey = map.getPtrConst(feature).*.key;
             const feature_id: u64 = @bitCast(pubkey.data[0..8].*);
             if (feature_id == id) {
                 destination.* = slot;
