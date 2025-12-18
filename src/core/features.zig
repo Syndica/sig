@@ -118,34 +118,15 @@ pub const Set = struct {
         self.array.set(feature, null);
     }
 
-    const FullInflationFeatures = struct {
-        mainnet: bool,
-        devnet_and_testnet: bool,
+    pub fn fullInflationFeaturesEnabled(self: *const Set, slot: Slot, new: *const Set) bool {
+        if (self.active(.full_inflation_mainnet_vote, slot) and
+            self.active(.full_inflation_mainnet_enable, slot) and
+            new.active(.full_inflation_mainnet_enable, slot)) return true;
 
-        pub fn enabled(self: FullInflationFeatures, set: Set, slot: Slot) bool {
-            if (self.mainnet and set.active(.full_inflation_mainnet_enable, slot)) return true;
-            if (self.devnet_and_testnet and
-                set.active(.full_inflation_devnet_and_testnet, slot)) return true;
-            return false;
-        }
+        if (self.active(.full_inflation_devnet_and_testnet, slot) and
+            new.active(.full_inflation_devnet_and_testnet, slot)) return true;
 
-        pub fn mainnetSlot(self: FullInflationFeatures, set: *const Set) ?Slot {
-            if (self.mainnet) return set.get(.full_inflation_mainnet_enable);
-            return null;
-        }
-
-        pub fn devnetAndTestnetSlot(self: FullInflationFeatures, set: *const Set) ?Slot {
-            if (self.devnet_and_testnet) return set.get(.full_inflation_devnet_and_testnet);
-            return null;
-        }
-    };
-
-    pub fn fullInflationFeatures(self: *const Set, slot: Slot) FullInflationFeatures {
-        return .{
-            .mainnet = self.active(.full_inflation_mainnet_vote, slot) and
-                self.active(.full_inflation_mainnet_enable, slot),
-            .devnet_and_testnet = self.active(.full_inflation_devnet_and_testnet, slot),
-        };
+        return false;
     }
 
     pub fn newWarmupCooldownRateEpoch(self: *const Set, epoch_schedule: *const EpochSchedule) ?u64 {
@@ -188,57 +169,23 @@ pub const Set = struct {
     };
 };
 
-test "full inflation on mainnet" {
+test "full inflation enabled" {
     var feature_set: Set = .ALL_DISABLED;
-    {
-        const inflation_features = feature_set.fullInflationFeatures(0);
-        try std.testing.expect(!inflation_features.mainnet);
-        try std.testing.expect(!inflation_features.devnet_and_testnet);
-    }
+    var new_feature_set: Set = .ALL_DISABLED;
+
+    try std.testing.expect(!feature_set.fullInflationFeaturesEnabled(0, &new_feature_set));
     feature_set.setSlot(.full_inflation_mainnet_vote, 0);
-    {
-        const inflation_features = feature_set.fullInflationFeatures(0);
-        try std.testing.expect(!inflation_features.mainnet);
-        try std.testing.expect(!inflation_features.devnet_and_testnet);
-    }
+    try std.testing.expect(!feature_set.fullInflationFeaturesEnabled(0, &new_feature_set));
     feature_set.setSlot(.full_inflation_mainnet_enable, 0);
-    {
-        const inflation_features = feature_set.fullInflationFeatures(0);
-        try std.testing.expect(inflation_features.mainnet);
-        try std.testing.expect(!inflation_features.devnet_and_testnet);
-    }
+    try std.testing.expect(!feature_set.fullInflationFeaturesEnabled(0, &new_feature_set));
+    new_feature_set.setSlot(.full_inflation_mainnet_enable, 0);
+    try std.testing.expect(feature_set.fullInflationFeaturesEnabled(0, &new_feature_set));
 
     feature_set = .ALL_DISABLED;
-    {
-        const inflation_features = feature_set.fullInflationFeatures(0);
-        try std.testing.expect(!inflation_features.mainnet);
-        try std.testing.expect(!inflation_features.devnet_and_testnet);
-    }
-    feature_set.setSlot(.full_inflation_mainnet_enable, 0);
-    {
-        const inflation_features = feature_set.fullInflationFeatures(0);
-        try std.testing.expect(!inflation_features.mainnet);
-        try std.testing.expect(!inflation_features.devnet_and_testnet);
-    }
-    feature_set.setSlot(.full_inflation_mainnet_vote, 0);
-    {
-        const inflation_features = feature_set.fullInflationFeatures(0);
-        try std.testing.expect(inflation_features.mainnet);
-        try std.testing.expect(!inflation_features.devnet_and_testnet);
-    }
-}
-
-test "full inflation on devnet" {
-    var feature_set: Set = .ALL_DISABLED;
-    {
-        const inflation_features = feature_set.fullInflationFeatures(0);
-        try std.testing.expect(!inflation_features.mainnet);
-        try std.testing.expect(!inflation_features.devnet_and_testnet);
-    }
+    new_feature_set = .ALL_DISABLED;
+    try std.testing.expect(!feature_set.fullInflationFeaturesEnabled(0, &new_feature_set));
     feature_set.setSlot(.full_inflation_devnet_and_testnet, 0);
-    {
-        const inflation_features = feature_set.fullInflationFeatures(0);
-        try std.testing.expect(!inflation_features.mainnet);
-        try std.testing.expect(inflation_features.devnet_and_testnet);
-    }
+    try std.testing.expect(!feature_set.fullInflationFeaturesEnabled(0, &new_feature_set));
+    new_feature_set.setSlot(.full_inflation_devnet_and_testnet, 0);
+    try std.testing.expect(feature_set.fullInflationFeaturesEnabled(0, &new_feature_set));
 }

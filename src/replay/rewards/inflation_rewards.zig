@@ -208,26 +208,21 @@ pub fn calculateStakePointsAndCredits(
 /// If full inflation is enabled for either mainnet or devnet/testnet, returns the
 /// earlier of the two feature activation slots. If neither full inflation feature is enabled,
 /// returns the pico inflation feature activation slot, or 0 if pico inflation is not enabled.
-pub fn getInflationStartSlot(slot: Slot, feature_set: *const FeatureSet) Slot {
-    const full_inflation_features = feature_set.fullInflationFeatures(slot);
+fn getInflationStartSlot(slot: Slot, feature_set: *const FeatureSet) Slot {
+    const mainnet_vote = feature_set.get(.full_inflation_mainnet_vote) orelse std.math.maxInt(Slot);
+    const mainnet = feature_set.get(.full_inflation_mainnet_enable) orelse std.math.maxInt(Slot);
+    const devnet_and_testnet = feature_set.get(.full_inflation_devnet_and_testnet) orelse
+        std.math.maxInt(Slot);
 
-    const mainnet_slot = full_inflation_features.mainnetSlot(feature_set);
-    const devnet_and_testnet_slot = full_inflation_features.devnetAndTestnetSlot(feature_set);
-
-    if (mainnet_slot != null or devnet_and_testnet_slot != null) {
-        return @min(
-            mainnet_slot orelse std.math.maxInt(Slot),
-            devnet_and_testnet_slot orelse std.math.maxInt(Slot),
-        );
-    }
-
-    return if (feature_set.active(.pico_inflation, slot))
+    return if (slot >= mainnet_vote and slot >= mainnet_vote or slot >= devnet_and_testnet)
+        @min(mainnet, devnet_and_testnet)
+    else if (feature_set.active(.pico_inflation, slot))
         feature_set.get(.pico_inflation).?
     else
         0;
 }
 
-pub fn getInflationNumSlots(
+fn getInflationNumSlots(
     slot: Slot,
     epoch: Epoch,
     feature_set: *const FeatureSet,
