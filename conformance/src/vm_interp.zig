@@ -106,7 +106,6 @@ fn executeVmTest(
         .maximum_version = sbpf_version,
         .enable_stack_frame_gaps = !direct_mapping,
         .aligned_memory_mapping = !direct_mapping,
-        .enable_instruction_tracing = true,
     };
 
     const stricter_abi_and_runtime_constraints = tc.feature_set.active(
