@@ -148,6 +148,7 @@ pub fn TransactionResult(comptime T: type) type {
 
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L323-L324
 pub fn loadAndExecuteTransaction(
+    gpa: std.mem.Allocator,
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
     account_store: SlotAccountStore,
@@ -155,7 +156,7 @@ pub fn loadAndExecuteTransaction(
     config: *const TransactionExecutionConfig,
     program_map: *ProgramMap,
 ) AccountLoadError!TransactionResult(ProcessedTransaction) {
-    var zone = tracy.Zone.init(@src(), .{ .name = "executeTransaction" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "loadAndExecuteTransaction" });
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
 
@@ -253,7 +254,7 @@ pub fn loadAndExecuteTransaction(
     errdefer for (loaded_accounts.accounts.slice()) |acct| acct.deinit(allocator);
 
     for (loaded_accounts.accounts.slice()) |account| try program_loader.loadIfProgram(
-        allocator,
+        gpa,
         program_map,
         account.pubkey,
         &account.account,
@@ -832,6 +833,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         defer program_map.deinit(allocator);
         const result = try loadAndExecuteTransaction(
             allocator,
+            allocator,
             &transaction,
             .{ .account_shared_data_map = .{ allocator, &account_map } },
             &environment,
@@ -867,6 +869,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         var program_map = ProgramMap.empty;
         defer program_map.deinit(allocator);
         const result = try loadAndExecuteTransaction(
+            allocator,
             allocator,
             &transaction,
             .{ .account_shared_data_map = .{ allocator, &account_map } },

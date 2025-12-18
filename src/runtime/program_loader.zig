@@ -77,7 +77,7 @@ pub const LoadedProgram = union(enum(u8)) {
 };
 
 pub fn loadIfProgram(
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     programs: *ProgramMap,
     address: Pubkey,
     account: *const AccountSharedData,
@@ -92,11 +92,11 @@ pub fn loadIfProgram(
         !account.owner.equals(&bpf_loader.v4.ID) or
         programs.contains(address)) return;
 
-    var loaded_program = try loadProgram(allocator, account, account_reader, enviroment, slot);
-    errdefer loaded_program.deinit(allocator);
+    var loaded_program = try loadProgram(gpa, account, account_reader, enviroment, slot);
+    errdefer loaded_program.deinit(gpa);
 
-    if (try programs.fetchPut(allocator, address, loaded_program)) |old_value| {
-        old_value.deinit(allocator);
+    if (try programs.fetchPut(gpa, address, loaded_program)) |old_value| {
+        old_value.deinit(gpa);
     }
 }
 

@@ -32,6 +32,7 @@ replay_votes_sender: ?*Channel(ParsedVote),
 
 pub fn commitTransactions(
     self: Committer,
+    gpa: Allocator,
     allocator: Allocator,
     slot: Slot,
     transactions: []const ResolvedTransaction,
@@ -63,6 +64,8 @@ pub fn commitTransactions(
         transaction_fees += tx_result.fees.transaction_fee;
         priority_fees += tx_result.fees.prioritization_fee;
 
+        // TODO: fix nesting, this sucks
+
         if (tx_result.outputs != null) {
             rent_collected += tx_result.rent;
 
@@ -70,11 +73,11 @@ pub fn commitTransactions(
             // Only send votes if consensus is enabled (sender exists)
             if (self.replay_votes_sender) |sender| {
                 if (tx_result.err == null and isSimpleVoteTransaction(transaction.transaction)) {
-                    if (try parseSanitizedVoteTransaction(allocator, transaction)) |parsed| {
+                    if (try parseSanitizedVoteTransaction(gpa, transaction)) |parsed| {
                         if (parsed.vote.lastVotedSlot() != null) {
-                            sender.send(parsed) catch parsed.deinit(allocator);
+                            sender.send(parsed) catch parsed.deinit(gpa);
                         } else {
-                            parsed.deinit(allocator);
+                            parsed.deinit(gpa);
                         }
                     }
                 }
@@ -91,7 +94,7 @@ pub fn commitTransactions(
             defer status_cache_zone.deinit();
 
             try self.status_cache.insert(
-                allocator,
+                gpa,
                 rng.random(),
                 recent_blockhash,
                 &message_hash.data,
@@ -106,7 +109,7 @@ pub fn commitTransactions(
             defer status_cache_zone.deinit();
 
             try self.status_cache.insert(
-                allocator,
+                gpa,
                 rng.random(),
                 recent_blockhash,
                 &signature.toBytes(),
@@ -124,7 +127,7 @@ pub fn commitTransactions(
 
     for (accounts_to_store.values()) |account| {
         try self.stakes_cache.checkAndStore(
-            allocator,
+            gpa,
             account.pubkey,
             account.account,
             self.new_rate_activation_epoch,

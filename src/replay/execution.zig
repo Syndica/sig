@@ -286,7 +286,7 @@ pub const BatchResult = union(enum) {
 /// Processes a batch of transactions by verifying their signatures and
 /// executing them with the SVM.
 pub fn replayBatch(
-    allocator: Allocator,
+    gpa: Allocator,
     svm_gateway: *SvmGateway,
     committer: Committer,
     transactions: []const ResolvedTransaction,
@@ -296,6 +296,18 @@ pub fn replayBatch(
     zone.value(transactions.len);
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
+
+    // `gpa` allocations may be persisted to data structures, e.g.
+    // - votes
+    // - status_cache
+    // - stakes_cache
+    // - ProgramMap programs
+    // Use this for all other allocations.
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // TODO: maybe do a MultiArrayList {Hash, ProcessedTransaction, ResolvedTransaction}
 
     const results = try allocator.alloc(struct { Hash, ProcessedTransaction }, transactions.len);
     var populated_count: usize = 0;
@@ -321,7 +333,7 @@ pub fn replayBatch(
 
         const runtime_transaction = transaction.toRuntimeTransaction(hash, compute_budget_details);
 
-        switch (try executeTransaction(allocator, svm_gateway, &runtime_transaction)) {
+        switch (try executeTransaction(gpa, allocator, svm_gateway, &runtime_transaction)) {
             .ok => |result| {
                 results[i] = .{ hash, result };
                 populated_count += 1;
@@ -330,6 +342,7 @@ pub fn replayBatch(
         }
     }
     try committer.commitTransactions(
+        gpa,
         allocator,
         svm_gateway.params.slot,
         transactions,

@@ -844,6 +844,7 @@ fn executeTxnContext(
     var program_map = sig.runtime.program_loader.ProgramMap.empty;
     const txn_result = try sig.runtime.transaction_execution.loadAndExecuteTransaction(
         allocator,
+        allocator,
         &runtime_transaction,
         accounts_db.accountStore().forSlot(slot, &ancestors),
         &environment,
