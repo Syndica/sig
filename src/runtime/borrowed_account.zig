@@ -54,7 +54,7 @@ pub const BorrowedAccount = struct {
     /// the context under which the account was borrowed
     context: BorrowedAccountContext,
 
-    pub fn release(self: BorrowedAccount) void {
+    pub fn release(self: *const BorrowedAccount) void {
         self.account_write_guard.release();
     }
 
@@ -70,7 +70,7 @@ pub const BorrowedAccount = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1077
-    pub fn checkDataIsMutable(self: BorrowedAccount) ?InstructionError {
+    pub fn checkDataIsMutable(self: *const BorrowedAccount) ?InstructionError {
         if (!self.context.is_writable)
             return InstructionError.ReadonlyDataModified;
 
@@ -82,7 +82,7 @@ pub const BorrowedAccount = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1095
     pub fn checkCanSetDataLength(
-        self: BorrowedAccount,
+        self: *const BorrowedAccount,
         resize_delta: i64,
         length: usize,
     ) ?InstructionError {
@@ -105,7 +105,7 @@ pub const BorrowedAccount = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/transaction-context/src/lib.rs#L825
-    pub fn setLamports(self: BorrowedAccount, lamports: u64) InstructionError!void {
+    pub fn setLamports(self: *const BorrowedAccount, lamports: u64) InstructionError!void {
         if (lamports < self.account.lamports and
             !self.account.owner.equals(&self.context.program_id))
         {
@@ -132,7 +132,7 @@ pub const BorrowedAccount = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L800
-    pub fn addLamports(self: BorrowedAccount, lamports: u64) InstructionError!void {
+    pub fn addLamports(self: *const BorrowedAccount, lamports: u64) InstructionError!void {
         try self.setLamports(std.math.add(
             u64,
             self.account.lamports,
@@ -141,7 +141,7 @@ pub const BorrowedAccount = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L808
-    pub fn subtractLamports(self: BorrowedAccount, lamports: u64) InstructionError!void {
+    pub fn subtractLamports(self: *const BorrowedAccount, lamports: u64) InstructionError!void {
         try self.setLamports(std.math.sub(
             u64,
             self.account.lamports,
@@ -150,19 +150,19 @@ pub const BorrowedAccount = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L817
-    pub fn constAccountData(self: BorrowedAccount) []const u8 {
+    pub fn constAccountData(self: *const BorrowedAccount) []const u8 {
         return self.account.data;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L823
-    pub fn mutableAccountData(self: BorrowedAccount) InstructionError![]u8 {
+    pub fn mutableAccountData(self: *const BorrowedAccount) InstructionError![]u8 {
         if (self.checkDataIsMutable()) |err| return err;
         return self.account.data;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L885
     pub fn setDataLength(
-        self: BorrowedAccount,
+        self: *const BorrowedAccount,
         allocator: std.mem.Allocator,
         resize_delta: *i64,
         new_length: usize,
@@ -179,7 +179,7 @@ pub const BorrowedAccount = struct {
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L916
     pub fn setDataFromSlice(
-        self: BorrowedAccount,
+        self: *const BorrowedAccount,
         allocator: std.mem.Allocator,
         resize_delta: *i64,
         data: []const u8,
@@ -200,7 +200,7 @@ pub const BorrowedAccount = struct {
     ///
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L968
     pub fn deserializeFromAccountData(
-        self: BorrowedAccount,
+        self: *const BorrowedAccount,
         allocator: std.mem.Allocator,
         comptime T: type,
     ) InstructionError!T {
@@ -217,7 +217,10 @@ pub const BorrowedAccount = struct {
     /// `state` must support bincode serialization
     ///
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L976
-    pub fn serializeIntoAccountData(self: BorrowedAccount, state: anytype) InstructionError!void {
+    pub fn serializeIntoAccountData(
+        self: *const BorrowedAccount,
+        state: anytype,
+    ) InstructionError!void {
         if (self.checkDataIsMutable()) |err| return err;
 
         const serialized_size = bincode.sizeOf(state, .{});
