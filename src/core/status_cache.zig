@@ -129,7 +129,7 @@ pub const StatusCache = struct {
 
         const lookup_key: [CACHED_KEY_SIZE]u8 = key[key_index..][0..CACHED_KEY_SIZE].*;
 
-        const forks = try hash_map.getOrPutValue(allocator, lookup_key, ForkStatus{});
+        const forks = try hash_map.getOrPutValue(allocator, lookup_key, .empty);
         try forks.value_ptr.append(allocator, .{ .slot = slot });
 
         // Add this key slice to the list of key slices for this slot and blockhash combo.

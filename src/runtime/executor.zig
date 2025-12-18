@@ -48,6 +48,8 @@ pub fn executeNativeCpiInstruction(
     signers: []const Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
     const instruction_info = try prepareCpiInstructionInfo(tc, instruction, signers);
+    defer instruction_info.deinit(tc.allocator);
+
     try executeInstruction(allocator, tc, instruction_info);
 }
 
@@ -247,6 +249,7 @@ pub fn prepareCpiInstructionInfo(
 
     var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
     var deduped_account_metas = InstructionInfo.AccountMetas{};
+    errdefer deduped_account_metas.deinit(tc.allocator);
 
     for (callee.accounts) |account| {
         const index_in_transaction = tc.getAccountIndex(account.pubkey) orelse {
@@ -255,14 +258,14 @@ pub fn prepareCpiInstructionInfo(
         };
 
         const index_in_callee_ptr = &dedupe_map[index_in_transaction];
-        if (index_in_callee_ptr.* < deduped_account_metas.len) {
-            const prev = &deduped_account_metas.slice()[index_in_callee_ptr.*];
+        if (index_in_callee_ptr.* < deduped_account_metas.items.len) {
+            const prev = &deduped_account_metas.items[index_in_callee_ptr.*];
             prev.is_signer = prev.is_signer or account.is_signer;
             prev.is_writable = prev.is_writable or account.is_writable;
-            deduped_account_metas.appendAssumeCapacity(prev.*);
+            try deduped_account_metas.append(tc.allocator, prev.*);
         } else {
-            index_in_callee_ptr.* = @intCast(deduped_account_metas.len);
-            deduped_account_metas.appendAssumeCapacity(.{
+            index_in_callee_ptr.* = @intCast(deduped_account_metas.items.len);
+            try deduped_account_metas.append(tc.allocator, .{
                 .pubkey = account.pubkey,
                 .index_in_transaction = index_in_transaction,
                 .is_signer = account.is_signer,
@@ -271,12 +274,13 @@ pub fn prepareCpiInstructionInfo(
         }
     }
 
-    for (deduped_account_metas.slice(), 0..) |*account_meta, index_in_instruction| {
+    for (deduped_account_metas.items, 0..) |*account_meta, index_in_instruction| {
         const index_in_callee = dedupe_map[account_meta.index_in_transaction];
 
         if (index_in_callee != index_in_instruction) {
-            if (index_in_callee >= deduped_account_metas.len) return error.NotEnoughAccountKeys;
-            const prev = deduped_account_metas.get(index_in_callee);
+            if (index_in_callee >= deduped_account_metas.items.len)
+                return error.NotEnoughAccountKeys;
+            const prev = deduped_account_metas.items[index_in_callee];
             account_meta.is_signer = account_meta.is_signer or prev.is_signer;
             account_meta.is_writable = account_meta.is_writable or prev.is_writable;
             // This account is repeated, so theres no need to check for perms
@@ -287,7 +291,7 @@ pub fn prepareCpiInstructionInfo(
             try caller.ixn_info.getAccountInstructionIndex(account_meta.index_in_transaction);
 
         const callee_account_key = callee.accounts[index_in_instruction].pubkey;
-        const caller_account_meta = caller.ixn_info.account_metas.get(index_in_caller);
+        const caller_account_meta = caller.ixn_info.account_metas.items[index_in_caller];
 
         // Readonly in caller cannot become writable in callee
         if (account_meta.is_writable and !caller_account_meta.is_writable) {
@@ -307,7 +311,7 @@ pub fn prepareCpiInstructionInfo(
     }
 
     // Find and validate executables / program accounts
-    const program_account_index = for (caller.ixn_info.account_metas.slice(), 0..) |acc_meta, i| {
+    const program_account_index = for (caller.ixn_info.account_metas.items, 0..) |acc_meta, i| {
         const tc_acc = tc.getAccountAtIndex(acc_meta.index_in_transaction) orelse continue;
         if (tc_acc.pubkey.equals(&callee.program_id)) break i;
     } else {
@@ -330,6 +334,7 @@ pub fn prepareCpiInstructionInfo(
         .account_metas = deduped_account_metas,
         .dedupe_map = dedupe_map,
         .instruction_data = callee.data,
+        .owned_instruction_data = false,
         .initial_account_lamports = 0,
     };
 }
@@ -705,6 +710,7 @@ test prepareCpiInstructionInfo {
             .{ .pubkey = tc.accounts[1].pubkey, .is_signer = false, .is_writable = false },
         },
         .data = &.{},
+        .owned_data = false,
     };
 
     // Failure: CallDepth

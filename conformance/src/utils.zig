@@ -252,10 +252,12 @@ pub fn createInstructionInfo(
     }
 
     var instruction_accounts = InstructionInfo.AccountMetas{};
+    defer instruction_accounts.deinit(allocator);
+
     for (pb_instruction_accounts) |account| {
         const tc_acc = tc.getAccountAtIndex(@intCast(account.index)) orelse
             return error.AccountNotInTransaction;
-        try instruction_accounts.append(.{
+        try instruction_accounts.append(allocator, .{
             .pubkey = tc_acc.pubkey,
             .index_in_transaction = @intCast(account.index),
             .is_signer = account.is_signer,
@@ -271,6 +273,7 @@ pub fn createInstructionInfo(
         .account_metas = instruction_accounts,
         .dedupe_map = dedupe_map,
         .instruction_data = try allocator.dupe(u8, instruction),
+        .owned_instruction_data = true,
         .initial_account_lamports = 0,
     };
 }

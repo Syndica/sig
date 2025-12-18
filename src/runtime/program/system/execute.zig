@@ -134,7 +134,7 @@ fn executeCreateAccount(
         lamports,
         space,
         owner,
-        ic.ixn_info.account_metas.buffer[1].pubkey,
+        ic.ixn_info.account_metas.items[1].pubkey,
     );
 }
 
@@ -154,7 +154,7 @@ fn executeCreateAccountWithSeed(
     try ic.ixn_info.checkNumberOfAccounts(2);
     try checkSeedAddress(
         ic,
-        ic.ixn_info.account_metas.buffer[1].pubkey,
+        ic.ixn_info.account_metas.items[1].pubkey,
         base,
         owner,
         seed,
@@ -224,8 +224,8 @@ fn executeTransferWithSeed(
     const from_base_index = 1;
     const to_index = 2;
 
-    const from_base_pubkey = ic.ixn_info.account_metas.buffer[from_base_index].pubkey;
-    const from_pubkey = ic.ixn_info.account_metas.buffer[from_index].pubkey;
+    const from_base_pubkey = ic.ixn_info.account_metas.items[from_base_index].pubkey;
+    const from_pubkey = ic.ixn_info.account_metas.items[from_index].pubkey;
 
     if (!try ic.ixn_info.isIndexSigner(from_base_index)) {
         try ic.tc.log("Transfer: `from` account {} must sign", .{from_base_pubkey});
@@ -512,7 +512,7 @@ fn transfer(
     if (!try ic.ixn_info.isIndexSigner(from_index)) {
         try ic.tc.log(
             "Transfer: `from` account {} must sign",
-            .{ic.ixn_info.account_metas.buffer[from_index].pubkey},
+            .{ic.ixn_info.account_metas.items[from_index].pubkey},
         );
         return InstructionError.MissingRequiredSignature;
     }
