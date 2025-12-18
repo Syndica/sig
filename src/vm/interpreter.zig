@@ -119,13 +119,13 @@ pub const Vm = struct {
         }
 
         self.instruction_count += 1;
-        if (self.registers.get(.pc) >= self.executable.instructions.len) {
+        if (self.registers.getPtrConst(.pc).* >= self.executable.instructions.len) {
             return error.ExecutionOverrun;
         }
 
         const version = self.executable.version;
         const registers = &self.registers;
-        const pc = registers.get(.pc);
+        const pc = registers.getPtrConst(.pc).*;
         var next_pc: u64 = pc + 1;
 
         const instructions = self.executable.instructions;
@@ -157,7 +157,7 @@ pub const Vm = struct {
                         .mod32_reg => u64,
                         else => unreachable,
                     };
-                    const base_address: i64 = @bitCast(registers.get(inst.src));
+                    const base_address: i64 = @bitCast(registers.getPtrConst(inst.src).*);
                     const vm_addr: u64 = @bitCast(base_address +% @as(i64, inst.off));
                     registers.set(inst.dst, try self.memory_map.load(T, vm_addr));
                 },
@@ -179,7 +179,7 @@ pub const Vm = struct {
                         .mod64_imm => u64,
                         else => unreachable,
                     };
-                    const base_address: i64 = @bitCast(registers.get(inst.dst));
+                    const base_address: i64 = @bitCast(registers.getPtrConst(inst.dst).*);
                     const vm_addr: u64 = @bitCast(base_address +% @as(i64, inst.off));
                     try self.memory_map.store(T, vm_addr, @truncate(extend(inst.imm)));
                 },
@@ -201,9 +201,13 @@ pub const Vm = struct {
                         .mod64_reg => u64,
                         else => unreachable,
                     };
-                    const base_address: i64 = @bitCast(registers.get(inst.dst));
+                    const base_address: i64 = @bitCast(registers.getPtrConst(inst.dst).*);
                     const vm_addr: u64 = @bitCast(base_address +% @as(i64, inst.off));
-                    try self.memory_map.store(T, vm_addr, @truncate(registers.get(inst.src)));
+                    try self.memory_map.store(
+                        T,
+                        vm_addr,
+                        @truncate(registers.getPtrConst(inst.src).*),
+                    );
                 },
 
                 else => {},
@@ -283,9 +287,9 @@ pub const Vm = struct {
                         const Int = if (is_64) u64 else u32;
                         const SignedInt = if (is_64) i64 else i32;
 
-                        const lhs: Int = @truncate(registers.get(inst.dst));
+                        const lhs: Int = @truncate(registers.getPtrConst(inst.dst).*);
                         const rhs: Int = @truncate(if (opcode.isReg())
-                            registers.get(inst.src)
+                            registers.getPtrConst(inst.src).*
                         else
                             extend(inst.imm));
 
@@ -340,7 +344,7 @@ pub const Vm = struct {
             },
 
             .hor64_imm => {
-                const lhs = registers.get(inst.dst);
+                const lhs = registers.getPtrConst(inst.dst).*;
                 const result = lhs | @as(u64, inst.imm) << 32;
                 registers.set(inst.dst, result);
             },
@@ -357,8 +361,11 @@ pub const Vm = struct {
             .srem32_imm,
             => {
                 if (!version.enablePqr()) return error.UnsupportedInstruction;
-                const lhs_large = registers.get(inst.dst);
-                const rhs_large = if (opcode.isReg()) registers.get(inst.src) else inst.imm;
+                const lhs_large = registers.getPtrConst(inst.dst).*;
+                const rhs_large = if (opcode.isReg())
+                    registers.getPtrConst(inst.src).*
+                else
+                    inst.imm;
 
                 const opc = @intFromEnum(opcode) & 0b11100000;
                 const extended: u64 = switch (opc) {
@@ -407,10 +414,10 @@ pub const Vm = struct {
             .srem64_imm,
             => {
                 if (!version.enablePqr()) return error.UnsupportedInstruction;
-                const lhs: u64 = registers.get(inst.dst);
-                const rhs: u64 = if (opcode.isReg()) registers.get(inst.src) else inst.imm;
+                const lhs: u64 = registers.getPtrConst(inst.dst).*;
+                const rhs: u64 = if (opcode.isReg()) registers.getPtrConst(inst.src).* else inst.imm;
                 const signed_rhs: i64 = if (opcode.isReg())
-                    @bitCast(registers.get(inst.src))
+                    @bitCast(registers.getPtrConst(inst.src).*)
                 else
                     @bitCast(extend(inst.imm));
 
@@ -486,14 +493,14 @@ pub const Vm = struct {
 
                 const access = code.accessType();
                 const addr_reg = if (access == .constant) inst.src else inst.dst;
-                const address: i64 = @bitCast(registers.get(addr_reg));
+                const address: i64 = @bitCast(registers.getPtrConst(addr_reg).*);
                 const vaddr: u64 = @bitCast(address +% inst.off);
 
                 switch (access) {
                     .constant => registers.set(inst.dst, try self.memory_map.load(T, vaddr)),
                     .mutable => {
                         const operand = switch (@intFromEnum(opcode) & 0b111) {
-                            Instruction.stx => registers.get(inst.src),
+                            Instruction.stx => registers.getPtrConst(inst.src).*,
                             Instruction.st => extend(inst.imm),
                             else => unreachable,
                         };
@@ -512,7 +519,7 @@ pub const Vm = struct {
                     64,
                     => |size| std.mem.nativeTo(
                         std.meta.Int(.unsigned, size),
-                        @truncate(registers.get(inst.dst)),
+                        @truncate(registers.getPtrConst(inst.dst).*),
                         if (opcode == .le) .little else .big,
                     ),
                     else => return error.UnsupportedInstruction,
@@ -545,8 +552,11 @@ pub const Vm = struct {
             .jslt_reg,
             => {
                 const target_pc: u64 = @intCast(@as(i64, @intCast(next_pc)) + inst.off);
-                const lhs = registers.get(inst.dst);
-                const rhs = if (opcode.isReg()) registers.get(inst.src) else extend(inst.imm);
+                const lhs = registers.getPtrConst(inst.dst).*;
+                const rhs = if (opcode.isReg())
+                    registers.getPtrConst(inst.src).*
+                else
+                    extend(inst.imm);
 
                 // for the signed variants
                 const lhs_signed: i64 = @bitCast(lhs);
@@ -597,7 +607,7 @@ pub const Vm = struct {
                         {
                             return error.ExceededMaxInstructions;
                         }
-                        self.result = .{ .ok = self.registers.get(.r0) };
+                        self.result = .{ .ok = self.registers.getPtrConst(.r0).* };
                         return false;
                     }
                     self.depth -= 1;
@@ -630,7 +640,7 @@ pub const Vm = struct {
                     inst.src
                 else
                     @enumFromInt(inst.imm);
-                const target_pc = registers.get(src);
+                const target_pc = registers.getPtrConst(src).*;
 
                 try self.pushCallFrame();
 
@@ -667,8 +677,8 @@ pub const Vm = struct {
         const frame = self.call_frames.addOneAssumeCapacity();
         frame.* = .{
             .caller_saved_regs = self.registers.values[6..][0..4].*,
-            .fp = self.registers.get(.r10),
-            .return_pc = self.registers.get(.pc) + 1,
+            .fp = self.registers.getPtrConst(.r10).*,
+            .return_pc = self.registers.getPtrConst(.pc).* + 1,
         };
 
         self.depth += 1;

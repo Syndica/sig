@@ -110,7 +110,7 @@ pub const Syscall = enum {
                 if (value == bytes) break @enumFromInt(i); // assumes that the EnumArray will be in "array" mode, which it should be.
             } else return null; // no such hash
             // TODO: consider just making a build flag for harness builds that removes this check entirely for perf
-            return if (self.is_stubbed) &stubbed else map.get(syscall);
+            return if (self.is_stubbed) &stubbed else map.getPtrConst(syscall).*;
         }
 
         fn stubbed(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {}
