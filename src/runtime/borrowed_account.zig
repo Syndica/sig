@@ -242,10 +242,6 @@ pub const BorrowedAccount = struct {
         var zone = tracy.Zone.init(@src(), .{ .name = "setOwner" });
         defer zone.deinit();
 
-        if (self.account.lamports == 0) {
-            std.debug.assert(self.account.isZeroed());
-        }
-
         if (!self.context.is_writable or
             !self.account.owner.equals(&self.context.program_id) or
             !self.account.isZeroed())
