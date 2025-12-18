@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../../../sig.zig");
 
 const zksdk = sig.zksdk;
@@ -10,6 +11,9 @@ pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "zk_elgamal: entrypoint" });
+    defer zone.deinit();
+
     const tc = ic.tc;
     const instruction_data = ic.ixn_info.instruction_data;
 

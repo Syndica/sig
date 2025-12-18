@@ -118,6 +118,9 @@ pub fn resolveBatch(
     batch: []const Transaction,
     params: SlotResolver,
 ) !ResolvedBatch {
+    const zone = tracy.Zone.init(@src(), .{ .name = "resolveBatch" });
+    defer zone.deinit();
+
     var accounts = try std.ArrayListUnmanaged(LockableAccount)
         .initCapacity(allocator, Transaction.numAccounts(batch));
     errdefer accounts.deinit(allocator);
@@ -152,6 +155,9 @@ pub fn resolveTransaction(
     transaction: Transaction,
     params: SlotResolver,
 ) !ResolvedTransaction {
+    const zone = tracy.Zone.init(@src(), .{ .name = "resolveTransaction" });
+    defer zone.deinit();
+
     const message = transaction.msg;
 
     const lookups = try resolveLookupTableAccounts(

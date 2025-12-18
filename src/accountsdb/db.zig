@@ -277,6 +277,9 @@ pub const AccountsDB = struct {
     ///
     /// Returns a tmpdir that you should cleanup alongside AccountsDB
     pub fn initForTest(allocator: std.mem.Allocator) !struct { AccountsDB, std.testing.TmpDir } {
+        const zone = tracy.Zone.init(@src(), .{ .name = "AccountsDB.initForTest" });
+        defer zone.deinit();
+
         var tmp_dir = std.testing.tmpDir(.{});
         errdefer tmp_dir.cleanup();
         return .{

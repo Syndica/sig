@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
@@ -232,11 +233,18 @@ pub const BorrowedAccount = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L742
     pub fn setOwner(
-        self: BorrowedAccount,
+        self: *const BorrowedAccount,
         pubkey: Pubkey,
     ) InstructionError!void {
-        if (!self.account.owner.equals(&self.context.program_id) or
-            !self.context.is_writable or
+        var zone = tracy.Zone.init(@src(), .{ .name = "setOwner" });
+        defer zone.deinit();
+
+        if (self.account.lamports == 0) {
+            std.debug.assert(self.account.isZeroed());
+        }
+
+        if (!self.context.is_writable or
+            !self.account.owner.equals(&self.context.program_id) or
             !self.account.isZeroed())
         {
             return InstructionError.ModifiedProgramId;

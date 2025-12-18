@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 
 const sbpf = sig.vm.sbpf;
@@ -75,6 +76,9 @@ pub const Vm = struct {
     }
 
     pub fn run(self: *Vm) struct { Result, u64 } {
+        const zone = tracy.Zone.init(@src(), .{ .name = "VM.run" });
+        defer zone.deinit();
+
         const initial_instruction_count = self.transaction_context.compute_meter;
         while (true) {
             const cont = self.step() catch |err| {
@@ -92,6 +96,9 @@ pub const Vm = struct {
     }
 
     fn dispatchSyscall(self: *Vm, func: Syscall) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "VM: dispatchSyscall" });
+        defer zone.deinit();
+
         if (self.executable.config.enable_instruction_meter)
             self.transaction_context.consumeUnchecked(self.instruction_count);
         self.instruction_count = 0;

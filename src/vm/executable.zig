@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const sbpf = sig.vm.sbpf;
 const memory = sig.vm.memory;
@@ -48,6 +49,9 @@ pub const Executable = struct {
         loader: *const SyscallMap,
         config: Config,
     ) !Executable {
+        const zone = tracy.Zone.init(@src(), .{ .name = "Executable.fromBytes" });
+        defer zone.deinit();
+
         const elf = try Elf.parse(allocator, source, loader, config);
         return fromElf(elf);
     }
@@ -123,6 +127,9 @@ pub const Executable = struct {
         self: *const Executable,
         loader: *const SyscallMap,
     ) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "Executable.Verify" });
+        defer zone.deinit();
+
         const version = self.version;
         const instructions = self.instructions;
         if (instructions.len == 0) return error.NoProgram;

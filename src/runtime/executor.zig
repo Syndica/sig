@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 
 const ids = sig.runtime.ids;
@@ -22,6 +23,9 @@ pub fn executeInstruction(
     tc: *TransactionContext,
     instruction_info: InstructionInfo,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "runtime: executeInstruction" });
+    defer zone.deinit();
+
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L471-L474
     try pushInstruction(tc, instruction_info);
 
@@ -56,6 +60,9 @@ pub fn pushInstruction(
     tc: *TransactionContext,
     initial_instruction_info: InstructionInfo,
 ) InstructionError!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "pushInstruction" });
+    defer zone.deinit();
+
     const instruction_info = initial_instruction_info;
     const program_id = instruction_info.program_meta.pubkey;
 
@@ -117,6 +124,9 @@ fn processNextInstruction(
     allocator: std.mem.Allocator,
     tc: *TransactionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "processNextInstruction" });
+    defer zone.deinit();
+
     // Get next instruction context from the stack
     if (tc.instruction_stack.len == 0) return InstructionError.CallDepth;
     const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
@@ -166,18 +176,23 @@ fn processNextInstruction(
         ic.tc.instruction_stack.len,
     );
 
-    native_program_fn(allocator, ic) catch |err| {
-        // This approach to failure logging is used to prevent requiring all native programs to return
-        // an ExecutionError. Instead, native programs return an InstructionError, and more granular
-        // failure logging for bpf programs is handled in the BPF executor.
-        if (err != InstructionError.ProgramFailedToComplete)
-            try stable_log.programFailure(
-                ic.tc,
-                program_id,
-                err,
-            );
-        return err;
-    };
+    {
+        const native_zone = tracy.Zone.init(@src(), .{ .name = "native_program_fn" });
+        defer native_zone.deinit();
+
+        native_program_fn(allocator, ic) catch |err| {
+            // This approach to failure logging is used to prevent requiring all native programs to return
+            // an ExecutionError. Instead, native programs return an InstructionError, and more granular
+            // failure logging for bpf programs is handled in the BPF executor.
+            if (err != InstructionError.ProgramFailedToComplete)
+                try stable_log.programFailure(
+                    ic.tc,
+                    program_id,
+                    err,
+                );
+            return err;
+        };
+    }
 
     try stable_log.programSuccess(
         ic.tc,
@@ -190,6 +205,9 @@ fn processNextInstruction(
 pub fn popInstruction(
     tc: *TransactionContext,
 ) InstructionError!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "popInstruction" });
+    defer zone.deinit();
+
     // TODO: pop syscall context and record trace log
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L291-L294
 

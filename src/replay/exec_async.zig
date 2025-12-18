@@ -144,6 +144,9 @@ pub const ReplaySlotFuture = struct {
     }
 
     fn finish(self: *ReplaySlotFuture) void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "ReplaySlotFuture.finish" });
+        defer zone.deinit();
+
         if (self.pending.fetchSub(1, .acq_rel) - 1 == 0) {
             @branchHint(.unlikely);
 
@@ -287,7 +290,7 @@ const TransactionScheduler = struct {
     }
 
     fn start(self: *TransactionScheduler) Error!void {
-        const zone = tracy.Zone.init(@src(), .{ .name = "replaySchedule" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "TransactionScheduler.start" });
         defer zone.deinit();
 
         const allocator = self.future.arena.allocator();

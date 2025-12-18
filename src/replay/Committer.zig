@@ -83,20 +83,36 @@ pub fn commitTransactions(
 
         const recent_blockhash = &transaction.transaction.msg.recent_blockhash;
         const signature = transaction.transaction.signatures[0];
-        try self.status_cache.insert(
-            allocator,
-            rng.random(),
-            recent_blockhash,
-            &message_hash.data,
-            slot,
-        );
-        try self.status_cache.insert(
-            allocator,
-            rng.random(),
-            recent_blockhash,
-            &signature.toBytes(),
-            slot,
-        );
+        {
+            const status_cache_zone = tracy.Zone.init(
+                @src(),
+                .{ .name = "status_cache.insert: message_hash.data" },
+            );
+            defer status_cache_zone.deinit();
+
+            try self.status_cache.insert(
+                allocator,
+                rng.random(),
+                recent_blockhash,
+                &message_hash.data,
+                slot,
+            );
+        }
+        {
+            const status_cache_zone = tracy.Zone.init(
+                @src(),
+                .{ .name = "status_cache.insert: signature.toBytes()" },
+            );
+            defer status_cache_zone.deinit();
+
+            try self.status_cache.insert(
+                allocator,
+                rng.random(),
+                recent_blockhash,
+                &signature.toBytes(),
+                slot,
+            );
+        }
         // NOTE: we'll need to store the actual status at some point, probably for rpc.
     }
 

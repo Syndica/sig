@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../../../sig.zig");
 
 const builtin_costs = sig.runtime.program.builtin_costs;
@@ -31,6 +32,9 @@ pub fn entrypoint(
     _: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "compute_budget: entrypoint" });
+    defer zone.deinit();
+
     try ic.tc.consumeCompute(COMPUTE_UNITS);
 }
 
