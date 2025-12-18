@@ -109,7 +109,7 @@ pub const Filters = struct {
             } else return error.DuplicateDefaultFilter;
         }
 
-        return Filters{
+        return .{
             .default = if (main_filter) |f| f else (Filters{}).default,
             .scopes = try scopes.toOwnedSlice(allocator),
         };
