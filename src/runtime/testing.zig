@@ -346,6 +346,8 @@ pub fn createInstructionInfo(
 
     var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
     var account_metas = InstructionInfo.AccountMetas{};
+    errdefer account_metas.deinit(tc.allocator);
+
     for (accounts_params, 0..) |acc, idx| {
         if (acc.index_in_transaction >= tc.accounts.len)
             return error.AccountIndexOutOfBounds;
@@ -353,7 +355,7 @@ pub fn createInstructionInfo(
         if (dedupe_map[acc.index_in_transaction] == 0xff)
             dedupe_map[acc.index_in_transaction] = @intCast(idx);
 
-        try account_metas.append(.{
+        try account_metas.append(tc.allocator, .{
             .pubkey = tc.accounts[acc.index_in_transaction].pubkey,
             .index_in_transaction = acc.index_in_transaction,
             .is_signer = acc.is_signer,
@@ -369,6 +371,7 @@ pub fn createInstructionInfo(
             instruction,
             .{},
         );
+    errdefer tc.allocator.free(instruction_data);
 
     return .{
         .program_meta = .{
@@ -378,6 +381,7 @@ pub fn createInstructionInfo(
         .account_metas = account_metas,
         .dedupe_map = dedupe_map,
         .instruction_data = instruction_data,
+        .owned_instruction_data = true,
     };
 }
 

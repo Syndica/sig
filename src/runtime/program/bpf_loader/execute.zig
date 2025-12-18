@@ -4021,11 +4021,11 @@ test checkProgramAccount {
     // check writable
     {
         account.context.is_writable = false;
-        ic.ixn_info.account_metas.slice()[0].is_writable = false;
+        ic.ixn_info.account_metas.items[0].is_writable = false;
 
         defer {
             account.context.is_writable = true;
-            ic.ixn_info.account_metas.slice()[0].is_writable = true;
+            ic.ixn_info.account_metas.items[0].is_writable = true;
         }
 
         try std.testing.expectError(
@@ -4036,8 +4036,8 @@ test checkProgramAccount {
 
     // check signer
     {
-        ic.ixn_info.account_metas.slice()[1].is_signer = false;
-        defer ic.ixn_info.account_metas.slice()[1].is_signer = true;
+        ic.ixn_info.account_metas.items[1].is_signer = false;
+        defer ic.ixn_info.account_metas.items[1].is_signer = true;
 
         try std.testing.expectError(
             error.MissingRequiredSignature,

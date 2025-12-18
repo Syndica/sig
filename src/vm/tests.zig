@@ -2357,6 +2357,7 @@ pub fn testElfWithSyscalls(
         .account_metas = .{},
         .dedupe_map = @splat(0xff),
         .instruction_data = &.{},
+        .owned_instruction_data = false,
         .initial_account_lamports = 0,
     };
 

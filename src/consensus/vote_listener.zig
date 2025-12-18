@@ -1212,7 +1212,7 @@ pub const vote_parser = struct {
             return null;
         }
 
-        const account_metas = first_instruction.account_metas.constSlice();
+        const account_metas = first_instruction.account_metas.items;
         if (account_metas.len == 0) return null;
         const key = account_metas[0].pubkey;
 
@@ -1396,19 +1396,24 @@ pub const vote_parser = struct {
             const first_ix = message.instructions[0];
 
             var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
-            var account_metas = sig.runtime.InstructionInfo.AccountMetas{};
+            var account_metas: sig.runtime.InstructionInfo.AccountMetas =
+                try .initCapacity(allocator, 4);
+            defer account_metas.deinit(allocator);
+
+            // Vote instructions have 4 accounts, below MAX_ACCOUNT_METAS (256)
+            std.debug.assert(first_ix.account_indexes.len == 4);
             for (first_ix.account_indexes, 0..) |acct_index_u8, i| {
                 const acct_index: usize = acct_index_u8;
                 if (dedupe_map[i] == 0xff)
                     dedupe_map[i] = @intCast(i);
 
                 const pubkey = message.account_keys[acct_index];
-                account_metas.append(.{
+                account_metas.appendAssumeCapacity(.{
                     .pubkey = pubkey,
                     .index_in_transaction = @intCast(acct_index),
                     .is_signer = message.isSigner(acct_index),
                     .is_writable = false,
-                }) catch @panic("Vote instructions have 4 accounts, below MAX_ACCOUNT_METAS (256)");
+                });
             }
 
             const resolved: sig.replay.resolve_lookup.ResolvedTransaction = .{
@@ -1422,6 +1427,7 @@ pub const vote_parser = struct {
                     .account_metas = account_metas,
                     .dedupe_map = dedupe_map,
                     .instruction_data = first_ix.data,
+                    .owned_instruction_data = false,
                 }},
             };
 
@@ -1477,11 +1483,13 @@ pub const vote_parser = struct {
 
         var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
         var account_metas = sig.runtime.InstructionInfo.AccountMetas{};
+        defer account_metas.deinit(allocator);
+
         // minimal one account to satisfy check
         if (first_ix.account_indexes.len != 0) {
             const acct_index: usize = first_ix.account_indexes[0];
             dedupe_map[0] = 0;
-            try account_metas.append(.{
+            try account_metas.append(allocator, .{
                 .pubkey = message.account_keys[acct_index],
                 .index_in_transaction = @intCast(acct_index),
                 .is_signer = message.isSigner(acct_index),
@@ -1500,6 +1508,7 @@ pub const vote_parser = struct {
                 .account_metas = account_metas,
                 .dedupe_map = dedupe_map,
                 .instruction_data = first_ix.data,
+                .owned_instruction_data = false,
             }},
         };
 

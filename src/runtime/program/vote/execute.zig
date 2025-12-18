@@ -445,7 +445,7 @@ fn executeAuthorizeCheckedWithSeed(
     try ic.ixn_info.checkNumberOfAccounts(4);
 
     // Safe since there are at least 4 accounts, and the new_authority index is 3.
-    const new_authority_meta = &ic.ixn_info.account_metas.buffer[
+    const new_authority_meta = &ic.ixn_info.account_metas.items[
         @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority)
     ];
     if (!new_authority_meta.is_signer) {
@@ -477,7 +477,7 @@ fn executeAuthorizeChecked(
     try ic.ixn_info.checkNumberOfAccounts(4);
 
     // Safe since there are at least 4 accounts, and the new_authority index is 3.
-    const new_authority_meta = &ic.ixn_info.account_metas.buffer[
+    const new_authority_meta = &ic.ixn_info.account_metas.items[
         @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.new_authority)
     ];
     if (!new_authority_meta.is_signer) {
@@ -516,7 +516,7 @@ fn executeUpdateValidatorIdentity(
     try ic.ixn_info.checkNumberOfAccounts(2);
 
     // Safe since there are at least 2 accounts, and the new_identity index is 1.
-    const new_identity_meta = &ic.ixn_info.account_metas.buffer[
+    const new_identity_meta = &ic.ixn_info.account_metas.items[
         @intFromEnum(vote_instruction.UpdateVoteIdentity.AccountIndex.new_identity)
     ];
 

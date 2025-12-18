@@ -205,7 +205,7 @@ pub fn execute(
                 &clock,
                 &stake_history,
                 4,
-                if (ic.ixn_info.account_metas.len >= 6) 5 else null,
+                if (ic.ixn_info.account_metas.items.len >= 6) 5 else null,
                 newWarmupCooldownRateEpoch(ic),
             );
         },

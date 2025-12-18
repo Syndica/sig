@@ -570,6 +570,7 @@ test "compute_budget Instruction" {
         .account_metas = .{},
         .dedupe_map = @splat(0xff),
         .instruction_data = &.{},
+        .owned_instruction_data = false,
         .program_meta = .{ .index_in_transaction = 0, .pubkey = ID },
     });
 

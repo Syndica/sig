@@ -468,7 +468,7 @@ fn getDurableNonce(transaction: *const RuntimeTransaction) ?Pubkey {
     if (transaction.instructions.len <= 0) return null;
     const instruction = transaction.instructions[NONCED_TX_MARKER_IX_INDEX];
 
-    if (instruction.account_metas.len == 0) return null;
+    if (instruction.account_metas.items.len == 0) return null;
 
     const serialized_size = 4;
     if (instruction.instruction_data.len < serialized_size) return null;
@@ -488,7 +488,7 @@ fn getDurableNonce(transaction: *const RuntimeTransaction) ?Pubkey {
         &.{ 4, 0, 0, 0 }, // SystemInstruction::AdvanceNonceAccount
     )) return null;
 
-    const nonce_meta = instruction.account_metas.get(0);
+    const nonce_meta = instruction.account_metas.items[0];
     if (!nonce_meta.is_writable) return null;
     if (nonce_meta.index_in_transaction >= account_keys.len) return null;
     return account_keys[nonce_meta.index_in_transaction];
@@ -645,6 +645,24 @@ test "checkAge: nonce account" {
         .{ .pubkey = nonce_authority_key, .is_signer = true, .is_writable = false },
     );
 
+    var metas: sig.runtime.InstructionInfo.AccountMetas = .empty;
+    defer metas.deinit(allocator);
+
+    try metas.appendSlice(allocator, &.{
+        .{
+            .pubkey = nonce_key,
+            .index_in_transaction = 1,
+            .is_signer = false,
+            .is_writable = true,
+        },
+        .{
+            .pubkey = nonce_authority_key,
+            .index_in_transaction = 2,
+            .is_signer = true,
+            .is_writable = false,
+        },
+    });
+
     const transaction = RuntimeTransaction{
         .signature_count = 0,
         .fee_payer = Pubkey.ZEROES,
@@ -652,20 +670,7 @@ test "checkAge: nonce account" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{.{
             .program_meta = .{ .pubkey = sig.runtime.program.system.ID, .index_in_transaction = 0 },
-            .account_metas = try sig.runtime.InstructionInfo.AccountMetas.fromSlice(&.{
-                .{
-                    .pubkey = nonce_key,
-                    .index_in_transaction = 1,
-                    .is_signer = false,
-                    .is_writable = true,
-                },
-                .{
-                    .pubkey = nonce_authority_key,
-                    .index_in_transaction = 2,
-                    .is_signer = true,
-                    .is_writable = false,
-                },
-            }),
+            .account_metas = metas,
             .dedupe_map = blk: {
                 var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
                 dedupe_map[1] = 1;
@@ -673,6 +678,7 @@ test "checkAge: nonce account" {
                 break :blk dedupe_map;
             },
             .instruction_data = instruction_data,
+            .owned_instruction_data = false,
             .initial_account_lamports = 0,
         }},
         .accounts = accounts,

@@ -573,6 +573,7 @@ test getInstructionDatasSliceForPrecompiles {
             .account_metas = .{},
             .dedupe_map = @splat(0xff),
             .instruction_data = "data",
+            .owned_instruction_data = false,
             .initial_account_lamports = 0,
         }};
 
@@ -597,6 +598,7 @@ test getInstructionDatasSliceForPrecompiles {
                 .account_metas = .{},
                 .dedupe_map = @splat(0xff),
                 .instruction_data = "one",
+                .owned_instruction_data = false,
                 .initial_account_lamports = 0,
             },
             .{
@@ -607,6 +609,7 @@ test getInstructionDatasSliceForPrecompiles {
                 .account_metas = .{},
                 .dedupe_map = @splat(0xff),
                 .instruction_data = "two",
+                .owned_instruction_data = false,
                 .initial_account_lamports = 0,
             },
             .{
@@ -617,6 +620,7 @@ test getInstructionDatasSliceForPrecompiles {
                 .account_metas = .{},
                 .dedupe_map = @splat(0xff),
                 .instruction_data = "three",
+                .owned_instruction_data = false,
                 .initial_account_lamports = 0,
             },
         };
@@ -702,6 +706,23 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .is_writable = false,
     });
 
+    var metas: sig.runtime.InstructionInfo.AccountMetas = .empty;
+    defer metas.deinit(allocator);
+    try metas.appendSlice(allocator, &.{ // sender, receiver, system program
+        .{
+            .pubkey = sender_key,
+            .index_in_transaction = 0,
+            .is_signer = true,
+            .is_writable = true,
+        },
+        .{
+            .pubkey = receiver_key,
+            .index_in_transaction = 1,
+            .is_signer = false,
+            .is_writable = true,
+        },
+    });
+
     var transaction: RuntimeTransaction = .{
         .signature_count = 1,
         .fee_payer = sender_key,
@@ -712,20 +733,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
                 .pubkey = sig.runtime.program.system.ID,
                 .index_in_transaction = 2,
             },
-            .account_metas = try .fromSlice(&.{ // sender, receiver, system program
-                .{
-                    .pubkey = sender_key,
-                    .index_in_transaction = 0,
-                    .is_signer = true,
-                    .is_writable = true,
-                },
-                .{
-                    .pubkey = receiver_key,
-                    .index_in_transaction = 1,
-                    .is_signer = false,
-                    .is_writable = true,
-                },
-            }),
+            .account_metas = metas,
             .dedupe_map = blk: {
                 var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
                 dedupe_map[0] = 0;
@@ -733,6 +741,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
                 break :blk dedupe_map;
             },
             .instruction_data = transfer_instruction_data,
+            .owned_instruction_data = false,
         }},
         .accounts = accounts,
         .num_lookup_tables = 0,

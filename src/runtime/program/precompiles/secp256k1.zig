@@ -296,6 +296,7 @@ fn newSecp256k1Instruction(
         .program_id = ID,
         .accounts = &.{},
         .data = instruction_data,
+        .owned_data = true,
     };
 }
 

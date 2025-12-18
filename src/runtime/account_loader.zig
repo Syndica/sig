@@ -525,11 +525,11 @@ fn constructInstructionsAccount(
     for (transaction.instructions) |instruction| {
         const accounts_meta = try allocator.alloc(
             InstructionAccount,
-            instruction.account_metas.len,
+            instruction.account_metas.items.len,
         );
         errdefer allocator.free(accounts_meta);
 
-        for (instruction.account_metas.slice(), accounts_meta) |account_meta, *new_account_meta| {
+        for (instruction.account_metas.items, accounts_meta) |account_meta, *new_account_meta| {
             new_account_meta.* = .{
                 .pubkey = tx_accounts.items(.pubkey)[account_meta.index_in_transaction],
                 .is_signer = tx_accounts.items(.is_signer)[account_meta.index_in_transaction],
@@ -540,6 +540,7 @@ fn constructInstructionsAccount(
         decompiled_instructions.appendAssumeCapacity(.{
             .accounts = accounts_meta,
             .data = instruction.instruction_data,
+            .owned_data = false,
             .program_id = tx_accounts.items(.pubkey)[instruction.program_meta.index_in_transaction],
         });
     }
@@ -754,25 +755,30 @@ test "load accounts rent paid" {
     var tx = try emptyTxWithKeys(allocator, &.{ fee_payer_address, instruction_address });
     defer tx.accounts.deinit(allocator);
 
+    var metas: sig.runtime.InstructionInfo.AccountMetas = .empty;
+    defer metas.deinit(allocator);
+    try metas.appendSlice(
+        allocator,
+        &.{
+            .{
+                .pubkey = fee_payer_address,
+                .index_in_transaction = 0,
+                .is_signer = true,
+                .is_writable = true,
+            },
+            .{
+                .pubkey = instruction_address,
+                .index_in_transaction = 1,
+                .is_signer = false,
+                .is_writable = false,
+            },
+        },
+    );
+
     tx.instructions = &.{
         .{
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 1 },
-            .account_metas = try sig.runtime.InstructionInfo.AccountMetas.fromSlice(
-                &.{
-                    .{
-                        .pubkey = fee_payer_address,
-                        .index_in_transaction = 0,
-                        .is_signer = true,
-                        .is_writable = true,
-                    },
-                    .{
-                        .pubkey = instruction_address,
-                        .index_in_transaction = 1,
-                        .is_signer = false,
-                        .is_writable = false,
-                    },
-                },
-            ),
+            .account_metas = metas,
             .dedupe_map = blk: {
                 var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
                 dedupe_map[0] = 0;
@@ -780,6 +786,7 @@ test "load accounts rent paid" {
                 break :blk dedupe_map;
             },
             .instruction_data = "",
+            .owned_instruction_data = false,
         },
     };
 
@@ -889,31 +896,36 @@ test "load accounts with simd 186 and loaderv3 program" {
     });
     defer tx.accounts.deinit(allocator);
 
+    var meta: sig.runtime.InstructionInfo.AccountMetas = .empty;
+    defer meta.deinit(allocator);
+    try meta.appendSlice(
+        allocator,
+        &.{
+            .{
+                .pubkey = fee_payer_address,
+                .index_in_transaction = 0,
+                .is_signer = true,
+                .is_writable = true,
+            },
+            .{
+                .pubkey = instruction_address,
+                .index_in_transaction = 1,
+                .is_signer = false,
+                .is_writable = false,
+            },
+            .{
+                .pubkey = program_address,
+                .index_in_transaction = 2,
+                .is_signer = false,
+                .is_writable = false,
+            },
+        },
+    );
+
     tx.instructions = &.{
         .{
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 1 },
-            .account_metas = try sig.runtime.InstructionInfo.AccountMetas.fromSlice(
-                &.{
-                    .{
-                        .pubkey = fee_payer_address,
-                        .index_in_transaction = 0,
-                        .is_signer = true,
-                        .is_writable = true,
-                    },
-                    .{
-                        .pubkey = instruction_address,
-                        .index_in_transaction = 1,
-                        .is_signer = false,
-                        .is_writable = false,
-                    },
-                    .{
-                        .pubkey = program_address,
-                        .index_in_transaction = 2,
-                        .is_signer = false,
-                        .is_writable = false,
-                    },
-                },
-            ),
+            .account_metas = meta,
             .dedupe_map = blk: {
                 var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
                 dedupe_map[0] = 0;
@@ -922,6 +934,7 @@ test "load accounts with simd 186 and loaderv3 program" {
                 break :blk dedupe_map;
             },
             .instruction_data = "",
+            .owned_instruction_data = false,
         },
     };
 
@@ -970,6 +983,7 @@ test "constructInstructionsAccount" {
                 .account_metas = .{},
                 .dedupe_map = @splat(0xff),
                 .instruction_data = "",
+                .owned_instruction_data = false,
                 .initial_account_lamports = 0,
             },
         },
@@ -1116,7 +1130,12 @@ test "dont double count program owner account data size" {
         var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
         dedupe_map[0] = 0;
         dedupe_map[1] = 1;
-        const metas = try sig.runtime.InstructionInfo.AccountMetas.fromSlice(
+
+        var metas: sig.runtime.InstructionInfo.AccountMetas = .empty;
+        defer metas.deinit(allocator);
+
+        try metas.appendSlice(
+            allocator,
             &.{
                 .{
                     .pubkey = pk1,
@@ -1139,12 +1158,14 @@ test "dont double count program owner account data size" {
                 .account_metas = metas,
                 .dedupe_map = dedupe_map,
                 .instruction_data = "",
+                .owned_instruction_data = false,
             },
             .{
                 .program_meta = .{ .pubkey = pk1, .index_in_transaction = 0 },
                 .account_metas = metas,
                 .dedupe_map = dedupe_map,
                 .instruction_data = "",
+                .owned_instruction_data = false,
             },
         };
         break :blk tx;
@@ -1231,6 +1252,7 @@ test "invalid program owner owner" {
             .account_metas = .{},
             .dedupe_map = @splat(0xff),
             .instruction_data = "",
+            .owned_instruction_data = false,
             .initial_account_lamports = 0,
         },
     };
@@ -1275,6 +1297,7 @@ test "missing program owner account" {
             .account_metas = .{},
             .dedupe_map = @splat(0xff),
             .instruction_data = "",
+            .owned_instruction_data = false,
             .initial_account_lamports = 0,
         },
     };
@@ -1393,6 +1416,7 @@ test "load v3 program" {
             .account_metas = .{},
             .dedupe_map = @splat(0xff),
             .instruction_data = "",
+            .owned_instruction_data = false,
             .initial_account_lamports = 0,
         },
     };

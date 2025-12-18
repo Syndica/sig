@@ -434,8 +434,11 @@ fn testSchedulerForBatches(
     comptime std.debug.assert(@import("builtin").is_test);
 
     var resolved: std.ArrayListUnmanaged(replay.resolve_lookup.ResolvedTransaction) = .{};
-    defer {
-        for (resolved.items) |tx| tx.deinit(allocator);
+    errdefer {
+        for (resolved.items) |tx| {
+            for (tx.instructions) |instr| instr.deinit(allocator);
+            tx.deinit(allocator);
+        }
         resolved.deinit(allocator);
     }
 
