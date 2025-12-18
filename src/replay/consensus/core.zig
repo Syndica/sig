@@ -1872,7 +1872,6 @@ test "processResult and handleDuplicateConfirmedFork" {
     };
 
     try consensus.fork_choice.fork_infos.put(allocator, slot_hash, .{
-        .logger = .FOR_TESTS,
         .stake_for_slot = 0,
         .stake_for_subtree = 0,
         .height = 0,

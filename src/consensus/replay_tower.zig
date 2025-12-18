@@ -2167,8 +2167,7 @@ test "collect vote lockouts root" {
     try std.testing.expectEqual(expected_bank_stake, computed_banks.fork_stake);
     try std.testing.expectEqual(expected_total_stake, computed_banks.total_stake);
 
-    const new_votes =
-        try latest_votes.takeVotesDirtySet(allocator, root.slot);
+    const new_votes = try latest_votes.takeVotesDirtySet(allocator, root.slot);
     defer allocator.free(new_votes);
 
     try std.testing.expectEqualSlices(
@@ -4774,11 +4773,7 @@ test "switch threshold use gossip votes" {
     _ = try tower.recordBankVote(allocator, 47, progress.getHash(47).?);
 
     // Create latest validator votes (initially empty)
-    var latest_validator_votes: LatestValidatorVotes = .{
-        .max_gossip_frozen_votes = .empty,
-        .max_replay_frozen_votes = .empty,
-        .fork_choice_dirty_set = .empty,
-    };
+    var latest_validator_votes: LatestValidatorVotes = .empty;
     defer latest_validator_votes.deinit(allocator);
 
     // Create fork choice
