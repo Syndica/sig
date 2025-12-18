@@ -201,7 +201,8 @@ pub const Executable = struct {
                 .arsh64_imm,
                 => if (inst.imm >= 64) return error.ShiftWithOverflow,
 
-                .neg32 => if (version.disableNegation()) return error.UnsupportedInstruction,
+                .neg32,
+                => if (version.disableNegation()) return error.UnsupportedInstruction,
 
                 .mul32_reg,
                 .div32_reg,
@@ -220,18 +221,20 @@ pub const Executable = struct {
 
                 .div64_imm,
                 .mod64_imm,
-                => if (!version.enablePqr()) {
-                    if (inst.imm == 0) return error.DivisionByZero;
-                } else {
+                => if (version.enablePqr()) {
                     store = true;
+                } else {
+                    if (inst.imm == 0) return error.DivisionByZero;
                 },
 
                 .mul32_imm => if (version.enablePqr()) return error.UnsupportedInstruction,
                 .mod32_imm,
                 .div32_imm,
-                => if (!version.enablePqr()) {
+                => if (version.enablePqr()) {
+                    return error.UnsupportedInstruction;
+                } else {
                     if (inst.imm == 0) return error.DivisionByZero;
-                } else return error.UnsupportedInstruction,
+                },
 
                 .udiv32_reg,
                 .udiv64_reg,
@@ -934,22 +937,12 @@ pub const Config = struct {
     max_call_depth: usize = 64,
     /// Size of a stack frame in bytes, must match the size specified in the LLVM BPF backend
     stack_frame_size: usize = 4096,
-    /// Enables the use of MemoryMapping and MemoryRegion for address translation
-    enable_address_translation: bool = true,
-    /// Maximal pc distance after which a new instruction meter validation is emitted by the JIT
-    instruction_meter_checkpoint_distance: usize = 10_000,
     /// Enable instruction meter and limiting
     enable_instruction_meter: bool = true,
-    /// Enable instruction tracing
-    enable_instruction_tracing: bool = false,
     /// Enable dynamic string allocation for labels
     enable_symbol_and_section_labels: bool = false,
     /// Reject ELF files containing issues that the verifier did not catch before (up to v0.2.21)
     reject_broken_elfs: bool = false,
-    /// Ratio of native host instructions per random no-op in JIT (0 = OFF)
-    noop_instruction_rate: u32 = 256,
-    /// Enable disinfection of immediate values and offsets provided by the user in JIT
-    sanitize_user_provided_values: bool = true,
     /// Avoid copying read only sections when possible
     optimize_rodata: bool = true,
     /// Use aligned memory mapping
@@ -957,7 +950,7 @@ pub const Config = struct {
     /// Enables gaps in VM address space between the stack frames
     enable_stack_frame_gaps: bool = true,
 
-    /// Allowed [SBPFVersion]s
+    // The range of allowed SBPF versions
     minimum_version: sbpf.Version = .v0,
     maximum_version: sbpf.Version = .v3,
 

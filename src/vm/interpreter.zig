@@ -7,6 +7,7 @@ const memory = sig.vm.memory;
 
 const MemoryMap = memory.MemoryMap;
 const Instruction = sbpf.Instruction;
+const OpCode = Instruction.OpCode;
 const Executable = sig.vm.Executable;
 const TransactionContext = sig.runtime.TransactionContext;
 const ExecutionError = sig.vm.ExecutionError;
@@ -30,6 +31,8 @@ pub const Vm = struct {
     transaction_context: *TransactionContext,
     result: Result,
 
+    jump_table: *const [256]Handle,
+
     const CallFrame = struct {
         caller_saved_regs: [4]u64,
         fp: u64,
@@ -48,7 +51,7 @@ pub const Vm = struct {
             stack_len
         else
             executable.config.stack_frame_size;
-        const stack_pointer = memory.STACK_START +% offset;
+        const stack_pointer = memory.STACK_START + offset;
         var self: Vm = .{
             .executable = executable,
             .allocator = allocator,
@@ -61,6 +64,16 @@ pub const Vm = struct {
             .loader = loader,
             .transaction_context = ctx,
             .result = .{ .ok = 0 },
+            .jump_table = switch (executable.version) {
+                // The only difference between v0 and v1 is how function calls work with
+                // dynamic frame pointers, which we can just eat the cost of checking the
+                // version in `pushCallFrame`, it doesn't seem to matter much.
+                .v0, .v1 => &v0.table,
+                .v2 => &v2.table,
+                .v3 => &v3.table,
+                .reserved => @panic("TODO"), // NOTE: cannot actually be hit
+                _ => unreachable,
+            },
         };
 
         self.registers.set(.r10, stack_pointer);
@@ -79,18 +92,44 @@ pub const Vm = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "VM.run" });
         defer zone.deinit();
 
-        const initial_instruction_count = self.transaction_context.compute_meter;
+        const initial_meter = self.transaction_context.compute_meter;
+        const instructions = self.executable.instructions;
+
         while (true) {
-            const cont = self.step() catch |err| {
-                self.result = .{ .err = err };
+            const current_meter = self.transaction_context.compute_meter;
+            if (self.executable.config.enable_instruction_meter and
+                self.instruction_count >= current_meter)
+            {
+                @branchHint(.unlikely);
+                self.result = .{ .err = error.ExceededMaxInstructions };
                 break;
+            }
+            self.instruction_count += 1;
+
+            const pc = self.registers.getPtrConst(.pc).*;
+            if (pc >= instructions.len) {
+                @branchHint(.unlikely);
+                self.result = .{ .err = error.ExecutionOverrun };
+                break;
+            }
+
+            // Our step function needs to have the same prototype as the instruction handles,
+            // in order to force a tail-call to happen. Our instruction handles take in the
+            // instruction they're processing as well as the program counter it was found at,
+            // and we can patch the same behaviour here.
+            self.step(instructions[pc], pc) catch |err| switch (err) {
+                error.Stop => break,
+                else => |e| {
+                    self.result = .{ .err = e };
+                    break;
+                },
             };
-            if (!cont) break;
         }
+
         // https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/vm.rs#L380-L385
         const instruction_count = if (self.executable.config.enable_instruction_meter) blk: {
             self.transaction_context.consumeUnchecked(self.instruction_count);
-            break :blk initial_instruction_count -| self.transaction_context.compute_meter;
+            break :blk initial_meter -| self.transaction_context.compute_meter;
         } else 0;
         return .{ self.result, instruction_count };
     }
@@ -110,37 +149,483 @@ pub const Vm = struct {
         );
     }
 
-    fn step(self: *Vm) ExecutionError!bool {
-        const config = self.executable.config;
-        if (config.enable_instruction_meter and
-            self.instruction_count >= self.transaction_context.compute_meter)
-        {
-            return error.ExceededMaxInstructions;
-        }
+    const DispatchError = ExecutionError || error{Stop};
 
-        self.instruction_count += 1;
-        if (self.registers.getPtrConst(.pc).* >= self.executable.instructions.len) {
-            return error.ExecutionOverrun;
-        }
+    const Handle = *const fn (*Vm, Instruction, u64) DispatchError!void;
 
-        const version = self.executable.version;
-        const registers = &self.registers;
-        const pc = registers.getPtrConst(.pc).*;
-        var next_pc: u64 = pc + 1;
-
-        const instructions = self.executable.instructions;
-        const inst = instructions[pc];
-        const opcode = inst.opcode;
-
-        if (version.moveMemoryInstructionClasses()) {
-            switch (opcode) {
-                // reserved opcodes
+    const v0 = struct {
+        const table: [256]Handle = table: {
+            var array: [256]Handle = @splat(v0.unsupported);
+            for (@typeInfo(OpCode).@"enum".fields) |field| switch (@field(OpCode, field.name)) {
+                // alu operations
+                .add64_reg,
+                .add64_imm,
+                .add32_reg,
+                .add32_imm,
+                .mul64_reg,
+                .mul64_imm,
+                .mul32_reg,
                 .mul32_imm,
-                .mod32_imm,
+                .sub64_reg,
+                .sub64_imm,
+                .sub32_reg,
+                .sub32_imm,
+                .div64_reg,
+                .div64_imm,
+                .div32_reg,
                 .div32_imm,
-                => return error.UnsupportedInstruction,
+                .xor64_reg,
+                .xor64_imm,
+                .xor32_reg,
+                .xor32_imm,
+                .or64_reg,
+                .or64_imm,
+                .or32_reg,
+                .or32_imm,
+                .and64_reg,
+                .and64_imm,
+                .and32_reg,
+                .and32_imm,
+                .mod64_reg,
+                .mod64_imm,
+                .mod32_reg,
+                .mod32_imm,
+                .mov64_reg,
+                .mov64_imm,
+                .mov32_reg,
+                .mov32_imm,
+                .neg32,
+                .neg64,
+                .arsh64_reg,
+                .arsh64_imm,
+                .arsh32_reg,
+                .arsh32_imm,
+                .lsh64_reg,
+                .lsh64_imm,
+                .lsh32_reg,
+                .lsh32_imm,
+                .rsh64_reg,
+                .rsh64_imm,
+                .rsh32_reg,
+                .rsh32_imm,
+                => |t| array[@intFromEnum(t)] = &struct {
+                    fn run(vm: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+                        return binop(vm, t, inst, pc);
+                    }
+                }.run,
+                .be,
+                .le,
+                => |t| array[@intFromEnum(t)] = &struct {
+                    fn bswap(vm: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+                        defer vm.registers.set(.pc, pc + 1);
+                        const result = switch (inst.imm) {
+                            inline 16, 32, 64 => |size| std.mem.nativeTo(
+                                std.meta.Int(.unsigned, size),
+                                @truncate(vm.registers.getPtrConst(inst.dst).*),
+                                if (t == .le) .little else .big,
+                            ),
+                            else => return error.UnsupportedInstruction,
+                        };
+                        vm.registers.set(inst.dst, result);
+                    }
+                }.bswap,
+                .ld_b_reg,
+                .st_b_reg,
+                .st_b_imm,
+                .ld_h_reg,
+                .st_h_reg,
+                .st_h_imm,
+                .ld_w_reg,
+                .st_w_reg,
+                .st_w_imm,
+                .ld_dw_reg,
+                .st_dw_reg,
+                .st_dw_imm,
+                => |t| array[@intFromEnum(t)] = &struct {
+                    fn run(vm: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+                        return memop(vm, t, inst, pc);
+                    }
+                }.run,
+                .ja,
+                .jeq_imm,
+                .jeq_reg,
+                .jne_imm,
+                .jne_reg,
+                .jge_imm,
+                .jge_reg,
+                .jgt_imm,
+                .jgt_reg,
+                .jle_imm,
+                .jle_reg,
+                .jlt_imm,
+                .jlt_reg,
+                .jset_imm,
+                .jset_reg,
+                .jsge_imm,
+                .jsge_reg,
+                .jsgt_imm,
+                .jsgt_reg,
+                .jsle_imm,
+                .jsle_reg,
+                .jslt_imm,
+                .jslt_reg,
+                => |t| array[@intFromEnum(t)] = &struct {
+                    fn run(vm: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+                        return branch(vm, t, inst, pc);
+                    }
+                }.run,
+                else => |t| if (@hasDecl(v0, field.name)) {
+                    array[@intFromEnum(t)] = @field(v0, field.name);
+                },
+            };
+            break :table array;
+        };
 
-                inline
+        fn unsupported(_: *Vm, _: Instruction, _: u64) DispatchError!void {
+            return error.UnsupportedInstruction;
+        }
+
+        // NOTE: this is the behaviour specifically for sBPF v0.
+        inline fn binop(
+            self: *Vm,
+            comptime opcode: OpCode,
+            inst: Instruction,
+            pc: u64,
+        ) DispatchError!void {
+            const is_64 = comptime opcode.is64();
+            const Int = if (is_64) u64 else u32;
+            const SignedInt = if (is_64) i64 else i32;
+
+            const registers = &self.registers;
+            const lhs: Int = @truncate(registers.getPtrConst(inst.dst).*);
+            const rhs: Int = @truncate(if (comptime opcode.isReg())
+                registers.getPtrConst(inst.src).*
+            else
+                extend(inst.imm));
+
+            const result: Int = switch (comptime @intFromEnum(opcode) & 0b11110000) {
+                // zig fmt: off
+                Instruction.mov    => rhs,
+                Instruction.add    => lhs +% rhs,
+                Instruction.sub    => lhs -% rhs,
+                Instruction.mul    => lhs *% rhs,
+
+                Instruction.neg    => -%lhs,
+                Instruction.xor    => lhs ^ rhs,
+                Instruction.@"or"  => lhs | rhs,
+                Instruction.@"and" => lhs & rhs,
+
+                Instruction.lsh    => lhs << @truncate(rhs),
+                Instruction.rsh    => lhs >> @truncate(rhs),
+
+                Instruction.div    => try divTrunc(Int, lhs, rhs),
+                Instruction.mod    => try mod(Int, lhs, rhs),
+                // zig fmt: on
+                Instruction.arsh => value: {
+                    const signed: SignedInt = @bitCast(lhs);
+                    break :value @bitCast(signed >> @truncate(rhs));
+                },
+                else => unreachable,
+            };
+
+            const large_result: u64 = switch (@intFromEnum(opcode) & 0b11110000) {
+                // The result of add/sub is always extended as if were an i32.
+                Instruction.add,
+                Instruction.sub,
+                => if (is_64) result else @bitCast(@as(i64, @as(i32, @bitCast(result)))),
+                // The mul32 instruction requires a sign extension to u64 from i32.
+                Instruction.mul => if (is_64) result else extend(result),
+                else => result,
+            };
+
+            registers.set(inst.dst, large_result);
+            self.registers.set(.pc, pc + 1);
+        }
+
+        fn hor64_imm(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+            defer self.registers.set(.pc, pc + 1);
+            const lhs = self.registers.getPtrConst(inst.dst).*;
+            const result = lhs | @as(u64, inst.imm) << 32;
+            self.registers.set(inst.dst, result);
+        }
+
+        // memory
+
+        inline fn memop(
+            self: *Vm,
+            comptime opcode: OpCode,
+            inst: Instruction,
+            pc: u64,
+        ) DispatchError!void {
+            const T = switch (opcode) {
+                .ld_b_reg,
+                .st_b_reg,
+                .st_b_imm,
+                => u8,
+                .ld_h_reg,
+                .st_h_reg,
+                .st_h_imm,
+                => u16,
+                .ld_w_reg,
+                .st_w_reg,
+                .st_w_imm,
+                => u32,
+                .ld_dw_reg,
+                .st_dw_reg,
+                .st_dw_imm,
+                => u64,
+                else => comptime unreachable,
+            };
+
+            const access = comptime opcode.accessType();
+            const addr_reg = if (access == .constant) inst.src else inst.dst;
+            const address: i64 = @bitCast(self.registers.getPtrConst(addr_reg).*);
+            const vaddr: u64 = @bitCast(address +% inst.off);
+
+            switch (access) {
+                .constant => self.registers.set(inst.dst, try self.memory_map.load(T, vaddr)),
+                .mutable => {
+                    const operand = switch (@intFromEnum(opcode) & 0b111) {
+                        Instruction.stx => self.registers.getPtrConst(inst.src).*,
+                        Instruction.st => extend(inst.imm),
+                        else => unreachable,
+                    };
+                    try self.memory_map.store(T, vaddr, @truncate(operand));
+                },
+            }
+
+            self.registers.set(.pc, pc + 1);
+        }
+
+        // control flow
+
+        inline fn branch(
+            self: *Vm,
+            comptime opcode: OpCode,
+            inst: Instruction,
+            pc: u64,
+        ) DispatchError!void {
+            const target_pc: u64 = @intCast(@as(i64, @intCast(pc + 1)) + inst.off);
+            const lhs = self.registers.getPtrConst(inst.dst).*;
+            const rhs = if (opcode.isReg())
+                self.registers.getPtrConst(inst.src).*
+            else
+                extend(inst.imm);
+
+            // for the signed variants
+            const lhs_signed: i64 = @bitCast(lhs);
+            const rhs_signed: i64 = if (opcode.isReg())
+                @bitCast(rhs)
+            else
+                @as(i32, @bitCast(inst.imm));
+
+            const predicate: bool = switch (opcode) {
+                // zig fmt: off
+                .ja => true,
+                .jeq_imm,  .jeq_reg  => lhs == rhs,
+                .jne_imm,  .jne_reg  => lhs != rhs,
+                .jge_imm,  .jge_reg  => lhs >= rhs,
+                .jgt_imm,  .jgt_reg  => lhs >  rhs,
+                .jle_imm,  .jle_reg  => lhs <= rhs,
+                .jlt_imm,  .jlt_reg  => lhs <  rhs,
+                .jset_imm, .jset_reg => lhs &  rhs != 0,
+                .jsge_imm, .jsge_reg => lhs_signed >= rhs_signed,
+                .jsgt_imm, .jsgt_reg => lhs_signed >  rhs_signed,
+                .jsle_imm, .jsle_reg => lhs_signed <= rhs_signed,
+                .jslt_imm, .jslt_reg => lhs_signed <  rhs_signed,
+                // zig fmt: on
+                else => unreachable,
+            };
+            self.registers.set(.pc, if (predicate) target_pc else pc + 1);
+        }
+
+        // misc
+
+        fn exit_or_syscall(self: *Vm, _: Instruction, _: u64) DispatchError!void {
+            if (self.depth == 0) {
+                if (self.executable.config.enable_instruction_meter and
+                    self.instruction_count > self.transaction_context.compute_meter)
+                {
+                    return error.ExceededMaxInstructions;
+                }
+                self.result = .{ .ok = self.registers.getPtrConst(.r0).* };
+                return error.Stop;
+            }
+            self.depth -= 1;
+            const frame = self.call_frames.pop().?;
+            self.registers.set(.r10, frame.fp);
+            @memcpy(self.registers.values[6..][0..4], &frame.caller_saved_regs);
+            self.registers.set(.pc, frame.return_pc);
+        }
+
+        fn call_imm(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+            if (self.loader.get(inst.imm)) |entry| {
+                try self.dispatchSyscall(entry);
+                self.registers.set(.pc, pc + 1);
+                return;
+            }
+            const function_registry = &self.executable.function_registry;
+            if (function_registry.lookupKey(inst.imm)) |entry| {
+                try self.pushCallFrame();
+                self.registers.set(.pc, entry.value);
+                return;
+            }
+            return error.UnsupportedInstruction;
+        }
+
+        fn call_reg(self: *Vm, inst: Instruction, _: u64) DispatchError!void {
+            // NOTE: register is checked to be in-bounds in verify()
+            const src: sbpf.Instruction.Register = @enumFromInt(inst.imm);
+            const target_pc = self.registers.getPtrConst(src).*;
+
+            try self.pushCallFrame();
+
+            const next_pc = (target_pc -% self.vm_addr) / 8;
+            const instructions = self.executable.instructions;
+            if (next_pc >= instructions.len) return error.CallOutsideTextSegment;
+            self.registers.set(.pc, next_pc);
+        }
+
+        fn ld_dw_imm(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+            defer self.registers.set(.pc, pc + 2);
+            const instructions = self.executable.instructions;
+            const value: u64 = (@as(u64, instructions[pc + 1].imm) << 32) | inst.imm;
+            self.registers.set(inst.dst, value);
+        }
+    };
+
+    /// SIMD-0174, SIMD-0173
+    const v2 = struct {
+        const table: [256]Handle = table: {
+            var array = v0.table;
+            for (@typeInfo(OpCode).@"enum".fields) |field| switch (@field(OpCode, field.name)) {
+                .lmul32_reg,
+                .lmul32_imm,
+                .udiv32_reg,
+                .udiv32_imm,
+                .urem32_reg,
+                .urem32_imm,
+                .sdiv32_reg,
+                .sdiv32_imm,
+                .srem32_reg,
+                .srem32_imm,
+                => |t| array[@intFromEnum(t)] = &struct {
+                    fn run(vm: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+                        return pqr32(vm, t, inst, pc);
+                    }
+                }.run,
+                .lmul64_reg,
+                .lmul64_imm,
+                .uhmul64_reg,
+                .uhmul64_imm,
+                .shmul64_reg,
+                .shmul64_imm,
+                .udiv64_reg,
+                .udiv64_imm,
+                .urem64_reg,
+                .urem64_imm,
+                .sdiv64_reg,
+                .sdiv64_imm,
+                .srem64_reg,
+                .srem64_imm,
+                => |t| array[@intFromEnum(t)] = &struct {
+                    fn run(vm: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+                        return pqr64(vm, t, inst, pc);
+                    }
+                }.run,
+                .add64_reg,
+                .add64_imm,
+                .add32_reg,
+                .add32_imm,
+                .sub64_reg,
+                .sub64_imm,
+                .sub32_reg,
+                .sub32_imm,
+                => |t| array[@intFromEnum(t)] = &struct {
+                    fn run(vm: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+                        return binop(vm, t, inst, pc);
+                    }
+                }.run,
+                OpCode.ld_1b_reg,
+                OpCode.ld_2b_reg,
+                OpCode.ld_4b_reg,
+                OpCode.ld_8b_reg,
+                OpCode.st_1b_imm,
+                OpCode.st_2b_imm,
+                OpCode.st_4b_imm,
+                OpCode.st_8b_imm,
+                OpCode.st_1b_reg,
+                OpCode.st_2b_reg,
+                OpCode.st_4b_reg,
+                OpCode.st_8b_reg,
+                => |t| array[@intFromEnum(t)] = &struct {
+                    fn run(vm: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+                        return memop(vm, t, inst, pc);
+                    }
+                }.run,
+                else => |t| if (@hasDecl(v2, field.name)) {
+                    array[@intFromEnum(t)] = @field(v2, field.name);
+                },
+            };
+            break :table array;
+        };
+
+        /// SIMD-0174:
+        /// "the `MOV32_REG` instruction (opcode `0xBC`) which until now did zero
+        /// out the 32 MSBs, must now perform sign extension in the 32 MSBs."
+        pub fn mov32_reg(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+            defer self.registers.set(.pc, pc + 1);
+            const rhs: u32 = @truncate(self.registers.getPtrConst(inst.src).*);
+            const extended: u64 = extend(rhs);
+            self.registers.set(inst.dst, extended);
+        }
+
+        /// SIMD-0173:
+        /// "A program containing one of the following instructions must throw
+        /// `VerifierError::UnknownOpCode` during verification:
+        /// - the `LDDW` instruction (opcodes `0x18` and `0x00`)"
+        pub const ld_dw_imm = v0.unsupported;
+
+        // TODO: find the simd comment that tells us to turn off / reserve these instructions
+        pub const mul32_imm = v0.unsupported;
+        pub const mod32_imm = v0.unsupported;
+        pub const div32_imm = v0.unsupported;
+
+        inline fn binop(
+            self: *Vm,
+            comptime opcode: OpCode,
+            inst: Instruction,
+            pc: u64,
+        ) DispatchError!void {
+            const is_64 = comptime opcode.is64();
+            const is_reg = comptime opcode.isReg();
+            const Int = if (is_64) u64 else u32;
+
+            const registers = &self.registers;
+            const lhs: Int = @truncate(registers.getPtrConst(inst.dst).*);
+            const rhs: Int = @truncate(if (is_reg)
+                registers.getPtrConst(inst.src).*
+            else
+                extend(inst.imm));
+
+            const result: Int = switch (comptime @intFromEnum(opcode) & 0b11110000) {
+                Instruction.add => lhs +% rhs,
+                // SIMD-0174: sub imm operands are swapped.
+                Instruction.sub => if (is_reg) lhs -% rhs else rhs -% lhs,
+                else => unreachable,
+            };
+
+            registers.set(inst.dst, result);
+            self.registers.set(.pc, pc + 1);
+        }
+
+        inline fn memop(
+            self: *Vm,
+            comptime opcode: OpCode,
+            inst: Instruction,
+            pc: u64,
+        ) DispatchError!void {
+            switch (opcode) {
                 // LD_1B_REG
                 .mul32_reg,
                 // LD_2B_REG
@@ -157,12 +642,11 @@ pub const Vm = struct {
                         .mod32_reg => u64,
                         else => unreachable,
                     };
-                    const base_address: i64 = @bitCast(registers.getPtrConst(inst.src).*);
+                    const base_address: i64 = @bitCast(self.registers.getPtrConst(inst.src).*);
                     const vm_addr: u64 = @bitCast(base_address +% @as(i64, inst.off));
-                    registers.set(inst.dst, try self.memory_map.load(T, vm_addr));
+                    self.registers.set(inst.dst, try self.memory_map.load(T, vm_addr));
                 },
 
-                inline
                 // ST_1B_IMM
                 .mul64_imm,
                 // ST_2B_IMM
@@ -179,12 +663,11 @@ pub const Vm = struct {
                         .mod64_imm => u64,
                         else => unreachable,
                     };
-                    const base_address: i64 = @bitCast(registers.getPtrConst(inst.dst).*);
+                    const base_address: i64 = @bitCast(self.registers.getPtrConst(inst.dst).*);
                     const vm_addr: u64 = @bitCast(base_address +% @as(i64, inst.off));
                     try self.memory_map.store(T, vm_addr, @truncate(extend(inst.imm)));
                 },
 
-                inline
                 // ST_1B_REG
                 .mul64_reg,
                 // ST_2B_REG
@@ -201,476 +684,178 @@ pub const Vm = struct {
                         .mod64_reg => u64,
                         else => unreachable,
                     };
-                    const base_address: i64 = @bitCast(registers.getPtrConst(inst.dst).*);
+                    const base_address: i64 = @bitCast(self.registers.getPtrConst(inst.dst).*);
                     const vm_addr: u64 = @bitCast(base_address +% @as(i64, inst.off));
                     try self.memory_map.store(
                         T,
                         vm_addr,
-                        @truncate(registers.getPtrConst(inst.src).*),
+                        @truncate(self.registers.getPtrConst(inst.src).*),
                     );
                 },
 
-                else => {},
+                else => comptime unreachable,
+            }
+
+            self.registers.set(.pc, pc + 1);
+        }
+
+        inline fn pqr32(
+            self: *Vm,
+            comptime opcode: OpCode,
+            inst: Instruction,
+            pc: u64,
+        ) DispatchError!void {
+            const lhs_large = self.registers.getPtrConst(inst.dst).*;
+            const rhs_large: u64 = if (comptime opcode.isReg())
+                self.registers.getPtrConst(inst.src).*
+            else
+                inst.imm;
+
+            const opc = comptime @intFromEnum(opcode) & 0b11100000;
+            const extended: u64 = switch (opc) {
+                Instruction.sdiv, Instruction.srem => result: {
+                    const lhs: i32 = @truncate(@as(i64, @bitCast(lhs_large)));
+                    const rhs: i32 = @truncate(@as(i64, @bitCast(rhs_large)));
+                    const result: u32 = @bitCast(switch (opc) {
+                        Instruction.sdiv => try divTrunc(i32, lhs, rhs),
+                        Instruction.srem => try rem(i32, lhs, rhs),
+                        else => unreachable,
+                    });
+                    break :result result;
+                },
+                Instruction.lmul,
+                Instruction.urem,
+                Instruction.udiv,
+                => result: {
+                    const lhs: u32 = @truncate(lhs_large);
+                    const rhs: u32 = @truncate(rhs_large);
+                    break :result switch (opc) {
+                        Instruction.lmul => lhs *% rhs,
+                        Instruction.urem => try rem(u32, lhs, rhs),
+                        Instruction.udiv => try divTrunc(u32, lhs, rhs),
+                        else => unreachable,
+                    };
+                },
+                else => unreachable,
+            };
+
+            self.registers.set(inst.dst, extended);
+            self.registers.set(.pc, pc + 1);
+        }
+
+        inline fn pqr64(
+            self: *Vm,
+            comptime opcode: OpCode,
+            inst: Instruction,
+            pc: u64,
+        ) DispatchError!void {
+            const lhs: u64 = self.registers.getPtrConst(inst.dst).*;
+            const rhs: u64 = if (opcode.isReg())
+                self.registers.getPtrConst(inst.src).*
+            else
+                inst.imm;
+            const signed_rhs: i64 = if (opcode.isReg())
+                @bitCast(self.registers.getPtrConst(inst.src).*)
+            else
+                @bitCast(extend(inst.imm));
+
+            const opc = @intFromEnum(opcode) & 0b11100000;
+            const result: u64 = switch (opc) {
+                Instruction.lmul => lhs *% @as(u64, @bitCast(signed_rhs)),
+                Instruction.udiv => try divTrunc(u64, lhs, rhs),
+                Instruction.urem => try rem(u64, lhs, rhs),
+                Instruction.sdiv => result: {
+                    const result = try divTrunc(i64, @bitCast(lhs), signed_rhs);
+                    break :result @bitCast(result);
+                },
+                Instruction.uhmul => result: {
+                    const result = @as(u128, lhs) *% @as(u128, rhs);
+                    break :result @truncate(result >> 64);
+                },
+                Instruction.shmul,
+                Instruction.srem,
+                => result: {
+                    const signed_lhs: i64 = @bitCast(lhs);
+                    const result: i64 = switch (opc) {
+                        Instruction.shmul => value: {
+                            const result = @as(i128, signed_lhs) *% @as(i128, signed_rhs);
+                            break :value @truncate(result >> 64);
+                        },
+                        Instruction.srem => try rem(i64, signed_lhs, signed_rhs),
+                        else => unreachable,
+                    };
+                    break :result @bitCast(result);
+                },
+                else => unreachable,
+            };
+
+            self.registers.set(inst.dst, result);
+            self.registers.set(.pc, pc + 1);
+        }
+
+        pub fn call_reg(self: *Vm, inst: Instruction, _: u64) DispatchError!void {
+            const target_pc = self.registers.getPtrConst(inst.src).*;
+            try self.pushCallFrame();
+            const next_pc = (target_pc -% self.vm_addr) / 8;
+            const instructions = self.executable.instructions;
+            if (next_pc >= instructions.len) return error.CallOutsideTextSegment;
+            self.registers.set(.pc, next_pc);
+        }
+    };
+
+    const v3 = struct {
+        const table = inherit(v2, v3);
+
+        pub fn call_imm(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+            const target_pc: i64 = @as(i64, @intCast(pc)) +| @as(i32, @bitCast(inst.imm)) +| 1;
+            const function_registry = &self.executable.function_registry;
+            if (function_registry.lookupKey(@bitCast(target_pc))) |entry| {
+                try self.pushCallFrame();
+                self.registers.set(.pc, entry.value);
+                return;
+            }
+            return error.UnsupportedInstruction;
+        }
+
+        pub fn exit_or_syscall(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+            if (self.loader.get(inst.imm)) |entry| {
+                try self.dispatchSyscall(entry);
+                self.registers.set(.pc, pc + 1);
+            } else {
+                @panic("TODO: detect invalid syscall in verifier");
             }
         }
 
-        switch (opcode) {
-            // alu operations
-            .add64_reg,
-            .add64_imm,
-            .add32_reg,
-            .add32_imm,
-            .mul64_reg,
-            .mul64_imm,
-            .mul32_reg,
-            .mul32_imm,
-            .sub64_reg,
-            .sub64_imm,
-            .sub32_reg,
-            .sub32_imm,
-            .div64_reg,
-            .div64_imm,
-            .div32_reg,
-            .div32_imm,
-            .xor64_reg,
-            .xor64_imm,
-            .xor32_reg,
-            .xor32_imm,
-            .or64_reg,
-            .or64_imm,
-            .or32_reg,
-            .or32_imm,
-            .and64_reg,
-            .and64_imm,
-            .and32_reg,
-            .and32_imm,
-            .mod64_reg,
-            .mod64_imm,
-            .mod32_reg,
-            .mod32_imm,
-            .mov64_reg,
-            .mov64_imm,
-            .mov32_reg,
-            .mov32_imm,
-            .neg32,
-            .neg64,
-            .arsh64_reg,
-            .arsh64_imm,
-            .arsh32_reg,
-            .arsh32_imm,
-            .lsh64_reg,
-            .lsh64_imm,
-            .lsh32_reg,
-            .lsh32_imm,
-            .rsh64_reg,
-            .rsh64_imm,
-            .rsh32_reg,
-            .rsh32_imm,
-            => cont: {
-                if (version.moveMemoryInstructionClasses()) {
-                    // instructions handled above
-                    switch (@intFromEnum(opcode) & 0xF0) {
-                        Instruction.mod,
-                        Instruction.neg,
-                        Instruction.mul,
-                        Instruction.div,
-                        => break :cont,
-                        else => {},
-                    }
-                }
-
-                switch (opcode.is64()) {
-                    inline //
-                    true,
-                    false,
-                    => |is_64| {
-                        const Int = if (is_64) u64 else u32;
-                        const SignedInt = if (is_64) i64 else i32;
-
-                        const lhs: Int = @truncate(registers.getPtrConst(inst.dst).*);
-                        const rhs: Int = @truncate(if (opcode.isReg())
-                            registers.getPtrConst(inst.src).*
-                        else
-                            extend(inst.imm));
-
-                        const result: Int = switch (@intFromEnum(opcode) & 0b11110000) {
-                            // zig fmt: off
-                            Instruction.mov    => rhs,
-                            Instruction.add    => lhs +% rhs,
-                            Instruction.mul    => lhs *% rhs,
-                           
-                            Instruction.neg    => -%lhs,
-                            Instruction.xor    => lhs ^ rhs,
-                            Instruction.@"or"  => lhs | rhs,
-                            Instruction.@"and" => lhs & rhs,
-
-                            Instruction.lsh    => lhs << @truncate(rhs),
-                            Instruction.rsh    => lhs >> @truncate(rhs),
-
-                            Instruction.div    => try divTrunc(Int, lhs, rhs),
-                            Instruction.mod    => try mod(Int, lhs, rhs),
-                            // zig fmt: on
-                            Instruction.sub => v: {
-                                const swapped = !opcode.isReg() and version.swapSubRegImmOperands();
-                                break :v if (swapped)
-                                    rhs -% lhs
-                                else
-                                    lhs -% rhs;
-                            },
-                            Instruction.arsh => value: {
-                                const signed: SignedInt = @bitCast(lhs);
-                                break :value @bitCast(signed >> @truncate(rhs));
-                            },
-                            else => std.debug.panic("{s}", .{@tagName(opcode)}),
-                        };
-
-                        const large_result: u64 = switch (@intFromEnum(opcode) & 0b11110000) {
-                            Instruction.add,
-                            Instruction.sub,
-                            => if (is_64) result else signExtend(version, @bitCast(result)),
-                            // The mul32 instruction requires a sign extension to u64 from i32.
-                            Instruction.mul => if (is_64) result else extend(result),
-                            Instruction.mov => if (!is_64 and
-                                opcode.isReg() and
-                                version.explicitSignExtensionOfResults())
-                                extend(result)
-                            else
-                                result,
-                            else => result,
-                        };
-                        registers.set(inst.dst, large_result);
-                    },
-                }
-            },
-
-            .hor64_imm => {
-                const lhs = registers.getPtrConst(inst.dst).*;
-                const result = lhs | @as(u64, inst.imm) << 32;
-                registers.set(inst.dst, result);
-            },
-
-            .lmul32_reg,
-            .lmul32_imm,
-            .udiv32_reg,
-            .udiv32_imm,
-            .urem32_reg,
-            .urem32_imm,
-            .sdiv32_reg,
-            .sdiv32_imm,
-            .srem32_reg,
-            .srem32_imm,
-            => {
-                if (!version.enablePqr()) return error.UnsupportedInstruction;
-                const lhs_large = registers.getPtrConst(inst.dst).*;
-                const rhs_large = if (opcode.isReg())
-                    registers.getPtrConst(inst.src).*
-                else
-                    inst.imm;
-
-                const opc = @intFromEnum(opcode) & 0b11100000;
-                const extended: u64 = switch (opc) {
-                    Instruction.sdiv, Instruction.srem => result: {
-                        const lhs: i32 = @truncate(@as(i64, @bitCast(lhs_large)));
-                        const rhs: i32 = @truncate(@as(i64, @bitCast(rhs_large)));
-                        const result: u32 = @bitCast(switch (opc) {
-                            Instruction.sdiv => try divTrunc(i32, lhs, rhs),
-                            Instruction.srem => try rem(i32, lhs, rhs),
-                            else => unreachable,
-                        });
-                        break :result result;
-                    },
-                    Instruction.lmul,
-                    Instruction.urem,
-                    Instruction.udiv,
-                    => result: {
-                        const lhs: u32 = @truncate(lhs_large);
-                        const rhs: u32 = @truncate(rhs_large);
-                        break :result switch (opc) {
-                            Instruction.lmul => lhs *% rhs,
-                            Instruction.urem => try rem(u32, lhs, rhs),
-                            Instruction.udiv => try divTrunc(u32, lhs, rhs),
-                            else => unreachable,
-                        };
-                    },
-                    else => unreachable,
-                };
-
-                registers.set(inst.dst, extended);
-            },
-
-            .lmul64_reg,
-            .lmul64_imm,
-            .uhmul64_reg,
-            .uhmul64_imm,
-            .shmul64_reg,
-            .shmul64_imm,
-            .udiv64_reg,
-            .udiv64_imm,
-            .urem64_reg,
-            .urem64_imm,
-            .sdiv64_reg,
-            .sdiv64_imm,
-            .srem64_reg,
-            .srem64_imm,
-            => {
-                if (!version.enablePqr()) return error.UnsupportedInstruction;
-                const lhs: u64 = registers.getPtrConst(inst.dst).*;
-                const rhs: u64 = if (opcode.isReg()) registers.getPtrConst(inst.src).* else inst.imm;
-                const signed_rhs: i64 = if (opcode.isReg())
-                    @bitCast(registers.getPtrConst(inst.src).*)
-                else
-                    @bitCast(extend(inst.imm));
-
-                const opc = @intFromEnum(opcode) & 0b11100000;
-                const result: u64 = switch (opc) {
-                    Instruction.lmul => lhs *% @as(u64, @bitCast(signed_rhs)),
-                    Instruction.udiv => try divTrunc(u64, lhs, rhs),
-                    Instruction.urem => try rem(u64, lhs, rhs),
-                    Instruction.sdiv => result: {
-                        const result = try divTrunc(i64, @bitCast(lhs), signed_rhs);
-                        break :result @bitCast(result);
-                    },
-                    Instruction.uhmul => result: {
-                        const result = @as(u128, lhs) *% @as(u128, rhs);
-                        break :result @truncate(result >> 64);
-                    },
-                    Instruction.shmul,
-                    Instruction.srem,
-                    => result: {
-                        const signed_lhs: i64 = @bitCast(lhs);
-                        const result: i64 = switch (opc) {
-                            Instruction.shmul => value: {
-                                const result = @as(i128, signed_lhs) *% @as(i128, signed_rhs);
-                                break :value @truncate(result >> 64);
-                            },
-                            Instruction.srem => try rem(i64, signed_lhs, signed_rhs),
-                            else => unreachable,
-                        };
-                        break :result @bitCast(result);
-                    },
-                    else => unreachable,
-                };
-                registers.set(inst.dst, result);
-            },
-
-            // loads/stores
-            inline //
-            .ld_b_reg,
-            .st_b_reg,
-            .st_b_imm,
-
-            .ld_h_reg,
-            .st_h_reg,
-            .st_h_imm,
-
-            .ld_w_reg,
-            .st_w_reg,
-            .st_w_imm,
-
-            .ld_dw_reg,
-            .st_dw_reg,
-            .st_dw_imm,
-            => |code| {
-                const T = switch (code) {
-                    .ld_b_reg,
-                    .st_b_reg,
-                    .st_b_imm,
-                    => u8,
-                    .ld_h_reg,
-                    .st_h_reg,
-                    .st_h_imm,
-                    => u16,
-                    .ld_w_reg,
-                    .st_w_reg,
-                    .st_w_imm,
-                    => u32,
-                    .ld_dw_reg,
-                    .st_dw_reg,
-                    .st_dw_imm,
-                    => u64,
-                    else => comptime unreachable,
-                };
-
-                const access = code.accessType();
-                const addr_reg = if (access == .constant) inst.src else inst.dst;
-                const address: i64 = @bitCast(registers.getPtrConst(addr_reg).*);
-                const vaddr: u64 = @bitCast(address +% inst.off);
-
-                switch (access) {
-                    .constant => registers.set(inst.dst, try self.memory_map.load(T, vaddr)),
-                    .mutable => {
-                        const operand = switch (@intFromEnum(opcode) & 0b111) {
-                            Instruction.stx => registers.getPtrConst(inst.src).*,
-                            Instruction.st => extend(inst.imm),
-                            else => unreachable,
-                        };
-                        try self.memory_map.store(T, vaddr, @truncate(operand));
-                    },
-                }
-            },
-
-            .be,
-            .le,
-            => {
-                registers.set(inst.dst, switch (inst.imm) {
-                    inline //
-                    16,
-                    32,
-                    64,
-                    => |size| std.mem.nativeTo(
-                        std.meta.Int(.unsigned, size),
-                        @truncate(registers.getPtrConst(inst.dst).*),
-                        if (opcode == .le) .little else .big,
-                    ),
-                    else => return error.UnsupportedInstruction,
-                });
-            },
-
-            // branching
-            .ja,
-            .jeq_imm,
-            .jeq_reg,
-            .jne_imm,
-            .jne_reg,
-            .jge_imm,
-            .jge_reg,
-            .jgt_imm,
-            .jgt_reg,
-            .jle_imm,
-            .jle_reg,
-            .jlt_imm,
-            .jlt_reg,
-            .jset_imm,
-            .jset_reg,
-            .jsge_imm,
-            .jsge_reg,
-            .jsgt_imm,
-            .jsgt_reg,
-            .jsle_imm,
-            .jsle_reg,
-            .jslt_imm,
-            .jslt_reg,
-            => {
-                const target_pc: u64 = @intCast(@as(i64, @intCast(next_pc)) + inst.off);
-                const lhs = registers.getPtrConst(inst.dst).*;
-                const rhs = if (opcode.isReg())
-                    registers.getPtrConst(inst.src).*
-                else
-                    extend(inst.imm);
-
-                // for the signed variants
-                const lhs_signed: i64 = @bitCast(lhs);
-                const rhs_signed: i64 = if (opcode.isReg())
-                    @bitCast(rhs)
-                else
-                    @as(i32, @bitCast(inst.imm));
-
-                const predicate: bool = switch (opcode) {
-                    // zig fmt: off
-                    .ja => true,
-                    .jeq_imm,  .jeq_reg  => lhs == rhs,
-                    .jne_imm,  .jne_reg  => lhs != rhs,
-                    .jge_imm,  .jge_reg  => lhs >= rhs,
-                    .jgt_imm,  .jgt_reg  => lhs >  rhs,
-                    .jle_imm,  .jle_reg  => lhs <= rhs,
-                    .jlt_imm,  .jlt_reg  => lhs <  rhs,
-                    .jset_imm, .jset_reg => lhs &  rhs != 0,
-                    .jsge_imm, .jsge_reg => lhs_signed >= rhs_signed,
-                    .jsgt_imm, .jsgt_reg => lhs_signed >  rhs_signed,
-                    .jsle_imm, .jsle_reg => lhs_signed <= rhs_signed,
-                    .jslt_imm, .jslt_reg => lhs_signed <  rhs_signed,
-                    // zig fmt: on
-                    else => unreachable,
-                };
-                if (predicate) next_pc = target_pc;
-            },
-
-            // calling
-            .exit_or_syscall,
-            .@"return",
-            => {
-                if (opcode == .exit_or_syscall and version.enableStaticSyscalls()) {
-                    // SBPFv3 SYSCALL instruction
-                    if (self.loader.get(inst.imm)) |entry| {
-                        try self.dispatchSyscall(entry);
-                    } else {
-                        @panic("TODO: detect invalid syscall in verifier");
-                    }
-                } else {
-                    if (opcode == .@"return" and !version.enableStaticSyscalls()) {
-                        return error.UnsupportedInstruction;
-                    }
-
-                    if (self.depth == 0) {
-                        if (config.enable_instruction_meter and
-                            self.instruction_count > self.transaction_context.compute_meter)
-                        {
-                            return error.ExceededMaxInstructions;
-                        }
-                        self.result = .{ .ok = self.registers.getPtrConst(.r0).* };
-                        return false;
-                    }
-                    self.depth -= 1;
-                    const frame = self.call_frames.pop().?;
-                    self.registers.set(.r10, frame.fp);
-                    @memcpy(self.registers.values[6..][0..4], &frame.caller_saved_regs);
-                    next_pc = frame.return_pc;
-                }
-            },
-            .call_imm => blk: {
-                if (!version.enableStaticSyscalls()) {
-                    if (self.loader.get(inst.imm)) |entry| {
-                        try self.dispatchSyscall(entry);
-                        break :blk;
-                    }
-                }
-
-                const target_pc = version.computeTargetPc(pc, inst);
-                const function_registry = &self.executable.function_registry;
-                if (function_registry.lookupKey(target_pc)) |entry| {
-                    try self.pushCallFrame();
-                    next_pc = entry.value;
-                    break :blk;
-                }
-
-                return error.UnsupportedInstruction;
-            },
-            .call_reg => {
-                const src: sbpf.Instruction.Register = if (version.callRegUsesSrcReg())
-                    inst.src
-                else
-                    @enumFromInt(inst.imm);
-                const target_pc = registers.getPtrConst(src).*;
-
-                try self.pushCallFrame();
-
-                next_pc = (target_pc -% self.vm_addr) / 8;
-                if (next_pc >= instructions.len) return error.CallOutsideTextSegment;
-                if (version.enableStaticSyscalls() and
-                    self.executable.function_registry.lookupKey(next_pc) == null)
-                {
-                    return error.UnsupportedInstruction;
-                }
-            },
-
-            // other instructions
-            .ld_dw_imm => {
-                if (version.disableLddw()) return error.UnsupportedInstruction;
-                const value: u64 = (@as(u64, instructions[next_pc].imm) << 32) | inst.imm;
-                registers.set(inst.dst, value);
-                next_pc += 1;
-            },
-
-            // handled above
-            .ld_4b_reg,
-            .st_4b_reg,
-            => if (!version.moveMemoryInstructionClasses()) return error.UnsupportedInstruction,
-
-            else => return error.UnsupportedInstruction,
+        pub fn @"return"(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+            return @call(.always_inline, v0.exit_or_syscall, .{ self, inst, pc });
         }
 
-        self.registers.set(.pc, next_pc);
-        return true;
+        pub fn call_reg(self: *Vm, inst: Instruction, _: u64) DispatchError!void {
+            const target_pc = self.registers.getPtrConst(inst.src).*;
+            try self.pushCallFrame();
+            const next_pc = (target_pc -% self.vm_addr) / 8;
+            const instructions = self.executable.instructions;
+            if (next_pc >= instructions.len) return error.CallOutsideTextSegment;
+            if (self.executable.function_registry.lookupKey(next_pc) == null) {
+                return error.UnsupportedInstruction;
+            }
+            self.registers.set(.pc, next_pc);
+        }
+    };
+
+    fn inherit(base: type, new: type) [256]Handle {
+        var array = base.table;
+        for (@typeInfo(new).@"struct".decls) |field| {
+            array[@intFromEnum(@field(OpCode, field.name))] = @field(new, field.name);
+        }
+        return array;
+    }
+
+    /// Returns `true` when the instruction executed stops the VM.
+    ///
+    /// NOTE: no `inline`, since we tail call. But looking at the codegen, it does inline the tail call.
+    fn step(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+        return @call(.always_tail, self.jump_table[@intFromEnum(inst.opcode)], .{ self, inst, pc });
     }
 
     fn pushCallFrame(self: *Vm) !void {
@@ -693,16 +878,8 @@ pub const Vm = struct {
         }
     }
 
-    fn signExtend(version: sbpf.Version, input: i32) u64 {
-        if (version.explicitSignExtensionOfResults()) {
-            return @as(u32, @bitCast(input));
-        } else {
-            return @bitCast(@as(i64, input));
-        }
-    }
-
     /// u32 -> sign extend -> i64 -> bitcast -> u64
-    fn extend(input: anytype) u64 {
+    inline fn extend(input: anytype) u64 {
         const value: u32 = @truncate(input);
         const signed: i32 = @bitCast(value);
         const extended: i64 = signed;
