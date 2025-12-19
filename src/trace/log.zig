@@ -38,8 +38,8 @@ pub fn Logger(comptime scope: []const u8) type {
 
         pub const noop: Self = .{
             .impl = .noop,
-            .max_level = .err,
-            .filters = .err,
+            .max_level = .@"error",
+            .filters = .@"error",
         };
 
         pub fn withScope(self: Self, comptime new_scope: []const u8) Logger(new_scope) {
@@ -68,7 +68,7 @@ pub fn Logger(comptime scope: []const u8) type {
         }
 
         pub fn err(self: Self) NewEntry(scope) {
-            return self.entry(.err);
+            return self.entry(.@"error");
         }
 
         pub fn warn(self: Self) NewEntry(scope) {
@@ -231,7 +231,7 @@ pub const ChannelPrintLogger = struct {
             defer std.debug.unlockStdErr();
             const stderr = std.io.getStdErr().writer();
             const err_msg = "failed to allocate {} bytes for log message - {}";
-            logfmt.writeLog(stderr, "logger", .err, .{}, err_msg, .{ size, err }) catch {};
+            logfmt.writeLog(stderr, "logger", .@"error", .{}, err_msg, .{ size, err }) catch {};
             logfmt.writeLog(stderr, scope, level, fields, fmt, args) catch {};
             return;
         };
@@ -330,7 +330,7 @@ pub const TestLogger = struct {
 
 /// change this locally for temporary visibility into tests.
 /// normally this should be err since we don't want any output from well-behaved passing tests.
-const test_filters: Filters = .err;
+const test_filters: Filters = .@"error";
 
 test "direct" {
     const allocator = std.testing.allocator;

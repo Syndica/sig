@@ -3,7 +3,7 @@ pub const std = @import("std");
 pub const Level = enum {
     /// Error: something has gone wrong. This might be recoverable or might
     /// be followed by the program exiting.
-    err,
+    @"error",
     /// Warning: it is uncertain if something has gone wrong or not, but the
     /// circumstances would be worth investigating.
     warn,
@@ -13,29 +13,6 @@ pub const Level = enum {
     debug,
     /// Trace: fine-grained messages that track execution flow.
     trace,
-
-    /// Returns a string literal of the given level in full text form.
-    pub fn asText(self: Level) []const u8 {
-        return switch (self) {
-            .err => "error",
-            .warn => "warn",
-            .info => "info",
-            .debug => "debug",
-            .trace => "trace",
-        };
-    }
-
-    pub fn parse(string: []const u8) !Level {
-        // zig fmt: off
-        return 
-            if (std.mem.eql(u8, string, "error")) .err   else
-            if (std.mem.eql(u8, string, "warn"))  .warn  else
-            if (std.mem.eql(u8, string, "info"))  .info  else
-            if (std.mem.eql(u8, string, "debug")) .debug else
-            if (std.mem.eql(u8, string, "trace")) .trace else
-            error.InvalidLogLevel;
-        // zig fmt: on
-    }
 };
 
 pub const Filters = struct {
@@ -51,7 +28,7 @@ pub const Filters = struct {
 
     const default_level: Level = .info;
 
-    pub const err: Filters = .{ .root = .err };
+    pub const @"error": Filters = .{ .root = .@"error" };
     pub const warn: Filters = .{ .root = .warn };
     pub const info: Filters = .{ .root = .info };
     pub const debug: Filters = .{ .root = .debug };
@@ -104,10 +81,12 @@ pub const Filters = struct {
                 }
                 try scopes.append(allocator, .{
                     .name = scope,
-                    .level = try .parse(filter[eq_index + 1 ..]),
+                    .level = std.meta.stringToEnum(Level, filter[eq_index + 1 ..]) orelse
+                        return error.InvalidLogLevel,
                 });
             } else if (main_filter == null) {
-                main_filter = try .parse(filter);
+                main_filter = std.meta.stringToEnum(Level, filter) orelse
+                    return error.InvalidLogLevel;
             } else return error.DuplicateDefaultFilter;
         }
 
@@ -128,7 +107,7 @@ test "Filters.parse happy path" {
     try std.testing.expect(filters.root == .debug);
     try std.testing.expect(filters.scopes.len == 2);
     try std.testing.expect(filters.level("net") == .info);
-    try std.testing.expect(filters.level("db") == .err);
+    try std.testing.expect(filters.level("db") == .@"error");
     try std.testing.expect(filters.level("other") == .debug);
 }
 
@@ -182,7 +161,7 @@ test "Filters.parse only scopes defaults to info" {
     try std.testing.expect(filters.root == .info);
     try std.testing.expect(filters.scopes.len == 2);
     try std.testing.expect(filters.level("net") == .info);
-    try std.testing.expect(filters.level("db") == .err);
+    try std.testing.expect(filters.level("db") == .@"error");
     try std.testing.expect(filters.level("other") == .info);
 }
 
@@ -218,7 +197,7 @@ test "Filters.parse scopes with spaces are valid" {
     try std.testing.expect(filters.root == .debug);
     try std.testing.expect(filters.scopes.len == 2);
     try std.testing.expect(filters.level("the network") == .info);
-    try std.testing.expect(filters.level("db") == .err);
+    try std.testing.expect(filters.level("db") == .@"error");
     try std.testing.expect(filters.level("other") == .debug);
 }
 
@@ -232,7 +211,7 @@ test "Filters.parse scopes with = are valid" {
     try std.testing.expect(filters.root == .debug);
     try std.testing.expect(filters.scopes.len == 2);
     try std.testing.expect(filters.level("the=network") == .info);
-    try std.testing.expect(filters.level("db") == .err);
+    try std.testing.expect(filters.level("db") == .@"error");
     try std.testing.expect(filters.level("other") == .debug);
 }
 
@@ -248,6 +227,6 @@ test "Filters.parse prefixes work" {
     try std.testing.expect(filters.level("net") == .info);
     try std.testing.expect(filters.level("net.http") == .info);
     try std.testing.expect(filters.level("network") == .debug);
-    try std.testing.expect(filters.level("db") == .err);
+    try std.testing.expect(filters.level("db") == .@"error");
     try std.testing.expect(filters.level("other") == .debug);
 }

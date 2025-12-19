@@ -520,9 +520,9 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     .invalid_block => |e| switch (e) {
                         // TooFewTicks is typical during forks and should not require intervention.
                         .TooFewTicks => .warn,
-                        else => .err,
+                        else => .@"error",
                     },
-                    else => .err,
+                    else => .@"error",
                 },
                 "replayed slot {} with error: {}",
                 .{ result.slot, err },
@@ -921,7 +921,7 @@ test "freezeCompletedSlots handles errors correctly" {
     try std.testing.expectEqualSlices(u8,
         \\replayed slot 1 with error: replay.execution.ReplaySlotError{ .invalid_block = replay.execution.BlockError.TooFewTicks }
     , logger.messages.items[0].content);
-    try std.testing.expectEqual(sig.trace.Level.err, logger.messages.items[1].level);
+    try std.testing.expectEqual(sig.trace.Level.@"error", logger.messages.items[1].level);
     try std.testing.expectEqualSlices(u8,
         \\replayed slot 2 with error: replay.execution.ReplaySlotError{ .failed_to_load_meta = void }
     , logger.messages.items[1].content);
