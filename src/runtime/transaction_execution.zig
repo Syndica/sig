@@ -251,7 +251,7 @@ pub fn loadAndExecuteTransaction(
             } };
         },
     };
-    defer for (loaded_accounts.accounts.slice()) |acct| acct.deinit(allocator);
+    errdefer for (loaded_accounts.accounts.slice()) |acct| acct.deinit(allocator);
 
     for (loaded_accounts.accounts.slice()) |account| try program_loader.loadIfProgram(
         gpa,
