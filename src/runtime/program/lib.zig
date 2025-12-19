@@ -26,36 +26,49 @@ const InstructionContext = sig.runtime.InstructionContext;
 // const MAX_SEED_LEN = sig.runtime.pubkey_utils.MAX_SEED_LEN;
 pub const SEED_FIELD_CONFIG = sig.bincode.utf8StringCodec([]const u8, 1024 * 1024);
 
-pub const PROGRAM_ENTRYPOINTS = initProgramEntrypoints();
-pub const PRECOMPILE_ENTRYPOINTS = initPrecompileEntrypoints();
-
 const EntrypointFn = *const fn (
     std.mem.Allocator,
     *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void;
 
-// reviewer's note: does this have to be a string map? might be better to keep as pubkeys
-fn initProgramEntrypoints() std.StaticStringMap(EntrypointFn) {
-    @setEvalBranchQuota(10_000);
-    return std.StaticStringMap(EntrypointFn).initComptime(&.{
-        .{ bpf_loader.v1.ID.base58String().slice(), bpf_loader.execute },
-        .{ bpf_loader.v2.ID.base58String().slice(), bpf_loader.execute },
-        .{ bpf_loader.v3.ID.base58String().slice(), bpf_loader.execute },
-        .{ bpf_loader.v4.ID.base58String().slice(), bpf_loader.execute },
-        .{ system.ID.base58String().slice(), system.execute },
-        .{ vote.ID.base58String().slice(), vote.execute },
-        .{ address_lookup_table.ID.base58String().slice(), address_lookup_table.execute },
-        .{ compute_budget.ID.base58String().slice(), compute_budget.entrypoint },
-        .{ zk_elgamal.ID.base58String().slice(), zk_elgamal.execute },
-        .{ stake.ID.base58String().slice(), stake.execute },
-    });
-}
+const StaticFuncMap = struct {
+    keys: []const sig.core.Pubkey,
+    values: []const EntrypointFn,
 
-fn initPrecompileEntrypoints() std.StaticStringMap(EntrypointFn) {
-    @setEvalBranchQuota(10_000);
-    return std.StaticStringMap(EntrypointFn).initComptime(&.{
-        .{ precompiles.ed25519.ID.base58String().slice(), precompiles.ed25519.execute },
-        .{ precompiles.secp256k1.ID.base58String().slice(), precompiles.secp256k1.execute },
-        .{ precompiles.secp256r1.ID.base58String().slice(), precompiles.secp256r1.execute },
-    });
-}
+    fn init(entries: []const struct { sig.core.Pubkey, EntrypointFn }) StaticFuncMap {
+        var keys: []const sig.core.Pubkey = &.{};
+        var values: []const EntrypointFn = &.{};
+        for (entries) |entry| {
+            keys = keys ++ [_]sig.core.Pubkey{entry.@"0"};
+            values = values ++ [_]EntrypointFn{entry.@"1"};
+        }
+        return .{ .keys = keys, .values = values };
+    }
+
+    pub fn get(self: *const StaticFuncMap, key: *const sig.core.Pubkey) ?EntrypointFn {
+        for (self.keys, 0..) |k, i|
+            if (k.equals(key)) return self.values[i];
+        return null;
+    }
+};
+
+// zig fmt: off
+pub const PROGRAM_ENTRYPOINTS: StaticFuncMap = .init(&.{
+    .{ bpf_loader.v1.ID       , bpf_loader.execute           },
+    .{ bpf_loader.v2.ID       , bpf_loader.execute           },
+    .{ bpf_loader.v3.ID       , bpf_loader.execute           },
+    .{ bpf_loader.v4.ID       , bpf_loader.execute           },
+    .{ system.ID              , system.execute               },
+    .{ vote.ID                , vote.execute                 },
+    .{ address_lookup_table.ID, address_lookup_table.execute },
+    .{ compute_budget.ID      , compute_budget.entrypoint    },
+    .{ zk_elgamal.ID          , zk_elgamal.execute           },
+    .{ stake.ID               , stake.execute                },
+});
+pub const PRECOMPILE_ENTRYPOINTS: StaticFuncMap = .init(&.{
+    .{ precompiles.ed25519.ID  , precompiles.ed25519.execute  },
+    .{ precompiles.secp256k1.ID, precompiles.secp256k1.execute },
+    .{ precompiles.secp256r1.ID, precompiles.secp256r1.execute },
+
+});
+// zig fmt: on
