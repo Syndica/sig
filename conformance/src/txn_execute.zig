@@ -769,7 +769,7 @@ fn executeTxnContext(
 
     // Verify transaction
     const msg_hash, const compute_budget_instruction_details =
-        switch (preprocessTransaction(transaction, .skip_sig_verify)) {
+        switch (preprocessTransaction(transaction)) {
             .ok => |hash| hash,
             .err => |err| return serializeSanitizationError(err),
         };

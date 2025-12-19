@@ -1249,7 +1249,7 @@ pub const vote_parser = struct {
     pub fn parseSanitizedVoteTransaction(
         allocator: std.mem.Allocator,
         // TODO: Confirm if this is the correct type to use here
-        tx: sig.replay.resolve_lookup.ResolvedTransaction,
+        tx: *const sig.replay.resolve_lookup.ResolvedTransaction,
     ) std.mem.Allocator.Error!?ParsedVote {
         // Check first instruction for a vote
         const instructions = tx.instructions;
@@ -1474,7 +1474,7 @@ pub const vote_parser = struct {
                 }},
             };
 
-            const maybe_parsed_tx = try parseSanitizedVoteTransaction(allocator, resolved);
+            const maybe_parsed_tx = try parseSanitizedVoteTransaction(allocator, &resolved);
             defer if (maybe_parsed_tx) |parsed_tx| parsed_tx.deinit(allocator);
 
             try std.testing.expectEqualDeep(ParsedVote{
@@ -1554,7 +1554,7 @@ pub const vote_parser = struct {
 
         try std.testing.expectEqual(
             null,
-            try parseSanitizedVoteTransaction(allocator, resolved_bad),
+            try parseSanitizedVoteTransaction(allocator, &resolved_bad),
         );
     }
 
@@ -1702,7 +1702,8 @@ fn newTowerSyncTransaction(
     );
     errdefer vote_tx_msg.deinit(allocator);
 
-    const msg_serialized = try vote_tx_msg.serializeBounded(.legacy);
+    var msg_buffer: [Transaction.MAX_BYTES]u8 = undefined;
+    const serialized_msg = try vote_tx_msg.serializeBounded(.legacy, &msg_buffer);
     const keypairs = [_]sig.identity.KeyPair{ node_keypair, authorized_voter_keypair };
 
     const signatures = try allocator.alloc(sig.core.Signature, vote_tx_msg.signature_count);
@@ -1714,7 +1715,7 @@ fn newTowerSyncTransaction(
         const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
         const pos = vote_tx_msg.getSigningKeypairPosition(pubkey) orelse
             return error.MissingOrInvalidSigner;
-        const signature = try keypairs[i].sign(msg_serialized.constSlice(), null);
+        const signature = try keypairs[i].sign(serialized_msg, null);
         signatures[pos] = .fromSignature(signature);
     }
 

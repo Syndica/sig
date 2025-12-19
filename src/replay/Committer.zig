@@ -30,19 +30,19 @@ stakes_cache: *sig.core.StakesCache,
 new_rate_activation_epoch: ?sig.core.Epoch,
 replay_votes_sender: ?*Channel(ParsedVote),
 
-pub fn commitTransactions(
+pub fn commitTransaction(
     self: Committer,
     allocator: Allocator,
     slot: Slot,
-    transactions: []const ResolvedTransaction,
-    tx_results: []const struct { Hash, ProcessedTransaction },
+    resolved: *const ResolvedTransaction,
+    hash: *const Hash,
+    result: *const ProcessedTransaction,
 ) !void {
-    var zone = tracy.Zone.init(@src(), .{ .name = "commitTransactions" });
-    zone.value(transactions.len);
+    var zone = tracy.Zone.init(@src(), .{ .name = "commitTransaction" });
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
 
-    var rng = std.Random.DefaultPrng.init(slot + transactions.len);
+    var rng = std.Random.DefaultPrng.init(slot);
 
     var accounts_to_store = sig.utils.collections.PubkeyMap(LoadedAccount).empty;
     defer accounts_to_store.deinit(allocator);
@@ -53,56 +53,52 @@ pub fn commitTransactions(
     var transaction_fees: u64 = 0;
     var priority_fees: u64 = 0;
 
-    for (transactions, tx_results) |transaction, result| {
-        const message_hash, const tx_result = result;
-        signature_count += transaction.transaction.signatures.len;
+    for (result.writes.slice()) |account| {
+        try accounts_to_store.put(allocator, account.pubkey, account);
+    }
+    signature_count += resolved.transaction.signatures.len;
+    transaction_fees += result.fees.transaction_fee;
+    priority_fees += result.fees.prioritization_fee;
 
-        for (tx_result.writes.slice()) |account| {
-            try accounts_to_store.put(allocator, account.pubkey, account);
-        }
-        transaction_fees += tx_result.fees.transaction_fee;
-        priority_fees += tx_result.fees.prioritization_fee;
+    if (result.outputs != null) {
+        rent_collected += result.rent;
 
-        if (tx_result.outputs != null) {
-            rent_collected += tx_result.rent;
-
-            // Skip non successful or non vote transactions.
-            // Only send votes if consensus is enabled (sender exists)
-            if (self.replay_votes_sender) |sender| {
-                if (tx_result.err == null and isSimpleVoteTransaction(transaction.transaction)) {
-                    if (try parseSanitizedVoteTransaction(allocator, transaction)) |parsed| {
-                        if (parsed.vote.lastVotedSlot() != null) {
-                            sender.send(parsed) catch parsed.deinit(allocator);
-                        } else {
-                            parsed.deinit(allocator);
-                        }
+        // Skip non successful or non vote transactions.
+        // Only send votes if consensus is enabled (sender exists)
+        if (self.replay_votes_sender) |sender| {
+            if (result.err == null and isSimpleVoteTransaction(resolved.transaction)) {
+                if (try parseSanitizedVoteTransaction(allocator, resolved)) |parsed| {
+                    if (parsed.vote.lastVotedSlot() != null) {
+                        sender.send(parsed) catch parsed.deinit(allocator);
+                    } else {
+                        parsed.deinit(allocator);
                     }
                 }
             }
         }
-
-        const recent_blockhash = &transaction.transaction.msg.recent_blockhash;
-        const signature = transaction.transaction.signatures[0];
-        try self.status_cache.insert(
-            allocator,
-            rng.random(),
-            recent_blockhash,
-            &message_hash.data,
-            slot,
-        );
-        try self.status_cache.insert(
-            allocator,
-            rng.random(),
-            recent_blockhash,
-            &signature.toBytes(),
-            slot,
-        );
-        // NOTE: we'll need to store the actual status at some point, probably for rpc.
     }
+
+    const recent_blockhash = &resolved.transaction.msg.recent_blockhash;
+    const signature = resolved.transaction.signatures[0];
+    try self.status_cache.insert(
+        allocator,
+        rng.random(),
+        recent_blockhash,
+        &hash.data,
+        slot,
+    );
+    try self.status_cache.insert(
+        allocator,
+        rng.random(),
+        recent_blockhash,
+        &signature.toBytes(),
+        slot,
+    );
+    // NOTE: we'll need to store the actual status at some point, probably for rpc.
 
     _ = self.slot_state.collected_transaction_fees.fetchAdd(transaction_fees, .monotonic);
     _ = self.slot_state.collected_priority_fees.fetchAdd(priority_fees, .monotonic);
-    _ = self.slot_state.transaction_count.fetchAdd(tx_results.len, .monotonic);
+    _ = self.slot_state.transaction_count.fetchAdd(1, .monotonic);
     _ = self.slot_state.signature_count.fetchAdd(signature_count, .monotonic);
     _ = self.slot_state.collected_rent.fetchAdd(rent_collected, .monotonic);
 

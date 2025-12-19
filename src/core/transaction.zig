@@ -137,11 +137,11 @@ pub const Transaction = struct {
     pub fn initOwnedMessageWithSigningKeypairs(
         allocator: std.mem.Allocator,
         version: Version,
-        message: Message,
+        msg: Message,
         keypairs: []const sig.identity.KeyPair,
     ) InitOwnedMessageWithSigningKeypairsError!Transaction {
-        const msg_bytes_bounded = message.serializeBounded(version) catch return error.BadMessage;
-        const msg_bytes = msg_bytes_bounded.constSlice();
+        var msg_buffer: [Transaction.MAX_BYTES]u8 = undefined;
+        const msg_bytes = msg.serializeBounded(version, &msg_buffer) catch return error.BadMessage;
 
         const signatures = try allocator.alloc(Signature, keypairs.len);
         errdefer allocator.free(signatures);
@@ -154,7 +154,7 @@ pub const Transaction = struct {
         return .{
             .signatures = signatures,
             .version = version,
-            .msg = message,
+            .msg = msg,
         };
     }
 
@@ -198,9 +198,10 @@ pub const Transaction = struct {
     /// Does *not* ensure total internal consistency. Only does the minimum to
     /// verify signatures. Call `validate` to ensure full consistency.
     pub fn verify(self: Transaction) VerifyError!void {
-        const serialized_message = self.msg.serializeBounded(self.version) catch
+        var buffer: [MAX_BYTES]u8 = undefined;
+        const message = self.msg.serializeBounded(self.version, &buffer) catch
             return error.SerializationFailed;
-        try self.verifySignatures(serialized_message.constSlice());
+        try self.verifySignatures(message);
     }
 
     /// Verify the transaction signatures against the provided serialized message.
@@ -448,15 +449,15 @@ pub const Message = struct {
         return !(is_reserved or demote_program_id);
     }
 
-    /// Returns the serialized message as a bounded array.
     /// Returns an error if the message would exceed the maximum allowed transaction size.
     pub fn serializeBounded(
         self: Message,
         version: Version,
-    ) !std.BoundedArray(u8, Transaction.MAX_BYTES) {
-        var buf: std.BoundedArray(u8, Transaction.MAX_BYTES) = .{};
-        try self.serialize(buf.writer(), version);
-        return buf;
+        dst: *[Transaction.MAX_BYTES]u8,
+    ) ![]const u8 {
+        var output = std.io.fixedBufferStream(dst);
+        try self.serialize(output.writer(), version);
+        return dst[0..output.pos];
     }
 
     pub fn serialize(self: Message, writer: anytype, version: Version) !void {
@@ -1258,7 +1259,9 @@ pub const transaction_v0_example = struct {
 test "verify and hash transaction" {
     const txn = transaction_legacy_example.as_struct;
     try txn.verify();
-    const hash = Message.hash((try txn.msg.serializeBounded(txn.version)).constSlice());
+
+    var buffer: [Transaction.MAX_BYTES]u8 = undefined;
+    const hash = Message.hash(try txn.msg.serializeBounded(txn.version, &buffer));
     try std.testing.expectEqual(
         Hash.parse("FjoeKaxTd3J7xgt9vHMpuQb7j192weaEP3yMa1ntfQNo"),
         hash,

@@ -24,32 +24,19 @@ pub const SigVerifyOption = enum {
 /// Checks that a transaction is valid for execution.
 ///     1. Ensure the transaction is valid i.e. signature counts make sense, there are enough accounts, etc.
 ///     2. Ensure the transaction message is serialisable
-///     3. Ensure all signatures are verified against the serialized transaction message
-///     4. Ensure that the compute budget program is executed succesfully
+///     3. Ensure that the compute budget program is executed succesfully
 /// Returns the message hash and the compute budget instruction details on success.
 ///
 /// [agave] https://github.com/firedancer-io/agave/blob/52daf1a021b716bf3ac4f20f9f301f20077f4d54/runtime/src/bank.rs#L4777
-pub fn preprocessTransaction(
-    txn: Transaction,
-    sig_verify: SigVerifyOption,
-) PreprocessTransactionResult {
+pub fn preprocessTransaction(txn: Transaction) PreprocessTransactionResult {
     var zone = tracy.Zone.init(@src(), .{ .name = "preprocessTransaction" });
     defer zone.deinit();
 
     txn.validate() catch return .{ .err = .SanitizeFailure };
 
-    const msg_bytes = txn.msg.serializeBounded(txn.version) catch return .{
-        .err = .SanitizeFailure,
-    };
-
-    if (sig_verify == .run_sig_verify) {
-        txn.verifySignatures(msg_bytes.constSlice()) catch |err| {
-            return switch (err) {
-                error.SignatureVerificationFailed => .{ .err = .SignatureFailure },
-                else => .{ .err = .SanitizeFailure },
-            };
-        };
-    }
+    var msg_buffer: [Transaction.MAX_BYTES]u8 = undefined;
+    const msg_bytes = txn.msg.serializeBounded(txn.version, &msg_buffer) catch
+        return .{ .err = .SanitizeFailure };
 
     const compute_budget_instruction_details = switch (compute_budget.execute(&txn.msg)) {
         .ok => |details| details,
@@ -57,7 +44,7 @@ pub fn preprocessTransaction(
     };
 
     return .{ .ok = .{
-        Message.hash(msg_bytes.constSlice()),
+        Message.hash(msg_bytes),
         compute_budget_instruction_details,
     } };
 }
@@ -75,8 +62,7 @@ test preprocessTransaction {
     { // Verify succeeds
         const txn = try Transaction.initRandom(allocator, random, null);
         defer txn.deinit(allocator);
-        _ = preprocessTransaction(txn, .run_sig_verify).ok;
-        _ = preprocessTransaction(txn, .skip_sig_verify).ok;
+        _ = preprocessTransaction(txn).ok;
     }
 
     { // Transaction serialize fails
@@ -102,7 +88,7 @@ test preprocessTransaction {
             },
         };
 
-        const err = preprocessTransaction(txn, .skip_sig_verify).err;
+        const err = preprocessTransaction(txn).err;
         try std.testing.expectEqual(TransactionError.SanitizeFailure, err);
     }
 
@@ -121,7 +107,7 @@ test preprocessTransaction {
             },
         };
 
-        const err = preprocessTransaction(txn, .skip_sig_verify).err;
+        const err = preprocessTransaction(txn).err;
         try std.testing.expectEqual(TransactionError.SanitizeFailure, err);
     }
 
@@ -147,7 +133,7 @@ test preprocessTransaction {
         };
         defer for (txn.msg.instructions) |instr| allocator.free(instr.data);
 
-        _, const details = preprocessTransaction(txn, .skip_sig_verify).ok;
+        _, const details = preprocessTransaction(txn).ok;
         const compute_limits = compute_budget.sanitize(details, &.ALL_DISABLED, 0).ok;
         try std.testing.expectEqual(1_000_000, compute_limits.compute_unit_limit);
     }
@@ -179,7 +165,7 @@ test preprocessTransaction {
         };
         defer for (txn.msg.instructions) |instr| allocator.free(instr.data);
 
-        const err = preprocessTransaction(txn, .skip_sig_verify).err;
+        const err = preprocessTransaction(txn).err;
         try std.testing.expectEqual(TransactionError{ .DuplicateInstruction = 1 }, err);
     }
 }

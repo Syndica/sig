@@ -255,88 +255,38 @@ pub fn replaySlotSync(
     }
 
     for (params.transactions) |transaction| {
-        var exit = Atomic(bool).init(false);
+        const hash, const compute_budget_details = switch (preprocessTransaction(transaction.transaction)) {
+            .ok => |res| res,
+            .err => |err| return .{ .invalid_transaction = err },
+        };
 
-        switch (try replayBatch(
-            allocator,
-            &svm_gateway,
-            params.committer,
-            &.{transaction},
-            &exit,
-        )) {
-            .success => {},
-            .failure => |err| return .{ .invalid_transaction = err },
-            .exit => unreachable,
-        }
-    }
-
-    return null;
-}
-
-/// The result of processing a transaction batch (entry).
-pub const BatchResult = union(enum) {
-    /// The batch completed with acceptable results.
-    success,
-    /// This batch had an error that indicates an invalid block
-    failure: TransactionError,
-    /// Termination was exited due to a failure in another thread.
-    exit,
-};
-
-/// Processes a batch of transactions by verifying their signatures and
-/// executing them with the SVM.
-pub fn replayBatch(
-    allocator: Allocator,
-    svm_gateway: *SvmGateway,
-    committer: Committer,
-    transactions: []const ResolvedTransaction,
-    exit: *Atomic(bool),
-) !BatchResult {
-    var zone = tracy.Zone.init(@src(), .{ .name = "replayBatch" });
-    zone.value(transactions.len);
-    defer zone.deinit();
-    errdefer zone.color(0xFF0000);
-
-    const results = try allocator.alloc(struct { Hash, ProcessedTransaction }, transactions.len);
-    var populated_count: usize = 0;
-    defer {
-        // Only deinit elements that were actually populated
-        // TODO Better way to do this? Instead of tracking populated count. Maybe switch to array list?
-        for (results[0..populated_count]) |*result| {
-            result.*[1].deinit(allocator);
-        }
-        allocator.free(results);
-    }
-
-    for (transactions, 0..) |transaction, i| {
-        if (exit.load(.monotonic)) {
-            return .exit;
-        }
-
-        const hash, const compute_budget_details =
-            switch (preprocessTransaction(transaction.transaction, .run_sig_verify)) {
-                .ok => |res| res,
-                .err => |err| return .{ .failure = err },
-            };
+        transaction.transaction.verify() catch |err| return .{ .invalid_transaction = switch (err) {
+            error.SignatureVerificationFailed => .SignatureFailure,
+            else => .SanitizeFailure,
+        } };
 
         const runtime_transaction = transaction.toRuntimeTransaction(hash, compute_budget_details);
 
-        switch (try executeTransaction(allocator, svm_gateway, &runtime_transaction)) {
-            .ok => |result| {
-                results[i] = .{ hash, result };
-                populated_count += 1;
-            },
-            .err => |err| return .{ .failure = err },
-        }
-    }
-    try committer.commitTransactions(
-        allocator,
-        svm_gateway.params.slot,
-        transactions,
-        results,
-    );
+        const result = switch (try executeTransaction(
+            allocator,
+            &svm_gateway,
+            &runtime_transaction,
+        )) {
+            .ok => |result| result,
+            .err => |err| return .{ .invalid_transaction = err },
+        };
+        defer result.deinit(allocator);
 
-    return .success;
+        try params.committer.commitTransaction(
+            allocator,
+            svm_gateway.params.slot,
+            &transaction,
+            &hash,
+            &result,
+        );
+    }
+
+    return null;
 }
 
 const PreparedSlot = union(enum) {
@@ -948,7 +898,7 @@ fn testReplaySlot(
 
         var result: ReplaySlotFuture.Result = undefined;
         {
-            var wg = std.Thread.WaitGroup{};
+            var wg: std.Thread.WaitGroup = .{};
             defer wg.wait();
 
             ReplaySlotFuture.startAsync(
