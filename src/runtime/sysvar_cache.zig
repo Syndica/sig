@@ -38,7 +38,7 @@ pub const SysvarCache = struct {
     fees_obj: ?Fees = null,
     recent_blockhashes_obj: ?RecentBlockhashes = null,
 
-    pub fn deinit(self: SysvarCache, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const SysvarCache, allocator: std.mem.Allocator) void {
         if (self.clock) |clock| allocator.free(clock);
         if (self.epoch_schedule) |epoch_schedule| allocator.free(epoch_schedule);
         if (self.epoch_rewards) |epoch_rewards| allocator.free(epoch_rewards);
@@ -51,7 +51,7 @@ pub const SysvarCache = struct {
     /// Returns the sysvar as an object if it is supported
     /// Replaces the sysvar object getters in Agave
     pub fn get(
-        self: SysvarCache,
+        self: *const SysvarCache,
         comptime T: type,
     ) error{UnsupportedSysvar}!T {
         // NOTE: No allocations are actually performed here, we require the allocator purely
@@ -100,7 +100,7 @@ pub const SysvarCache = struct {
     /// Deserialises the sysvar from bytes
     /// This should only be used by the getSysvar syscall
     fn deserialize(
-        self: SysvarCache,
+        self: *const SysvarCache,
         allocator: std.mem.Allocator,
         comptime T: type,
     ) error{UnsupportedSysvar}!T {
