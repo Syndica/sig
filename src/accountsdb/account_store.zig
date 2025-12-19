@@ -67,6 +67,7 @@ pub const AccountStore = union(enum) {
     ) !void {
         var zone = tracy.Zone.init(@src(), .{ .name = "onSlotRooted" });
         defer zone.deinit();
+        zone.value(newly_rooted_slot);
 
         switch (self) {
             .accounts_db => |db| try accounts_db.manager.onSlotRooted(

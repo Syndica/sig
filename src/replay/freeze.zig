@@ -113,6 +113,8 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
         .{ params.hash_slot.slot, slot_hash.get().*.?.base58String().slice() },
     );
 
+    tracy.frameMarkNamed("slots frozen");
+
     // NOTE: agave updates hard_forks and hash_overrides here
 }
 
