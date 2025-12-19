@@ -305,7 +305,7 @@ pub const TestLogger = struct {
         return .{
             .impl = .{ .test_logger = self },
             .max_level = max_level,
-            .filters = .{ .default = max_level },
+            .filters = .{ .root = max_level },
         };
     }
 
@@ -476,7 +476,7 @@ test "channel logger" {
         .max_buffer = 512,
     }, stream.writer());
 
-    logger.logger("test", .{ .default = .info }).log(.info, "hello world");
+    logger.logger("test", .{ .root = .info }).log(.info, "hello world");
     std.Thread.sleep(10 * std.time.ns_per_ms);
     logger.deinit();
 

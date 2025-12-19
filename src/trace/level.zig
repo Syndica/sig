@@ -40,7 +40,7 @@ pub const Level = enum {
 
 pub const Filters = struct {
     /// The filter to use by default for scopes not explicitly listed in `scopes`.
-    default: Level = .info,
+    root: Level = default_level,
     /// Filters to apply for specific scopes.
     scopes: []const ScopeFilter = &.{},
 
@@ -49,11 +49,13 @@ pub const Filters = struct {
         level: Level,
     };
 
-    pub const err: Filters = .{ .default = .err };
-    pub const warn: Filters = .{ .default = .warn };
-    pub const info: Filters = .{ .default = .info };
-    pub const debug: Filters = .{ .default = .debug };
-    pub const trace: Filters = .{ .default = .trace };
+    const default_level: Level = .info;
+
+    pub const err: Filters = .{ .root = .err };
+    pub const warn: Filters = .{ .root = .warn };
+    pub const info: Filters = .{ .root = .info };
+    pub const debug: Filters = .{ .root = .debug };
+    pub const trace: Filters = .{ .root = .trace };
 
     pub fn deinit(self: *const Filters, allocator: std.mem.Allocator) void {
         for (self.scopes) |scope| allocator.free(scope.name);
@@ -71,7 +73,7 @@ pub const Filters = struct {
                 scope_level.name.len < scope.len and
                 scope[scope_level.name.len] == '.') return scope_level.level;
         }
-        return self.default;
+        return self.root;
     }
 
     pub const ParseError = error{
@@ -110,7 +112,7 @@ pub const Filters = struct {
         }
 
         return .{
-            .default = if (main_filter) |f| f else (Filters{}).default,
+            .root = if (main_filter) |f| f else default_level,
             .scopes = try scopes.toOwnedSlice(allocator),
         };
     }
@@ -123,7 +125,7 @@ test "Filters.parse happy path" {
     const filters = try Filters.parse(allocator, filter_str);
     defer filters.deinit(allocator);
 
-    try std.testing.expect(filters.default == .debug);
+    try std.testing.expect(filters.root == .debug);
     try std.testing.expect(filters.scopes.len == 2);
     try std.testing.expect(filters.level("net") == .info);
     try std.testing.expect(filters.level("db") == .err);
@@ -153,7 +155,7 @@ test "Filters.parse no scopes" {
     const filters = try Filters.parse(allocator, filter_str);
     defer filters.deinit(allocator);
 
-    try std.testing.expect(filters.default == .warn);
+    try std.testing.expect(filters.root == .warn);
     try std.testing.expect(filters.level("anyscope") == .warn);
 }
 
@@ -163,7 +165,7 @@ test "Filters.parse empty string uses default" {
     const filter_str = "";
     const filters = try Filters.parse(allocator, filter_str);
 
-    try std.testing.expect(filters.default == .info);
+    try std.testing.expect(filters.root == .info);
     try std.testing.expect(filters.scopes.len == 0);
     try std.testing.expect(filters.level("net") == .info);
     try std.testing.expect(filters.level("db") == .info);
@@ -177,7 +179,7 @@ test "Filters.parse only scopes defaults to info" {
     const filters = try Filters.parse(allocator, filter_str);
     defer filters.deinit(allocator);
 
-    try std.testing.expect(filters.default == .info);
+    try std.testing.expect(filters.root == .info);
     try std.testing.expect(filters.scopes.len == 2);
     try std.testing.expect(filters.level("net") == .info);
     try std.testing.expect(filters.level("db") == .err);
@@ -191,7 +193,7 @@ test "Filters.parse extra commas are fine" {
     const filters = try Filters.parse(allocator, filter_str);
     defer filters.deinit(allocator);
 
-    try std.testing.expect(filters.default == .debug);
+    try std.testing.expect(filters.root == .debug);
     try std.testing.expect(filters.scopes.len == 1);
     try std.testing.expect(filters.level("net") == .info);
     try std.testing.expect(filters.level("db") == .debug);
@@ -213,7 +215,7 @@ test "Filters.parse scopes with spaces are valid" {
     const filters = try Filters.parse(allocator, filter_str);
     defer filters.deinit(allocator);
 
-    try std.testing.expect(filters.default == .debug);
+    try std.testing.expect(filters.root == .debug);
     try std.testing.expect(filters.scopes.len == 2);
     try std.testing.expect(filters.level("the network") == .info);
     try std.testing.expect(filters.level("db") == .err);
@@ -227,7 +229,7 @@ test "Filters.parse scopes with = are valid" {
     const filters = try Filters.parse(allocator, filter_str);
     defer filters.deinit(allocator);
 
-    try std.testing.expect(filters.default == .debug);
+    try std.testing.expect(filters.root == .debug);
     try std.testing.expect(filters.scopes.len == 2);
     try std.testing.expect(filters.level("the=network") == .info);
     try std.testing.expect(filters.level("db") == .err);
@@ -241,7 +243,7 @@ test "Filters.parse prefixes work" {
     const filters = try Filters.parse(allocator, filter_str);
     defer filters.deinit(allocator);
 
-    try std.testing.expect(filters.default == .debug);
+    try std.testing.expect(filters.root == .debug);
     try std.testing.expect(filters.scopes.len == 2);
     try std.testing.expect(filters.level("net") == .info);
     try std.testing.expect(filters.level("net.http") == .info);
