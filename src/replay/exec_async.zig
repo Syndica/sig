@@ -494,7 +494,10 @@ fn testSchedulerForBatches(
             .arena = .init(allocator),
             .logger = .noop,
             .entries = entries,
-            .poh_verifier = .{ .future = future },
+            .poh_verifier = .{
+                .future = future,
+                .initial_hash = .ZEROES, // poh_verifier not used.
+            },
             .txn_scheduler = .{
                 .future = future,
                 .transactions = resolved_transactions,
