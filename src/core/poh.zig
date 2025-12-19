@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Hash = sig.core.Hash;
-
+const verifyPoh = sig.core.entry.verifyPoh;
 const assert = std.debug.assert;
 
 /// Tracks the latest hash value and tick counts, and updates it with new hashes
@@ -35,9 +35,7 @@ pub const Poh = struct {
     /// - parameter `max_num_hashes`
     pub fn hash(self: *Poh, max_num_hashes: u64) bool {
         const num_hashes = @min(self.remaining_hashes -| 1, max_num_hashes);
-        for (0..num_hashes) |_| {
-            self.latest_hash = .init(&self.latest_hash.data);
-        }
+        Hash.hashRepeated(&self.latest_hash, &self.latest_hash, num_hashes);
         self.num_hashes += num_hashes;
         self.remaining_hashes -= num_hashes;
 
@@ -154,9 +152,9 @@ pub fn testPoh(
     const batch2 = try allocator.dupe(Transaction, transactions[2..3]);
     const batch3 = try allocator.dupe(Transaction, transactions[3..6]);
 
-    const mixin1 = try hashTransactions(allocator, null, batch1);
-    const mixin2 = try hashTransactions(allocator, null, batch2);
-    const mixin3 = try hashTransactions(allocator, null, batch3);
+    const mixin1 = hashTransactions(batch1);
+    const mixin2 = hashTransactions(batch2);
+    const mixin3 = hashTransactions(batch3);
 
     var poh = Poh.init(.ZEROES, 20, 0);
 
@@ -215,8 +213,8 @@ test Poh {
     defer for (entries) |entry| entry.deinit(allocator);
 
     try std.testing.expectEqual(7, entries.len);
-    try std.testing.expect(try sig.core.entry.verifyPoh(entries, allocator, .ZEROES, .{}));
+    try std.testing.expect(verifyPoh(entries, .ZEROES));
 
     entries[1].hash = .ZEROES;
-    try std.testing.expect(!try sig.core.entry.verifyPoh(entries, allocator, .ZEROES, .{}));
+    try std.testing.expect(!verifyPoh(entries, .ZEROES));
 }
