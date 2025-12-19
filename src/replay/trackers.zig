@@ -438,6 +438,10 @@ pub const EpochTracker = struct {
         epochs.deinit(allocator);
     }
 
+    pub fn get(self: *const EpochTracker, epoch: Epoch) ?EpochConstants {
+        return self.epochs.get(epoch);
+    }
+
     pub fn getForSlot(self: *const EpochTracker, slot: Slot) ?EpochConstants {
         return self.epochs.get(self.schedule.getEpoch(slot));
     }
@@ -445,6 +449,21 @@ pub const EpochTracker = struct {
     /// lifetime ends as soon as the map is modified
     pub fn getPtrForSlot(self: *const EpochTracker, slot: Slot) ?*const EpochConstants {
         return self.epochs.getPtr(self.schedule.getEpoch(slot));
+    }
+
+    // lifetime ends as soon as the map is modified
+    pub fn getMutablePtrForSlot(self: *EpochTracker, slot: Slot) ?*EpochConstants {
+        return self.epochs.getPtr(self.schedule.getEpoch(slot));
+    }
+
+    pub fn put(
+        self: *EpochTracker,
+        allocator: Allocator,
+        epoch: Epoch,
+        epoch_constants: EpochConstants,
+    ) Allocator.Error!void {
+        try self.epochs.ensureUnusedCapacity(allocator, 1);
+        self.epochs.putAssumeCapacity(epoch, epoch_constants);
     }
 };
 
@@ -457,10 +476,10 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
         .collector_id = .ZEROES,
         .max_tick_height = 0,
         .fee_rate_governor = .DEFAULT,
-        .epoch_reward_status = .inactive,
         .ancestors = .{ .ancestors = .empty },
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .empty,
+        .inflation = .DEFAULT,
     };
 }
 

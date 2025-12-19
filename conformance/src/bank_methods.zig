@@ -1,7 +1,7 @@
 const sig = @import("sig");
 const std = @import("std");
 
-const builtins = @import("builtins.zig");
+const builtin_programs = sig.runtime.builtin_programs;
 
 const Allocator = std.mem.Allocator;
 
@@ -39,7 +39,7 @@ pub fn applyFeatureActivations(
         allow_new_activations,
     );
 
-    var iterator = new_feature_activations.iterator(slot);
+    var iterator = new_feature_activations.iterator(slot, .active);
     while (iterator.next()) |feature| {
         const feature_id: Pubkey = features.map.get(feature).key;
         const db_account =
@@ -64,7 +64,7 @@ pub fn applyFeatureActivations(
     if (new_feature_activations.active(.pico_inflation, slot))
         return error.PicoInflationActivationNotImplemented;
 
-    if (feature_set.fullInflationFeatures(slot).enabled(new_feature_activations, slot)) {
+    if (feature_set.fullInflationFeaturesEnabled(slot, &new_feature_activations)) {
         return error.FullInflationActivationNotImplemented;
     }
 
@@ -117,7 +117,7 @@ fn applyBuiltinProgramFeatureTransitions(
     new_feature_activations: *const FeatureSet,
     allow_new_activations: bool,
 ) !void {
-    for (builtins.BUILTINS) |builtin_program| {
+    for (builtin_programs.BUILTINS) |builtin_program| {
         var is_core_bpf = false;
         if (builtin_program.core_bpf_migration_config) |core_bpf_config| {
             if (new_feature_activations.active(core_bpf_config.enable_feature_id, slot)) {
@@ -162,7 +162,7 @@ fn applyBuiltinProgramFeatureTransitions(
         }
     }
 
-    for (builtins.STATELESS_BUILTINS) |builtin_program| {
+    for (builtin_programs.STATELESS_BUILTINS) |builtin_program| {
         const core_bpf_config = builtin_program.core_bpf_migration_config orelse continue;
         if (new_feature_activations.active(core_bpf_config.enable_feature_id, 0)) {
             try migrateBuiltinProgramToCoreBpf();
@@ -217,7 +217,7 @@ fn computeActiveFeatureSet(
     // var inactive = sig.utils.collections.PubkeyMap(void){};
     var pending: FeatureSet = .ALL_DISABLED;
 
-    var iterator = feature_set.iterator(slot);
+    var iterator = feature_set.iterator(slot, .inactive);
     while (iterator.next()) |feature| {
         const feature_id: Pubkey = features.map.get(feature).key;
         var maybe_activation_slot: ?u64 = null;
@@ -227,7 +227,7 @@ fn computeActiveFeatureSet(
             if (try featureActivationSlotFromAccount(allocator, account)) |activation_slot| {
                 maybe_activation_slot = activation_slot;
             } else if (allow_new_activations) {
-                pending.setSlot(feature, 0);
+                pending.setSlot(feature, slot);
                 maybe_activation_slot = slot;
             }
         }
