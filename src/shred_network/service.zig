@@ -88,12 +88,7 @@ pub fn start(
 
     // tracker (shared state, internal to Shred Network)
     const shred_tracker = try arena.create(BasicShredTracker);
-    shred_tracker.* = try BasicShredTracker.init(
-        deps.allocator,
-        conf.root_slot + 1,
-        .from(deps.logger),
-        deps.registry,
-    );
+    try shred_tracker.init(deps.allocator, conf.root_slot + 1, .from(deps.logger), deps.registry);
     try defers.deferCall(BasicShredTracker.deinit, .{shred_tracker});
 
     // channels (cant use arena as they need to alloc/free frequently &

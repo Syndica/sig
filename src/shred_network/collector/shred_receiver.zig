@@ -297,12 +297,9 @@ test "handleBatch/handlePacket" {
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
 
-    var shred_tracker = try sig.shred_network.shred_tracker.BasicShredTracker.init(
-        allocator,
-        root_slot + 1,
-        .noop,
-        &registry,
-    );
+    const shred_tracker = try allocator.create(BasicShredTracker);
+    defer allocator.destroy(shred_tracker);
+    try shred_tracker.init(allocator, root_slot + 1, .noop, &registry);
     defer shred_tracker.deinit();
 
     var exit = Atomic(bool).init(false);
@@ -317,7 +314,7 @@ test "handleBatch/handlePacket" {
         .root_slot = root_slot,
         .maybe_retransmit_shred_sender = null,
         .leader_schedule = epoch_ctx.slotLeaders(),
-        .tracker = &shred_tracker,
+        .tracker = shred_tracker,
         .inserter = ledger.shredInserter(),
     });
     defer shred_receiver.deinit(allocator);
