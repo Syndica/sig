@@ -470,15 +470,21 @@ pub fn newSlotFromParent(
 /// Analogous to [compute_active_feature_set](https://github.com/anza-xyz/agave/blob/785455b5a3e2d8a95f878d6c80d5361dea9256db/runtime/src/bank.rs#L5338-L5339)
 // TODO: epoch boundary - handle feature activations
 pub fn getActiveFeatures(
-    allocator: Allocator,
+    gpa: Allocator,
     account_reader: sig.accounts_db.SlotAccountReader,
     slot: Slot,
 ) !sig.core.FeatureSet {
     const zone = tracy.Zone.init(@src(), .{ .name = "getActiveFeatures" });
     defer zone.deinit();
 
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
     var features: sig.core.FeatureSet = .ALL_DISABLED;
     for (0..sig.core.features.NUM_FEATURES) |i| {
+        defer _ = arena.reset(.retain_capacity);
+
         const possible_feature: sig.core.features.Feature = @enumFromInt(i);
         const possible_feature_pubkey = sig.core.features.map.get(possible_feature).key;
 
