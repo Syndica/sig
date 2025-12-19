@@ -1063,9 +1063,14 @@ pub const ForkChoice = struct {
         var update_operations: UpdateOperations = .empty;
         errdefer update_operations.deinit(allocator);
 
-        var observed_pubkeys: sig.utils.collections.PubkeyMap(Slot) = .empty;
-        defer observed_pubkeys.deinit(allocator);
-        try observed_pubkeys.ensureUnusedCapacity(allocator, pubkey_votes.len);
+        // Check for duplicate pubkeys in the same batch.
+        for (pubkey_votes, 0..) |current, i| {
+            for (pubkey_votes[i + 1 ..]) |next| {
+                if (current.pubkey.equals(&next.pubkey)) {
+                    return error.MultipleVotesForPubKey;
+                }
+            }
+        }
 
         try self.latest_votes.ensureUnusedCapacity(allocator, @intCast(pubkey_votes.len));
         for (pubkey_votes) |pubkey_vote| {
@@ -1079,10 +1084,6 @@ pub const ForkChoice = struct {
                 // because the root represents finalized consensus.
                 continue;
             }
-
-            // Check for duplicate pubkeys in the same batch
-            if (observed_pubkeys.contains(pubkey)) return error.MultipleVotesForPubKey;
-            observed_pubkeys.putAssumeCapacity(pubkey, new_vote_slot);
 
             // Single lookup that handles both existing and new entries
             const entry = try self.latest_votes.getOrPut(allocator, pubkey);
@@ -1105,7 +1106,7 @@ pub const ForkChoice = struct {
                 }
 
                 const epoch = epoch_schedule.getEpoch(old_latest_vote_slot);
-                const stake_update = stake_update: {
+                const stake_update: u64 = stake_update: {
                     const stakes = epoch_stakes.get(epoch) orelse
                         break :stake_update 0;
                     const stake_and_vote_account =
@@ -1533,13 +1534,10 @@ pub const ForkChoice = struct {
     ) !void {
         const root = self.tree_root.slot;
 
-        var new_votes = std.ArrayListUnmanaged(PubkeyVote).empty;
+        var new_votes: std.ArrayListUnmanaged(PubkeyVote) = .empty;
         defer new_votes.deinit(allocator);
 
-        const dirty_votest = try latest_validator_votes.takeVotesDirtySet(
-            allocator,
-            root,
-        );
+        const dirty_votest = try latest_validator_votes.takeVotesDirtySet(allocator, root);
         defer allocator.free(dirty_votest);
 
         try new_votes.ensureUnusedCapacity(allocator, dirty_votest.len);
