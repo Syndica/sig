@@ -87,7 +87,10 @@ pub const ReplaySlotFuture = struct {
             .arena = .init(allocator),
             .logger = logger,
             .entries = params.entries,
-            .poh_verifier = .{ .future = self },
+            .poh_verifier = .{
+                .future = self,
+                .initial_hash = params.last_entry,
+            },
             .txn_scheduler = .{
                 .future = self,
                 .transactions = params.transactions,
@@ -104,8 +107,8 @@ pub const ReplaySlotFuture = struct {
         wait_group.start();
         defer self.finish(); // if no tasks scheduled, this immediately completes the Future.
 
-        // Start poh verifier.
-        self.poh_verifier.start(params.last_entry) catch |e| return self.setError(e);
+        // Start poh verifier before txn scheduler so it runs while txn-sched builds dag.
+        self.poh_verifier.start() catch |e| return self.setError(e);
 
         // Start transaction scheduler.
         self.txn_scheduler.start() catch |e| return self.setError(e);
@@ -172,6 +175,7 @@ pub const ReplaySlotFuture = struct {
 
 const PohVerifier = struct {
     future: *ReplaySlotFuture,
+    initial_hash: Hash,
     workers: std.ArrayListUnmanaged(Worker) = .{},
 
     const Error = Allocator.Error;
@@ -183,7 +187,7 @@ const PohVerifier = struct {
         self.workers.deinit(allocator);
     }
 
-    fn start(self: *PohVerifier, last_entry: Hash) Error!void {
+    fn start(self: *PohVerifier) Error!void {
         const future = self.future;
         const entries = future.entries;
         const allocator = self.future.arena.allocator();
@@ -191,41 +195,11 @@ const PohVerifier = struct {
         var task_batch = ThreadPool.Batch{};
         defer future.schedule(task_batch);
 
-        var total_hashes: u64 = 0;
-        for (entries) |entry| total_hashes += entry.num_hashes;
-
-        const num_workers = @min(future.thread_pool.max_threads, entries.len);
-        const per_worker_target = @max(1, total_hashes / num_workers);
-
-        var begin: usize = 0;
-        var num_hashes: usize = 0;
-        var initial_hash = last_entry;
-
-        try self.workers.ensureUnusedCapacity(allocator, num_workers + 1); // +1 for div rounding
-        for (entries, 0..) |entry, i| {
-            num_hashes += entry.num_hashes;
-            if (num_hashes >= per_worker_target) {
-                const worker = self.workers.addOneAssumeCapacity();
-                worker.* = .{
-                    .future = self.future,
-                    .entries = entries[begin .. i + 1],
-                    .initial_hash = initial_hash,
-                };
-                task_batch.push(.from(&worker.task));
-
-                begin = i + 1;
-                num_hashes = 0;
-                initial_hash = entry.hash;
-            }
-        }
-
-        if (num_hashes > 0) {
+        try self.workers.ensureTotalCapacity(allocator, entries.len);
+        for (entries) |_| {
+            const index: u32 = @intCast(self.workers.items.len);
             const worker = self.workers.addOneAssumeCapacity();
-            worker.* = .{
-                .future = self.future,
-                .entries = entries[begin..],
-                .initial_hash = initial_hash,
-            };
+            worker.* = .{ .future = future, .index = index };
             task_batch.push(.from(&worker.task));
         }
     }
@@ -233,8 +207,7 @@ const PohVerifier = struct {
     const Worker = struct {
         task: ThreadPool.Task = .{ .callback = run },
         future: *ReplaySlotFuture,
-        entries: []const Entry,
-        initial_hash: Hash,
+        index: u32,
 
         fn run(task: *ThreadPool.Task) void {
             const zone = tracy.Zone.init(@src(), .{ .name = "replayVerify" });
@@ -243,10 +216,15 @@ const PohVerifier = struct {
             const self: *Worker = @alignCast(@fieldParentPtr("task", task));
             defer self.future.finish();
 
+            const initial_hash = switch (self.index) {
+                0 => self.future.poh_verifier.initial_hash,
+                else => self.future.entries[self.index - 1].hash,
+            };
+
             const success = verifyPoh(
-                self.entries,
+                @as(*const [1]Entry, &self.future.entries[self.index]),
                 self.future.allocator, // cant use future's arena here as its multi-threaded.
-                self.initial_hash,
+                initial_hash,
                 .{ .exit = &self.future.exit },
             ) catch |e| switch (e) {
                 error.Exit => return,
