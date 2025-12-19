@@ -125,6 +125,9 @@ pub const SvmGateway = struct {
     }
 
     pub fn deinit(self: *const SvmGateway, allocator: Allocator) void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "SvmGateway.deinit" });
+        defer zone.deinit();
+
         var bhq = self.state.blockhash_queue;
         bhq.unlock();
 
