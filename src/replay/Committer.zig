@@ -54,12 +54,14 @@ pub fn commitTransactions(
     var transaction_fees: u64 = 0;
     var priority_fees: u64 = 0;
 
-    for (transactions, tx_results) |transaction, result| {
-        const message_hash, const tx_result = result;
+    for (transactions, tx_results) |transaction, *result| {
+        const message_hash = &result.@"0";
+        const tx_result = &result.@"1";
+
         signature_count += transaction.transaction.signatures.len;
 
-        for (tx_result.writes.slice()) |account| {
-            try accounts_to_store.put(allocator, account.pubkey, account);
+        for (tx_result.writes.constSlice()) |*account| {
+            try accounts_to_store.put(allocator, account.pubkey, account.*);
         }
         transaction_fees += tx_result.fees.transaction_fee;
         priority_fees += tx_result.fees.prioritization_fee;
