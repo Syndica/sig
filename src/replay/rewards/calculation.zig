@@ -26,14 +26,12 @@ const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 
 const PreviousEpochInflationRewards = sig.replay.rewards.PreviousEpochInflationRewards;
-const ValidatorRewards = sig.replay.rewards.ValidatorRewards;
 const VoteRewards = sig.replay.rewards.VoteRewards;
 const StakeRewards = sig.replay.rewards.StakeRewards;
 const PointValue = sig.replay.rewards.inflation_rewards.PointValue;
 const PartitionedStakeReward = sig.replay.rewards.PartitionedStakeReward;
 const PartitionedStakeRewards = sig.replay.rewards.PartitionedStakeRewards;
 const PartitionedVoteReward = sig.replay.rewards.PartitionedVoteReward;
-const RewardsForPartitioning = sig.replay.rewards.RewardsForPartitioning;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 
 const redeemRewards = sig.replay.rewards.inflation_rewards.redeemRewards;
@@ -100,10 +98,11 @@ pub fn beginPartitionedRewards(
         epoch_schedule,
     );
 
-    slot_state.reward_status = .{ .active = .{ .calculating = .{
+    slot_state.reward_status = .{ .active = .{
         .distribution_start_block_height = distribution_starting_blockheight,
         .all_stake_rewards = stake_rewards,
-    } } };
+        .partitioned_indices = null,
+    } };
 
     const blockhash_queue, var blockhash_queue_lg = slot_state.blockhash_queue.readWithLock();
     defer blockhash_queue_lg.unlock();
@@ -270,6 +269,21 @@ fn storeVoteAccountsPartitioned(
     }
 }
 
+const RewardsForPartitioning = struct {
+    vote_rewards: VoteRewards,
+    stake_rewards: StakeRewards,
+    point_value: PointValue,
+    validator_rate: f64,
+    foundation_rate: f64,
+    previous_epoch_duration_in_years: f64,
+    capitalization: u64,
+
+    pub fn deinit(self: *RewardsForPartitioning, allocator: Allocator) void {
+        self.vote_rewards.deinit(allocator);
+        self.stake_rewards.deinit(allocator);
+    }
+};
+
 fn calculateRewardsForPartitioning(
     allocator: Allocator,
     slot: Slot,
@@ -317,6 +331,29 @@ fn calculateRewardsForPartitioning(
         .capitalization = previous_epoch_capitalization,
     };
 }
+
+const ValidatorRewards = struct {
+    vote_rewards: VoteRewards,
+    stake_rewards: StakeRewards,
+    point_value: PointValue,
+
+    pub fn initEmpty(allocator: Allocator) Allocator.Error!ValidatorRewards {
+        const vote_rewards = try VoteRewards.initEmpty(allocator);
+        errdefer vote_rewards.deinit(allocator);
+        const stake_rewards = try StakeRewards.initEmpty(allocator);
+        errdefer stake_rewards.deinit(allocator);
+        return .{
+            .vote_rewards = vote_rewards,
+            .stake_rewards = stake_rewards,
+            .point_value = .ZERO,
+        };
+    }
+
+    pub fn deinit(self: ValidatorRewards, allocator: std.mem.Allocator) void {
+        self.vote_rewards.deinit(allocator);
+        self.stake_rewards.deinit(allocator);
+    }
+};
 
 fn calculateValidatorRewards(
     allocator: Allocator,
@@ -567,47 +604,6 @@ fn calculatePreviousEpochInflationRewards(
         .foundation_rate = foundation_rate,
     };
 }
-
-pub const TestEnvironment = struct {
-    slot: Slot,
-    slot_constants: SlotConstants,
-    slot_state: SlotState,
-    epoch_tracker: EpochTracker,
-
-    pub fn deinit(self: *TestEnvironment, allocator: Allocator) void {
-        self.slot_constants.deinit(allocator);
-        self.slot_state.deinit(allocator);
-        self.epoch_tracker.deinit(allocator);
-        self.account_map.deinit();
-    }
-
-    pub fn genesis(
-        allocator: Allocator,
-    ) !TestEnvironment {
-        var epoch_tracker = EpochTracker{
-            .epochs = .empty,
-            .schedule = EpochSchedule.INIT,
-        };
-        errdefer epoch_tracker.deinit(allocator);
-        try epoch_tracker.put(
-            allocator,
-            0,
-            .genesis(sig.core.GenesisConfig.default(allocator)),
-        );
-        return .{
-            .slot = 0,
-            .slot_constants = try SlotConstants.genesis(allocator, sig.core.FeeRateGovernor.DEFAULT),
-            .slot_state = SlotState.GENESIS,
-            .epoch_tracker = epoch_tracker,
-        };
-    }
-
-    pub fn epochVoteAccounts(self: *const TestEnvironment, epoch: Epoch) !VoteAccounts {
-        const epoch_info = self.epoch_tracker.get(epoch) orelse
-            return error.NoEpochConstants;
-        return epoch_info.stakes.stakes.vote_accounts;
-    }
-};
 
 fn newVoteAccountForTest(
     allocator: Allocator,
