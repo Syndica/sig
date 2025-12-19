@@ -140,9 +140,8 @@ fn processNextInstruction(
             return InstructionError.UnsupportedProgramId;
         defer program_account.release();
 
-        const program_key = program_account.pubkey.base58String().constSlice();
         if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner) or
-            program.PRECOMPILE_ENTRYPOINTS.get(program_key) != null)
+            program.PRECOMPILE_ENTRYPOINTS.get(&program_account.pubkey) != null)
             break :blk .{ program_account.pubkey, program_account.pubkey };
 
         const owner_id = program_account.account.owner;
@@ -156,12 +155,10 @@ fn processNextInstruction(
     };
 
     const maybe_precompile_fn =
-        program.PRECOMPILE_ENTRYPOINTS.get(native_program_id.base58String().slice());
+        program.PRECOMPILE_ENTRYPOINTS.get(&native_program_id);
 
     const maybe_native_program_fn = maybe_precompile_fn orelse blk: {
-        const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
-            native_program_id.base58String().slice(),
-        );
+        const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(&native_program_id);
         ic.tc.return_data.data.len = 0;
         break :blk native_program_fn;
     };
