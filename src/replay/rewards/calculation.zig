@@ -482,7 +482,10 @@ fn calculateStakeVoteRewards(
             &point_value,
             stake_history,
             new_warmup_and_cooldown_rate_epoch,
-        ) catch continue;
+        ) catch |e| switch (e) {
+            error.NoCreditsToRedeem => continue,
+            else => return e,
+        };
 
         const commission = vote_account.state.commission;
 

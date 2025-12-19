@@ -276,9 +276,12 @@ fn applyBuiltinProgramFeatureTransitions(
                     builtin_program.program_id,
                     core_bpf_config,
                     .builtin,
-                ) catch {
-                    // Failed to migrate
-                    is_core_bpf = false;
+                ) catch |e| switch (e) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => {
+                        // Failed to migrate
+                        is_core_bpf = false;
+                    },
                 };
             } else {
                 if (try slot_store.reader().get(allocator, builtin_program.program_id)) |account| {
@@ -309,7 +312,7 @@ fn applyBuiltinProgramFeatureTransitions(
     // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L5526-L5540
     for (builtin_programs.STATELESS_BUILTINS) |builtin_program| {
         const core_bpf_config = builtin_program.core_bpf_migration_config orelse continue;
-        if (new_feature_activations.active(core_bpf_config.enable_feature_id, 0)) {
+        if (new_feature_activations.active(core_bpf_config.enable_feature_id, slot)) {
             migrateBuiltinProgramToCoreBpf(
                 allocator,
                 slot,
@@ -320,9 +323,9 @@ fn applyBuiltinProgramFeatureTransitions(
                 builtin_program.program_id,
                 core_bpf_config,
                 .stateless_builtin,
-            ) catch {
-                // Failed to migrate
-                return;
+            ) catch |e| switch (e) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return, // Failed to migrate
             };
         }
     }
@@ -352,15 +355,15 @@ fn migrateBuiltinProgramToCoreBpf(
     const target = .{
         .program_account = switch (migration_type) {
             .builtin => blk: {
-                const account = (slot_store.reader()
-                    .get(allocator, builtin_program_id) catch null) orelse
+                const account = (try slot_store.reader()
+                    .get(allocator, builtin_program_id)) orelse
                     return error.AccountNotFound;
                 if (!account.owner.equals(&sig.runtime.ids.NATIVE_LOADER_ID))
                     return error.IncorrectOwner;
                 break :blk account;
             },
             .stateless_builtin => blk: {
-                if ((slot_store.reader().get(allocator, builtin_program_id) catch null) != null)
+                if ((try slot_store.reader().get(allocator, builtin_program_id)) != null)
                     return error.AccountExists;
                 break :blk null;
             },
@@ -371,7 +374,7 @@ fn migrateBuiltinProgramToCoreBpf(
                 program.bpf_loader.v3.ID,
             ) orelse unreachable; // agave/solana-address-1.0.0 panics on this case.
 
-            if ((slot_store.reader().get(allocator, program_data_address) catch null) != null) {
+            if ((try slot_store.reader().get(allocator, program_data_address)) != null) {
                 return error.ProgramHasDataAccount;
             }
             break :blk program_data_address;
@@ -379,10 +382,10 @@ fn migrateBuiltinProgramToCoreBpf(
     };
 
     const source = blk: {
-        const buffer_account = (slot_store.reader().get(
+        const buffer_account = (try slot_store.reader().get(
             allocator,
             migration_config.source_buffer_address,
-        ) catch null) orelse return error.AccountNotFound;
+        )) orelse return error.AccountNotFound;
 
         if (!buffer_account.owner.equals(&loader_v3.ID))
             return error.IncorrectOwner;
