@@ -177,6 +177,9 @@ pub const SlotConstants = struct {
 /// Contains the intersection of data from agave's Bank and firedancer's
 /// fd_slot_bank, excluding data that is constant during a slot.
 ///
+/// Contains reference counted data in the reward_status. Beware of races cause by
+/// acquisition and deinitialization across threads.
+///
 /// [Bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank.rs#L744)
 /// [fd_slot_bank](https://github.com/firedancer-io/firedancer/blob/9a18101ee6e1094f27c7fb81da9ef3a7b9efb18b/src/flamenco/types/fd_types.h#L2270)
 pub const SlotState = struct {
@@ -215,6 +218,7 @@ pub const SlotState = struct {
     collected_priority_fees: Atomic(u64),
 
     /// Reward status, use to track reward distributions for N slots after an epoch boundary
+    /// Contains reference counted partitioned rewards and partitioned indices.
     reward_status: EpochRewardStatus,
 
     pub fn deinit(self: *SlotState, allocator: Allocator) void {
