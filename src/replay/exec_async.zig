@@ -242,20 +242,9 @@ const PohVerifier = struct {
 
             const self: *Worker = @alignCast(@fieldParentPtr("task", task));
             defer self.future.finish();
+            if (self.future.exit.load(.acquire)) return;
 
-            const success = verifyPoh(
-                self.entries,
-                self.future.allocator, // cant use future's arena here as its multi-threaded.
-                self.initial_hash,
-                .{ .exit = &self.future.exit },
-            ) catch |e| switch (e) {
-                error.Exit => return,
-                error.OutOfMemory => {
-                    self.future.logger.err().log("poh verification failed with OutOfMemory");
-                    self.future.setError(error.OutOfMemory);
-                    return;
-                },
-            };
+            const success = verifyPoh(self.entries, self.initial_hash);
 
             if (!success) {
                 self.future.logger.err().log("poh verification failed");
