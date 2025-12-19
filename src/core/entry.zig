@@ -69,9 +69,7 @@ pub fn verifyTickHashCount(
     hashes_per_tick: u64,
 ) bool {
     // When hashes_per_tick is 0, hashing is disabled.
-    if (hashes_per_tick == 0) {
-        return true;
-    }
+    if (hashes_per_tick == 0) return true;
 
     for (entries) |entry| {
         tick_hash_count.* = tick_hash_count.* +| entry.num_hashes;
@@ -92,18 +90,7 @@ pub fn verifyTickHashCount(
 }
 
 /// Simple PoH validation that validates the hash of every entry in sequence.
-pub fn verifyPoh(
-    entries: []const Entry,
-    allocator: Allocator,
-    initial_hash: Hash,
-    /// Items you may include to optimize this function.
-    optional: struct {
-        /// Recycle a list from a prior execution to avoid unnecessary allocations.
-        preallocated_nodes: ?*std.ArrayListUnmanaged(Hash) = null,
-        /// return error.Exit when set to true by another thread.
-        exit: ?*const std.atomic.Value(bool) = null,
-    },
-) (Allocator.Error || error{Exit})!bool {
+pub fn verifyPoh(entries: []const Entry, seed: Hash) bool {
     const zone = tracy.Zone.init(@src(), .{ .name = "verifyPoh" });
     defer zone.deinit();
 
@@ -111,25 +98,16 @@ pub fn verifyPoh(
     for (entries) |entry| total_entry_hashes += entry.num_hashes;
     zone.value(total_entry_hashes);
 
-    var current_hash = initial_hash;
-
+    var current_hash = seed;
     for (entries) |entry| {
-        if (optional.exit) |exit| if (exit.load(.monotonic)) return error.Exit;
         if (entry.num_hashes == 0) continue;
 
-        for (1..entry.num_hashes) |_| {
-            current_hash = Hash.init(&current_hash.data);
-        }
-
+        const count = (entry.num_hashes - 1) + @intFromBool(entry.transactions.len == 0);
+        if (count != 0) Hash.hashRepeated(&current_hash, &current_hash, count);
         if (entry.transactions.len > 0) {
-            const mixin = try hashTransactions(
-                allocator,
-                optional.preallocated_nodes,
-                entry.transactions,
-            );
+            const mixin = hashTransactions(entry.transactions);
             current_hash = current_hash.extend(&mixin.data);
-        } else current_hash = Hash.init(&current_hash.data);
-
+        }
         if (!current_hash.eql(entry.hash)) return false;
     }
 
@@ -146,58 +124,55 @@ pub fn verifyPoh(
 /// Based on these agave functions for conformance:
 /// - [hash_transactions](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/entry/src/entry.rs#L215)
 /// - [MerkleTree::new](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/merkle-tree/src/merkle_tree.rs#L98)
-pub fn hashTransactions(
-    allocator: std.mem.Allocator,
-    preallocated_nodes: ?*std.ArrayListUnmanaged(Hash),
-    transactions: []const Transaction,
-) Allocator.Error!Hash {
-    const LEAF_PREFIX: []const u8 = &.{0};
-    const INTERMEDIATE_PREFIX: []const u8 = &.{1};
+///
+/// [agave](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/entry/src/entry.rs#L215)
+pub fn hashTransactions(transactions: []const Transaction) Hash {
+    const LEAF_PREFIX = &sig.ledger.shred.MERKLE_HASH_PREFIX_LEAF[0];
+    const INTERMEDIATE_PREFIX = &sig.ledger.shred.MERKLE_HASH_PREFIX_NODE[0];
 
-    var num_signatures: usize = 0;
+    var num_signatures: u64 = 0;
     for (transactions) |tx| num_signatures += tx.signatures.len;
-    if (num_signatures == 0) return Hash.ZEROES;
+    if (num_signatures == 0) return .ZEROES;
 
-    var owned_nodes = std.ArrayListUnmanaged(Hash){};
-    defer owned_nodes.deinit(allocator);
-    const nodes = if (preallocated_nodes) |pn| pn else &owned_nodes;
-    const capacity = std.math.log2(num_signatures) + 2 * num_signatures + 1;
-    nodes.clearRetainingCapacity();
-    try nodes.ensureTotalCapacity(allocator, capacity);
+    // NOTE: The Firedancer code is currently designed around never having more
+    // than 30 transactions in a microblock, and pretty much always puts one
+    // transaction per entry. The Agave code used to batch, however has also
+    // switched to one transaction per entry recently.
+    //
+    // 1_000 txns per entry is 32kb, which is a fine amount of stack space to use.
+    // TODO: we should investigate what the true limit here is, perhaps switching
+    // to a slower but less space intensive algorithm if we're hit with strange
+    // entries containing tons of transactions.
+    const MAX_TXNS_PER_ENTRY = 1_000;
+    var nodes: [MAX_TXNS_PER_ENTRY]Hash = undefined;
+    var nodes_len: usize = 0;
 
     for (transactions) |tx| for (tx.signatures) |signature| {
-        const hash = Hash.initMany(&.{ LEAF_PREFIX, &signature.toBytes() });
-        nodes.appendAssumeCapacity(hash);
+        nodes[nodes_len] = Hash.initMany(&.{ LEAF_PREFIX[0..1], &signature.toBytes() });
+        nodes_len += 1;
     };
 
-    var level_len = nextLevelLen(num_signatures);
-    var level_start = num_signatures;
-    var prev_level_len = num_signatures;
-    var prev_level_start: usize = 0;
-    while (level_len > 0) {
-        for (0..level_len) |i| {
-            const prev_level_idx = 2 * i;
-            const lsib = &nodes.items[prev_level_start + prev_level_idx];
-            const rsib = if (prev_level_idx + 1 < prev_level_len)
-                &nodes.items[prev_level_start + prev_level_idx + 1]
-            else
-                // Duplicate last entry if the level length is odd
-                &nodes.items[prev_level_start + prev_level_idx];
+    var level_start: u64 = 0;
+    var level_length = nodes_len;
+    while (level_length > 1) {
+        const next_length = (level_length + 1) / 2;
+        const next_start = nodes_len;
 
-            const hash = Hash.initMany(&.{ INTERMEDIATE_PREFIX, &lsib.data, &rsib.data });
-            nodes.appendAssumeCapacity(hash);
+        for (0..next_length) |i| {
+            const index = level_start + 2 * i;
+            const lhs = &nodes[index];
+            // duplicate last if odd
+            const rhs = if (2 * i + 1 < level_length) &nodes[index + 1] else lhs;
+
+            nodes[nodes_len] = Hash.initMany(&.{ INTERMEDIATE_PREFIX[0..1], &lhs.data, &rhs.data });
+            nodes_len += 1;
         }
-        prev_level_start = level_start;
-        prev_level_len = level_len;
-        level_start += level_len;
-        level_len = nextLevelLen(level_len);
+
+        level_start = next_start;
+        level_length = next_length;
     }
 
-    return nodes.getLast();
-}
-
-fn nextLevelLen(level_len: usize) usize {
-    return if (level_len == 1) 0 else (level_len + 1) / 2;
+    return nodes[nodes_len - 1];
 }
 
 test "Entry serialization and deserialization" {
@@ -314,13 +289,13 @@ test hashTransactions {
 
     try std.testing.expectEqual(
         Hash.parse("2Gd4Mp8gCqSNCbmZXZVhrEo5A9qLM9BrmiWwzvvsLH4A"),
-        hashTransactions(std.testing.allocator, null, &transactions),
+        hashTransactions(&transactions),
     );
 
     std.mem.swap(Transaction, &transactions[0], &transactions[1]);
 
     try std.testing.expectEqual(
         Hash.parse("4yK3bxwdLmPQjDiLRH1XYZeYjXhuTmf8HUTYXMwwTcrJ"),
-        hashTransactions(std.testing.allocator, null, &transactions),
+        hashTransactions(&transactions),
     );
 }

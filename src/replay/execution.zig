@@ -216,7 +216,7 @@ pub fn replaySlotSync(
         return .{ .invalid_block = block_error };
     }
 
-    if (!try verifyPoh(params.entries, allocator, params.last_entry, .{})) {
+    if (!verifyPoh(params.entries, params.last_entry)) {
         return .{ .invalid_block = .InvalidEntryHash };
     }
 
@@ -225,10 +225,10 @@ pub fn replaySlotSync(
         .relax_intrabatch_account_locks,
         svm_gateway.params.slot,
     )) {
-        var locks = sig.replay.AccountLocks{};
+        var locks: sig.replay.AccountLocks = .{};
         defer locks.deinit(allocator);
 
-        var accounts = std.ArrayListUnmanaged(sig.replay.AccountLocks.LockableAccount){};
+        var accounts: std.ArrayListUnmanaged(sig.replay.AccountLocks.LockableAccount) = .{};
         defer accounts.deinit(allocator);
 
         var i: usize = 0;

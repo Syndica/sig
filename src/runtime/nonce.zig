@@ -96,16 +96,13 @@ pub const Data = struct {
 };
 
 pub fn initDurableNonceFromHash(blockhash: Hash) Hash {
-    return .initMany(&.{
-        DURABLE_NONCE_HASH_PREFIX,
-        &blockhash.data,
-    });
+    return .initMany(&.{ DURABLE_NONCE_HASH_PREFIX, &blockhash.data });
 }
 
 test "verify_durable_nonce" {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    const blockhash = Hash{ .data = [_]u8{171} ** 32 };
+    const blockhash: Hash = .{ .data = @splat(171) };
 
     {
         const versions = Versions{ .legacy = .uninitialized };
@@ -155,7 +152,7 @@ test "upgrade_nonce_version" {
     }
 
     {
-        const blockhash = Hash{ .data = [_]u8{171} ** 32 };
+        const blockhash: Hash = .{ .data = @splat(171) };
 
         const initial_durable_nonce = initDurableNonceFromHash(blockhash);
         const initial_data = Data{
