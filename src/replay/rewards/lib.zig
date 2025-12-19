@@ -15,8 +15,6 @@ pub const distribution = @import("distribution.zig");
 pub const inflation_rewards = @import("inflation_rewards.zig");
 pub const EpochRewardsHasher = @import("EpochRewardsHasher.zig");
 
-const PointValue = inflation_rewards.PointValue;
-
 pub const REWARD_CALCULATION_NUM_BLOCKS: u64 = 1;
 
 pub const RewardType = enum {
@@ -180,29 +178,6 @@ pub const VoteRewards = struct {
     }
 };
 
-pub const ValidatorRewards = struct {
-    vote_rewards: VoteRewards,
-    stake_rewards: StakeRewards,
-    point_value: PointValue,
-
-    pub fn initEmpty(allocator: Allocator) Allocator.Error!ValidatorRewards {
-        const vote_rewards = try VoteRewards.initEmpty(allocator);
-        errdefer vote_rewards.deinit(allocator);
-        const stake_rewards = try StakeRewards.initEmpty(allocator);
-        errdefer stake_rewards.deinit(allocator);
-        return .{
-            .vote_rewards = vote_rewards,
-            .stake_rewards = stake_rewards,
-            .point_value = .ZERO,
-        };
-    }
-
-    pub fn deinit(self: ValidatorRewards, allocator: std.mem.Allocator) void {
-        self.vote_rewards.deinit(allocator);
-        self.stake_rewards.deinit(allocator);
-    }
-};
-
 pub const PreviousEpochInflationRewards = struct {
     validator_rewards: u64,
     previous_epoch_duration_in_years: f64,
@@ -210,89 +185,34 @@ pub const PreviousEpochInflationRewards = struct {
     foundation_rate: f64,
 };
 
-pub const RewardsForPartitioning = struct {
-    vote_rewards: VoteRewards,
-    stake_rewards: StakeRewards,
-    point_value: PointValue,
-    validator_rate: f64,
-    foundation_rate: f64,
-    previous_epoch_duration_in_years: f64,
-    capitalization: u64,
-
-    pub fn deinit(self: *RewardsForPartitioning, allocator: Allocator) void {
-        self.vote_rewards.deinit(allocator);
-        self.stake_rewards.deinit(allocator);
-    }
-};
-
-pub const StartBlockHeightAndRewards = struct {
-    distribution_start_block_height: u64,
-    all_stake_rewards: PartitionedStakeRewards,
-
-    pub fn deinit(self: StartBlockHeightAndRewards, allocator: Allocator) void {
-        self.all_stake_rewards.deinit(allocator);
-    }
-
-    pub fn clone(self: StartBlockHeightAndRewards) StartBlockHeightAndRewards {
-        return .{
-            .distribution_start_block_height = self.distribution_start_block_height,
-            .all_stake_rewards = self.all_stake_rewards.getAcquire(),
-        };
-    }
-};
-
-pub const StartBlockHeightAndPartitionedRewards = struct {
-    distribution_start_block_height: u64,
-    all_stake_rewards: PartitionedStakeRewards,
-    partitioned_indices: PartitionedIndices,
-
-    pub fn deinit(self: StartBlockHeightAndPartitionedRewards, allocator: Allocator) void {
-        self.all_stake_rewards.deinit(allocator);
-        self.partitioned_indices.deinit(allocator);
-    }
-
-    pub fn clone(self: StartBlockHeightAndPartitionedRewards) StartBlockHeightAndPartitionedRewards {
-        return .{
-            .distribution_start_block_height = self.distribution_start_block_height,
-            .all_stake_rewards = self.all_stake_rewards.getAcquire(),
-            .partitioned_indices = self.partitioned_indices.getAcquire(),
-        };
-    }
-};
-
-pub const EpochRewardPhase = union(enum) {
-    calculating: StartBlockHeightAndRewards,
-    distributing: StartBlockHeightAndPartitionedRewards,
-
-    pub fn deinit(self: EpochRewardPhase, allocator: Allocator) void {
-        switch (self) {
-            .calculating => |s| s.deinit(allocator),
-            .distributing => |s| s.deinit(allocator),
-        }
-    }
-
-    pub fn clone(self: EpochRewardPhase) EpochRewardPhase {
-        return switch (self) {
-            .calculating => |s| .{ .calculating = s.clone() },
-            .distributing => |s| .{ .distributing = s.clone() },
-        };
-    }
-};
-
 pub const EpochRewardStatus = union(enum) {
-    active: EpochRewardPhase,
+    active: struct {
+        distribution_start_block_height: u64,
+        all_stake_rewards: PartitionedStakeRewards,
+        partitioned_indices: ?PartitionedIndices,
+    },
     inactive,
 
     pub fn deinit(self: EpochRewardStatus, allocator: Allocator) void {
         switch (self) {
-            .active => |phase| phase.deinit(allocator),
+            .active => |active| {
+                active.all_stake_rewards.deinit(allocator);
+                if (active.partitioned_indices) |pi| pi.deinit(allocator);
+            },
             .inactive => {},
         }
     }
 
     pub fn clone(self: EpochRewardStatus) EpochRewardStatus {
         return switch (self) {
-            .active => |phase| .{ .active = phase.clone() },
+            .active => |active| .{ .active = .{
+                .distribution_start_block_height = active.distribution_start_block_height,
+                .all_stake_rewards = active.all_stake_rewards.getAcquire(),
+                .partitioned_indices = if (active.partitioned_indices) |pi|
+                    pi.getAcquire()
+                else
+                    null,
+            } },
             .inactive => .inactive,
         };
     }
