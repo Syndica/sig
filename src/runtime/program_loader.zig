@@ -163,6 +163,7 @@ fn loadDeploymentSlotAndExecutableBytes(
 
         const program_data_account = try wrapDB(accounts.get(allocator, program_data_key)) orelse
             return null;
+        defer program_data_account.deinit(allocator);
 
         const meta_size = bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE;
         const account_len = program_data_account.data.len();
