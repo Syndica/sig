@@ -14,11 +14,9 @@ const StakeStateV2 = sig.runtime.program.stake.StakeStateV2;
 
 const SlotAccountStore = sig.accounts_db.SlotAccountStore;
 
-// const SlotAccountStore = sig.replay.slot_account_store.SlotAccountStore;
-
 const EpochRewardStatus = sig.replay.rewards.EpochRewardStatus;
-const StartBlockHeightAndPartitionedRewards =
-    sig.replay.rewards.StartBlockHeightAndPartitionedRewards;
+const PartitionedStakeRewards = sig.replay.rewards.PartitionedStakeRewards;
+const PartitionedIndices = sig.replay.rewards.PartitionedIndices;
 const StakeReward = sig.replay.rewards.StakeReward;
 
 const EpochRewards = sig.runtime.sysvar.EpochRewards;
@@ -39,67 +37,55 @@ pub fn distributePartitionedEpochRewards(
     rent: *const Rent,
     slot_store: SlotAccountStore,
 ) !void {
-    const reward_phase = switch (epoch_reward_status.*) {
-        .active => |phase| phase,
+    var stake_rewards = switch (epoch_reward_status.*) {
+        .active => |active| active,
         .inactive => return,
     };
 
-    const start_block_height = switch (reward_phase) {
-        .calculating => |calc| calc.distribution_start_block_height,
-        .distributing => |dist| dist.distribution_start_block_height,
-    };
-
-    if (block_height < start_block_height) {
+    if (block_height < stake_rewards.distribution_start_block_height) {
         return;
     }
 
-    switch (reward_phase) {
-        .calculating => |calc| {
-            const epoch_rewards_sysvar = try getSysvarFromAccount(
-                EpochRewards,
+    if (stake_rewards.partitioned_indices == null) {
+        const epoch_rewards_sysvar = try getSysvarFromAccount(
+            EpochRewards,
+            allocator,
+            slot_store.reader(),
+        ) orelse EpochRewards.INIT;
+
+        const partition_indices =
+            try sig.replay.rewards.EpochRewardsHasher.hashRewardsIntoPartitions(
                 allocator,
-                slot_store.reader(),
-            ) orelse EpochRewards.INIT;
+                stake_rewards.all_stake_rewards.entries,
+                &epoch_rewards_sysvar.parent_blockhash,
+                epoch_rewards_sysvar.num_partitions,
+            );
 
-            const partition_indices =
-                try sig.replay.rewards.EpochRewardsHasher.hashRewardsIntoPartitions(
-                    allocator,
-                    calc.all_stake_rewards.entries,
-                    &epoch_rewards_sysvar.parent_blockhash,
-                    epoch_rewards_sysvar.num_partitions,
-                );
-
-            epoch_reward_status.* = .{ .active = .{
-                .distributing = .{
-                    .distribution_start_block_height = calc.distribution_start_block_height,
-                    .all_stake_rewards = calc.all_stake_rewards,
-                    .partitioned_indices = try .init(allocator, partition_indices),
-                },
-            } };
-        },
-        .distributing => {},
+        stake_rewards.partitioned_indices = try .init(allocator, partition_indices);
+        epoch_reward_status.* = .{ .active = stake_rewards };
     }
 
-    const partition_rewards: StartBlockHeightAndPartitionedRewards = switch (epoch_reward_status.*) {
-        .active => |dist| switch (dist) {
-            .distributing => |d| d,
-            .calculating => unreachable,
-        },
-        .inactive => unreachable,
+    const partition_rewards, const partition_indices = .{
+        stake_rewards.all_stake_rewards,
+        stake_rewards.partitioned_indices.?,
     };
 
-    const end_block_height = start_block_height + partition_rewards.partitioned_indices.entries.len;
+    const end_block_height = stake_rewards.distribution_start_block_height +
+        partition_indices.entries.len;
 
     std.debug.assert(epoch_schedule.getSlotsInEpoch(epoch) >
-        partition_rewards.partitioned_indices.entries.len);
+        partition_indices.entries.len);
 
-    if (block_height >= start_block_height and block_height < end_block_height) {
-        const partition_index = block_height - start_block_height;
+    if (block_height >= stake_rewards.distribution_start_block_height and
+        block_height < end_block_height)
+    {
+        const partition_index = block_height - stake_rewards.distribution_start_block_height;
         try distributeEpochRewardsInPartition(
             allocator,
             slot,
             rent,
             partition_rewards,
+            partition_indices,
             partition_index,
             capitalization,
             stakes_cache,
@@ -108,6 +94,7 @@ pub fn distributePartitionedEpochRewards(
     }
 
     if (block_height +| 1 >= end_block_height) {
+        epoch_reward_status.deinit(allocator);
         epoch_reward_status.* = .{ .inactive = {} };
         var epoch_rewards_sysvar = try getSysvarFromAccount(
             EpochRewards,
@@ -133,7 +120,8 @@ fn distributeEpochRewardsInPartition(
     allocator: Allocator,
     slot: Slot,
     rent: *const Rent,
-    partition_rewards: StartBlockHeightAndPartitionedRewards,
+    partition_rewards: PartitionedStakeRewards,
+    partition_indices: PartitionedIndices,
     partition_index: u64,
     capitalization: *AtomicU64,
     stakes_cache: *StakesCache,
@@ -143,6 +131,7 @@ fn distributeEpochRewardsInPartition(
         try storeStakeAccountsInPartition(
             allocator,
             partition_rewards,
+            partition_indices,
             partition_index,
             stakes_cache,
             slot_store,
@@ -182,7 +171,8 @@ fn distributeEpochRewardsInPartition(
 
 fn storeStakeAccountsInPartition(
     allocator: Allocator,
-    partition_rewards: StartBlockHeightAndPartitionedRewards,
+    partition_rewards: PartitionedStakeRewards,
+    partition_indices: PartitionedIndices,
     partition_index: u64,
     stakes_cache: *StakesCache,
     slot_store: SlotAccountStore,
@@ -191,9 +181,9 @@ fn storeStakeAccountsInPartition(
     var lamports_distributed: u64 = 0;
     var lamports_burnt: u64 = 0;
 
-    const indices = if (partition_index >= partition_rewards.partitioned_indices.entries.len) {
+    const indices = if (partition_index >= partition_indices.entries.len) {
         return error.InvalidPartitionIndex;
-    } else partition_rewards.partitioned_indices.entries[partition_index];
+    } else partition_indices.entries[partition_index];
 
     var updated_stake_rewards = try std.ArrayListUnmanaged(StakeReward)
         .initCapacity(allocator, indices.len);
@@ -204,10 +194,10 @@ fn storeStakeAccountsInPartition(
 
         for (indices) |index| {
             const partitioned_reward = if (index >=
-                partition_rewards.all_stake_rewards.entries.len)
+                partition_rewards.entries.len)
             {
                 return error.InvalidStakeRewardIndex;
-            } else partition_rewards.all_stake_rewards.entries[index];
+            } else partition_rewards.entries[index];
 
             const stake_reward = buildUpdatedStakeReward(
                 allocator,
@@ -258,6 +248,7 @@ fn buildUpdatedStakeReward(
 
     var account = try slot_store.reader().get(allocator, partitioned_reward.stake_pubkey) orelse
         return error.MissingStakeAccountInDb;
+    defer account.deinit(allocator);
 
     // NOTE: If we stored the full stake state in the stake account we might be able to skip
     // deserializing and just update the stake directly.
@@ -298,84 +289,6 @@ fn buildUpdatedStakeReward(
         },
     };
 }
-
-// const TestEnvironment = struct {
-//     slot_state: sig.core.SlotState,
-//     slot_constants: sig.core.SlotConstants,
-//     account_map: sig.accounts_db.account_store.ThreadSafeAccountMap,
-//     ancestors: sig.core.Ancestors,
-
-//     slot: Slot,
-//     epoch: Epoch,
-//     rent: Rent,
-//     epoch_schedule: EpochSchedule,
-
-//     pub fn init(allocator: Allocator) !TestEnvironment {
-//         var ancestors = sig.core.Ancestors.EMPTY;
-//         errdefer ancestors.deinit(allocator);
-//         try ancestors.addSlot(allocator, 0);
-
-//         return .{
-//             .slot_state = .GENESIS,
-//             .slot_constants = try .genesis(allocator, .DEFAULT),
-//             .account_map = .init(allocator),
-//             .ancestors = ancestors,
-//             .slot = 0,
-//             .epoch = 0,
-//             .rent = .INIT,
-//             .epoch_schedule = .INIT,
-//         };
-//     }
-
-//     pub fn deinit(self: *TestEnvironment, allocator: Allocator) void {
-//         self.slot_state.deinit(allocator);
-//         self.slot_constants.deinit(allocator);
-//         self.account_map.deinit();
-//         self.ancestors.deinit(allocator);
-//     }
-
-//     pub fn slotStore(self: *TestEnvironment) SlotAccountStore {
-//         const account_store = sig.accounts_db.AccountStore{
-//             .thread_safe_map = &self.account_map,
-//         };
-//         return account_store.forSlot(self.slot, &self.ancestors);
-//     }
-// };
-
-// test storeStakeAccountsInPartition {
-//     const PartitionedStakeReward = sig.replay.rewards.PartitionedStakeReward;
-
-//     const allocator = std.testing.allocator;
-//     var prng = std.Random.DefaultPrng.init(0);
-//     const random = prng.random();
-
-//     var env = try TestEnvironment.init(allocator);
-//     defer env.deinit(allocator);
-
-//     env.slot_state.reward_status = .{ .active = .{ .calculating = .{
-//         .distribution_start_block_height = 0,
-//         .all_stake_rewards = try .init(
-//             allocator,
-//             try allocator.dupe(PartitionedStakeReward, &[_]PartitionedStakeReward{
-//                 .{
-//                     .stake_pubkey = Pubkey.initRandom(random),
-//                     .stake = .{
-//                         .delegation = .{
-//                             .voter_pubkey = Pubkey.initRandom(random),
-//                             .stake = 1_000_000_000,
-//                             .activation_epoch = 0,
-//                             .deactivation_epoch = std.math.maxInt(Epoch),
-//                             .deprecated_warmup_cooldown_rate = 0.0,
-//                         },
-//                         .credits_observed = 0,
-//                     },
-//                     .stake_reward = 1_000_000_000,
-//                     .commission = 50,
-//                 },
-//             }),
-//         ),
-//     } } };
-// }
 
 test distributePartitionedEpochRewards {
     const PartitionedStakeReward = sig.replay.rewards.PartitionedStakeReward;
@@ -465,24 +378,6 @@ test distributePartitionedEpochRewards {
     }
 
     partitioned_reward.stake.delegation.stake = 2_000_000_000;
-    var partition_rewards: StartBlockHeightAndPartitionedRewards = .{
-        .distribution_start_block_height = 0,
-        .partitioned_indices = try sig.replay.rewards.PartitionedIndices.init(
-            allocator,
-            try allocator.dupe(
-                []const usize,
-                &[_][]const usize{try allocator.dupe(usize, &[_]usize{0})},
-            ),
-        ),
-        .all_stake_rewards = try sig.replay.rewards.PartitionedStakeRewards.init(
-            allocator,
-            try allocator.dupe(
-                PartitionedStakeReward,
-                &[_]PartitionedStakeReward{partitioned_reward},
-            ),
-        ),
-    };
-    defer partition_rewards.deinit(allocator);
 
     const epoch_rewards = sig.runtime.sysvar.EpochRewards{
         .distribution_starting_block_height = 0,
@@ -501,8 +396,25 @@ test distributePartitionedEpochRewards {
     });
 
     var epoch_reward_status = EpochRewardStatus{
-        .active = .{ .distributing = partition_rewards },
+        .active = .{
+            .distribution_start_block_height = 0,
+            .partitioned_indices = try sig.replay.rewards.PartitionedIndices.init(
+                allocator,
+                try allocator.dupe(
+                    []const usize,
+                    &[_][]const usize{try allocator.dupe(usize, &[_]usize{0})},
+                ),
+            ),
+            .all_stake_rewards = try sig.replay.rewards.PartitionedStakeRewards.init(
+                allocator,
+                try allocator.dupe(
+                    PartitionedStakeReward,
+                    &[_]PartitionedStakeReward{partitioned_reward},
+                ),
+            ),
+        },
     };
+    defer epoch_reward_status.deinit(allocator);
 
     try distributePartitionedEpochRewards(
         allocator,
@@ -604,24 +516,23 @@ test distributeEpochRewardsInPartition {
     }
 
     partitioned_reward.stake.delegation.stake = 2_000_000_000;
-    var partition_rewards: StartBlockHeightAndPartitionedRewards = .{
-        .distribution_start_block_height = 0,
-        .partitioned_indices = try sig.replay.rewards.PartitionedIndices.init(
-            allocator,
-            try allocator.dupe(
-                []const usize,
-                &[_][]const usize{try allocator.dupe(usize, &[_]usize{0})},
-            ),
+    const partitioned_indices = try sig.replay.rewards.PartitionedIndices.init(
+        allocator,
+        try allocator.dupe(
+            []const usize,
+            &[_][]const usize{try allocator.dupe(usize, &[_]usize{0})},
         ),
-        .all_stake_rewards = try sig.replay.rewards.PartitionedStakeRewards.init(
-            allocator,
-            try allocator.dupe(
-                PartitionedStakeReward,
-                &[_]PartitionedStakeReward{partitioned_reward},
-            ),
+    );
+    defer partitioned_indices.deinit(allocator);
+
+    const partitioned_rewards = try sig.replay.rewards.PartitionedStakeRewards.init(
+        allocator,
+        try allocator.dupe(
+            PartitionedStakeReward,
+            &[_]PartitionedStakeReward{partitioned_reward},
         ),
-    };
-    defer partition_rewards.deinit(allocator);
+    );
+    defer partitioned_rewards.deinit(allocator);
 
     const epoch_rewards = sig.runtime.sysvar.EpochRewards{
         .distribution_starting_block_height = 0,
@@ -643,7 +554,8 @@ test distributeEpochRewardsInPartition {
         allocator,
         slot,
         &rent,
-        partition_rewards,
+        partitioned_rewards,
+        partitioned_indices,
         partition_index,
         &capitalization,
         &stakes_cache,
@@ -682,24 +594,23 @@ test storeStakeAccountsInPartition {
     {
         // Partitioned Rewards
         const partition_index: u64 = 0;
-        var partition_rewards: StartBlockHeightAndPartitionedRewards = .{
-            .distribution_start_block_height = 0,
-            .partitioned_indices = try sig.replay.rewards.PartitionedIndices.init(
-                allocator,
-                try allocator.dupe(
-                    []const usize,
-                    &[_][]const usize{try allocator.dupe(usize, &[_]usize{0})},
-                ),
+        const partitioned_indices = try sig.replay.rewards.PartitionedIndices.init(
+            allocator,
+            try allocator.dupe(
+                []const usize,
+                &[_][]const usize{try allocator.dupe(usize, &[_]usize{0})},
             ),
-            .all_stake_rewards = try sig.replay.rewards.PartitionedStakeRewards.init(
-                allocator,
-                try allocator.dupe(
-                    PartitionedStakeReward,
-                    &[_]PartitionedStakeReward{partitioned_reward},
-                ),
+        );
+        defer partitioned_indices.deinit(allocator);
+
+        const partitioned_rewards = try sig.replay.rewards.PartitionedStakeRewards.init(
+            allocator,
+            try allocator.dupe(
+                PartitionedStakeReward,
+                &[_]PartitionedStakeReward{partitioned_reward},
             ),
-        };
-        defer partition_rewards.deinit(allocator);
+        );
+        defer partitioned_rewards.deinit(allocator);
 
         var db_context = try sig.accounts_db.Two.initTest(allocator);
         defer db_context.deinit();
@@ -714,7 +625,8 @@ test storeStakeAccountsInPartition {
 
         const result = try storeStakeAccountsInPartition(
             allocator,
-            partition_rewards,
+            partitioned_rewards,
+            partitioned_indices,
             partition_index,
             &stakes_cache,
             slot_store,
@@ -770,24 +682,23 @@ test storeStakeAccountsInPartition {
         // Partitioned Rewards
         const partition_index: u64 = 0;
         partitioned_reward.stake.delegation.stake = 2_000_000_000;
-        var partition_rewards: StartBlockHeightAndPartitionedRewards = .{
-            .distribution_start_block_height = 0,
-            .partitioned_indices = try sig.replay.rewards.PartitionedIndices.init(
-                allocator,
-                try allocator.dupe(
-                    []const usize,
-                    &[_][]const usize{try allocator.dupe(usize, &[_]usize{0})},
-                ),
+        const partitioned_indices = try sig.replay.rewards.PartitionedIndices.init(
+            allocator,
+            try allocator.dupe(
+                []const usize,
+                &[_][]const usize{try allocator.dupe(usize, &[_]usize{0})},
             ),
-            .all_stake_rewards = try sig.replay.rewards.PartitionedStakeRewards.init(
-                allocator,
-                try allocator.dupe(
-                    PartitionedStakeReward,
-                    &[_]PartitionedStakeReward{partitioned_reward},
-                ),
+        );
+        defer partitioned_indices.deinit(allocator);
+
+        const partitioned_rewards = try sig.replay.rewards.PartitionedStakeRewards.init(
+            allocator,
+            try allocator.dupe(
+                PartitionedStakeReward,
+                &[_]PartitionedStakeReward{partitioned_reward},
             ),
-        };
-        defer partition_rewards.deinit(allocator);
+        );
+        defer partitioned_rewards.deinit(allocator);
 
         {
             var stakes, var guard = stakes_cache.stakes.writeWithLock();
@@ -801,7 +712,8 @@ test storeStakeAccountsInPartition {
 
         const result = try storeStakeAccountsInPartition(
             allocator,
-            partition_rewards,
+            partitioned_rewards,
+            partitioned_indices,
             partition_index,
             &stakes_cache,
             slot_store,
