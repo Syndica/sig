@@ -69,6 +69,9 @@ pub fn put(
     address: Pubkey,
     data: AccountSharedData,
 ) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.put" });
+    defer zone.deinit();
+
     const index = slot % MAX_SLOTS;
     const entry = &self.slots[index];
 
