@@ -2536,11 +2536,10 @@ test "checkAndHandleNewRoot - missing slot" {
         });
     }
 
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer test_state.deinit();
 
     // Try to check a slot that doesn't exist in the tracker
@@ -2592,11 +2591,10 @@ test "checkAndHandleNewRoot - missing hash" {
         });
     }
 
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer test_state.deinit();
 
     // Try to check a slot that doesn't exist in the tracker
@@ -2635,11 +2633,10 @@ test "checkAndHandleNewRoot - empty slot tracker" {
         defer lg.unlock();
         ptr.deinit(testing.allocator);
     }
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
     defer registry.deinit();
 
-    var test_state = try sig.ledger.tests.initTestLedger(testing.allocator, @src(), logger);
+    var test_state = try sig.ledger.tests.initTestLedger(testing.allocator, @src(), .noop);
     defer test_state.deinit();
 
     // Try to check a slot that doesn't exist in the tracker

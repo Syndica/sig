@@ -11,7 +11,6 @@ const Entry = sig.core.Entry;
 
 const Shred = ledger.shred.Shred;
 const Slot = sig.core.Slot;
-const DirectPrintLogger = sig.trace.DirectPrintLogger;
 const Logger = sig.trace.Logger("ledger.tests");
 const SlotMeta = ledger.meta.SlotMeta;
 const VersionedTransactionWithStatusMeta = ledger.Reader.VersionedTransactionWithStatusMeta;
@@ -53,14 +52,8 @@ test "put/get data consistency for merkle root" {
 // Analogous to [test_get_rooted_block](https://github.com/anza-xyz/agave/blob/a72f981370c3f566fc1becf024f3178da041547a/ledger/src/blockstore.rs#L8271)
 test "insert shreds and transaction statuses then get blocks" {
     const allocator = std.testing.allocator;
-    var test_logger = DirectPrintLogger.init(
-        allocator,
-        Logger.TEST_DEFAULT_LEVEL,
-    );
 
-    const logger = test_logger.logger("ledger.test");
-
-    var ledger_state = try initTestLedger(allocator, @src(), .from(logger));
+    var ledger_state = try initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger_state.deinit();
 
     const result = try insertDataForBlockTest(&ledger_state, allocator);

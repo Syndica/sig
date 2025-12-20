@@ -62,7 +62,7 @@ fn writeLogWithoutTime(
     comptime fmt: []const u8,
     args: anytype,
 ) !void {
-    try std.fmt.format(writer, " level={s}", .{level.asText()});
+    try std.fmt.format(writer, " level={s}", .{@tagName(level)});
 
     if (maybe_scope) |scope| {
         try std.fmt.format(writer, " scope={s}", .{scope});
