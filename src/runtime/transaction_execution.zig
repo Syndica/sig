@@ -148,6 +148,7 @@ pub fn TransactionResult(comptime T: type) type {
 
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L323-L324
 pub fn loadAndExecuteTransaction(
+    gpa: std.mem.Allocator,
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
     account_store: SlotAccountStore,
@@ -155,7 +156,7 @@ pub fn loadAndExecuteTransaction(
     config: *const TransactionExecutionConfig,
     program_map: *ProgramMap,
 ) AccountLoadError!TransactionResult(ProcessedTransaction) {
-    var zone = tracy.Zone.init(@src(), .{ .name = "executeTransaction" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "loadAndExecuteTransaction" });
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
 
@@ -253,7 +254,7 @@ pub fn loadAndExecuteTransaction(
     errdefer for (loaded_accounts.accounts.slice()) |acct| acct.deinit(allocator);
 
     for (loaded_accounts.accounts.slice()) |account| try program_loader.loadIfProgram(
-        allocator,
+        gpa,
         program_map,
         account.pubkey,
         &account.account,
@@ -572,6 +573,7 @@ test getInstructionDatasSliceForPrecompiles {
             .account_metas = .{},
             .dedupe_map = @splat(0xff),
             .instruction_data = "data",
+            .owned_instruction_data = false,
             .initial_account_lamports = 0,
         }};
 
@@ -596,6 +598,7 @@ test getInstructionDatasSliceForPrecompiles {
                 .account_metas = .{},
                 .dedupe_map = @splat(0xff),
                 .instruction_data = "one",
+                .owned_instruction_data = false,
                 .initial_account_lamports = 0,
             },
             .{
@@ -606,6 +609,7 @@ test getInstructionDatasSliceForPrecompiles {
                 .account_metas = .{},
                 .dedupe_map = @splat(0xff),
                 .instruction_data = "two",
+                .owned_instruction_data = false,
                 .initial_account_lamports = 0,
             },
             .{
@@ -616,6 +620,7 @@ test getInstructionDatasSliceForPrecompiles {
                 .account_metas = .{},
                 .dedupe_map = @splat(0xff),
                 .instruction_data = "three",
+                .owned_instruction_data = false,
                 .initial_account_lamports = 0,
             },
         };
@@ -701,6 +706,23 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .is_writable = false,
     });
 
+    var metas: sig.runtime.InstructionInfo.AccountMetas = .empty;
+    defer metas.deinit(allocator);
+    try metas.appendSlice(allocator, &.{ // sender, receiver, system program
+        .{
+            .pubkey = sender_key,
+            .index_in_transaction = 0,
+            .is_signer = true,
+            .is_writable = true,
+        },
+        .{
+            .pubkey = receiver_key,
+            .index_in_transaction = 1,
+            .is_signer = false,
+            .is_writable = true,
+        },
+    });
+
     var transaction: RuntimeTransaction = .{
         .signature_count = 1,
         .fee_payer = sender_key,
@@ -711,20 +733,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
                 .pubkey = sig.runtime.program.system.ID,
                 .index_in_transaction = 2,
             },
-            .account_metas = try .fromSlice(&.{ // sender, receiver, system program
-                .{
-                    .pubkey = sender_key,
-                    .index_in_transaction = 0,
-                    .is_signer = true,
-                    .is_writable = true,
-                },
-                .{
-                    .pubkey = receiver_key,
-                    .index_in_transaction = 1,
-                    .is_signer = false,
-                    .is_writable = true,
-                },
-            }),
+            .account_metas = metas,
             .dedupe_map = blk: {
                 var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
                 dedupe_map[0] = 0;
@@ -732,6 +741,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
                 break :blk dedupe_map;
             },
             .instruction_data = transfer_instruction_data,
+            .owned_instruction_data = false,
         }},
         .accounts = accounts,
         .num_lookup_tables = 0,
@@ -832,6 +842,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         defer program_map.deinit(allocator);
         const result = try loadAndExecuteTransaction(
             allocator,
+            allocator,
             &transaction,
             .{ .account_shared_data_map = .{ allocator, &account_map } },
             &environment,
@@ -867,6 +878,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         var program_map = ProgramMap.empty;
         defer program_map.deinit(allocator);
         const result = try loadAndExecuteTransaction(
+            allocator,
             allocator,
             &transaction,
             .{ .account_shared_data_map = .{ allocator, &account_map } },

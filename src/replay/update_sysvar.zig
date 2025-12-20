@@ -284,6 +284,9 @@ pub const UpdateStakeHistoryDeps = struct {
 };
 
 pub fn updateStakeHistory(allocator: Allocator, deps: UpdateStakeHistoryDeps) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "updateStakeHistory" });
+    defer zone.deinit();
+
     if (deps.parent_slots_epoch) |e| if (e == deps.epoch) return;
     const stakes, var guard = deps.stakes_cache.stakes.readWithLock();
     defer guard.unlock();

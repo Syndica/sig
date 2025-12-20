@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../../../sig.zig");
 
 const ids = sig.runtime.ids;
@@ -28,6 +29,9 @@ pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "bpf_loader: execute" });
+    defer zone.deinit();
+
     // The borrowed program cannot be held during calls to other execute functions.
     // Agave originally drops it at the relevant sites, but we can just extract needed fields here.
     const program_owner = blk: {
@@ -4017,11 +4021,11 @@ test checkProgramAccount {
     // check writable
     {
         account.context.is_writable = false;
-        ic.ixn_info.account_metas.slice()[0].is_writable = false;
+        ic.ixn_info.account_metas.items[0].is_writable = false;
 
         defer {
             account.context.is_writable = true;
-            ic.ixn_info.account_metas.slice()[0].is_writable = true;
+            ic.ixn_info.account_metas.items[0].is_writable = true;
         }
 
         try std.testing.expectError(
@@ -4032,8 +4036,8 @@ test checkProgramAccount {
 
     // check signer
     {
-        ic.ixn_info.account_metas.slice()[1].is_signer = false;
-        defer ic.ixn_info.account_metas.slice()[1].is_signer = true;
+        ic.ixn_info.account_metas.items[1].is_signer = false;
+        defer ic.ixn_info.account_metas.items[1].is_signer = true;
 
         try std.testing.expectError(
             error.MissingRequiredSignature,

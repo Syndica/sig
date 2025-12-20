@@ -32,6 +32,7 @@ replay_votes_sender: ?*Channel(ParsedVote),
 
 pub fn commitTransactions(
     self: Committer,
+    gpa: Allocator,
     allocator: Allocator,
     slot: Slot,
     transactions: []const ResolvedTransaction,
@@ -53,15 +54,19 @@ pub fn commitTransactions(
     var transaction_fees: u64 = 0;
     var priority_fees: u64 = 0;
 
-    for (transactions, tx_results) |transaction, result| {
-        const message_hash, const tx_result = result;
+    for (transactions, tx_results) |transaction, *result| {
+        const message_hash = &result.@"0";
+        const tx_result = &result.@"1";
+
         signature_count += transaction.transaction.signatures.len;
 
-        for (tx_result.writes.slice()) |account| {
-            try accounts_to_store.put(allocator, account.pubkey, account);
+        for (tx_result.writes.constSlice()) |*account| {
+            try accounts_to_store.put(allocator, account.pubkey, account.*);
         }
         transaction_fees += tx_result.fees.transaction_fee;
         priority_fees += tx_result.fees.prioritization_fee;
+
+        // TODO: fix nesting, this sucks
 
         if (tx_result.outputs != null) {
             rent_collected += tx_result.rent;
@@ -70,11 +75,11 @@ pub fn commitTransactions(
             // Only send votes if consensus is enabled (sender exists)
             if (self.replay_votes_sender) |sender| {
                 if (tx_result.err == null and isSimpleVoteTransaction(transaction.transaction)) {
-                    if (try parseSanitizedVoteTransaction(allocator, transaction)) |parsed| {
+                    if (try parseSanitizedVoteTransaction(gpa, transaction)) |parsed| {
                         if (parsed.vote.lastVotedSlot() != null) {
-                            sender.send(parsed) catch parsed.deinit(allocator);
+                            sender.send(parsed) catch parsed.deinit(gpa);
                         } else {
-                            parsed.deinit(allocator);
+                            parsed.deinit(gpa);
                         }
                     }
                 }
@@ -83,20 +88,36 @@ pub fn commitTransactions(
 
         const recent_blockhash = &transaction.transaction.msg.recent_blockhash;
         const signature = transaction.transaction.signatures[0];
-        try self.status_cache.insert(
-            allocator,
-            rng.random(),
-            recent_blockhash,
-            &message_hash.data,
-            slot,
-        );
-        try self.status_cache.insert(
-            allocator,
-            rng.random(),
-            recent_blockhash,
-            &signature.toBytes(),
-            slot,
-        );
+        {
+            const status_cache_zone = tracy.Zone.init(
+                @src(),
+                .{ .name = "status_cache.insert: message_hash.data" },
+            );
+            defer status_cache_zone.deinit();
+
+            try self.status_cache.insert(
+                gpa,
+                rng.random(),
+                recent_blockhash,
+                &message_hash.data,
+                slot,
+            );
+        }
+        {
+            const status_cache_zone = tracy.Zone.init(
+                @src(),
+                .{ .name = "status_cache.insert: signature.toBytes()" },
+            );
+            defer status_cache_zone.deinit();
+
+            try self.status_cache.insert(
+                gpa,
+                rng.random(),
+                recent_blockhash,
+                &signature.toBytes(),
+                slot,
+            );
+        }
         // NOTE: we'll need to store the actual status at some point, probably for rpc.
     }
 
@@ -108,7 +129,7 @@ pub fn commitTransactions(
 
     for (accounts_to_store.values()) |account| {
         try self.stakes_cache.checkAndStore(
-            allocator,
+            gpa,
             account.pubkey,
             account.account,
             self.new_rate_activation_epoch,

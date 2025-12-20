@@ -110,7 +110,7 @@ pub const Syscall = enum {
                 if (value == bytes) break @enumFromInt(i); // assumes that the EnumArray will be in "array" mode, which it should be.
             } else return null; // no such hash
             // TODO: consider just making a build flag for harness builds that removes this check entirely for perf
-            return if (self.is_stubbed) &stubbed else map.get(syscall);
+            return if (self.is_stubbed) &stubbed else map.getPtrConst(syscall).*;
         }
 
         fn stubbed(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {}
@@ -426,7 +426,7 @@ pub fn getProcessedSiblingInstruction(
         );
 
         if (header.data_len == info.instruction_data.len and
-            header.accounts_len == info.account_metas.len)
+            header.accounts_len == info.account_metas.items.len)
         {
             const program_id = try memory_map.translateType(
                 Pubkey,
@@ -485,7 +485,7 @@ pub fn getProcessedSiblingInstruction(
             program_id.* = info.program_meta.pubkey;
             @memcpy(data, info.instruction_data);
 
-            for (info.account_metas.slice(), 0..) |meta, i| {
+            for (info.account_metas.items, 0..) |meta, i| {
                 const acc = tc.getAccountAtIndex(meta.index_in_transaction) orelse
                     return InstructionError.NotEnoughAccountKeys;
 
@@ -498,7 +498,7 @@ pub fn getProcessedSiblingInstruction(
         }
 
         header.data_len = info.instruction_data.len;
-        header.accounts_len = info.account_metas.len;
+        header.accounts_len = info.account_metas.items.len;
         registers.set(.r0, 1);
         return;
     }
@@ -1212,6 +1212,12 @@ test getProcessedSiblingInstruction {
         cache.deinit(allocator);
     }
 
+    var allocated_account_metas: std.ArrayListUnmanaged(InstructionInfo.AccountMetas) = .empty;
+    defer {
+        for (allocated_account_metas.items) |*account_metas| account_metas.deinit(allocator);
+        allocated_account_metas.deinit(allocator);
+    }
+
     const trace_indexes: [8]u8 = std.simd.iota(u8, 8);
     for ([_]u8{ 1, 2, 3, 2, 2, 3, 4, 3 }, 0..) |stack_height, index_in_trace| {
         while (stack_height <= tc.instruction_stack.len) {
@@ -1223,19 +1229,22 @@ test getProcessedSiblingInstruction {
                     .pubkey = tc.accounts[0].pubkey,
                     .index_in_transaction = 0,
                 },
-                .account_metas = .{},
+                .account_metas = .empty,
                 .dedupe_map = @splat(0xff),
                 .instruction_data = @as(*const [1]u8, &trace_indexes[index_in_trace]),
+                .owned_instruction_data = false,
             };
 
             const index_in_tc = index_in_trace +| 1;
             info.dedupe_map[index_in_tc] = 0;
-            info.account_metas.appendAssumeCapacity(.{
+            try info.account_metas.append(allocator, .{
                 .pubkey = tc.accounts[index_in_tc].pubkey,
                 .index_in_transaction = @intCast(index_in_tc),
                 .is_signer = false,
                 .is_writable = false,
             });
+
+            try allocated_account_metas.append(allocator, info.account_metas);
 
             tc.instruction_stack.appendAssumeCapacity(.{
                 .tc = &tc,
@@ -1501,6 +1510,7 @@ test "set and get return data" {
         .account_metas = .{},
         .dedupe_map = @splat(0xff),
         .instruction_data = &.{},
+        .owned_instruction_data = false,
         .initial_account_lamports = 0,
     };
     try sig.runtime.executor.pushInstruction(&tc, instr_info);

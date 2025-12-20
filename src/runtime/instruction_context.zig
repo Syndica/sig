@@ -112,6 +112,7 @@ pub const InstructionContext = struct {
                 .program_id = program_id,
                 .accounts = account_metas,
                 .data = data,
+                .owned_data = false,
             },
             signers,
         );

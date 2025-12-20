@@ -555,7 +555,7 @@ fn translateAccounts(
     account_infos_len: u64,
     cpi_info: *const InstructionInfo,
 ) !TranslatedAccounts {
-    const account_metas = cpi_info.account_metas.slice();
+    const account_metas = cpi_info.account_metas.items;
 
     // translate_account_infos():
 
@@ -786,6 +786,7 @@ fn translateInstruction(
     return Instruction{
         .accounts = accounts,
         .data = data,
+        .owned_data = false,
         .program_id = program_id,
     };
 }
@@ -992,7 +993,7 @@ fn cpiCommon(
         AccountInfoType,
         instruction_addr,
     );
-    defer allocator.free(instruction.accounts);
+    defer instruction.deinit(allocator);
 
     const signers = try translateSigners(
         ic,
@@ -1024,6 +1025,7 @@ fn cpiCommon(
         instruction,
         signers.slice(),
     );
+    defer info.deinit(ic.tc.allocator);
 
     var accounts = try translateAccounts(
         allocator,
@@ -1239,7 +1241,7 @@ const TestContext = struct {
 
     fn getAccount(self: *const TestContext) TestAccount {
         const index = 0;
-        const account_meta = self.ic.ixn_info.account_metas.get(index);
+        const account_meta = self.ic.ixn_info.account_metas.items[index];
         const account_shared = self.ic.tc.accounts[index].account;
 
         return .{
@@ -1516,26 +1518,31 @@ test "translateAccounts" {
 
     ctx.tc.serialized_accounts.appendAssumeCapacity(serialized_metadata);
 
+    var metas: InstructionInfo.AccountMetas = .empty;
+    defer metas.deinit(allocator);
+    try metas.appendSlice(allocator, &.{
+        .{
+            .pubkey = account.key,
+            .index_in_transaction = account.index,
+            .is_signer = account.is_signer,
+            .is_writable = account.is_writable,
+        },
+        .{ // intentional duplicate to test skipping it
+            .pubkey = account.key,
+            .index_in_transaction = account.index,
+            .is_signer = account.is_signer,
+            .is_writable = account.is_writable,
+        },
+    });
+
     var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
     dedupe_map[account.index] = 0;
     const cpi_info: InstructionInfo = .{
         .program_meta = ctx.ic.ixn_info.program_meta,
-        .account_metas = try InstructionInfo.AccountMetas.fromSlice(&.{
-            .{
-                .pubkey = account.key,
-                .index_in_transaction = account.index,
-                .is_signer = account.is_signer,
-                .is_writable = account.is_writable,
-            },
-            .{ // intentional duplicate to test skipping it
-                .pubkey = account.key,
-                .index_in_transaction = account.index,
-                .is_signer = account.is_signer,
-                .is_writable = account.is_writable,
-            },
-        }),
+        .account_metas = metas,
         .dedupe_map = dedupe_map,
         .instruction_data = "",
+        .owned_instruction_data = false,
     };
 
     const accounts = try translateAccounts(

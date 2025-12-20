@@ -13,7 +13,10 @@ pub const InstructionInfo = struct {
     program_meta: ProgramMeta,
     account_metas: AccountMetas,
     dedupe_map: [MAX_ACCOUNT_METAS]u8,
+
     instruction_data: []const u8,
+    owned_instruction_data: bool,
+
     // Initial account lamports are computed and set immediately before
     // pushing an instruction onto the stack.
     initial_account_lamports: u128 = 0,
@@ -25,7 +28,8 @@ pub const InstructionInfo = struct {
     /// transaction execution. We construct the account metas before transaction execution, so using an
     /// array of size MAX_ACCOUNTS_METAS + 1 allows us to check the account metas length during transaction
     /// execution and return the appropriate error.
-    pub const AccountMetas = std.BoundedArray(AccountMeta, MAX_ACCOUNT_METAS + 1);
+    // pub const AccountMetas = std.BoundedArray(AccountMeta, MAX_ACCOUNT_METAS + 1);
+    pub const AccountMetas = std.ArrayListUnmanaged(AccountMeta);
 
     pub const ProgramMeta = struct {
         pubkey: Pubkey,
@@ -40,7 +44,10 @@ pub const InstructionInfo = struct {
     };
 
     pub fn deinit(self: InstructionInfo, allocator: std.mem.Allocator) void {
-        allocator.free(self.instruction_data);
+        if (self.owned_instruction_data) allocator.free(self.instruction_data);
+
+        var account_metas = self.account_metas;
+        account_metas.deinit(allocator);
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/v3.0/transaction-context/src/lib.rs#L690
@@ -50,7 +57,7 @@ pub const InstructionInfo = struct {
     ) InstructionError!u16 {
         if (index_in_transaction < self.dedupe_map.len) {
             const index = self.dedupe_map[index_in_transaction];
-            if (index < self.account_metas.len) {
+            if (index < self.account_metas.items.len) {
                 return index;
             }
         }
@@ -62,7 +69,7 @@ pub const InstructionInfo = struct {
         self: *const InstructionInfo,
         pubkey: Pubkey,
     ) ?u16 {
-        for (self.account_metas.slice(), 0..) |account_meta, index|
+        for (self.account_metas.items, 0..) |account_meta, index|
             if (account_meta.pubkey.equals(&pubkey)) return @intCast(index);
         return null;
     }
@@ -72,8 +79,8 @@ pub const InstructionInfo = struct {
         self: *const InstructionInfo,
         index: u16,
     ) ?*const InstructionInfo.AccountMeta {
-        if (index >= self.account_metas.len) return null;
-        return &self.account_metas.buffer[index];
+        if (index >= self.account_metas.items.len) return null;
+        return &self.account_metas.items[index];
     }
 
     /// Return if the account at a given index is a signer with bounds checking
@@ -92,7 +99,7 @@ pub const InstructionInfo = struct {
         self: *const InstructionInfo,
         pubkey: Pubkey,
     ) bool {
-        for (self.account_metas.constSlice()) |account_meta|
+        for (self.account_metas.items) |account_meta|
             if (account_meta.pubkey.equals(&pubkey) and account_meta.is_signer) return true;
         return false;
     }
@@ -102,7 +109,7 @@ pub const InstructionInfo = struct {
         self: *const InstructionInfo,
     ) std.BoundedArray(Pubkey, MAX_ACCOUNT_METAS) {
         var signers = std.BoundedArray(Pubkey, MAX_ACCOUNT_METAS){};
-        for (self.account_metas.constSlice()) |account_meta| {
+        for (self.account_metas.items) |account_meta| {
             if (account_meta.is_signer) {
                 signers.appendAssumeCapacity(account_meta.pubkey);
             }
@@ -149,6 +156,7 @@ pub const InstructionInfo = struct {
         self: *const InstructionInfo,
         minimum_accounts: u16,
     ) InstructionError!void {
-        if (self.account_metas.len < minimum_accounts) return InstructionError.NotEnoughAccountKeys;
+        if (self.account_metas.items.len < minimum_accounts)
+            return InstructionError.NotEnoughAccountKeys;
     }
 };
