@@ -10,28 +10,48 @@ const AtomicBool = std.atomic.Value(bool);
 const Channel = sig.sync.Channel;
 const RecycleFBA = sig.utils.allocators.RecycleFBA;
 
+const Filters = trace.level.Filters;
 const Level = trace.level.Level;
 const NewEntry = trace.entry.NewEntry;
 
 pub fn Logger(comptime scope: []const u8) type {
-    return union(enum) {
-        channel_print: *ChannelPrintLogger,
-        direct_print: DirectPrintLogger,
-        test_logger: *TestLogger,
-        noop: void,
+    return struct {
+        impl: union(enum) {
+            channel_print: *ChannelPrintLogger,
+            direct_print,
+            test_logger: *TestLogger,
+            noop: void,
+        },
+        max_level: Level,
+        filters: Filters,
 
         const Self = @This();
 
-        /// Can be used in tests to minimize the amount of logging during tests.
-        pub const TEST_DEFAULT_LEVEL: Level = .warn;
-        pub const FOR_TESTS: Self = .{ .direct_print = .{ .max_level = TEST_DEFAULT_LEVEL } };
+        /// Can be used in tests to minimize the amount of logging while still
+        /// allowing warn and error messages to be printed in case something
+        /// went wrong.
+        pub const FOR_TESTS: Self = .{
+            .impl = .direct_print,
+            .max_level = .warn,
+            .filters = .warn,
+        };
+
+        pub const noop: Self = .{
+            .impl = .noop,
+            .max_level = .@"error",
+            .filters = .@"error",
+        };
 
         pub fn withScope(self: Self, comptime new_scope: []const u8) Logger(new_scope) {
-            return switch (self) {
-                .channel_print => |logger| .{ .channel_print = logger },
-                .direct_print => |logger| .{ .direct_print = logger },
-                .test_logger => |logger| .{ .test_logger = logger },
-                .noop => .noop,
+            return .{
+                .impl = switch (self.impl) {
+                    .channel_print => |logger| .{ .channel_print = logger },
+                    .direct_print => |logger| .{ .direct_print = logger },
+                    .test_logger => |logger| .{ .test_logger = logger },
+                    .noop => .noop,
+                },
+                .max_level = self.filters.level(new_scope),
+                .filters = self.filters,
             };
         }
 
@@ -40,7 +60,7 @@ pub fn Logger(comptime scope: []const u8) type {
         }
 
         pub fn deinit(self: *const Self) void {
-            switch (self.*) {
+            switch (self.impl) {
                 .channel_print => |logger| logger.deinit(),
                 .test_logger => |logger| logger.deinit(),
                 .direct_print, .noop => {},
@@ -48,7 +68,7 @@ pub fn Logger(comptime scope: []const u8) type {
         }
 
         pub fn err(self: Self) NewEntry(scope) {
-            return self.entry(.err);
+            return self.entry(.@"error");
         }
 
         pub fn warn(self: Self) NewEntry(scope) {
@@ -68,13 +88,7 @@ pub fn Logger(comptime scope: []const u8) type {
         }
 
         pub fn entry(self: Self, level: Level) NewEntry(scope) {
-            const logger = switch (self) {
-                .noop => .noop,
-                inline else => |impl| if (@intFromEnum(impl.max_level) >= @intFromEnum(level))
-                    self
-                else
-                    .noop,
-            };
+            const logger = if (@intFromEnum(self.max_level) < @intFromEnum(level)) noop else self;
             return .{ .logger = logger, .level = level, .fields = .{} };
         }
 
@@ -96,8 +110,13 @@ pub fn Logger(comptime scope: []const u8) type {
             comptime fmt: []const u8,
             args: anytype,
         ) void {
-            switch (self) {
+            if (@intFromEnum(self.max_level) < @intFromEnum(level)) return;
+            switch (self.impl) {
                 .noop => {},
+                .direct_print => {
+                    tracy.print(fmt, args);
+                    direct_print.log(scope, level, fields, fmt, args);
+                },
                 inline else => |impl| {
                     tracy.print(fmt, args);
                     impl.log(scope, level, fields, fmt, args);
@@ -109,7 +128,6 @@ pub fn Logger(comptime scope: []const u8) type {
 
 /// An instance of `Logger` that logs via the channel.
 pub const ChannelPrintLogger = struct {
-    max_level: Level,
     exit: std.atomic.Value(bool),
     allocator: Allocator,
     log_allocator: Allocator,
@@ -120,7 +138,6 @@ pub const ChannelPrintLogger = struct {
     write_stderr: bool,
 
     pub const Config = struct {
-        max_level: Level = Level.debug,
         allocator: std.mem.Allocator,
         /// Maximum memory that logger can use.
         max_buffer: u64,
@@ -145,7 +162,6 @@ pub const ChannelPrintLogger = struct {
             .log_allocator_state = recycle_fba,
             .max_buffer = max_buffer,
             .exit = AtomicBool.init(false),
-            .max_level = config.max_level,
             .handle = null,
             .channel = try Channel([]const u8).init(config.allocator),
             .write_stderr = config.write_stderr,
@@ -170,8 +186,16 @@ pub const ChannelPrintLogger = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn logger(self: *ChannelPrintLogger, comptime scope: []const u8) Logger(scope) {
-        return .{ .channel_print = self };
+    pub fn logger(
+        self: *ChannelPrintLogger,
+        comptime scope: []const u8,
+        filters: Filters,
+    ) Logger(scope) {
+        return .{
+            .impl = .{ .channel_print = self },
+            .max_level = filters.level(scope),
+            .filters = filters,
+        };
     }
 
     pub fn run(self: *ChannelPrintLogger, maybe_writer: anytype) void {
@@ -201,14 +225,13 @@ pub const ChannelPrintLogger = struct {
         comptime fmt: []const u8,
         args: anytype,
     ) void {
-        if (@intFromEnum(self.max_level) < @intFromEnum(level)) return;
         const size = logfmt.countLog(scope, level, fields, fmt, args);
         const msg_buf = self.log_allocator.alloc(u8, size) catch |err| {
             std.debug.lockStdErr();
             defer std.debug.unlockStdErr();
             const stderr = std.io.getStdErr().writer();
             const err_msg = "failed to allocate {} bytes for log message - {}";
-            logfmt.writeLog(stderr, "logger", .err, .{}, err_msg, .{ size, err }) catch {};
+            logfmt.writeLog(stderr, "logger", .@"error", .{}, err_msg, .{ size, err }) catch {};
             logfmt.writeLog(stderr, scope, level, fields, fmt, args) catch {};
             return;
         };
@@ -232,26 +255,22 @@ pub const ChannelPrintLogger = struct {
 /// Directly prints instead of running in a separate thread. This handles issues during tests
 /// where some log messages never get logged because the logger is deinitialized before the
 /// logging thread picks up the log message.
-pub const DirectPrintLogger = struct {
-    max_level: Level,
-
-    pub fn init(_: std.mem.Allocator, max_level: Level) DirectPrintLogger {
-        return .{ .max_level = max_level };
-    }
-
-    pub fn logger(self: DirectPrintLogger, comptime scope: []const u8) Logger(scope) {
-        return .{ .direct_print = self };
+pub const direct_print = struct {
+    pub fn logger(comptime scope: []const u8, filters: Filters) Logger(scope) {
+        return .{
+            .impl = .direct_print,
+            .max_level = filters.level(scope),
+            .filters = filters,
+        };
     }
 
     pub fn log(
-        self: DirectPrintLogger,
         comptime scope: ?[]const u8,
         level: Level,
         fields: anytype,
         comptime fmt: []const u8,
         args: anytype,
     ) void {
-        if (@intFromEnum(self.max_level) < @intFromEnum(level)) return;
         const writer = std.io.getStdErr().writer();
         std.debug.lockStdErr();
         defer std.debug.unlockStdErr();
@@ -261,7 +280,6 @@ pub const DirectPrintLogger = struct {
 
 /// for use in tests where we want to capture and assert that messages were logged.
 pub const TestLogger = struct {
-    max_level: Level,
     allocator: std.mem.Allocator,
     messages: std.ArrayListUnmanaged(Message),
 
@@ -271,10 +289,9 @@ pub const TestLogger = struct {
         content: []const u8,
     };
 
-    pub fn init(allocator: std.mem.Allocator, max_level: Level) TestLogger {
+    pub fn init(allocator: std.mem.Allocator) TestLogger {
         return .{
             .allocator = allocator,
-            .max_level = max_level,
             .messages = .empty,
         };
     }
@@ -284,8 +301,12 @@ pub const TestLogger = struct {
         self.messages.deinit(self.allocator);
     }
 
-    pub fn logger(self: *TestLogger, comptime scope: []const u8) Logger(scope) {
-        return .{ .test_logger = self };
+    pub fn logger(self: *TestLogger, comptime scope: []const u8, max_level: Level) Logger(scope) {
+        return .{
+            .impl = .{ .test_logger = self },
+            .max_level = max_level,
+            .filters = .{ .root = max_level },
+        };
     }
 
     pub fn log(
@@ -309,18 +330,17 @@ pub const TestLogger = struct {
 
 /// change this locally for temporary visibility into tests.
 /// normally this should be err since we don't want any output from well-behaved passing tests.
-const test_level = Level.err;
+const test_filters: Filters = .@"error";
 
 test "direct" {
     const allocator = std.testing.allocator;
     const std_logger = try ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = test_level,
         .max_buffer = 1 << 20,
     }, null);
     defer std_logger.deinit();
 
-    const logger = std_logger.logger("test");
+    const logger = std_logger.logger("test", test_filters);
     logger.log(.warn, "warn");
     logger.log(.info, "info");
     logger.log(.debug, "debug");
@@ -364,12 +384,11 @@ test "trace_ngswitch" {
 
     const std_logger = try ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = test_level,
         .max_buffer = 1 << 20,
     }, null);
     defer std_logger.deinit();
 
-    const logger = std_logger.logger("test");
+    const logger = std_logger.logger("test", test_filters);
 
     // Below logs out the following:
     // trace_ng.log.test.trace_ng: scope switch.Stuff] time=2024-09-11T06:49:02Z level=info doing stuff parent
@@ -377,8 +396,6 @@ test "trace_ngswitch" {
     // time=2024-09-11T06:49:02Z level=info Log from main
     var stuff = Stuff.init(logger);
     stuff.doStuff();
-    // Log using the concrete instance also works.
-    std_logger.log(null, .info, .{}, "Log from main", .{});
 }
 
 test "reclaim" {
@@ -386,13 +403,12 @@ test "reclaim" {
 
     var std_logger = try ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = test_level,
         .max_buffer = 4048,
     }, null);
 
     defer std_logger.deinit();
 
-    const logger = std_logger.logger("test");
+    const logger = std_logger.logger("test", test_filters);
 
     // Ensure memory can be continously requested from recycle_fba without getting stuck.
     for (0..25) |_| {
@@ -408,13 +424,12 @@ test "level" {
 
     var std_logger = try ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = test_level,
         .max_buffer = 1 << 20,
     }, null);
 
     defer std_logger.deinit();
 
-    const logger = std_logger.logger("test");
+    const logger = std_logger.logger("test", test_filters);
 
     //None should log as they are higher than set max_log.
     logger
@@ -445,11 +460,8 @@ test "level" {
 test "test_logger" {
     // TODO Replace this with a logger that is configurable with a writer
     // That way, the logger can be configured to write to a file, stdout or an array list.
-    const allocator = std.testing.allocator;
 
-    var test_logger = DirectPrintLogger.init(allocator, Level.warn);
-
-    const logger = test_logger.logger("test");
+    const logger = direct_print.logger("test", test_filters);
 
     logger.log(.info, "Logging with log");
 }
@@ -464,7 +476,7 @@ test "channel logger" {
         .max_buffer = 512,
     }, stream.writer());
 
-    logger.logger("test").log(.info, "hello world");
+    logger.logger("test", .{ .root = .info }).log(.info, "hello world");
     std.Thread.sleep(10 * std.time.ns_per_ms);
     logger.deinit();
 

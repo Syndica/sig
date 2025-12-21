@@ -16,7 +16,7 @@ const RwMux = sig.sync.RwMux;
 const exp = std.math.exp;
 
 pub const MAX_BLOOM_SIZE: usize = 928;
-pub const MAX_NUM_PULL_REQUESTS: usize = 20; // labs - 1024;
+pub const MAX_NUM_PULL_REQUESTS: usize = 256;
 pub const FALSE_RATE: f64 = 0.1;
 pub const KEYS: f64 = 8;
 

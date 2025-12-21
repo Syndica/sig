@@ -19,7 +19,7 @@ const Duration = sig.time.Duration;
 const Gauge = sig.prometheus.Gauge;
 const GossipTable = sig.gossip.GossipTable;
 const Histogram = sig.prometheus.Histogram;
-const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
+const ScopedThreadPool = sig.utils.thread.ScopedThreadPool;
 const LruCacheCustom = sig.utils.lru.LruCacheCustom;
 const Nonce = sig.core.Nonce;
 const Packet = sig.net.Packet;
@@ -57,18 +57,11 @@ pub const RepairService = struct {
     exit: *Atomic(bool),
     /// memory to re-use across iterations. initialized to empty
     report: MultiSlotReport,
-    thread_pool: RequestBatchThreadPool,
+    thread_pool: *RequestBatchThreadPool,
     metrics: Metrics,
     prng: std.Random.DefaultPrng,
 
-    pub const RequestBatchThreadPool = HomogeneousThreadPool(struct {
-        requester: *RepairRequester,
-        requests: []const AddressedRepairRequest,
-
-        pub fn run(self: *@This()) !void {
-            return self.requester.sendRepairRequestBatch(self.requests);
-        }
-    });
+    const RequestBatchThreadPool = ScopedThreadPool(RepairRequester.sendRepairRequestBatch);
 
     const Metrics = struct {
         request_count: *Counter,
@@ -107,6 +100,9 @@ pub const RepairService = struct {
         defer zone.deinit();
 
         const n_threads = maxRequesterThreads();
+        const thread_pool = try RequestBatchThreadPool.init(allocator, n_threads);
+        errdefer thread_pool.deinit(allocator);
+
         return RepairService{
             .allocator = allocator,
             .requester = requester,
@@ -115,7 +111,7 @@ pub const RepairService = struct {
             .logger = .from(logger),
             .exit = exit,
             .report = MultiSlotReport.init(allocator),
-            .thread_pool = try RequestBatchThreadPool.init(allocator, n_threads, n_threads),
+            .thread_pool = thread_pool,
             .metrics = try registry.initStruct(Metrics),
             .prng = std.Random.DefaultPrng.init(std.testing.random_seed),
         };
@@ -182,11 +178,11 @@ pub const RepairService = struct {
                 const start = (addressed_requests.items.len * i) / num_threads;
                 const end = (addressed_requests.items.len * (i + 1)) / num_threads;
                 try self.thread_pool.schedule(self.allocator, .{
-                    .requester = &self.requester,
-                    .requests = addressed_requests.items[start..end],
+                    &self.requester,
+                    addressed_requests.items[start..end],
                 });
             }
-            try self.thread_pool.joinFallible();
+            try self.thread_pool.join();
         }
 
         return addressed_requests.items.len;
@@ -661,7 +657,9 @@ test "RepairService sends repair request to gossip peer" {
         &my_shred_version,
     );
 
-    var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry);
+    const tracker = try allocator.create(BasicShredTracker);
+    defer allocator.destroy(tracker);
+    try tracker.init(std.testing.allocator, 13579, .noop, &registry);
     defer tracker.deinit();
 
     var service = try RepairService.init(
@@ -672,7 +670,7 @@ test "RepairService sends repair request to gossip peer" {
         try RepairRequester
             .init(allocator, .from(logger), random, &registry, &keypair, repair_socket, &exit),
         peers,
-        &tracker,
+        tracker,
     );
     defer service.deinit();
 

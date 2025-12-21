@@ -595,6 +595,10 @@ pub const Duration = struct {
         return .{ .ns = self.ns / divisor };
     }
 
+    pub fn mul(self: Duration, factor: u64) Duration {
+        return .{ .ns = self.ns * factor };
+    }
+
     pub fn format(
         self: @This(),
         comptime _: []const u8,

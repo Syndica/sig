@@ -32,11 +32,7 @@ pub fn run(seed: u64, args: []const []const u8) !void {
     const allocator = gpa_state.allocator();
 
     // NOTE: change to trace for full logs
-    var std_logger = sig.trace.DirectPrintLogger.init(
-        allocator,
-        .debug,
-    );
-    const logger = std_logger.logger("gossip_table.fuzz");
+    const logger = sig.trace.direct_print.logger("gossip_table.fuzz", .debug);
 
     var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();

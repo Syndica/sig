@@ -96,7 +96,10 @@ pub fn main() !void {
     defer parser.free(gpa, cmd);
 
     var current_config: config.Cmd = .{};
-    current_config.log_level = cmd.log_level;
+
+    current_config.log_filters = try .parse(gpa, cmd.log_filters);
+    defer current_config.log_filters.deinit(gpa);
+
     current_config.metrics_port = cmd.metrics_port;
     current_config.log_file = cmd.log_file;
     current_config.tee_logs = cmd.tee_logs;
@@ -225,7 +228,7 @@ pub fn main() !void {
 }
 
 const Cmd = struct {
-    log_level: sig.trace.Level,
+    log_filters: []const u8,
     metrics_port: u16,
     log_file: ?[]const u8,
     tee_logs: bool,
@@ -269,13 +272,13 @@ const Cmd = struct {
                 .test_transaction_sender = TestTransactionSender.cmd_info,
                 .mock_rpc_server = MockRpcServer.cmd_info,
             },
-            .log_level = .{
+            .log_filters = .{
                 .kind = .named,
                 .name_override = null,
                 .alias = .l,
-                .default_value = if (builtin.mode == .Debug) .debug else .info,
-                .config = {},
-                .help = "The amount of detail to log",
+                .default_value = if (builtin.mode == .Debug) "debug" else "info",
+                .config = .string,
+                .help = "The amount of detail to log.",
             },
             .metrics_port = .{
                 .kind = .named,
@@ -1874,7 +1877,11 @@ fn testTransactionSenderService(
 }
 
 fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
-    const logger: sig.trace.Logger("mock rpc") = .{ .direct_print = .{ .max_level = .trace } };
+    const logger: sig.trace.Logger("mock rpc") = .{
+        .impl = .direct_print,
+        .max_level = .trace,
+        .filters = .trace,
+    };
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(cfg.accounts_db.snapshot_dir, .{
         .iterate = true,
@@ -2329,12 +2336,11 @@ fn spawnLogger(
 
     var std_logger = try ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = cfg.log_level,
         .max_buffer = 1 << 20,
         .write_stderr = cfg.tee_logs or cfg.log_file == null,
     }, writer);
 
-    return .{ file, .from(std_logger.logger("spawnLogger")) };
+    return .{ file, .from(std_logger.logger("spawnLogger", cfg.log_filters)) };
 }
 
 /// entrypoint to download snapshot
@@ -2409,6 +2415,6 @@ fn loggingPanic(message: []const u8, first_trace_addr: ?usize) noreturn {
     std.debug.lockStdErr();
     defer std.debug.unlockStdErr();
     const writer = std.io.getStdErr().writer();
-    sig.trace.logfmt.writeLog(writer, "panic", .err, .{}, "{s}", .{message}) catch {};
+    sig.trace.logfmt.writeLog(writer, "panic", .@"error", .{}, "{s}", .{message}) catch {};
     std.debug.defaultPanic(message, first_trace_addr);
 }

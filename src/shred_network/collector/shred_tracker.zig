@@ -29,6 +29,9 @@ pub const Range = struct {
 /// rooted that slot. This is necessary to keep up with turbine while consensus
 /// is not yet implemented. A complete implementation in the future should
 /// continue pursuing missing shreds unless a later slot is rooted.
+///
+/// This struct is over 8 MB so you should probably allocate memory on the heap
+/// for it and pass it by pointer.
 pub const BasicShredTracker = struct {
     logger: Logger,
     skip_checking_arena: std.heap.ArenaAllocator,
@@ -57,22 +60,23 @@ pub const BasicShredTracker = struct {
     const Self = @This();
 
     pub fn init(
+        self: *BasicShredTracker,
         allocator: Allocator,
         slot: Slot,
         logger: Logger,
         registry: *Registry(.{}),
-    ) !Self {
+    ) !void {
         const metrics = try registry.initStruct(Metrics);
         metrics.finished_slots_through.set(slot);
         metrics.max_slot_processed.set(slot);
-        return .{
+        self.* = .{
             .start_slot = slot,
             .skip_checking_arena = .init(allocator),
             .current_bottom_slot = slot,
             .max_slot_processed = slot,
             .max_slot_seen = slot,
             .logger = logger,
-            .metrics = try registry.initStruct(Metrics),
+            .metrics = metrics,
         };
     }
 
@@ -81,7 +85,7 @@ pub const BasicShredTracker = struct {
     }
 
     pub const RegisterDataShredError = SlotOutOfBounds ||
-        error{ InvalidShredParent, InvalidParentSlotOffset };
+        error{ InvalidShredIndex, InvalidShredParent, InvalidParentSlotOffset };
 
     pub fn registerDataShred(
         self: *Self,
@@ -102,8 +106,10 @@ pub const BasicShredTracker = struct {
         parent_slot: Slot,
         is_last_in_slot: bool,
         timestamp: Instant,
-    ) (SlotOutOfBounds || error{InvalidShredParent})!void {
+    ) (SlotOutOfBounds || error{ InvalidShredIndex, InvalidShredParent })!void {
         if (parent_slot >= slot) return error.InvalidShredParent;
+        if (shred_index >= sig.ledger.shred.DataShred.constants.max_per_slot)
+            return error.InvalidShredIndex;
 
         self.mux.lock();
         defer self.mux.unlock();
@@ -384,7 +390,7 @@ pub const SlotReport = struct {
     }
 };
 
-const ShredSet = std.bit_set.ArrayBitSet(usize, MAX_SHREDS_PER_SLOT / 10);
+const ShredSet = std.bit_set.ArrayBitSet(usize, MAX_SHREDS_PER_SLOT);
 
 const bit_set = struct {
     pub fn setAndWasSet(self: *ShredSet, index: usize) bool {
@@ -422,7 +428,7 @@ const MonitoredSlot = struct {
     const Self = @This();
 
     /// returns if the slot is *definitely* complete (there may be false negatives)
-    pub fn record(
+    fn record(
         self: *Self,
         logger: Logger,
         shred_index: u32,
@@ -509,7 +515,10 @@ test "trivial happy path" {
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry);
+
+    const tracker = try allocator.create(BasicShredTracker);
+    defer allocator.destroy(tracker);
+    try tracker.init(allocator, 13579, .noop, &registry);
     defer tracker.deinit();
 
     _ = try tracker.identifyMissing(&msr, Instant.EPOCH_ZERO.plus(Duration.fromSecs(1)));
@@ -530,7 +539,10 @@ test "1 registered shred is identified" {
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    var tracker = try BasicShredTracker.init(std.testing.allocator, 13579, .noop, &registry);
+
+    const tracker = try allocator.create(BasicShredTracker);
+    defer allocator.destroy(tracker);
+    try tracker.init(allocator, 13579, .noop, &registry);
     defer tracker.deinit();
 
     try tracker.registerShred(13579, 123, 13578, false, .EPOCH_ZERO);
@@ -558,7 +570,10 @@ test "slots are only skipped after a competing fork has developed sufficiently" 
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    var tracker = try BasicShredTracker.init(std.testing.allocator, 1, .noop, &registry);
+
+    const tracker = try allocator.create(BasicShredTracker);
+    defer allocator.destroy(tracker);
+    try tracker.init(allocator, 1, .noop, &registry);
     defer tracker.deinit();
 
     const start = Instant.EPOCH_ZERO;
@@ -607,7 +622,10 @@ test "slots are not skipped when the current fork is developed" {
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    var tracker = try BasicShredTracker.init(std.testing.allocator, 1, .noop, &registry);
+
+    const tracker = try allocator.create(BasicShredTracker);
+    defer allocator.destroy(tracker);
+    try tracker.init(allocator, 1, .noop, &registry);
     defer tracker.deinit();
 
     const start = Instant.EPOCH_ZERO;

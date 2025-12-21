@@ -1192,7 +1192,6 @@ pub const Metrics = struct {
 
 const test_shreds = @import("../test_shreds.zig");
 const initTestLedger = ledger_mod.tests.initTestLedger;
-const DirectPrintLogger = sig.trace.DirectPrintLogger;
 
 fn assertOk(result: anytype) void {
     std.debug.assert(if (result) |_| true else |_| false);
@@ -1205,9 +1204,7 @@ const ShredInserterTestState = struct {
         allocator: std.mem.Allocator,
         comptime test_src: std.builtin.SourceLocation,
     ) !ShredInserterTestState {
-        var test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-        const logger = test_logger.logger("shred_inserter.test");
-        return initWithLogger(allocator, test_src, .from(logger));
+        return initWithLogger(allocator, test_src, .FOR_TESTS);
     }
 
     fn initWithLogger(

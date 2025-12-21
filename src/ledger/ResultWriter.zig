@@ -430,11 +430,10 @@ pub const ScanAndFixRootsMetrics = struct {
 
 test "setRoots" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer state.deinit();
 
     const roots: [5]Slot = .{ 1, 2, 3, 4, 5 };
@@ -449,11 +448,10 @@ test "setRoots" {
 
 test "setDeadSlot" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer state.deinit();
 
     const dead_slots: [4]Slot = .{ 10, 25, 42, 100 };
@@ -493,11 +491,10 @@ test "setDeadSlot" {
 
 test "markSlotsAsIfRootedNormallyAtStartup with hash" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var prng_state: std.Random.DefaultPrng = .init(31431);
     const prng = prng_state.random();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer state.deinit();
 
     const slot_maybe_hashes = [_]struct { Slot, ?Hash }{
@@ -534,11 +531,10 @@ test "markSlotsAsIfRootedNormallyAtStartup with hash" {
 
 test "markSlotsAsIfRootedNormallyAtStartup without hash" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var prng_state: std.Random.DefaultPrng = .init(6416);
     const prng = prng_state.random();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer state.deinit();
 
     const slot_maybe_hashes = [_]struct { Slot, ?Hash }{
@@ -570,11 +566,10 @@ test "markSlotsAsIfRootedNormallyAtStartup without hash" {
 
 test "setDuplicateConfirmedSlotsAndHashes" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var prng_state: std.Random.DefaultPrng = .init(27911);
     const prng = prng_state.random();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer state.deinit();
 
     const duplicate_confirmed_slot_hashes = [_]struct { Slot, Hash }{
@@ -602,11 +597,10 @@ test "setDuplicateConfirmedSlotsAndHashes" {
 
 test "scanAndFixRoots" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer state.deinit();
 
     var result_writer = state.resultWriter();
@@ -635,11 +629,10 @@ test "scanAndFixRoots" {
 
 test "setAndChainConnectedOnRootAndNextSlots" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer state.deinit();
 
     var result_writer = state.resultWriter();
@@ -698,11 +691,10 @@ test "setAndChainConnectedOnRootAndNextSlots" {
 
 test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     const allocator = std.testing.allocator;
-    const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), logger);
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer state.deinit();
 
     var result_writer = state.resultWriter();

@@ -520,9 +520,9 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     .invalid_block => |e| switch (e) {
                         // TooFewTicks is typical during forks and should not require intervention.
                         .TooFewTicks => .warn,
-                        else => .err,
+                        else => .@"error",
                     },
-                    else => .err,
+                    else => .@"error",
                 },
                 "replayed slot {} with error: {}",
                 .{ result.slot, err },
@@ -903,13 +903,13 @@ test "Execute testnet block multi threaded" {
 test "freezeCompletedSlots handles errors correctly" {
     const allocator = std.testing.allocator;
 
-    var logger = sig.trace.log.TestLogger.init(allocator, .warn);
+    var logger = sig.trace.log.TestLogger.init(allocator);
     defer logger.deinit();
 
-    var dep_stubs = try DependencyStubs.init(allocator, .from(logger.logger("")));
+    var dep_stubs = try DependencyStubs.init(allocator, .from(logger.logger("", .warn)));
     defer dep_stubs.deinit();
 
-    var replay_state = try dep_stubs.stubbedState(allocator, .from(logger.logger("")));
+    var replay_state = try dep_stubs.stubbedState(allocator, .from(logger.logger("", .warn)));
     defer replay_state.deinit();
 
     const processed_a_slot = try freezeCompletedSlots(&replay_state, &.{
@@ -921,7 +921,7 @@ test "freezeCompletedSlots handles errors correctly" {
     try std.testing.expectEqualSlices(u8,
         \\replayed slot 1 with error: replay.execution.ReplaySlotError{ .invalid_block = replay.execution.BlockError.TooFewTicks }
     , logger.messages.items[0].content);
-    try std.testing.expectEqual(sig.trace.Level.err, logger.messages.items[1].level);
+    try std.testing.expectEqual(sig.trace.Level.@"error", logger.messages.items[1].level);
     try std.testing.expectEqualSlices(u8,
         \\replayed slot 2 with error: replay.execution.ReplaySlotError{ .failed_to_load_meta = void }
     , logger.messages.items[1].content);
