@@ -14,8 +14,6 @@ const GossipKey = sig.gossip.data.GossipKey;
 const Signature = sig.core.Signature;
 const Duration = sig.time.Duration;
 
-const getVariant = sig.utils.types.getVariant;
-
 const TRIM_INTERVAL = Duration.fromSecs(2);
 
 pub fn run(seed: u64, args: []const []const u8) !void {
@@ -102,7 +100,7 @@ pub fn run(seed: u64, args: []const []const u8) !void {
                     // !
                     logger.trace().logf("putting pubkey: {}", .{pubkey});
                     const result = try gossip_table.insert(signed_data, now);
-                    std.debug.assert(result.wasInserted());
+                    std.debug.assert(result == .success);
 
                     try keys.append(GossipKey{ .ContactInfo = pubkey });
                     try keypairs.append(keypair);
@@ -143,22 +141,16 @@ pub fn run(seed: u64, args: []const []const u8) !void {
 
                     // !
                     const result = try gossip_table.insert(signed_data, now);
-                    defer {
-                        if (getVariant(result, .OverwroteExistingEntry)) |entry| {
-                            entry.deinit(allocator);
-                        } else if (!result.wasInserted()) {
-                            data.deinit(allocator);
-                        }
-                    }
-                    if (result == .IgnoredOldValue) {
+                    defer if (result == .fail) data.deinit(allocator);
+                    if (result == .fail and result.fail == .too_old) {
                         logger.trace().logf("ignored old value: {}", .{pubkey});
                         std.debug.assert(!should_overwrite);
                     }
-                    if (result == .IgnoredDuplicateValue) {
+                    if (result == .fail and result.fail == .duplicate) {
                         logger.trace().logf("duplicate value: {}", .{pubkey});
                     }
 
-                    if (result.wasInserted()) {
+                    if (result == .success) {
                         keys.items[index] = GossipKey{ .ContactInfo = pubkey };
                         // should over-write the old value
                         insertion_times.items[index] = now;

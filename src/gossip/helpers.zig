@@ -59,5 +59,6 @@ pub fn initGossipFromCluster(
         my_keypair,
         entrypoints.items,
         .from(logger),
+        .{},
     );
 }
