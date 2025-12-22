@@ -136,7 +136,8 @@ fn insertFromSnapshot(
             const data = try account.data.readAllAllocate(arena.allocator());
             defer arena.allocator().free(data);
 
-            try self.db.setAccountDataLength(acc_info, data.len);
+            // Resize with `.uninitialize` as itll immediately be memcpy'd over.
+            try self.db.setAccountDataLength(acc_info, data.len, .uninitialize);
             @memcpy(self.db.getAccountData(acc_info), data);
         }
     }
@@ -160,7 +161,6 @@ pub fn get(
     const acc_info = entry.info orelse return null;
 
     return AccountSharedData{
-        .pubkey = acc_info.pubkey,
         .owner = acc_info.owner,
         .lamports = acc_info.lamports,
         .rent_epoch = acc_info.rent_epoch,
@@ -210,7 +210,10 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
         },
     };
 
-    try self.db.setAccountDataLength(acc_info, @intCast(account.data.len));
+    // Resize with uninitialize as itll immediately be memcpy'd over.
+    self.db.setAccountDataLength(acc_info, @intCast(account.data.len), .uninitialize) catch |err| {
+        std.debug.panic("db account data resize failed: {}", .{err});
+    };
     @memcpy(self.db.getAccountData(acc_info), account.data);
 }
 
@@ -315,8 +318,8 @@ const Db = extern struct {
             self.pool.num_blocks = blockCount(@sizeOf(Db));
 
             // initialize b-tree
-            self.root = try self.alloc(@sizeOf(LeafNode));
-            const leaf = self.getPtr(LeafNode, self.root);
+            self.tree.root = try self.alloc(@sizeOf(LeafNode));
+            const leaf = self.getPtr(LeafNode, self.tree.root);
             @memset(&leaf.keys, EMPTY_KEY);
         }
 
@@ -359,7 +362,8 @@ const Db = extern struct {
     pub fn remove(self: *Db, entry: *Entry) void {
         const acc_info = entry.info.?;
         self.free(acc_info.data.offset, acc_info.data.len);
-        self.delete(&entry._path);
+        acc_info.* = std.mem.zeroes(AccountInfo);
+        // TODO: self.delete(&entry._path);
         entry.info = null;
     }
 
@@ -371,7 +375,7 @@ const Db = extern struct {
     /// Get the account data held by the given AccountInfo.
     /// This is safe to be called from multiple threads (as long as there's no other mutators).
     pub fn getAccountData(self: *const Db, acc_info: *AccountInfo) []align(@alignOf(Block)) u8 {
-        self.getSlice(u8, acc_info.data.offset, acc_info.data.len);
+        return getSlice(@constCast(self), u8, acc_info.data.offset, acc_info.data.len);
     }
 
     /// Change the size of the account data at the given AccountInfo.
@@ -393,7 +397,7 @@ const Db = extern struct {
                 @memset(new_slice[copy..], 0);
             }
             self.free(acc_info.data.offset, acc_info.data.len);
-            acc_info.data.offset = new_offset;
+            acc_info.data.offset = @intCast(new_offset);
         }
         acc_info.data.len = @intCast(new_len);
     }
@@ -405,7 +409,7 @@ const Db = extern struct {
             .sync => posix.MSF.SYNC,
             .@"async" => posix.MSF.ASYNC,
         });
-        if (mode == .sync) posix.fsync(self.file.handle);
+        if (mode == .sync) try posix.fsync(self.file.handle);
     }
 
     /// Returns all memory that was mapped for the file (some of it may not be accessible).
@@ -507,7 +511,7 @@ const Db = extern struct {
     fn countLessThan(keys: *[B]Key, key: Key) u8 {
         const key_vec: @Vector(B, Key) = @splat(key);
         const keys_vec: @Vector(B, Key) = keys.*;
-        const lt_mask: std.math.Int(.unsigned, B) = @bitCast(keys_vec < key_vec);
+        const lt_mask: std.meta.Int(.unsigned, B) = @bitCast(keys_vec < key_vec);
         return @popCount(lt_mask);
     }
 
@@ -518,7 +522,7 @@ const Db = extern struct {
     };
 
     /// Search for an AccountInfo that matches the pubkey, saving the Path along the way.
-    fn lookup(self: *Db, path: *Path, pubkey: Pubkey) ?*AccountInfo {
+    fn lookup(self: *const Db, path: *Path, pubkey: Pubkey) ?*AccountInfo {
         // Covert pubkey into searching Key value.
         var key = pubkey.hash();
         key -= @intFromBool(key == EMPTY_KEY); // make sure its not EMPTY_KEY
@@ -527,7 +531,7 @@ const Db = extern struct {
         // Traverse down inner nodes until we reach a LeafNode, recording the path.
         var node = self.tree.root;
         for (0..self.tree.height) |h| {
-            const inner = self.getPtr(InnerNode, node);
+            const inner = getPtr(@constCast(self), InnerNode, node);
             const idx = countLessThan(&inner.keys, key);
             path.idx_stack[h] = idx;
             path.node_stack[h] = node;
@@ -535,7 +539,7 @@ const Db = extern struct {
         }
 
         // Find lower bound in leaf.
-        const leaf = self.getPtr(LeafNode, node);
+        const leaf = getPtr(@constCast(self), LeafNode, node);
         var idx = countLessThan(&leaf.keys, key);
         path.idx_stack[self.tree.height] = idx;
         path.node_stack[self.tree.height] = node;
@@ -556,7 +560,7 @@ const Db = extern struct {
     }
 
     fn insertAt(comptime T: type, array: *[B]T, idx: u32, value: T) void {
-        std.mem.copyBackwards(Key, array[idx + 1 ..], array[idx .. B - 1]);
+        std.mem.copyBackwards(T, array[idx + 1 ..], array[idx .. B - 1]);
         array[idx] = value;
     }
 
@@ -595,7 +599,7 @@ const Db = extern struct {
 
             // Branchlessly reassign the acc_info if it was moved to the new_leaf.
             const new_idx = @as(u32, idx) -% (B / 2);
-            const new_acc_info = new_leaf.values.ptr +% new_idx;
+            const new_acc_info: *AccountInfo = @ptrCast(new_leaf.values[0..].ptr + new_idx);
             if (new_idx < idx) acc_info = new_acc_info;
 
             // Ascend up the tree until we reach either the root or an non-full node
@@ -633,10 +637,5 @@ const Db = extern struct {
         }
 
         return acc_info;
-    }
-
-    /// Using a path populated from a lookup which returned an AccountInfo, delete it from the tree.
-    fn delete(self: *Db, path: *Path) void {
-        _ = .{ self, path }; // TODO
     }
 };
