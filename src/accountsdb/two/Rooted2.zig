@@ -6,14 +6,19 @@ const tracy = @import("tracy");
 const Rooted = @This();
 
 const posix = std.posix;
+const RwLock = std.Thread.RwLock;
+
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
+
 const AccountSharedData = sig.runtime.AccountSharedData;
 const AccountFile = sig.accounts_db.accounts_file.AccountFile;
 
-/// Handle to the underlying sqlite database.
+/// Handle to the underlying database.
 db: *Db,
+/// Synchronization for the Db
+rwlock: RwLock,
 /// Tracks the largest rooted slot.
 largest_rooted_slot: ?Slot,
 
@@ -24,7 +29,11 @@ pub fn init(file_path: [:0]const u8) !Rooted {
     const db = try Db.open(file_path);
     errdefer db.close();
 
-    return .{ .db = db, .largest_rooted_slot = null };
+    return .{
+        .db = db,
+        .rwlock = .{},
+        .largest_rooted_slot = null,
+    };
 }
 
 pub fn initSnapshot(
@@ -50,6 +59,10 @@ pub fn initSnapshot(
 }
 
 pub fn deinit(self: *Rooted) void {
+    // sanity check
+    std.debug.assert(self.rwlock.tryLock());
+    self.rwlock.unlock();
+
     self.db.close();
 }
 
@@ -113,32 +126,22 @@ fn insertFromSnapshot(
             defer account.deinit(arena.allocator());
             n_accounts_in_file += 1;
 
-            var acc_entry = self.db.get(account.store_info.pubkey);
-            const acc_info = if (acc_entry.info) |acc_info| blk: {
-                // Simulate sorting by skipping account updates from older accounts_file entries.
-                if (acc_info.slot > accounts_file.slot) continue;
-                break :blk acc_info;
-            } else try self.db.put(&acc_entry);
+            const acc = try self.db.put(account.store_info.pubkey);
+            // simulate sorting by skipping account updates on older accounts_file entries.
+            if (acc.slot > accounts_file.slot) continue;
 
-            acc_info.* = .{
-                .pubkey = account.store_info.pubkey,
-                .owner = account.account_info.owner,
-                .lamports = account.account_info.lamports,
-                .rent_epoch = account.account_info.rent_epoch,
-                .slot = accounts_file.slot,
-                .data = .{
-                    .executable = account.account_info.executable,
-                    .offset = acc_info.data.offset,
-                    .len = acc_info.data.len,
-                },
-            };
+            acc.slot = accounts_file.slot;
+            acc.owner = account.account_info.owner;
+            acc.lamports = account.account_info.lamports;
+            acc.rent_epoch = account.account_info.rent_epoch;
+            acc.data.executable = account.account_info.executable;
 
             const data = try account.data.readAllAllocate(arena.allocator());
             defer arena.allocator().free(data);
 
             // Resize with `.uninitialize` as itll immediately be memcpy'd over.
-            try self.db.setAccountDataLength(acc_info, @intCast(data.len), .uninitialize);
-            @memcpy(self.db.getAccountData(acc_info), data);
+            try self.db.setAccountDataLength(acc, @intCast(data.len), .uninitialize);
+            @memcpy(self.db.getAccountData(acc), data);
         }
     }
 }
@@ -153,19 +156,20 @@ pub fn deinitThreadLocals() void {}
 ///
 /// TODO: we really don't want to be doing these clones, so some other solution would be good.
 pub fn get(
-    self: *const Rooted,
+    self: *Rooted,
     allocator: std.mem.Allocator,
     address: Pubkey,
 ) error{OutOfMemory}!?AccountSharedData {
-    const entry = self.db.get(address);
-    const acc_info = entry.info orelse return null;
+    self.rwlock.lockShared();
+    defer self.rwlock.unlockShared();
 
-    return AccountSharedData{
-        .owner = acc_info.owner,
-        .lamports = acc_info.lamports,
-        .rent_epoch = acc_info.rent_epoch,
-        .executable = acc_info.data.executable,
-        .data = try allocator.dupe(u8, self.db.getAccountData(acc_info)),
+    const acc = self.db.get(address) orelse return null;
+    return .{
+        .owner = acc.owner,
+        .lamports = acc.lamports,
+        .rent_epoch = acc.rent_epoch,
+        .executable = acc.data.executable,
+        .data = try allocator.dupe(u8, self.db.getAccountData(acc)),
     };
 }
 
@@ -187,34 +191,31 @@ pub fn commitTransaction(self: *Rooted) void {
 /// Should not be called outside of snapshot loading or slot rooting.
 /// TODO: write putRootedSlot(slot, []pk, []account) and make that public instead.
 pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedData) void {
-    var entry = self.db.get(address);
+    self.rwlock.lock();
+    defer self.rwlock.unlock();
+
+    // Avoid db.put() if just trying to delete an account.
     if (account.isDeleted()) {
-        if (entry.info != null) self.db.remove(&entry);
+        const acc = self.db.get(address) orelse return;
+        self.db.remove(acc);
         return;
     }
 
-    const acc_info = entry.info orelse self.db.put(&entry) catch |err| {
+    const acc = self.db.put(address) catch |err| {
         std.debug.panic("db.put() failed: {}", .{err});
     };
 
-    acc_info.* = .{
-        .pubkey = address,
-        .owner = account.owner,
-        .lamports = account.lamports,
-        .rent_epoch = account.rent_epoch,
-        .slot = slot,
-        .data = .{
-            .executable = account.executable,
-            .offset = acc_info.data.offset,
-            .len = acc_info.data.len,
-        },
-    };
+    acc.slot = slot;
+    acc.owner = account.owner;
+    acc.lamports = account.lamports;
+    acc.rent_epoch = account.rent_epoch;
+    acc.data.executable = account.executable;
 
-    // Resize with uninitialize as itll immediately be memcpy'd over.
-    self.db.setAccountDataLength(acc_info, @intCast(account.data.len), .uninitialize) catch |err| {
-        std.debug.panic("db account data resize failed: {}", .{err});
+    // Resize with .uninitialize and we'll be overwriting all of it with memcpy anyway.
+    self.db.setAccountDataLength(acc, @intCast(account.data.len), .uninitialize) catch |err| {
+        std.debug.panic("db account data size failed: {}", .{err});
     };
-    @memcpy(self.db.getAccountData(acc_info), account.data);
+    @memcpy(self.db.getAccountData(acc), account.data);
 }
 
 /// An on-disk KV database simulating a HashMap(Pubkey, { Slot, AccountSharedData }).
@@ -258,25 +259,26 @@ const Db = extern struct {
     const Key = u64;
     const EMPTY_KEY: Key = std.math.maxInt(u64);
 
-    /// The database's representation of an Account which is free to modify.
-    pub const AccountInfo = extern struct {
+    /// The database's representation of an Account. Db users are free to modify most fields.
+    const Account = extern struct {
         pubkey: Pubkey,
         owner: Pubkey,
         lamports: u64,
         rent_epoch: Epoch,
         slot: Slot,
 
-        /// Use getAccountData() to access the data bytes.
-        /// Use setAccountDataLength() to change the data bytes size.
+        /// NOTE contains internal fields. Only read/write `.executable`, or read `.len`.
+        /// The data bytes themselves are interfaced with `getAccountData`/`setAccountDataLength`.
         data: packed struct(u64) {
             executable: bool,
-            offset: u39, // enough to address 550 million Blocks
+            deleted: bool, // TODO: eventually replace this with actual b-tree index removal
+            offset: u38, // enough to address 275 million Blocks
             len: u24, // enough to address 10 MB
         },
     };
 
     const B = 32;
-    const max_height = 8; // allows for `(B / 2) << height` max entries
+    const max_height = 8; // allows for `pow(B / 2, height)` max entries
 
     const InnerNode = extern struct {
         keys: [B]Key,
@@ -284,7 +286,7 @@ const Db = extern struct {
     };
     const LeafNode = extern struct {
         keys: [B]Key,
-        values: [B]AccountInfo,
+        values: [B]Account,
     };
 
     pub fn open(file_path: [:0]const u8) !*Db {
@@ -335,72 +337,74 @@ const Db = extern struct {
         posix.close(handle);
     }
 
-    pub const Entry = struct {
-        _path: Path,
-        info: ?*AccountInfo,
-    };
-
-    /// Lookup an instance of the AccountInfo in the database using the pubkey & return an Entry.
-    /// An entry holds the amortized lookup result & can be used to insert/remove the AccountInfo.
-    /// This is marked inline to avoid stack copies of the Entry struct.
-    /// This is safe to be called from multiple threads (as long as there's no other mutators).
-    pub inline fn get(self: *const Db, pubkey: Pubkey) Entry {
-        var entry: Entry = undefined;
-        entry.info = self.lookup(&entry._path, pubkey);
-        return entry;
+    /// For the given pubkey, return's an existing Account if any.
+    pub fn get(self: *const Db, pubkey: Pubkey) ?*Account {
+        var path: Path = undefined;
+        const acc = self.lookup(&path, &pubkey) orelse return null;
+        return if (!acc.data.deleted) acc else null;
     }
 
-    /// For an entry returned by get() that DOES NOT contain an AccountInfo, create a new one.
-    /// This consumes & invalidates the Entry.
-    pub fn put(self: *Db, entry: *Entry) !*AccountInfo {
-        std.debug.assert(entry.info == null);
-        entry.info = try self.insert(&entry._path);
-        return entry.info.?;
+    /// For the given pubkey, either return an existing Account, or create a new one.
+    /// Newly created Accounts have their state zeroed out (excluding the pubkey).
+    pub fn put(self: *Db, pubkey: Pubkey) !*Account {
+        var path: Path = undefined;
+        if (self.lookup(&path, &pubkey)) |acc| {
+            acc.data.deleted = false;
+            return acc;
+        }
+
+        const acc = try self.insert(&path);
+        acc.* = std.mem.zeroes(Account);
+        acc.pubkey = pubkey;
+        return acc;
     }
 
-    /// For an entry returned by get() tat DOES contain an AccountInfo, remove it from the database.
-    /// This consumes & invalidates the Entry.
-    pub fn remove(self: *Db, entry: *Entry) void {
-        const acc_info = entry.info.?;
-        self.free(acc_info.data.offset, acc_info.data.len);
-        acc_info.* = std.mem.zeroes(AccountInfo);
-        // TODO: self.delete(&entry._path);
-        entry.info = null;
+    /// Mark the account (returned from a valid get()) as deleted,
+    /// zeroing out the account state (excluding the pubkey).
+    pub fn remove(self: *Db, acc: *Account) void {
+        std.debug.assert(!acc.data.deleted);
+        self.free(acc.data.offset, acc.data.len);
+        self.tree.count -= 1;
+
+        const pubkey = acc.pubkey;
+        acc.* = std.mem.zeroes(Account);
+        acc.pubkey = pubkey;
+        acc.data.deleted = true;
     }
 
-    //// Returns the number of AccountInfo's currently present in the databse.
+    //// Returns the number of Accounts's currently present in the databse.
     pub fn count(self: *const Db) usize {
         return self.tree.count;
     }
 
-    /// Get the account data held by the given AccountInfo.
-    /// This is safe to be called from multiple threads (as long as there's no other mutators).
-    pub fn getAccountData(self: *const Db, acc_info: *AccountInfo) []align(@alignOf(Block)) u8 {
-        return getSlice(@constCast(self), u8, acc_info.data.offset, acc_info.data.len);
+    /// Get the account data held by the given Account.
+    pub fn getAccountData(self: *const Db, acc: *Account) []align(@alignOf(Block)) u8 {
+        return getSlice(@constCast(self), u8, acc.data.offset, acc.data.len);
     }
 
-    /// Change the size of the account data at the given AccountInfo.
+    /// Change the size of the account data at the given Account.
     /// The new length must not be larger than the maximum addressible data by the databse (10 MB).
     /// When the mode is `uninitialize`, the contents of the data after resizing are unspecified.
     /// When the mode is `truncate`, shrinking keeps data & growing extends with zeroes.
     pub fn setAccountDataLength(
         self: *Db,
-        acc_info: *AccountInfo,
+        acc: *Account,
         new_len: u32,
         mode: enum { truncate, uninitialize },
     ) !void {
-        if (sizeClassIndex(acc_info.data.len) != sizeClassIndex(new_len)) {
+        // Check if a realloc is required.
+        if (sizeClassIndex(acc.data.len) != sizeClassIndex(new_len)) {
             const new_offset = try self.alloc(new_len);
             if (mode == .truncate) {
-                const copy = @min(acc_info.data.len, new_len);
+                const keep = @min(acc.data.len, new_len);
                 const new_slice = self.getSlice(u8, new_offset, new_len);
-                @memcpy(new_slice[0..copy], self.getAccountData(acc_info)[0..copy]);
-                @memset(new_slice[copy..], 0);
+                @memcpy(new_slice[0..keep], self.getAccountData(acc)[0..keep]);
+                @memset(new_slice[keep..], 0);
             }
-            self.free(acc_info.data.offset, acc_info.data.len);
-            acc_info.data.offset = @intCast(new_offset);
+            self.free(acc.data.offset, acc.data.len);
+            acc.data.offset = @intCast(new_offset);
         }
-        acc_info.data.len = @intCast(new_len);
+        acc.data.len = @intCast(new_len);
     }
 
     /// Tell the database to flush all inflight updates to disk.
@@ -523,7 +527,11 @@ const Db = extern struct {
     };
 
     /// Search for an AccountInfo that matches the pubkey, saving the Path along the way.
-    fn lookup(self: *const Db, path: *Path, pubkey: Pubkey) ?*AccountInfo {
+    fn lookup(
+        noalias self: *const Db,
+        noalias path: *Path,
+        noalias pubkey: *const Pubkey,
+    ) ?*Account {
         // Covert pubkey into searching Key value.
         var key = pubkey.hash();
         key -= @intFromBool(key == EMPTY_KEY); // make sure its not EMPTY_KEY
@@ -551,7 +559,7 @@ const Db = extern struct {
         while (leaf.keys[idx] == key) : (idx += 1) {
             @branchHint(.likely);
             const acc_info = &leaf.values[idx];
-            if (acc_info.pubkey.equals(&pubkey)) {
+            if (acc_info.pubkey.equals(pubkey)) {
                 @branchHint(.likely);
                 return acc_info;
             }
@@ -571,8 +579,8 @@ const Db = extern struct {
         @memcpy(new_node.values[0 .. B / 2], old_node.values[B / 2 ..]);
     }
 
-    /// Using a path populated from a lookup which returned null, allocate a new AccountInfo
-    fn insert(self: *Db, path: *Path) !*AccountInfo {
+    /// Using a path populated from a lookup which returned null, allocate a new Account
+    fn insert(noalias self: *Db, noalias path: *Path) !*Account {
         const max_entries = comptime std.math.pow(u64, B / 2, max_height);
         if (self.tree.count == max_entries) return posix.TruncateError.FileTooBig;
         self.tree.count += 1;
@@ -582,13 +590,13 @@ const Db = extern struct {
         var node = path.node_stack[self.tree.height];
 
         const leaf = self.getPtr(LeafNode, node);
-        var acc_info = &leaf.values[idx];
-        @prefetch(acc_info, .{});
+        var value = &leaf.values[idx];
+        @prefetch(value, .{});
 
         // Insert the key and value, pipelining the check for if leaf will be full.
         var filled = leaf.keys[B - 2] != EMPTY_KEY;
         insertAt(Key, &leaf.keys, idx, key);
-        insertAt(AccountInfo, &leaf.values, idx, std.mem.zeroes(AccountInfo));
+        insertAt(Account, &leaf.values, idx, undefined);
         if (filled) split: {
             @branchHint(.unlikely);
 
@@ -598,10 +606,10 @@ const Db = extern struct {
             moveHalf(leaf, new_leaf);
             key = leaf.keys[B / 2 - 1];
 
-            // Branchlessly reassign the acc_info if it was moved to the new_leaf.
+            // Branchlessly reassign the value if it was moved to the new_leaf.
             const new_idx = @as(u32, idx) -% (B / 2);
-            const new_acc_info: *AccountInfo = @ptrCast(new_leaf.values[0..].ptr + new_idx);
-            if (new_idx < idx) acc_info = new_acc_info;
+            const new_value: *Account = @ptrCast(new_leaf.values[0..].ptr + new_idx);
+            if (new_idx < idx) value = new_value;
 
             // Ascend up the tree until we reach either the root or an non-full node
             var h = @as(u32, self.tree.height) -% 1;
@@ -637,6 +645,6 @@ const Db = extern struct {
             self.tree.height += 1;
         }
 
-        return acc_info;
+        return value;
     }
 };
