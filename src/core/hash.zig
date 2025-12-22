@@ -202,7 +202,7 @@ pub const Hash = extern struct {
                         : [x] "=x" (-> V),
                         : [_] "0" (x),
                           [y] "x" (y),
-                          [_] "{xmm0}" (@as(V, @bitCast(@as(u128, @bitCast(w)) >> 64))),
+                          [_] "{xmm0}" (@shuffle(u32, w, undefined, @Vector(4, i32){ 2, 3, 0, 1 })),
                     );
                 }
 
