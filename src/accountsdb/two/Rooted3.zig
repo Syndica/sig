@@ -259,14 +259,11 @@ const Db = extern struct {
         lamports: u64,
         rent_epoch: Epoch,
         slot: Slot,
-        data: packed struct(u32) {
+        data: packed struct(u64) {
             executable: bool,
-            len: u31,
+            offset: u39,
+            len: u24,
         },
-
-        fn getData(self: *Account) []u8 {
-            return @as([*]u8, @ptrCast(self))[@sizeOf(Account)..][0..self.data.len];
-        }
     };
 
     const B = 32;
@@ -280,7 +277,7 @@ const Db = extern struct {
         keys: [B]Key,
         values: [B]extern struct {
             pubkey: Pubkey,
-            account: Offset,
+            account: Account = std.mem.zeroes(Account),
         },
     };
 
@@ -309,6 +306,8 @@ const Db = extern struct {
         self.file = .{ .handle = file.handle, .size = size };
 
         if (self.pool.allocated == 0) {
+            std.debug.print("initializing db\n", .{});
+
             self.pool = .{
                 .allocated = @sizeOf(Db),
                 .free_lists = @splat(0),
@@ -356,21 +355,17 @@ const Db = extern struct {
         defer zone.deinit();
 
         var path: Path = undefined;
-        const offset_ptr = self.lookup(&path, &pubkey) orelse return null;
-
-        const offset = offset_ptr.*;
-        if (offset == 0) return null;
+        const acc = self.lookup(&path, &pubkey) orelse return null;
 
         const read_zone = tracy.Zone.init(@src(), .{ .name = "Db.readAccount" });
         defer read_zone.deinit();
 
-        const acc = self.getPtr(Account, offset);
         return .{
             .owner = acc.owner,
             .lamports = acc.lamports,
             .rent_epoch = acc.rent_epoch,
             .executable = acc.data.executable,
-            .data = try allocator.dupe(u8, acc.getData()),
+            .data = try allocator.dupe(u8, self.getSlice(u8, acc.data.offset, acc.data.len)),
         };
     }
 
@@ -379,51 +374,41 @@ const Db = extern struct {
         defer zone.deinit();
 
         var path: Path = undefined;
-        const offset_ptr = self.lookup(&path, &pubkey) orelse blk: {
+        const acc = self.lookup(&path, &pubkey) orelse blk: {
             if (account.isDeleted()) return;
             break :blk try self.insert(&path, &pubkey);
         };
 
-        const new_size: u32 = @intCast(@sizeOf(Account) + account.data.len);
-
-        var offset = offset_ptr.*;
-        if (offset > 0) {
-            const acc = self.getPtr(Account, offset);
-            const acc_size: u32 = @intCast(@sizeOf(Account) + acc.data.len);
-
-            if (slot <= acc.slot) {
-                return error.InvalidSlot;
-            }
-
-            if (account.isDeleted()) {
-                self.free(offset, acc_size);
-                offset_ptr.* = 0;
-                return;
-            }
-
-            if (sizeClassIndex(acc_size) != sizeClassIndex(new_size)) {
-                self.free(offset, acc_size);
-                offset = 0;
-            }
+        if (slot < acc.slot) {
+            return error.InvalidSlot;
         }
 
-        if (offset == 0) {
-            offset = try self.alloc(new_size);
-            offset_ptr.* = offset;
+        if (account.isDeleted()) {
+            self.free(acc.data.offset, acc.data.len);
+            acc.* = std.mem.zeroes(Account);
+            return;
+        }
+
+        if (sizeClassIndex(acc.data.len) != sizeClassIndex(@intCast(account.data.len))) {
+            self.free(acc.data.offset, acc.data.len);
+            acc.data.offset = @intCast(try self.alloc(@intCast(account.data.len)));
         }
 
         const write_zone = tracy.Zone.init(@src(), .{ .name = "Db.writeAccount" });
         defer write_zone.deinit();
 
-        const acc = self.getPtr(Account, offset);
         acc.* = .{
             .owner = account.owner,
             .lamports = account.lamports,
             .rent_epoch = account.rent_epoch,
             .slot = slot,
-            .data = .{ .executable = account.executable, .len = @intCast(account.data.len) },
+            .data = .{
+                .executable = account.executable,
+                .offset = acc.data.offset,
+                .len = @intCast(account.data.len),
+            },
         };
-        @memcpy(acc.getData(), account.data);
+        @memcpy(self.getSlice(u8, acc.data.offset, acc.data.len), account.data);
     }
 
     /// Returns all memory that was mapped for the file (some of it may not be accessible).
@@ -556,7 +541,11 @@ const Db = extern struct {
         node_stack: [max_height]Offset,
     };
 
-    fn lookup(noalias self: *const Db, noalias path: *Path, noalias pubkey: *const Pubkey) ?*Offset {
+    fn lookup(
+        noalias self: *const Db,
+        noalias path: *Path,
+        noalias pubkey: *const Pubkey,
+    ) ?*@TypeOf(@as(LeafNode, undefined).values[0].account) {
         const zone = tracy.Zone.init(@src(), .{ .name = "Db.BTree.lookup" });
         defer zone.deinit();
 
@@ -608,7 +597,11 @@ const Db = extern struct {
     }
 
     /// Using a path populated from a lookup which returned null, allocate a new Account
-    fn insert(noalias self: *Db, noalias path: *Path, noalias pubkey: *const Pubkey) !*Offset {
+    fn insert(
+        noalias self: *Db,
+        noalias path: *Path,
+        noalias pubkey: *const Pubkey,
+    ) !*@TypeOf(@as(LeafNode, undefined).values[0].account) {
         const zone = tracy.Zone.init(@src(), .{ .name = "Db.BTree.insert" });
         defer zone.deinit();
 
@@ -627,7 +620,7 @@ const Db = extern struct {
         // Insert the key and value, pipelining the check for if leaf will be full.
         var filled = leaf.keys[B - 2] != EMPTY_KEY;
         insertAt(&leaf.keys, idx, key);
-        insertAt(&leaf.values, idx, .{ .pubkey = pubkey.*, .account = 0 });
+        insertAt(&leaf.values, idx, .{ .pubkey = pubkey.* });
         if (filled) split: {
             @branchHint(.unlikely);
 
