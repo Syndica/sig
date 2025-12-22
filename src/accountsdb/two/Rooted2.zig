@@ -290,7 +290,7 @@ const Db = extern struct {
     };
 
     pub fn open(file_path: [:0]const u8) !*Db {
-        const file = try std.fs.cwd().createFile(file_path, .{});
+        const file = try std.fs.cwd().createFile(file_path, .{ .read = true, .lock = .exclusive });
         errdefer file.close();
 
         const memory = try posix.mmap(
