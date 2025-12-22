@@ -218,6 +218,7 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
 }
 
 /// An on-disk KV database simulating a HashMap(Pubkey, { Slot, AccountSharedData }).
+/// Backed by a B- Tree implementation from: https://en.algorithmica.org/hpc/data-structures/b-tree/
 const Db = extern struct {
     _: [0]u8 align(std.heap.page_size_min),
     file: extern struct {
@@ -547,16 +548,15 @@ const Db = extern struct {
         // Its technically possible, although extremely unlikely, for 2 pubkeys to hash to same Key.
         // In that case, we must scan for the right AccountInfo.
         // The last key in a node is always EMPTY_KEY, so we can rely on key comparison to exit loop
-        while (true) {
+        while (leaf.keys[idx] == key) : (idx += 1) {
+            @branchHint(.likely);
             const acc_info = &leaf.values[idx];
             if (acc_info.pubkey.equals(&pubkey)) {
                 @branchHint(.likely);
                 return acc_info;
             }
-            idx += 1;
-            if (leaf.keys[idx] == key) continue;
-            return null;
         }
+        return null;
     }
 
     fn insertAt(comptime T: type, array: *[B]T, idx: u32, value: T) void {
@@ -573,7 +573,7 @@ const Db = extern struct {
 
     /// Using a path populated from a lookup which returned null, allocate a new AccountInfo
     fn insert(self: *Db, path: *Path) !*AccountInfo {
-        const max_entries = (B / 2) << max_height;
+        const max_entries = comptime std.math.pow(u64, B / 2, max_height);
         if (self.tree.count == max_entries) return posix.TruncateError.FileTooBig;
         self.tree.count += 1;
 
@@ -596,6 +596,7 @@ const Db = extern struct {
             var new_node = try self.alloc(@sizeOf(LeafNode));
             const new_leaf = self.getPtr(LeafNode, new_node);
             moveHalf(leaf, new_leaf);
+            key = leaf.keys[B / 2 - 1];
 
             // Branchlessly reassign the acc_info if it was moved to the new_leaf.
             const new_idx = @as(u32, idx) -% (B / 2);
