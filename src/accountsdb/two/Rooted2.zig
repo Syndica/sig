@@ -95,8 +95,8 @@ fn insertFromSnapshot(
         // TODO: assuming length is the file length is technically not correct
         const accounts_file = try AccountFile.init(
             file,
-            .{ .id = .fromInt(entry.id), .length = (try file.stat()).size },
-            entry.slot,
+            .{ .id = .fromInt(id), .length = (try file.stat()).size },
+            slot,
         );
 
         const file_zone = tracy.Zone.init(
@@ -137,7 +137,7 @@ fn insertFromSnapshot(
             defer arena.allocator().free(data);
 
             // Resize with `.uninitialize` as itll immediately be memcpy'd over.
-            try self.db.setAccountDataLength(acc_info, data.len, .uninitialize);
+            try self.db.setAccountDataLength(acc_info, @intCast(data.len), .uninitialize);
             @memcpy(self.db.getAccountData(acc_info), data);
         }
     }
