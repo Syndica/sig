@@ -74,8 +74,6 @@ fn insertFromSnapshot(
     const insert_zone = tracy.Zone.init(@src(), .{ .name = "Rooted.insertFromSnapshot" });
     defer insert_zone.deinit();
 
-    std.debug.print("db is empty -  loading from snapshot!\n", .{});
-
     var bp = try sig.accounts_db.buffer_pool.BufferPool.init(allocator, 20480 + 2);
     defer bp.deinit(allocator);
 
@@ -126,24 +124,27 @@ fn insertFromSnapshot(
             defer account.deinit(arena.allocator());
             n_accounts_in_file += 1;
 
-            const acc = try self.db.put(account.store_info.pubkey);
-            // simulate sorting by skipping account updates on older accounts_file entries.
-            if (acc.slot > accounts_file.slot) continue;
-
-            acc.slot = accounts_file.slot;
-            acc.owner = account.account_info.owner;
-            acc.lamports = account.account_info.lamports;
-            acc.rent_epoch = account.account_info.rent_epoch;
-            acc.data.executable = account.account_info.executable;
-
             const data = try account.data.readAllAllocate(arena.allocator());
             defer arena.allocator().free(data);
 
-            // Resize with `.uninitialize` as itll immediately be memcpy'd over.
-            try self.db.setAccountDataLength(acc, @intCast(data.len), .uninitialize);
-            @memcpy(self.db.getAccountData(acc), data);
+            self.db.put(
+                account.store_info.pubkey,
+                accounts_file.slot,
+                .{
+                    .owner = account.account_info.owner,
+                    .lamports = account.account_info.lamports,
+                    .rent_epoch = account.account_info.rent_epoch,
+                    .executable = account.account_info.executable,
+                    .data = data,
+                },
+            ) catch |err| switch (err) {
+                error.InvalidSlot => {}, // simulate sorting by ignoring older slot puts
+                else => |e| return e,
+            };
         }
     }
+
+    try self.db.flush(.sync);
 }
 
 /// For API compatibility.
@@ -160,17 +161,13 @@ pub fn get(
     allocator: std.mem.Allocator,
     address: Pubkey,
 ) error{OutOfMemory}!?AccountSharedData {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.get" });
+    defer zone.deinit();
+
     self.rwlock.lockShared();
     defer self.rwlock.unlockShared();
 
-    const acc = self.db.get(address) orelse return null;
-    return .{
-        .owner = acc.owner,
-        .lamports = acc.lamports,
-        .rent_epoch = acc.rent_epoch,
-        .executable = acc.data.executable,
-        .data = try allocator.dupe(u8, self.db.getAccountData(acc)),
-    };
+    return self.db.get(allocator, address);
 }
 
 /// For API compatibility.
@@ -185,37 +182,24 @@ pub fn beginTransaction(self: *Rooted) void {
 }
 
 pub fn commitTransaction(self: *Rooted) void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.commitTransaction" });
+    defer zone.deinit();
+
     self.db.flush(.@"async") catch |err| std.debug.panic("db.sync() failed: {}", .{err});
 }
 
 /// Should not be called outside of snapshot loading or slot rooting.
 /// TODO: write putRootedSlot(slot, []pk, []account) and make that public instead.
 pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedData) void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.put" });
+    defer zone.deinit();
+
     self.rwlock.lock();
     defer self.rwlock.unlock();
 
-    // Avoid db.put() if just trying to delete an account.
-    if (account.isDeleted()) {
-        const acc = self.db.get(address) orelse return;
-        self.db.remove(acc);
-        return;
-    }
-
-    const acc = self.db.put(address) catch |err| {
+    self.db.put(address, slot, account) catch |err| {
         std.debug.panic("db.put() failed: {}", .{err});
     };
-
-    acc.slot = slot;
-    acc.owner = account.owner;
-    acc.lamports = account.lamports;
-    acc.rent_epoch = account.rent_epoch;
-    acc.data.executable = account.executable;
-
-    // Resize with .uninitialize and we'll be overwriting all of it with memcpy anyway.
-    self.db.setAccountDataLength(acc, @intCast(account.data.len), .uninitialize) catch |err| {
-        std.debug.panic("db account data size failed: {}", .{err});
-    };
-    @memcpy(self.db.getAccountData(acc), account.data);
 }
 
 /// An on-disk KV database simulating a HashMap(Pubkey, { Slot, AccountSharedData }).
@@ -227,54 +211,61 @@ const Db = extern struct {
         size: u64,
     },
     pool: extern struct {
-        num_blocks: u64,
+        allocated: Offset,
         free_lists: [size_classes.len]Offset,
     },
-    tree: packed struct(u128) {
+    tree: extern struct {
         root: Offset,
-        height: u4,
-        count: u60,
+        height: u32,
+        count: u32,
+        node_cache: extern struct {
+            ptr: Offset,
+            end: Offset,
+        },
     },
 
     // Absurdely large limit to avoid having to mremap ever
-    const max_file_size = 64 * 1024 * 1024 * 1024; // 64 TB
+    const max_file_size = 64 * 1024 * 1024 * 1024 * 1024; // 64 TB
 
     // Smallest size in bytes when extending the file on disk (to amortize ftruncate/mprotect calls)
-    const min_file_growth = 64 * 1024 * 1024; // 64 MB
+    const min_file_growth = 1 * 1024 * 1024 * 1024; // 1 GB
 
-    // Smallest addressible unit of memory for disk allocations
-    const Block = extern struct { _: [64]u8 align(64) };
-    const Offset = u64;
+    // Smallest possible alignment
+    const min_align = size_classes[0];
+
+    // Amount of memory to grab in chunks at a time for BTree nodes
+    const node_cache_size = size_classes[size_classes.len - 1];
 
     // All possible bins disk allocations can fit into.
     const size_classes = [_]u32{
-        64,               256,             512,
-        1024,             4 * 1024,        8 * 1024,
-        16 * 1024,        64 * 1024,       1024 * 1024,
-        2 * 1024 * 1024,  4 * 1024 * 1024, 8 * 1024 * 1024,
-        10 * 1024 * 1024,
+        64,              256,             512,
+        1024,            4 * 1024,        8 * 1024,
+        16 * 1024,       64 * 1024,       1024 * 1024,
+        2 * 1024 * 1024, 4 * 1024 * 1024, 8 * 1024 * 1024,
+        @sizeOf(Account) + 10 * 1024 * 1024, // Account with 10 MB
     };
+
+    // Byte-wise index into the Db memory map. A value of 0 is null.
+    const Offset = u64;
 
     // Pubkeys are converted into this format to accelerate tree operations.
     const Key = u64;
     const EMPTY_KEY: Key = std.math.maxInt(u64);
 
-    /// The database's representation of an Account. Db users are free to modify most fields.
+    /// The database's internal representation of an Account.
     const Account = extern struct {
-        pubkey: Pubkey,
         owner: Pubkey,
         lamports: u64,
         rent_epoch: Epoch,
         slot: Slot,
-
-        /// NOTE contains internal fields. Only read/write `.executable`, or read `.len`.
-        /// The data bytes themselves are interfaced with `getAccountData`/`setAccountDataLength`.
-        data: packed struct(u64) {
+        data: packed struct(u32) {
             executable: bool,
-            deleted: bool, // TODO: eventually replace this with actual b-tree index removal
-            offset: u38, // enough to address 275 million Blocks
-            len: u24, // enough to address 10 MB
+            len: u31,
         },
+
+        fn getData(self: *Account) []u8 {
+            return @as([*]u8, @ptrCast(self))[@sizeOf(Account)..][0..self.data.len];
+        }
     };
 
     const B = 32;
@@ -286,7 +277,10 @@ const Db = extern struct {
     };
     const LeafNode = extern struct {
         keys: [B]Key,
-        values: [B]Account,
+        values: [B]extern struct {
+            pubkey: Pubkey,
+            account: Offset,
+        },
     };
 
     pub fn open(file_path: [:0]const u8) !*Db {
@@ -303,27 +297,27 @@ const Db = extern struct {
         );
         errdefer posix.munmap(memory);
 
-        // Make sure there's enough room for Db struct.
         var size = (try file.stat()).size;
         if (size < @sizeOf(Db)) {
             size = @max(@sizeOf(Db), min_file_growth);
             try posix.ftruncate(file.handle, size);
         }
 
-        // Allow access only to memory that encompasses the file data on disk & init Db.
         try posix.mprotect(memory[0..size], posix.PROT.READ | posix.PROT.WRITE);
         const self: *Db = @ptrCast(memory[0..@sizeOf(Db)].ptr);
         self.file = .{ .handle = file.handle, .size = size };
 
-        // mmap + ftruncate zeroes out memory by default. So on first access, setup the Db.
-        if (self.pool.num_blocks == 0) {
-            // mark Db header as already allocted.
-            self.pool.num_blocks = blockCount(@sizeOf(Db));
-
-            // initialize b-tree
-            self.tree.root = try self.alloc(@sizeOf(LeafNode));
-            const leaf = self.getPtr(LeafNode, self.tree.root);
-            @memset(&leaf.keys, EMPTY_KEY);
+        if (self.pool.allocated == 0) {
+            self.pool = .{
+                .allocated = @sizeOf(Db),
+                .free_lists = @splat(0),
+            };
+            self.tree = .{
+                .root = try self.allocNode(LeafNode),
+                .height = 0,
+                .count = 0,
+                .node_cache = .{ .ptr = 0, .end = 0 },
+            };
         }
 
         return self;
@@ -333,43 +327,18 @@ const Db = extern struct {
         self.flush(.sync) catch {};
 
         const handle = self.file.handle; // read out handle before unmapping Db memory.
-        posix.munmap(self.mapped());
+        posix.munmap(self.getMapped());
         posix.close(handle);
     }
 
-    /// For the given pubkey, return's an existing Account if any.
-    pub fn get(self: *const Db, pubkey: Pubkey) ?*Account {
-        var path: Path = undefined;
-        const acc = self.lookup(&path, &pubkey) orelse return null;
-        return if (!acc.data.deleted) acc else null;
-    }
-
-    /// For the given pubkey, either return an existing Account, or create a new one.
-    /// Newly created Accounts have their state zeroed out (excluding the pubkey).
-    pub fn put(self: *Db, pubkey: Pubkey) !*Account {
-        var path: Path = undefined;
-        if (self.lookup(&path, &pubkey)) |acc| {
-            acc.data.deleted = false;
-            return acc;
-        }
-
-        const acc = try self.insert(&path);
-        acc.* = std.mem.zeroes(Account);
-        acc.pubkey = pubkey;
-        return acc;
-    }
-
-    /// Mark the account (returned from a valid get()) as deleted,
-    /// zeroing out the account state (excluding the pubkey).
-    pub fn remove(self: *Db, acc: *Account) void {
-        std.debug.assert(!acc.data.deleted);
-        self.free(acc.data.offset, acc.data.len);
-        self.tree.count -= 1;
-
-        const pubkey = acc.pubkey;
-        acc.* = std.mem.zeroes(Account);
-        acc.pubkey = pubkey;
-        acc.data.deleted = true;
+    /// Tell the database to flush all inflight updates to disk.
+    /// If mode == .async, this *tries* to return early and do the flushing in the background.
+    pub fn flush(self: *Db, mode: enum { sync, @"async" }) !void {
+        try posix.msync(self.getDiskMapped(), switch (mode) {
+            .sync => posix.MSF.SYNC,
+            .@"async" => posix.MSF.ASYNC,
+        });
+        if (mode == .sync) try posix.fsync(self.file.handle);
     }
 
     //// Returns the number of Accounts's currently present in the databse.
@@ -377,64 +346,108 @@ const Db = extern struct {
         return self.tree.count;
     }
 
-    /// Get the account data held by the given Account.
-    pub fn getAccountData(self: *const Db, acc: *Account) []align(@alignOf(Block)) u8 {
-        return getSlice(@constCast(self), u8, acc.data.offset, acc.data.len);
+    pub fn get(
+        self: *const Db,
+        allocator: std.mem.Allocator,
+        pubkey: Pubkey,
+    ) !?AccountSharedData {
+        const zone = tracy.Zone.init(@src(), .{ .name = "Db.get" });
+        defer zone.deinit();
+
+        var path: Path = undefined;
+        const offset_ptr = self.lookup(&path, &pubkey) orelse return null;
+
+        const offset = offset_ptr.*;
+        if (offset == 0) return null;
+
+        const read_zone = tracy.Zone.init(@src(), .{ .name = "Db.readAccount" });
+        defer read_zone.deinit();
+
+        const acc = self.getPtr(Account, offset);
+        return .{
+            .owner = acc.owner,
+            .lamports = acc.lamports,
+            .rent_epoch = acc.rent_epoch,
+            .executable = acc.data.executable,
+            .data = try allocator.dupe(u8, acc.getData()),
+        };
     }
 
-    /// Change the size of the account data at the given Account.
-    /// The new length must not be larger than the maximum addressible data by the databse (10 MB).
-    /// When the mode is `uninitialize`, the contents of the data after resizing are unspecified.
-    /// When the mode is `truncate`, shrinking keeps data & growing extends with zeroes.
-    pub fn setAccountDataLength(
-        self: *Db,
-        acc: *Account,
-        new_len: u32,
-        mode: enum { truncate, uninitialize },
-    ) !void {
-        // Check if a realloc is required.
-        if (sizeClassIndex(acc.data.len) != sizeClassIndex(new_len)) {
-            const new_offset = try self.alloc(new_len);
-            if (mode == .truncate) {
-                const keep = @min(acc.data.len, new_len);
-                const new_slice = self.getSlice(u8, new_offset, new_len);
-                @memcpy(new_slice[0..keep], self.getAccountData(acc)[0..keep]);
-                @memset(new_slice[keep..], 0);
+    pub fn put(self: *Db, pubkey: Pubkey, slot: Slot, account: AccountSharedData) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "Db.put" });
+        defer zone.deinit();
+
+        var path: Path = undefined;
+        const offset_ptr = self.lookup(&path, &pubkey) orelse blk: {
+            if (account.isDeleted()) return;
+            break :blk try self.insert(&path, &pubkey);
+        };
+
+        const new_size: u32 = @intCast(@sizeOf(Account) + account.data.len);
+
+        var offset = offset_ptr.*;
+        if (offset > 0) {
+            const acc = self.getPtr(Account, offset);
+            const acc_size: u32 = @intCast(@sizeOf(Account) + acc.data.len);
+
+            if (slot <= acc.slot) {
+                return error.InvalidSlot;
             }
-            self.free(acc.data.offset, acc.data.len);
-            acc.data.offset = @intCast(new_offset);
-        }
-        acc.data.len = @intCast(new_len);
-    }
 
-    /// Tell the database to flush all inflight updates to disk.
-    /// If mode == .async, this *tries* to return early and do the flushing in the background.
-    pub fn flush(self: *Db, mode: enum { sync, @"async" }) !void {
-        try posix.msync(self.mapped(), switch (mode) {
-            .sync => posix.MSF.SYNC,
-            .@"async" => posix.MSF.ASYNC,
-        });
-        if (mode == .sync) try posix.fsync(self.file.handle);
+            if (account.isDeleted()) {
+                self.free(offset, acc_size);
+                offset_ptr.* = 0;
+                return;
+            }
+
+            if (sizeClassIndex(acc_size) != sizeClassIndex(new_size)) {
+                self.free(offset, acc_size);
+                offset = 0;
+            }
+        }
+
+        if (offset == 0) {
+            offset = try self.alloc(new_size);
+            offset_ptr.* = offset;
+        }
+
+        const write_zone = tracy.Zone.init(@src(), .{ .name = "Db.writeAccount" });
+        defer write_zone.deinit();
+
+        const acc = self.getPtr(Account, offset);
+        acc.* = .{
+            .owner = account.owner,
+            .lamports = account.lamports,
+            .rent_epoch = account.rent_epoch,
+            .slot = slot,
+            .data = .{ .executable = account.executable, .len = @intCast(account.data.len) },
+        };
+        @memcpy(acc.getData(), account.data);
     }
 
     /// Returns all memory that was mapped for the file (some of it may not be accessible).
-    fn mapped(self: *Db) *align(std.heap.page_size_min) [max_file_size]u8 {
-        return @ptrCast(self);
+    fn getMapped(self: *const Db) *align(std.heap.page_size_min) [max_file_size]u8 {
+        return @ptrCast(@constCast(self));
     }
 
     /// Returns all memory thats backed by the file on disk.
-    fn slice(self: *Db) []align(std.heap.page_size_min) u8 {
-        return self.mapped()[0..self.file.size];
+    fn getDiskMapped(self: *const Db) []align(std.heap.page_size_min) u8 {
+        return self.getMapped()[0..self.file.size];
     }
 
     /// Returns all blocks the disk has marked allocated.
-    fn blocks(self: *Db) []Block {
-        return std.mem.bytesAsSlice(Block, self.slice()[0 .. self.pool.num_blocks * @sizeOf(Block)]);
+    fn getMemory(self: *const Db) []align(std.heap.page_size_min) u8 {
+        return self.getDiskMapped()[0..self.pool.allocated];
     }
 
-    /// Returns the number of blocks needed to hold the given amount of bytes.
-    fn blockCount(bytes: u64) u64 {
-        return @divExact(std.mem.alignForward(u64, bytes, @sizeOf(Block)), @sizeOf(Block));
+    fn getSlice(self: *const Db, T: type, offset: Offset, len: usize) []align(min_align) T {
+        std.debug.assert(offset > 0);
+        const bytes = self.getMemory()[offset..][0 .. @sizeOf(T) * len];
+        return @as([*]align(min_align) T, @ptrCast(@alignCast(bytes.ptr)))[0..len];
+    }
+
+    fn getPtr(self: *const Db, T: type, offset: Offset) *align(min_align) T {
+        return @ptrCast(self.getSlice(T, offset, 1).ptr);
     }
 
     /// Compute the size_classes index for the given amount of bytes.
@@ -442,17 +455,20 @@ const Db = extern struct {
         comptime var bits_to_idx: [32 + 1]u8 = @splat(@intCast(size_classes.len));
         inline for (1..32 + 1) |bits| {
             bits_to_idx[bits] = comptime @intCast(for (size_classes, 0..) |size, idx| {
-                std.debug.assert(size % @sizeOf(Block) == 0);
-                std.debug.assert(size >= @sizeOf(Block));
                 if (size >= (1 << bits) - 1) break idx;
-            } else size_classes.len);
+            } else size_classes.len - 1);
         }
 
+        if (bytes == 0 or bytes > size_classes[size_classes.len - 1]) return null;
         const sc_idx = bits_to_idx[32 - @clz(bytes)];
-        return if (sc_idx < size_classes.len) sc_idx else null;
+        std.debug.assert(sc_idx < size_classes.len);
+        return sc_idx;
     }
 
     fn alloc(self: *Db, bytes: u32) !Offset {
+        const zone = tracy.Zone.init(@src(), .{ .name = "Db.Disk.allocBuffer" });
+        defer zone.deinit();
+
         if (bytes == 0) return 0;
         const sc_idx = sizeClassIndex(bytes) orelse {
             std.debug.panic("db alloc too large: {}", .{bytes});
@@ -468,26 +484,31 @@ const Db = extern struct {
         }
 
         // Bump alloc new run of blocks.
-        const new_offset = self.pool.num_blocks;
-        self.pool.num_blocks += blockCount(size_classes[sc_idx]);
+        const new_offset = self.pool.allocated;
+        self.pool.allocated += size_classes[sc_idx];
 
         // Extend the disk/memory as needed.
-        var new_file_size = self.pool.num_blocks * @sizeOf(Block);
-        if (new_file_size > self.slice().len) {
+        if (self.pool.allocated > self.file.size) {
             @branchHint(.unlikely);
 
-            new_file_size = @max(new_file_size, self.slice().len + min_file_growth);
+            const extend_zone = tracy.Zone.init(@src(), .{ .name = "Db.Disk.extend" });
+            defer extend_zone.deinit();
+
+            const new_file_size = @max(self.pool.allocated, self.file.size + min_file_growth);
             try posix.ftruncate(self.file.handle, new_file_size);
             self.file.size = new_file_size;
-            try posix.mprotect(self.slice(), posix.PROT.READ | posix.PROT.WRITE);
+            try posix.mprotect(self.getDiskMapped(), posix.PROT.READ | posix.PROT.WRITE);
         }
 
         return new_offset;
     }
 
     fn free(self: *Db, offset: Offset, bytes: u32) void {
-        if (offset == 0 or bytes == 0) return;
-        std.debug.assert(offset < self.blocks().len);
+        const zone = tracy.Zone.init(@src(), .{ .name = "Db.Disk.freeBuffer" });
+        defer zone.deinit();
+
+        if (bytes == 0) return;
+        std.debug.assert(offset < self.pool.allocated);
 
         const sc_idx = sizeClassIndex(bytes) orelse {
             std.debug.panic("db free too large: {}", .{bytes});
@@ -500,16 +521,22 @@ const Db = extern struct {
         free_list.* = offset;
     }
 
-    /// Returns a slice of memory that was previously allocated.
-    fn getSlice(self: *Db, comptime T: type, offset: Offset, len: u32) []align(@alignOf(Block)) T {
-        const num_blocks = blockCount(@sizeOf(T) * len);
-        const ptr: [*]align(@alignOf(Block)) T = @ptrCast(self.blocks()[offset..][0..num_blocks]);
-        return ptr[0..len];
-    }
+    fn allocNode(self: *Db, Node: type) !Offset {
+        var offset = self.tree.node_cache.ptr;
+        self.tree.node_cache.ptr += @sizeOf(Node);
 
-    /// Returns a single item that was previously allocated.
-    fn getPtr(self: *Db, comptime T: type, offset: Offset) *T {
-        return &self.getSlice(T, offset, 1)[0];
+        if (self.tree.node_cache.ptr > self.tree.node_cache.end) {
+            @branchHint(.unlikely);
+
+            offset = try self.alloc(node_cache_size);
+            self.tree.node_cache.ptr = offset + @sizeOf(Node);
+            self.tree.node_cache.end = offset + node_cache_size;
+        }
+
+        const node = self.getPtr(Node, offset);
+        @memset(&node.keys, EMPTY_KEY);
+        @memset(&node.values, undefined);
+        return offset;
     }
 
     /// Returns number of keys in array that are less than the given key.
@@ -526,12 +553,10 @@ const Db = extern struct {
         node_stack: [max_height]Offset,
     };
 
-    /// Search for an AccountInfo that matches the pubkey, saving the Path along the way.
-    fn lookup(
-        noalias self: *const Db,
-        noalias path: *Path,
-        noalias pubkey: *const Pubkey,
-    ) ?*Account {
+    fn lookup(noalias self: *const Db, noalias path: *Path, noalias pubkey: *const Pubkey) ?*Offset {
+        const zone = tracy.Zone.init(@src(), .{ .name = "Db.BTree.lookup" });
+        defer zone.deinit();
+
         // Covert pubkey into searching Key value.
         var key = pubkey.hash();
         key -= @intFromBool(key == EMPTY_KEY); // make sure its not EMPTY_KEY
@@ -540,7 +565,7 @@ const Db = extern struct {
         // Traverse down inner nodes until we reach a LeafNode, recording the path.
         var node = self.tree.root;
         for (0..self.tree.height) |h| {
-            const inner = getPtr(@constCast(self), InnerNode, node);
+            const inner = self.getPtr(InnerNode, node);
             const idx = countLessThan(&inner.keys, key);
             path.idx_stack[h] = idx;
             path.node_stack[h] = node;
@@ -548,7 +573,7 @@ const Db = extern struct {
         }
 
         // Find lower bound in leaf.
-        const leaf = getPtr(@constCast(self), LeafNode, node);
+        const leaf = self.getPtr(LeafNode, node);
         var idx = countLessThan(&leaf.keys, key);
         path.idx_stack[self.tree.height] = idx;
         path.node_stack[self.tree.height] = node;
@@ -558,17 +583,17 @@ const Db = extern struct {
         // The last key in a node is always EMPTY_KEY, so we can rely on key comparison to exit loop
         while (leaf.keys[idx] == key) : (idx += 1) {
             @branchHint(.likely);
-            const acc_info = &leaf.values[idx];
-            if (acc_info.pubkey.equals(pubkey)) {
+            const value = &leaf.values[idx];
+            if (value.pubkey.equals(pubkey)) {
                 @branchHint(.likely);
-                return acc_info;
+                return &value.account;
             }
         }
         return null;
     }
 
-    fn insertAt(comptime T: type, array: *[B]T, idx: u32, value: T) void {
-        std.mem.copyBackwards(T, array[idx + 1 ..], array[idx .. B - 1]);
+    fn insertAt(array: anytype, idx: u32, value: @TypeOf(array[0])) void {
+        std.mem.copyBackwards(@TypeOf(array[0]), array[idx + 1 ..], array[idx .. B - 1]);
         array[idx] = value;
     }
 
@@ -580,7 +605,10 @@ const Db = extern struct {
     }
 
     /// Using a path populated from a lookup which returned null, allocate a new Account
-    fn insert(noalias self: *Db, noalias path: *Path) !*Account {
+    fn insert(noalias self: *Db, noalias path: *Path, noalias pubkey: *const Pubkey) !*Offset {
+        const zone = tracy.Zone.init(@src(), .{ .name = "Db.BTree.insert" });
+        defer zone.deinit();
+
         const max_entries = comptime std.math.pow(u64, B / 2, max_height);
         if (self.tree.count == max_entries) return posix.TruncateError.FileTooBig;
         self.tree.count += 1;
@@ -590,25 +618,25 @@ const Db = extern struct {
         var node = path.node_stack[self.tree.height];
 
         const leaf = self.getPtr(LeafNode, node);
-        var value = &leaf.values[idx];
+        var value = &leaf.values[idx].account;
         @prefetch(value, .{});
 
         // Insert the key and value, pipelining the check for if leaf will be full.
         var filled = leaf.keys[B - 2] != EMPTY_KEY;
-        insertAt(Key, &leaf.keys, idx, key);
-        insertAt(Account, &leaf.values, idx, undefined);
+        insertAt(&leaf.keys, idx, key);
+        insertAt(&leaf.values, idx, .{ .pubkey = pubkey.*, .account = 0 });
         if (filled) split: {
             @branchHint(.unlikely);
 
             // The leaf was filled & needs to be split into a new one.
-            var new_node = try self.alloc(@sizeOf(LeafNode));
+            var new_node = try self.allocNode(LeafNode);
             const new_leaf = self.getPtr(LeafNode, new_node);
             moveHalf(leaf, new_leaf);
             key = leaf.keys[B / 2 - 1];
 
             // Branchlessly reassign the value if it was moved to the new_leaf.
-            const new_idx = @as(u32, idx) -% (B / 2);
-            const new_value: *Account = @ptrCast(new_leaf.values[0..].ptr + new_idx);
+            const new_idx = idx -% (B / 2);
+            const new_value = &new_leaf.values[0..].ptr[new_idx].account;
             if (new_idx < idx) value = new_value;
 
             // Ascend up the tree until we reach either the root or an non-full node
@@ -620,12 +648,12 @@ const Db = extern struct {
                 // Insert to inner node
                 const inner = self.getPtr(InnerNode, node);
                 filled = inner.keys[B - 3] != EMPTY_KEY;
-                insertAt(Key, &inner.keys, idx, key);
-                insertAt(Offset, &inner.values, idx + 1, new_node);
+                insertAt(&inner.keys, idx, key);
+                insertAt(&inner.values, idx + 1, new_node);
                 if (!filled) break :split;
 
                 // The inner was filled & needs to be split into a new one.
-                new_node = try self.alloc(@sizeOf(InnerNode));
+                new_node = try self.allocNode(InnerNode);
                 const new_inner = self.getPtr(InnerNode, new_node);
                 moveHalf(inner, new_inner);
 
@@ -634,9 +662,8 @@ const Db = extern struct {
             }
 
             // Reached the root which needs to be split
-            const new_root = try self.alloc(@sizeOf(InnerNode));
+            const new_root = try self.allocNode(InnerNode);
             const new_inner = self.getPtr(InnerNode, new_root);
-            @memset(&new_inner.keys, EMPTY_KEY);
             new_inner.keys[0] = key;
             new_inner.values[0] = self.tree.root;
             new_inner.values[1] = new_node;
