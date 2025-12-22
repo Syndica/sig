@@ -1552,7 +1552,7 @@ pub const GossipService = struct {
     /// included in the next pull request (so we dont receive them again).
     /// For all pull responses:
     ///     - PullResponseMessage.gossip_values are inserted into the gossip table or added to failed pull hashes and freed
-    pub fn handleBatchPullResponses(
+    fn handleBatchPullResponses(
         self: *GossipService,
         pull_response_messages: []const PullResponseMessage,
     ) !void {
@@ -1576,21 +1576,17 @@ pub const GossipService = struct {
                     pull_message.from_pubkey.*,
                 );
                 const invalid_shred_count = full_len - values_to_insert.len;
-
-                const insert_results = try gossip_table.insertValues(
-                    now,
-                    values_to_insert,
-                    PULL_RESPONSE_TIMEOUT.asMillis(),
-                );
-                defer insert_results.deinit();
-
                 self.metrics.pull_response_n_invalid_shred_version.add(invalid_shred_count);
 
-                for (values_to_insert, insert_results.items) |*value, result| {
+                for (values_to_insert) |*value| {
+                    const result = try gossip_table.insert(value.*, now);
                     self.metrics.observeInsertResult(result);
                     switch (result) {
-                        .success => |success| {
-                            if (!success.timeout) {
+                        .success => {
+                            const wallclock = value.wallclock();
+                            const timeout = PULL_RESPONSE_TIMEOUT.asMillis();
+                            // we can't trust this wallclock at all unless it's current
+                            if (wallclock >= now -| timeout and wallclock <= now +| timeout) {
                                 gossip_table.updateRecordTimestamp(value.id(), now);
                             }
                             try self.broker.publish(&value.data);
@@ -1673,11 +1669,6 @@ pub const GossipService = struct {
         for (batch_push_messages.items) |push_message| {
             max_inserts_per_push = @max(max_inserts_per_push, push_message.gossip_values.len);
         }
-        var insert_results = try std.ArrayList(GossipTable.InsertResult).initCapacity(
-            self.allocator,
-            max_inserts_per_push,
-        );
-        defer insert_results.deinit();
 
         // insert values and track the failed origins per pubkey
         {
@@ -1701,19 +1692,30 @@ pub const GossipService = struct {
                 );
                 const invalid_shred_count = full_len - values_to_insert.len;
 
-                try gossip_table.insertValuesWithResults(
-                    now,
-                    values_to_insert,
-                    PUSH_MSG_TIMEOUT.asMillis(),
-                    &insert_results,
-                );
-
                 var insert_fail_count: u64 = 0;
-                for (values_to_insert, insert_results.items) |value, result| {
+                var failed_origins: ?*AutoArrayHashSet(Pubkey) = null;
+
+                for (values_to_insert) |value| {
+                    const wallclock = value.wallclock();
+                    const timeout = PUSH_MSG_TIMEOUT.asMillis();
+                    if (wallclock < now -| timeout or wallclock > now +| timeout) continue;
+                    const result = try gossip_table.insert(value, now);
                     self.metrics.observeInsertResult(result);
                     switch (result) {
                         .success => try self.broker.publish(&value.data),
-                        .fail => insert_fail_count += 1,
+                        .fail => {
+                            insert_fail_count += 1;
+                            if (failed_origins == null) {
+                                const lookup_result = try pubkey_to_failed_origins
+                                    .getOrPut(push_message.from_pubkey.*);
+                                if (!lookup_result.found_existing) {
+                                    lookup_result.value_ptr.* = .init(self.allocator);
+                                }
+                                failed_origins = lookup_result.value_ptr;
+                            }
+                            try failed_origins.?.put(value.id(), {});
+                            value.deinit(self.gossip_data_allocator);
+                        },
                     }
                 }
                 self.metrics.push_message_n_invalid_shred_version.add(invalid_shred_count);
@@ -1728,12 +1730,6 @@ pub const GossipService = struct {
                 if (insert_fail_count == 0) {
                     // dont need to build prune messages
                     continue;
-                }
-                // free failed inserts
-                defer {
-                    for (insert_results.items, values_to_insert) |result, value| {
-                        if (result == .fail) value.deinit(self.gossip_data_allocator);
-                    }
                 }
 
                 // lookup contact info to send a prune message to
@@ -1752,19 +1748,6 @@ pub const GossipService = struct {
                 // track the endpoint
                 const from_gossip_endpoint = from_gossip_addr.toEndpoint();
                 try pubkey_to_endpoint.put(push_message.from_pubkey.*, from_gossip_endpoint);
-
-                // track failed origins
-                var failed_origins = blk: {
-                    const lookup_result = try pubkey_to_failed_origins.getOrPut(push_message.from_pubkey.*);
-                    if (!lookup_result.found_existing) {
-                        lookup_result.value_ptr.* = AutoArrayHashSet(Pubkey).init(self.allocator);
-                    }
-                    break :blk lookup_result.value_ptr;
-                };
-
-                for (insert_results.items, values_to_insert) |result, value| {
-                    if (result == .fail) try failed_origins.put(value.id(), {});
-                }
             }
         }
 
@@ -2184,10 +2167,9 @@ pub const GossipMetrics = struct {
         result: GossipTable.InsertResult,
     ) void {
         switch (result) {
-            .success => |success| if (success.replaced) {
-                metrics.pull_response_n_overwrite_existing.inc();
-            } else {
-                metrics.pull_response_n_new_inserts.inc();
+            .success => |success| switch (success) {
+                .new => metrics.pull_response_n_new_inserts.inc(),
+                .replaced => metrics.pull_response_n_overwrite_existing.inc(),
             },
             .fail => |reason| switch (reason) {
                 .too_old => metrics.pull_response_n_old_value.inc(),

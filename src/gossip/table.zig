@@ -131,19 +131,8 @@ pub const GossipTable = struct {
     }
 
     pub const InsertResult = union(enum) {
-        success: SuccessDetails,
-        fail: FailReason,
-
-        pub const SuccessDetails = struct {
-            replaced: bool = false,
-            timeout: bool = false,
-        };
-
-        pub const FailReason = enum {
-            too_old,
-            duplicate,
-            table_full,
-        };
+        success: enum { new, replaced },
+        fail: enum { too_old, duplicate, table_full },
     };
 
     pub fn insert(self: *Self, value: SignedGossipData, now: u64) !InsertResult {
@@ -215,7 +204,7 @@ pub const GossipTable = struct {
             self.cursor += 1;
 
             // inserted new entry
-            return .{ .success = .{} };
+            return .{ .success = .new };
 
             // should overwrite existing entry
         } else if (versioned_value.overwrites(&result.entry.getVersionedData())) {
@@ -277,7 +266,7 @@ pub const GossipTable = struct {
             self.cursor += 1;
 
             // overwrite existing entry
-            return .{ .success = .{ .replaced = true } };
+            return .{ .success = .replaced };
 
             // do nothing
         } else {
@@ -291,48 +280,6 @@ pub const GossipTable = struct {
                 // hash is the same then its a duplicate value which isnt stored
                 return .{ .fail = .duplicate };
             }
-        }
-    }
-
-    pub fn insertWithTimeout(
-        self: *Self,
-        value: SignedGossipData,
-        now: u64,
-        timeout: u64,
-    ) !InsertResult {
-        const value_time = value.wallclock();
-        const is_too_new = value_time > now +| timeout;
-        const is_too_old = value_time < now -| timeout;
-        var result = try self.insert(value, now);
-        if (result == .success) result.success.timeout = is_too_new or is_too_old;
-        return result;
-    }
-
-    pub fn insertValues(
-        self: *Self,
-        now: u64,
-        values: []const SignedGossipData,
-        timeout: u64,
-    ) !std.ArrayList(InsertResult) {
-        var results = std.ArrayList(InsertResult).init(self.allocator);
-        try self.insertValuesWithResults(now, values, timeout, &results);
-        return results;
-    }
-
-    /// Like insertValues, but it accepts an arraylist whose memory can be reused.
-    pub fn insertValuesWithResults(
-        self: *Self,
-        now: u64,
-        values: []const SignedGossipData,
-        timeout: u64,
-        results: *std.ArrayList(InsertResult),
-    ) !void {
-        results.clearRetainingCapacity();
-        try results.ensureTotalCapacity(values.len);
-
-        for (values) |value| {
-            const result = try self.insertWithTimeout(value, now, timeout);
-            results.appendAssumeCapacity(result);
         }
     }
 
@@ -1156,7 +1103,7 @@ test "insert and get contact_info" {
     // test insertion
     const result = try table.insert(gossip_value, 0);
     try std.testing.expectEqual(.success, std.meta.activeTag(result));
-    try std.testing.expect(!result.success.replaced);
+    try std.testing.expectEqual(.new, result.success);
 
     // test retrieval
     var buf: [100]ContactInfo = undefined;
@@ -1178,7 +1125,7 @@ test "insert and get contact_info" {
         break :blk try table.insert(cloned, 0);
     };
     try std.testing.expectEqual(.success, std.meta.activeTag(result3));
-    try std.testing.expect(result3.success.replaced);
+    try std.testing.expectEqual(.replaced, result3.success);
 
     // check retrieval
     nodes = table.getContactInfos(&buf, 0);
