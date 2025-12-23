@@ -213,7 +213,7 @@ const PohVerifier = struct {
         index: u32,
 
         fn run(task: *ThreadPool.Task) void {
-            const zone = tracy.Zone.init(@src(), .{ .name = "replayVerify" });
+            const zone = tracy.Zone.init(@src(), .{ .name = "pohVerify" });
             defer zone.deinit();
 
             const self: *Worker = @alignCast(@fieldParentPtr("task", task));
