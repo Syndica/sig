@@ -216,8 +216,8 @@ pub const Executable = struct {
                 .mod64_imm,
                 => if (version.enablePqr()) {
                     store = true;
-                } else {
-                    if (inst.imm == 0) return error.DivisionByZero;
+                } else if (inst.imm == 0) {
+                    return error.DivisionByZero;
                 },
 
                 .mul32_imm => if (version.enablePqr()) return error.UnsupportedInstruction,

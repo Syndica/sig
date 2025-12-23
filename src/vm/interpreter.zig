@@ -71,8 +71,9 @@ pub const Vm = struct {
                 .v0, .v1 => &v0.table,
                 .v2 => &v2.table,
                 .v3 => &v3.table,
-                .reserved => @panic("TODO"), // NOTE: cannot actually be hit
-                _ => unreachable,
+                // TODO: remove the `reserved` tag entirely, it is a hack around Agave's out-dated behaviour.
+                .reserved => unreachable,
+                _ => @panic("un-numbered sBPF versions should have been checked in `Elf.parse`"),
             },
         };
 
@@ -800,6 +801,7 @@ pub const Vm = struct {
         }
     };
 
+    /// SIMD-0178, SIMD-0179, SIMD-0189
     const v3 = struct {
         const table = inherit(v2, v3);
 
