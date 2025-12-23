@@ -1,5 +1,4 @@
 const std = @import("std");
-const net = @import("zig-network");
 const sig = @import("../../sig.zig");
 const shred_network = @import("../lib.zig");
 
@@ -7,9 +6,8 @@ const socket_utils = sig.net.socket_utils;
 
 const AtomicBool = std.atomic.Value(bool);
 const AtomicU64 = std.atomic.Value(u64);
-const EndPoint = net.EndPoint;
 const Random = std.Random;
-const UdpSocket = net.Socket;
+const UdpSocket = sig.net.UdpSocket;
 
 const Channel = sig.sync.Channel;
 const Counter = sig.prometheus.Counter;
@@ -77,9 +75,9 @@ pub fn runShredRetransmitter(params: ShredRetransmitterParams) !void {
     var retransmit_to_socket_channel = try Channel(Packet).init(params.allocator);
     defer retransmit_to_socket_channel.deinit();
 
-    var retransmit_socket = try UdpSocket.create(.ipv4, .udp);
+    const retransmit_socket: UdpSocket = try .create(.ipv4);
     defer retransmit_socket.close();
-    try retransmit_socket.bind(try EndPoint.parse("0.0.0.0:0"));
+    try retransmit_socket.bind(.initIp4(.{ 0, 0, 0, 0 }, 0));
 
     var thread_handles = std.ArrayList(std.Thread).init(params.allocator);
     defer thread_handles.deinit();
@@ -352,7 +350,7 @@ fn retransmitShreds(
             if (child.tvuAddress()) |tvu_address| {
                 children_with_addresses_count += 1;
                 try sender.send(Packet.init(
-                    tvu_address.toEndpoint(),
+                    tvu_address,
                     retransmit_info.shred_packet.buffer,
                     retransmit_info.shred_packet.size,
                 ));

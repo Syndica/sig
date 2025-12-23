@@ -1994,7 +1994,7 @@ const AppBase = struct {
             0;
 
         const config_host = cfg.gossip.getHost() catch null;
-        const my_ip = config_host orelse echo_data.ip orelse IpAddr.newIpv4(127, 0, 0, 1);
+        const my_ip: IpAddr = config_host orelse echo_data.ip orelse .initIpv4(.{ 127, 0, 0, 1 });
 
         const my_port = cfg.gossip.port;
 

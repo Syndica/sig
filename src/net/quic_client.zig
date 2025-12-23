@@ -1,6 +1,5 @@
 const lsquic = @import("lsquic");
 const std = @import("std");
-const network = @import("zig-network");
 const xev = @import("xev");
 const ssl = @import("ssl");
 const sig = @import("../sig.zig");
@@ -33,7 +32,7 @@ pub fn Client(
     return struct {
         allocator: std.mem.Allocator,
         receiver: *Channel(Packet),
-        socket: network.Socket,
+        socket: sig.net.UdpSocket,
         connections: std.BoundedArray(*Connection, max_connections),
         exit: ExitCondition,
         logger: Logger,
@@ -92,7 +91,7 @@ pub fn Client(
             self.* = .{
                 .allocator = allocator,
                 .receiver = receiver,
-                .socket = try network.Socket.create(.ipv4, .udp),
+                .socket = try .create(.ipv4),
                 .connections = .{},
                 .exit = exit,
                 .logger = logger,
@@ -108,14 +107,11 @@ pub fn Client(
                     .ea_get_ssl_ctx = &getSslContext,
                 },
                 .lsquic_engine_settings = .{},
-                .packets_in_event = xev.UDP.initFd(self.socket.internal),
+                .packets_in_event = xev.UDP.initFd(self.socket.handle),
                 .tick_event = try xev.Timer.init(),
             };
 
-            try self.socket.bind(.{
-                .address = .{ .ipv4 = network.Address.IPv4.any },
-                .port = 4444,
-            });
+            try self.socket.bind(.initIp4(.{ 0, 0, 0, 0 }, 4444));
 
             lsquic.lsquic_engine_init_settings(&self.lsquic_engine_settings, 0);
 
@@ -177,7 +173,7 @@ pub fn Client(
             const self = maybe_self.?;
 
             while (self.receiver.tryReceive()) |packet| {
-                const connection = try self.getConnection(packet.addr);
+                const connection = try self.getConnection(packet.addr.toAddress());
                 try connection.packets.push(packet);
             }
 
@@ -220,8 +216,8 @@ pub fn Client(
 
             const local_endpoint = try self.socket.getLocalEndPoint();
             const local_socketaddr = switch (toSocketAddress(local_endpoint)) {
-                .ipv4 => |addr| addr,
-                .ipv6 => @panic("add ipv6 support"),
+                .V4 => |addr| addr,
+                .V6 => @panic("add ipv6 support"),
             };
 
             const peer_sockaddr = peer_address.in.sa;
@@ -244,12 +240,10 @@ pub fn Client(
         // TODO: add connection eviction
         fn getConnection(
             self: *Self,
-            peer_endpoint: network.EndPoint,
+            peer_endpoint: std.net.Address,
         ) !*Connection {
             for (self.connections.constSlice()) |connection| {
-                if (connection.endpoint.address.eql(peer_endpoint.address) and
-                    connection.endpoint.port == peer_endpoint.port)
-                    return connection;
+                if (connection.endpoint.eql(peer_endpoint)) return connection;
             }
 
             const connection = try self.allocator.create(Connection);
@@ -261,21 +255,12 @@ pub fn Client(
             };
 
             const local_endpoint = try self.socket.getLocalEndPoint();
-            const local_socketaddr = switch (toSocketAddress(local_endpoint)) {
-                .ipv4 => |addr| addr,
-                .ipv6 => @panic("add ipv6 support"),
-            };
-
-            const peer_socketaddr = switch (toSocketAddress(peer_endpoint)) {
-                .ipv4 => |addr| addr,
-                .ipv6 => @panic("add ipv6 support"),
-            };
 
             if (lsquic.lsquic_engine_connect(
                 self.lsquic_engine,
                 lsquic.N_LSQVER,
-                @ptrCast(&local_socketaddr),
-                @ptrCast(&peer_socketaddr),
+                @ptrCast(&local_endpoint.any),
+                @ptrCast(&peer_endpoint.any),
                 self.ssl_ctx,
                 @ptrCast(connection),
                 null,
@@ -294,7 +279,7 @@ pub fn Client(
         const Connection = struct {
             lsquic_connection: *lsquic.lsquic_conn_t,
             client: *Self,
-            endpoint: network.EndPoint,
+            endpoint: std.net.Address,
             packets: PacketBuffer,
 
             const Status = enum(u32) {
@@ -390,7 +375,7 @@ pub fn Client(
                 const conn_ctx = lsquic.lsquic_conn_get_ctx(maybe_lsquic_connection).?;
                 const self: *Connection = @alignCast(@ptrCast(conn_ctx));
 
-                self.client.logger.debug().logf("onNewConn: {s}", .{self.endpoint});
+                self.client.logger.debug().logf("onNewConn: {}", .{self.endpoint});
                 self.lsquic_connection = maybe_lsquic_connection.?;
                 self.client.connections.append(self) catch @panic("reached max connections");
 
@@ -583,7 +568,7 @@ fn packetsOut(
     n_specs: u32,
 ) callconv(.c) i32 {
     var msg: std.posix.msghdr_const = undefined;
-    const socket: *network.Socket = @alignCast(@ptrCast(ctx.?));
+    const socket: *sig.net.UdpSocket = @alignCast(@ptrCast(ctx.?));
 
     for (specs.?[0..n_specs]) |spec| {
         msg.name = @alignCast(@ptrCast(spec.dest_sa));
@@ -593,7 +578,7 @@ fn packetsOut(
         msg.flags = 0;
         msg.control = null;
         msg.controllen = 0;
-        _ = std.posix.sendmsg(socket.internal, &msg, 0) catch |err| {
+        _ = std.posix.sendmsg(socket.handle, &msg, 0) catch |err| {
             std.debug.panic("sendmsgPosix failed with: {s}", .{@errorName(err)});
         };
     }
@@ -601,25 +586,6 @@ fn packetsOut(
     return @intCast(n_specs);
 }
 
-// function is private inside of zig-network
-fn toSocketAddress(self: network.EndPoint) network.EndPoint.SockAddr {
-    return switch (self.address) {
-        .ipv4 => |addr| .{
-            .ipv4 = .{
-                .family = std.posix.AF.INET,
-                .port = std.mem.nativeToBig(u16, self.port),
-                .addr = @bitCast(addr.value),
-                .zero = [_]u8{0} ** 8,
-            },
-        },
-        .ipv6 => |addr| .{
-            .ipv6 = .{
-                .family = std.posix.AF.INET6,
-                .port = std.mem.nativeToBig(u16, self.port),
-                .flowinfo = 0,
-                .addr = addr.value,
-                .scope_id = addr.scope_id,
-            },
-        },
-    };
+fn toSocketAddress(address: std.net.Address) sig.net.SocketAddr {
+    return .initAddress(address);
 }

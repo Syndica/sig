@@ -1,5 +1,4 @@
 const std = @import("std");
-const network = @import("zig-network");
 const sig = @import("../sig.zig");
 
 const AtomicBool = std.atomic.Value(bool);
@@ -312,7 +311,7 @@ pub const Service = struct {
             for (transactions) |tx| {
                 self.logger.info().logf("sending transaction to leader: address={} signature={}", .{ leader_address, tx.signature });
                 try self.send_channel.send(Packet.init(
-                    leader_address.toEndpoint(),
+                    leader_address,
                     tx.wire_transaction,
                     tx.wire_transaction_size,
                 ));
