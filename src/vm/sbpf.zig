@@ -370,12 +370,27 @@ pub const Instruction = packed struct(u64) {
         @"return" = jmp | x | exit_code,
         _,
 
-        pub fn isReg(opcode: OpCode) bool {
+        // The commented out opcodes are unique, and already have an entry in the enum.
+        // The rest of them "overwrite" the behaviour of existing instructions.
+        pub const ld_1b_reg: OpCode = .mul32_reg;
+        pub const ld_2b_reg: OpCode = .div32_reg;
+        // pub const ld_4b_reg: OpCode = .ld_4b_reg;
+        pub const ld_8b_reg: OpCode = .mod32_reg;
+        pub const st_1b_imm: OpCode = .mul64_imm;
+        pub const st_2b_imm: OpCode = .div64_imm;
+        pub const st_4b_imm: OpCode = .neg64;
+        pub const st_8b_imm: OpCode = .mod64_imm;
+        pub const st_1b_reg: OpCode = .mul64_reg;
+        pub const st_2b_reg: OpCode = .div64_reg;
+        // pub const st_4b_reg: OpCode = .st_4b_reg;
+        pub const st_8b_reg: OpCode = .mod64_reg;
+
+        pub inline fn isReg(opcode: OpCode) bool {
             const is_reg_bit: u1 = @truncate(@intFromEnum(opcode) >> 3);
             return @bitCast(is_reg_bit);
         }
 
-        pub fn is64(opcode: OpCode) bool {
+        pub inline fn is64(opcode: OpCode) bool {
             const class: u3 = @truncate(@intFromEnum(opcode));
             return switch (class) {
                 alu64 => true,
@@ -384,7 +399,7 @@ pub const Instruction = packed struct(u64) {
             };
         }
 
-        pub fn accessType(opcode: OpCode) memory.MemoryState {
+        pub inline fn accessType(opcode: OpCode) memory.MemoryState {
             const class: u3 = @truncate(@intFromEnum(opcode));
             return switch (class) {
                 ld, ldx => .constant,
