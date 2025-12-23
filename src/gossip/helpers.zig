@@ -34,7 +34,7 @@ pub fn initGossipFromCluster(
     // create contact info
     const echo_data = try getShredAndIPFromEchoServer(.from(logger), entrypoints.items);
     const my_shred_version = echo_data.shred_version orelse 0;
-    const my_ip = echo_data.ip orelse IpAddr.newIpv4(127, 0, 0, 1);
+    const my_ip: IpAddr = echo_data.ip orelse .initIpv4(.{ 127, 0, 0, 1 });
 
     const my_keypair = try sig.identity.getOrInit(allocator, .from(logger));
 
