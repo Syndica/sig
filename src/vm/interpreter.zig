@@ -71,8 +71,9 @@ pub const Vm = struct {
                 .v0, .v1 => &v0.table,
                 .v2 => &v2.table,
                 .v3 => &v3.table,
-                .reserved => @panic("TODO"), // NOTE: cannot actually be hit
-                _ => unreachable,
+                // TODO: remove the `reserved` tag entirely, it is a hack around Agave's out-dated behaviour.
+                .reserved => unreachable,
+                _ => @panic("un-numbered sBPF versions should have been checked in `Elf.parse`"),
             },
         };
 
@@ -113,7 +114,7 @@ pub const Vm = struct {
             // Our step function needs to have the same prototype as the instruction handles,
             // in order to force a tail-call to happen. Our instruction handles take in the
             // instruction they're processing as well as the program counter it was found at,
-            // and we can patch the same behaviour here.
+            // and we can match the same behaviour here.
             self.step(instructions[pc], pc) catch |err| switch (err) {
                 error.Stop => break,
                 else => |e| {
@@ -800,6 +801,7 @@ pub const Vm = struct {
         }
     };
 
+    /// SIMD-0178, SIMD-0179, SIMD-0189
     const v3 = struct {
         const table = inherit(v2, v3);
 
