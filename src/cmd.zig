@@ -233,12 +233,20 @@ pub fn main() !void {
 
             const out_dir = params.out_dir orelse return error.NoOutDirSpecified;
 
-            try sig.ledger.agave_migration_tool.migrateLedgerToAgave(
-                gpa,
-                .from(app_base.logger),
-                params.in_dir,
-                out_dir,
-            );
+            switch (params.direction) {
+                .sig_to_agave => try sig.ledger.agave_migration_tool.migrateLedgerToAgave(
+                    gpa,
+                    .from(app_base.logger),
+                    params.in_dir,
+                    out_dir,
+                ),
+                .agave_to_sig => try sig.ledger.agave_migration_tool.migrateLedgerFromAgave(
+                    gpa,
+                    .from(app_base.logger),
+                    params.in_dir,
+                    out_dir,
+                ),
+            }
         },
     }
 }
@@ -764,20 +772,33 @@ const Cmd = struct {
         .help = "path to Agave ledger directory",
     };
 
+    const MigrationDirection = enum { agave_to_sig, sig_to_agave };
+
+    const direction_arg: cli.ArgumentInfo(MigrationDirection) = .{
+        .kind = .named,
+        .name_override = "direction",
+        .alias = .d,
+        .config = {},
+        .default_value = .agave_to_sig,
+        .help = "format migration direction",
+    };
+
     const AgaveMigrationTool = struct {
         in_dir: []const u8,
         out_dir: ?[]const u8,
+        direction: MigrationDirection,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
-                .short = "Convert a Sig ledger into an Agave ledger",
+                .short = "Convert a between Sig and Agave ledger formats",
                 .long =
-                \\Migrates from Sig's RocksDb ledger format into Agave's RocksDb ledger format.
+                \\Migrates to and from Sig's and Agave's RocksDb ledger formats.
                 ,
             },
             .sub = .{
                 .in_dir = in_dir_arg,
                 .out_dir = out_dir_arg,
+                .direction = direction_arg,
             },
         };
     };
