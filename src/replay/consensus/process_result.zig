@@ -130,9 +130,7 @@ fn markDeadSlot(
         params.allocator.free(proof.shred1);
         params.allocator.free(proof.shred2);
     };
-    if (!params.duplicate_slots_tracker.contains(dead_slot) and
-        maybe_duplicate_proof != null)
-    {
+    if (!params.duplicate_slots_tracker.contains(dead_slot) and maybe_duplicate_proof != null) {
         const slot_info =
             params.slot_tracker.get(dead_slot) orelse return error.MissingSlotInTracker;
         const slot_hash = slot_info.state.hash.readCopy();
@@ -176,6 +174,7 @@ fn updateConsensusForFrozenSlot(params: ProcessResultParams, slot: Slot) !void {
     // Needs to be updated before `check_slot_agrees_with_cluster()` so that any
     // updates in `check_slot_agrees_with_cluster()` on fork choice take effect
     try params.fork_choice.addNewLeafSlot(
+        params.allocator,
         .{ .slot = slot, .hash = hash },
         .{ .slot = parent_slot, .hash = parent_hash },
     );
@@ -340,7 +339,7 @@ const TestReplayStateResources = struct {
     pub fn deinit(self: *TestReplayStateResources, allocator: Allocator) void {
         self.slot_tracker.deinit(allocator);
         self.progress.deinit(allocator);
-        self.fork_choice.deinit();
+        self.fork_choice.deinit(allocator);
         allocator.destroy(self.fork_choice);
         self.duplicate_slots_tracker.deinit(allocator);
         self.unfrozen_gossip_verified_vote_hashes.deinit(allocator);
@@ -514,6 +513,7 @@ test "processResult: confirm status with done poll and slot complete - success p
         .hash = Hash.ZEROES,
     };
     try test_resources.params.fork_choice.addNewLeafSlot(
+        allocator,
         slot_99_slot_and_hash,
         root_slot_and_hash,
     );
@@ -741,6 +741,7 @@ test "updateConsensusForFrozenSlot: moves gossip votes with gossip vote_kind" {
 
     // Ensure fork choice knows about the parent before adding the leaf
     try test_state.params.fork_choice.addNewLeafSlot(
+        allocator,
         .{ .slot = parent_slot, .hash = parent_hash },
         .{ .slot = 0, .hash = Hash.ZEROES },
     );
