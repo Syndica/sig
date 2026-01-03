@@ -68,7 +68,10 @@ pub const ComputeBudgetLimits = struct {
     };
 
     pub fn intoComputeBudget(self: ComputeBudgetLimits) sig.runtime.ComputeBudget {
-        var default = sig.runtime.ComputeBudget.init(self.compute_unit_limit);
+        // TODO: It would make sense for us to perform a similar refactor to Agave,
+        // and split up into seperate cost and budget structs. We hardcode SIMD-339
+        // false here, since there is no other "good" alternative without a refactor.
+        var default = sig.runtime.ComputeBudget.init(self.compute_unit_limit, false);
         default.heap_size = self.heap_size;
         return default;
     }

@@ -41,6 +41,11 @@ inline fn madd52hi(x: u64x4, y: u64x4, z: u64x4) u64x4 {
 
 /// A vector of four field elements.
 pub const ExtendedPoint = struct {
+    /// [ X0, Y0, Z0, T0 ]
+    /// [ X1, Y1, Z1, T1 ]
+    /// [ X2, Y2, Z2, T2 ]
+    /// [ X3, Y3, Z3, T3 ]
+    /// [ X4, Y4, Z4, T4 ]
     limbs: [5]u64x4,
 
     const zero: ExtendedPoint = .{ .limbs = @splat(@splat(0)) };

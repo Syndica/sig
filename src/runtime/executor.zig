@@ -17,7 +17,7 @@ const TransactionContext = sig.runtime.TransactionContext;
 const deinitAccountMap = sig.runtime.testing.deinitAccountMap;
 
 /// Execute an instruction described by the instruction info\
-/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L462-L479
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/invoke_context.rs#L477-L488
 pub fn executeInstruction(
     allocator: std.mem.Allocator,
     tc: *TransactionContext,
@@ -29,13 +29,11 @@ pub fn executeInstruction(
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L471-L474
     try pushInstruction(tc, instruction_info);
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L475
     processNextInstruction(allocator, tc) catch |err| {
         popInstruction(tc) catch {};
         return err;
     };
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L478
     try popInstruction(tc);
 }
 
@@ -139,41 +137,42 @@ fn processNextInstruction(
     const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
 
     // Lookup the program id
-    // [agave] https://github.com/anza-xyz/agave/blob/1ceeab0548d5db0bbcf7dab7726c2ffb4180fa76/program-runtime/src/invoke_context.rs#L509-L533
-    const native_program_id, const program_id = blk: {
-        const program_account = ic.borrowProgramAccount() catch
-            return InstructionError.UnsupportedProgramId;
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/invoke_context.rs#L515-L528
+    const builtin_id, const program_id = blk: {
+        const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
-
-        if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner) or
-            program.PRECOMPILE_ENTRYPOINTS.get(&program_account.pubkey) != null)
-            break :blk .{ program_account.pubkey, program_account.pubkey };
-
         const owner_id = program_account.account.owner;
-        if (bpf_loader_program.v1.ID.equals(&owner_id) or
+        const program_key = program_account.pubkey;
+
+        if (ids.NATIVE_LOADER_ID.equals(&owner_id) or
+            program.PRECOMPILE.get(&program_key) != null)
+            break :blk .{ program_key, program_key }
+        else if (bpf_loader_program.v1.ID.equals(&owner_id) or
             bpf_loader_program.v2.ID.equals(&owner_id) or
             bpf_loader_program.v3.ID.equals(&owner_id) or
             bpf_loader_program.v4.ID.equals(&owner_id))
-            break :blk .{ owner_id, program_account.pubkey };
-
-        return InstructionError.UnsupportedProgramId;
+            break :blk .{ owner_id, program_key }
+        else
+            return InstructionError.UnsupportedProgramId;
     };
 
-    const maybe_precompile_fn =
-        program.PRECOMPILE_ENTRYPOINTS.get(&native_program_id);
-
-    const maybe_native_program_fn = maybe_precompile_fn orelse blk: {
-        const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(&native_program_id);
-        ic.tc.return_data.data.len = 0;
-        break :blk native_program_fn;
+    const builtin = program.PRECOMPILE.get(&builtin_id) orelse blk: {
+        // Only clear the return data if it is a native program.
+        const builtin = program.NATIVE.get(&builtin_id) orelse
+            return InstructionError.UnsupportedProgramId;
+        tc.return_data.data.len = 0;
+        break :blk builtin;
     };
 
-    const native_program_fn = maybe_native_program_fn orelse
+    // Emulate Agave's program_map by checking the feature gates here.
+    // [fd] https://github.com/firedancer-io/firedancer/blob/31e08b0cd42c25b36155307e4b422a9390d25e4d/src/flamenco/runtime/fd_executor.c#L179-L187
+    if (builtin.gate) |gate| if (!tc.feature_set.active(gate, tc.slot)) {
         return InstructionError.UnsupportedProgramId;
+    };
 
     // Invoke the program and log the result
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L551-L571
-    // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1160-L1167
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/invoke_context.rs#L549
+    // [fd] https://github.com/firedancer-io/firedancer/blob/913e47274b135963fe8433a1e94abb9b42ce6253/src/flamenco/runtime/fd_executor.c#L1347-L1359
     try stable_log.programInvoke(
         ic.tc,
         program_id,
@@ -181,23 +180,26 @@ fn processNextInstruction(
     );
 
     {
-        const native_zone = tracy.Zone.init(@src(), .{ .name = "native_program_fn" });
-        defer native_zone.deinit();
+        const program_execute = tracy.Zone.init(@src(), .{ .name = "runtime: execute program" });
+        defer program_execute.deinit();
 
-        native_program_fn(allocator, ic) catch |err| {
+        // Run the program!
+        builtin.func(allocator, ic) catch |err| {
             // This approach to failure logging is used to prevent requiring all native programs to return
             // an ExecutionError. Instead, native programs return an InstructionError, and more granular
             // failure logging for bpf programs is handled in the BPF executor.
-            if (err != InstructionError.ProgramFailedToComplete)
+            if (err != InstructionError.ProgramFailedToComplete) {
                 try stable_log.programFailure(
                     ic.tc,
                     program_id,
                     err,
                 );
+            }
             return err;
         };
     }
 
+    // Log the success, if the execution did not return an error.
     try stable_log.programSuccess(
         ic.tc,
         program_id,

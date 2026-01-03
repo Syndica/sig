@@ -251,12 +251,6 @@ fn loadTransactionAccountsSimd186(
         ) orelse return error.ProgramAccountNotFound;
         defer program_account.account.deinit(allocator);
 
-        if (!feature_set.active(.remove_accounts_executable_flag_checks, slot) and
-            !program_account.account.executable)
-        {
-            return error.InvalidProgramForExecution;
-        }
-
         const owner_id = &program_account.account.owner;
         if (!owner_id.equals(&runtime.ids.NATIVE_LOADER_ID)) {
             for ([_]Pubkey{
@@ -340,9 +334,6 @@ fn loadTransactionAccountsOld(
             feature_set.active(.formalize_loaded_transaction_data_size, slot),
         ) orelse return error.ProgramAccountNotFound;
         defer program_account.account.deinit(allocator);
-
-        if (!feature_set.active(.remove_accounts_executable_flag_checks, slot) and
-            !program_account.account.executable) return error.InvalidProgramForExecution;
 
         const owner_id = program_account.account.owner;
 
