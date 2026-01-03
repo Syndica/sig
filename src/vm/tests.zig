@@ -2909,6 +2909,7 @@ pub fn testSyscall(
         align_memory_map: bool = false,
         version: sbpf.Version = .v3,
         compute_meter: u64 = 10_000,
+        feature_set: []const sig.runtime.testing.ExecuteContextsParams.FeatureParams = &.{},
     },
 ) !void {
     const testing = sig.runtime.testing;
@@ -2921,6 +2922,7 @@ pub fn testSyscall(
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }},
         .compute_meter = config.compute_meter,
+        .feature_set = config.feature_set,
     });
     defer {
         sig.runtime.testing.deinitTransactionContext(allocator, &tc);
