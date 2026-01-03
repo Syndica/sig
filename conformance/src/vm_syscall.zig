@@ -104,7 +104,7 @@ fn executeSyscall(
     // } else {
     //     try pb_instr_ctx.accounts.append(.{
     //         .address = try pb_instr_ctx.program_id.dupe(allocator),
-    //         .owner = protobuf.ManagedString.static(&(.{0} ** 32)),
+    //         .owner = protobuf.ManagedString.static(comptime &(.{0} ** 32)),
     //     });
     // }
 
@@ -132,7 +132,7 @@ fn executeSyscall(
     const reject_broken_elfs = false;
     const debugging_features = false;
     const direct_mapping = tc.feature_set.active(
-        .bpf_account_data_direct_mapping,
+        .account_data_direct_mapping,
         tc.slot,
     );
     const config = sig.vm.Environment.initV1Config(

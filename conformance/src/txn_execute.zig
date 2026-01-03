@@ -5,7 +5,6 @@ const utils = @import("utils.zig");
 const protobuf = @import("protobuf");
 
 const EMIT_LOGS = false;
-const TOGGLE_DIRECT_MAPPING = false;
 const STACK_SIZE = 32 * 1024 * 1024;
 
 /// [fd] https://github.com/firedancer-io/firedancer/blob/61e3d2e21419fc71002aa1c037ab637cea85416d/src/flamenco/runtime/tests/harness/fd_exec_sol_compat.c#L583
@@ -129,7 +128,7 @@ fn executeTxnContext(
     }
 
     // Load info from the protobuf transaction context
-    var feature_set = try loadFeatureSet(&pb_txn_ctx);
+    var feature_set = try utils.loadFeatureSet(&pb_txn_ctx);
 
     const blockhashes = try loadBlockhashes(allocator, &pb_txn_ctx);
     defer allocator.free(blockhashes);
@@ -1024,36 +1023,10 @@ fn parsePubkey(bytes: []const u8) !Pubkey {
     return .{ .data = bytes[0..Pubkey.SIZE].* };
 }
 
-fn loadSlot(pb_txn_ctx: *const pb.TxnContext) u64 {
-    return if (pb_txn_ctx.slot_ctx) |ctx| ctx.slot else 10;
-}
-
-fn loadFeatureSet(pb_txn_ctx: *const pb.TxnContext) !FeatureSet {
-    var feature_set: FeatureSet = set: {
-        const maybe_pb_features = if (pb_txn_ctx.epoch_ctx) |epoch_ctx|
-            if (epoch_ctx.features) |pb_features| pb_features else null
-        else
-            null;
-
-        const pb_features = maybe_pb_features orelse break :set .ALL_DISABLED;
-
-        var feature_set: FeatureSet = .ALL_DISABLED;
-        for (pb_features.features.items) |id| {
-            // only way for `setId` to fail is if the `id` doesn't exist.
-            feature_set.setSlotId(id, 0) catch std.debug.panic("unknown id: 0x{x}", .{id});
-        }
-        break :set feature_set;
-    };
-
-    if (TOGGLE_DIRECT_MAPPING) {
-        if (feature_set.active(.bpf_account_data_direct_mapping, 0)) {
-            feature_set.disable(.bpf_account_data_direct_mapping);
-        } else {
-            feature_set.setSlot(.bpf_account_data_direct_mapping, 0);
-        }
-    }
-
-    return feature_set;
+/// [agave] https://github.com/firedancer-io/solfuzz-agave/blob/agave-v3.1.0-beta.0/src/txn_fuzzer.rs#L319-L323
+fn loadSlot(txn_ctx: *const pb.TxnContext) u64 {
+    const slot = if (txn_ctx.slot_context) |ctx| ctx.slot else return 10;
+    return if (slot == 0) 10 else slot;
 }
 
 /// Load blockhashes from the protobuf transaction context.

@@ -74,7 +74,7 @@ pub fn createTransactionContext(
         ptr
     else
         try allocator.create(FeatureSet);
-    feature_set.* = try createFeatureSet(instr_ctx);
+    feature_set.* = try loadFeatureSet(instr_ctx);
 
     const epoch_stakes = if (environment.epoch_stakes) |ptr|
         ptr
@@ -169,18 +169,14 @@ pub fn deinitTransactionContext(
     tc.deinit();
 }
 
-pub fn createFeatureSet(pb_ctx: pb.InstrContext) !FeatureSet {
-    errdefer |err| {
-        std.debug.print("createFeatureSet: error={}\n", .{err});
-    }
-
-    const pb_epoch_context = pb_ctx.epoch_context orelse return FeatureSet.ALL_DISABLED;
-    const pb_feature_set = pb_epoch_context.features orelse return FeatureSet.ALL_DISABLED;
+pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
+    const epoch_context = ctx.epoch_context orelse return .ALL_DISABLED;
+    const pb_features = epoch_context.features orelse return .ALL_DISABLED;
 
     var feature_set: FeatureSet = .ALL_DISABLED;
-    for (pb_feature_set.features.items) |id| {
-        // only way for `setSlotId` to return an error is if the `id` didn't match.
-        feature_set.setSlotId(id, 0) catch continue;
+    for (pb_features.features.items) |id| {
+        // only way for `setSlotId` to fail is if the `id` doesn't exist.
+        feature_set.setSlotId(id, 0) catch std.debug.panic("unknown id: 0x{x}", .{id});
     }
     return feature_set;
 }

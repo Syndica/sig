@@ -64,17 +64,16 @@ fn executeVmTest(
     } else {
         try instr_context.accounts.append(.{
             .address = try instr_context.program_id.dupe(allocator),
-            .owner = protobuf.ManagedString.static(&(.{0} ** 32)),
+            .owner = protobuf.ManagedString.static(comptime &(.{0} ** 32)),
         });
     }
 
-    var feature_set = try allocator.create(sig.core.FeatureSet);
-    feature_set.* = try utils.createFeatureSet(instr_context);
+    var feature_set = try utils.loadFeatureSet(instr_context);
     var tc: sig.runtime.TransactionContext = undefined;
     try utils.createTransactionContext(
         allocator,
         instr_context,
-        .{ .feature_set = feature_set },
+        .{ .feature_set = &feature_set },
         &tc,
     );
     defer utils.deinitTransactionContext(allocator, tc);
@@ -85,7 +84,17 @@ fn executeVmTest(
         3 => .v3,
         else => .v0,
     };
-    const direct_mapping = feature_set.active(.bpf_account_data_direct_mapping, slot);
+
+    var env = sig.vm.Environment.initV1(
+        tc.feature_set,
+        &tc.compute_budget,
+        tc.slot,
+        false,
+        false,
+    );
+    env.config.maximum_version = sbpf_version;
+    env.loader.is_stubbed = true;
+    const config = env.config;
 
     if (instr_context.program_id.getSlice().len != Pubkey.SIZE) return error.OutOfBounds;
     const instr_info = try utils.createInstructionInfo(
@@ -101,13 +110,10 @@ fn executeVmTest(
 
     var ic = tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
 
-    const config: Config = .{
-        .minimum_version = .v0,
-        .maximum_version = sbpf_version,
-        .enable_stack_frame_gaps = !direct_mapping,
-        .aligned_memory_mapping = !direct_mapping,
-    };
-
+    const direct_mapping = tc.feature_set.active(
+        .account_data_direct_mapping,
+        slot,
+    );
     const stricter_abi_and_runtime_constraints = tc.feature_set.active(
         .stricter_abi_and_runtime_constraints,
         slot,
@@ -131,13 +137,6 @@ fn executeVmTest(
 
     const rodata = try allocator.dupe(u8, vm_context.rodata.getSlice());
     defer allocator.free(rodata);
-
-    var syscall_registry = sig.vm.Environment.initV1Loader(
-        feature_set,
-        slot,
-        false,
-    );
-    syscall_registry.is_stubbed = true;
 
     var function_registry: Registry = .{};
 
@@ -172,7 +171,7 @@ fn executeVmTest(
         .instructions = std.mem.bytesAsSlice(Instruction, rodata),
         .bytes = rodata,
         .version = sbpf_version,
-        .config = config,
+        .config = env.config,
         .function_registry = function_registry,
         .entry_pc = entry_pc,
         .ro_section = .{ .borrowed = .{
@@ -187,7 +186,7 @@ fn executeVmTest(
             memory.RODATA_START,
     };
 
-    const verify_result = executable.verify(&syscall_registry);
+    const verify_result = executable.verify(&env.loader);
     if (std.meta.isError(verify_result)) {
         return .{
             .@"error" = -2,
@@ -236,7 +235,7 @@ fn executeVmTest(
         allocator,
         &executable,
         map,
-        &syscall_registry,
+        &env.loader,
         STACK_SIZE,
         &tc,
     );

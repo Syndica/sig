@@ -56,8 +56,8 @@ pub const Serializer = struct {
         size: usize,
         region_start: usize,
         aligned: bool,
-        account_data_direct_mapping: bool,
         stricter_abi_and_runtime_constraints: bool,
+        account_data_direct_mapping: bool,
     ) error{OutOfMemory}!Serializer {
         return .{
             .allocator = allocator,
@@ -102,6 +102,7 @@ pub const Serializer = struct {
                     account.constAccountData().len,
                     BPF_ALIGN_OF_U128,
                 ) - account.constAccountData().len;
+
                 try self.buffer.appendNTimes(
                     self.allocator,
                     0,
@@ -115,9 +116,12 @@ pub const Serializer = struct {
         const addr = self.vaddr;
         if (!self.account_data_direct_mapping) {
             _ = self.writeBytes(account.constAccountData()); // intentionally ignored
-            if (self.aligned) {
-                try self.buffer.appendNTimes(self.allocator, 0, MAX_PERMITTED_DATA_INCREASE);
-            }
+
+            if (self.aligned) try self.buffer.appendNTimes(
+                self.allocator,
+                0,
+                MAX_PERMITTED_DATA_INCREASE,
+            );
         }
 
         // TODO: Cow https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L134
@@ -309,8 +313,8 @@ fn serializeParametersUnaligned(
         size,
         INPUT_START,
         false,
-        account_data_direct_mapping,
         stricter_abi_and_runtime_constraints,
+        account_data_direct_mapping,
     );
 
     var account_metas: std.BoundedArray(
@@ -435,8 +439,8 @@ fn serializeParametersAligned(
         size,
         INPUT_START,
         true,
-        account_data_direct_mapping,
         stricter_abi_and_runtime_constraints,
+        account_data_direct_mapping,
     );
     errdefer serializer.deinit();
 
