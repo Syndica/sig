@@ -18,13 +18,37 @@ fn consumeMemoryCompute(tc: *TransactionContext, length: u64) !void {
     try tc.consumeCompute(cost);
 }
 
+/// Returns whether `src_ptr[0..src_len]` overlaps with `dst_ptr[0..dst_len]`.
+/// Lengths are in terms of bytes, unless the pointer is a slice, in which case
+/// we multiply the length by the abi size of the element.
+///
+/// NOTE: We call `@intFromPtr` inside in order to ensure *Zig* pointers are passed in.
+/// This is because we need to check whether the "physical" addresses are overlapping,
+/// not the virtual ones.
+///
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/syscalls/src/mem_ops.rs#L13-L24
-pub fn isOverlapping(src_addr: u64, src_len: u64, dst_addr: u64, dst_len: u64) bool {
-    if (src_addr > dst_addr) {
-        return (src_addr -| dst_addr) < dst_len;
-    } else {
-        return (dst_addr -| src_addr) < src_len;
+pub fn isOverlapping(src: anytype, dst: anytype) bool {
+    const src_ptr, const src_len = unpack(src);
+    const dst_ptr, const dst_len = unpack(dst);
+    return overlaps(src_ptr, src_len, dst_ptr, dst_len);
+}
+
+inline fn unpack(input: anytype) struct { u64, u64 } {
+    const is_slice = @typeInfo(@TypeOf(input)).pointer.size == .slice;
+    const ptr = @intFromPtr(if (is_slice) input.ptr else input);
+    const size = @sizeOf(std.meta.Child(@TypeOf(input)));
+    const len = size *| if (is_slice) input.len else 1;
+    return .{ ptr, len };
+}
+
+fn overlaps(src_ptr: u64, src_len: u64, dst_ptr: u64, dst_len: u64) bool {
+    if (((src_ptr > dst_ptr) and (src_ptr -| dst_ptr < dst_len)) or
+        ((dst_ptr >= src_ptr) and (dst_ptr -| src_ptr < src_len)))
+    {
+        @branchHint(.unlikely);
+        return true;
     }
+    return false;
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/syscalls/src/mem_ops.rs#L26-L47
@@ -36,7 +60,7 @@ pub fn memcpy(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/syscalls/src/mem_ops.rs#L38
     try consumeMemoryCompute(tc, len);
 
-    if (isOverlapping(src_addr, len, dst_addr, len)) {
+    if (overlaps(src_addr, len, dst_addr, len)) {
         return SyscallError.CopyOverlapping;
     }
 
@@ -110,7 +134,7 @@ pub fn memset(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
     @memset(host, @truncate(scalar));
 }
 
-test "isOverlapping" {
+test overlaps {
     for ([_]struct { usize, usize, usize, bool }{
         .{ 1, 2, 2, true }, // dst overlaps src
         .{ 2, 1, 2, true }, // src overlaps dst
@@ -118,8 +142,7 @@ test "isOverlapping" {
         .{ 1, 10, 1, false }, // neither overlaps
     }) |test_case| {
         const src, const dst, const len, const expect = test_case;
-        errdefer std.log.err("isOverlapping failed src={x} dst={x} len={}\n", .{ src, dst, len });
-        try std.testing.expectEqual(expect, isOverlapping(src, len, dst, len));
+        try std.testing.expectEqual(expect, overlaps(src, len, dst, len));
     }
 }
 
@@ -258,7 +281,7 @@ test "memmove syscall" {
                 const dst_addr, const src_addr, const len, _, _ = args;
 
                 // skip checking overlapping data validity as its hard to tell using `testSyscall`
-                if (isOverlapping(src_addr, len, dst_addr, len)) return;
+                if (overlaps(src_addr, len, dst_addr, len)) return;
 
                 const aligned = tc.getCheckAligned();
                 const dst = try memory_map.translateSlice(u8, .constant, dst_addr, len, aligned);
