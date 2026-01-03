@@ -247,12 +247,14 @@ const CallerAccount = struct {
     fn fromAccountInfoRust(
         ic: *const InstructionContext,
         memory_map: *const MemoryMap,
-        _vm_addr: u64,
+        _: u64, // vm_addr. Unused, but we need the same function prototype as `fromAccountInfoC()`.
         account_info: *align(1) const AccountInfoRust,
         account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
-        _ = _vm_addr; // unused, but have same signature as fromAccountInfoC().
-
+        const account_data_direct_mapping = ic.tc.feature_set.active(
+            .account_data_direct_mapping,
+            ic.tc.slot,
+        );
         const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
             .stricter_abi_and_runtime_constraints,
             ic.tc.slot,
@@ -355,7 +357,7 @@ const CallerAccount = struct {
                 vm_data_addr,
                 data.len,
                 stricter_abi_and_runtime_constraints,
-                ic.tc.account_data_direct_mapping,
+                account_data_direct_mapping,
             );
 
             break :blk .{ serialized, vm_data_addr, ref_to_len_addr };
@@ -379,6 +381,10 @@ const CallerAccount = struct {
         account_info: *align(1) const AccountInfoC,
         account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
+        const account_data_direct_mapping = ic.tc.feature_set.active(
+            .account_data_direct_mapping,
+            ic.tc.slot,
+        );
         const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
             .stricter_abi_and_runtime_constraints,
             ic.tc.slot,
@@ -433,7 +439,7 @@ const CallerAccount = struct {
             account_info.data_addr,
             account_info.data_len,
             stricter_abi_and_runtime_constraints,
-            ic.tc.account_data_direct_mapping,
+            account_data_direct_mapping,
         );
 
         // we already have the host addr we want: &mut account_info.data_len.
@@ -559,6 +565,10 @@ fn translateAccounts(
 
     // translate_account_infos():
 
+    const account_data_direct_mapping = ic.tc.feature_set.active(
+        .account_data_direct_mapping,
+        ic.tc.slot,
+    );
     const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
         .stricter_abi_and_runtime_constraints,
         ic.tc.slot,
@@ -682,7 +692,7 @@ fn translateAccounts(
             &callee_account,
             &caller_account,
             stricter_abi_and_runtime_constraints,
-            ic.tc.account_data_direct_mapping,
+            account_data_direct_mapping,
         );
 
         try accounts.append(.{
@@ -905,6 +915,7 @@ fn updateCallerAccount(
     caller_account: *CallerAccount,
     callee_account: *BorrowedAccount,
     stricter_abi_and_runtime_constraints: bool,
+    account_data_direct_mapping: bool,
 ) !void {
     caller_account.lamports.* = callee_account.account.lamports;
     caller_account.owner.* = callee_account.account.owner;
@@ -930,7 +941,7 @@ fn updateCallerAccount(
     if (prev_len != post_len) {
         // when stricter_abi_and_runtime_constraints is enabled we don't cache the serialized data
         // in caller_account.serialized_data. See CallerAccount.fromAccountInfoRust.
-        if (!(stricter_abi_and_runtime_constraints and ic.tc.account_data_direct_mapping)) {
+        if (!(stricter_abi_and_runtime_constraints and account_data_direct_mapping)) {
             // If the account has been shrunk, we're going to zero the unused memory
             // *that was previously used*.
             if (post_len < prev_len) {
@@ -944,7 +955,7 @@ fn updateCallerAccount(
                 caller_account.vm_data_addr,
                 post_len,
                 stricter_abi_and_runtime_constraints,
-                ic.tc.account_data_direct_mapping,
+                account_data_direct_mapping,
             );
         }
         // this is the len field in the AccountInfo.data slice
@@ -960,7 +971,7 @@ fn updateCallerAccount(
         serialized_len.* = post_len;
     }
 
-    if (!(stricter_abi_and_runtime_constraints and ic.tc.account_data_direct_mapping)) {
+    if (!(stricter_abi_and_runtime_constraints and account_data_direct_mapping)) {
         // Propagate changes in the callee up to the caller.
         const to = caller_account.serialized_data;
         const from = callee_account.constAccountData();
@@ -971,132 +982,152 @@ fn updateCallerAccount(
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1054
-fn cpiCommon(
-    allocator: std.mem.Allocator,
-    ic: *InstructionContext,
-    memory_map: *MemoryMap,
-    comptime AccountInfoType: type,
-    instruction_addr: u64,
-    account_infos_addr: u64,
-    account_infos_len: u64,
-    signers_seeds_addr: u64,
-    signers_seeds_len: u64,
-) Error!void {
-    try ic.tc.consumeCompute(ic.tc.compute_budget.invoke_units);
+pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
+    return struct {
+        fn common(
+            tc: *TransactionContext,
+            memory_map: *MemoryMap,
+            registers: *RegisterMap,
+        ) !void {
+            const instruction_addr = registers.get(.r1);
+            const account_infos_addr = registers.get(.r2);
+            const account_infos_len = registers.get(.r3);
+            const signers_seeds_addr = registers.get(.r4);
+            const signers_seeds_len = registers.get(.r5);
 
-    // TODO: timings
+            try tc.consumeCompute(tc.compute_budget.invoke_units);
 
-    const instruction = try translateInstruction(
-        allocator,
-        ic,
-        memory_map,
-        AccountInfoType,
-        instruction_addr,
-    );
-    defer instruction.deinit(allocator);
+            const allocator = tc.allocator;
+            const ic = try tc.getCurrentInstructionContext();
 
-    const signers = try translateSigners(
-        ic,
-        memory_map,
-        signers_seeds_addr,
-        signers_seeds_len,
-        ic.ixn_info.program_meta.pubkey,
-    );
+            // TODO: timings
 
-    // check_authorized_program(ic, instruction):
-    // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1028C4-L1028C28
-    if (ids.NATIVE_LOADER_ID.equals(&instruction.program_id) or
-        bpf_loader_program.v1.ID.equals(&instruction.program_id) or
-        bpf_loader_program.v2.ID.equals(&instruction.program_id) or
-        (bpf_loader_program.v3.ID.equals(&instruction.program_id) and
-            isBpfLoaderV3InstructionAuthorized(instruction.data, ic.tc.feature_set, ic.tc.slot)) or
-        (blk: {
-            for (PRECOMPILES) |p| if (p.program_id.equals(&instruction.program_id)) break :blk true;
-            break :blk false;
-        }))
-    {
-        // TODO add {instruction.program_id} as context to error.
-        // https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1048
-        return SyscallError.ProgramNotSupported;
-    }
-
-    const info = try sig.runtime.executor.prepareCpiInstructionInfo(
-        ic.tc,
-        instruction,
-        signers.slice(),
-    );
-    defer info.deinit(ic.tc.allocator);
-
-    var accounts = try translateAccounts(
-        allocator,
-        ic,
-        memory_map,
-        AccountInfoType,
-        account_infos_addr,
-        account_infos_len,
-        &info,
-    );
-
-    // Process the callee instruction.
-    // Doesn't call `executeNativeCpiInstruction` as info already setup.
-    try sig.runtime.executor.executeInstruction(allocator, ic.tc, info);
-
-    // CPI Exit.
-    // Synchronize the callee's account changes so the caller can see them.
-    const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
-        .stricter_abi_and_runtime_constraints,
-        ic.tc.slot,
-    );
-
-    for (accounts.slice()) |*translated| {
-        var callee_account = try ic.borrowInstructionAccount(translated.index_in_caller);
-        defer callee_account.release();
-
-        if (translated.update_caller_account_info) {
-            try updateCallerAccount(
+            const instruction = try translateInstruction(
+                allocator,
                 ic,
                 memory_map,
-                &translated.caller_account,
-                &callee_account,
-                stricter_abi_and_runtime_constraints,
+                AccountInfo,
+                instruction_addr,
             );
-        }
-    }
+            defer instruction.deinit(allocator);
 
-    if (stricter_abi_and_runtime_constraints) {
-        for (accounts.constSlice()) |translated| {
-            var callee_account = try ic.borrowInstructionAccount(translated.index_in_caller);
-            defer callee_account.release();
+            const signers = try translateSigners(
+                ic,
+                memory_map,
+                signers_seeds_addr,
+                signers_seeds_len,
+                ic.ixn_info.program_meta.pubkey,
+            );
 
-            if (translated.update_caller_account_region) {
-                // update_caller_account_region()
+            // check_authorized_program(ic, instruction):
+            // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1028C4-L1028C28
+            if (ids.NATIVE_LOADER_ID.equals(&instruction.program_id) or
+                bpf_loader_program.v1.ID.equals(&instruction.program_id) or
+                bpf_loader_program.v2.ID.equals(&instruction.program_id) or
+                (bpf_loader_program.v3.ID.equals(&instruction.program_id) and
+                    isBpfLoaderV3InstructionAuthorized(instruction.data, ic.tc.feature_set, ic.tc.slot)) or
+                (blk: {
+                    for (PRECOMPILES) |p| if (p.program_id.equals(&instruction.program_id)) break :blk true;
+                    break :blk false;
+                }))
+            {
+                // TODO add {instruction.program_id} as context to error.
+                // https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1048
+                return SyscallError.ProgramNotSupported;
+            }
 
-                const caller_account = &translated.caller_account;
-                const is_caller_loader_deprecated = !ic.getCheckAligned();
-                const address_space = if (is_caller_loader_deprecated)
-                    caller_account.original_data_len
-                else
-                    caller_account.original_data_len +| MAX_PERMITTED_DATA_INCREASE;
+            const info = try sig.runtime.executor.prepareCpiInstructionInfo(
+                ic.tc,
+                instruction,
+                signers.slice(),
+            );
+            defer info.deinit(ic.tc.allocator);
 
-                if (address_space > 0) {
-                    const region = memory_map.findRegion(caller_account.vm_data_addr) catch
-                        return InstructionError.MissingAccount;
-                    std.debug.assert(region.vm_addr_start == caller_account.vm_data_addr);
+            var accounts = try translateAccounts(
+                allocator,
+                ic,
+                memory_map,
+                AccountInfo,
+                account_infos_addr,
+                account_infos_len,
+                &info,
+            );
 
-                    switch (callee_account.checkDataIsMutable() == null) {
-                        inline true, false => |mutable| {
-                            const state: memory.MemoryState = if (mutable) .mutable else .constant;
-                            const data = if (ic.tc.account_data_direct_mapping)
-                                callee_account.account.data
-                            else
-                                region.hostSlice(state).?[0..callee_account.account.data.len];
-                            region.* = .init(state, data, region.vm_addr_start);
-                        },
+            // Process the callee instruction.
+            // Doesn't call `executeNativeCpiInstruction` as info already setup.
+            try sig.runtime.executor.executeInstruction(allocator, ic.tc, info);
+
+            // CPI Exit.
+            // Synchronize the callee's account changes so the caller can see them.
+            const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
+                .stricter_abi_and_runtime_constraints,
+                ic.tc.slot,
+            );
+            const account_data_direct_mapping = ic.tc.feature_set.active(
+                .account_data_direct_mapping,
+                ic.tc.slot,
+            );
+
+            for (accounts.slice()) |*translated| {
+                var callee_account = try ic.borrowInstructionAccount(translated.index_in_caller);
+                defer callee_account.release();
+
+                if (translated.update_caller_account_info) {
+                    try updateCallerAccount(
+                        ic,
+                        memory_map,
+                        &translated.caller_account,
+                        &callee_account,
+                        stricter_abi_and_runtime_constraints,
+                        account_data_direct_mapping,
+                    );
+                }
+            }
+
+            if (!stricter_abi_and_runtime_constraints) {
+                // nothing left for us to do
+                return;
+            }
+
+            for (accounts.constSlice()) |translated| {
+                var callee_account = try ic.borrowInstructionAccount(translated.index_in_caller);
+                defer callee_account.release();
+
+                if (translated.update_caller_account_region) {
+                    // update_caller_account_region()
+                    const caller_account = &translated.caller_account;
+                    const is_caller_loader_deprecated = !ic.getCheckAligned();
+
+                    const address_space = if (is_caller_loader_deprecated)
+                        caller_account.original_data_len
+                    else
+                        caller_account.original_data_len +| MAX_PERMITTED_DATA_INCREASE;
+
+                    if (address_space > 0) {
+                        const region = memory_map.findRegion(caller_account.vm_data_addr) catch
+                            return InstructionError.MissingAccount;
+                        std.debug.assert(region.vm_addr_start == caller_account.vm_data_addr);
+
+                        switch (callee_account.checkDataIsMutable() == null) {
+                            inline true, false => |mutable| {
+                                const state: memory.MemoryState = if (mutable)
+                                    .mutable
+                                else
+                                    .constant;
+
+                                const data = if (account_data_direct_mapping)
+                                    callee_account.account.data
+                                else
+                                    region.hostSlice(state).?[0..callee_account.account.data.len];
+
+                                region.* = .init(state, data, region.vm_addr_start);
+                            },
+                        }
                     }
                 }
             }
         }
-    }
+    }.common;
 }
 
 /// Some bpf loader v3 instructions are not allowed to be invoked via cpi. This method
@@ -1107,74 +1138,23 @@ fn isBpfLoaderV3InstructionAuthorized(
     slot: sig.core.Slot,
 ) bool {
     if (instruction_data.len == 0) return true;
-    const V3Tag = @typeInfo(bpf_loader_program.v3.Instruction).@"union".tag_type.?;
-    const v3_tag = std.meta.intToEnum(V3Tag, instruction_data[0]) catch return true;
-    return switch (v3_tag) {
-        // upgrade instruction
+    const Inst = @typeInfo(bpf_loader_program.v3.Instruction).@"union".tag_type.?;
+    const inst = std.meta.intToEnum(Inst, instruction_data[0]) catch return true;
+    return switch (inst) {
         .upgrade => false,
-        // set authority instruction
         .set_authority => false,
-        // close instrucion
         .close => false,
-        // set authority checked instruction
         .set_authority_checked => !feature_set.active(
             .enable_bpf_loader_set_authority_checked_ix,
             slot,
         ),
-        // migrate instruction
         .migrate => false,
-        // extend program checked instruction
         .extend_program_checked => !feature_set.active(
             .enable_extend_program_checked,
             slot,
         ),
         else => true,
     };
-}
-
-fn invokeSigned(
-    comptime AccountInfoType: type,
-    tc: *TransactionContext,
-    memory_map: *MemoryMap,
-    registers: *RegisterMap,
-) Error!void {
-    const instruction_addr = registers.get(.r1);
-    const account_infos_addr = registers.get(.r2);
-    const account_infos_len = registers.get(.r3);
-    const signers_seeds_addr = registers.get(.r4);
-    const signers_seeds_len = registers.get(.r5);
-
-    const caller_ic = try tc.getCurrentInstructionContext();
-
-    return cpiCommon(
-        tc.allocator,
-        caller_ic,
-        memory_map,
-        AccountInfoType,
-        instruction_addr,
-        account_infos_addr,
-        account_infos_len,
-        signers_seeds_addr,
-        signers_seeds_len,
-    );
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L608-L630
-pub fn invokeSignedC(
-    tc: *TransactionContext,
-    memory_map: *MemoryMap,
-    registers: *RegisterMap,
-) Error!void {
-    return invokeSigned(AccountInfoC, tc, memory_map, registers);
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L399-L421
-pub fn invokeSignedRust(
-    tc: *TransactionContext,
-    memory_map: *MemoryMap,
-    registers: *RegisterMap,
-) Error!void {
-    return invokeSigned(AccountInfoRust, tc, memory_map, registers);
 }
 
 // CPI Tests
@@ -2117,6 +2097,7 @@ test "updateCallerAccount: lamports owner" {
             &caller_account,
             &callee_account,
             stricter_abi_and_runtime_constraints,
+            stricter_abi_and_runtime_constraints,
         );
 
         try std.testing.expectEqual(caller_account.lamports.*, 42);
@@ -2169,6 +2150,7 @@ test "updateCallerAccount: data" {
             &caller_account,
             &callee_account,
             false, // stricter_abi_and_runtime_constraints
+            false, // account_data_direct_mapping
         );
 
         const size = callee_account.account.data.len;
@@ -2198,6 +2180,7 @@ test "updateCallerAccount: data" {
         &caller_account,
         &callee_account,
         false, // stricter_abi_and_runtime_constraints
+        false, // account_data_direct_mapping
     );
 
     const realloced = ca.slice()[callee_account.account.data.len..];
@@ -2216,6 +2199,7 @@ test "updateCallerAccount: data" {
         &caller_account,
         &callee_account,
         false, // stricter_abi_and_runtime_constraints
+        false, // account_data_direct_mapping
     ));
 
     // close the account
@@ -2226,19 +2210,20 @@ test "updateCallerAccount: data" {
         &caller_account,
         &callee_account,
         false, // stricter_abi_and_runtime_constraints
+        false, // account_data_direct_mapping
     );
     try std.testing.expectEqual(callee_account.account.data.len, 0);
 }
 
-test "cpiCommon (invokeSignedRust)" {
+test "inokeSignedRust" {
     try testCpiCommon(AccountInfoRust);
 }
 
-test "cpiCommon (invokeSignedC)" {
+test "invokeSignedC" {
     try testCpiCommon(AccountInfoC);
 }
 
-fn testCpiCommon(comptime AccountInfoType: type) !void {
+fn testCpiCommon(comptime AccountType: type) !void {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -2250,9 +2235,7 @@ fn testCpiCommon(comptime AccountInfoType: type) !void {
         if (stricter_abi_and_runtime_constraints) {
             const feature_set: *sig.core.FeatureSet = @constCast(ctx.tc.feature_set);
             feature_set.setSlot(.stricter_abi_and_runtime_constraints, ctx.tc.slot);
-
-            // also enable account_data_direct_mapping for getSerializedData
-            ctx.tc.account_data_direct_mapping = true;
+            feature_set.setSlot(.account_data_direct_mapping, ctx.tc.slot);
         }
 
         // the CPI program to execute.
@@ -2273,7 +2256,7 @@ fn testCpiCommon(comptime AccountInfoType: type) !void {
         const instruction_addr = memory.HEAP_START;
         const instruction_buffer = try intoStableInstruction(
             allocator,
-            AccountInfoType,
+            AccountType,
             instruction_addr,
             data,
             program_id,
@@ -2292,7 +2275,7 @@ fn testCpiCommon(comptime AccountInfoType: type) !void {
             std.mem.alignForward(u64, instruction_addr + instruction_buffer.len, BPF_ALIGN_OF_U128);
         const account_info_buffer, const serialized_metadata = try account.intoAccountInfo(
             allocator,
-            AccountInfoType,
+            AccountType,
             account_info_addr,
             account_data_addr,
         );
@@ -2323,11 +2306,7 @@ fn testCpiCommon(comptime AccountInfoType: type) !void {
         registers.set(.r4, 0); // null signers_addr
         registers.set(.r5, 0); // zero signers_len
 
-        switch (AccountInfoType) {
-            AccountInfoRust => try invokeSignedRust(ctx.tc, &memory_map, &registers),
-            AccountInfoC => try invokeSignedC(ctx.tc, &memory_map, &registers),
-            else => @compileError("invalid AccountInfo type"),
-        }
+        try invokeSigned(AccountType)(ctx.tc, &memory_map, &registers);
     }
 }
 
