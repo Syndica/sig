@@ -84,11 +84,9 @@ pub fn createProgramAddress(
     if (seeds.len + 1 > MAX_SEEDS) {
         return PubkeyError.MaxSeedLenExceeded;
     }
-
-    for (seeds) |seed| {
-        if (seed.len > MAX_SEED_LEN) return PubkeyError.MaxSeedLenExceeded;
-    }
-
+    for (seeds) |seed| if (seed.len > MAX_SEED_LEN) {
+        return PubkeyError.MaxSeedLenExceeded;
+    };
     if (bump_seed.len > MAX_SEED_LEN) {
         return PubkeyError.MaxSeedLenExceeded;
     }

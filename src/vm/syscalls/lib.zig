@@ -428,22 +428,21 @@ pub fn getProcessedSiblingInstruction(
         if (header.data_len == info.instruction_data.len and
             header.accounts_len == info.account_metas.items.len)
         {
+            // sig fmt: off
             const program_id = try memory_map.translateType(Pubkey, .mutable, program_id_addr, check_aligned);
             const data = try memory_map.translateSlice(u8, .mutable, data_addr, header.data_len, check_aligned);
             const accounts = try memory_map.translateSlice(AccountMeta, .mutable, accounts_addr, header.accounts_len, check_aligned);
+            // sig fmt: on
 
-            // Ensures that none of the inputs are overlapping.
-            // sig fmt: off
-            if (memops.isOverlapping(meta_addr, @sizeOf(ProcessedSiblingInstruction), program_id_addr, @sizeOf(Pubkey)) or
-                memops.isOverlapping(meta_addr, @sizeOf(ProcessedSiblingInstruction), accounts_addr, accounts.len *| @sizeOf(AccountMeta)) or
-                memops.isOverlapping(meta_addr, @sizeOf(ProcessedSiblingInstruction), data_addr, data.len) or
-                memops.isOverlapping(program_id_addr, @sizeOf(Pubkey), data_addr, data.len) or
-                memops.isOverlapping(program_id_addr, @sizeOf(Pubkey), accounts_addr, accounts.len *| @sizeOf(AccountMeta)) or
-                memops.isOverlapping(data_addr, data.len, accounts_addr, accounts.len *| @sizeOf(AccountMeta)))
+            if (memops.isOverlapping(header, program_id) or
+                memops.isOverlapping(header, accounts) or
+                memops.isOverlapping(header, data) or
+                memops.isOverlapping(program_id, accounts) or
+                memops.isOverlapping(program_id, data) or
+                memops.isOverlapping(data, accounts))
             {
                 return SyscallError.CopyOverlapping;
             }
-            // sig fmt: on
 
             program_id.* = info.program_meta.pubkey;
             @memcpy(data, info.instruction_data);
@@ -464,11 +463,10 @@ pub fn getProcessedSiblingInstruction(
 
         header.data_len = info.instruction_data.len;
         header.accounts_len = info.account_metas.items.len;
-        registers.set(.r0, 1);
+        registers.set(.r0, 1); // true
         return;
     }
-
-    registers.set(.r0, 0);
+    registers.set(.r0, 0); // false
     return;
 }
 
@@ -533,28 +531,26 @@ pub fn getReturnData(
         const cost = (length +| @sizeOf(Pubkey)) / tc.compute_budget.cpi_bytes_per_unit;
         try tc.consumeCompute(cost);
 
-        const return_data_result = try memory_map.translateSlice(
+        const return_data_ptr = try memory_map.translateSlice(
             u8,
             .mutable,
             return_data_addr,
             length,
             tc.getCheckAligned(),
         );
-
-        const program_id_result = try memory_map.translateType(
+        const program_id_ptr = try memory_map.translateType(
             Pubkey,
             .mutable,
             program_id_addr,
             tc.getCheckAligned(),
         );
 
-        if (memops.isOverlapping(return_data_addr, length, program_id_addr, @sizeOf(Pubkey))) {
+        if (memops.isOverlapping(return_data_ptr, program_id_ptr)) {
             return SyscallError.CopyOverlapping;
         }
 
-        const source = return_data[0..length];
-        @memcpy(return_data_result, source);
-        program_id_result.* = program_id;
+        @memcpy(return_data_ptr, return_data[0..length]);
+        program_id_ptr.* = program_id;
     }
 
     registers.set(.r0, return_data.len);
@@ -618,7 +614,7 @@ pub fn findProgramAddress(
     const seeds_addr = registers.get(.r1);
     const seeds_len = registers.get(.r2);
     const program_id_addr = registers.get(.r3);
-    const address_addr = registers.get(.r4);
+    const pubkey_addr = registers.get(.r4);
     const bump_seed_addr = registers.get(.r5);
 
     const cost = tc.compute_budget.create_program_address_units;
@@ -640,31 +636,31 @@ pub fn findProgramAddress(
             &.{bump_seed},
             program_id,
         ) catch {
-            bump_seed -|= 1;
+            // NOTE: This subtraction cannot fail as we iterate a maximum of 255 times.
+            bump_seed -= 1;
             try tc.consumeCompute(cost);
             continue;
         };
 
-        const bump_seed_ref = try memory_map.translateType(
+        const bump_seed_ptr = try memory_map.translateType(
             u8,
             .mutable,
             bump_seed_addr,
             check_aligned,
         );
-        const address = try memory_map.translateSlice(
-            u8,
+        const pubkey_ptr = try memory_map.translateType(
+            Pubkey,
             .mutable,
-            address_addr,
-            @sizeOf(Pubkey),
+            pubkey_addr,
             check_aligned,
         );
 
-        if (memops.isOverlapping(bump_seed_addr, @sizeOf(u8), address_addr, address.len)) {
+        if (memops.isOverlapping(bump_seed_ptr, pubkey_ptr)) {
             return SyscallError.CopyOverlapping;
         }
 
-        bump_seed_ref.* = bump_seed;
-        @memcpy(address, std.mem.asBytes(&new_address));
+        bump_seed_ptr.* = bump_seed;
+        pubkey_ptr.* = new_address;
         return; // r0 = 0
     }
 
