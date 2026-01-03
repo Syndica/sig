@@ -199,9 +199,10 @@ pub fn convertExecutionError(err: ExecutionError) struct { i64, ExecutionErrorKi
         SyscallError.InvalidEndianness =>                           .{ -1, .Syscall, "Invalid endianness." },
         SyscallError.InvalidParameters =>                           .{ -1, .Syscall, "Invalid parameters." },
 
-        // zig fmt: on
+       
         else => std.debug.panic("Unexpected Sig Error: {s}\n", .{@errorName(err)}),
     };
+    // zig fmt: on
 }
 
 pub fn executionErrorFromStatusCode(status_code: u64) ExecutionError {

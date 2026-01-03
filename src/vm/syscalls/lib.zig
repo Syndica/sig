@@ -391,7 +391,7 @@ const ProcessedSiblingInstruction = extern struct {
     accounts_len: u64,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/4d9d57c433b491689ba7793aa9339eae22c218d3/programs/bpf_loader/src/syscalls/mod.rs#L1529
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/syscalls/src/lib.rs#L1450-L1536
 pub fn getProcessedSiblingInstruction(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -428,66 +428,31 @@ pub fn getProcessedSiblingInstruction(
         if (header.data_len == info.instruction_data.len and
             header.accounts_len == info.account_metas.items.len)
         {
-            const program_id = try memory_map.translateType(
-                Pubkey,
-                .mutable,
-                program_id_addr,
-                check_aligned,
-            );
-            const data = try memory_map.translateSlice(
-                u8,
-                .mutable,
-                data_addr,
-                header.data_len,
-                check_aligned,
-            );
-            const accounts = try memory_map.translateSlice(
-                AccountMeta,
-                .mutable,
-                accounts_addr,
-                header.accounts_len,
-                check_aligned,
-            );
-            if (memops.isOverlapping(
-                @intFromPtr(header),
-                @sizeOf(ProcessedSiblingInstruction),
-                @intFromPtr(program_id),
-                @sizeOf(Pubkey),
-            ) or memops.isOverlapping(
-                @intFromPtr(header),
-                @sizeOf(ProcessedSiblingInstruction),
-                @intFromPtr(accounts.ptr),
-                accounts.len *| @sizeOf(AccountMeta),
-            ) or memops.isOverlapping(
-                @intFromPtr(header),
-                @sizeOf(ProcessedSiblingInstruction),
-                @intFromPtr(data.ptr),
-                data.len,
-            ) or memops.isOverlapping(
-                @intFromPtr(program_id),
-                @sizeOf(Pubkey),
-                @intFromPtr(data.ptr),
-                data.len,
-            ) or memops.isOverlapping(
-                @intFromPtr(program_id),
-                @sizeOf(Pubkey),
-                @intFromPtr(accounts.ptr),
-                accounts.len *| @sizeOf(AccountMeta),
-            ) or memops.isOverlapping(
-                @intFromPtr(data.ptr),
-                data.len,
-                @intFromPtr(accounts.ptr),
-                accounts.len *| @sizeOf(AccountMeta),
-            )) {
+            const program_id = try memory_map.translateType(Pubkey, .mutable, program_id_addr, check_aligned);
+            const data = try memory_map.translateSlice(u8, .mutable, data_addr, header.data_len, check_aligned);
+            const accounts = try memory_map.translateSlice(AccountMeta, .mutable, accounts_addr, header.accounts_len, check_aligned);
+
+            // Ensures that none of the inputs are overlapping.
+            // sig fmt: off
+            if (memops.isOverlapping(meta_addr, @sizeOf(ProcessedSiblingInstruction), program_id_addr, @sizeOf(Pubkey)) or
+                memops.isOverlapping(meta_addr, @sizeOf(ProcessedSiblingInstruction), accounts_addr, accounts.len *| @sizeOf(AccountMeta)) or
+                memops.isOverlapping(meta_addr, @sizeOf(ProcessedSiblingInstruction), data_addr, data.len) or
+                memops.isOverlapping(program_id_addr, @sizeOf(Pubkey), data_addr, data.len) or
+                memops.isOverlapping(program_id_addr, @sizeOf(Pubkey), accounts_addr, accounts.len *| @sizeOf(AccountMeta)) or
+                memops.isOverlapping(data_addr, data.len, accounts_addr, accounts.len *| @sizeOf(AccountMeta)))
+            {
                 return SyscallError.CopyOverlapping;
             }
+            // sig fmt: on
 
             program_id.* = info.program_meta.pubkey;
             @memcpy(data, info.instruction_data);
 
+            // Ensured by the if-check before the `translate*` calls above.
+            std.debug.assert(info.account_metas.items.len == accounts.len);
             for (info.account_metas.items, 0..) |meta, i| {
                 const acc = tc.getAccountAtIndex(meta.index_in_transaction) orelse
-                    return InstructionError.NotEnoughAccountKeys;
+                    return InstructionError.MissingAccount;
 
                 accounts[i] = .{
                     .pubkey = acc.pubkey,
@@ -583,12 +548,7 @@ pub fn getReturnData(
             tc.getCheckAligned(),
         );
 
-        if (memops.isOverlapping(
-            @intFromPtr(return_data_result.ptr),
-            length,
-            @intFromPtr(program_id_result),
-            @sizeOf(Pubkey),
-        )) {
+        if (memops.isOverlapping(return_data_addr, length, program_id_addr, @sizeOf(Pubkey))) {
             return SyscallError.CopyOverlapping;
         }
 
@@ -699,12 +659,9 @@ pub fn findProgramAddress(
             check_aligned,
         );
 
-        if (memops.isOverlapping(
-            @intFromPtr(bump_seed_ref),
-            @sizeOf(u8),
-            @intFromPtr(address.ptr),
-            address.len,
-        )) return SyscallError.CopyOverlapping;
+        if (memops.isOverlapping(bump_seed_addr, @sizeOf(u8), address_addr, address.len)) {
+            return SyscallError.CopyOverlapping;
+        }
 
         bump_seed_ref.* = bump_seed;
         @memcpy(address, std.mem.asBytes(&new_address));
