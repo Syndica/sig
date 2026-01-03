@@ -199,7 +199,7 @@ test "print_account" {
             .owner = .parse("3DTD43NijdpuwzQL6fM19vU5hDZ2u6M7A9hMrJH3dJyD"),
             .executable = false,
             .rent_epoch = 25,
-            .data = &[_]u8{ 'm', 'y', ' ', 'd', 'a', 't', 'a', ' ', ':', ')' },
+            .data = "my data :)",
         },
     };
 
@@ -214,7 +214,7 @@ test "print_account" {
                 .is_writable = false,
             },
         },
-        ExecuteContextParams{
+        .{
             .accounts = accounts,
             .compute_meter = 28_650,
             .program_map = program_map,
@@ -284,7 +284,7 @@ test "fast_copy" {
                 .is_writable = true,
             },
         },
-        ExecuteContextParams{
+        .{
             .accounts = &.{
                 program_account,
                 initial_instruction_account,
@@ -341,7 +341,7 @@ test "set_return_data" {
         program_account.pubkey.?,
         &[_]u8{},
         &.{},
-        ExecuteContextParams{
+        .{
             .accounts = &.{program_account},
             .compute_meter = 141,
             .program_map = program_map,
@@ -383,12 +383,12 @@ test "program_is_not_executable" {
     };
 
     try expectProgramExecuteError(
-        error.IncorrectProgramId,
+        error.UnsupportedProgramId,
         allocator,
         program_id,
         &[_]u8{},
         &.{},
-        ExecuteContextParams{
+        .{
             .accounts = accounts,
             .compute_meter = 137,
             .feature_set = &.{
@@ -399,7 +399,7 @@ test "program_is_not_executable" {
     );
 }
 
-test "program_invalid_account_data" {
+test "program_unsupported_program_id" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -423,25 +423,21 @@ test "program_invalid_account_data" {
         },
     };
 
-    const result = expectProgramExecuteResult(
+    try expectProgramExecuteError(
+        error.UnsupportedProgramId,
         allocator,
         program_id,
         &[_]u8{},
         &.{},
-        ExecuteContextParams{
+        .{
             .accounts = accounts,
             .compute_meter = 137,
             .feature_set = &.{
                 .{ .feature = .enable_sbpf_v3_deployment_and_execution },
             },
         },
-        .{
-            .accounts = accounts,
-        },
         .{},
     );
-
-    try std.testing.expectError(error.InvalidAccountData, result);
 }
 
 test "program_init_vm_not_enough_compute" {
@@ -471,7 +467,8 @@ test "program_init_vm_not_enough_compute" {
     // Set heap size so that heap cost is 8
     compute_budget.heap_size = 2 * 32 * 1024;
 
-    const result = expectProgramExecuteResult(
+    try expectProgramExecuteError(
+        error.ProgramEnvironmentSetupFailure,
         allocator,
         program_account.pubkey.?,
         &[_]u8{},
@@ -485,8 +482,5 @@ test "program_init_vm_not_enough_compute" {
             .feature_set = feature_params,
         },
         .{},
-        .{},
     );
-
-    try std.testing.expectError(error.ProgramEnvironmentSetupFailure, result);
 }

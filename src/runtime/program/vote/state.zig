@@ -2253,9 +2253,7 @@ test "state.VoteState.convertToCurrent" {
         var vote_state = try VoteStateVersions.convertToCurrent(vote_state_0_23_5, allocator);
         defer vote_state.deinit(allocator);
 
-        try std.testing.expectEqual(1, vote_state.voters.count());
-        var authorized_voter = vote_state.voters;
-        try std.testing.expect(authorized_voter.getAuthorizedVoter(0).?.equals(&Pubkey.ZEROES));
+        try std.testing.expectEqual(0, vote_state.voters.count());
         try std.testing.expect(vote_state.withdrawer.equals(&Pubkey.ZEROES));
         try std.testing.expectEqual(10, vote_state.commission);
         try std.testing.expectEqual(0, vote_state.votes.items.len);

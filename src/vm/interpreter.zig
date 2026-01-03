@@ -45,6 +45,7 @@ pub const Vm = struct {
         memory_map: MemoryMap,
         loader: *const SyscallMap,
         stack_len: u64,
+        instruction_data_offset: u64,
         ctx: *TransactionContext,
     ) error{OutOfMemory}!Vm {
         const offset = if (executable.version.enableDynamicStackFrames())
@@ -79,6 +80,7 @@ pub const Vm = struct {
 
         self.registers.set(.r10, stack_pointer);
         self.registers.set(.r1, memory.INPUT_START);
+        self.registers.set(.r2, instruction_data_offset);
         self.registers.set(.pc, executable.entry_pc);
 
         return self;

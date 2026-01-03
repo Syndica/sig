@@ -247,4 +247,5 @@
     .{ .name = "deprecate_rent_exemption_threshold", .pubkey = "rent6iVy6PDoViPBeJ6k5EJQrkj62h7DPyLbWGHwjrC" },
     .{ .name = "static_instruction_limit", .pubkey = "64ixypL1HPu8WtJhNSMb9mSgfFaJvsANuRkTbHyuLfnx" },
     .{ .name = "account_data_direct_mapping", .pubkey = "DFN8MyKpQqFW31qczcahgnnxcAHQc6P94wtTEX5EP1RA" },
+    .{ .name = "provide_instruction_data_offset_in_vm_r2", .pubkey = "5xXZc66h4UdB6Yq7FzdBxBiRAFMMScMLwHxk2QZDaNZL" },
 }
