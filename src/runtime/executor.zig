@@ -84,10 +84,15 @@ pub fn pushInstruction(
     if (tc.instruction_stack.len > 0 and tc.accounts_lamport_delta != 0) {
         return InstructionError.UnbalancedInstruction;
     }
-    if (tc.instruction_trace.len >= tc.instruction_trace.capacity()) {
+
+    // NOTE: We compare greater-than-or-equal because we append to the trace *after* this check.
+    // Firedancer instead opts to append to the trace always (even if it's over the limit), and
+    // allocates an extra element into their trace array. We might need to use a similar strategy
+    // in the future if there is anything we need to do with the trace before this check.
+    if (tc.instruction_trace.len >= sig.runtime.transaction_context.MAX_INSTRUCTION_TRACE_LENGTH) {
         return InstructionError.MaxInstructionTraceLengthExceeded;
     }
-    if (tc.instruction_stack.len >= tc.instruction_stack.capacity()) {
+    if (tc.instruction_stack.len >= sig.runtime.transaction_context.MAX_INSTRUCTION_STACK_DEPTH) {
         return InstructionError.CallDepth;
     }
 
