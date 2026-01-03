@@ -250,4 +250,5 @@
     .{ .name = "provide_instruction_data_offset_in_vm_r2", .pubkey = "5xXZc66h4UdB6Yq7FzdBxBiRAFMMScMLwHxk2QZDaNZL" },
     .{ .name = "poseidon_enforce_padding", .pubkey = "poUdAqRXXsNmfqAZ6UqpjbeYgwBygbfQLEvWSqVhSnb" },
     .{ .name = "fix_alt_bn128_pairing_length_check", .pubkey = "bnYzodLwmybj7e1HAe98yZrdJTd7we69eMMLgCXqKZm" },
+    .{ .name = "increase_cpi_account_info_limit", .pubkey = "H6iVbVaDZgDphcPbcZwc5LoznMPWQfnJ1AM7L1xzqvt5" },
 }
