@@ -102,8 +102,12 @@ pub fn applyFeatureActivations(
         !feature_set.active(.raise_block_limits_to_60m, slot))
         return error.RaiseBlockLimitsTo50MActivationNotImplemented;
 
-    if (new_feature_activations.active(.raise_block_limits_to_60m, slot))
+    if (new_feature_activations.active(.raise_block_limits_to_60m, slot) and
+        !feature_set.active(.raise_block_limits_to_100m, slot))
         return error.RaiseBlockLimitsTo60MActivationNotImplemented;
+
+    if (new_feature_activations.active(.raise_block_limits_to_100m, slot))
+        return error.RaiseBlockLimitsTo100MActivationNotImplemented;
 
     if (new_feature_activations.active(.remove_accounts_delta_hash, slot))
         return error.RemoveAccountsDeltaHashActivationNotImplemented;

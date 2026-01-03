@@ -662,8 +662,11 @@ test "preprocessTransaction: invalid compute budget instruction" {
         },
     };
 
-    const result =
-        sig.replay.preprocess_transaction.preprocessTransaction(transaction, .skip_sig_verify);
+    const result = sig.replay.preprocess_transaction.preprocessTransaction(
+        transaction,
+        .skip_sig_verify,
+        false,
+    );
 
     try std.testing.expectEqual(
         TransactionError{ .InstructionError = .{ 0, .InvalidInstructionData } },

@@ -24,10 +24,10 @@ const Rent = sig.runtime.sysvar.Rent;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
-// https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/program-runtime/src/compute_budget.rs#L139
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/transaction-context/src/lib.rs#L41
 pub const MAX_INSTRUCTION_TRACE_LENGTH = 64;
 
-// https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/compute-budget/src/compute_budget.rs#L11-L12
+// https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/execution_budget.rs#L8
 pub const MAX_INSTRUCTION_STACK_DEPTH = 5;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L136

@@ -245,4 +245,7 @@
     .{ .name = "enable_partitioned_epoch_reward", .pubkey = "9bn2vTJUsUcnpiZWbu2woSKtTGW3ErZC9ERv88SDqQjK" },
     .{ .name = "stricter_abi_and_runtime_constraints", .pubkey = "C37iaPi6VE4CZDueU1vL8y6pGp5i8amAbEsF31xzz723" },
     .{ .name = "relax_intrabatch_account_locks", .pubkey = "ENTRYnPAoT5Swwx73YDGzMp3XnNH1kxacyvLosRHza1i" },
+    .{ .name = "enforce_fixed_fec_set", .pubkey = "fixfecLZYMfkGzwq6NJA11Yw6KYztzXiK9QcL3K78in" },
+    .{ .name = "deprecate_rent_exemption_threshold", .pubkey = "rent6iVy6PDoViPBeJ6k5EJQrkj62h7DPyLbWGHwjrC" },
+    .{ .name = "static_instruction_limit", .pubkey = "64ixypL1HPu8WtJhNSMb9mSgfFaJvsANuRkTbHyuLfnx" },
 }

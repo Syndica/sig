@@ -763,11 +763,14 @@ fn executeTxnContext(
     defer transaction.deinit(allocator);
 
     // Verify transaction
-    const msg_hash, const compute_budget_instruction_details =
-        switch (preprocessTransaction(transaction, .skip_sig_verify)) {
-            .ok => |hash| hash,
-            .err => |err| return serializeSanitizationError(err),
-        };
+    const msg_hash, const compute_budget_instruction_details = switch (preprocessTransaction(
+        transaction,
+        .skip_sig_verify,
+        feature_set.active(.static_instruction_limit, slot),
+    )) {
+        .ok => |hash| hash,
+        .err => |err| return serializeSanitizationError(err),
+    };
 
     // Resolve transaction
     const resolved_transaction = resolveTransaction(allocator, transaction, .{
