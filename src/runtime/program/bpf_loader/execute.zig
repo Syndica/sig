@@ -162,7 +162,7 @@ pub fn executeV4Write(
 
     const authority_meta = ic.ixn_info.getAccountMetaAtIndex(
         @intFromEnum(AccountIndex.authority),
-    ) orelse return error.NotEnoughAccountKeys;
+    ) orelse return error.MissingAccount;
 
     const state = try checkProgramAccount(allocator, ic, &program_account, authority_meta.pubkey);
     defer bincode.free(allocator, state);
@@ -195,7 +195,7 @@ pub fn executeV4Copy(
 
     const authority_meta = ic.ixn_info.getAccountMetaAtIndex(
         @intFromEnum(AccountIndex.authority),
-    ) orelse return error.NotEnoughAccountKeys;
+    ) orelse return error.MissingAccount;
 
     const src_account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.src_account));
     defer src_account.release();
@@ -249,9 +249,9 @@ pub fn executeV4SetProgramLength(
 
     const authority_address = blk: {
         const meta = ic.ixn_info.getAccountMetaAtIndex(@intFromEnum(AccountIndex.authority)) orelse
-            return InstructionError.NotEnoughAccountKeys;
+            return InstructionError.MissingAccount;
         const txn_account = ic.tc.getAccountAtIndex(meta.index_in_transaction) orelse
-            return InstructionError.NotEnoughAccountKeys;
+            return InstructionError.MissingAccount;
         break :blk txn_account.pubkey;
     };
 
@@ -343,9 +343,9 @@ pub fn executeV4Deploy(
 
     const authority_address = blk: {
         const meta = ic.ixn_info.getAccountMetaAtIndex(@intFromEnum(AccountIndex.authority)) orelse
-            return InstructionError.NotEnoughAccountKeys;
+            return InstructionError.MissingAccount;
         const txn_account = ic.tc.getAccountAtIndex(meta.index_in_transaction) orelse
-            return InstructionError.NotEnoughAccountKeys;
+            return InstructionError.MissingAccount;
         break :blk txn_account.pubkey;
     };
 
@@ -396,9 +396,9 @@ pub fn executeV4Retract(
 
     const authority_address = blk: {
         const meta = ic.ixn_info.getAccountMetaAtIndex(@intFromEnum(AccountIndex.authority)) orelse
-            return InstructionError.NotEnoughAccountKeys;
+            return InstructionError.MissingAccount;
         const txn_account = ic.tc.getAccountAtIndex(meta.index_in_transaction) orelse
-            return InstructionError.NotEnoughAccountKeys;
+            return InstructionError.MissingAccount;
         break :blk txn_account.pubkey;
     };
 
@@ -436,18 +436,18 @@ pub fn executeV4TransferAuthority(
     const authority_address = blk: {
         const meta = ic.ixn_info.getAccountMetaAtIndex(
             @intFromEnum(AccountIndex.authority),
-        ) orelse return InstructionError.NotEnoughAccountKeys;
+        ) orelse return InstructionError.MissingAccount;
         const txn_account = ic.tc.getAccountAtIndex(meta.index_in_transaction) orelse
-            return InstructionError.NotEnoughAccountKeys;
+            return InstructionError.MissingAccount;
         break :blk txn_account.pubkey;
     };
 
     const new_authority_address = blk: {
         const meta = ic.ixn_info.getAccountMetaAtIndex(
             @intFromEnum(AccountIndex.new_authority),
-        ) orelse return InstructionError.NotEnoughAccountKeys;
+        ) orelse return InstructionError.MissingAccount;
         const txn_account = ic.tc.getAccountAtIndex(meta.index_in_transaction) orelse
-            return InstructionError.NotEnoughAccountKeys;
+            return InstructionError.MissingAccount;
         break :blk txn_account.pubkey;
     };
 
@@ -482,9 +482,9 @@ pub fn executeV4Finalize(
         const authority_address = b: {
             const meta = ic.ixn_info.getAccountMetaAtIndex(
                 @intFromEnum(AccountIndex.authority),
-            ) orelse return InstructionError.NotEnoughAccountKeys;
+            ) orelse return InstructionError.MissingAccount;
             const txn_account = ic.tc.getAccountAtIndex(meta.index_in_transaction) orelse
-                return InstructionError.NotEnoughAccountKeys;
+                return InstructionError.MissingAccount;
             break :b txn_account.pubkey;
         };
 
@@ -1613,7 +1613,7 @@ fn commonExtendProgram(
             if (check_authority) {
                 const authority = ic.ixn_info.getAccountMetaAtIndex(
                     @intFromEnum(AccountIndex.authority),
-                ) orelse return InstructionError.NotEnoughAccountKeys;
+                ) orelse return InstructionError.MissingAccount;
 
                 if (!upgrade_authority_address.equals(&authority.pubkey)) {
                     try ic.tc.log("Incorrect upgrade authority provided", .{});
@@ -1650,7 +1650,7 @@ fn commonExtendProgram(
         const payer = ic.ixn_info.getAccountMetaAtIndex(
             @intFromEnum(AccountIndex.payer),
         ) orelse
-            return InstructionError.NotEnoughAccountKeys;
+            return InstructionError.MissingAccount;
 
         try ic.nativeInvoke(
             allocator,

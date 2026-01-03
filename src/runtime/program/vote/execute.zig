@@ -409,7 +409,7 @@ fn authorizeWithSeed(
     const clock = try ic.getSysvarWithAccountCheck(Clock, clock_index);
 
     const signer_meta = ic.ixn_info.getAccountMetaAtIndex(signer_index) orelse
-        return InstructionError.NotEnoughAccountKeys;
+        return InstructionError.MissingAccount;
 
     const expected_authority_keys = if (signer_meta.is_signer)
         &[_]Pubkey{pubkey_utils.createWithSeed(

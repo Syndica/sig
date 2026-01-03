@@ -545,9 +545,9 @@ fn closeLookupTable(
     try ic.ixn_info.checkNumberOfAccounts(3);
 
     const lookup_table_meta = ic.ixn_info.getAccountMetaAtIndex(0) orelse
-        return error.NotEnoughAccountKeys;
+        return error.MissingAccount;
     const payer_meta = ic.ixn_info.getAccountMetaAtIndex(2) orelse
-        return error.NotEnoughAccountKeys;
+        return error.MissingAccount;
 
     if (lookup_table_meta.pubkey.equals(&payer_meta.pubkey)) {
         try ic.tc.log(

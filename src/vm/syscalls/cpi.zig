@@ -624,7 +624,7 @@ fn translateAccounts(
 
         const account_key = blk: {
             const account_meta = ic.tc.getAccountAtIndex(meta.index_in_transaction) orelse
-                return InstructionError.NotEnoughAccountKeys;
+                return InstructionError.MissingAccount;
             break :blk account_meta.pubkey;
         };
 
