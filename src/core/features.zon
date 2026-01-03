@@ -249,4 +249,5 @@
     .{ .name = "raise_account_cu_limit", .pubkey = "htsptAwi2yRoZH83SKaUXykeZGtZHgxkS2QwW1pssR8" },
     .{ .name = "provide_instruction_data_offset_in_vm_r2", .pubkey = "5xXZc66h4UdB6Yq7FzdBxBiRAFMMScMLwHxk2QZDaNZL" },
     .{ .name = "poseidon_enforce_padding", .pubkey = "poUdAqRXXsNmfqAZ6UqpjbeYgwBygbfQLEvWSqVhSnb" },
+    .{ .name = "fix_alt_bn128_pairing_length_check", .pubkey = "bnYzodLwmybj7e1HAe98yZrdJTd7we69eMMLgCXqKZm" },
 }
