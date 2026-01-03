@@ -109,7 +109,7 @@ pub fn pushInstruction(
 
     if (tc.getAccountIndex(sig.runtime.sysvar.instruction.ID)) |index_in_transaction| {
         const account = tc.getAccountAtIndex(index_in_transaction) orelse
-            return InstructionError.NotEnoughAccountKeys;
+            return InstructionError.MissingAccount;
         // Normally this would never be hit since we setup the sysvar accounts and their owners,
         // however if the validator falls into some sort of corrupt state, it is plausible this
         // could trigger. Should only be seen through fuzzing.
@@ -288,8 +288,7 @@ pub fn prepareCpiInstructionInfo(
         const index_in_callee = dedupe_map[account_meta.index_in_transaction];
 
         if (index_in_callee != index_in_instruction) {
-            if (index_in_callee >= deduped_account_metas.items.len)
-                return error.NotEnoughAccountKeys;
+            if (index_in_callee >= deduped_account_metas.items.len) return error.MissingAccount;
             const prev = deduped_account_metas.items[index_in_callee];
             account_meta.is_signer = account_meta.is_signer or prev.is_signer;
             account_meta.is_writable = account_meta.is_writable or prev.is_writable;
@@ -332,7 +331,7 @@ pub fn prepareCpiInstructionInfo(
     const program_index_in_transaction = blk: {
         const program_account_meta = caller.ixn_info.getAccountMetaAtIndex(
             @intCast(program_account_index),
-        ) orelse return error.NotEnoughAccountKeys;
+        ) orelse return error.MissingAccount;
         break :blk program_account_meta.index_in_transaction;
     };
 

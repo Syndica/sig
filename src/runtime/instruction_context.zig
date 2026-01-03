@@ -59,7 +59,7 @@ pub const InstructionContext = struct {
         index_in_instruction: u16,
     ) InstructionError!BorrowedAccount {
         const account_meta = self.ixn_info.getAccountMetaAtIndex(index_in_instruction) orelse
-            return InstructionError.NotEnoughAccountKeys;
+            return InstructionError.MissingAccount;
 
         const remove_accounts_executable_flag_checks =
             self.tc.feature_set.active(.remove_accounts_executable_flag_checks, self.tc.slot);
@@ -79,7 +79,7 @@ pub const InstructionContext = struct {
         index_in_instruction: u16,
     ) InstructionError!T {
         const account_meta = self.ixn_info.getAccountMetaAtIndex(index_in_instruction) orelse
-            return InstructionError.NotEnoughAccountKeys;
+            return InstructionError.MissingAccount;
 
         if (!T.ID.equals(&account_meta.pubkey))
             return InstructionError.InvalidArgument;
