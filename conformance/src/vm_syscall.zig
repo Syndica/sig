@@ -215,18 +215,15 @@ fn executeSyscall(
         .mask_out_rent_epoch_in_vm_serialization,
         tc.slot,
     );
-    var parameter_bytes, var regions, const accounts_metadata = try serialize.serializeParameters(
+    var serialized = try serialize.serializeParameters(
         allocator,
         ic,
         direct_mapping,
         stricter_abi_and_runtime_constraints,
         mask_out_rent_epoch_in_vm_serialization,
     );
-    defer {
-        parameter_bytes.deinit(allocator);
-        regions.deinit(allocator);
-    }
-    tc.serialized_accounts = accounts_metadata;
+    defer serialized.deinit(allocator);
+    tc.serialized_accounts = serialized.account_metas;
 
     if (pb_vm.heap_max > HEAP_MAX) return error.InvalidHeapSize;
 
@@ -253,7 +250,7 @@ fn executeSyscall(
         ),
         memory.Region.init(.mutable, heap, memory.HEAP_START),
     });
-    try input_memory_regions.appendSlice(allocator, regions.items);
+    try input_memory_regions.appendSlice(allocator, serialized.regions.items);
 
     const memory_map = try memory.MemoryMap.init(
         allocator,
@@ -268,6 +265,7 @@ fn executeSyscall(
         memory_map,
         syscall_registry,
         stack.len,
+        0,
         &tc,
     );
     defer vm.deinit();

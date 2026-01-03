@@ -10,6 +10,7 @@ const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const SyscallMap = sig.vm.SyscallMap;
+const Region = sig.vm.memory.Region;
 
 pub fn execute(
     allocator: std.mem.Allocator,
@@ -61,11 +62,13 @@ pub fn execute(
         .mask_out_rent_epoch_in_vm_serialization,
         ic.tc.slot,
     );
+    const provide_instruction_data_offset = ic.tc.feature_set.active(
+        .provide_instruction_data_offset_in_vm_r2,
+        ic.tc.slot,
+    );
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
-    var parameter_bytes, //
-    var regions, //
-    const accounts_metadata = try serialize.serializeParameters(
+    var serialized = try serialize.serializeParameters(
         allocator,
         ic,
         ic.tc.account_data_direct_mapping,
@@ -73,13 +76,14 @@ pub fn execute(
         mask_out_rent_epoch_in_vm_serialization,
     );
     defer {
-        parameter_bytes.deinit(allocator);
-        regions.deinit(allocator);
+        serialized.memory.deinit(allocator);
+        serialized.regions.deinit(allocator);
     }
 
+    // TODO: this is a heavy copy, can we avoid doing it?
     // [agave] https://github.com/anza-xyz/agave/blob/v3.0/programs/bpf_loader/src/lib.rs#L275
     const old_accounts = ic.tc.serialized_accounts;
-    ic.tc.serialized_accounts = accounts_metadata;
+    ic.tc.serialized_accounts = serialized.account_metas;
     defer ic.tc.serialized_accounts = old_accounts;
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1604-L1617
@@ -88,24 +92,23 @@ pub fn execute(
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1621-L1640
     const compute_available = ic.tc.compute_meter;
     const result, const compute_consumed = blk: {
-        var sbpf_vm, const stack, const heap, const mm_regions = initVm(
+        var state = initVm(
             allocator,
             ic.tc,
             &executable,
-            regions.items,
+            serialized.regions.items,
             &ic.tc.vm_environment.loader,
+            if (provide_instruction_data_offset) serialized.instruction_data_offset else 0,
         ) catch |err| {
             try ic.tc.log("Failed to create SBPF VM: {s}", .{@errorName(err)});
             return InstructionError.ProgramEnvironmentSetupFailure;
         };
-        defer {
-            sbpf_vm.deinit();
-            allocator.free(stack);
-            allocator.free(heap);
-            allocator.free(mm_regions);
-        }
-        sbpf_vm.registers.set(.r1, sig.vm.memory.INPUT_START);
-        break :blk sbpf_vm.run();
+        defer state.deinit(allocator);
+
+        // Run our bpf program!
+        const result = state.vm.run();
+
+        break :blk result;
     };
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1641-L1644
@@ -143,8 +146,8 @@ pub fn execute(
             ic,
             stricter_abi_and_runtime_constraints,
             ic.tc.account_data_direct_mapping,
-            parameter_bytes.items,
-            accounts_metadata.constSlice(),
+            serialized.memory.items,
+            serialized.account_metas.constSlice(),
         ) catch |err| {
             maybe_execute_error = err;
         };
@@ -155,19 +158,29 @@ pub fn execute(
     if (maybe_execute_error) |err| return err;
 }
 
+const VmState = struct {
+    vm: vm.Vm,
+    stack: []u8,
+    heap: []u8,
+    regions: []Region,
+
+    fn deinit(self: *VmState, allocator: std.mem.Allocator) void {
+        self.vm.deinit();
+        allocator.free(self.stack);
+        allocator.free(self.heap);
+        allocator.free(self.regions);
+    }
+};
+
 // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L299-L300
-pub fn initVm(
+fn initVm(
     allocator: std.mem.Allocator,
     tc: *TransactionContext,
     executable: *const vm.Executable,
-    regions: []vm.memory.Region,
+    trailing_regions: []const Region,
     syscalls: *const SyscallMap,
-) !struct {
-    vm.Vm,
-    []u8,
-    []u8,
-    []vm.memory.Region,
-} {
+    instruction_data_offset: u64,
+) !VmState {
     const PAGE_SIZE: u64 = 32 * 1024;
 
     const stack_size = executable.config.stackSize();
@@ -175,6 +188,12 @@ pub fn initVm(
     const cost = std.mem.alignBackward(u64, heap_size -| 1, PAGE_SIZE) / PAGE_SIZE;
     const heap_cost = cost * tc.compute_budget.heap_cost;
     try tc.consumeCompute(heap_cost);
+
+    const stack_gap: u64 = if (!executable.version.enableDynamicStackFrames() and
+        executable.config.enable_stack_frame_gaps)
+        executable.config.stack_frame_size
+    else
+        0;
 
     const heap = try allocator.alloc(u8, heap_size);
     @memset(heap, 0);
@@ -184,24 +203,20 @@ pub fn initVm(
     @memset(stack, 0);
     errdefer allocator.free(stack);
 
-    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L256-L280
-    var mm_regions_array = std.ArrayList(vm.memory.Region).init(allocator);
-    errdefer mm_regions_array.deinit();
-    const stack_gap: u64 = if (!executable.version.enableDynamicStackFrames() and
-        executable.config.enable_stack_frame_gaps)
-        executable.config.stack_frame_size
-    else
-        0;
-    try mm_regions_array.appendSlice(&.{
+    // 3 regions for the input, stack, and heap.
+    const regions = try allocator.alloc(Region, 3 + trailing_regions.len);
+    errdefer allocator.free(regions);
+
+    regions[0..3].* = .{
         executable.getProgramRegion(),
-        vm.memory.Region.initGapped(.mutable, stack, vm.memory.STACK_START, stack_gap),
-        vm.memory.Region.init(.mutable, heap, vm.memory.HEAP_START),
-    });
-    try mm_regions_array.appendSlice(regions);
-    const mm_regions = try mm_regions_array.toOwnedSlice();
+        Region.initGapped(.mutable, stack, vm.memory.STACK_START, stack_gap),
+        Region.init(.mutable, heap, vm.memory.HEAP_START),
+    };
+    @memcpy(regions[3..], trailing_regions);
+
     const memory_map = try vm.memory.MemoryMap.init(
         allocator,
-        mm_regions,
+        regions,
         executable.version,
         executable.config,
     );
@@ -210,21 +225,21 @@ pub fn initVm(
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L280-L285
     // TODO: Set syscall context
 
-    // Create VM
     const sbpf_vm = try vm.Vm.init(
         allocator,
         executable,
         memory_map,
         syscalls,
         stack.len,
+        instruction_data_offset,
         tc,
     );
 
     return .{
-        sbpf_vm,
-        stack,
-        heap,
-        mm_regions,
+        .vm = sbpf_vm,
+        .stack = stack,
+        .heap = heap,
+        .regions = regions,
     };
 }
 

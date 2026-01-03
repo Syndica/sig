@@ -698,6 +698,7 @@ fn testVerifyProofWithoutContext(
                 .owner = sig.runtime.ids.NATIVE_LOADER_ID,
             }},
             .compute_meter = compute_budget,
+            .feature_set = &.{.{ .feature = .zk_elgamal_proof_program_enabled }},
         },
         .{
             .accounts = &.{.{
@@ -729,6 +730,7 @@ fn testVerifyProofWithoutContext(
                     .owner = sig.runtime.ids.NATIVE_LOADER_ID,
                 }},
                 .compute_meter = 500_000,
+                .feature_set = &.{.{ .feature = .zk_elgamal_proof_program_enabled }},
             },
             .{},
         );
@@ -763,6 +765,7 @@ fn testVerifyProofWithoutContext(
                 },
             },
             .compute_meter = compute_budget,
+            .feature_set = &.{.{ .feature = .zk_elgamal_proof_program_enabled }},
         },
         .{
             .accounts = &.{
@@ -798,6 +801,7 @@ fn testVerifyProofWithoutContext(
                 .owner = sig.runtime.ids.NATIVE_LOADER_ID,
             }},
             .compute_meter = compute_budget,
+            .feature_set = &.{.{ .feature = .zk_elgamal_proof_program_enabled }},
         },
         .{},
     );
@@ -828,6 +832,7 @@ fn testVerifyProofWithoutContext(
                 },
             },
             .compute_meter = compute_budget,
+            .feature_set = &.{.{ .feature = .zk_elgamal_proof_program_enabled }},
         },
         .{},
     );
@@ -885,6 +890,7 @@ fn testVerifyProofWithContext(
                 },
             },
             .compute_meter = compute_budget,
+            .feature_set = &.{.{ .feature = .zk_elgamal_proof_program_enabled }},
         },
         .{},
     );
@@ -914,6 +920,7 @@ fn testVerifyProofWithContext(
                 },
             },
             .compute_meter = compute_budget,
+            .feature_set = &.{.{ .feature = .zk_elgamal_proof_program_enabled }},
         },
         .{},
     );
@@ -941,6 +948,7 @@ fn testVerifyProofWithContext(
                 },
             },
             .compute_meter = compute_budget,
+            .feature_set = &.{.{ .feature = .zk_elgamal_proof_program_enabled }},
         },
         .{
             .accounts = &.{
@@ -1008,6 +1016,7 @@ fn testCloseState(
                 },
             },
             .compute_meter = zk_elgamal.CLOSE_CONTEXT_STATE_COMPUTE_UNITS,
+            .feature_set = &.{.{ .feature = .zk_elgamal_proof_program_enabled }},
         },
         .{
             .accounts = &.{

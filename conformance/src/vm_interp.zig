@@ -122,18 +122,15 @@ fn executeVmTest(
         .mask_out_rent_epoch_in_vm_serialization,
         slot,
     );
-    var parameter_bytes, var regions, const accounts_metadata = try serialize.serializeParameters(
+    var serialized = try serialize.serializeParameters(
         allocator,
         &ic,
         direct_mapping,
         stricter_abi_and_runtime_constraints,
         mask_out_rent_epoch_in_vm_serialization,
     );
-    defer {
-        parameter_bytes.deinit(allocator);
-        regions.deinit(allocator);
-    }
-    tc.serialized_accounts = accounts_metadata;
+    defer serialized.deinit(allocator);
+    tc.serialized_accounts = serialized.account_metas;
 
     const rodata = try allocator.dupe(u8, vm_context.rodata.getSlice());
     defer allocator.free(rodata);
@@ -221,7 +218,7 @@ fn executeVmTest(
         ),
         memory.Region.init(.mutable, heap, memory.HEAP_START),
     });
-    try input_memory_regions.appendSlice(allocator, regions.items);
+    try input_memory_regions.appendSlice(allocator, serialized.regions.items);
 
     const map = try memory.MemoryMap.init(
         allocator,
@@ -237,18 +234,19 @@ fn executeVmTest(
         map,
         &env.loader,
         STACK_SIZE,
+        0,
         &tc,
     );
     defer vm.deinit();
 
-    // r1, r10, pc are initialized by Vm.init, modifying them will most like break execution.
+    // r1, r2, r10, pc are initialized by Vm.init, modifying them will most like break execution.
     // In vm_syscalls we allow override them (especially r1) because that simulates the fact
     // that a program partially executed before reaching the syscall.
     // Here we want to test what happens when the program starts from the beginning.
     // [agave] https://github.com/firedancer-io/solfuzz-agave/blob/0b8a7971055d822df3f602c287c368400a784c15/src/vm_interp.rs#L357-L362
     vm.registers.set(.r0, vm_context.r0);
     // vm.registers.set(.r1, vm_context.r1);
-    vm.registers.set(.r2, vm_context.r2);
+    // vm.registers.set(.r2, vm_context.r2);
     vm.registers.set(.r3, vm_context.r3);
     vm.registers.set(.r4, vm_context.r4);
     vm.registers.set(.r5, vm_context.r5);

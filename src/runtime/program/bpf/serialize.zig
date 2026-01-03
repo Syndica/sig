@@ -205,9 +205,15 @@ pub const Serializer = struct {
 };
 
 const SerializeReturn = struct {
-    std.ArrayListUnmanaged(u8),
-    std.ArrayListUnmanaged(Region),
-    std.BoundedArray(SerializedAccountMeta, InstructionInfo.MAX_ACCOUNT_METAS),
+    memory: std.ArrayListUnmanaged(u8),
+    regions: std.ArrayListUnmanaged(Region),
+    account_metas: std.BoundedArray(SerializedAccountMeta, InstructionInfo.MAX_ACCOUNT_METAS),
+    instruction_data_offset: u64,
+
+    pub fn deinit(self: *SerializeReturn, allocator: std.mem.Allocator) void {
+        self.memory.deinit(allocator);
+        self.regions.deinit(allocator);
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L188
@@ -371,7 +377,7 @@ fn serializeParametersUnaligned(
         }
     }
     _ = serializer.write(u64, std.mem.nativeToLittle(u64, instruction_data.len));
-    _ = serializer.writeBytes(instruction_data);
+    const instruction_data_offset = serializer.writeBytes(instruction_data);
     _ = serializer.writeBytes(&program_id.data);
 
     var memory, var regions = try serializer.finish();
@@ -381,9 +387,10 @@ fn serializeParametersUnaligned(
     }
 
     return .{
-        memory,
-        regions,
-        account_metas,
+        .memory = memory,
+        .regions = regions,
+        .account_metas = account_metas,
+        .instruction_data_offset = instruction_data_offset,
     };
 }
 
@@ -499,7 +506,7 @@ fn serializeParametersAligned(
     }
 
     _ = serializer.write(u64, std.mem.nativeToLittle(u64, instruction_data.len));
-    _ = serializer.writeBytes(instruction_data);
+    const instruction_data_offset = serializer.writeBytes(instruction_data);
     _ = serializer.writeBytes(&program_id.data);
 
     var memory, var regions = try serializer.finish();
@@ -509,9 +516,10 @@ fn serializeParametersAligned(
     }
 
     return .{
-        memory,
-        regions,
-        account_metas,
+        .memory = memory,
+        .regions = regions,
+        .account_metas = account_metas,
+        .instruction_data_offset = instruction_data_offset,
     };
 }
 
@@ -926,14 +934,9 @@ test serializeParameters {
                 });
             }
 
-            const ret = serializeParameters(allocator, ic, false, false, false);
-            defer blk: {
-                var value = ret catch break :blk;
-                value.@"0".deinit(allocator);
-                value.@"1".deinit(allocator);
-            }
-
-            try std.testing.expect(ret == error.MaxAccountsExceeded);
+            var serialized = serializeParameters(allocator, ic, false, false, false);
+            defer if (serialized) |*ret| ret.deinit(allocator) else |_| {};
+            try std.testing.expect(serialized == error.MaxAccountsExceeded);
         }
 
         const pre_accounts = blk: {
@@ -964,22 +967,19 @@ test serializeParameters {
             allocator.free(pre_accounts);
         }
 
-        var memory, var regions, const account_metas = try serializeParameters(
+        var serialized = try serializeParameters(
             allocator,
             ic,
             false, // account_data_direct_mapping,
             stricter_abi_and_runtime_constraints,
             false,
         );
-        defer {
-            memory.deinit(allocator);
-            regions.deinit(allocator);
-        }
+        defer serialized.deinit(allocator);
 
-        const serialized_regions = try concatRegions(allocator, regions.items);
+        const serialized_regions = try concatRegions(allocator, serialized.regions.items);
         defer allocator.free(serialized_regions);
         if (!stricter_abi_and_runtime_constraints) {
-            try std.testing.expectEqualSlices(u8, memory.items, serialized_regions);
+            try std.testing.expectEqualSlices(u8, serialized.memory.items, serialized_regions);
         }
 
         // TODO: compare against entrypoint deserialize method once implemented
@@ -991,8 +991,8 @@ test serializeParameters {
             ic,
             stricter_abi_and_runtime_constraints,
             false, // account_data_direct_mapping,
-            memory.items,
-            account_metas.constSlice(),
+            serialized.memory.items,
+            serialized.account_metas.constSlice(),
         );
         for (pre_accounts, 0..) |pre_account, index_in_transaction| {
             const post_account = tc.accounts[index_in_transaction];

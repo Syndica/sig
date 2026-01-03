@@ -3727,6 +3727,7 @@ test executeV4Write {
                 },
             },
             .compute_meter = bpf_loader_program.v4.COMPUTE_UNITS,
+            .feature_set = &.{.{ .feature = .enable_loader_v4 }},
         },
         .{
             .accounts = &.{
@@ -3801,10 +3802,8 @@ test executeV4Retract {
                 },
             },
             .compute_meter = bpf_loader_program.v4.COMPUTE_UNITS,
-            .sysvar_cache = .{
-                .rent = sysvar.Rent.INIT,
-                .clock = clock,
-            },
+            .sysvar_cache = .{ .rent = sysvar.Rent.INIT, .clock = clock },
+            .feature_set = &.{.{ .feature = .enable_loader_v4 }},
         },
         .{
             .accounts = &.{
@@ -3928,6 +3927,7 @@ test executeV4SetProgramLength {
                 },
                 .compute_meter = bpf_loader_program.v4.COMPUTE_UNITS,
                 .sysvar_cache = .{ .rent = rent },
+                .feature_set = &.{.{ .feature = .enable_loader_v4 }},
             },
             .{
                 .accounts = &.{
