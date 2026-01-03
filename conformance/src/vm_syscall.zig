@@ -270,15 +270,18 @@ fn executeSyscall(
     );
     defer vm.deinit();
 
-    // r0 is the return value register
-    // r1-5 are the argument registers
-    // r6-11 aren't used by the syscalls
-    vm.registers.set(.r0, 0);
+    vm.registers.set(.r0, pb_vm.r0);
     vm.registers.set(.r1, pb_vm.r1);
     vm.registers.set(.r2, pb_vm.r2);
     vm.registers.set(.r3, pb_vm.r3);
     vm.registers.set(.r4, pb_vm.r4);
     vm.registers.set(.r5, pb_vm.r5);
+    vm.registers.set(.r6, pb_vm.r6);
+    vm.registers.set(.r7, pb_vm.r7);
+    vm.registers.set(.r8, pb_vm.r8);
+    vm.registers.set(.r9, pb_vm.r9);
+    vm.registers.set(.r10, pb_vm.r10);
+    vm.registers.set(.pc, pb_vm.r11);
 
     utils.copyPrefix(heap, pb_syscall_invocation.heap_prefix.getSlice());
     utils.copyPrefix(stack, pb_syscall_invocation.stack_prefix.getSlice());

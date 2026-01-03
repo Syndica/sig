@@ -33,6 +33,15 @@ const MM_INPUT_START = memory.INPUT_START;
 const MAX_PERMITTED_DATA_INCREASE = serialize.MAX_PERMITTED_DATA_INCREASE;
 const BPF_ALIGN_OF_U128 = serialize.BPF_ALIGN_OF_U128;
 
+/// SIMD-0339 based calculation of AccountInfo translation byte size. Fixed size of **80 bytes** for each AccountInfo broken down as:
+/// - 32 bytes for account address
+/// - 32 bytes for owner address
+/// - 8 bytes for lamport balance
+/// - 8 bytes for data length
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L68
+const ACCOUNT_INFO_BYTE_SIZE = 80;
+
 /// [agave] StableVec: https://github.com/anza-xyz/solana-sdk/blob/c54daf5355ad43448786cafdb66ff07d3add8be5/stable-layout/src/stable_vec.rs#L30
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/0666fa5999750153070e5c43d64813467bfdc38e/stable-layout/src/stable_instruction.rs#L33
 const StableInstructionRust = extern struct {
@@ -512,11 +521,10 @@ fn updateCalleeAccount(
         }
     } else {
         // The redundant check helps to avoid the expensive data comparison if we can
-        const can_data_be_resized =
-            callee_account.checkCanSetDataLength(
-                ic.tc.accounts_resize_delta,
-                caller_account.serialized_data.len,
-            );
+        const can_data_be_resized = callee_account.checkCanSetDataLength(
+            ic.tc.accounts_resize_delta,
+            caller_account.serialized_data.len,
+        );
         if (can_data_be_resized) |err| {
             if (!std.mem.eql(u8, callee_account.account.data, caller_account.serialized_data))
                 return err;
@@ -553,10 +561,10 @@ const TranslatedAccount = struct {
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L498
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L725
 fn translateAccounts(
+    comptime AccountType: type,
     allocator: std.mem.Allocator,
     ic: *const InstructionContext,
     memory_map: *const MemoryMap,
-    comptime AccountInfoType: type,
     account_infos_addr: u64,
     account_infos_len: u64,
     cpi_info: *const InstructionInfo,
@@ -564,27 +572,28 @@ fn translateAccounts(
     const account_metas = cpi_info.account_metas.items;
 
     // translate_account_infos():
-
-    const account_data_direct_mapping = ic.tc.feature_set.active(
+    const tc = ic.tc;
+    const account_data_direct_mapping = tc.feature_set.active(
         .account_data_direct_mapping,
-        ic.tc.slot,
+        tc.slot,
     );
-    const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
+    const stricter_abi_and_runtime_constraints = tc.feature_set.active(
         .stricter_abi_and_runtime_constraints,
-        ic.tc.slot,
+        tc.slot,
     );
+    const increase_info_limit = tc.feature_set.active(.increase_cpi_account_info_limit, tc.slot);
 
     // In the same vein as the other checkAccountInfoPtr() checks, we don't lock
     // this pointer to a specific address but we don't want it to be inside accounts, or
     // callees might be able to write to the pointed memory.
     if (stricter_abi_and_runtime_constraints and
-        (account_infos_addr +| (account_infos_len *| @sizeOf(AccountInfoType))) >= MM_INPUT_START)
+        (account_infos_addr +| (account_infos_len *| @sizeOf(AccountType))) >= MM_INPUT_START)
     {
         return SyscallError.InvalidPointer;
     }
 
     const account_infos = try memory_map.translateSlice(
-        AccountInfoType,
+        AccountType,
         .constant,
         account_infos_addr,
         account_infos_len,
@@ -592,13 +601,20 @@ fn translateAccounts(
     );
 
     // check_account_infos():
-    const max_cpi_account_infos: u64 = if (ic.tc.feature_set.active(
-        .increase_tx_account_lock_limit,
-        ic.tc.slot,
-    )) 128 else 64;
-
+    const max_cpi_account_infos: u32 = if (increase_info_limit)
+        255
+    else if (tc.feature_set.active(.increase_tx_account_lock_limit, tc.slot))
+        128
+    else
+        64;
     if (account_infos.len > max_cpi_account_infos) {
         return SyscallError.MaxInstructionAccountInfosExceeded;
+    }
+
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L969-L981
+    if (increase_info_limit) {
+        const account_info_bytes = account_infos.len *| ACCOUNT_INFO_BYTE_SIZE;
+        try tc.consumeCompute(account_info_bytes / tc.compute_budget.cpi_bytes_per_unit);
     }
 
     // translate keys upfront before inner loop below.
@@ -633,15 +649,15 @@ fn translateAccounts(
         defer callee_account.release();
 
         const account_key = blk: {
-            const account_meta = ic.tc.getAccountAtIndex(meta.index_in_transaction) orelse
+            const account_meta = tc.getAccountAtIndex(meta.index_in_transaction) orelse
                 return InstructionError.MissingAccount;
             break :blk account_meta.pubkey;
         };
 
         if (callee_account.account.executable) {
             // Use the known account
-            try ic.tc.consumeCompute(
-                callee_account.constAccountData().len / ic.tc.compute_budget.cpi_bytes_per_unit,
+            try tc.consumeCompute(
+                callee_account.constAccountData().len / tc.compute_budget.cpi_bytes_per_unit,
             );
             continue;
         }
@@ -649,15 +665,15 @@ fn translateAccounts(
         const caller_account_index = for (account_info_keys.constSlice(), 0..) |key, idx| {
             if (key.equals(&account_key)) break idx;
         } else {
-            try ic.tc.log("Instruction references an unknown account {}", .{account_key});
+            try tc.log("Instruction references an unknown account {}", .{account_key});
             return InstructionError.MissingAccount;
         };
 
-        const serialized_account_metas = ic.tc.serialized_accounts.constSlice();
+        const serialized_account_metas = tc.serialized_accounts.constSlice();
         const serialized_metadata = if (index_in_caller < serialized_account_metas.len) blk: {
             break :blk &serialized_account_metas[index_in_caller];
         } else {
-            try ic.tc.log("Internal error: index mismatch for account {}", .{account_key});
+            try tc.log("Internal error: index mismatch for account {}", .{account_key});
             return InstructionError.MissingAccount;
         };
 
@@ -668,7 +684,7 @@ fn translateAccounts(
 
         const caller_account = try @call(
             .auto,
-            switch (AccountInfoType) {
+            switch (AccountType) {
                 AccountInfoC => CallerAccount.fromAccountInfoC,
                 AccountInfoRust => CallerAccount.fromAccountInfoRust,
                 else => @compileError("invalid AccountInfo type"),
@@ -676,7 +692,7 @@ fn translateAccounts(
             .{
                 ic,
                 memory_map,
-                account_infos_addr +| (caller_account_index *| @sizeOf(AccountInfoType)),
+                account_infos_addr +| (caller_account_index *| @sizeOf(AccountType)),
                 &account_infos[caller_account_index],
                 serialized_metadata,
             },
@@ -755,18 +771,34 @@ fn translateInstruction(
         ic.getCheckAligned(),
     );
 
-    // check_instruction_size():
-    const MAX_ACCOUNTS_PER_INSTRUCTION = InstructionInfo.MAX_ACCOUNT_METAS - 1;
-    if (account_metas.len > MAX_ACCOUNTS_PER_INSTRUCTION) {
-        return SyscallError.MaxInstructionAccountsExceeded;
-    }
+    const tc = ic.tc;
+    const loosen_cpi_size = tc.feature_set.active(.loosen_cpi_size_restriction, tc.slot);
+    const increase_info_limit = tc.feature_set.active(.increase_cpi_account_info_limit, tc.slot);
 
-    const MAX_INSTRUCTION_DATA_LEN = 10 * 1024;
-    if (data.len > MAX_INSTRUCTION_DATA_LEN) {
-        return SyscallError.MaxInstructionDataLenExceeded;
-    }
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L146-L161
+    if (loosen_cpi_size) {
+        if (account_metas.len >= InstructionInfo.MAX_ACCOUNT_METAS) {
+            return SyscallError.MaxInstructionAccountsExceeded;
+        }
+        if (data.len > 10 * 1024) {
+            return SyscallError.MaxInstructionDataLenExceeded;
+        }
 
-    try ic.tc.consumeCompute(data.len / ic.tc.compute_budget.cpi_bytes_per_unit);
+        var total_cu_cost = data.len / tc.compute_budget.cpi_bytes_per_unit;
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L555-L567
+        if (increase_info_limit) {
+            // NOTE: Agave uses the same size here (34 bytes) no matter which type it is.
+            total_cu_cost +|= account_metas.len *| @sizeOf(AccountMetaRust) /
+                tc.compute_budget.cpi_bytes_per_unit;
+        }
+        try tc.consumeCompute(total_cu_cost);
+    } else {
+        // [agave] https://github.com/solana-labs/solana/blob/dbf06e258ae418097049e845035d7d5502fe1327/programs/bpf_loader/src/syscalls/cpi.rs#L1114-L1120
+        const total_size = account_metas.len *| @sizeOf(AccountInfoRust) +| data.len;
+        if (total_size > tc.compute_budget.max_cpi_instruction_size) {
+            return SyscallError.InstructionTooLarge;
+        }
+    }
 
     var accounts = try allocator.alloc(InstructionAccount, account_metas.len);
     errdefer allocator.free(accounts);
@@ -981,7 +1013,7 @@ fn updateCallerAccount(
     }
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1054
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L802
 pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
     return struct {
         fn common(
@@ -995,10 +1027,19 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
             const signers_seeds_addr = registers.get(.r4);
             const signers_seeds_len = registers.get(.r5);
 
-            try tc.consumeCompute(tc.compute_budget.invoke_units);
-
             const allocator = tc.allocator;
             const ic = try tc.getCurrentInstructionContext();
+
+            const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
+                .stricter_abi_and_runtime_constraints,
+                ic.tc.slot,
+            );
+            const account_data_direct_mapping = ic.tc.feature_set.active(
+                .account_data_direct_mapping,
+                ic.tc.slot,
+            );
+
+            try tc.consumeCompute(tc.compute_budget.invoke_units);
 
             // TODO: timings
 
@@ -1019,35 +1060,33 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                 ic.ixn_info.program_meta.pubkey,
             );
 
-            // check_authorized_program(ic, instruction):
-            // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1028C4-L1028C28
+            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L193-L222
             if (ids.NATIVE_LOADER_ID.equals(&instruction.program_id) or
                 bpf_loader_program.v1.ID.equals(&instruction.program_id) or
                 bpf_loader_program.v2.ID.equals(&instruction.program_id) or
                 (bpf_loader_program.v3.ID.equals(&instruction.program_id) and
-                    isBpfLoaderV3InstructionAuthorized(instruction.data, ic.tc.feature_set, ic.tc.slot)) or
+                    isBpfLoaderV3InstructionBlacklisted(instruction.data, tc.feature_set, tc.slot)) or
                 (blk: {
                     for (PRECOMPILES) |p| if (p.program_id.equals(&instruction.program_id)) break :blk true;
                     break :blk false;
                 }))
             {
-                // TODO add {instruction.program_id} as context to error.
-                // https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1048
+                // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L219
                 return SyscallError.ProgramNotSupported;
             }
 
             const info = try sig.runtime.executor.prepareCpiInstructionInfo(
-                ic.tc,
+                tc,
                 instruction,
                 signers.slice(),
             );
             defer info.deinit(ic.tc.allocator);
 
             var accounts = try translateAccounts(
+                AccountInfo,
                 allocator,
                 ic,
                 memory_map,
-                AccountInfo,
                 account_infos_addr,
                 account_infos_len,
                 &info,
@@ -1059,15 +1098,6 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
 
             // CPI Exit.
             // Synchronize the callee's account changes so the caller can see them.
-            const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
-                .stricter_abi_and_runtime_constraints,
-                ic.tc.slot,
-            );
-            const account_data_direct_mapping = ic.tc.feature_set.active(
-                .account_data_direct_mapping,
-                ic.tc.slot,
-            );
-
             for (accounts.slice()) |*translated| {
                 var callee_account = try ic.borrowInstructionAccount(translated.index_in_caller);
                 defer callee_account.release();
@@ -1130,9 +1160,13 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
     }.common;
 }
 
-/// Some bpf loader v3 instructions are not allowed to be invoked via cpi. This method
-/// determines if a bpf loader v3 instruction is part of the cpi restriced set of instructions.
-fn isBpfLoaderV3InstructionAuthorized(
+/// Some Loader-V3 instructions are not allowed to be invoked via CPI. This helper
+/// determines if an instruction is authorized to be invoked through CPI.
+///
+/// Returns whether the provided instruction is *not* allowed to be called.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L202-L216
+fn isBpfLoaderV3InstructionBlacklisted(
     instruction_data: []const u8,
     feature_set: *const sig.core.FeatureSet,
     slot: sig.core.Slot,
@@ -1143,16 +1177,15 @@ fn isBpfLoaderV3InstructionAuthorized(
     return switch (inst) {
         .upgrade => false,
         .set_authority => false,
-        .close => false,
         .set_authority_checked => !feature_set.active(
             .enable_bpf_loader_set_authority_checked_ix,
             slot,
         ),
-        .migrate => false,
         .extend_program_checked => !feature_set.active(
             .enable_extend_program_checked,
             slot,
         ),
+        .close => false,
         else => true,
     };
 }
@@ -1526,10 +1559,10 @@ test "translateAccounts" {
     };
 
     const accounts = try translateAccounts(
+        AccountInfoRust,
         allocator,
         &ctx.ic,
         &memory_map,
-        AccountInfoRust,
         vm_addr, // account_infos_addr
         1, // account_infos_len
         &cpi_info, // cpi_info
@@ -2310,17 +2343,17 @@ fn testCpiCommon(comptime AccountType: type) !void {
     }
 }
 
-test isBpfLoaderV3InstructionAuthorized {
+test isBpfLoaderV3InstructionBlacklisted {
     const all_enabled = sig.core.features.Set.ALL_ENABLED_AT_GENESIS;
     const all_disabled = sig.core.features.Set.ALL_DISABLED;
-    try std.testing.expect(isBpfLoaderV3InstructionAuthorized(&.{}, &all_disabled, 0));
-    try std.testing.expect(!isBpfLoaderV3InstructionAuthorized(&.{3}, &all_disabled, 0));
-    try std.testing.expect(!isBpfLoaderV3InstructionAuthorized(&.{4}, &all_disabled, 0));
-    try std.testing.expect(!isBpfLoaderV3InstructionAuthorized(&.{5}, &all_disabled, 0));
-    try std.testing.expect(isBpfLoaderV3InstructionAuthorized(&.{7}, &all_disabled, 0));
-    try std.testing.expect(!isBpfLoaderV3InstructionAuthorized(&.{7}, &all_enabled, 0));
-    try std.testing.expect(!isBpfLoaderV3InstructionAuthorized(&.{3}, &all_disabled, 0));
-    try std.testing.expect(!isBpfLoaderV3InstructionAuthorized(&.{8}, &all_disabled, 0));
-    try std.testing.expect(isBpfLoaderV3InstructionAuthorized(&.{9}, &all_disabled, 0));
-    try std.testing.expect(!isBpfLoaderV3InstructionAuthorized(&.{9}, &all_enabled, 0));
+    try std.testing.expect(isBpfLoaderV3InstructionBlacklisted(&.{}, &all_disabled, 0));
+    try std.testing.expect(!isBpfLoaderV3InstructionBlacklisted(&.{3}, &all_disabled, 0));
+    try std.testing.expect(!isBpfLoaderV3InstructionBlacklisted(&.{4}, &all_disabled, 0));
+    try std.testing.expect(!isBpfLoaderV3InstructionBlacklisted(&.{5}, &all_disabled, 0));
+    try std.testing.expect(isBpfLoaderV3InstructionBlacklisted(&.{7}, &all_disabled, 0));
+    try std.testing.expect(!isBpfLoaderV3InstructionBlacklisted(&.{7}, &all_enabled, 0));
+    try std.testing.expect(!isBpfLoaderV3InstructionBlacklisted(&.{3}, &all_disabled, 0));
+    try std.testing.expect(isBpfLoaderV3InstructionBlacklisted(&.{8}, &all_disabled, 0));
+    try std.testing.expect(isBpfLoaderV3InstructionBlacklisted(&.{9}, &all_disabled, 0));
+    try std.testing.expect(!isBpfLoaderV3InstructionBlacklisted(&.{9}, &all_enabled, 0));
 }

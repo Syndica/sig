@@ -9,12 +9,14 @@ const program = sig.runtime.program;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const sysvar = sig.runtime.sysvar;
 const vm = sig.vm;
-const bpf_program = sig.runtime.program.bpf;
+const bpf_serialize = sig.runtime.program.bpf.serialize;
 const system_program = sig.runtime.program.system;
 const bpf_loader_program = sig.runtime.program.bpf_loader;
+const stable_log = sig.runtime.stable_log;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
+const ExecutionError = sig.vm.ExecutionError;
 
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;
@@ -39,46 +41,209 @@ pub fn execute(
         defer program_account.release();
         break :blk program_account.account.owner;
     };
+    const program_id = &ic.ixn_info.program_meta.pubkey;
 
-    // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L408
-    if (ids.NATIVE_LOADER_ID.equals(&program_owner)) {
-        if (bpf_loader_program.v1.ID.equals(&ic.ixn_info.program_meta.pubkey)) {
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/programs/loader-v4/src/lib.rs
+    // NOTE: The feature gate is already checked before we enter this function in `processNextInstruction`.
+    if (bpf_loader_program.v4.ID.equals(program_id)) {
+        try ic.tc.consumeCompute(bpf_loader_program.v4.COMPUTE_UNITS);
+        return executeBpfLoaderV4ProgramInstruction(allocator, ic);
+    } else if (ids.NATIVE_LOADER_ID.equals(&program_owner)) {
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/programs/bpf_loader/src/lib.rs#L394-L417
+        if (bpf_loader_program.v3.ID.equals(program_id)) {
+            try ic.tc.consumeCompute(bpf_loader_program.v3.COMPUTE_UNITS);
+            return executeBpfLoaderV3ProgramInstruction(allocator, ic);
+        } else if (bpf_loader_program.v2.ID.equals(program_id)) {
+            try ic.tc.consumeCompute(bpf_loader_program.v2.COMPUTE_UNITS);
+            try ic.tc.log("BPF loader management instructions are no longer supported", .{});
+            return InstructionError.UnsupportedProgramId;
+        } else if (bpf_loader_program.v1.ID.equals(program_id)) {
             try ic.tc.consumeCompute(bpf_loader_program.v1.COMPUTE_UNITS);
             try ic.tc.log("Deprecated loader is no longer supported", .{});
             return InstructionError.UnsupportedProgramId;
-        } else if (bpf_loader_program.v2.ID.equals(&ic.ixn_info.program_meta.pubkey)) {
-            try ic.tc.consumeCompute(bpf_loader_program.v2.COMPUTE_UNITS);
-            try ic.tc.log(
-                "BPF loader management instructions are no longer supported",
-                .{},
-            );
-            return InstructionError.UnsupportedProgramId;
-        } else if (bpf_loader_program.v3.ID.equals(&ic.ixn_info.program_meta.pubkey)) {
-            try ic.tc.consumeCompute(bpf_loader_program.v3.COMPUTE_UNITS);
-            return executeBpfLoaderV3ProgramInstruction(allocator, ic);
-        } else if (bpf_loader_program.v4.ID.equals(&ic.ixn_info.program_meta.pubkey)) {
-            try ic.tc.consumeCompute(bpf_loader_program.v4.COMPUTE_UNITS);
-            return executeBpfLoaderV4ProgramInstruction(allocator, ic);
         } else {
-            if (ic.tc.feature_set.active(.remove_accounts_executable_flag_checks, ic.tc.slot)) {
-                return InstructionError.UnsupportedProgramId;
-            }
-            return InstructionError.IncorrectProgramId;
+            try ic.tc.log("Invalid BPF loader id", .{});
+            return InstructionError.UnsupportedProgramId;
         }
     }
 
-    // NOTE: We reborrow the program account within bpf_program.execute, this adds an additional
-    // borrow wrt Agave's implementation. It should not cause an issue but is worth noting.
+    // NOTE: We double borrow the program account within `executeBpfProgram`, which adds an
+    // additional borrow relative to Agave. This difference should not cause any issues, but is worth noting.
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L458-L518
-    bpf_program.execute(allocator, ic) catch |err| {
+    executeBpfProgram(allocator, ic) catch |err| {
         const kind = sig.vm.getExecutionErrorKind(err);
         if (kind != .Instruction) {
-            try sig.runtime.stable_log.programFailure(ic.tc, ic.ixn_info.program_meta.pubkey, err);
+            try stable_log.programFailure(
+                ic.tc,
+                ic.ixn_info.program_meta.pubkey,
+                err,
+            );
             return InstructionError.ProgramFailedToComplete;
         } else {
             return sig.vm.instructionErrorFromExecutionError(err);
         }
     };
+}
+
+fn executeBpfProgram(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) ExecutionError!void {
+    const executable = blk: {
+        const program_account = try ic.borrowProgramAccount();
+        defer program_account.release();
+        const program_key = program_account.pubkey;
+
+        const loaded_program = ic.tc.program_map.get(program_key) orelse {
+            try ic.tc.log("Program is not cached", .{});
+            return InstructionError.UnsupportedProgramId;
+        };
+        switch (loaded_program) {
+            .failed => {
+                // For the `builtin` case in Agave, they skip the log message
+                // and only return `UnsupportedProgramId`. We can emulate the
+                // `builtin` program map entry by simply checking if the pubkey
+                // is a "builtin program".
+                if (program.NATIVE.get(&program_key) == null) {
+                    try ic.tc.log("Program is not deployed", .{});
+                }
+                return InstructionError.UnsupportedProgramId;
+            },
+            .loaded => |entry| break :blk entry.executable,
+        }
+    };
+
+    const account_data_direct_mapping = ic.tc.feature_set.active(
+        .account_data_direct_mapping,
+        ic.tc.slot,
+    );
+    const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
+        .stricter_abi_and_runtime_constraints,
+        ic.tc.slot,
+    );
+    const mask_out_rent_epoch_in_vm_serialization = ic.tc.feature_set.active(
+        .mask_out_rent_epoch_in_vm_serialization,
+        ic.tc.slot,
+    );
+    const provide_instruction_data_offset = ic.tc.feature_set.active(
+        .provide_instruction_data_offset_in_vm_r2,
+        ic.tc.slot,
+    );
+
+    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
+    var serialized = try bpf_serialize.serializeParameters(
+        allocator,
+        ic,
+        account_data_direct_mapping,
+        stricter_abi_and_runtime_constraints,
+        mask_out_rent_epoch_in_vm_serialization,
+    );
+    defer serialized.deinit(allocator);
+
+    // TODO: this is a heavy copy, can we avoid doing it?
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.0/programs/bpf_loader/src/lib.rs#L275
+    const old_accounts = ic.tc.serialized_accounts;
+    ic.tc.serialized_accounts = serialized.account_metas;
+    defer ic.tc.serialized_accounts = old_accounts;
+
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1604-L1617
+    // TODO: save account addresses for access violation errors resolution
+
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1621-L1640
+    const compute_available = ic.tc.compute_meter;
+    const result, const compute_consumed = blk: {
+        var state = sig.vm.init(
+            allocator,
+            ic.tc,
+            &executable,
+            serialized.regions.items,
+            &ic.tc.vm_environment.loader,
+            if (provide_instruction_data_offset) serialized.instruction_data_offset else 0,
+        ) catch |err| {
+            try ic.tc.log("Failed to create SBPF VM: {s}", .{@errorName(err)});
+            return InstructionError.ProgramEnvironmentSetupFailure;
+        };
+        defer state.deinit(allocator);
+
+        // Run our bpf program!
+        const result = state.vm.run();
+
+        break :blk result;
+    };
+
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1641-L1644
+    // TODO: timings
+
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1646-L1653
+    try ic.tc.log("Program {} consumed {} of {} compute units", .{
+        ic.ixn_info.program_meta.pubkey,
+        compute_consumed,
+        compute_available,
+    });
+
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1653-L1657
+    if (ic.tc.return_data.data.len != 0) {
+        try stable_log.programReturn(
+            ic.tc,
+            ic.ixn_info.program_meta.pubkey,
+            ic.tc.return_data.data.constSlice(),
+        );
+    }
+
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1658-L1731
+    var maybe_execute_error: ?ExecutionError = handleExecutionResult(
+        result,
+        &ic.tc.custom_error,
+        &ic.tc.compute_meter,
+        stricter_abi_and_runtime_constraints,
+        ic.tc.feature_set.active(.deplete_cu_meter_on_vm_failure, ic.tc.slot),
+    );
+
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1750-L1756
+    if (maybe_execute_error == null)
+        bpf_serialize.deserializeParameters(
+            allocator,
+            ic,
+            stricter_abi_and_runtime_constraints,
+            account_data_direct_mapping,
+            serialized.memory.items,
+            serialized.account_metas.constSlice(),
+        ) catch |err| {
+            maybe_execute_error = err;
+        };
+
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1757-L1761
+    // TODO: update timings
+
+    if (maybe_execute_error) |err| return err;
+}
+
+fn handleExecutionResult(
+    result: sig.vm.interpreter.Result,
+    custom_error: *?u32,
+    compute_meter: *u64,
+    stricter_abi_and_runtime_constraints: bool,
+    deplete_cu_meter: bool,
+) ?ExecutionError {
+    switch (result) {
+        .ok => |status| if (status != 0) {
+            switch (sig.vm.executionErrorFromStatusCode(status)) {
+                error.Custom => custom_error.* = @intCast(status),
+                error.GenericError => custom_error.* = 0,
+                else => |err| return err,
+            }
+            return error.Custom;
+        },
+        .err => |err| {
+            const err_kind = sig.vm.getExecutionErrorKind(err);
+            if (deplete_cu_meter and err_kind != .Syscall)
+                compute_meter.* = 0;
+            if (stricter_abi_and_runtime_constraints and err == error.AccessViolation)
+                std.debug.print("TODO: Handle AccessViolation: {s}\n", .{@errorName(err)});
+            return err;
+        },
+    }
+    return null;
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/v3.0/programs/loader-v4/src/lib.rs#L88
@@ -87,9 +252,10 @@ pub fn executeBpfLoaderV4ProgramInstruction(
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     var buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
-    const instruction =
-        try ic.ixn_info.limitedDeserializeInstruction(bpf_loader_program.v4.Instruction, &buf);
-
+    const instruction = try ic.ixn_info.limitedDeserializeInstruction(
+        bpf_loader_program.v4.Instruction,
+        &buf,
+    );
     return switch (instruction) {
         .write => |args| executeV4Write(
             allocator,
@@ -4126,4 +4292,57 @@ test checkProgramAccount {
             .authority_address_or_next_version = program_key,
         },
     );
+}
+
+test handleExecutionResult {
+    var custom_error: ?u32 = null;
+    var compute_meter: u64 = 1000;
+
+    // No Error
+    try std.testing.expectEqual(null, handleExecutionResult(
+        .{ .ok = 0 },
+        &custom_error,
+        &compute_meter,
+        false,
+        false,
+    ));
+    try std.testing.expectEqual(null, custom_error);
+    try std.testing.expectEqual(1000, compute_meter);
+
+    // Generic Error maps to Custom error with code 0
+    try std.testing.expectEqual(error.Custom, handleExecutionResult(
+        .{ .ok = 0x100000000 },
+        &custom_error,
+        &compute_meter,
+        false,
+        false,
+    ).?);
+    try std.testing.expectEqual(0, custom_error.?);
+    try std.testing.expectEqual(1000, compute_meter);
+
+    // Custom error with specific code
+    custom_error = null;
+    try std.testing.expectEqual(error.Custom, handleExecutionResult(
+        .{ .ok = 101 },
+        &custom_error,
+        &compute_meter,
+        false,
+        false,
+    ).?);
+    try std.testing.expectEqual(101, custom_error.?);
+    try std.testing.expectEqual(1000, compute_meter);
+
+    // Deplete compute meter on non-syscall error
+    custom_error = null;
+    try std.testing.expectEqual(error.InvalidArgument, handleExecutionResult(
+        .{ .err = error.InvalidArgument },
+        &custom_error,
+        &compute_meter,
+        false,
+        true,
+    ).?);
+    try std.testing.expectEqual(null, custom_error);
+    try std.testing.expectEqual(0, compute_meter);
+
+    // TODO: Handle AccessViolation
 }

@@ -72,6 +72,91 @@ pub const EbpfError = error{
     // SyscallError, // Sig never returns an Ebpf syscall error
 };
 
+pub const State = struct {
+    vm: Vm,
+    stack: []u8,
+    heap: []u8,
+    regions: []memory.Region,
+
+    pub fn deinit(self: *State, allocator: std.mem.Allocator) void {
+        self.vm.deinit();
+        allocator.free(self.stack);
+        allocator.free(self.heap);
+        allocator.free(self.regions);
+    }
+};
+
+// [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L299-L300
+pub fn init(
+    allocator: std.mem.Allocator,
+    tc: *sig.runtime.TransactionContext,
+    exe: *const Executable,
+    trailing_regions: []const memory.Region,
+    map: *const SyscallMap,
+    instruction_data_offset: u64,
+) !State {
+    const PAGE_SIZE: u64 = 32 * 1024;
+
+    const stack_size = exe.config.stackSize();
+    const heap_size = tc.compute_budget.heap_size;
+    const cost = std.mem.alignBackward(u64, heap_size -| 1, PAGE_SIZE) / PAGE_SIZE;
+    const heap_cost = cost * tc.compute_budget.heap_cost;
+    try tc.consumeCompute(heap_cost);
+
+    const stack_gap: u64 = if (!exe.version.enableDynamicStackFrames() and
+        exe.config.enable_stack_frame_gaps)
+        exe.config.stack_frame_size
+    else
+        0;
+
+    const heap = try allocator.alloc(u8, heap_size);
+    @memset(heap, 0);
+    errdefer allocator.free(heap);
+
+    const stack = try allocator.alloc(u8, stack_size);
+    @memset(stack, 0);
+    errdefer allocator.free(stack);
+
+    // 3 regions for the input, stack, and heap.
+    const regions = try allocator.alloc(memory.Region, 3 + trailing_regions.len);
+    errdefer allocator.free(regions);
+
+    regions[0..3].* = .{
+        exe.getProgramRegion(),
+        .initGapped(.mutable, stack, memory.STACK_START, stack_gap),
+        .init(.mutable, heap, memory.HEAP_START),
+    };
+    @memcpy(regions[3..], trailing_regions);
+
+    const memory_map = try memory.MemoryMap.init(
+        allocator,
+        regions,
+        exe.version,
+        exe.config,
+    );
+    errdefer memory_map.deinit(allocator);
+
+    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L280-L285
+    // TODO: Set syscall context
+
+    const sbpf_vm = try Vm.init(
+        allocator,
+        exe,
+        memory_map,
+        map,
+        stack.len,
+        instruction_data_offset,
+        tc,
+    );
+
+    return .{
+        .vm = sbpf_vm,
+        .stack = stack,
+        .heap = heap,
+        .regions = regions,
+    };
+}
+
 pub const ExecutionErrorKind = enum(u8) {
     Instruction,
     Syscall,

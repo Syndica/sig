@@ -108,6 +108,7 @@ pub fn createTransactionContext(
     const log_collector = try sig.runtime.LogCollector.default(allocator);
     errdefer log_collector.deinit(allocator);
 
+    const slot = if (instr_ctx.slot_context) |slot_ctx| slot_ctx.slot else 0;
     tc.* = TransactionContext{
         .allocator = allocator,
         .feature_set = feature_set,
@@ -126,13 +127,16 @@ pub fn createTransactionContext(
         .return_data = .{},
         .accounts_resize_delta = 0,
         .compute_meter = instr_ctx.cu_avail,
-        .compute_budget = .init(instr_ctx.cu_avail),
+        .compute_budget = .init(
+            instr_ctx.cu_avail,
+            feature_set.active(.increase_cpi_account_info_limit, slot),
+        ),
         .custom_error = null,
         .log_collector = log_collector,
         .rent = sysvar_cache.get(sysvar.Rent) catch sysvar.Rent.INIT,
         .prev_blockhash = sig.core.Hash.ZEROES,
         .prev_lamports_per_signature = 0,
-        .slot = if (instr_ctx.slot_context) |slot_ctx| slot_ctx.slot else 0,
+        .slot = slot,
     };
     errdefer comptime unreachable;
 

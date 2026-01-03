@@ -124,11 +124,4 @@ const BuiltinCost = union(enum(u8)) {
             .not_migrating => null,
         };
     }
-
-    pub fn hasMigrated(self: BuiltinCost, feature_set: *const FeatureSet) bool {
-        return switch (self) {
-            .migrating => |m| feature_set.active.contains(m.core_bf_migration_feature),
-            .not_migrating => false,
-        };
-    }
 };

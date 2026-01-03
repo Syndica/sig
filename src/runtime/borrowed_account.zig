@@ -29,8 +29,6 @@ pub const BorrowedAccountContext = struct {
     program_id: Pubkey,
     is_signer: bool = false,
     is_writable: bool = false,
-    /// TODO: remove this after upgrading to agave 2.3+ (for conformance).
-    remove_accounts_executable_flag_checks: bool,
     accounts_lamport_delta: *i128,
 };
 
@@ -61,12 +59,6 @@ pub const BorrowedAccount = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/transaction-context/src/lib.rs#L1129
     pub fn isOwnedByCurrentProgram(self: *const BorrowedAccount) bool {
         return self.account.owner.equals(&self.context.program_id);
-    }
-
-    /// TODO: remove this after upgrading to agave 2.3+ (for conformance).
-    /// [agave] https://github.com/anza-xyz/agave/blob/23e01995a3d547295dd8dfa83fafe93f07de78d9/transaction-context/src/lib.rs#L1053-L1061 (v2.2 for conformance)
-    pub fn isExecutableInternal(self: *const BorrowedAccount) bool {
-        return self.account.executable and !self.context.remove_accounts_executable_flag_checks;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1077
@@ -114,10 +106,6 @@ pub const BorrowedAccount = struct {
 
         if (!self.context.is_writable)
             return InstructionError.ReadonlyLamportChange;
-
-        if (self.isExecutableInternal()) {
-            return InstructionError.ExecutableLamportChange;
-        }
 
         // Dont touch account if lamports dont change.
         if (lamports == self.account.lamports) return;
