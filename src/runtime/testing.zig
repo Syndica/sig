@@ -282,9 +282,7 @@ pub fn createEpochStakes(
 }
 
 pub fn createFeatureSet(params: []const ExecuteContextsParams.FeatureParams) !FeatureSet {
-    if (!builtin.is_test)
-        @compileError("createFeatureSet should only be called in test mode");
-
+    if (!builtin.is_test) @compileError("createFeatureSet should only be called in test mode");
     var feature_set: FeatureSet = .ALL_DISABLED;
     for (params) |args| feature_set.setSlot(args.feature, args.slot);
     return feature_set;

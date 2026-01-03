@@ -652,15 +652,15 @@ pub const TxnContext = struct {
     tx: ?SanitizedTransaction = null,
     account_shared_data: ArrayList(AcctState),
     blockhash_queue: ArrayList(ManagedString),
-    epoch_ctx: ?EpochContext = null,
-    slot_ctx: ?SlotContext = null,
+    epoch_context: ?EpochContext = null,
+    slot_context: ?SlotContext = null,
 
     pub const _desc_table = .{
         .tx = fd(1, .{ .SubMessage = {} }),
         .account_shared_data = fd(2, .{ .List = .{ .SubMessage = {} } }),
         .blockhash_queue = fd(3, .{ .List = .Bytes }),
-        .epoch_ctx = fd(4, .{ .SubMessage = {} }),
-        .slot_ctx = fd(5, .{ .SubMessage = {} }),
+        .epoch_context = fd(4, .{ .SubMessage = {} }),
+        .slot_context = fd(5, .{ .SubMessage = {} }),
     };
 
     pub usingnamespace protobuf.MessageMixins(@This());
