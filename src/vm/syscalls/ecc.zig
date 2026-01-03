@@ -460,22 +460,21 @@ fn altBn128Operation(
             return out;
         },
         .pairing => {
-            // Agave does not check that the input length is a multiple of the
-            // pair size (192 bytes). That *would* make sense, however it turns out Agave
-            // performs a useless check,
-            // https://github.com/anza-xyz/solana-sdk/blob/8eef25b054c4e5ca6d8b879744456297a187db92/bn254/src/lib.rs#L321-L327
+            // Originally Agave did not check that the input length is a multiple
+            // of the pair size (192 bytes). They used `input.len().check_rem(192).is_none()`,
+            // which made little sense, as `check_rem` only returns `None` if the RHS is zero.
             //
-            // To the untrained eye this may seem like a check that `input.len()` is a multiple of
-            // the pairing size. You would be wrong! `check_rem` only returns `None`
-            // if the RHS is zero. The only way this condition will be true is if the
-            // `PAIRING_ELEMENT_LENGTH` constant were zero, which is impossible.
+            // This ended up sort of working, since we perform a truncating integer division
+            // in `pairingSyscall`, which ensures that the number of pairs read will always fit
+            // the input size and ignores the remaining bytes.
             //
-            // The "correct" behaviour ends up being to *not* check the length, instead we perform
-            // a truncating integer division in the pairing syscall implementation (ensuring that
-            // the number of pairs read will always fit input size), and simply ignore the remaining
-            // bytes.
+            // This is all fixed by the feature gate which enables us to perform the correct check.
             //
-            // if (input.len % 192 != 0) return error.InvalidLength;
+            // [fd] https://github.com/firedancer-io/firedancer/blob/d848e9b27a80cc344772521689671ef05de28653/src/ballet/bn254/fd_bn254.c#L227-L236
+            // [agave] https://github.com/anza-xyz/solana-sdk/blob/master/bn254/src/pairing.rs#L66-L83
+            if (feature_set.active(.fix_alt_bn128_pairing_length_check, slot)) {
+                if (input.len % 192 != 0) return error.InvalidLength;
+            }
 
             try bn254.pairingSyscall(out[0..32], input);
 
