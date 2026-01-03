@@ -111,14 +111,18 @@ def path(path):
 
 
 def run_test(vectors, config, pad):
-    if not config.run_separately:
+    if config.no_run:
+        print(f"{vectors:<{pad}}")
+    elif not config.run_separately:
         print_noln(f"{vectors:<{pad}}")
+
     vectors_path = path(f"env/test-vectors/{vectors}")
     fixtures_path = path(f"env/test-fixtures/{vectors}")
     outputs_folder = os.path.dirname(vectors) if vectors.endswith(".fix") else vectors
     outputs_path = path(f"env/test-outputs/{outputs_folder}")
     if not os.path.exists(vectors_path):
         os.makedirs(fixtures_path, exist_ok=True)
+
 
     if config.create:
         # fmt: off

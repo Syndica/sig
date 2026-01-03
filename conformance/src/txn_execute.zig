@@ -1013,7 +1013,6 @@ fn sharedAccountToState(
         .data = data_duped,
         .executable = value.executable,
         .owner = owner_duped,
-        .seed_addr = null,
     };
 }
 
