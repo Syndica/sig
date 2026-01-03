@@ -81,9 +81,6 @@ pub const TransactionContext = struct {
     /// Total change to account lamports
     accounts_lamport_delta: i128 = 0,
 
-    // TODO: is this correct?
-    account_data_direct_mapping: bool = false,
-
     /// Instruction compute meter, for tracking compute units consumed against
     /// the designated compute budget during program execution.
     compute_meter: u64,
