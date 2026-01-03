@@ -54,6 +54,10 @@ pub fn execute(
         }
     };
 
+    const account_data_direct_mapping = ic.tc.feature_set.active(
+        .account_data_direct_mapping,
+        ic.tc.slot,
+    );
     const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
         .stricter_abi_and_runtime_constraints,
         ic.tc.slot,
@@ -71,7 +75,7 @@ pub fn execute(
     var serialized = try serialize.serializeParameters(
         allocator,
         ic,
-        ic.tc.account_data_direct_mapping,
+        account_data_direct_mapping,
         stricter_abi_and_runtime_constraints,
         mask_out_rent_epoch_in_vm_serialization,
     );
@@ -145,7 +149,7 @@ pub fn execute(
             allocator,
             ic,
             stricter_abi_and_runtime_constraints,
-            ic.tc.account_data_direct_mapping,
+            account_data_direct_mapping,
             serialized.memory.items,
             serialized.account_metas.constSlice(),
         ) catch |err| {

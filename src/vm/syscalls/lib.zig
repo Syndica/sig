@@ -169,8 +169,8 @@ pub const Syscall = enum {
         .sol_get_epoch_stake = getEpochStake,
         .sol_remaining_compute_units = remainingComputeUnits,
 
-        .sol_invoke_signed_c = cpi.invokeSignedC,
-        .sol_invoke_signed_rust = cpi.invokeSignedRust,
+        .sol_invoke_signed_c = cpi.invokeSigned(cpi.AccountInfoC),
+        .sol_invoke_signed_rust = cpi.invokeSigned(cpi.AccountInfoRust),
     });
 
     const Gate = struct {
