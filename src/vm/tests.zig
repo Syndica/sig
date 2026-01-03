@@ -86,6 +86,7 @@ fn testAsmWithMemory(
         m,
         &loader,
         stack_memory.len,
+        0,
         &tc,
     );
     defer vm.deinit();
@@ -2017,6 +2018,7 @@ test "pqr" {
             map,
             &loader,
             0,
+            0,
             &tc,
         );
         defer vm.deinit();
@@ -2076,6 +2078,7 @@ test "pqr divide by zero" {
             &executable,
             map,
             &loader,
+            0,
             0,
             &tc,
         );
@@ -2369,6 +2372,7 @@ pub fn testElfWithSyscalls(
         m,
         &loader,
         stack_memory.len,
+        0,
         &tc,
     );
     defer vm.deinit();

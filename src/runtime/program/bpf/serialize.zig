@@ -205,9 +205,15 @@ pub const Serializer = struct {
 };
 
 const SerializeReturn = struct {
-    std.ArrayListUnmanaged(u8),
-    std.ArrayListUnmanaged(Region),
-    std.BoundedArray(SerializedAccountMeta, InstructionInfo.MAX_ACCOUNT_METAS),
+    memory: std.ArrayListUnmanaged(u8),
+    regions: std.ArrayListUnmanaged(Region),
+    account_metas: std.BoundedArray(SerializedAccountMeta, InstructionInfo.MAX_ACCOUNT_METAS),
+    instruction_data_offset: u64,
+
+    pub fn deinit(self: *SerializeReturn, allocator: std.mem.Allocator) void {
+        self.memory.deinit(allocator);
+        self.regions.deinit(allocator);
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L188
@@ -371,7 +377,7 @@ fn serializeParametersUnaligned(
         }
     }
     _ = serializer.write(u64, std.mem.nativeToLittle(u64, instruction_data.len));
-    _ = serializer.writeBytes(instruction_data);
+    const instruction_data_offset = serializer.writeBytes(instruction_data);
     _ = serializer.writeBytes(&program_id.data);
 
     var memory, var regions = try serializer.finish();
@@ -381,9 +387,10 @@ fn serializeParametersUnaligned(
     }
 
     return .{
-        memory,
-        regions,
-        account_metas,
+        .memory = memory,
+        .regions = regions,
+        .account_metas = account_metas,
+        .instruction_data_offset = instruction_data_offset,
     };
 }
 
@@ -499,7 +506,7 @@ fn serializeParametersAligned(
     }
 
     _ = serializer.write(u64, std.mem.nativeToLittle(u64, instruction_data.len));
-    _ = serializer.writeBytes(instruction_data);
+    const instruction_data_offset = serializer.writeBytes(instruction_data);
     _ = serializer.writeBytes(&program_id.data);
 
     var memory, var regions = try serializer.finish();
@@ -509,9 +516,10 @@ fn serializeParametersAligned(
     }
 
     return .{
-        memory,
-        regions,
-        account_metas,
+        .memory = memory,
+        .regions = regions,
+        .account_metas = account_metas,
+        .instruction_data_offset = instruction_data_offset,
     };
 }
 
