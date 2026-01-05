@@ -7,8 +7,11 @@ const snapshot = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
+const features = sig.core.features;
+
 const AccountsDB = sig.accounts_db.AccountsDB;
 const GenesisConfig = sig.core.GenesisConfig;
+const FeatureSet = sig.core.features.Set;
 const GeyserWriter = sig.geyser.GeyserWriter;
 const GossipService = sig.gossip.GossipService;
 const StatusCache = sig.accounts_db.snapshot.StatusCache;
@@ -31,6 +34,29 @@ pub const LoadedSnapshot = struct {
         if (self.status_cache) |status_cache| {
             status_cache.deinit(self.allocator);
         }
+    }
+
+    pub fn featureSet(self: *LoadedSnapshot, allocator: Allocator) !FeatureSet {
+        const slot = self.collapsed_manifest.bank_fields.slot;
+        const ancestors = self.collapsed_manifest.bank_fields.ancestors;
+        const slot_store = self.accounts_db.accountStore().forSlot(slot, &ancestors);
+
+        var feature_set = FeatureSet.ALL_DISABLED;
+        var inactive_iterator = feature_set.iterator(
+            self.collapsed_manifest.bank_fields.slot,
+            .inactive,
+        );
+        while (inactive_iterator.next()) |feature| {
+            const feature_id = features.map.get(feature).key;
+            if (try slot_store.reader().get(allocator, feature_id)) |feature_account| {
+                defer feature_account.deinit(allocator);
+                if (try features.activationSlotFromAccount(feature_account)) |activation_slot| {
+                    feature_set.setSlot(feature, activation_slot);
+                }
+            }
+        }
+
+        return feature_set;
     }
 };
 
