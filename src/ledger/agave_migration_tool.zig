@@ -102,13 +102,13 @@ const AgaveSchema = struct {
         .Key = Slot,
         .Value = sig_meta.DuplicateSlotProof,
     };
-    /// Indicates which slots are rooted. A slot is "rooted" when consensus is finalized for that
-    /// slot. It means the block from that slot is permanently included on-chain.
-    pub const rooted_slots: ColumnFamily = .{
-        .name = "roots",
-        .Key = Slot,
-        .Value = bool,
-    };
+    // /// Indicates which slots are rooted. A slot is "rooted" when consensus is finalized for that
+    // /// slot. It means the block from that slot is permanently included on-chain.
+    // pub const rooted_slots: ColumnFamily = .{
+    //     .name = "roots",
+    //     .Key = Slot,
+    //     .Value = bool,
+    // };
     /// Metadata about each Reed-Solomon erasure set, such as how many shreds are in the set.
     pub const erasure_meta: ColumnFamily = .{
         .name = "erasure_meta",
@@ -157,10 +157,10 @@ pub fn migrateLedgerToAgave(
     in_db_path: []const u8,
     out_db_path: []const u8,
 ) !void {
-    var in_db = try OurDb.open(allocator, .from(logger), in_db_path);
+    var in_db = try OurDb.open(allocator, .from(logger), in_db_path, true);
     defer in_db.deinit();
 
-    var out_db = try TheirDb.open(allocator, .from(logger), out_db_path);
+    var out_db = try TheirDb.open(allocator, .from(logger), out_db_path, false);
     defer out_db.deinit();
     {
         var iter = try in_db.iterator(SigSchema.slot_meta, .forward, null);
@@ -200,11 +200,11 @@ pub fn migrateLedgerFromAgave(
     out_db_path: []const u8,
 ) !void {
     std.debug.print("opening in_db\n", .{});
-    var in_db = try TheirDb.open(allocator, .from(logger), in_db_path);
+    var in_db = try TheirDb.open(allocator, .from(logger), in_db_path, true);
     defer in_db.deinit();
 
     std.debug.print("opening out_db\n", .{});
-    var out_db = try OurDb.open(allocator, .from(logger), out_db_path);
+    var out_db = try OurDb.open(allocator, .from(logger), out_db_path, false);
     defer out_db.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);

@@ -32,6 +32,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             allocator: Allocator,
             logger: database.interface.Logger,
             path: []const u8,
+            open_read_only: bool,
         ) OpenError!Self {
             logger.info().log("Opening RocksDB for ledger");
             const owned_path = try std.fmt.allocPrintZ(allocator, "{s}/rocksdb", .{path});
@@ -58,7 +59,11 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 .{
                     allocator,
                     owned_path,
-                    rocks.DBOptions{ .create_if_missing = true, .create_missing_column_families = true },
+                    rocks.DBOptions{
+                        .create_if_missing = true,
+                        .create_missing_column_families = true,
+                        .open_read_only = open_read_only,
+                    },
                     column_family_descriptions,
                 },
             );
