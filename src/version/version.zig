@@ -23,14 +23,16 @@ pub const ClientVersion = struct {
     };
 
     /// Keep up to date with:
-    /// https://github.com/solana-foundation/solana-validator-client-ids/blob/9d7afce390114e20fff0a0287ba7ba009a80805f/client-ids.csv
+    /// https://github.com/solana-foundation/solana-validator-client-ids/blob/main/client-ids.csv
     const ClientId = enum(u16) {
         solana_labs = 0,
         jito_labs = 1,
         frankendancer = 2,
         agave = 3,
-        // TODO: change to official Sig Id, when that is formalized.
-        sig = 5,
+        agave_paladin = 4,
+        firedancer = 5,
+        agave_bam = 6,
+        sig = 7,
         _,
 
         pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
