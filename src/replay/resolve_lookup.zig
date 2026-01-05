@@ -296,7 +296,7 @@ fn resolveLookupTableAccounts(
 
         // resolve writable addresses
         for (lookup.writable_indexes) |index| {
-            if (active_addresses_len < index + 1) {
+            if (active_addresses_len <= index) {
                 return error.InvalidAddressLookupTableIndex;
             }
             writable_accounts.appendAssumeCapacity(table.addresses[index]);
@@ -304,7 +304,7 @@ fn resolveLookupTableAccounts(
 
         // resolve readonly addresses
         for (lookup.readonly_indexes) |index| {
-            if (active_addresses_len < index + 1) {
+            if (active_addresses_len <= index) {
                 return error.InvalidAddressLookupTableIndex;
             }
             readonly_accounts.appendAssumeCapacity(table.addresses[index]);

@@ -245,21 +245,27 @@ pub fn prepareCpiInstructionInfo(
     const caller = try tc.getCurrentInstructionContext();
 
     var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
-    var deduped_account_metas = InstructionInfo.AccountMetas{};
+    var deduped_account_metas: InstructionInfo.AccountMetas = .empty;
     errdefer deduped_account_metas.deinit(tc.allocator);
+
+    std.debug.assert(callee.accounts.len <= InstructionInfo.MAX_ACCOUNT_METAS);
 
     for (callee.accounts) |account| {
         const index_in_transaction = tc.getAccountIndex(account.pubkey) orelse {
             try tc.log("Instruction references an unknown account {}", .{account.pubkey});
             return InstructionError.MissingAccount;
         };
+        std.debug.assert(index_in_transaction < InstructionInfo.MAX_ACCOUNT_METAS);
 
         const index_in_callee_ptr = &dedupe_map[index_in_transaction];
         if (index_in_callee_ptr.* < deduped_account_metas.items.len) {
             const prev = &deduped_account_metas.items[index_in_callee_ptr.*];
             prev.is_signer = prev.is_signer or account.is_signer;
             prev.is_writable = prev.is_writable or account.is_writable;
-            try deduped_account_metas.append(tc.allocator, prev.*);
+
+            std.debug.assert(prev.index_in_transaction < InstructionInfo.MAX_ACCOUNT_METAS);
+            const new = prev.*; // this seems to dodge a miscompilation?
+            try deduped_account_metas.append(tc.allocator, new);
         } else {
             index_in_callee_ptr.* = @intCast(deduped_account_metas.items.len);
             try deduped_account_metas.append(tc.allocator, .{
@@ -272,6 +278,8 @@ pub fn prepareCpiInstructionInfo(
     }
 
     for (deduped_account_metas.items, 0..) |*account_meta, index_in_instruction| {
+        std.debug.assert(account_meta.index_in_transaction < InstructionInfo.MAX_ACCOUNT_METAS);
+
         const index_in_callee = dedupe_map[account_meta.index_in_transaction];
 
         if (index_in_callee != index_in_instruction) {
