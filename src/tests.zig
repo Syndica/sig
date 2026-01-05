@@ -6,6 +6,7 @@ test {
     refAllDeclsRecursive(sig, 2);
     refAllDeclsRecursive(sig.accounts_db, 2);
     refAllDeclsRecursive(sig.ledger, 2);
+    refAllDeclsRecursive(sig.replay, 3);
     refAllDeclsRecursive(sig.runtime.program, 3);
     refAllDeclsRecursive(sig.runtime.sysvar, 3);
     refAllDeclsRecursive(sig.vm, 3);
