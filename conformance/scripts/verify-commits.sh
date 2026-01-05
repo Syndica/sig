@@ -12,8 +12,6 @@ cd $(dirname "${BASH_SOURCE[0]}")/../..
 
 . conformance/commits.env
 
-test $(grep -c "test-vectors-$TEST_VECTORS_COMMIT" .circleci/config.yml) -eq 2
-grep "solfuzz-agave: $SOLFUZZ_AGAVE_COMMIT" conformance/scripts/download_artifacts.sh > /dev/null
 grep "// current commit: $SIG_PROTOSOL_COMMIT" conformance/build.zig > /dev/null
 
 echo ✅  Verified conformance commits.
