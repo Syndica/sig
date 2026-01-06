@@ -56,6 +56,7 @@ export ASAN_OPTIONS=detect_leaks=0
 
 echo "Running fixtures"
 solana-test-suite exec-fixtures \
+    --num-processes $NUM_THREADS \
     -t ${PREBUILT_LIB_DIR}/libsolfuzz_sig.so \
-    -o "test_results/" \
+    -o test_results/ \
     -i split-fixtures/ | tee /dev/tty | grep -q "Failed: 0,"
