@@ -395,7 +395,7 @@ pub fn SortedSetUnmanagedCustom(comptime T: type, comptime config: SortedMapConf
             try self.map.put(allocator, item, {});
         }
 
-        pub fn orderedRemove(self: *SortedSetSelf, item: T) bool {
+        fn orderedRemove(self: *SortedSetSelf, item: T) bool {
             return self.map.orderedRemove(item);
         }
 
@@ -484,7 +484,7 @@ pub fn SortedMapCustom(
             return self.unmanaged.getEntry(key);
         }
 
-        pub fn fetchSwapRemove(self: *SortedMapSelf, key: K) ?Unmanaged.Inner.KV {
+        fn fetchSwapRemove(self: *SortedMapSelf, key: K) ?Unmanaged.Inner.KV {
             return self.unmanaged.fetchSwapRemove(key);
         }
 
@@ -584,6 +584,602 @@ pub fn SortedMapUnmanaged(comptime K: type, comptime V: type) type {
     return SortedMapUnmanagedCustom(K, V, .{});
 }
 
+pub fn SortedTreeConfig(comptime Key: type) type {
+    return struct {
+        orderFn: fn (a: anytype, b: anytype) std.math.Order = order,
+        empty_key: Key,
+    };
+}
+
+pub fn SortedTree(
+    comptime Key: type,
+    comptime Value: type,
+    comptime config: SortedTreeConfig(Key),
+) type {
+    return struct {
+        data: std.ArrayListUnmanaged(u8),
+        tree: struct { root: Offset, height: u8, count: u32 },
+
+        const Self = @This();
+        const Offset = u32; // index into self.data
+
+        const B = 32;
+        const max_height = 8; // allows for `pow(B / 2, height)` max entries
+        const EMPTY_KEY = config.empty_key;
+
+        const Path = struct {
+            key: Key,
+            idx_stack: [max_height]u8,
+            node_stack: [max_height]Offset,
+        };
+        const InnerNode = struct { keys: [B]Key, values: [B]Offset };
+        const LeafNode = extern struct {
+            keys: [B]Key,
+            values: [B]Value,
+
+            fn relativeOffset(kind: enum { key, value }, idx: u8) u32 {
+                return switch (kind) {
+                    .key => 0 +
+                        @as(u32, idx) * @sizeOf(Key),
+                    .value => @offsetOf(LeafNode, "values") +
+                        @as(u32, idx) * @sizeOf(Value),
+                };
+            }
+        };
+
+        /// An entry iterator. NOTE: any insertion or deletion performed while iterating will
+        /// invalide the iterator.
+        pub const Iterator = struct {
+            sorted_tree: *const Self,
+            path: Path,
+            end: ?Key = null,
+
+            pub fn next(self: *Iterator) ?struct { *const Key, *Value } {
+                var node_offset: Offset = self.path.node_stack[self.sorted_tree.tree.height];
+
+                while (true) {
+                    const leaf = self.sorted_tree.getPtr(LeafNode, node_offset);
+                    const idx = self.path.idx_stack[self.sorted_tree.tree.height];
+
+                    // at a leaf node, return next value if there is one
+                    if (idx < B and leaf.keys[idx] != EMPTY_KEY) {
+                        // support ending early
+                        if (self.end) |end_key| {
+                            if (leaf.keys[idx] >= end_key) return null;
+                        }
+
+                        const result = .{ &leaf.keys[idx], &leaf.values[idx] };
+                        // NOTE: this allows idx_stack to store indexes which equal B.
+                        // This means that it would be an out of bounds access if used.
+                        self.path.idx_stack[self.sorted_tree.tree.height] += 1;
+                        return result;
+                    }
+
+                    // try to find next leaf node
+                    var found_parent = false;
+                    var h = self.sorted_tree.tree.height;
+                    while (h > 0) {
+                        h -= 1;
+                        const parent_node = self.path.node_stack[h];
+                        const parent_idx = self.path.idx_stack[h];
+                        const parent_inner = self.sorted_tree.getPtr(InnerNode, parent_node);
+
+                        if (parent_idx < B and parent_inner.keys[parent_idx] != EMPTY_KEY) {
+                            node_offset = parent_inner.values[parent_idx + 1];
+                            self.path.idx_stack[h] += 1;
+
+                            // Descend to leftmost leaf
+                            var hh: u8 = h + 1;
+                            while (hh <= self.sorted_tree.tree.height) : (hh += 1) {
+                                self.path.idx_stack[hh] = 0;
+                                self.path.node_stack[hh] = node_offset;
+
+                                if (hh == self.sorted_tree.tree.height) break;
+                                const inner = self.sorted_tree.getPtr(InnerNode, node_offset);
+                                node_offset = inner.values[0];
+                            }
+
+                            found_parent = true;
+                            break;
+                        }
+                    }
+
+                    if (!found_parent) return null; // iteration finished
+                }
+            }
+        };
+
+        pub fn init(allocator: std.mem.Allocator) !Self {
+            var self: Self = .{
+                .data = .empty,
+                .tree = .{ .height = 0, .count = 0, .root = undefined },
+            };
+            self.tree.root = try self.allocNode(allocator, LeafNode);
+
+            return self;
+        }
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.data.deinit(allocator);
+        }
+
+        pub fn get(self: *const Self, key: Key) ?Value {
+            if (key == EMPTY_KEY) unreachable; // likely a mistake
+
+            var path: Path = undefined;
+            const val_ptr = self.lookup(&path, key) orelse return null;
+            return val_ptr.*;
+        }
+
+        pub fn put(self: *Self, allocator: std.mem.Allocator, key: Key, value: Value) !void {
+            if (key == EMPTY_KEY) unreachable; // likely a mistake
+
+            var path: Path = undefined;
+            const val_ptr = self.lookup(&path, key) orelse
+                try self.insert(allocator, &path, key);
+            val_ptr.* = value;
+        }
+
+        pub fn remove(self: *Self, key: Key) bool {
+            var path: Path = undefined;
+            _ = self.lookup(&path, key) orelse return false;
+
+            const leaf_node: Offset = path.node_stack[self.tree.height];
+            const idx: u8 = path.idx_stack[self.tree.height];
+
+            const leaf = self.getPtr(LeafNode, leaf_node);
+
+            const n_used_keys = countLessThan(&leaf.keys, EMPTY_KEY);
+            std.mem.copyForwards(Key, leaf.keys[idx .. B - 1], leaf.keys[idx + 1 ..]);
+            std.mem.copyForwards(Value, leaf.values[idx .. B - 1], leaf.values[idx + 1 ..]);
+            leaf.keys[n_used_keys] = EMPTY_KEY;
+
+            return true;
+        }
+
+        // Iterate over keys from start (inclusive) to end (exclusive)
+        pub fn iterRanged(self: *const Self, maybe_start: ?Key, maybe_end: ?Key) Iterator {
+            var path: Path = undefined;
+
+            if (maybe_start) |start| {
+                _ = self.lookup(&path, start);
+            } else {
+                // Traverse down inner nodes until we reach the lowest LeafNode, recording the path.
+                var node = self.tree.root;
+                for (0..self.tree.height) |h| {
+                    const inner = self.getPtr(InnerNode, node);
+                    const idx = countLeadingEmpty(&inner.keys);
+                    path.idx_stack[h] = idx;
+                    path.node_stack[h] = node;
+                    node = inner.values[idx];
+                }
+
+                // Find lower bound in leaf
+                const leaf = self.getPtr(LeafNode, node);
+                const idx = @min(B - 1, countLeadingEmpty(&leaf.keys));
+
+                path.idx_stack[self.tree.height] = idx;
+                path.node_stack[self.tree.height] = node;
+            }
+
+            return .{
+                .sorted_tree = self,
+                .path = path,
+                .end = maybe_end,
+            };
+        }
+
+        pub fn iter(self: *const Self) Iterator {
+            return self.iterRanged(null, null);
+        }
+
+        fn allocNode(self: *Self, allocator: std.mem.Allocator, Node: type) !Offset {
+            try self.data.ensureUnusedCapacity(allocator, @sizeOf(Node));
+            const new_node_offset: Offset = @intCast(self.data.items.len);
+            self.data.items.len += @sizeOf(Node);
+            const node: *Node = @alignCast(@ptrCast(self.data.items[new_node_offset..][0..@sizeOf(Node)]));
+            node.* = .{ .keys = @splat(EMPTY_KEY), .values = @splat(undefined) };
+            return new_node_offset;
+        }
+
+        fn countLessThan(keys: *const [B]Key, key: Key) u8 {
+            if (@typeInfo(Key) == .int and EMPTY_KEY == std.math.maxInt(Key)) {
+                const key_vec: @Vector(B, Key) = @splat(key);
+                const keys_vec: @Vector(B, Key) = keys.*;
+                const lt_mask: std.meta.Int(.unsigned, B) = @bitCast(keys_vec < key_vec);
+                return @popCount(lt_mask);
+            } else {
+                var i: usize = 0;
+                comptime var len: usize = keys.len;
+                inline while (len > 1) {
+                    const half = len / 2;
+                    len -= half;
+                    i += half * @intFromBool(config.orderFn(keys[i + (half - 1)], key) == .lt);
+                }
+                return i;
+            }
+        }
+
+        fn countLeadingEmpty(keys: []const Key) u8 {
+            std.debug.assert(keys.len <= B);
+
+            var n_empty: u8 = 0;
+            for (keys) |k| {
+                if (k != EMPTY_KEY) break;
+                n_empty += 1;
+            }
+            return n_empty;
+        }
+
+        fn getSlice(self: *const Self, T: type, offset: Offset, len: usize) []T {
+            if (len == 0) return &.{};
+            const bytes = self.data.items[offset..][0 .. @sizeOf(T) * len];
+            return @as([*]T, @ptrCast(@alignCast(bytes.ptr)))[0..len];
+        }
+
+        /// warning: these pointers will be regularly invalidated by arraylist growth
+        fn getPtr(self: *const Self, T: type, offset: Offset) *T {
+            return @ptrCast(self.getSlice(T, offset, 1).ptr);
+        }
+
+        fn lookup(self: *const Self, path: *Path, key: Key) ?*Value {
+            path.key = key;
+
+            // Traverse down inner nodes until we reach a LeafNode, recording the path.
+            var node = self.tree.root;
+            for (0..self.tree.height) |h| {
+                const inner = self.getPtr(InnerNode, node);
+                const idx = countLessThan(&inner.keys, key);
+                path.idx_stack[h] = idx;
+                path.node_stack[h] = node;
+                node = inner.values[idx];
+            }
+
+            // Find lower bound in leaf
+            const leaf = self.getPtr(LeafNode, node);
+            const idx = countLessThan(&leaf.keys, key);
+            path.idx_stack[self.tree.height] = idx;
+            path.node_stack[self.tree.height] = node;
+
+            if (leaf.keys[idx] == key) return &leaf.values[idx];
+
+            return null;
+        }
+
+        fn insertAt(array: anytype, idx: u32, value: @TypeOf(array[0])) void {
+            std.mem.copyBackwards(@TypeOf(array[0]), array[idx + 1 ..], array[idx .. B - 1]);
+            array[idx] = value;
+        }
+
+        fn moveHalf(noalias old_node: anytype, noalias new_node: @TypeOf(old_node)) void {
+            @memset(new_node.keys[B / 2 ..], EMPTY_KEY);
+            @memcpy(new_node.keys[0 .. B / 2], old_node.keys[B / 2 ..]);
+            @memset(old_node.keys[B / 2 ..], EMPTY_KEY);
+            @memcpy(new_node.values[0 .. B / 2], old_node.values[B / 2 ..]);
+        }
+
+        fn insert(self: *Self, allocator: std.mem.Allocator, path: *Path, key: Key) !*Value {
+            const max_entries = comptime std.math.pow(u64, B / 2, max_height);
+            if (self.tree.count == max_entries) return error.SortedTreeTooBig;
+            self.tree.count += 1;
+
+            std.debug.assert(key == path.key);
+
+            var k = path.key;
+            var idx = path.idx_stack[self.tree.height];
+            var node = path.node_stack[self.tree.height];
+
+            const leaf_node: Offset = node;
+
+            // NOTE: here we store an Offset, as the pointer may be invalidated in self.allocNode
+            var value: Offset, var filled: bool = blk: {
+                const leaf: *LeafNode = self.getPtr(LeafNode, leaf_node);
+                std.debug.assertReadable(std.mem.asBytes(leaf[0..1]));
+
+                const value_offset = leaf_node + LeafNode.relativeOffset(.value, idx);
+                const value: Value = self.getPtr(Value, value_offset).*;
+
+                insertAt(&leaf.keys, idx, k);
+                insertAt(&leaf.values, idx, value);
+
+                break :blk .{
+                    value_offset,
+                    leaf.keys[B - 2] != EMPTY_KEY,
+                };
+            };
+
+            if (filled) split: {
+                @branchHint(.unlikely);
+
+                std.debug.print("split (key): {}\n", .{key});
+
+                // The leaf was filled & needs to be split into a new one.
+                var new_node = try self.allocNode(allocator, LeafNode);
+
+                {
+                    const new_leaf = self.getPtr(LeafNode, new_node);
+                    const leaf: *LeafNode = self.getPtr(LeafNode, leaf_node);
+
+                    std.debug.assertReadable(std.mem.asBytes(leaf[0..1]));
+                    std.debug.assertReadable(std.mem.asBytes(new_leaf[0..1]));
+
+                    moveHalf(leaf, new_leaf);
+                    k = leaf.keys[B / 2 - 1];
+                }
+
+                // Branchlessly reassign the value if it was moved to the new_leaf.
+                const new_idx = idx -% (B / 2);
+                const new_value_offset = new_node + LeafNode.relativeOffset(.value, new_idx);
+
+                if (new_idx < idx) value = new_value_offset;
+
+                // Ascend up the tree until we reach either the root or an non-full node
+                var h = @as(u32, self.tree.height) -% 1;
+                while (h != std.math.maxInt(u32)) : (h -%= 1) {
+                    idx = path.idx_stack[h];
+                    node = path.node_stack[h];
+
+                    // Insert to inner node
+                    const inner = self.getPtr(InnerNode, node);
+                    filled = inner.keys[B - 3] != EMPTY_KEY;
+                    insertAt(&inner.keys, idx, k);
+                    insertAt(&inner.values, idx + 1, new_node);
+                    if (!filled) break :split;
+
+                    // The inner was filled & needs to be split into a new one.
+                    new_node = try self.allocNode(allocator, InnerNode);
+                    const new_inner = self.getPtr(InnerNode, new_node);
+                    moveHalf(inner, new_inner);
+
+                    k = inner.keys[(B / 2) - 1];
+                    inner.keys[(B / 2) - 1] = EMPTY_KEY;
+                }
+
+                // Reached the root which needs to be split
+                const new_root = try self.allocNode(allocator, InnerNode);
+                const new_inner = self.getPtr(InnerNode, new_root);
+                new_inner.keys[0] = k;
+                new_inner.values[0] = self.tree.root;
+                new_inner.values[1] = new_node;
+
+                self.tree.root = new_root;
+                self.tree.height += 1;
+            }
+
+            return self.getPtr(Value, value);
+        }
+    };
+}
+
+test "basic treemap" {
+    const allocator = std.testing.allocator;
+
+    var x: SortedTree(i32, u128, .{ .empty_key = std.math.maxInt(i32) }) = try .init(allocator);
+    defer x.deinit(allocator);
+
+    const values: []const struct { i32, u128 } = &.{
+        .{ 1, 9 },
+        .{ 2, 8 },
+        .{ 3, 7 },
+        .{ 4, 6 },
+        .{ 5, 5 },
+        .{ 6, 4 },
+        .{ 7, 3 },
+        .{ 8, 2 },
+        .{ 9, 1 },
+
+        .{ -1, 9 },
+        .{ -2, 8 },
+        .{ -3, 7 },
+        .{ -4, 6 },
+        .{ -5, 5 },
+        .{ -6, 4 },
+        .{ -7, 3 },
+        .{ -8, 2 },
+        .{ -9, 1 },
+
+        .{ 11, 9 },
+        .{ 12, 8 },
+        .{ 13, 7 },
+        .{ 14, 6 },
+        .{ 15, 5 },
+        .{ 16, 4 },
+        .{ 17, 3 },
+        .{ 18, 2 },
+        .{ 19, 1 },
+
+        .{ 21, 9 },
+        .{ 22, 8 },
+        .{ 23, 7 },
+        .{ 24, 6 },
+        .{ 25, 5 },
+        .{ 26, 4 },
+        .{ 27, 3 },
+        .{ 28, 2 },
+        .{ 29, 1 },
+
+        .{ 0, 0 },
+
+        .{ 31, 9 },
+        .{ 32, 8 },
+        .{ 33, 7 },
+        .{ 34, 6 },
+        .{ 35, 5 },
+        .{ 36, 4 },
+        .{ 37, 3 },
+        .{ 38, 2 },
+        .{ 39, 1 },
+
+        .{ 41, 9 },
+        .{ 42, 8 },
+        .{ 43, 7 },
+        .{ 44, 6 },
+        .{ 45, 5 },
+        .{ 46, 4 },
+        .{ 47, 3 },
+        .{ 48, 2 },
+        .{ 49, 1 },
+
+        .{ 51, 9 },
+        .{ 52, 8 },
+        .{ 53, 7 },
+        .{ 54, 6 },
+        .{ 55, 5 },
+        .{ 56, 4 },
+        .{ 57, 3 },
+        .{ 58, 2 },
+        .{ 59, 1 },
+
+        .{ 61, 9 },
+        .{ 62, 8 },
+        .{ 63, 7 },
+        .{ 64, 6 },
+        .{ 65, 5 },
+        .{ 66, 4 },
+        .{ 67, 3 },
+        .{ 68, 2 },
+        .{ 69, 1 },
+
+        .{ 71, 9 },
+        .{ 72, 8 },
+        .{ 73, 7 },
+        .{ 74, 6 },
+        .{ 75, 5 },
+        .{ 76, 4 },
+        .{ 77, 3 },
+        .{ 78, 2 },
+        .{ 79, 1 },
+
+        .{ 81, 9 },
+        .{ 82, 8 },
+        .{ 83, 7 },
+        .{ 84, 6 },
+        .{ 85, 5 },
+        .{ 86, 4 },
+        .{ 87, 3 },
+        .{ 88, 2 },
+        .{ 89, 1 },
+
+        .{ 91, 9 },
+        .{ 92, 8 },
+        .{ 93, 7 },
+        .{ 94, 6 },
+        .{ 95, 5 },
+        .{ 96, 4 },
+        .{ 97, 3 },
+        .{ 98, 2 },
+        .{ 99, 1 },
+
+        .{ 101, 9 },
+        .{ 102, 8 },
+        .{ 103, 7 },
+        .{ 104, 6 },
+        .{ 105, 5 },
+        .{ 106, 4 },
+        .{ 107, 3 },
+        .{ 108, 2 },
+        .{ 109, 1 },
+
+        .{ 101, 9 },
+        .{ 102, 8 },
+        .{ 103, 7 },
+        .{ 104, 6 },
+        .{ 105, 5 },
+        .{ 106, 4 },
+        .{ 107, 3 },
+        .{ 108, 2 },
+        .{ 109, 1 },
+    };
+
+    for (values) |val| {
+        try x.put(allocator, val.@"0", val.@"1");
+    }
+
+    for (values) |val| {
+        try std.testing.expectEqual(val.@"1", x.get(val.@"0"));
+    }
+
+    try std.testing.expect(x.remove(109));
+    try std.testing.expect(x.remove(-9));
+    try std.testing.expect(x.remove(69));
+
+    try std.testing.expect(!x.remove(100000000));
+    try std.testing.expect(!x.remove(-123131231));
+    try std.testing.expect(!x.remove(345635635));
+
+    // try x.put(allocator, -55, 50100);
+    // try x.put(allocator, 0, 0);
+    // try x.put(allocator, 1, 0);
+    // try x.put(allocator, 10, 100);
+    // try x.put(allocator, 112, 1012);
+    // try x.put(allocator, 113, 1013);
+    // try x.put(allocator, 12, 102);
+    // try x.put(allocator, 13, 103);
+    // try x.put(allocator, 20, 200);
+    // try x.put(allocator, 21, 201);
+    // try x.put(allocator, 212, 2012);
+    // try x.put(allocator, 213, 2013);
+    // try x.put(allocator, 22, 202);
+    // try x.put(allocator, 23, 203);
+    // try x.put(allocator, 30, 300);
+    // try x.put(allocator, 31, 301);
+    // try x.put(allocator, 312, 3012);
+    // try x.put(allocator, 313, 3013);
+    // try x.put(allocator, 32, 302);
+    // try x.put(allocator, 33, 303);
+    // try x.put(allocator, 40, 400);
+    // try x.put(allocator, 41, 401);
+    // try x.put(allocator, 412, 4012);
+    // try x.put(allocator, 413, 4013);
+    // try x.put(allocator, 42, 402);
+    // try x.put(allocator, 43, 403);
+    // try x.put(allocator, 50, 500);
+    // try x.put(allocator, 51, 501);
+    // try x.put(allocator, 512, 5012);
+    // try x.put(allocator, 513, 5013);
+    // try x.put(allocator, 52, 502);
+    // try x.put(allocator, 53, 503);
+    // try x.put(allocator, 60, 600);
+    // try x.put(allocator, 61, 601);
+    // try x.put(allocator, 612, 6012);
+    // try x.put(allocator, 613, 6013);
+    // try x.put(allocator, 62, 602);
+    // try x.put(allocator, 63, 603);
+    // try x.put(allocator, 70, 700);
+    // try x.put(allocator, 71, 701);
+    // try x.put(allocator, 712, 7012);
+    // try x.put(allocator, 713, 7013);
+    // try x.put(allocator, 72, 702);
+    // try x.put(allocator, 73, 703);
+    // try x.put(allocator, 80, 800);
+    // try x.put(allocator, 81, 801);
+    // try x.put(allocator, 812, 8012);
+    // try x.put(allocator, 813, 8013);
+    // try x.put(allocator, 82, 802);
+    // try x.put(allocator, 83, 803);
+    // try x.put(allocator, 90, 900);
+    // try x.put(allocator, 912, 9012);
+    // try x.put(allocator, 913, 9013);
+    // try x.put(allocator, 92, 902);
+    // try x.put(allocator, 93, 903);
+
+    var iter = x.iterRanged(0, 100);
+    while (iter.next()) |entry| {
+        const key: *const i32, const value: *u128 = entry;
+
+        std.debug.print("key: {}\n", .{key.*});
+        std.debug.print("value: {}\n", .{value.*});
+    }
+
+    // try x.put(allocator, std.math.maxInt(u64), 1);
+
+    // try std.testing.expectEqual(null, x.get(std.math.maxInt(u64)));
+    // try std.testing.expectEqual(null, x.get(1));
+    // try std.testing.expectEqual(null, x.get(0));
+    // try std.testing.expectEqual(0, x.get(123));
+    // try std.testing.expectEqual(1234, x.get(10));
+}
+
 /// A map that guarantees the contained items will be sorted by key
 /// whenever accessed through public methods like `keys` and `range`.
 ///
@@ -667,7 +1263,7 @@ pub fn SortedMapUnmanagedCustom(
             return self.inner.getEntry(key);
         }
 
-        pub fn fetchSwapRemove(self: *SortedMapSelf, key: K) ?Inner.KV {
+        fn fetchSwapRemove(self: *SortedMapSelf, key: K) ?Inner.KV {
             const item = self.inner.fetchSwapRemove(key);
             if (item != null and !self.resetMaxOnRemove(key)) {
                 self.is_sorted = false;
@@ -733,7 +1329,7 @@ pub fn SortedMapUnmanagedCustom(
             return result;
         }
 
-        pub fn orderedRemove(self: *SortedMapSelf, key: K) bool {
+        fn orderedRemove(self: *SortedMapSelf, key: K) bool {
             const was_removed = self.inner.orderedRemove(key);
             if (was_removed) _ = self.resetMaxOnRemove(key);
             return was_removed;
