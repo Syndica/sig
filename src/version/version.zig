@@ -22,8 +22,8 @@ pub const ClientVersion = struct {
         .client = .sig,
     };
 
-    /// Keep up to date with:
-    /// https://github.com/solana-foundation/solana-validator-client-ids/blob/main/client-ids.csv
+    /// Keep up to date with: https://github.com/solana-foundation/solana-validator-client-ids/blob/main/client-ids.csv
+    /// Currently based on: https://github.com/solana-foundation/solana-validator-client-ids/blob/0fff9f8e016972ff55680d011a4f81922c452f72/client-ids.csv
     const ClientId = enum(u16) {
         solana_labs = 0,
         jito_labs = 1,
