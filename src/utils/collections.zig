@@ -395,7 +395,7 @@ pub fn SortedSetUnmanagedCustom(comptime T: type, comptime config: SortedMapConf
             try self.map.put(allocator, item, {});
         }
 
-        pub fn orderedRemove(self: *SortedSetSelf, item: T) bool {
+        fn orderedRemove(self: *SortedSetSelf, item: T) bool {
             return self.map.orderedRemove(item);
         }
 
@@ -484,7 +484,7 @@ pub fn SortedMapCustom(
             return self.unmanaged.getEntry(key);
         }
 
-        pub fn fetchSwapRemove(self: *SortedMapSelf, key: K) ?Unmanaged.Inner.KV {
+        fn fetchSwapRemove(self: *SortedMapSelf, key: K) ?Unmanaged.Inner.KV {
             return self.unmanaged.fetchSwapRemove(key);
         }
 
@@ -658,6 +658,23 @@ pub fn SortedTree(
             val_ptr.* = value;
         }
 
+        pub fn remove(self: *Self, key: Key) bool {
+            var path: Path = undefined;
+            _ = self.lookup(&path, key) orelse return false;
+
+            const leaf_node: Offset = path.node_stack[self.tree.height];
+            const idx: u8 = path.idx_stack[self.tree.height];
+
+            const leaf = self.getPtr(LeafNode, leaf_node);
+
+            const n_used_keys = countLessThan(&leaf.keys, EMPTY_KEY);
+            std.mem.copyForwards(Key, leaf.keys[idx .. B - 1], leaf.keys[idx + 1 ..]);
+            std.mem.copyForwards(Value, leaf.values[idx .. B - 1], leaf.values[idx + 1 ..]);
+            leaf.keys[n_used_keys] = EMPTY_KEY;
+
+            return true;
+        }
+
         fn next(self: *const Self, path: *Path) ?struct { *const Key, *Value } {
             var node_offset: Offset = path.node_stack[self.tree.height];
 
@@ -722,11 +739,14 @@ pub fn SortedTree(
 
             // Find lower bound in leaf
             const leaf = self.getPtr(LeafNode, node);
-            const idx = countLeadingEmpty(&leaf.keys);
+            const idx = @min(B - 1, countLeadingEmpty(&leaf.keys));
+
             path.idx_stack[self.tree.height] = idx;
             path.node_stack[self.tree.height] = node;
 
             var key: *const Key, var value = .{ &leaf.keys[idx], &leaf.values[idx] };
+            if (leaf.keys[idx] == EMPTY_KEY) key, value = self.next(&path) orelse return;
+
             while (true) {
                 std.debug.print("{}:{}\n", .{ key.*, value.* });
                 key, value = self.next(&path) orelse break;
@@ -758,11 +778,14 @@ pub fn SortedTree(
                 const lt_mask: std.meta.Int(.unsigned, B) = @bitCast(keys_vec < key_vec);
                 return @popCount(lt_mask);
             } else {
-                var lt: u8 = 0;
-                for (keys) |k| {
-                    if (k != EMPTY_KEY and config.orderFn(k, key) == .lt) lt += 1;
+                var i: usize = 0;
+                comptime var len: usize = keys.len;
+                inline while (len > 1) {
+                    const half = len / 2;
+                    len -= half;
+                    i += half * @intFromBool(config.orderFn(keys[i + (half - 1)], key) == .lt);
                 }
-                return lt;
+                return i;
             }
         }
 
@@ -1063,6 +1086,14 @@ test "basic treemap" {
         try std.testing.expectEqual(val.@"1", x.get(val.@"0"));
     }
 
+    try std.testing.expect(x.remove(109));
+    try std.testing.expect(x.remove(-9));
+    try std.testing.expect(x.remove(69));
+
+    try std.testing.expect(!x.remove(100000000));
+    try std.testing.expect(!x.remove(-123131231));
+    try std.testing.expect(!x.remove(345635635));
+
     // try x.put(allocator, -55, 50100);
     // try x.put(allocator, 0, 0);
     // try x.put(allocator, 1, 0);
@@ -1211,7 +1242,7 @@ pub fn SortedMapUnmanagedCustom(
             return self.inner.getEntry(key);
         }
 
-        pub fn fetchSwapRemove(self: *SortedMapSelf, key: K) ?Inner.KV {
+        fn fetchSwapRemove(self: *SortedMapSelf, key: K) ?Inner.KV {
             const item = self.inner.fetchSwapRemove(key);
             if (item != null and !self.resetMaxOnRemove(key)) {
                 self.is_sorted = false;
@@ -1272,7 +1303,7 @@ pub fn SortedMapUnmanagedCustom(
             return result;
         }
 
-        pub fn orderedRemove(self: *SortedMapSelf, key: K) bool {
+        fn orderedRemove(self: *SortedMapSelf, key: K) bool {
             const was_removed = self.inner.orderedRemove(key);
             if (was_removed) _ = self.resetMaxOnRemove(key);
             return was_removed;
