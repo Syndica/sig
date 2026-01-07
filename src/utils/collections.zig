@@ -598,7 +598,7 @@ pub fn SortedTree(
 ) type {
     return struct {
         data: std.ArrayListUnmanaged(u8),
-        tree: struct { root: Offset, height: u32, count: u32 },
+        tree: struct { root: Offset, height: u8, count: u32 },
 
         const Self = @This();
         const Offset = u32; // index into self.data
@@ -613,7 +613,19 @@ pub fn SortedTree(
             node_stack: [max_height]Offset,
         };
         const InnerNode = struct { keys: [B]Key, values: [B]Offset };
-        const LeafNode = struct { keys: [B]Key, values: [B]Value };
+        const LeafNode = extern struct {
+            keys: [B]Key,
+            values: [B]Value,
+
+            fn relativeOffset(kind: enum { key, value }, idx: u8) u32 {
+                return switch (kind) {
+                    .key => 0 +
+                        @as(u32, idx) * @sizeOf(Key),
+                    .value => @offsetOf(LeafNode, "values") +
+                        @as(u32, idx) * @sizeOf(Value),
+                };
+            }
+        };
 
         pub fn init(allocator: std.mem.Allocator) !Self {
             var self: Self = .{
@@ -646,22 +658,60 @@ pub fn SortedTree(
             val_ptr.* = value;
         }
 
-        pub fn iter(self: *const Self) void {
+        fn next(self: *const Self, path: *Path) ?struct { *const Key, *Value } {
+            const height = self.tree.height;
+
+            // Try next key in leaf node
+            {
+                const leaf = self.getPtr(LeafNode, path.node_stack[height]);
+                const i = path.idx_stack[height] + 1;
+                if (i < leaf.keys.len and leaf.keys[i] != EMPTY_KEY) {
+                    path.idx_stack[height] = i;
+                    return .{ &leaf.keys[i], &leaf.values[i] };
+                }
+            }
+
+            // Find next leaf node
+            var level: isize = @as(isize, @intCast(height)) - 1;
+            while (level >= 0) : (level -= 1) {
+                const inner = self.getPtr(InnerNode, path.node_stack[@intCast(level)]);
+                const i = path.idx_stack[@intCast(level)] + 1;
+
+                if (i < inner.values.len and inner.values[i] != EMPTY_KEY) {
+                    // go right once
+                    path.idx_stack[@intCast(level)] = i;
+                    var node = inner.values[i];
+
+                    // then descend left as far as possible
+                    var d = level + 1;
+                    while (d < height) : (d += 1) {
+                        const in = self.getPtr(InnerNode, node);
+                        const j = countLeadingEmpty(&in.keys);
+                        path.idx_stack[@intCast(d)] = j;
+                        path.node_stack[@intCast(d)] = node;
+                        node = in.values[j];
+                    }
+
+                    // land in leaf
+                    const leaf = self.getPtr(LeafNode, node);
+                    const j = countLeadingEmpty(&leaf.keys);
+                    path.idx_stack[height] = j;
+                    path.node_stack[height] = node;
+                    return .{ &leaf.keys[j], &leaf.values[j] };
+                }
+            }
+
+            return null; // end of tree
+        }
+
+        fn iter(self: *const Self) void {
             var path: Path = undefined;
 
-            // Traverse down inner nodes until we reach a LeafNode, recording the path.
+            // Traverse down inner nodes until we reach the lowest LeafNode, recording the path.
             var node = self.tree.root;
             for (0..self.tree.height) |h| {
-                std.debug.print("h: {}\n", .{h});
-
                 const inner = self.getPtr(InnerNode, node);
-                const idx = countEmpty(&inner.keys);
-                std.debug.print("iterr idx: {}\n", .{idx});
-
-                if (idx == B) {
-                    std.debug.print("idx: {}\n", .{idx});
-                    return; // all keys in node are empty?
-                }
+                const idx = countLeadingEmpty(&inner.keys);
                 path.idx_stack[h] = idx;
                 path.node_stack[h] = node;
                 node = inner.values[idx];
@@ -669,16 +719,15 @@ pub fn SortedTree(
 
             // Find lower bound in leaf
             const leaf = self.getPtr(LeafNode, node);
-            const idx = countEmpty(&leaf.keys);
+            const idx = countLeadingEmpty(&leaf.keys);
             path.idx_stack[self.tree.height] = idx;
             path.node_stack[self.tree.height] = node;
 
-            if (idx == B) {
-                std.debug.print("idx (leaf): {}\n", .{idx});
-                return; // all keys in node are empty?
+            var key: *const Key, var value = .{ &leaf.keys[idx], &leaf.values[idx] };
+            while (true) {
+                std.debug.print("{}:{}\n", .{ key.*, value.* });
+                key, value = self.next(&path) orelse break;
             }
-
-            std.debug.print("leaf.values[idx]: {}\n", .{leaf.values[idx]});
         }
 
         fn allocNode(self: *Self, allocator: std.mem.Allocator, Node: type) !Offset {
@@ -700,7 +749,7 @@ pub fn SortedTree(
         }
 
         fn countLessThan(keys: *const [B]Key, key: Key) u8 {
-            if (@typeInfo(Key) == .int and config.empty_key == std.math.maxInt(Key)) {
+            if (@typeInfo(Key) == .int and EMPTY_KEY == std.math.maxInt(Key)) {
                 const key_vec: @Vector(B, Key) = @splat(key);
                 const keys_vec: @Vector(B, Key) = keys.*;
                 const lt_mask: std.meta.Int(.unsigned, B) = @bitCast(keys_vec < key_vec);
@@ -714,14 +763,13 @@ pub fn SortedTree(
             }
         }
 
-        fn countEmpty(keys: *[B]Key) u8 {
+        fn countLeadingEmpty(keys: []const Key) u8 {
+            std.debug.assert(keys.len <= B);
+
             var n_empty: u8 = 0;
             for (keys) |k| {
-                if (k == EMPTY_KEY) {
-                    n_empty += 1;
-                } else {
-                    break;
-                }
+                if (k != EMPTY_KEY) break;
+                n_empty += 1;
             }
             return n_empty;
         }
@@ -732,6 +780,7 @@ pub fn SortedTree(
             return @as([*]T, @ptrCast(@alignCast(bytes.ptr)))[0..len];
         }
 
+        /// warning: these pointers will be regularly invalidated by arraylist growth
         fn getPtr(self: *const Self, T: type, offset: Offset) *T {
             return @ptrCast(self.getSlice(T, offset, 1).ptr);
         }
@@ -783,20 +832,24 @@ pub fn SortedTree(
             var idx = path.idx_stack[self.tree.height];
             var node = path.node_stack[self.tree.height];
 
-            // BUGS! this pointer gets invalidated by allocNode
-            const leaf: *LeafNode = self.getPtr(LeafNode, node);
+            const leaf_node: Offset = node;
 
-            std.debug.assertReadable(std.mem.asBytes(leaf[0..1]));
+            // NOTE: here we store an Offset, as the pointer may be invalidated in self.allocNode
+            var value: Offset, var filled: bool = blk: {
+                const leaf: *LeafNode = self.getPtr(LeafNode, leaf_node);
+                std.debug.assertReadable(std.mem.asBytes(leaf[0..1]));
 
-            // BUGS! this pointer gets invalidated by allocNode
-            var value: *Value = &leaf.values[idx];
-            @prefetch(value, .{});
+                const value_offset = leaf_node + LeafNode.relativeOffset(.value, idx);
+                const value: Value = self.getPtr(Value, value_offset).*;
 
-            var filled = leaf.keys[B - 2] != EMPTY_KEY;
-            insertAt(&leaf.keys, idx, k);
-            insertAt(&leaf.values, idx, value.*);
+                insertAt(&leaf.keys, idx, k);
+                insertAt(&leaf.values, idx, value);
 
-            std.debug.assertReadable(std.mem.asBytes(&leaf.keys));
+                break :blk .{
+                    value_offset,
+                    leaf.keys[B - 2] != EMPTY_KEY,
+                };
+            };
 
             if (filled) split: {
                 @branchHint(.unlikely);
@@ -805,23 +858,23 @@ pub fn SortedTree(
 
                 // The leaf was filled & needs to be split into a new one.
                 var new_node = try self.allocNode(allocator, LeafNode);
-                const new_leaf = self.getPtr(LeafNode, new_node);
 
-                std.debug.assertReadable(std.mem.asBytes(leaf[0..1]));
-                std.debug.assertReadable(std.mem.asBytes(&leaf.keys));
-                std.debug.assertReadable(std.mem.asBytes(&leaf.values));
+                {
+                    const new_leaf = self.getPtr(LeafNode, new_node);
+                    const leaf: *LeafNode = self.getPtr(LeafNode, leaf_node);
 
-                std.debug.assertReadable(std.mem.asBytes(new_leaf[0..1]));
-                std.debug.assertReadable(std.mem.asBytes(&new_leaf.keys));
-                std.debug.assertReadable(std.mem.asBytes(&leaf.values));
+                    std.debug.assertReadable(std.mem.asBytes(leaf[0..1]));
+                    std.debug.assertReadable(std.mem.asBytes(new_leaf[0..1]));
 
-                moveHalf(leaf, new_leaf);
-                k = leaf.keys[B / 2 - 1];
+                    moveHalf(leaf, new_leaf);
+                    k = leaf.keys[B / 2 - 1];
+                }
 
                 // Branchlessly reassign the value if it was moved to the new_leaf.
                 const new_idx = idx -% (B / 2);
-                const new_value = &new_leaf.values[0..].ptr[new_idx];
-                if (new_idx < idx) value = new_value;
+                const new_value_offset = new_node + LeafNode.relativeOffset(.value, new_idx);
+
+                if (new_idx < idx) value = new_value_offset;
 
                 // Ascend up the tree until we reach either the root or an non-full node
                 var h = @as(u32, self.tree.height) -% 1;
@@ -856,7 +909,7 @@ pub fn SortedTree(
                 self.tree.height += 1;
             }
 
-            return value;
+            return self.getPtr(Value, value);
         }
     };
 }
@@ -867,61 +920,97 @@ test "basic treemap" {
     var x: SortedTree(i32, u128, .{ .empty_key = std.math.maxInt(i32) }) = try .init(allocator);
     defer x.deinit(allocator);
 
-    try x.put(allocator, 10, 100);
-    try x.put(allocator, 20, 200);
-    try x.put(allocator, 30, 300);
-    try x.put(allocator, 40, 400);
-    try x.put(allocator, 0, 0);
-    try x.put(allocator, 50, 500);
-    try x.put(allocator, 60, 600);
-    try x.put(allocator, 70, 700);
-    try x.put(allocator, 80, 800);
-    try x.put(allocator, 90, 900);
-    try x.put(allocator, 21, 201);
-    try x.put(allocator, 31, 301);
-    try x.put(allocator, 41, 401);
-    try x.put(allocator, 51, 501);
-    try x.put(allocator, -55, 50100);
-    try x.put(allocator, 61, 601);
-    try x.put(allocator, 1, 0);
-    try x.put(allocator, 71, 701);
-    try x.put(allocator, 81, 801);
-    try x.put(allocator, 12, 102);
-    try x.put(allocator, 22, 202);
-    try x.put(allocator, 32, 302);
-    try x.put(allocator, 42, 402);
-    try x.put(allocator, 52, 502);
-    try x.put(allocator, 62, 602);
-    try x.put(allocator, 72, 702);
-    try x.put(allocator, 82, 802);
-    try x.put(allocator, 92, 902);
-    try x.put(allocator, 13, 103);
-    try x.put(allocator, 23, 203);
-    try x.put(allocator, 33, 303);
-    try x.put(allocator, 43, 403);
-    try x.put(allocator, 53, 503);
-    try x.put(allocator, 63, 603);
-    try x.put(allocator, 73, 703);
-    try x.put(allocator, 83, 803);
-    try x.put(allocator, 93, 903);
-    try x.put(allocator, 112, 1012);
-    try x.put(allocator, 212, 2012);
-    try x.put(allocator, 312, 3012);
-    try x.put(allocator, 412, 4012);
-    try x.put(allocator, 512, 5012);
-    try x.put(allocator, 612, 6012);
-    try x.put(allocator, 712, 7012);
-    try x.put(allocator, 812, 8012);
-    try x.put(allocator, 912, 9012);
-    try x.put(allocator, 113, 1013);
-    try x.put(allocator, 213, 2013);
-    try x.put(allocator, 313, 3013);
-    try x.put(allocator, 413, 4013);
-    try x.put(allocator, 513, 5013);
-    try x.put(allocator, 613, 6013);
-    try x.put(allocator, 713, 7013);
-    try x.put(allocator, 813, 8013);
-    try x.put(allocator, 913, 9013);
+    const values: []const struct { i32, u128 } = &.{
+        .{ 1, 9 },
+        .{ 2, 8 },
+        .{ 3, 7 },
+        .{ 4, 6 },
+        .{ 5, 5 },
+        .{ 6, 4 },
+        .{ 7, 3 },
+        .{ 8, 2 },
+        .{ 9, 1 },
+
+        .{ -1, 9 },
+        .{ -2, 8 },
+        .{ -3, 7 },
+        .{ -4, 6 },
+        .{ -5, 5 },
+        .{ -6, 4 },
+        .{ -7, 3 },
+        .{ -8, 2 },
+        .{ -9, 1 },
+
+        .{ 11, 9 },
+        .{ 12, 8 },
+        .{ 13, 7 },
+        .{ 14, 6 },
+        .{ 15, 5 },
+        .{ 16, 4 },
+        .{ 17, 3 },
+        .{ 18, 2 },
+        .{ 19, 1 },
+    };
+
+    for (values) |val| {
+        try x.put(allocator, val.@"0", val.@"1");
+    }
+
+    // try x.put(allocator, -55, 50100);
+    // try x.put(allocator, 0, 0);
+    // try x.put(allocator, 1, 0);
+    // try x.put(allocator, 10, 100);
+    // try x.put(allocator, 112, 1012);
+    // try x.put(allocator, 113, 1013);
+    // try x.put(allocator, 12, 102);
+    // try x.put(allocator, 13, 103);
+    // try x.put(allocator, 20, 200);
+    // try x.put(allocator, 21, 201);
+    // try x.put(allocator, 212, 2012);
+    // try x.put(allocator, 213, 2013);
+    // try x.put(allocator, 22, 202);
+    // try x.put(allocator, 23, 203);
+    // try x.put(allocator, 30, 300);
+    // try x.put(allocator, 31, 301);
+    // try x.put(allocator, 312, 3012);
+    // try x.put(allocator, 313, 3013);
+    // try x.put(allocator, 32, 302);
+    // try x.put(allocator, 33, 303);
+    // try x.put(allocator, 40, 400);
+    // try x.put(allocator, 41, 401);
+    // try x.put(allocator, 412, 4012);
+    // try x.put(allocator, 413, 4013);
+    // try x.put(allocator, 42, 402);
+    // try x.put(allocator, 43, 403);
+    // try x.put(allocator, 50, 500);
+    // try x.put(allocator, 51, 501);
+    // try x.put(allocator, 512, 5012);
+    // try x.put(allocator, 513, 5013);
+    // try x.put(allocator, 52, 502);
+    // try x.put(allocator, 53, 503);
+    // try x.put(allocator, 60, 600);
+    // try x.put(allocator, 61, 601);
+    // try x.put(allocator, 612, 6012);
+    // try x.put(allocator, 613, 6013);
+    // try x.put(allocator, 62, 602);
+    // try x.put(allocator, 63, 603);
+    // try x.put(allocator, 70, 700);
+    // try x.put(allocator, 71, 701);
+    // try x.put(allocator, 712, 7012);
+    // try x.put(allocator, 713, 7013);
+    // try x.put(allocator, 72, 702);
+    // try x.put(allocator, 73, 703);
+    // try x.put(allocator, 80, 800);
+    // try x.put(allocator, 81, 801);
+    // try x.put(allocator, 812, 8012);
+    // try x.put(allocator, 813, 8013);
+    // try x.put(allocator, 82, 802);
+    // try x.put(allocator, 83, 803);
+    // try x.put(allocator, 90, 900);
+    // try x.put(allocator, 912, 9012);
+    // try x.put(allocator, 913, 9013);
+    // try x.put(allocator, 92, 902);
+    // try x.put(allocator, 93, 903);
 
     x.iter();
 
