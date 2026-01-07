@@ -49,7 +49,7 @@ pub const Metrics = struct {
 
 pub const AvanceReplayConsensusParams = struct {
     tower: *TowerConsensus,
-    gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+    gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
     senders: TowerConsensus.Senders,
     receivers: TowerConsensus.Receivers,
     vote_sockets: ?*const sig.replay.consensus.core.VoteSockets,
@@ -102,7 +102,7 @@ pub fn advanceReplay(
 
         try consensus.tower.process(allocator, .{
             .account_store = replay_state.account_store,
-            .gossip_table = consensus.gossip_table,
+            .gossip_votes = consensus.gossip_votes,
             .ledger = replay_state.ledger,
             .slot_tracker = &replay_state.slot_tracker,
             .epoch_tracker = &replay_state.epoch_tracker,
@@ -845,7 +845,7 @@ test "process runs without error with no replay results" {
     try consensus.process(allocator, .{
         .account_store = .{ .thread_safe_map = &dep_stubs.accountsdb },
         .ledger = &dep_stubs.ledger,
-        .gossip_table = null,
+        .gossip_votes = null,
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = &replay_state.epoch_tracker,
         .progress_map = &replay_state.progress_map,

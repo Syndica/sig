@@ -131,26 +131,8 @@ pub const GossipTable = struct {
     }
 
     pub const InsertResult = union(enum) {
-        InsertedNewEntry,
-        /// the overwritten value
-        OverwroteExistingEntry: GossipData,
-        IgnoredOldValue,
-        IgnoredDuplicateValue,
-        IgnoredTimeout,
-        GossipTableFull,
-
-        pub fn wasInserted(self: InsertResult) bool {
-            return self == .InsertedNewEntry or self == .OverwroteExistingEntry;
-        }
-
-        /// Must be called using the same allocator used to allocate gossip values in order
-        /// to properly de-allocate any returned data (like a previous, now overwritten entry).
-        pub fn deinit(self: InsertResult, allocator: std.mem.Allocator) void {
-            switch (self) {
-                .OverwroteExistingEntry => |existing| existing.deinit(allocator),
-                else => {},
-            }
-        }
+        success: enum { new, replaced },
+        fail: enum { too_old, duplicate, table_full },
     };
 
     pub fn insert(self: *Self, value: SignedGossipData, now: u64) !InsertResult {
@@ -178,7 +160,7 @@ pub const GossipTable = struct {
             // if table is full, return early
             if (self.store.count() >= MAX_TABLE_SIZE) {
                 _ = self.store.swapRemove(label);
-                return .GossipTableFull;
+                return .{ .fail = .table_full };
             }
 
             switch (value.data) {
@@ -222,7 +204,7 @@ pub const GossipTable = struct {
             self.cursor += 1;
 
             // inserted new entry
-            return .InsertedNewEntry;
+            return .{ .success = .new };
 
             // should overwrite existing entry
         } else if (versioned_value.overwrites(&result.entry.getVersionedData())) {
@@ -279,11 +261,12 @@ pub const GossipTable = struct {
             try self.purged.insert(old_entry.value_hash, now);
 
             const overwritten_data = result.entry.getGossipData();
+            overwritten_data.deinit(self.gossip_data_allocator);
             result.entry.setVersionedData(versioned_value);
             self.cursor += 1;
 
             // overwrite existing entry
-            return .{ .OverwroteExistingEntry = overwritten_data };
+            return .{ .success = .replaced };
 
             // do nothing
         } else {
@@ -292,54 +275,11 @@ pub const GossipTable = struct {
             if (current_entry.value_hash.order(&metadata.value_hash) != .eq) {
                 // if hash isnt the same and override() is false then msg is old
                 try self.purged.insert(metadata.value_hash, now);
-                return .IgnoredOldValue;
+                return .{ .fail = .too_old };
             } else {
                 // hash is the same then its a duplicate value which isnt stored
-                return .IgnoredDuplicateValue;
+                return .{ .fail = .duplicate };
             }
-        }
-    }
-
-    pub fn insertWithTimeout(
-        self: *Self,
-        value: SignedGossipData,
-        now: u64,
-        timeout: u64,
-    ) !InsertResult {
-        const value_time = value.wallclock();
-        const is_too_new = value_time > now +| timeout;
-        const is_too_old = value_time < now -| timeout;
-        if (is_too_new or is_too_old) {
-            return .IgnoredTimeout;
-        }
-        return self.insert(value, now);
-    }
-
-    pub fn insertValues(
-        self: *Self,
-        now: u64,
-        values: []const SignedGossipData,
-        timeout: u64,
-    ) !std.ArrayList(InsertResult) {
-        var results = std.ArrayList(InsertResult).init(self.allocator);
-        try self.insertValuesWithResults(now, values, timeout, &results);
-        return results;
-    }
-
-    /// Like insertValues, but it accepts an arraylist whose memory can be reused.
-    pub fn insertValuesWithResults(
-        self: *Self,
-        now: u64,
-        values: []const SignedGossipData,
-        timeout: u64,
-        results: *std.ArrayList(InsertResult),
-    ) !void {
-        results.clearRetainingCapacity();
-        try results.ensureTotalCapacity(values.len);
-
-        for (values) |value| {
-            const result = try self.insertWithTimeout(value, now, timeout);
-            results.appendAssumeCapacity(result);
         }
     }
 
@@ -1162,7 +1102,8 @@ test "insert and get contact_info" {
 
     // test insertion
     const result = try table.insert(gossip_value, 0);
-    try std.testing.expectEqual(.InsertedNewEntry, result);
+    try std.testing.expectEqual(.success, std.meta.activeTag(result));
+    try std.testing.expectEqual(.new, result.success);
 
     // test retrieval
     var buf: [100]ContactInfo = undefined;
@@ -1172,13 +1113,19 @@ test "insert and get contact_info" {
 
     // test re-insertion
     const result2 = try table.insert(gossip_value, 0);
-    try std.testing.expectEqual(.IgnoredDuplicateValue, result2);
+    try std.testing.expectEqual(.fail, std.meta.activeTag(result2));
+    try std.testing.expectEqual(.duplicate, result2.fail);
 
     // test re-insertion with greater wallclock
     gossip_value.data.ContactInfo.wallclock += 2;
     const v = gossip_value.data.ContactInfo.wallclock;
-    const result3 = try table.insert(gossip_value, 0);
-    try std.testing.expectEqual(.OverwroteExistingEntry, std.meta.activeTag(result3));
+    const result3 = blk: {
+        const cloned = try gossip_value.clone(std.testing.allocator);
+        errdefer cloned.deinit(std.testing.allocator);
+        break :blk try table.insert(cloned, 0);
+    };
+    try std.testing.expectEqual(.success, std.meta.activeTag(result3));
+    try std.testing.expectEqual(.replaced, result3.success);
 
     // check retrieval
     nodes = table.getContactInfos(&buf, 0);

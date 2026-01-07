@@ -181,6 +181,9 @@ pub const GossipService = struct {
     metrics: GossipMetrics,
     service_manager: ServiceManager,
 
+    /// Communication with other validator components
+    broker: LocalMessageBroker,
+
     pub const PushMessageQueue = Mux(struct {
         queue: ArrayList(GossipData),
         data_allocator: std.mem.Allocator,
@@ -197,6 +200,7 @@ pub const GossipService = struct {
         my_keypair: KeyPair,
         maybe_entrypoints: ?[]const SocketAddr,
         logger: Logger,
+        broker: LocalMessageBroker,
     ) !*GossipService {
         const self = try allocator.create(GossipService);
         self.* = try GossipService.init(
@@ -206,6 +210,7 @@ pub const GossipService = struct {
             my_keypair,
             maybe_entrypoints,
             .from(logger),
+            broker,
         );
         return self;
     }
@@ -221,6 +226,7 @@ pub const GossipService = struct {
         my_keypair: KeyPair,
         maybe_entrypoints: ?[]const SocketAddr,
         logger: Logger,
+        broker: LocalMessageBroker,
     ) !GossipService {
         // setup channels for communication between threads
         const packet_incoming_channel: *Channel(Packet) = try .create(allocator);
@@ -321,6 +327,7 @@ pub const GossipService = struct {
             .exit_counter = exit_counter,
             .service_manager = service_manager,
             .closed = false,
+            .broker = broker,
         };
     }
 
@@ -1400,13 +1407,7 @@ pub const GossipService = struct {
                 const result = gossip_table.insert(req.value, now) catch {
                     @panic("gossip table insertion failed");
                 };
-                switch (result) {
-                    .InsertedNewEntry => {},
-                    .OverwroteExistingEntry => |x| x.deinit(self.gossip_data_allocator),
-                    else => {
-                        req.value.deinit(self.gossip_data_allocator);
-                    },
-                }
+                if (result == .fail) req.value.deinit(self.gossip_data_allocator);
             }
         }
 
@@ -1551,7 +1552,7 @@ pub const GossipService = struct {
     /// included in the next pull request (so we dont receive them again).
     /// For all pull responses:
     ///     - PullResponseMessage.gossip_values are inserted into the gossip table or added to failed pull hashes and freed
-    pub fn handleBatchPullResponses(
+    fn handleBatchPullResponses(
         self: *GossipService,
         pull_response_messages: []const PullResponseMessage,
     ) !void {
@@ -1569,52 +1570,28 @@ pub const GossipService = struct {
 
             for (pull_response_messages) |*pull_message| {
                 const full_len = pull_message.gossip_values.len;
-                const valid_len = self.filterBasedOnShredVersion(
+                const values_to_insert = self.filterBasedOnShredVersion(
                     gossip_table,
                     pull_message.gossip_values,
                     pull_message.from_pubkey.*,
                 );
-                const invalid_shred_count = full_len - valid_len;
-
-                const insert_results = try gossip_table.insertValues(
-                    now,
-                    pull_message.gossip_values[0..valid_len],
-                    PULL_RESPONSE_TIMEOUT.asMillis(),
-                );
-                defer insert_results.deinit();
-
-                for (insert_results.items) |result| {
-                    switch (result) {
-                        .InsertedNewEntry => self.metrics.pull_response_n_new_inserts.inc(),
-                        .OverwroteExistingEntry => self.metrics.pull_response_n_overwrite_existing.inc(),
-                        .IgnoredOldValue => self.metrics.pull_response_n_old_value.inc(),
-                        .IgnoredDuplicateValue => self.metrics.pull_response_n_duplicate_value.inc(),
-                        .IgnoredTimeout => self.metrics.pull_response_n_timeouts.inc(),
-                        .GossipTableFull => {},
-                    }
-                }
+                const invalid_shred_count = full_len - values_to_insert.len;
                 self.metrics.pull_response_n_invalid_shred_version.add(invalid_shred_count);
 
-                for (insert_results.items, 0..) |result, index| {
-                    if (result.wasInserted()) {
-                        // update the contactInfo (and all other origin values) timestamps of
-                        // successful inserts
-                        const origin = pull_message.gossip_values[index].id();
-                        gossip_table.updateRecordTimestamp(origin, now);
-
-                        switch (result) {
-                            .OverwroteExistingEntry => |old_data| {
-                                // if the value was overwritten, we need to free the old value
-                                old_data.deinit(self.gossip_data_allocator);
-                            },
-                            else => {},
-                        }
-                    } else if (result == .IgnoredTimeout) {
-                        // silently insert the timeout values
-                        // (without updating all associated origin values)
-                        _ = try gossip_table.insert(pull_message.gossip_values[index], now);
-                    } else {
-                        try failed_insert_ptrs.append(&pull_message.gossip_values[index]);
+                for (values_to_insert) |*value| {
+                    const result = try gossip_table.insert(value.*, now);
+                    self.metrics.observeInsertResult(result);
+                    switch (result) {
+                        .success => {
+                            const wallclock = value.wallclock();
+                            const timeout = PULL_RESPONSE_TIMEOUT.asMillis();
+                            // we can't trust this wallclock at all unless it's current
+                            if (wallclock >= now -| timeout and wallclock <= now +| timeout) {
+                                gossip_table.updateRecordTimestamp(value.id(), now);
+                            }
+                            try self.broker.publish(&value.data);
+                        },
+                        .fail => try failed_insert_ptrs.append(value),
                     }
                 }
 
@@ -1692,11 +1669,6 @@ pub const GossipService = struct {
         for (batch_push_messages.items) |push_message| {
             max_inserts_per_push = @max(max_inserts_per_push, push_message.gossip_values.len);
         }
-        var insert_results = try std.ArrayList(GossipTable.InsertResult).initCapacity(
-            self.allocator,
-            max_inserts_per_push,
-        );
-        defer insert_results.deinit();
 
         // insert values and track the failed origins per pubkey
         {
@@ -1713,36 +1685,37 @@ pub const GossipService = struct {
             for (batch_push_messages.items) |*push_message| {
                 // Filtered values are freed
                 const full_len = push_message.gossip_values.len;
-                const valid_len = self.filterBasedOnShredVersion(
+                const values_to_insert = self.filterBasedOnShredVersion(
                     gossip_table,
                     push_message.gossip_values,
                     push_message.from_pubkey.*,
                 );
-                const invalid_shred_count = full_len - valid_len;
-
-                try gossip_table.insertValuesWithResults(
-                    now,
-                    push_message.gossip_values[0..valid_len],
-                    PUSH_MSG_TIMEOUT.asMillis(),
-                    &insert_results,
-                );
+                const invalid_shred_count = full_len - values_to_insert.len;
 
                 var insert_fail_count: u64 = 0;
-                for (insert_results.items) |result| {
+                var failed_origins: ?*AutoArrayHashSet(Pubkey) = null;
+
+                for (values_to_insert) |value| {
+                    const wallclock = value.wallclock();
+                    const timeout = PUSH_MSG_TIMEOUT.asMillis();
+                    if (wallclock < now -| timeout or wallclock > now +| timeout) continue;
+                    const result = try gossip_table.insert(value, now);
+                    self.metrics.observeInsertResult(result);
                     switch (result) {
-                        .InsertedNewEntry => self.metrics.push_message_n_new_inserts.inc(),
-                        .OverwroteExistingEntry => |old_data| {
-                            self.metrics.push_message_n_overwrite_existing.inc();
-                            // if the value was overwritten, we need to free the old value
-                            old_data.deinit(self.gossip_data_allocator);
+                        .success => try self.broker.publish(&value.data),
+                        .fail => {
+                            insert_fail_count += 1;
+                            if (failed_origins == null) {
+                                const lookup_result = try pubkey_to_failed_origins
+                                    .getOrPut(push_message.from_pubkey.*);
+                                if (!lookup_result.found_existing) {
+                                    lookup_result.value_ptr.* = .init(self.allocator);
+                                }
+                                failed_origins = lookup_result.value_ptr;
+                            }
+                            try failed_origins.?.put(value.id(), {});
+                            value.deinit(self.gossip_data_allocator);
                         },
-                        .IgnoredOldValue => self.metrics.push_message_n_old_value.inc(),
-                        .IgnoredDuplicateValue => self.metrics.push_message_n_duplicate_value.inc(),
-                        .IgnoredTimeout => self.metrics.push_message_n_timeouts.inc(),
-                        .GossipTableFull => {},
-                    }
-                    if (!result.wasInserted()) {
-                        insert_fail_count += 1;
                     }
                 }
                 self.metrics.push_message_n_invalid_shred_version.add(invalid_shred_count);
@@ -1757,14 +1730,6 @@ pub const GossipService = struct {
                 if (insert_fail_count == 0) {
                     // dont need to build prune messages
                     continue;
-                }
-                // free failed inserts
-                defer {
-                    for (insert_results.items, 0..) |result, index| {
-                        if (!result.wasInserted()) {
-                            push_message.gossip_values[index].deinit(self.gossip_data_allocator);
-                        }
-                    }
                 }
 
                 // lookup contact info to send a prune message to
@@ -1783,22 +1748,6 @@ pub const GossipService = struct {
                 // track the endpoint
                 const from_gossip_endpoint = from_gossip_addr.toEndpoint();
                 try pubkey_to_endpoint.put(push_message.from_pubkey.*, from_gossip_endpoint);
-
-                // track failed origins
-                var failed_origins = blk: {
-                    const lookup_result = try pubkey_to_failed_origins.getOrPut(push_message.from_pubkey.*);
-                    if (!lookup_result.found_existing) {
-                        lookup_result.value_ptr.* = AutoArrayHashSet(Pubkey).init(self.allocator);
-                    }
-                    break :blk lookup_result.value_ptr;
-                };
-
-                for (insert_results.items, 0..) |result, index| {
-                    if (!result.wasInserted()) {
-                        const origin = push_message.gossip_values[index].id();
-                        try failed_origins.put(origin, {});
-                    }
-                }
             }
         }
 
@@ -1938,31 +1887,25 @@ pub const GossipService = struct {
 
             var gossip_data_unsigned = data.*;
             gossip_data_unsigned.wallclockPtr().* = now;
-            const signed_gossip_data = SignedGossipData.initSigned(&self.my_keypair, gossip_data_unsigned);
+            const signed = SignedGossipData.initSigned(&self.my_keypair, gossip_data_unsigned);
 
-            const result = gossip_table.insert(signed_gossip_data, now) catch |err| break .{ i, err };
+            const result = gossip_table.insert(signed, now) catch |err| break .{ i, err };
 
-            switch (result) {
-                // good and expected
-                .InsertedNewEntry => {},
-                .OverwroteExistingEntry => |*v| v.deinit(deinit_allocator),
-
-                // concerning
-                .IgnoredOldValue => {
+            if (result == .fail) switch (result.fail) {
+                .too_old => {
                     data.deinit(deinit_allocator);
-                    self.logger.warn().logf("DrainPushMessages: Ignored old value ({})", .{signed_gossip_data});
+                    self.logger.warn().logf("DrainPushMessages: Ignored old value ({})", .{signed});
                 },
-                .IgnoredDuplicateValue => {
+                .duplicate => {
                     data.deinit(deinit_allocator);
-                    self.logger.warn().logf("DrainPushMessages: Ignored duplicate value ({})", .{signed_gossip_data});
+                    self.logger.warn().logf(
+                        "DrainPushMessages: Ignored duplicate value ({})",
+                        .{signed},
+                    );
                 },
-
-                // not possible to reach from `insert`.
-                .IgnoredTimeout => unreachable,
-
                 // retry this value
-                .GossipTableFull => break .{ i, {} },
-            }
+                .table_full => break .{ i, {} },
+            };
         } else .{ push_msg_queue.queue.items.len, {} };
 
         // remove the gossip values which were inserted
@@ -2046,17 +1989,17 @@ pub const GossipService = struct {
 
     /// Sorts the incoming `gossip_values` slice to place the valid gossip data
     /// at the start, and returns the number of valid gossip values in that slice.
-    pub fn filterBasedOnShredVersion(
+    fn filterBasedOnShredVersion(
         self: *GossipService,
         gossip_table: *const GossipTable,
         gossip_values: []SignedGossipData,
         sender_pubkey: Pubkey,
-    ) usize {
+    ) []const SignedGossipData {
         // we use swap remove which just reorders the array
         // (order dm), so we just track the new len -- ie, no allocations/frees
         const my_shred_version = self.my_shred_version.load(.monotonic);
         if (my_shred_version == 0) {
-            return gossip_values.len;
+            return gossip_values;
         }
 
         var gossip_values_array = ArrayList(SignedGossipData).fromOwnedSlice(self.allocator, gossip_values);
@@ -2084,7 +2027,35 @@ pub const GossipService = struct {
             }
             i += 1;
         }
-        return gossip_values_array.items.len;
+        return gossip_values_array.items;
+    }
+};
+
+/// Manages messaging of gossip data with other validator components.
+///
+/// Other validator components need to receive gossip data as soon as it arrives
+/// from the network. Those components can register channels with this broker by
+/// populating the respective fields.
+///
+/// The word "local" here means "within the validator," to contrast with gossip
+/// messaging that happens between multiple validators over the network.
+pub const LocalMessageBroker = struct {
+    /// Pushes votes to VoteCollector in consensus.
+    vote_collector: ?*Channel(sig.gossip.data.Vote) = null,
+
+    /// Publishes new gossip data that was just received over the network to the
+    /// appropriate channels.
+    ///
+    /// Any allocated data is cloned using the channel's allocator before sending.
+    fn publish(self: *const LocalMessageBroker, data: *const GossipData) !void {
+        switch (data.*) {
+            .Vote => |vote| if (self.vote_collector) |channel| {
+                const cloned_vote = try vote[1].clone(channel.allocator);
+                errdefer cloned_vote.deinit(channel.allocator);
+                try channel.send(cloned_vote);
+            },
+            else => {},
+        }
     }
 };
 
@@ -2188,6 +2159,23 @@ pub const GossipMetrics = struct {
     pub fn reset(self: *GossipMetrics) void {
         inline for (@typeInfo(GossipMetrics).@"struct".fields) |field| {
             @field(self, field.name).reset();
+        }
+    }
+
+    fn observeInsertResult(
+        metrics: GossipMetrics,
+        result: GossipTable.InsertResult,
+    ) void {
+        switch (result) {
+            .success => |success| switch (success) {
+                .new => metrics.pull_response_n_new_inserts.inc(),
+                .replaced => metrics.pull_response_n_overwrite_existing.inc(),
+            },
+            .fail => |reason| switch (reason) {
+                .too_old => metrics.pull_response_n_old_value.inc(),
+                .duplicate => metrics.pull_response_n_duplicate_value.inc(),
+                .table_full => {},
+            },
         }
     }
 };
@@ -2325,6 +2313,7 @@ test "general coverage" {
         keypair,
         null,
         .noop,
+        .{},
     );
     defer {
         gossip_service.shutdown();
@@ -2357,7 +2346,7 @@ test "general coverage" {
 
         for (0..sig.gossip.service.UNIQUE_PUBKEY_CAPACITY * 2) |_| {
             const value: sig.gossip.SignedGossipData = .initRandom(prng, &keypair);
-            (try gossip_table.insert(value, 1)).deinit(allocator);
+            _ = try gossip_table.insert(value, 1);
         }
     }
 
@@ -2384,6 +2373,7 @@ test "handle pong messages" {
         keypair,
         null,
         .noop,
+        .{},
     );
     defer {
         gossip_service.shutdown();
@@ -2452,6 +2442,7 @@ test "build messages startup and shutdown" {
         my_keypair,
         null,
         .FOR_TESTS,
+        .{},
     );
     defer {
         gossip_service.deinit();
@@ -2508,6 +2499,7 @@ test "handling prune messages" {
         my_keypair,
         null,
         .FOR_TESTS,
+        .{},
     );
     defer {
         gossip_service.shutdown();
@@ -2578,6 +2570,7 @@ test "handling pull responses" {
         my_keypair,
         null,
         .FOR_TESTS,
+        .{},
     );
     defer {
         gossip_service.shutdown();
@@ -2639,6 +2632,7 @@ test "handle old prune & pull request message" {
         my_keypair,
         null,
         .noop,
+        .{},
     );
     defer {
         gossip_service.deinit();
@@ -2735,6 +2729,7 @@ test "handle pull request" {
         my_keypair,
         null,
         .FOR_TESTS,
+        .{},
     );
     defer {
         gossip_service.shutdown();
@@ -2842,6 +2837,7 @@ test "test build prune messages and handle push messages" {
         my_keypair,
         null,
         .FOR_TESTS,
+        .{},
     );
     defer {
         gossip_service.deinit();
@@ -2940,6 +2936,7 @@ fn testBuildPullRequests(
             my_keypair,
             maybe_entrypoints,
             .FOR_TESTS,
+            .{},
         );
     };
     defer {
@@ -2997,6 +2994,7 @@ test "test build push messages" {
         my_keypair,
         null,
         .FOR_TESTS,
+        .{},
     );
     defer {
         gossip_service.shutdown();
@@ -3069,6 +3067,7 @@ test "large push messages" {
         my_keypair,
         null,
         .noop,
+        .{},
     );
     defer {
         gossip_service.shutdown();
@@ -3123,6 +3122,7 @@ test "test packet verification" {
         keypair,
         null,
         .noop,
+        .{},
     );
     defer {
         gossip_service.deinit();
@@ -3239,6 +3239,7 @@ test "process contact info push packet" {
         my_keypair,
         null,
         .FOR_TESTS,
+        .{},
     );
     defer {
         gossip_service.deinit();
@@ -3343,6 +3344,7 @@ test "init, exit, and deinit" {
         my_keypair,
         null,
         .FOR_TESTS,
+        .{},
     );
     defer {
         gossip_service.deinit();
@@ -3373,6 +3375,7 @@ test "leak checked gossip init" {
                 my_keypair,
                 null,
                 .FOR_TESTS,
+                .{},
             );
             gossip_service.shutdown();
             gossip_service.deinit();
@@ -3445,6 +3448,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
             keypair,
             null,
             .noop,
+            .{},
         );
         defer {
             gossip_service.metrics.reset();
@@ -3556,6 +3560,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
             keypair,
             null,
             .from(logger),
+            .{},
         );
         defer {
             gossip_service.metrics.reset();
@@ -3651,4 +3656,27 @@ test "benchmarkGossipService" {
             .n_pull_response = 10,
         },
     });
+}
+
+test LocalMessageBroker {
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0);
+    var vote_collector: Channel(sig.gossip.data.Vote) = try .init(allocator);
+    defer vote_collector.deinit();
+    const broker: LocalMessageBroker = .{ .vote_collector = &vote_collector };
+    var signer: Pubkey = undefined;
+    {
+        var txn = try sig.core.Transaction.initRandom(allocator, rng.random(), null);
+        defer txn.deinit(allocator);
+        signer = txn.msg.account_keys[0];
+        try broker.publish(&.{ .Vote = .{ 0, .{
+            .from = .ZEROES,
+            .transaction = txn,
+            .wallclock = 0,
+            .slot = 0,
+        } } });
+    }
+    const vote = vote_collector.tryReceive().?;
+    defer vote.deinit(allocator);
+    try std.testing.expectEqualSlices(u8, &signer.data, &vote.transaction.msg.account_keys[0].data);
 }

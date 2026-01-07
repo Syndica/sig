@@ -1065,6 +1065,7 @@ fn gossip(
         cfg,
         &app_base,
         &.{},
+        .{},
     );
     defer {
         gossip_service.shutdown();
@@ -1100,10 +1101,20 @@ fn validator(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    var gossip_service = try startGossip(allocator, gossip_value_allocator, cfg, &app_base, &.{
-        .{ .tag = .repair, .port = repair_port },
-        .{ .tag = .turbine_recv, .port = turbine_recv_port },
-    });
+    var gossip_votes = try sig.sync.Channel(sig.gossip.data.Vote).init(allocator);
+    defer gossip_votes.deinit();
+
+    var gossip_service = try startGossip(
+        allocator,
+        gossip_value_allocator,
+        cfg,
+        &app_base,
+        &.{
+            .{ .tag = .repair, .port = repair_port },
+            .{ .tag = .turbine_recv, .port = turbine_recv_port },
+        },
+        .{ .vote_collector = &gossip_votes },
+    );
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
@@ -1309,7 +1320,7 @@ fn validator(
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
         if (maybe_vote_sockets) |*vs| vs else null,
-        &gossip_service.gossip_table_rw,
+        &gossip_votes,
     );
 
     const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
@@ -1533,7 +1544,7 @@ fn shredNetwork(
     var gossip_service = try startGossip(allocator, gossip_value_allocator, cfg, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },
         .{ .tag = .turbine_recv, .port = turbine_recv_port },
-    });
+    }, .{});
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
@@ -1792,7 +1803,14 @@ fn testTransactionSenderService(
     const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
 
     // start gossip (used to get TPU ports of leaders)
-    const gossip_service = try startGossip(allocator, gossip_value_allocator, cfg, &app_base, &.{});
+    const gossip_service = try startGossip(
+        allocator,
+        gossip_value_allocator,
+        cfg,
+        &app_base,
+        &.{},
+        .{},
+    );
     defer {
         gossip_service.deinit();
         allocator.destroy(gossip_service);
@@ -2046,6 +2064,7 @@ fn startGossip(
     app_base: *AppBase,
     /// Extra sockets to publish in gossip, other than the gossip socket
     extra_sockets: []const struct { tag: SocketTag, port: u16 },
+    broker: sig.gossip.service.LocalMessageBroker,
 ) !*GossipService {
     const zone = tracy.Zone.init(@src(), .{ .name = "cmd startGossip" });
     defer zone.deinit();
@@ -2074,6 +2093,7 @@ fn startGossip(
         app_base.my_keypair, // TODO: consider security implication of passing keypair by value
         app_base.entrypoints,
         .from(app_base.logger),
+        broker,
     );
 
     try service.start(.{
@@ -2274,7 +2294,7 @@ const ReplayAndConsensusServiceState = struct {
         self: *ReplayAndConsensusServiceState,
         app_base: *const AppBase,
         vote_sockets: ?*const replay.consensus.core.VoteSockets,
-        gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
+        gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
     ) !std.Thread {
         return try app_base.spawnService(
             "replay",
@@ -2291,7 +2311,7 @@ const ReplayAndConsensusServiceState = struct {
                 self.metrics,
                 if (self.consensus) |*c| replay.service.AvanceReplayConsensusParams{
                     .tower = &c.tower,
-                    .gossip_table = gossip_table,
+                    .gossip_votes = gossip_votes,
                     .senders = c.senders,
                     .receivers = c.receivers,
                     .vote_sockets = vote_sockets,
@@ -2344,6 +2364,7 @@ fn downloadSnapshot(
         cfg,
         &app_base,
         &.{},
+        .{},
     );
     defer {
         gossip_service.shutdown();
