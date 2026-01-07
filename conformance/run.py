@@ -18,6 +18,8 @@ except:
     print(
         textwrap.dedent(
             f"""
+          ERROR - Could not import the testing libraries. Do you have a valid active virtual environment?
+
           To create the environment:
 
               {conformance_dir}/scripts/setup-env.sh
@@ -25,6 +27,7 @@ except:
           To activate the environment:
 
               source {conformance_dir}/env/pyvenv/bin/activate
+
 
           """
         )
@@ -139,6 +142,7 @@ def run_test(vectors, config, pad):
             }
 
     if config.no_run:
+        print(f" │ Fixture(s) generated.")
         return None
 
     if config.run_separately:
