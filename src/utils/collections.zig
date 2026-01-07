@@ -659,49 +659,52 @@ pub fn SortedTree(
         }
 
         fn next(self: *const Self, path: *Path) ?struct { *const Key, *Value } {
-            const height = self.tree.height;
+            var node_offset: Offset = path.node_stack[self.tree.height];
 
-            // Try next key in leaf node
-            {
-                const leaf = self.getPtr(LeafNode, path.node_stack[height]);
-                const i = path.idx_stack[height] + 1;
-                if (i < leaf.keys.len and leaf.keys[i] != EMPTY_KEY) {
-                    path.idx_stack[height] = i;
-                    return .{ &leaf.keys[i], &leaf.values[i] };
+            while (true) {
+                const leaf = self.getPtr(LeafNode, node_offset);
+                const idx = path.idx_stack[self.tree.height];
+
+                // at a leaf node, return next value if there is one
+                if (idx < B and leaf.keys[idx] != EMPTY_KEY) {
+                    const result = .{ &leaf.keys[idx], &leaf.values[idx] };
+                    // NOTE: this allows idx_stack to store indexes which equal B.
+                    // This means that it would be an out of bounds access if used.
+                    path.idx_stack[self.tree.height] += 1;
+                    return result;
                 }
-            }
 
-            // Find next leaf node
-            var level: isize = @as(isize, @intCast(height)) - 1;
-            while (level >= 0) : (level -= 1) {
-                const inner = self.getPtr(InnerNode, path.node_stack[@intCast(level)]);
-                const i = path.idx_stack[@intCast(level)] + 1;
+                // try to find next leaf node
+                var found_parent = false;
+                var h = self.tree.height;
+                while (h > 0) {
+                    h -= 1;
+                    const parent_node = path.node_stack[h];
+                    const parent_idx = path.idx_stack[h];
+                    const parent_inner = self.getPtr(InnerNode, parent_node);
 
-                if (i < inner.values.len and inner.values[i] != EMPTY_KEY) {
-                    // go right once
-                    path.idx_stack[@intCast(level)] = i;
-                    var node = inner.values[i];
+                    if (parent_idx < B and parent_inner.keys[parent_idx] != EMPTY_KEY) {
+                        node_offset = parent_inner.values[parent_idx + 1];
+                        path.idx_stack[h] += 1;
 
-                    // then descend left as far as possible
-                    var d = level + 1;
-                    while (d < height) : (d += 1) {
-                        const in = self.getPtr(InnerNode, node);
-                        const j = countLeadingEmpty(&in.keys);
-                        path.idx_stack[@intCast(d)] = j;
-                        path.node_stack[@intCast(d)] = node;
-                        node = in.values[j];
+                        // Descend to leftmost leaf
+                        var hh: u8 = h + 1;
+                        while (hh <= self.tree.height) : (hh += 1) {
+                            path.idx_stack[hh] = 0;
+                            path.node_stack[hh] = node_offset;
+
+                            if (hh == self.tree.height) break;
+                            const inner = self.getPtr(InnerNode, node_offset);
+                            node_offset = inner.values[0];
+                        }
+
+                        found_parent = true;
+                        break;
                     }
-
-                    // land in leaf
-                    const leaf = self.getPtr(LeafNode, node);
-                    const j = countLeadingEmpty(&leaf.keys);
-                    path.idx_stack[height] = j;
-                    path.node_stack[height] = node;
-                    return .{ &leaf.keys[j], &leaf.values[j] };
                 }
-            }
 
-            return null; // end of tree
+                if (!found_parent) return null; // iteration finished
+            }
         }
 
         fn iter(self: *const Self) void {
@@ -950,10 +953,114 @@ test "basic treemap" {
         .{ 17, 3 },
         .{ 18, 2 },
         .{ 19, 1 },
+
+        .{ 21, 9 },
+        .{ 22, 8 },
+        .{ 23, 7 },
+        .{ 24, 6 },
+        .{ 25, 5 },
+        .{ 26, 4 },
+        .{ 27, 3 },
+        .{ 28, 2 },
+        .{ 29, 1 },
+
+        .{ 31, 9 },
+        .{ 32, 8 },
+        .{ 33, 7 },
+        .{ 34, 6 },
+        .{ 35, 5 },
+        .{ 36, 4 },
+        .{ 37, 3 },
+        .{ 38, 2 },
+        .{ 39, 1 },
+
+        .{ 41, 9 },
+        .{ 42, 8 },
+        .{ 43, 7 },
+        .{ 44, 6 },
+        .{ 45, 5 },
+        .{ 46, 4 },
+        .{ 47, 3 },
+        .{ 48, 2 },
+        .{ 49, 1 },
+
+        .{ 51, 9 },
+        .{ 52, 8 },
+        .{ 53, 7 },
+        .{ 54, 6 },
+        .{ 55, 5 },
+        .{ 56, 4 },
+        .{ 57, 3 },
+        .{ 58, 2 },
+        .{ 59, 1 },
+
+        .{ 61, 9 },
+        .{ 62, 8 },
+        .{ 63, 7 },
+        .{ 64, 6 },
+        .{ 65, 5 },
+        .{ 66, 4 },
+        .{ 67, 3 },
+        .{ 68, 2 },
+        .{ 69, 1 },
+
+        .{ 71, 9 },
+        .{ 72, 8 },
+        .{ 73, 7 },
+        .{ 74, 6 },
+        .{ 75, 5 },
+        .{ 76, 4 },
+        .{ 77, 3 },
+        .{ 78, 2 },
+        .{ 79, 1 },
+
+        .{ 81, 9 },
+        .{ 82, 8 },
+        .{ 83, 7 },
+        .{ 84, 6 },
+        .{ 85, 5 },
+        .{ 86, 4 },
+        .{ 87, 3 },
+        .{ 88, 2 },
+        .{ 89, 1 },
+
+        .{ 91, 9 },
+        .{ 92, 8 },
+        .{ 93, 7 },
+        .{ 94, 6 },
+        .{ 95, 5 },
+        .{ 96, 4 },
+        .{ 97, 3 },
+        .{ 98, 2 },
+        .{ 99, 1 },
+
+        .{ 101, 9 },
+        .{ 102, 8 },
+        .{ 103, 7 },
+        .{ 104, 6 },
+        .{ 105, 5 },
+        .{ 106, 4 },
+        .{ 107, 3 },
+        .{ 108, 2 },
+        .{ 109, 1 },
+
+        .{ 101, 9 },
+        .{ 102, 8 },
+        .{ 103, 7 },
+        .{ 104, 6 },
+        .{ 105, 5 },
+        .{ 106, 4 },
+        .{ 107, 3 },
+        .{ 108, 2 },
+        .{ 109, 1 },
     };
 
     for (values) |val| {
         try x.put(allocator, val.@"0", val.@"1");
+    }
+
+    for (values) |val| {
+        try std.testing.expectEqual(val.@"1", x.get(val.@"0"));
     }
 
     // try x.put(allocator, -55, 50100);
