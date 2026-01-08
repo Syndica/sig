@@ -27,8 +27,8 @@ const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 const initDurableNonceFromHash = sig.runtime.nonce.initDurableNonceFromHash;
 
 pub fn executeTransaction(
-    gpa: Allocator,
-    allocator: Allocator,
+    programs_allocator: Allocator,
+    tmp_allocator: Allocator,
     svm_gateway: *SvmGateway,
     transaction: *const RuntimeTransaction,
 ) !TransactionResult(ProcessedTransaction) {
@@ -38,8 +38,8 @@ pub fn executeTransaction(
     const environment = try svm_gateway.environment();
 
     return try sig.runtime.transaction_execution.loadAndExecuteTransaction(
-        gpa,
-        allocator,
+        programs_allocator,
+        tmp_allocator,
         transaction,
         svm_gateway.params.account_store,
         &environment,

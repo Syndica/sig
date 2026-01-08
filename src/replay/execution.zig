@@ -286,7 +286,7 @@ pub const BatchResult = union(enum) {
 /// Processes a batch of transactions by verifying their signatures and
 /// executing them with the SVM.
 pub fn replayBatch(
-    gpa: Allocator,
+    persistent_allocator: Allocator,
     svm_gateway: *SvmGateway,
     committer: Committer,
     transactions: []const ResolvedTransaction,
@@ -303,21 +303,24 @@ pub fn replayBatch(
     // - stakes_cache
     // - ProgramMap programs
     // Use this for all other allocations.
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = std.heap.ArenaAllocator.init(persistent_allocator);
     defer arena.deinit();
-    const allocator = arena.allocator();
+    const tmp_allocator = arena.allocator();
 
     // TODO: maybe do a MultiArrayList {Hash, ProcessedTransaction, ResolvedTransaction}
 
-    const results = try allocator.alloc(struct { Hash, ProcessedTransaction }, transactions.len);
+    const results = try tmp_allocator.alloc(
+        struct { Hash, ProcessedTransaction },
+        transactions.len,
+    );
     var populated_count: usize = 0;
     defer {
         // Only deinit elements that were actually populated
         // TODO Better way to do this? Instead of tracking populated count. Maybe switch to array list?
         for (results[0..populated_count]) |*result| {
-            result.*[1].deinit(allocator);
+            result.*[1].deinit(tmp_allocator);
         }
-        allocator.free(results);
+        tmp_allocator.free(results);
     }
 
     for (transactions, 0..) |transaction, i| {
@@ -333,7 +336,12 @@ pub fn replayBatch(
 
         const runtime_transaction = transaction.toRuntimeTransaction(hash, compute_budget_details);
 
-        switch (try executeTransaction(gpa, allocator, svm_gateway, &runtime_transaction)) {
+        switch (try executeTransaction(
+            persistent_allocator,
+            tmp_allocator,
+            svm_gateway,
+            &runtime_transaction,
+        )) {
             .ok => |result| {
                 results[i] = .{ hash, result };
                 populated_count += 1;
@@ -342,8 +350,8 @@ pub fn replayBatch(
         }
     }
     try committer.commitTransactions(
-        gpa,
-        allocator,
+        persistent_allocator,
+        tmp_allocator,
         svm_gateway.params.slot,
         transactions,
         results,
