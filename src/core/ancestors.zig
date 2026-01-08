@@ -85,4 +85,15 @@ pub const Ancestors = struct {
             subset_result.addSlotAssumeCapacity(slot);
         }
     }
+
+    // TODO: The need for this function will go away when the Ancestors set is converted
+    // into a bitset-based data structure. For now, we need to cleanup the ancestors and
+    // ensure it is never longer than Unrooted.MAX_SLOTS. If it becomes longer than that,
+    // when we iterate over the ancestors for performing unrooted get()s, we will wrap
+    // around and start getting funky behaviour.
+    pub fn cleanup(self: *Ancestors) void {
+        if (self.ancestors.count() >= sig.accounts_db.Two.Unrooted.MAX_SLOTS) {
+            self.ancestors.orderedRemoveAt(0);
+        }
+    }
 };

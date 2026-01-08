@@ -429,11 +429,8 @@ pub fn newSlotFromParent(
     var ancestors = try parent_constants.ancestors.clone(allocator);
     errdefer ancestors.deinit(allocator);
 
-    // TODO: Ponder on this number some more. We need to move to using a bitset
-    // for ancestors, which will solve the issue where it just keeps growing forever.
-    // The unrooted db also requires us to cap the length of ancestors at below MAX_SLOTS.
-    if (ancestors.ancestors.count() > 512) ancestors.ancestors.orderedRemoveAt(0);
-    try ancestors.ancestors.put(allocator, slot, {});
+    try ancestors.addSlot(allocator, slot);
+    ancestors.cleanup();
 
     var feature_set = try getActiveFeatures(allocator, account_reader.forSlot(&ancestors), slot);
 
