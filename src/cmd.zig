@@ -1688,6 +1688,7 @@ fn validator(
             else
                 null,
             .rpc_hooks = null,
+            .gossip_service = gossip_service,
         },
     );
     defer shred_network_manager.deinit();
@@ -1987,6 +1988,7 @@ fn shredNetwork(
         // No consensus in the standalone mode, so duplicate slots are not reported
         .duplicate_slots_sender = null,
         .rpc_hooks = null,
+        .gossip_service = gossip_service,
     });
     defer shred_network_manager.deinit();
 

@@ -58,6 +58,8 @@ pub const ShredNetworkDependencies = struct {
     rpc_hooks: ?*sig.rpc.Hooks = null,
     /// Optional channel to send duplicate slot notifications to consensus
     duplicate_slots_sender: ?*Channel(Slot),
+    /// Gossip service for broadcasting duplicate shred proofs
+    gossip_service: ?*sig.gossip.GossipService,
 };
 
 /// Start the Shred Network.
@@ -118,7 +120,7 @@ pub fn start(
         .ledger_reader = deps.ledger.reader(),
         .result_writer = deps.ledger.resultWriter(),
         .duplicate_slots_sender = deps.duplicate_slots_sender,
-        .gossip_service = null,
+        .gossip_service = deps.gossip_service,
     });
     try defers.deferCall(ShredReceiver.deinit, .{ shred_receiver, deps.allocator });
     try service_manager.spawn(
@@ -177,6 +179,27 @@ pub fn start(
         shred_tracker,
     );
     try service_manager.spawn("Repair Service", RepairService.run, .{repair_svc});
+
+    // duplicate shred listener (thread)
+    if (deps.duplicate_slots_sender) |dup_sender| {
+        try service_manager.spawn(
+            "Duplicate Shred Listener",
+            shred_network.duplicate_shred_listener.recvLoop,
+            .{
+                deps.allocator,
+                sig.trace.Logger("duplicate_shred_listener").from(deps.logger),
+                shred_network.duplicate_shred_listener.Params{
+                    .exit = deps.exit,
+                    .gossip_table_rw = deps.gossip_table_rw,
+                    .result_writer = deps.ledger.resultWriter(),
+                    .ledger_reader = deps.ledger.reader(),
+                    .duplicate_slots_sender = dup_sender,
+                    .shred_version = deps.my_shred_version,
+                    .epoch_tracker = deps.epoch_tracker,
+                },
+            },
+        );
+    }
 
     if (conf.dump_shred_tracker) {
         try service_manager.spawn("dump shred tracker", struct {
@@ -255,6 +278,7 @@ test "start and stop gracefully" {
         .overwrite_turbine_stake_for_testing = true,
         .epoch_tracker = &epoch_tracker,
         .duplicate_slots_sender = null,
+        .gossip_service = null,
     };
 
     var timer = sig.time.Timer.start();
