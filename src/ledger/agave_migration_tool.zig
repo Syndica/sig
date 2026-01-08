@@ -303,10 +303,14 @@ test "slotmeta encode/decode" {
     defer sig.bincode.free(allocator, their_meta_deserialized);
 
     const our_meta_from_their_meta_from_ours: sig_meta.SlotMeta =
-        their_meta_from_ours.intoOurs(allocator);
+        try their_meta_from_ours.intoOurs(allocator);
     defer our_meta_from_their_meta_from_ours.completed_data_indexes.deinit();
 
     try std.testing.expectEqualSlices(u8, their_meta, round_tripped_bytes);
     try std.testing.expectEqualDeep(their_meta_deserialized, their_meta_from_ours);
-    try std.testing.expectEqual(our_meta_from_their_meta_from_ours, our_meta_deserialized);
+    try std.testing.expect(sig.utils.types.eqlCustom(
+        our_meta_from_their_meta_from_ours,
+        our_meta_deserialized,
+        .{},
+    ));
 }

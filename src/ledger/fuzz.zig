@@ -59,6 +59,7 @@ fn createLedgerDB() !LedgerDB {
         allocator,
         .noop,
         ledger_path,
+        false,
     );
 }
 

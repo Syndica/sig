@@ -1715,7 +1715,7 @@ test getFirstDuplicateProof {
         .{ sig.TEST_STATE_DIR ++ "blockstore/insert_shred", "getFirstDuplicateProof" },
     );
     try sig.ledger.tests.freshDir(path);
-    var db = try LedgerDB.open(allocator, .FOR_TESTS, path);
+    var db = try LedgerDB.open(allocator, .FOR_TESTS, path, false);
     defer db.deinit();
 
     var self = ledger_mod.Ledger{
