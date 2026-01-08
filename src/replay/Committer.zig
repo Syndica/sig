@@ -32,8 +32,8 @@ replay_votes_sender: ?*Channel(ParsedVote),
 
 pub fn commitTransactions(
     self: Committer,
-    gpa: Allocator,
-    allocator: Allocator,
+    persistent_allocator: Allocator,
+    temp_allocator: Allocator,
     slot: Slot,
     transactions: []const ResolvedTransaction,
     tx_results: []const struct { Hash, ProcessedTransaction },
@@ -46,7 +46,7 @@ pub fn commitTransactions(
     var rng = std.Random.DefaultPrng.init(slot + transactions.len);
 
     var accounts_to_store = sig.utils.collections.PubkeyMap(LoadedAccount).empty;
-    defer accounts_to_store.deinit(allocator);
+    defer accounts_to_store.deinit(temp_allocator);
 
     var signature_count: usize = 0;
     var rent_collected: u64 = 0;
@@ -61,7 +61,7 @@ pub fn commitTransactions(
         signature_count += transaction.transaction.signatures.len;
 
         for (tx_result.writes.constSlice()) |*account| {
-            try accounts_to_store.put(allocator, account.pubkey, account.*);
+            try accounts_to_store.put(temp_allocator, account.pubkey, account.*);
         }
         transaction_fees += tx_result.fees.transaction_fee;
         priority_fees += tx_result.fees.prioritization_fee;
@@ -75,11 +75,14 @@ pub fn commitTransactions(
             // Only send votes if consensus is enabled (sender exists)
             if (self.replay_votes_sender) |sender| {
                 if (tx_result.err == null and isSimpleVoteTransaction(transaction.transaction)) {
-                    if (try parseSanitizedVoteTransaction(gpa, transaction)) |parsed| {
+                    if (try parseSanitizedVoteTransaction(
+                        persistent_allocator,
+                        transaction,
+                    )) |parsed| {
                         if (parsed.vote.lastVotedSlot() != null) {
-                            sender.send(parsed) catch parsed.deinit(gpa);
+                            sender.send(parsed) catch parsed.deinit(persistent_allocator);
                         } else {
-                            parsed.deinit(gpa);
+                            parsed.deinit(persistent_allocator);
                         }
                     }
                 }
@@ -96,7 +99,7 @@ pub fn commitTransactions(
             defer status_cache_zone.deinit();
 
             try self.status_cache.insert(
-                gpa,
+                persistent_allocator,
                 rng.random(),
                 recent_blockhash,
                 &message_hash.data,
@@ -111,7 +114,7 @@ pub fn commitTransactions(
             defer status_cache_zone.deinit();
 
             try self.status_cache.insert(
-                gpa,
+                persistent_allocator,
                 rng.random(),
                 recent_blockhash,
                 &signature.toBytes(),
@@ -129,7 +132,7 @@ pub fn commitTransactions(
 
     for (accounts_to_store.values()) |account| {
         try self.stakes_cache.checkAndStore(
-            gpa,
+            persistent_allocator,
             account.pubkey,
             account.account,
             self.new_rate_activation_epoch,

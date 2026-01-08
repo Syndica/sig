@@ -28,7 +28,6 @@ pub const InstructionInfo = struct {
     /// transaction execution. We construct the account metas before transaction execution, so using an
     /// array of size MAX_ACCOUNTS_METAS + 1 allows us to check the account metas length during transaction
     /// execution and return the appropriate error.
-    // pub const AccountMetas = std.BoundedArray(AccountMeta, MAX_ACCOUNT_METAS + 1);
     pub const AccountMetas = std.ArrayListUnmanaged(AccountMeta);
 
     pub const ProgramMeta = struct {

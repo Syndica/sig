@@ -148,8 +148,8 @@ pub fn TransactionResult(comptime T: type) type {
 
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L323-L324
 pub fn loadAndExecuteTransaction(
-    gpa: std.mem.Allocator,
-    allocator: std.mem.Allocator,
+    programs_allocator: std.mem.Allocator,
+    tmp_allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
     account_store: SlotAccountStore,
     env: *const TransactionExecutionEnvironment,
@@ -174,7 +174,7 @@ pub fn loadAndExecuteTransaction(
     }
 
     const maybe_nonce_info = switch (try sig.runtime.check_transactions.checkAge(
-        allocator,
+        tmp_allocator,
         transaction,
         account_store.reader(),
         env.blockhash_queue,
@@ -186,7 +186,7 @@ pub fn loadAndExecuteTransaction(
         .err => |e| return .{ .err = e },
     };
     var nonce_account_is_owned = true;
-    defer if (nonce_account_is_owned) if (maybe_nonce_info) |n| allocator.free(n.account.data);
+    defer if (nonce_account_is_owned) if (maybe_nonce_info) |n| tmp_allocator.free(n.account.data);
 
     const compute_budget_limits = switch (compute_budget_program.sanitize(
         transaction.compute_budget_instruction_details,
@@ -206,7 +206,7 @@ pub fn loadAndExecuteTransaction(
 
     nonce_account_is_owned = false;
     const fees, var rollbacks = switch (try sig.runtime.check_transactions.checkFeePayer(
-        allocator,
+        tmp_allocator,
         transaction,
         account_store,
         &compute_budget_limits,
@@ -219,11 +219,11 @@ pub fn loadAndExecuteTransaction(
         .ok => |x| x,
         .err => |e| return .{ .err = e },
     };
-    errdefer for (rollbacks.slice()) |r| r.deinit(allocator);
+    errdefer for (rollbacks.slice()) |r| r.deinit(tmp_allocator);
 
     var loaded_accounts = switch (try account_loader.loadTransactionAccounts(
         account_store.reader(),
-        allocator,
+        tmp_allocator,
         transaction,
         env.rent_collector,
         env.feature_set,
@@ -233,7 +233,7 @@ pub fn loadAndExecuteTransaction(
         .ok => |x| x,
         .err => |err| {
             var writes = ProcessedTransaction.Writes{};
-            errdefer while (writes.pop()) |item| item.account.deinit(allocator);
+            errdefer while (writes.pop()) |item| item.account.deinit(tmp_allocator);
             var loaded_accounts_data_size: u32 = 0;
             while (rollbacks.pop()) |rollback| {
                 const item = writes.addOne() catch unreachable;
@@ -251,10 +251,10 @@ pub fn loadAndExecuteTransaction(
             } };
         },
     };
-    errdefer for (loaded_accounts.accounts.slice()) |acct| acct.deinit(allocator);
+    errdefer for (loaded_accounts.accounts.slice()) |acct| acct.deinit(tmp_allocator);
 
     for (loaded_accounts.accounts.slice()) |account| try program_loader.loadIfProgram(
-        gpa,
+        programs_allocator,
         program_map,
         account.pubkey,
         &account.account,
@@ -264,7 +264,7 @@ pub fn loadAndExecuteTransaction(
     );
 
     const executed_transaction = try executeTransaction(
-        allocator,
+        tmp_allocator,
         transaction,
         loaded_accounts.accounts.slice(),
         &compute_budget_limits,
@@ -282,14 +282,14 @@ pub fn loadAndExecuteTransaction(
             if (is_writable)
                 writes.append(account) catch unreachable
             else
-                account.deinit(allocator);
+                account.deinit(tmp_allocator);
         }
-        while (rollbacks.pop()) |rollback| rollback.deinit(allocator);
+        while (rollbacks.pop()) |rollback| rollback.deinit(tmp_allocator);
     } else {
         while (rollbacks.pop()) |account| writes.append(account) catch unreachable;
         if (config.failed_accounts) |f|
             f.* = loaded_accounts.accounts
-        else for (loaded_accounts.accounts.slice()) |a| a.deinit(allocator);
+        else for (loaded_accounts.accounts.slice()) |a| a.deinit(tmp_allocator);
     }
 
     for (writes.slice()) |*acct| try wrapDB(account_store.put(acct.pubkey, acct.account));
