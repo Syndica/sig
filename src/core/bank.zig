@@ -578,7 +578,7 @@ pub fn ancestorsRandom(
     allocator: std.mem.Allocator,
     max_list_entries: usize,
 ) std.mem.Allocator.Error!Ancestors {
-    var ancestors = Ancestors{};
+    var ancestors: Ancestors = .{};
     errdefer ancestors.deinit(allocator);
 
     for (0..random.uintAtMost(usize, max_list_entries)) |_| {

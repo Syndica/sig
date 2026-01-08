@@ -482,7 +482,7 @@ fn testSchedulerForBatches(
         const future = try allocator.create(ReplaySlotFuture);
         errdefer allocator.destroy(future);
 
-        const committer = try state.committer(allocator);
+        const committer = state.committer();
         const resolved_transactions = try resolved.toOwnedSlice(allocator);
 
         const svm_params = state.svmParams();
@@ -699,6 +699,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
 
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
+    const account_store = state.accountStore();
 
     // Keys
     const node_kp = try sig.identity.KeyPair.generateDeterministic(@splat(11));
@@ -738,7 +739,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
         account.lamports = rent.minimumBalance(account.data.len);
 
         // Insert account into the test map so committer can update stakes
-        try state.account_map.put(state.slot, vote_pubkey, account);
+        try account_store.put(state.slot, vote_pubkey, account);
     }
 
     // 2) Make a Vote instruction (includes SlotHashes and Clock accounts)
@@ -772,7 +773,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
         const rent = sig.runtime.sysvar.Rent.INIT;
         sysvar_account.lamports = rent.minimumBalance(sysvar_account.data.len);
         sysvar_account.owner = sig.runtime.sysvar.OWNER_ID;
-        try state.account_map.put(state.slot, SlotHashes.ID, sysvar_account);
+        try account_store.put(state.slot, SlotHashes.ID, sysvar_account);
         allocator.free(sysvar_account.data);
     }
 
@@ -793,7 +794,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
         const rent = sig.runtime.sysvar.Rent.INIT;
         sysvar_account.lamports = rent.minimumBalance(sysvar_account.data.len);
         sysvar_account.owner = sig.runtime.sysvar.OWNER_ID;
-        try state.account_map.put(state.slot, sig.runtime.sysvar.Clock.ID, sysvar_account);
+        try account_store.put(state.slot, sig.runtime.sysvar.Clock.ID, sysvar_account);
         allocator.free(sysvar_account.data);
     }
 
@@ -803,13 +804,13 @@ test "TransactionScheduler: sends replay vote after successful execution" {
         vote_prog_acc.lamports = 1;
         vote_prog_acc.owner = sig.runtime.ids.NATIVE_LOADER_ID;
         vote_prog_acc.executable = true;
-        try state.account_map.put(state.slot, sig.runtime.program.vote.ID, vote_prog_acc);
+        try account_store.put(state.slot, sig.runtime.program.vote.ID, vote_prog_acc);
 
         var native_loader_acc = sig.runtime.AccountSharedData.NEW;
         native_loader_acc.lamports = 1;
         native_loader_acc.owner = sig.runtime.ids.NATIVE_LOADER_ID;
         native_loader_acc.executable = true;
-        try state.account_map.put(state.slot, sig.runtime.ids.NATIVE_LOADER_ID, native_loader_acc);
+        try account_store.put(state.slot, sig.runtime.ids.NATIVE_LOADER_ID, native_loader_acc);
     }
 
     // Insert Rent sysvar account
@@ -822,7 +823,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
         _ = try sig.bincode.writeToSlice(sysvar_account.data, rent, .{});
         sysvar_account.lamports = rent.minimumBalance(sysvar_account.data.len);
         sysvar_account.owner = sig.runtime.sysvar.OWNER_ID;
-        try state.account_map.put(state.slot, sig.runtime.sysvar.Rent.ID, sysvar_account);
+        try account_store.put(state.slot, sig.runtime.sysvar.Rent.ID, sysvar_account);
         allocator.free(sysvar_account.data);
     }
 
