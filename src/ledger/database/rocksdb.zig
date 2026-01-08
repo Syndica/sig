@@ -62,9 +62,9 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                     rocks.DBOptions{
                         .create_if_missing = true,
                         .create_missing_column_families = true,
-                        .open_read_only = open_read_only,
                     },
                     column_family_descriptions,
+                    open_read_only,
                 },
             );
             errdefer db.deinit();
