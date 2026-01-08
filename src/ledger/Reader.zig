@@ -1488,6 +1488,11 @@ pub fn lowestSlot(self: *const Reader) !Slot {
     return self.ledger.max_root.load(.monotonic);
 }
 
+/// Returns the highest rooted slot known to the ledger
+pub fn maxRoot(self: *const Reader) Slot {
+    return self.ledger.max_root.load(.monotonic);
+}
+
 /// Returns the highest available slot in the ledger
 ///
 /// Analogous to [highest_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L4100)
