@@ -170,3 +170,82 @@ pub fn slotModifiedIterator(self: *Db, slot: Slot) ?SlotModifiedIterator {
         .cursor = 0,
     };
 }
+
+const testing = struct {
+    fn convert(account: Account) AccountSharedData {
+        return .{
+            .data = account.data.owned_allocation,
+            .executable = account.executable,
+            .lamports = account.lamports,
+            .owner = account.owner,
+            .rent_epoch = account.rent_epoch,
+        };
+    }
+};
+
+test "many slots, many accounts" {
+    const allocator = std.testing.allocator;
+
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const random = prng.random();
+
+    var test_state = try Db.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    var ancestors: Ancestors = .EMPTY;
+    defer ancestors.deinit(allocator);
+
+    for (0..Unrooted.MAX_SLOTS * 2) |i| {
+        defer if (i > 50) db.onSlotRooted(i, &ancestors); // start rooting after 50 slots
+
+        const random_account = try Account.initRandom(allocator, random, 30);
+        defer random_account.deinit(allocator);
+        const random_pubkey = Pubkey.initRandom(random);
+
+        try ancestors.addSlot(allocator, i);
+        ancestors.cleanup();
+
+        try db.put(i, random_pubkey, testing.convert(random_account));
+    }
+    // Ensure we end up with a clean slate, not leaking any entries.
+    try ancestors.addSlot(allocator, Unrooted.MAX_SLOTS * 2);
+    ancestors.cleanup();
+    db.onSlotRooted(Unrooted.MAX_SLOTS * 2, &ancestors);
+    for (db.unrooted.slots) |entry| {
+        std.debug.assert(entry.is_empty.load(.acquire));
+    }
+}
+
+test "many slots, same account" {
+    const allocator = std.testing.allocator;
+
+    var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const random = prng.random();
+
+    var test_state = try Db.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    var ancestors: Ancestors = .EMPTY;
+    defer ancestors.deinit(allocator);
+
+    const random_pubkey = Pubkey.initRandom(random);
+    for (0..Unrooted.MAX_SLOTS * 2) |i| {
+        defer if (i % 64 == 0) db.onSlotRooted(i, &ancestors); // root every 64 slots
+
+        const random_account = try Account.initRandom(allocator, random, 30);
+        defer random_account.deinit(allocator);
+
+        try ancestors.addSlot(allocator, i);
+        ancestors.cleanup();
+
+        try db.put(i, random_pubkey, testing.convert(random_account));
+    }
+    try ancestors.addSlot(allocator, Unrooted.MAX_SLOTS * 2);
+    ancestors.cleanup();
+    db.onSlotRooted(Unrooted.MAX_SLOTS * 2, &ancestors);
+    for (db.unrooted.slots) |entry| {
+        std.debug.assert(entry.is_empty.load(.acquire));
+    }
+}
