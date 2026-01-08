@@ -3,8 +3,6 @@ const sig = @import("../sig.zig");
 
 const ledger = sig.ledger;
 
-const Pubkey = sig.core.Pubkey;
-const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 
 const sig_meta = ledger.meta;
@@ -42,7 +40,10 @@ const agave_meta = struct {
             };
         }
 
-        fn intoOurs(self: *const agave_meta.SlotMeta, allocator: std.mem.Allocator) !sig_meta.SlotMeta {
+        fn intoOurs(
+            self: *const agave_meta.SlotMeta,
+            allocator: std.mem.Allocator,
+        ) !sig_meta.SlotMeta {
             const child_slots: std.ArrayList(Slot) = .{
                 .items = self.child_slots,
                 .capacity = self.child_slots.len,
@@ -301,7 +302,8 @@ test "slotmeta encode/decode" {
     );
     defer sig.bincode.free(allocator, their_meta_deserialized);
 
-    const our_meta_from_their_meta_from_ours: sig_meta.SlotMeta = their_meta_from_ours.intoOurs(allocator);
+    const our_meta_from_their_meta_from_ours: sig_meta.SlotMeta =
+        their_meta_from_ours.intoOurs(allocator);
     defer our_meta_from_their_meta_from_ours.completed_data_indexes.deinit();
 
     try std.testing.expectEqualSlices(u8, their_meta, round_tripped_bytes);
