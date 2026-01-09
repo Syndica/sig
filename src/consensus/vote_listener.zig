@@ -1396,12 +1396,14 @@ pub const vote_parser = struct {
             const first_ix = message.instructions[0];
 
             var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
-            var account_metas: sig.runtime.InstructionInfo.AccountMetas =
-                try .initCapacity(allocator, 4);
-            defer account_metas.deinit(allocator);
 
             // Vote instructions have 4 accounts, below MAX_ACCOUNT_METAS (256)
-            std.debug.assert(first_ix.account_indexes.len == 4);
+            const n_instr_accounts = 4;
+            var account_metas: sig.runtime.InstructionInfo.AccountMetas =
+                try .initCapacity(allocator, n_instr_accounts);
+            defer account_metas.deinit(allocator);
+
+            std.debug.assert(first_ix.account_indexes.len == n_instr_accounts);
             for (first_ix.account_indexes, 0..) |acct_index_u8, i| {
                 const acct_index: usize = acct_index_u8;
                 if (dedupe_map[i] == 0xff)
