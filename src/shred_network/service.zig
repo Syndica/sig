@@ -1,5 +1,4 @@
 const std = @import("std");
-const network = @import("zig-network");
 const sig = @import("../sig.zig");
 const shred_network = @import("lib.zig");
 
@@ -7,7 +6,6 @@ const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.Random;
-const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;
 const EpochContextManager = sig.adapter.EpochContextManager;
@@ -186,9 +184,9 @@ pub fn start(
     return service_manager;
 }
 
-fn bindUdpReusable(port: u16) !Socket {
-    var socket = try Socket.create(network.AddressFamily.ipv4, network.Protocol.udp);
-    try sig.net.enablePortReuse(&socket, true);
+fn bindUdpReusable(port: u16) !sig.net.UdpSocket {
+    var socket = try sig.net.UdpSocket.create(.ipv4);
+    try socket.enablePortReuse(true);
     try socket.bindToPort(port);
     try socket.setReadTimeout(sig.net.SOCKET_TIMEOUT_US);
     return socket;
