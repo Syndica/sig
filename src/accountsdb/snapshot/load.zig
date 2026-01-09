@@ -131,6 +131,7 @@ pub fn loadSnapshot2(
             allocator,
             logger,
             rooted_db,
+            snapshot_dir,
             path.constSlice(),
             .{ .slot = snapshot_files.full.slot, .hash = snapshot_files.full.hash },
             .{ .snapshot_type = .full, .put_accounts = !db_has_entries },
@@ -152,6 +153,7 @@ pub fn loadSnapshot2(
             allocator,
             logger,
             rooted_db,
+            snapshot_dir,
             incremental_path.constSlice(),
             info.slotAndHash(),
             .{ .snapshot_type = .incremental, .put_accounts = !db_has_entries },
@@ -258,6 +260,7 @@ fn insertFromSnapshotArchive(
     allocator: std.mem.Allocator,
     logger: Logger,
     rooted_db: *Rooted,
+    snapshot_dir: std.fs.Dir,
     snapshot_path: []const u8,
     slot_and_hash: sig.core.hash.SlotAndHash,
     options: struct {
@@ -271,11 +274,11 @@ fn insertFromSnapshotArchive(
     var timer = try std.time.Timer.start();
     logger.info().logf("loading snapshot archive: {s}", .{snapshot_path});
     defer logger.info().logf(
-        "  loaded snapshot archive in {}",
+        "loaded snapshot archive in {}",
         .{std.fmt.fmtDuration(timer.read())},
     );
 
-    const file = try std.fs.cwd().openFile(snapshot_path, .{ .mode = .read_only });
+    const file = try snapshot_dir.openFile(snapshot_path, .{ .mode = .read_only });
     defer file.close();
 
     // calling posix.mmap on a zero-sized file will cause illegal behaviour
@@ -312,6 +315,8 @@ fn insertFromSnapshotArchive(
 
     // read version file
     {
+        logger.debug().logf("  loading version file", .{});
+
         const tar_file: @TypeOf(tar_iter).File = while (true) {
             const tar_file = (try tar_iter.next()) orelse return error.MissingFile;
             if (tar_file.kind == .file) break tar_file;
@@ -334,6 +339,8 @@ fn insertFromSnapshotArchive(
         const inner_zone = tracy.Zone.init(@src(), .{ .name = "Snapshot.readManifest" });
         defer inner_zone.deinit();
 
+        logger.debug().logf("  loading manifest file", .{});
+
         const tar_file: @TypeOf(tar_iter).File = while (true) {
             const tar_file = (try tar_iter.next()) orelse return error.MissingFile;
             if (tar_file.kind == .file) break tar_file;
@@ -352,6 +359,8 @@ fn insertFromSnapshotArchive(
         const inner_zone = tracy.Zone.init(@src(), .{ .name = "Snapshot.readStatusCache" });
         defer inner_zone.deinit();
 
+        logger.debug().logf("  loading status cache file", .{});
+
         const tar_file: @TypeOf(tar_iter).File = while (true) {
             const tar_file = (try tar_iter.next()) orelse return error.MissingFile;
             if (tar_file.kind == .file) break tar_file;
@@ -369,6 +378,8 @@ fn insertFromSnapshotArchive(
     if (expected_account_files > 0 and options.put_accounts) {
         const inner_zone = tracy.Zone.init(@src(), .{ .name = "Snapshot.readAccountFiles" });
         defer inner_zone.deinit();
+
+        logger.debug().logf("  loading {} account files", .{expected_account_files});
 
         rooted_db.beginTransaction();
         defer rooted_db.commitTransaction();
@@ -422,7 +433,8 @@ fn insertFromSnapshotArchive(
                         lamports: u64,
                         rent_epoch: sig.core.Epoch,
                         owner: Pubkey,
-                        executable: u64,
+                        executable: u8,
+                        _padding: [7]u8,
                         hash: Hash,
                     },
                     .little,
