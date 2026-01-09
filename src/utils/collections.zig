@@ -627,6 +627,68 @@ pub fn SortedTree(
             }
         };
 
+        /// An entry iterator. NOTE: any insertion or deletion performed while iterating will
+        /// invalide the iterator.
+        pub const Iterator = struct {
+            sorted_tree: *const Self,
+            path: Path,
+            end: ?Key = null,
+
+            pub fn next(self: *Iterator) ?struct { *const Key, *Value } {
+                var node_offset: Offset = self.path.node_stack[self.sorted_tree.tree.height];
+
+                while (true) {
+                    const leaf = self.sorted_tree.getPtr(LeafNode, node_offset);
+                    const idx = self.path.idx_stack[self.sorted_tree.tree.height];
+
+                    // at a leaf node, return next value if there is one
+                    if (idx < B and leaf.keys[idx] != EMPTY_KEY) {
+                        // support ending early
+                        if (self.end) |end_key| {
+                            if (leaf.keys[idx] >= end_key) return null;
+                        }
+
+                        const result = .{ &leaf.keys[idx], &leaf.values[idx] };
+                        // NOTE: this allows idx_stack to store indexes which equal B.
+                        // This means that it would be an out of bounds access if used.
+                        self.path.idx_stack[self.sorted_tree.tree.height] += 1;
+                        return result;
+                    }
+
+                    // try to find next leaf node
+                    var found_parent = false;
+                    var h = self.sorted_tree.tree.height;
+                    while (h > 0) {
+                        h -= 1;
+                        const parent_node = self.path.node_stack[h];
+                        const parent_idx = self.path.idx_stack[h];
+                        const parent_inner = self.sorted_tree.getPtr(InnerNode, parent_node);
+
+                        if (parent_idx < B and parent_inner.keys[parent_idx] != EMPTY_KEY) {
+                            node_offset = parent_inner.values[parent_idx + 1];
+                            self.path.idx_stack[h] += 1;
+
+                            // Descend to leftmost leaf
+                            var hh: u8 = h + 1;
+                            while (hh <= self.sorted_tree.tree.height) : (hh += 1) {
+                                self.path.idx_stack[hh] = 0;
+                                self.path.node_stack[hh] = node_offset;
+
+                                if (hh == self.sorted_tree.tree.height) break;
+                                const inner = self.sorted_tree.getPtr(InnerNode, node_offset);
+                                node_offset = inner.values[0];
+                            }
+
+                            found_parent = true;
+                            break;
+                        }
+                    }
+
+                    if (!found_parent) return null; // iteration finished
+                }
+            }
+        };
+
         pub fn init(allocator: std.mem.Allocator) !Self {
             var self: Self = .{
                 .data = .empty,
@@ -675,82 +737,40 @@ pub fn SortedTree(
             return true;
         }
 
-        fn next(self: *const Self, path: *Path) ?struct { *const Key, *Value } {
-            var node_offset: Offset = path.node_stack[self.tree.height];
-
-            while (true) {
-                const leaf = self.getPtr(LeafNode, node_offset);
-                const idx = path.idx_stack[self.tree.height];
-
-                // at a leaf node, return next value if there is one
-                if (idx < B and leaf.keys[idx] != EMPTY_KEY) {
-                    const result = .{ &leaf.keys[idx], &leaf.values[idx] };
-                    // NOTE: this allows idx_stack to store indexes which equal B.
-                    // This means that it would be an out of bounds access if used.
-                    path.idx_stack[self.tree.height] += 1;
-                    return result;
-                }
-
-                // try to find next leaf node
-                var found_parent = false;
-                var h = self.tree.height;
-                while (h > 0) {
-                    h -= 1;
-                    const parent_node = path.node_stack[h];
-                    const parent_idx = path.idx_stack[h];
-                    const parent_inner = self.getPtr(InnerNode, parent_node);
-
-                    if (parent_idx < B and parent_inner.keys[parent_idx] != EMPTY_KEY) {
-                        node_offset = parent_inner.values[parent_idx + 1];
-                        path.idx_stack[h] += 1;
-
-                        // Descend to leftmost leaf
-                        var hh: u8 = h + 1;
-                        while (hh <= self.tree.height) : (hh += 1) {
-                            path.idx_stack[hh] = 0;
-                            path.node_stack[hh] = node_offset;
-
-                            if (hh == self.tree.height) break;
-                            const inner = self.getPtr(InnerNode, node_offset);
-                            node_offset = inner.values[0];
-                        }
-
-                        found_parent = true;
-                        break;
-                    }
-                }
-
-                if (!found_parent) return null; // iteration finished
-            }
-        }
-
-        fn iter(self: *const Self) void {
+        // Iterate over keys from start (inclusive) to end (exclusive)
+        pub fn iterRanged(self: *const Self, maybe_start: ?Key, maybe_end: ?Key) Iterator {
             var path: Path = undefined;
 
-            // Traverse down inner nodes until we reach the lowest LeafNode, recording the path.
-            var node = self.tree.root;
-            for (0..self.tree.height) |h| {
-                const inner = self.getPtr(InnerNode, node);
-                const idx = countLeadingEmpty(&inner.keys);
-                path.idx_stack[h] = idx;
-                path.node_stack[h] = node;
-                node = inner.values[idx];
+            if (maybe_start) |start| {
+                _ = self.lookup(&path, start);
+            } else {
+                // Traverse down inner nodes until we reach the lowest LeafNode, recording the path.
+                var node = self.tree.root;
+                for (0..self.tree.height) |h| {
+                    const inner = self.getPtr(InnerNode, node);
+                    const idx = countLeadingEmpty(&inner.keys);
+                    path.idx_stack[h] = idx;
+                    path.node_stack[h] = node;
+                    node = inner.values[idx];
+                }
+
+                // Find lower bound in leaf
+                const leaf = self.getPtr(LeafNode, node);
+                const idx = @min(B - 1, countLeadingEmpty(&leaf.keys));
+
+                path.idx_stack[self.tree.height] = idx;
+                path.node_stack[self.tree.height] = node;
             }
 
-            // Find lower bound in leaf
-            const leaf = self.getPtr(LeafNode, node);
-            const idx = @min(B - 1, countLeadingEmpty(&leaf.keys));
+            return .{
+                .sorted_tree = self,
+                .path = path,
+                .end = maybe_end,
+            };
+        }
 
-            path.idx_stack[self.tree.height] = idx;
-            path.node_stack[self.tree.height] = node;
-
-            var key: *const Key, var value = .{ &leaf.keys[idx], &leaf.values[idx] };
-            if (leaf.keys[idx] == EMPTY_KEY) key, value = self.next(&path) orelse return;
-
-            while (true) {
-                std.debug.print("{}:{}\n", .{ key.*, value.* });
-                key, value = self.next(&path) orelse break;
-            }
+        pub fn iter(self: *const Self) Iterator {
+            return self.iterRanged(null, null);
         }
 
         fn allocNode(self: *Self, allocator: std.mem.Allocator, Node: type) !Offset {
@@ -760,15 +780,6 @@ pub fn SortedTree(
             const node: *Node = @alignCast(@ptrCast(self.data.items[new_node_offset..][0..@sizeOf(Node)]));
             node.* = .{ .keys = @splat(EMPTY_KEY), .values = @splat(undefined) };
             return new_node_offset;
-
-            // try self.data.appendSlice(allocator, &[_]u8{undefined} ** @sizeOf(Node));
-
-            // const new_node_offset: Offset = @intCast(self.data.items.len - @sizeOf(Node));
-
-            // const node = self.getPtr(Node, new_node_offset);
-            // @memset(&node.keys, EMPTY_KEY);
-            // @memset(&node.values, undefined);
-            // return new_node_offset;
         }
 
         fn countLessThan(keys: *const [B]Key, key: Key) u8 {
@@ -987,6 +998,8 @@ test "basic treemap" {
         .{ 28, 2 },
         .{ 29, 1 },
 
+        .{ 0, 0 },
+
         .{ 31, 9 },
         .{ 32, 8 },
         .{ 33, 7 },
@@ -1150,7 +1163,13 @@ test "basic treemap" {
     // try x.put(allocator, 92, 902);
     // try x.put(allocator, 93, 903);
 
-    x.iter();
+    var iter = x.iterRanged(0, 100);
+    while (iter.next()) |entry| {
+        const key: *const i32, const value: *u128 = entry;
+
+        std.debug.print("key: {}\n", .{key.*});
+        std.debug.print("value: {}\n", .{value.*});
+    }
 
     // try x.put(allocator, std.math.maxInt(u64), 1);
 
