@@ -44,22 +44,28 @@ pub const ShredNetworkDependencies = struct {
     random: Random,
     ledger: *sig.ledger.Ledger,
     registry: *Registry(.{}),
-    /// This validator's keypair
-    my_keypair: *const KeyPair,
     /// Shared exit indicator, used to shutdown the Shred Network.
     exit: *Atomic(bool),
-    /// Shared state that is read from gossip
-    gossip_table_rw: *RwMux(GossipTable),
+
+    /// This validator's keypair
+    my_keypair: *const KeyPair,
     /// Shared state that is read from gossip
     my_shred_version: *const Atomic(u16),
+    /// Shared state that is read from gossip
+    gossip_table_rw: *RwMux(GossipTable),
     my_contact_info: ThreadSafeContactInfo,
     epoch_tracker: *sig.core.EpochTracker,
     n_retransmit_threads: ?usize,
     overwrite_turbine_stake_for_testing: bool,
+
     /// RPC Observability
     rpc_hooks: ?*sig.rpc.Hooks = null,
-    /// Optional channel to send duplicate slot notifications to consensus
-    duplicate_slots_sender: ?*Channel(Slot),
+    duplicate: ?struct {
+        /// Data sent by gossip as it's observed.
+        shred_receiver: *Channel(sig.gossip.data.DuplicateShred),
+        /// Optional channel to send duplicate slot notifications to consensus.
+        slots_sender: ?*Channel(Slot),
+    },
     /// Optional push message queue mux for broadcasting duplicate shred proofs
     push_msg_queue_mux: ?*GossipService.PushMessageQueue,
 };
@@ -111,7 +117,7 @@ pub fn start(
     const duplicate_handler = DuplicateShredHandler{
         .ledger_reader = deps.ledger.reader(),
         .result_writer = deps.ledger.resultWriter(),
-        .duplicate_slots_sender = deps.duplicate_slots_sender,
+        .duplicate_slots_sender = if (deps.duplicate) |dupe| dupe.slots_sender else null,
         .push_msg_queue_mux = deps.push_msg_queue_mux,
         .keypair = deps.my_keypair,
         .logger = .from(deps.logger),
@@ -188,7 +194,7 @@ pub fn start(
     try service_manager.spawn("Repair Service", RepairService.run, .{repair_svc});
 
     // duplicate shred listener (thread)
-    if (deps.duplicate_slots_sender) |dup_sender| {
+    if (deps.duplicate) |duplicate| if (duplicate.slots_sender) |duplicate_slots_sender| {
         try service_manager.spawn(
             "Duplicate Shred Listener",
             shred_network.duplicate_shred_listener.recvLoop,
@@ -196,19 +202,19 @@ pub fn start(
                 deps.allocator,
                 sig.trace.Logger("duplicate_shred_listener").from(deps.logger),
                 shred_network.duplicate_shred_listener.RecvLoopParams{
-                    .exit = deps.exit,
-                    .gossip_table_rw = deps.gossip_table_rw,
+                    .exit = .{ .unordered = deps.exit },
+                    .duplicate_shred_receiver = duplicate.shred_receiver,
                     .handler = .{
                         .result_writer = deps.ledger.resultWriter(),
                         .ledger_reader = deps.ledger.reader(),
-                        .duplicate_slots_sender = dup_sender,
+                        .duplicate_slots_sender = duplicate_slots_sender,
                         .shred_version = deps.my_shred_version,
                         .epoch_tracker = deps.epoch_tracker,
                     },
                 },
             },
         );
-    }
+    };
 
     if (conf.dump_shred_tracker) {
         try service_manager.spawn("dump shred tracker", struct {
@@ -241,7 +247,33 @@ fn bindUdpReusable(port: u16) !sig.net.UdpSocket {
 test "start and stop gracefully" {
     const allocator = std.testing.allocator;
 
-    const config = ShredNetworkConfig{
+    var prng_state: Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var exit = Atomic(bool).init(false);
+
+    var registry = Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    const keypair: KeyPair = .generate();
+    const shred_version: Atomic(u16) = .init(0);
+    const contact_info: ThreadSafeContactInfo =
+        try .initRandom(prng, .initRandom(prng), 0);
+
+    var gossip_table: GossipTable = try .init(allocator, allocator);
+    defer gossip_table.deinit();
+    var gossip_table_rw: RwMux(GossipTable) = .init(gossip_table);
+
+    var duplicate_shred_receiver: Channel(sig.gossip.data.DuplicateShred) = try .init(allocator);
+    defer duplicate_shred_receiver.deinit();
+
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer state.deinit();
+
+    var epoch_tracker: sig.core.EpochTracker = .init(.default, 0, .INIT);
+    defer epoch_tracker.deinit(allocator);
+
+    const config: ShredNetworkConfig = .{
         .root_slot = 0,
         .repair_port = 50304,
         .turbine_recv_port = 50305,
@@ -250,32 +282,10 @@ test "start and stop gracefully" {
         .log_finished_slots = false,
     };
 
-    var exit = Atomic(bool).init(false);
-
-    var rng = Random.DefaultPrng.init(std.testing.random_seed);
-
-    var registry = Registry(.{}).init(allocator);
-    defer registry.deinit();
-
-    const keypair = KeyPair.generate();
-    const shred_version = Atomic(u16).init(0);
-    const contact_info = try ThreadSafeContactInfo
-        .initRandom(rng.random(), Pubkey.initRandom(rng.random()), 0);
-
-    var gossip_table = try GossipTable.init(allocator, allocator);
-    defer gossip_table.deinit();
-    var gossip_table_rw = RwMux(GossipTable).init(gossip_table);
-
-    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
-    defer state.deinit();
-
-    var epoch_tracker = sig.core.EpochTracker.init(.default, 0, .INIT);
-    defer epoch_tracker.deinit(allocator);
-
     const deps: ShredNetworkDependencies = .{
         .allocator = allocator,
         .logger = .FOR_TESTS,
-        .random = rng.random(),
+        .random = prng,
         .ledger = &state,
         .registry = &registry,
         .my_keypair = &keypair,
@@ -286,11 +296,14 @@ test "start and stop gracefully" {
         .n_retransmit_threads = 1,
         .overwrite_turbine_stake_for_testing = true,
         .epoch_tracker = &epoch_tracker,
-        .duplicate_slots_sender = null,
+        .duplicate = .{
+            .shred_receiver = &duplicate_shred_receiver,
+            .slots_sender = null,
+        },
         .push_msg_queue_mux = null,
     };
 
-    var timer = sig.time.Timer.start();
+    var timer: sig.time.Timer = .start();
 
     var shred_network_service = try start(config, deps);
     defer shred_network_service.deinit();

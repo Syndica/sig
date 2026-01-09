@@ -2,15 +2,11 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
-const Atomic = std.atomic.Value;
 const Channel = sig.sync.Channel;
-const GossipTable = sig.gossip.GossipTable;
 const Logger = sig.trace.Logger("duplicate_shred_listener");
 const Pubkey = sig.core.Pubkey;
-const RwMux = sig.sync.RwMux;
 const Slot = sig.core.Slot;
 
-const GossipVersionedData = sig.gossip.data.GossipVersionedData;
 const DuplicateShred = sig.gossip.data.DuplicateShred;
 
 const ResultWriter = sig.ledger.ResultWriter;
@@ -27,12 +23,12 @@ pub const HandlerParams = struct {
     ledger_reader: LedgerReader,
     duplicate_slots_sender: *Channel(Slot),
     shred_version: *const std.atomic.Value(u16),
-    epoch_tracker: *sig.core.EpochTracker,
+    epoch_tracker: *const sig.core.EpochTracker,
 };
 
 pub const RecvLoopParams = struct {
-    exit: *Atomic(bool),
-    gossip_table_rw: *RwMux(GossipTable),
+    exit: sig.sync.ExitCondition,
+    duplicate_shred_receiver: *Channel(DuplicateShred),
     handler: HandlerParams,
 };
 
@@ -47,43 +43,17 @@ pub fn recvLoop(
     logger: Logger,
     params: RecvLoopParams,
 ) !void {
-    var handler = GossipDuplicateShredHandler.init(allocator, logger, params.handler);
+    var handler: GossipDuplicateShredHandler = .init(allocator, logger, params.handler);
     defer handler.deinit();
 
-    var cursor: usize = 0;
-    var buf: [512]GossipVersionedData = undefined;
-
-    while (!params.exit.load(.monotonic)) {
-        const gossip_data: []GossipVersionedData = blk: {
-            const gossip_table, var lock = params.gossip_table_rw.readWithLock();
-            defer lock.unlock();
-            break :blk gossip_table.getClonedEntriesWithCursor(
-                allocator,
-                &buf,
-                &cursor,
-            ) catch |e| {
-                logger.err().logf("duplicate_shred_listener: get entries failed: {}", .{e});
-                break :blk &.{};
-            };
-        };
-
-        if (gossip_data.len == 0) {
-            std.time.sleep(GOSSIP_SLEEP_MILLIS * std.time.ns_per_ms);
-            continue;
-        }
-
-        for (gossip_data) |*versioned| {
-            defer versioned.deinit(allocator);
-            switch (versioned.data) {
-                .DuplicateShred => |data| {
-                    _, const duplicate_shred = data;
-                    handler.handle(duplicate_shred) catch |e| handler.logger.err().logf(
-                        "duplicate_shred_listener: handle chunk failed for slot {}: {}",
-                        .{ duplicate_shred.slot, e },
-                    );
-                },
-                else => {},
-            }
+    while (params.exit.shouldRun()) {
+        try params.duplicate_shred_receiver.waitToReceive(params.exit);
+        while (params.duplicate_shred_receiver.tryReceive()) |duplicate_shred| {
+            defer duplicate_shred.deinit(allocator);
+            handler.handle(duplicate_shred) catch |e| handler.logger.err().logf(
+                "duplicate_shred_listener: handle chunk failed for slot {}: {}",
+                .{ duplicate_shred.slot, e },
+            );
         }
     }
 }

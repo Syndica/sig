@@ -1472,8 +1472,11 @@ fn validator(
     });
     defer snapshot_dir.close();
 
-    var gossip_votes = try sig.sync.Channel(sig.gossip.data.Vote).init(allocator);
+    var gossip_votes: sig.sync.Channel(sig.gossip.data.Vote) = try .init(allocator);
     defer gossip_votes.deinit();
+
+    var duplicate_shreds: sig.sync.Channel(sig.gossip.data.DuplicateShred) = try .init(allocator);
+    defer duplicate_shreds.deinit();
 
     var gossip_service = try startGossip(
         allocator,
@@ -1484,7 +1487,10 @@ fn validator(
             .{ .tag = .repair, .port = repair_port },
             .{ .tag = .turbine_recv, .port = turbine_recv_port },
         },
-        .{ .vote_collector = &gossip_votes },
+        .{
+            .vote_collector = &gossip_votes,
+            .duplicate_shred_listener = &duplicate_shreds,
+        },
     );
     defer {
         gossip_service.shutdown();
@@ -1683,11 +1689,11 @@ fn validator(
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = turbine_config.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
-            .duplicate_slots_sender = if (replay_service_state.consensus) |consensus|
-                consensus.receivers.duplicate_slots
-            else
-                null,
             .rpc_hooks = null,
+            .duplicate = if (replay_service_state.consensus) |consensus| .{
+                .shred_receiver = &duplicate_shreds,
+                .slots_sender = consensus.receivers.duplicate_slots,
+            } else null,
             .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
         },
     );
@@ -1977,17 +1983,17 @@ fn shredNetwork(
         .registry = app_base.metrics_registry,
         .random = prng.random(),
         .ledger = &ledger,
-        .my_keypair = &app_base.my_keypair,
         .exit = app_base.exit,
+        .my_keypair = &app_base.my_keypair,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .my_shred_version = &gossip_service.my_shred_version,
         .epoch_tracker = &epoch_tracker,
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,
-        // No consensus in the standalone mode, so duplicate slots are not reported
-        .duplicate_slots_sender = null,
         .rpc_hooks = null,
+        // No consensus in the standalone mode, so duplicate slots are not reported.
+        .duplicate = null,
         .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
     });
     defer shred_network_manager.deinit();
