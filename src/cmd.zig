@@ -234,13 +234,13 @@ pub fn main() !void {
             const out_dir = params.out_dir orelse return error.NoOutDirSpecified;
 
             switch (params.direction) {
-                .sig_to_agave => try sig.ledger.agave_migration_tool.migrateLedgerToAgave(
+                .sig_to_agave => try sig.ledger.database.agave_migration.migrateLedgerToAgave(
                     gpa,
                     .from(app_base.logger),
                     params.in_dir,
                     out_dir,
                 ),
-                .agave_to_sig => try sig.ledger.agave_migration_tool.migrateLedgerFromAgave(
+                .agave_to_sig => try sig.ledger.database.agave_migration.migrateLedgerFromAgave(
                     gpa,
                     .from(app_base.logger),
                     params.in_dir,
