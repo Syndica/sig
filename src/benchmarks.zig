@@ -65,24 +65,36 @@ const benchmarks: std.EnumMap(Filter, []const Benchmark) = .init(.{
         .type = @import("net/socket_utils.zig").BenchmarkPacketProcessing,
         .resolution = .millis,
     }},
-    .gossip = &.{ .{
-        .type = @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
-        .resolution = .nanos,
-    }, .{
-        .type = @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
-        .resolution = .nanos,
-    } },
-    .crypto = &.{.{
-        .type = @import("crypto/benchmark.zig").Benchmark,
-        .resolution = .micros,
-    }},
-    .ledger = &.{ .{
-        .type = @import("ledger/benchmarks.zig").BenchmarkLedger,
-        .resolution = .nanos,
-    }, .{
-        .type = @import("ledger/benchmarks.zig").BenchmarkLedgerSlow,
-        .resolution = .millis,
-    } },
+    .gossip = &.{
+        .{
+            .type = @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
+            .resolution = .nanos,
+        },
+        .{
+            .type = @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
+            .resolution = .nanos,
+        },
+    },
+    .crypto = &.{
+        .{
+            .type = @import("crypto/benchmark.zig").BenchmarkSigVerify,
+            .resolution = .micros,
+        },
+        .{
+            .type = @import("crypto/benchmark.zig").BenchmarkPohHash,
+            .resolution = .nanos,
+        },
+    },
+    .ledger = &.{
+        .{
+            .type = @import("ledger/benchmarks.zig").BenchmarkLedger,
+            .resolution = .nanos,
+        },
+        .{
+            .type = @import("ledger/benchmarks.zig").BenchmarkLedgerSlow,
+            .resolution = .millis,
+        },
+    },
     .swissmap = &.{.{
         .type = @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
         .resolution = .nanos,
