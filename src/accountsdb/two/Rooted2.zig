@@ -42,34 +42,38 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         break :blk maybe_db orelse return error.SqliteDbNull;
     };
 
-    const schema =
-        \\ PRAGMA journal_mode = OFF;
-        \\ PRAGMA synchronous = 0;
-        \\ PRAGMA cache_size = 1000000;
-        \\ PRAGMA locking_mode = EXCLUSIVE;
-        \\ PRAGMA temp_store = MEMORY;
-        \\ PRAGMA page_size = 65536;
-        \\
-        \\CREATE TABLE IF NOT EXISTS entries (
-        \\  address BLOB(32) NOT NULL UNIQUE,
-        \\  lamports INTEGER NOT NULL,
-        \\  data BLOB NOT NULL,
-        \\  owner BLOB(32) NOT NULL,
-        \\  executable INTEGER NOT NULL,
-        \\  rent_epoch INTEGER NOT NULL,
-        \\  last_modified_slot INTEGER NOT NULL
-        \\);
-    ;
-
-    if (sql.sqlite3_exec(db, schema, null, null, null) != OK) {
-        std.debug.print("err  {s}\n", .{sql.sqlite3_errmsg(db)});
-        return error.FailedToCreateTables;
-    }
-
-    return .{
+    var self: Rooted = .{
         .handle = db,
         .largest_rooted_slot = null,
     };
+
+    if (self.isEmpty()) {
+        const schema =
+            \\ PRAGMA journal_mode = OFF;
+            \\ PRAGMA synchronous = 0;
+            \\ PRAGMA cache_size = 1000000;
+            \\ PRAGMA locking_mode = EXCLUSIVE;
+            \\ PRAGMA temp_store = MEMORY;
+            \\ PRAGMA page_size = 65536;
+            \\
+            \\CREATE TABLE IF NOT EXISTS entries (
+            \\  address BLOB(32) NOT NULL UNIQUE,
+            \\  lamports INTEGER NOT NULL,
+            \\  data BLOB NOT NULL,
+            \\  owner BLOB(32) NOT NULL,
+            \\  executable INTEGER NOT NULL,
+            \\  rent_epoch INTEGER NOT NULL,
+            \\  last_modified_slot INTEGER NOT NULL
+            \\);
+        ;
+
+        if (sql.sqlite3_exec(db, schema, null, null, null) != OK) {
+            std.debug.print("err  {s}\n", .{sql.sqlite3_errmsg(db)});
+            return error.FailedToCreateTables;
+        }
+    }
+
+    return self;
 }
 
 pub fn deinit(self: *Rooted) void {
