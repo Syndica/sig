@@ -1101,8 +1101,11 @@ fn validator(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    var gossip_votes = try sig.sync.Channel(sig.gossip.data.Vote).init(allocator);
+    var gossip_votes: sig.sync.Channel(sig.gossip.data.Vote) = try .init(allocator);
     defer gossip_votes.deinit();
+
+    var duplicate_shreds: sig.sync.Channel(sig.gossip.data.DuplicateShred) = try .init(allocator);
+    defer duplicate_shreds.deinit();
 
     var gossip_service = try startGossip(
         allocator,
@@ -1113,7 +1116,10 @@ fn validator(
             .{ .tag = .repair, .port = repair_port },
             .{ .tag = .turbine_recv, .port = turbine_recv_port },
         },
-        .{ .vote_collector = &gossip_votes },
+        .{
+            .vote_collector = &gossip_votes,
+            .duplicate_shred_listener = &duplicate_shreds,
+        },
     );
     defer {
         gossip_service.shutdown();
@@ -1250,27 +1256,6 @@ fn validator(
 
     const turbine_config = cfg.turbine;
 
-    // shred network
-    var shred_network_manager = try sig.shred_network.start(
-        cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
-        .{
-            .allocator = allocator,
-            .logger = .from(app_base.logger),
-            .registry = app_base.metrics_registry,
-            .random = prng.random(),
-            .ledger = &ledger,
-            .my_keypair = &app_base.my_keypair,
-            .exit = app_base.exit,
-            .gossip_table_rw = &gossip_service.gossip_table_rw,
-            .my_shred_version = &gossip_service.my_shred_version,
-            .epoch_context_mgr = &epoch_context_manager,
-            .my_contact_info = my_contact_info,
-            .n_retransmit_threads = turbine_config.num_retransmit_threads,
-            .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
-        },
-    );
-    defer shred_network_manager.deinit();
-
     // Vote account. if not provided, disable voting
     const maybe_vote_pubkey: ?Pubkey = if (cfg.voting_enabled) blk: {
         const vote_keypair_path = cfg.vote_account orelse default_path: {
@@ -1322,6 +1307,33 @@ fn validator(
         if (maybe_vote_sockets) |*vs| vs else null,
         &gossip_votes,
     );
+
+    // shred network
+    var shred_network_manager = try sig.shred_network.start(
+        cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
+        .{
+            .allocator = allocator,
+            .logger = .from(app_base.logger),
+            .registry = app_base.metrics_registry,
+            .random = prng.random(),
+            .ledger = &ledger,
+            .my_keypair = &app_base.my_keypair,
+            .exit = app_base.exit,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+            .my_shred_version = &gossip_service.my_shred_version,
+            .epoch_context_mgr = &epoch_context_manager,
+            .my_contact_info = my_contact_info,
+            .n_retransmit_threads = turbine_config.num_retransmit_threads,
+            .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
+            .rpc_hooks = null,
+            .duplicate = if (replay_service_state.consensus) |consensus| .{
+                .shred_receiver = &duplicate_shreds,
+                .slots_sender = consensus.receivers.duplicate_slots,
+            } else null,
+            .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
+        },
+    );
+    defer shred_network_manager.deinit();
 
     const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
         try std.Thread.spawn(.{}, runRPCServer, .{
@@ -1575,10 +1587,10 @@ fn shredNetwork(
         app_base.exit,
     });
 
-    var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
+    var prng: std.Random.DefaultPrng = .init(@bitCast(std.time.timestamp()));
 
-    const my_contact_info =
-        sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
+    const my_contact_info: sig.gossip.data.ThreadSafeContactInfo =
+        .fromContactInfo(gossip_service.my_contact_info);
 
     // shred networking
     var shred_network_manager = try sig.shred_network.start(shred_network_conf, .{
@@ -1587,14 +1599,18 @@ fn shredNetwork(
         .registry = app_base.metrics_registry,
         .random = prng.random(),
         .ledger = &ledger,
-        .my_keypair = &app_base.my_keypair,
         .exit = app_base.exit,
-        .gossip_table_rw = &gossip_service.gossip_table_rw,
+        .my_keypair = &app_base.my_keypair,
         .my_shred_version = &gossip_service.my_shred_version,
+        .gossip_table_rw = &gossip_service.gossip_table_rw,
         .epoch_context_mgr = &epoch_context_manager,
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,
+        .rpc_hooks = null,
+        // No consensus in the standalone mode, so duplicate slots are not reported.
+        .duplicate = null,
+        .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
     });
     defer shred_network_manager.deinit();
 

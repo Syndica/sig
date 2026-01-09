@@ -11,6 +11,7 @@ const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;
 const EpochContextManager = sig.adapter.EpochContextManager;
+const GossipService = sig.gossip.GossipService;
 const GossipTable = sig.gossip.GossipTable;
 const Logger = sig.trace.Logger("shred_network.service");
 const Packet = sig.net.Packet;
@@ -22,6 +23,7 @@ const Slot = sig.core.Slot;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 
 const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
+const DuplicateShredHandler = shred_network.duplicate_shred_handler.DuplicateShredHandler;
 const RepairPeerProvider = shred_network.repair_service.RepairPeerProvider;
 const RepairRequester = shred_network.repair_service.RepairRequester;
 const RepairService = shred_network.repair_service.RepairService;
@@ -44,20 +46,30 @@ pub const ShredNetworkDependencies = struct {
     random: Random,
     ledger: *sig.ledger.Ledger,
     registry: *Registry(.{}),
-    /// This validator's keypair
-    my_keypair: *const KeyPair,
     /// Shared exit indicator, used to shutdown the Shred Network.
     exit: *Atomic(bool),
-    /// Shared state that is read from gossip
-    gossip_table_rw: *RwMux(GossipTable),
+
+    /// This validator's keypair
+    my_keypair: *const KeyPair,
     /// Shared state that is read from gossip
     my_shred_version: *const Atomic(u16),
+    /// Shared state that is read from gossip
+    gossip_table_rw: *RwMux(GossipTable),
     my_contact_info: ThreadSafeContactInfo,
     epoch_context_mgr: *EpochContextManager,
     n_retransmit_threads: ?usize,
     overwrite_turbine_stake_for_testing: bool,
+
     /// RPC Observability
     rpc_hooks: ?*sig.rpc.Hooks = null,
+    duplicate: ?struct {
+        /// Data sent by gossip as it's observed.
+        shred_receiver: *Channel(sig.gossip.data.DuplicateShred),
+        /// Optional channel to send duplicate slot notifications to consensus.
+        slots_sender: ?*Channel(Slot),
+    },
+    /// Optional push message queue mux for broadcasting duplicate shred proofs
+    push_msg_queue_mux: ?*GossipService.PushMessageQueue,
 };
 
 /// Start the Shred Network.
@@ -88,7 +100,12 @@ pub fn start(
 
     // tracker (shared state, internal to Shred Network)
     const shred_tracker = try arena.create(BasicShredTracker);
-    try shred_tracker.init(deps.allocator, conf.root_slot + 1, .from(deps.logger), deps.registry);
+    try shred_tracker.init(
+        deps.allocator,
+        conf.root_slot + 1,
+        .from(deps.logger),
+        deps.registry,
+    );
     try defers.deferCall(BasicShredTracker.deinit, .{shred_tracker});
 
     // channels (cant use arena as they need to alloc/free frequently &
@@ -98,6 +115,14 @@ pub fn start(
     try defers.deferCall(Channel(Packet).destroy, .{retransmit_channel});
 
     // receiver (threads)
+    const duplicate_handler = DuplicateShredHandler{
+        .ledger_reader = deps.ledger.reader(),
+        .result_writer = deps.ledger.resultWriter(),
+        .duplicate_slots_sender = if (deps.duplicate) |dupe| dupe.slots_sender else null,
+        .push_msg_queue_mux = deps.push_msg_queue_mux,
+        .keypair = deps.my_keypair,
+        .logger = .from(deps.logger),
+    };
     const shred_receiver = try arena.create(ShredReceiver);
     shred_receiver.* = try .init(deps.allocator, .from(deps.logger), deps.registry, .{
         .keypair = deps.my_keypair,
@@ -110,6 +135,7 @@ pub fn start(
         .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
         .tracker = shred_tracker,
         .inserter = deps.ledger.shredInserter(),
+        .duplicate_handler = duplicate_handler,
     });
     try defers.deferCall(ShredReceiver.deinit, .{ shred_receiver, deps.allocator });
     try service_manager.spawn(
@@ -169,6 +195,31 @@ pub fn start(
     );
     try service_manager.spawn("Repair Service", RepairService.run, .{repair_svc});
 
+    // duplicate shred listener (thread)
+    if (deps.duplicate) |duplicate| if (duplicate.slots_sender) |duplicate_slots_sender| {
+        try service_manager.spawn(
+            "Duplicate Shred Listener",
+            shred_network.duplicate_shred_listener.recvLoop,
+            .{
+                deps.allocator,
+                sig.trace.Logger("duplicate_shred_listener").from(deps.logger),
+                shred_network.duplicate_shred_listener.RecvLoopParams{
+                    .exit = .{ .unordered = deps.exit },
+                    .duplicate_shred_receiver = duplicate.shred_receiver,
+                    .handler = .{
+                        .result_writer = deps.ledger.resultWriter(),
+                        .ledger_reader = deps.ledger.reader(),
+                        .duplicate_slots_sender = duplicate_slots_sender,
+                        .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
+                        .shred_version = deps.my_shred_version,
+                        .epoch_schedule = deps.epoch_context_mgr.schedule,
+                        .epoch_ctx_mgr = deps.epoch_context_mgr,
+                    },
+                },
+            },
+        );
+    };
+
     if (conf.dump_shred_tracker) {
         try service_manager.spawn("dump shred tracker", struct {
             fn run(exit: *const Atomic(bool), trakr: *BasicShredTracker) !void {
@@ -200,29 +251,25 @@ fn bindUdpReusable(port: u16) !Socket {
 test "start and stop gracefully" {
     const allocator = std.testing.allocator;
 
-    const config = ShredNetworkConfig{
-        .root_slot = 0,
-        .repair_port = 50304,
-        .turbine_recv_port = 50305,
-        .retransmit = true,
-        .dump_shred_tracker = false,
-    };
+    var prng_state: Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
     var exit = Atomic(bool).init(false);
-
-    var rng = Random.DefaultPrng.init(std.testing.random_seed);
 
     var registry = Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    const keypair = KeyPair.generate();
-    const shred_version = Atomic(u16).init(0);
-    const contact_info = try ThreadSafeContactInfo
-        .initRandom(rng.random(), Pubkey.initRandom(rng.random()), 0);
+    const keypair: KeyPair = .generate();
+    const shred_version: Atomic(u16) = .init(0);
+    const contact_info: ThreadSafeContactInfo =
+        try .initRandom(prng, .initRandom(prng), 0);
 
-    var gossip_table = try GossipTable.init(allocator, allocator);
+    var gossip_table: GossipTable = try .init(allocator, allocator);
     defer gossip_table.deinit();
-    var gossip_table_rw = RwMux(GossipTable).init(gossip_table);
+    var gossip_table_rw: RwMux(GossipTable) = .init(gossip_table);
+
+    var duplicate_shred_receiver: Channel(sig.gossip.data.DuplicateShred) = try .init(allocator);
+    defer duplicate_shred_receiver.deinit();
 
     var epoch_ctx = try EpochContextManager.init(allocator, sig.core.EpochSchedule.INIT);
     defer epoch_ctx.deinit();
@@ -230,10 +277,18 @@ test "start and stop gracefully" {
     var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
+    const config: ShredNetworkConfig = .{
+        .root_slot = 0,
+        .repair_port = 50304,
+        .turbine_recv_port = 50305,
+        .retransmit = true,
+        .dump_shred_tracker = false,
+    };
+
     const deps: ShredNetworkDependencies = .{
         .allocator = allocator,
         .logger = .FOR_TESTS,
-        .random = rng.random(),
+        .random = prng,
         .ledger = &state,
         .registry = &registry,
         .my_keypair = &keypair,
@@ -244,9 +299,14 @@ test "start and stop gracefully" {
         .epoch_context_mgr = &epoch_ctx,
         .n_retransmit_threads = 1,
         .overwrite_turbine_stake_for_testing = true,
+        .duplicate = .{
+            .shred_receiver = &duplicate_shred_receiver,
+            .slots_sender = null,
+        },
+        .push_msg_queue_mux = null,
     };
 
-    var timer = sig.time.Timer.start();
+    var timer: sig.time.Timer = .start();
 
     var shred_network_service = try start(config, deps);
     defer shred_network_service.deinit();
