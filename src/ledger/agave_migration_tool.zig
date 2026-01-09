@@ -8,7 +8,7 @@ const Slot = sig.core.Slot;
 const sig_meta = ledger.meta;
 const ColumnFamily = ledger.database.ColumnFamily;
 const ErasureSetId = ledger.shred.ErasureSetId;
-const SigSchema = ledger.schema.schema;
+const sig_schema = ledger.schema.schema;
 
 const Logger = sig.trace.Logger("agave-migrate");
 
@@ -72,7 +72,7 @@ const agave_meta = struct {
 /// This format may not be stable! You may want to check that this schema matches the one in the
 /// version of Agave that you're using.
 /// [agave] https://github.com/anza-xyz/agave/blob/93df4052e311fc1417cb90575836c5030c5e37d6/ledger/src/blockstore_db.rs#L176
-const AgaveSchema = struct {
+const agave_schema = struct {
     /// Information about the slot, including how many shreds we have received for the slot, and
     /// whether we've processed data from any of the adjacent slots
     pub const slot_meta: ColumnFamily = .{
@@ -133,15 +133,15 @@ const AgaveSchema = struct {
 };
 
 comptime {
-    std.debug.assert(std.meta.eql(AgaveSchema.data_shred, SigSchema.data_shred));
+    std.debug.assert(std.meta.eql(agave_schema.data_shred, sig_schema.data_shred));
 }
 
 const list = l: {
-    const decls = @typeInfo(AgaveSchema).@"struct".decls;
+    const decls = @typeInfo(agave_schema).@"struct".decls;
 
     var ret: [decls.len]ColumnFamily = undefined;
-    for (decls, 0..) |decl, i| {
-        ret[i] = @field(AgaveSchema, decl.name);
+    for (decls, &ret) |decl, *cf| {
+        cf.* = @field(agave_schema, decl.name);
     }
     break :l ret;
 };
@@ -158,38 +158,56 @@ pub fn migrateLedgerToAgave(
     in_db_path: []const u8,
     out_db_path: []const u8,
 ) !void {
+    logger.info().logf("Opening input Sig db: {s}", .{in_db_path});
     var in_db = try OurDb.open(allocator, .from(logger), in_db_path, true);
     defer in_db.deinit();
 
+    logger.info().logf("Opening output Agave db: {s}", .{out_db_path});
     var out_db = try TheirDb.open(allocator, .from(logger), out_db_path, false);
     defer out_db.deinit();
+
+    var total_progress = std.Progress.start(.{});
+    defer total_progress.end();
+
     {
-        var iter = try in_db.iterator(SigSchema.slot_meta, .forward, null);
+        var progress = total_progress.start(
+            "Writing out slot metas",
+            try in_db.count(sig_schema.slot_meta),
+        );
+        defer progress.end();
+
+        var iter = try in_db.iterator(sig_schema.slot_meta, .forward, null);
         defer iter.deinit();
 
-        while (try iter.next()) |n| {
-            const key: Slot, const value: ledger.meta.SlotMeta = n;
+        while (true) {
+            const key: Slot, const value: ledger.meta.SlotMeta = try iter.next() orelse break;
             const read_meta = agave_meta.SlotMeta.fromOurs(value);
-            try out_db.put(AgaveSchema.slot_meta, key, read_meta);
-            std.debug.print("put key: {}\n", .{key});
+
+            try out_db.put(agave_schema.slot_meta, key, read_meta);
+            progress.completeOne();
         }
     }
     {
-        var iter = try in_db.iterator(AgaveSchema.data_shred, .forward, null);
+        var progress = total_progress.start(
+            "Writing out data shreds",
+            try in_db.count(agave_schema.data_shred),
+        );
+        defer progress.end();
+
+        var iter = try in_db.iterator(agave_schema.data_shred, .forward, null);
         defer iter.deinit();
 
-        while (try iter.nextBytes()) |n| {
-            defer n[0].deinit();
-            defer n[1].deinit();
+        while (true) {
+            const key_ref, const value_ref = try iter.nextBytes() orelse break;
 
             const key = try sig.ledger.database.key_serializer.deserialize(
-                AgaveSchema.data_shred.Key,
+                agave_schema.data_shred.Key,
                 std.testing.failing_allocator,
-                n[0].data,
+                key_ref.data,
             );
-            const value: []const u8 = n[1].data;
-            try out_db.put(AgaveSchema.data_shred, key, value);
-            std.debug.print("put key: {}\n", .{key});
+            const value: []const u8 = value_ref.data;
+            try out_db.put(agave_schema.data_shred, key, value);
+            progress.completeOne();
         }
     }
 }
@@ -200,52 +218,63 @@ pub fn migrateLedgerFromAgave(
     in_db_path: []const u8,
     out_db_path: []const u8,
 ) !void {
-    std.debug.print("opening in_db\n", .{});
+    logger.info().logf("Opening input Agave db: {s}", .{in_db_path});
     var in_db = try TheirDb.open(allocator, .from(logger), in_db_path, true);
     defer in_db.deinit();
 
-    std.debug.print("opening out_db\n", .{});
+    logger.info().logf("Opening output Sig db: {s}", .{out_db_path});
     var out_db = try OurDb.open(allocator, .from(logger), out_db_path, false);
     defer out_db.deinit();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
+    var total_progress = std.Progress.start(.{});
+    defer total_progress.end();
+
     {
-        var iter = try in_db.iterator(AgaveSchema.slot_meta, .forward, null);
+        var progress = total_progress.start(
+            "Writing out slot metas",
+            try in_db.count(agave_schema.slot_meta),
+        );
+        defer progress.end();
+
+        var iter = try in_db.iterator(agave_schema.slot_meta, .forward, null);
         defer iter.deinit();
 
-        std.debug.print("hi\n", .{});
-
-        while (try iter.next()) |n| {
-            std.debug.print("value\n", .{});
-
+        while (true) {
+            const key: Slot, const value: agave_meta.SlotMeta = try iter.next() orelse break;
             defer _ = arena.reset(.retain_capacity);
-            const key: Slot, const value: agave_meta.SlotMeta = n;
 
             const read_meta: sig_meta.SlotMeta = try value.intoOurs(arena.allocator());
             defer read_meta.completed_data_indexes.deinit();
 
-            try out_db.put(SigSchema.slot_meta, key, read_meta);
-            std.debug.print("put key: {}\n", .{key});
+            try out_db.put(sig_schema.slot_meta, key, read_meta);
+            progress.completeOne();
         }
     }
     {
-        var iter = try in_db.iterator(AgaveSchema.data_shred, .forward, null);
+        var progress = total_progress.start(
+            "Writing out data shreds",
+            try in_db.count(agave_schema.data_shred),
+        );
+        defer progress.end();
+
+        var iter = try in_db.iterator(agave_schema.data_shred, .forward, null);
         defer iter.deinit();
 
-        while (try iter.nextBytes()) |n| {
-            defer n[0].deinit();
-            defer n[1].deinit();
+        while (true) {
+            const key_ref, const value_ref = try iter.nextBytes() orelse break;
 
             const key = try sig.ledger.database.key_serializer.deserialize(
-                AgaveSchema.data_shred.Key,
+                agave_schema.data_shred.Key,
                 std.testing.failing_allocator,
-                n[0].data,
+                key_ref.data,
             );
-            const value: []const u8 = n[1].data;
-            try out_db.put(AgaveSchema.data_shred, key, value);
-            std.debug.print("put key: {}\n", .{key});
+            const value: []const u8 = value_ref.data;
+
+            try out_db.put(agave_schema.data_shred, key, value);
+            progress.completeOne();
         }
     }
 }
