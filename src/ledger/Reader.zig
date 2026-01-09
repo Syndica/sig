@@ -453,6 +453,9 @@ pub fn getCompleteBlockWithEntries(
     populate_entries: bool,
     allow_dead_slots: bool,
 ) !VersionedConfirmedBlockWithEntries {
+    const zone = tracy.Zone.init(@src(), .{ .name = "getCompleteBlockWithEntries" });
+    defer zone.deinit();
+
     var slot_meta: SlotMeta = try self.ledger.db.get(allocator, schema.slot_meta, slot) orelse {
         self.logger.debug()
             .logf("getCompleteBlockWithEntries failed for slot {} (missing SlotMeta)", .{slot});
@@ -539,6 +542,12 @@ pub fn getCompleteBlockWithEntries(
 
     // TODO perf: seems wasteful to get all of this, only to read the blockhash
     const parent_slot_entries = if (slot_meta.parent_slot) |parent_slot| blk: {
+        const parent_entries_zone = tracy.Zone.init(
+            @src(),
+            .{ .name = "getCompleteBlockWithEntries: parent slot entries" },
+        );
+        defer parent_entries_zone.deinit();
+
         const parent_entries, _, _ = try self.getSlotEntriesWithShredInfo(
             allocator,
             parent_slot,
@@ -1066,6 +1075,9 @@ pub fn getSlotEntries(
     slot: Slot,
     shred_start_index: u64,
 ) ![]const Entry {
+    const zone = tracy.Zone.init(@src(), .{ .name = "getSlotEntries" });
+    defer zone.deinit();
+
     const entries, _, _ =
         try self.getSlotEntriesWithShredInfo(allocator, slot, shred_start_index, false);
     return entries;

@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 
 const bpf_loader = sig.runtime.program.bpf_loader;
@@ -76,7 +77,7 @@ pub const LoadedProgram = union(enum(u8)) {
 };
 
 pub fn loadIfProgram(
-    allocator: std.mem.Allocator,
+    programs_allocator: std.mem.Allocator,
     programs: *ProgramMap,
     address: Pubkey,
     account: *const AccountSharedData,
@@ -91,11 +92,17 @@ pub fn loadIfProgram(
         !account.owner.equals(&bpf_loader.v4.ID) or
         programs.contains(address)) return;
 
-    var loaded_program = try loadProgram(allocator, account, account_reader, enviroment, slot);
-    errdefer loaded_program.deinit(allocator);
+    var loaded_program = try loadProgram(
+        programs_allocator,
+        account,
+        account_reader,
+        enviroment,
+        slot,
+    );
+    errdefer loaded_program.deinit(programs_allocator);
 
-    if (try programs.fetchPut(allocator, address, loaded_program)) |old_value| {
-        old_value.deinit(allocator);
+    if (try programs.fetchPut(programs_allocator, address, loaded_program)) |old_value| {
+        old_value.deinit(programs_allocator);
     }
 }
 
@@ -107,6 +114,9 @@ fn loadProgram(
     environment: *const vm.Environment,
     slot: u64,
 ) AccountLoadError!LoadedProgram {
+    const zone = tracy.Zone.init(@src(), .{ .name = "loadProgram" });
+    defer zone.deinit();
+
     const maybe_deployment_slot, var executable_bytes = try loadDeploymentSlotAndExecutableBytes(
         allocator,
         account,
@@ -159,6 +169,7 @@ fn loadDeploymentSlotAndExecutableBytes(
 
         const program_data_account = try wrapDB(accounts.get(allocator, program_data_key)) orelse
             return null;
+        defer program_data_account.deinit(allocator);
 
         const meta_size = bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE;
         const account_len = program_data_account.data.len();

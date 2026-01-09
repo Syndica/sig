@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const builtin = @import("builtin");
 const sig = @import("../../../sig.zig");
 const program = @import("lib.zig");
@@ -25,6 +26,9 @@ pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "address_lookup_table: execute" });
+    defer zone.deinit();
+
     // agave: consumed in declare_process_instruction
     try ic.tc.consumeCompute(program.COMPUTE_UNITS);
 
