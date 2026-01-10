@@ -10,6 +10,11 @@ pub const SlotAndHash = struct {
     slot: Slot,
     hash: Hash,
 
+    pub const empty: SlotAndHash = .{
+        .slot = std.math.maxInt(Slot),
+        .hash = .ZEROES,
+    };
+
     pub fn tuple(self: SlotAndHash) struct { Slot, Hash } {
         return .{ self.slot, self.hash };
     }

@@ -38,7 +38,7 @@ pub const OptimisticVotesTracker = struct {
 /// Analogous to [OptimisticConfirmationVerifier](https://github.com/anza-xyz/agave/blob/9d8bf065f7aad8257addfc5639ae5cea4e743204/core/src/optimistic_confirmation_verifier.rs#L11)
 pub const OptimisticConfirmationVerifier = struct {
     snapshot_start_slot: Slot,
-    unchecked_slots: sig.utils.collections.SortedSetUnmanaged(sig.core.hash.SlotAndHash),
+    unchecked_slots: sig.utils.collections.SortedSet(sig.core.hash.SlotAndHash, .{}),
     last_optimistic_slot_ts: sig.time.Instant,
 
     pub fn deinit(
@@ -73,7 +73,7 @@ pub const OptimisticConfirmationVerifier = struct {
         var before_or_equal_root: std.ArrayListUnmanaged(sig.core.hash.SlotAndHash) = .empty;
         defer before_or_equal_root.deinit(allocator);
 
-        var after_root: sig.utils.collections.SortedSetUnmanaged(sig.core.hash.SlotAndHash) = .empty;
+        var after_root: sig.utils.collections.SortedSet(sig.core.hash.SlotAndHash, .{}) = .empty;
 
         const items = self.unchecked_slots.items();
         try before_or_equal_root.ensureTotalCapacityPrecise(allocator, items.len);
@@ -127,7 +127,7 @@ pub const OptimisticConfirmationVerifier = struct {
                 ) catch |err| {
                     logger.err().logf("insertOptimisticSlot: {s}", .{@errorName(err)});
                 };
-                try self.unchecked_slots.put(allocator, slot_and_hash);
+                try self.unchecked_slots.put(allocator, slot_and_hash, {});
             }
         }
 

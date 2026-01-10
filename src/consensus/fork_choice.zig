@@ -45,15 +45,14 @@ const SlotAndHashLabel = struct {
     slot_hash_key: SlotAndHash,
     label: UpdateLabel,
 
+    pub const empty: SlotAndHashLabel = .{ .slot_hash_key = .empty, .label = .add };
+
     pub fn order(a: SlotAndHashLabel, b: SlotAndHashLabel) std.math.Order {
         return a.slot_hash_key.order(b.slot_hash_key);
     }
 };
 
-const UpdateOperations = SortedMap(
-    SlotAndHashLabel,
-    UpdateOperation,
-);
+const UpdateOperations = SortedMap(SlotAndHashLabel, UpdateOperation, .{});
 
 pub const ForkWeight = u64;
 
@@ -77,7 +76,7 @@ pub const ForkInfo = struct {
     /// forks, unlike `heaviest_slot`
     deepest_slot: SlotAndHash,
     parent: ?SlotAndHash,
-    children: SortedMap(SlotAndHash, void),
+    children: ChildSet,
     /// The latest ancestor of this node that has been marked invalid by being a duplicate.
     /// If the slot itself is a duplicate, this is set to the slot itself.
     latest_duplicate_ancestor: ?Slot,
@@ -87,8 +86,10 @@ pub const ForkInfo = struct {
     /// and all competing forks for the same slot are invalid.
     is_duplicate_confirmed: bool,
 
-    fn deinit(self: *ForkInfo) void {
-        self.children.deinit();
+    const ChildSet = SortedMap(SlotAndHash, void, .{});
+
+    fn deinit(self: *ForkInfo, allocator: std.mem.Allocator) void {
+        self.children.deinit(allocator);
     }
 
     /// Returns if this node has been explicitly marked as a duplicate slot
@@ -197,7 +198,7 @@ pub const ForkChoice = struct {
     pub fn deinit(self: ForkChoice) void {
         var it = self.fork_infos.iterator();
         while (it.next()) |fork_info| {
-            fork_info.value_ptr.deinit();
+            fork_info.value_ptr.deinit(self.allocator);
         }
 
         var fork_infos = self.fork_infos;
@@ -328,7 +329,7 @@ pub const ForkChoice = struct {
                 // The `heaviest_slot` and `deepest_slot` of a leaf is itself
                 .heaviest_subtree_slot = slot_hash_key,
                 .deepest_slot = slot_hash_key,
-                .children = SortedMap(SlotAndHash, void).init(self.allocator),
+                .children = .empty,
                 .parent = maybe_parent,
                 .latest_duplicate_ancestor = parent_latest_duplicate_ancestor,
                 // If the parent is none, then this is the root, which implies this must
@@ -343,7 +344,7 @@ pub const ForkChoice = struct {
         const parent = if (maybe_parent) |parent| parent else return;
 
         if (self.fork_infos.getPtr(parent)) |parent_fork_info| {
-            try parent_fork_info.children.put(slot_hash_key, {});
+            try parent_fork_info.children.put(self.allocator, slot_hash_key, {});
         } else {
             // If parent is given then parent's info must
             // already exist by time child is being added.
@@ -552,8 +553,10 @@ pub const ForkChoice = struct {
 
         try self.fork_infos.ensureUnusedCapacity(1);
         // Create the new root parent's fork info
-        var root_parent_children = SortedMap(SlotAndHash, void).init(self.allocator);
-        try root_parent_children.put(self.tree_root, {});
+        var root_parent_children: ForkInfo.ChildSet = .empty;
+        errdefer root_parent_children.deinit(self.allocator);
+        try root_parent_children.put(self.allocator, self.tree_root, {});
+        errdefer comptime unreachable;
         self.fork_infos.putAssumeCapacityNoClobber(root_parent, .{
             .logger = .from(self.logger),
             .stake_for_slot = 0,
@@ -612,7 +615,7 @@ pub const ForkChoice = struct {
             try newly_duplicate_confirmed_ancestors.append(ancestor_slot_hash_key);
         }
 
-        var update_operations = UpdateOperations.init(self.allocator);
+        var update_operations: UpdateOperations = .empty;
         defer update_operations.deinit();
 
         // Notify all children that a parent was marked as valid.
@@ -649,8 +652,8 @@ pub const ForkChoice = struct {
                 return error.DuplicateConfirmedCannotBeMarkedInvalid;
             }
 
-            var update_operations = UpdateOperations.init(self.allocator);
-            defer update_operations.deinit();
+            var update_operations: UpdateOperations = .empty;
+            defer update_operations.deinit(self.allocator);
 
             // Notify all children that a parent was marked as invalid
             var children_hash_keys = try self.subtreeDiff(
@@ -921,7 +924,7 @@ pub const ForkChoice = struct {
     fn getChildren(
         self: *const ForkChoice,
         slot_hash_key: *const SlotAndHash,
-    ) ?SortedMap(SlotAndHash, void) {
+    ) ?ForkInfo.ChildSet {
         const fork_info = self.fork_infos.get(slot_hash_key.*) orelse return null;
         return fork_info.children;
     }
@@ -990,16 +993,16 @@ pub const ForkChoice = struct {
         self: *const ForkChoice,
         root1: *const SlotAndHash,
         root2: *const SlotAndHash,
-    ) !SortedMap(SlotAndHash, void) {
+    ) !ForkInfo.ChildSet {
         if (!self.containsBlock(root1)) {
-            return SortedMap(SlotAndHash, void).init(self.allocator);
+            return .empty;
         }
         var pending_keys = std.ArrayList(SlotAndHash).init(self.allocator);
         defer pending_keys.deinit();
 
         try pending_keys.append(root1.*);
 
-        var reachable_set = SortedMap(SlotAndHash, void).init(self.allocator);
+        var reachable_set: ForkInfo.ChildSet = .empty;
 
         while (pending_keys.pop()) |current_key| {
             if (current_key.equals(root2.*)) {
@@ -1037,8 +1040,8 @@ pub const ForkChoice = struct {
         epoch_stakes: *const EpochStakesMap,
         epoch_schedule: *const EpochSchedule,
     ) !UpdateOperations {
-        var update_operations = UpdateOperations.init(self.allocator);
-        errdefer update_operations.deinit();
+        var update_operations: UpdateOperations = .empty;
+        errdefer update_operations.deinit(self.allocator);
 
         var observed_pubkeys = std.AutoHashMapUnmanaged(Pubkey, Slot).empty;
         defer observed_pubkeys.deinit(allocator);
@@ -1553,7 +1556,7 @@ pub const ForkChoice = struct {
         const parent = split_tree_root.parent orelse
             return error.SplitNodeIsRoot;
 
-        var update_operations = UpdateOperations.init(allocator);
+        var update_operations = try UpdateOperations.init(allocator);
         defer update_operations.deinit();
 
         // Insert aggregate operations up to the root

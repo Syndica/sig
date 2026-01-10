@@ -1,6 +1,10 @@
 const std = @import("std");
 const sig = @import("sig.zig");
 
+// comptime {
+//     std.testing.refAllDeclsRecursive(sig.utils);
+// }
+
 test {
     @setEvalBranchQuota(10_000);
     refAllDeclsRecursive(sig, 2);

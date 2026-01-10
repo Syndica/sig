@@ -361,8 +361,8 @@ pub fn setAndChainConnectedOnRootAndNextSlots(
     root: Slot,
 ) !void {
     var root_slot_meta: SlotMeta = try self.ledger.db.get(allocator, schema.slot_meta, root) orelse
-        SlotMeta.init(allocator, root, null);
-    defer root_slot_meta.deinit();
+        SlotMeta.init(root, null);
+    defer root_slot_meta.deinit(allocator);
 
     // If the slot was already connected, there is nothing to do as this slot's
     // children are also assumed to be appropriately connected
@@ -391,7 +391,7 @@ pub fn setAndChainConnectedOnRootAndNextSlots(
             self.logger.err().logf("Slot {} is a child but has no SlotMeta in ledger", .{slot});
             return error.CorruptedLedger;
         };
-        defer slot_meta.deinit();
+        defer slot_meta.deinit(allocator);
 
         if (slot_meta.setParentConnected()) {
             try child_slots.appendSlice(slot_meta.child_slots.items);

@@ -10,7 +10,7 @@ const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.hash.Hash;
-const SortedMap = sig.utils.collections.SortedMapUnmanaged;
+const SortedMap = sig.utils.collections.SortedMap;
 
 const Clock = sig.runtime.sysvar.Clock;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
@@ -349,7 +349,9 @@ pub fn deserializeTowerSync(
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/authorized_voters.rs#L11
 pub const AuthorizedVoters = struct {
-    voters: SortedMap(Epoch, Pubkey),
+    const Map = SortedMap(Epoch, Pubkey, .{ .empty_key = std.math.maxInt(Epoch) });
+
+    voters: Map,
 
     pub const EMPTY: AuthorizedVoters = .{ .voters = .empty };
     pub const @"!bincode-config": sig.bincode.FieldConfig(AuthorizedVoters) = .{
@@ -358,12 +360,12 @@ pub const AuthorizedVoters = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator, epoch: Epoch, pubkey: Pubkey) !AuthorizedVoters {
-        var authorized_voters: SortedMap(Epoch, Pubkey) = .empty;
+        var authorized_voters: Map = .empty;
         try authorized_voters.put(allocator, epoch, pubkey);
         return .{ .voters = authorized_voters };
     }
 
-    pub fn deinit(self: AuthorizedVoters, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *AuthorizedVoters, allocator: std.mem.Allocator) void {
         self.voters.deinit(allocator);
     }
 
@@ -417,7 +419,7 @@ pub const AuthorizedVoters = struct {
         var expired_keys = std.ArrayList(Epoch).init(allocator);
         defer expired_keys.deinit();
 
-        var voter_iter = self.voters.iterator();
+        var voter_iter = self.voters.iter();
         while (voter_iter.next()) |entry| {
             if (entry.key_ptr.* < current_epoch) {
                 try expired_keys.append(entry.key_ptr.*);
@@ -638,7 +640,7 @@ pub const VoteStateVersions = union(enum) {
     pub fn convertToCurrent(self: VoteStateVersions, allocator: std.mem.Allocator) !VoteState {
         switch (self) {
             .v0_23_5 => |state| {
-                const authorized_voters = try AuthorizedVoters.init(
+                var authorized_voters = try AuthorizedVoters.init(
                     allocator,
                     state.voter_epoch,
                     state.voter,
@@ -667,7 +669,7 @@ pub const VoteStateVersions = union(enum) {
                 };
             },
             .v1_14_11 => |state| {
-                const authorized_voters = try state.voters.clone(allocator);
+                var authorized_voters = try state.voters.clone(allocator);
                 errdefer authorized_voters.deinit(allocator);
 
                 const votes = try VoteStateVersions.landedVotesFromLockouts(
@@ -935,7 +937,7 @@ pub const VoteState = struct {
         var votes = try self.votes.clone(allocator);
         errdefer votes.deinit(allocator);
 
-        const voters = try self.voters.clone(allocator);
+        var voters = try self.voters.clone(allocator);
         errdefer voters.deinit(allocator);
 
         return .{

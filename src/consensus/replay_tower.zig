@@ -14,7 +14,7 @@ const Epoch = sig.core.Epoch;
 const EpochStakesMap = sig.core.EpochStakesMap;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
-const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
+const SortedSet = sig.utils.collections.SortedSet;
 const TowerSync = sig.runtime.program.vote.state.TowerSync;
 const Vote = sig.runtime.program.vote.state.Vote;
 const VoteStateUpdate = sig.runtime.program.vote.state.VoteStateUpdate;
@@ -450,7 +450,7 @@ pub const ReplayTower = struct {
         allocator: std.mem.Allocator,
         switch_slot: Slot,
         ancestors: *const AutoArrayHashMapUnmanaged(Slot, Ancestors),
-        descendants: *const AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
+        descendants: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
         progress: *const ProgressMap,
         total_stake: u64,
         epoch_vote_accounts: *const StakeAndVoteAccountsMap,
@@ -593,7 +593,7 @@ pub const ReplayTower = struct {
         const switch_proof = Hash.ZEROES;
         var locked_out_stake: u64 = 0;
 
-        var locked_out_vote_accounts: SortedSetUnmanaged(Pubkey) = .empty;
+        var locked_out_vote_accounts: SortedSet(Pubkey) = .empty;
         defer locked_out_vote_accounts.deinit(allocator);
 
         for (descendants.keys(), descendants.values()) |candidate_slot, *candidate_descendants| {
@@ -782,7 +782,7 @@ pub const ReplayTower = struct {
         allocator: std.mem.Allocator,
         switch_slot: Slot,
         ancestors: *const AutoArrayHashMapUnmanaged(Slot, Ancestors),
-        descendants: *const AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
+        descendants: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
         progress: *const ProgressMap,
         total_stake: u64,
         epoch_vote_accounts: *const StakeAndVoteAccountsMap,
@@ -1398,7 +1398,7 @@ pub const ReplayTower = struct {
         heaviest_slot_on_same_voted_fork: ?Slot,
         heaviest_epoch: Epoch,
         ancestors: *const AutoArrayHashMapUnmanaged(u64, Ancestors),
-        descendants: *const AutoArrayHashMapUnmanaged(u64, SortedSetUnmanaged(u64)),
+        descendants: *const AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
         progress: *const ProgressMap,
         latest_validator_votes: *const LatestValidatorVotes,
         fork_choice: *const HeaviestSubtreeForkChoice,
@@ -1695,7 +1695,7 @@ pub fn collectClusterVoteState(
     defer zone.deinit();
 
     // The state we are interested in.
-    var vote_slots: SortedSetUnmanaged(Slot) = .empty;
+    var vote_slots: SortedSet(Slot) = .empty;
     defer vote_slots.deinit(allocator);
     var voted_stakes = VotedStakes.empty;
     var total_stake: u64 = 0;
@@ -4148,7 +4148,7 @@ test "switch threshold" {
     try ancestors.put(allocator, 112, try createAncestor(allocator, &.{ 43, 2, 1, 0 }));
 
     // Create descendants map
-    var descendants: AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)) = .empty;
+    var descendants: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .empty;
     defer {
         for (descendants.values()) |*set| set.deinit(allocator);
         descendants.deinit(allocator);
@@ -4157,12 +4157,12 @@ test "switch threshold" {
     // Helper to add descendants
     const addDescendants = struct {
         fn call(
-            desc: *AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
+            desc: *AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
             alloc: std.mem.Allocator,
             slot: Slot,
             desc_slots: []const Slot,
         ) !void {
-            var set: SortedSetUnmanaged(Slot) = .empty;
+            var set: SortedSet(Slot) = .empty;
             for (desc_slots) |s| try set.put(alloc, s);
             try desc.put(alloc, slot, set);
         }
@@ -4662,7 +4662,7 @@ test "switch threshold use gossip votes" {
     try ancestors.put(allocator, 112, try createAncestor(allocator, &.{ 43, 2, 1, 0 }));
 
     // Create descendants map
-    var descendants: AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)) = .empty;
+    var descendants: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .empty;
     defer {
         for (descendants.values()) |*set| set.deinit(allocator);
         descendants.deinit(allocator);
@@ -4670,12 +4670,12 @@ test "switch threshold use gossip votes" {
 
     const addDescendants = struct {
         fn call(
-            desc: *AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
+            desc: *AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
             alloc: std.mem.Allocator,
             slot: Slot,
             desc_slots: []const Slot,
         ) !void {
-            var set: SortedSetUnmanaged(Slot) = .empty;
+            var set: SortedSet(Slot) = .empty;
             for (desc_slots) |s| try set.put(alloc, s);
             try desc.put(alloc, slot, set);
         }
@@ -5435,7 +5435,7 @@ pub const TestFixture = struct {
     slot_tracker: SlotTracker,
     fork_choice: HeaviestSubtreeForkChoice,
     ancestors: AutoArrayHashMapUnmanaged(Slot, Ancestors) = .{},
-    descendants: AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)) = .{},
+    descendants: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     progress: ProgressMap = ProgressMap.INIT,
     epoch_stakes: EpochStakesMap,
     node_pubkeys: std.ArrayListUnmanaged(Pubkey),
@@ -5648,12 +5648,12 @@ pub const TestFixture = struct {
 
 fn getDescendants(allocator: std.mem.Allocator, tree: Tree) !std.AutoArrayHashMapUnmanaged(
     Slot,
-    SortedSetUnmanaged(Slot),
+    SortedSet(Slot),
 ) {
     if (!builtin.is_test) {
         @compileError("getDescendants should only be used in test");
     }
-    var descendants = std.AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)){};
+    var descendants = std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)){};
 
     var children_map = std.AutoHashMap(Slot, std.ArrayList(Slot)).init(allocator);
     defer {
@@ -5691,7 +5691,7 @@ fn getDescendants(allocator: std.mem.Allocator, tree: Tree) !std.AutoArrayHashMa
         if (current.processed) {
             _ = stack.pop();
 
-            var descendant_list: SortedSetUnmanaged(Slot) = .empty;
+            var descendant_list: SortedSet(Slot) = .empty;
             errdefer descendant_list.deinit(allocator);
 
             if (children_map.get(current.slot)) |children| {
@@ -5794,8 +5794,8 @@ fn getAncestors(allocator: std.mem.Allocator, tree: Tree) !std.AutoArrayHashMapU
 
 pub fn extendForkTree(
     allocator: std.mem.Allocator,
-    original: *std.AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
-    extension: std.AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
+    original: *std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
+    extension: std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
 ) !void {
     if (!builtin.is_test) {
         @compileError("extendForkTree should only be used in test");
