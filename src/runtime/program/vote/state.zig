@@ -419,7 +419,7 @@ pub const AuthorizedVoters = struct {
         var expired_keys = std.ArrayList(Epoch).init(allocator);
         defer expired_keys.deinit();
 
-        var voter_iter = self.voters.iter();
+        var voter_iter = self.voters.iterator();
         while (voter_iter.next()) |entry| {
             if (entry.key_ptr.* < current_epoch) {
                 try expired_keys.append(entry.key_ptr.*);
@@ -427,9 +427,8 @@ pub const AuthorizedVoters = struct {
         }
 
         for (expired_keys.items) |key| {
-            _ = self.voters.swapRemoveNoSort(key);
+            _ = self.voters.remove(key);
         }
-        self.voters.sort();
 
         // Have to uphold this invariant b/c this is
         // 1) The check for whether the vote state is initialized
@@ -514,10 +513,11 @@ pub const AuthorizedVoters = struct {
     pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
         var authorized_voters: AuthorizedVoters = data;
         try writer.writeInt(usize, authorized_voters.len(), .little);
-        const items = authorized_voters.voters.items();
-        for (items[0], items[1]) |k, v| {
-            try writer.writeInt(u64, k, .little);
-            try writer.writeAll(&v.data);
+
+        var iter = authorized_voters.voters.iterator();
+        while (iter.next()) |entry| {
+            try writer.writeInt(u64, entry.key_ptr.*, .little);
+            try writer.writeAll(&entry.value_ptr.data);
         }
     }
 

@@ -291,21 +291,21 @@ test "SplitUnionList: addOne, get, and swapRemove" {
 }
 
 pub fn SortedTreeConfig(comptime Key: type) type {
-    const NonDefaulted = struct {
-        orderFn: fn (a: anytype, b: anytype) std.math.Order = order,
-        empty_key: Key,
+    const can_default_key = switch (@typeInfo(Key)) {
+        .@"struct", .@"enum", .@"union" => @hasDecl(Key, "empty"),
+        else => false,
     };
 
-    return switch (@typeInfo(Key)) {
-        .@"struct", .@"enum", .@"union" => if (@hasDecl(Key, "empty"))
-            struct {
-                orderFn: fn (a: anytype, b: anytype) std.math.Order = order,
-                empty_key: Key = Key.empty,
-            }
-        else
-            NonDefaulted,
-        else => NonDefaulted,
-    };
+    return if (can_default_key)
+        struct {
+            orderFn: fn (a: anytype, b: anytype) std.math.Order = order,
+            empty_key: Key = Key.empty,
+        }
+    else
+        struct {
+            orderFn: fn (a: anytype, b: anytype) std.math.Order = order,
+            empty_key: Key,
+        };
 }
 
 pub fn SortedSet(comptime Key: type, comptime config: SortedTreeConfig(Key)) type {
@@ -376,10 +376,10 @@ pub fn SortedMap(
                     const idx = self.path.idx_stack[self.sorted_tree.tree.height];
 
                     // at a leaf node, return next value if there is one
-                    if (idx < B and leaf.keys[idx] != EMPTY_KEY) {
+                    if (idx < B and !eql(leaf.keys[idx], EMPTY_KEY)) {
                         // support ending early
                         if (self.end) |end_key| {
-                            if (leaf.keys[idx] >= end_key) return null;
+                            if (config.orderFn(leaf.keys[idx], end_key) == .gt) return null;
                         }
 
                         const result: Entry = .{
@@ -401,7 +401,7 @@ pub fn SortedMap(
                         const parent_idx = self.path.idx_stack[h];
                         const parent_inner = self.sorted_tree.asPtr(InnerNode, parent_node);
 
-                        if (parent_idx < B and parent_inner.keys[parent_idx] != EMPTY_KEY) {
+                        if (parent_idx < B and !eql(parent_inner.keys[parent_idx], EMPTY_KEY)) {
                             node_offset = parent_inner.values[parent_idx + 1];
                             self.path.idx_stack[h] += 1;
 
@@ -577,7 +577,7 @@ pub fn SortedMap(
 
             var n_empty: u8 = 0;
             for (keys) |k| {
-                if (k != EMPTY_KEY) break;
+                if (!eql(k, EMPTY_KEY)) break;
                 n_empty += 1;
             }
             return n_empty;
