@@ -1135,9 +1135,16 @@ fn validator(
         allocator.destroy(geyser);
     };
 
+    const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
+    defer allocator.free(rooted_file);
+
+    var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
+    defer rooted_db.deinit();
+
     // snapshot
-    var loaded_snapshot = try loadSnapshot(
+    var loaded_snapshot = try sig.accounts_db.snapshot.load.loadSnapshot2(
         allocator,
+        &rooted_db,
         cfg.accounts_db,
         try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
         .from(app_base.logger),
@@ -1149,19 +1156,6 @@ fn validator(
         },
     );
     defer loaded_snapshot.deinit();
-
-    const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
-    defer allocator.free(rooted_file);
-
-    var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
-    defer accounts_dir.close();
-
-    var rooted_db: sig.accounts_db.Two.Rooted = try .initSnapshot(
-        allocator,
-        rooted_file,
-        accounts_dir,
-    );
-    defer rooted_db.deinit();
 
     var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
     defer new_db.deinit();
@@ -1390,9 +1384,16 @@ fn replayOffline(
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
+    const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
+    defer allocator.free(rooted_file);
+
+    var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
+    defer rooted_db.deinit();
+
     // snapshot
-    var loaded_snapshot = try loadSnapshot(
+    var loaded_snapshot = try sig.accounts_db.snapshot.load.loadSnapshot2(
         allocator,
+        &rooted_db,
         cfg.accounts_db,
         try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
         .from(app_base.logger),
@@ -1404,19 +1405,6 @@ fn replayOffline(
         },
     );
     defer loaded_snapshot.deinit();
-
-    const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
-    defer allocator.free(rooted_file);
-
-    var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
-    defer accounts_dir.close();
-
-    var rooted_db: sig.accounts_db.Two.Rooted = try .initSnapshot(
-        allocator,
-        rooted_file,
-        accounts_dir,
-    );
-    defer rooted_db.deinit();
 
     var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
     defer new_db.deinit();
