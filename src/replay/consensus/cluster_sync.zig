@@ -155,19 +155,34 @@ pub const SlotData = struct {
     latest_validator_votes: LatestValidatorVotes,
 
     /// Analogous to [DuplicateSlotsTracker](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L18)
-    pub const DuplicateSlots = collections.SortedSetUnmanaged(Slot);
+    pub const DuplicateSlots = collections.SortedSet(
+        Slot,
+        .{ .empty_key = std.math.maxInt(Slot) },
+    );
 
     /// Analogous to [DuplicateSlotsToRepair](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L19)
     pub const DuplicateSlotsToRepair = std.AutoArrayHashMapUnmanaged(Slot, Hash);
 
     /// Analogous to [PurgeRepairSlotCounter](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L20)
-    pub const PurgeRepairSlotCounters = collections.SortedMapUnmanaged(Slot, usize);
+    pub const PurgeRepairSlotCounters = collections.SortedMap(
+        Slot,
+        usize,
+        .{ .empty_key = std.math.maxInt(Slot) },
+    );
 
     /// Analogous to [EpochSlotsFrozenSlots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L22)
-    pub const EpochSlotsFrozenSlots = collections.SortedMapUnmanaged(Slot, Hash);
+    pub const EpochSlotsFrozenSlots = collections.SortedMap(
+        Slot,
+        Hash,
+        .{ .empty_key = std.math.maxInt(Slot) },
+    );
 
     /// Analogous to [DuplicateConfirmedSlots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L24)
-    pub const DuplicateConfirmedSlots = collections.SortedMapUnmanaged(Slot, Hash);
+    pub const DuplicateConfirmedSlots = collections.SortedMap(
+        Slot,
+        Hash,
+        .{ .empty_key = std.math.maxInt(Slot) },
+    );
 
     pub const empty: SlotData = .{
         .duplicate_confirmed_slots = .empty,
@@ -194,7 +209,11 @@ pub const SlotData = struct {
 
 /// Analogous to [UnfrozenGossipVerifiedVoteHashes](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/unfrozen_gossip_verified_vote_hashes.rs#L8)
 pub const UnfrozenGossipVerifiedVoteHashes = struct {
-    votes_per_slot: sig.utils.collections.SortedMapUnmanaged(Slot, HashToVotesMap),
+    votes_per_slot: sig.utils.collections.SortedMap(
+        Slot,
+        HashToVotesMap,
+        .{ .empty_key = std.math.maxInt(Slot) },
+    ),
 
     const HashToVotesMap = std.AutoArrayHashMapUnmanaged(Hash, VoteList);
     const VoteList = std.ArrayListUnmanaged(Pubkey);

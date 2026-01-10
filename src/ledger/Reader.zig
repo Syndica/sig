@@ -6,6 +6,8 @@ const tracy = @import("tracy");
 // std
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
+
 const AutoHashMap = std.AutoHashMap;
 
 // sig common
@@ -95,9 +97,9 @@ pub fn slotRangeConnected(
         schema.slot_meta,
         starting_slot,
     ) orelse return false;
-    defer start_slot_meta.deinit();
+    defer start_slot_meta.deinit(allocator);
     // need a reference so the start_slot_meta.deinit works correctly
-    var child_slots: *ArrayList(Slot) = &start_slot_meta.child_slots;
+    var child_slots: *ArrayListUnmanaged(Slot) = &start_slot_meta.child_slots;
 
     // TODO: revisit this with more extensive testing. how does agave work fine with
     //       supposed bugs? it may be worth opening a PR in agave with the presumed fix
@@ -109,13 +111,13 @@ pub fn slotRangeConnected(
         const slot = child_slots.items[i];
         if (try self.ledger.db.get(allocator, schema.slot_meta, slot)) |_slot_meta| {
             var slot_meta = _slot_meta;
-            defer slot_meta.deinit();
+            defer slot_meta.deinit(allocator);
 
             if (slot_meta.isFull()) {
                 std.debug.assert(last_slot == slot - 1);
                 // this append is the same as agave, but is it redundant?
                 // does the list already have these slots?
-                try child_slots.appendSlice(slot_meta.child_slots.items);
+                try child_slots.appendSlice(allocator, slot_meta.child_slots.items);
             } else {
                 return false; // this is missing from agave, which seems like a bug
             }
@@ -458,7 +460,7 @@ pub fn getCompleteBlockWithEntries(
             .logf("getCompleteBlockWithEntries failed for slot {} (missing SlotMeta)", .{slot});
         return error.SlotUnavailable;
     };
-    defer slot_meta.deinit();
+    defer slot_meta.deinit(allocator);
     if (!slot_meta.isFull()) {
         self.logger.debug()
             .logf("getCompleteBlockWithEntries failed for slot {} (slot not full)", .{slot});
@@ -1313,10 +1315,10 @@ pub fn getSlotsSince(
     for (slots) |slot| {
         if (try self.ledger.db.get(allocator, schema.slot_meta, slot)) |meta| {
             var child_slots = meta.child_slots;
-            errdefer child_slots.deinit();
+            errdefer child_slots.deinit(allocator);
             var cdi = meta.completed_data_indexes;
-            cdi.deinit();
-            try map.put(allocator, slot, child_slots.moveToUnmanaged());
+            cdi.deinit(allocator);
+            try map.put(allocator, slot, child_slots);
         }
     }
     return map;
@@ -1617,19 +1619,22 @@ pub const AncestorIterator = struct {
     }
 
     pub fn next(self: *AncestorIterator) !?Slot {
-        if (self.next_slot) |slot| {
-            if (slot == 0) {
-                self.next_slot = null;
-            } else if (try self.db.get(self.allocator, schema.slot_meta, slot)) |slot_meta| {
-                defer slot_meta.deinit();
-                self.next_slot = slot_meta.parent_slot;
-            } else {
-                self.next_slot = null;
-            }
+        const slot = self.next_slot orelse return null;
 
+        if (slot == 0) {
+            self.next_slot = null;
             return slot;
         }
-        return null;
+
+        var slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, slot) orelse {
+            self.next_slot = null;
+            return slot;
+        };
+        defer slot_meta.deinit(self.allocator);
+
+        self.next_slot = slot_meta.parent_slot;
+
+        return slot;
     }
 };
 

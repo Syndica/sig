@@ -856,7 +856,7 @@ fn insertDataShred(
     } else slot_meta.consecutive_received_from_0;
 
     try write_batch.put(schema.data_shred, .{ slot, index }, shred.payload);
-    try data_index.put(index);
+    try data_index.put(allocator, index, {});
 
     var newly_completed_data_sets = ArrayList(CompletedDataSetInfo).init(allocator);
     const shred_indices = try updateSlotMeta(

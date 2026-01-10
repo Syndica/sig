@@ -463,7 +463,7 @@ fn serializeValue(allocator: Allocator, value: anytype) !RcSlice(u8) {
 const SharedHashMap = struct {
     /// must be the same as SharedHashmapDB.storage_allocator
     allocator: Allocator,
-    map: SortedMap([]const u8, RcSlice(u8)),
+    map: SortedMap([]const u8, RcSlice(u8), .{ .empty_key = "emptykey" }),
     lock: RwLock,
 
     const Self = @This();

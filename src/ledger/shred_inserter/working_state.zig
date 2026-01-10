@@ -81,7 +81,7 @@ pub const PendingInsertShredsState = struct {
     db: *LedgerDB,
     write_batch: WriteBatch,
     just_inserted_shreds: AutoHashMap(ShredId, Shred),
-    erasure_metas: SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)),
+    erasure_metas: SortedMap(ErasureSetId, WorkingEntry(ErasureMeta), .{}),
     merkle_root_metas: AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)),
     slot_meta_working_set: AutoHashMap(u64, SlotMetaWorkingSetEntry),
     index_working_set: AutoHashMap(u64, IndexMetaWorkingSetEntry),
@@ -103,12 +103,12 @@ pub const PendingInsertShredsState = struct {
             .db = db,
             .logger = logger.withScope(@typeName(Self)),
             .write_batch = try db.initWriteBatch(),
-            .just_inserted_shreds = AutoHashMap(ShredId, Shred).init(allocator), // TODO capacity = shreds.len
-            .erasure_metas = SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)).init(allocator),
-            .merkle_root_metas = AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)).init(allocator),
-            .slot_meta_working_set = AutoHashMap(u64, SlotMetaWorkingSetEntry).init(allocator),
-            .index_working_set = AutoHashMap(u64, IndexMetaWorkingSetEntry).init(allocator),
-            .duplicate_shreds = ArrayList(PossibleDuplicateShred).init(allocator),
+            .just_inserted_shreds = .init(allocator), // TODO capacity = shreds.len
+            .erasure_metas = .empty,
+            .merkle_root_metas = .init(allocator),
+            .slot_meta_working_set = .init(allocator),
+            .index_working_set = .init(allocator),
+            .duplicate_shreds = .init(allocator),
             .metrics = metrics,
         };
     }
@@ -116,10 +116,19 @@ pub const PendingInsertShredsState = struct {
     /// duplicate_shreds is not deinitialized. ownership is transfered to caller
     pub fn deinit(self: *Self) void {
         self.just_inserted_shreds.deinit();
-        self.erasure_metas.deinit();
+        self.erasure_metas.deinit(self.allocator);
         self.merkle_root_metas.deinit();
-        deinitMapRecursive(&self.slot_meta_working_set);
-        deinitMapRecursive(&self.index_working_set);
+
+        {
+            var iter = self.slot_meta_working_set.iterator();
+            while (iter.next()) |entry| entry.value_ptr.deinit(self.allocator);
+            self.slot_meta_working_set.deinit();
+        }
+        {
+            var iter = self.index_working_set.iterator();
+            while (iter.next()) |entry| entry.value_ptr.deinit(self.allocator);
+            self.index_working_set.deinit();
+        }
         self.write_batch.deinit();
     }
 
@@ -131,7 +140,7 @@ pub const PendingInsertShredsState = struct {
             if (try self.db.get(self.allocator, schema.index, slot)) |item| {
                 entry.value_ptr.* = .{ .index = item };
             } else {
-                entry.value_ptr.* = IndexMetaWorkingSetEntry.init(self.allocator, slot);
+                entry.value_ptr.* = IndexMetaWorkingSetEntry.init(slot);
             }
         }
         if (self.metrics) |m| m.index_meta_time_us.add(timer.read().asMicros());
@@ -161,7 +170,7 @@ pub const PendingInsertShredsState = struct {
                 };
             } else {
                 entry.value_ptr.* = .{
-                    .new_slot_meta = SlotMeta.init(self.allocator, slot, parent_slot),
+                    .new_slot_meta = SlotMeta.init(slot, parent_slot),
                 };
             }
         }
@@ -451,12 +460,12 @@ pub const IndexMetaWorkingSetEntry = struct {
     // struct was created
     did_insert_occur: bool = false,
 
-    pub fn init(allocator: std.mem.Allocator, slot: Slot) IndexMetaWorkingSetEntry {
-        return .{ .index = meta.Index.init(allocator, slot) };
+    pub fn init(slot: Slot) IndexMetaWorkingSetEntry {
+        return .{ .index = meta.Index.init(slot) };
     }
 
-    pub fn deinit(self: *IndexMetaWorkingSetEntry) void {
-        self.index.deinit();
+    pub fn deinit(self: *IndexMetaWorkingSetEntry, allocator: std.mem.Allocator) void {
+        self.index.deinit(allocator);
     }
 };
 
@@ -474,9 +483,9 @@ pub const SlotMetaWorkingSetEntry = struct {
     /// this struct was created.
     did_insert_occur: bool = false,
 
-    pub fn deinit(self: *@This()) void {
-        self.new_slot_meta.deinit();
-        if (self.old_slot_meta) |*old| old.deinit();
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        self.new_slot_meta.deinit(allocator);
+        if (self.old_slot_meta) |*old| old.deinit(allocator);
     }
 };
 
