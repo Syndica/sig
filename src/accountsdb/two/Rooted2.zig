@@ -4,18 +4,11 @@ const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 const sql = @import("sqlite");
 const tracy = @import("tracy");
-const zstd = @import("zstd");
 const Rooted = @This();
 
 const Slot = sig.core.Slot;
-const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const AccountSharedData = sig.runtime.AccountSharedData;
-
-const StatusCache = sig.accounts_db.snapshot.StatusCache;
-const Manifest = sig.accounts_db.snapshot.Manifest;
-const SnapshotFiles = sig.accounts_db.snapshot.SnapshotFiles;
-const FullAndIncrementalManifest = sig.accounts_db.snapshot.FullAndIncrementalManifest;
 
 const OK = sql.SQLITE_OK;
 const DONE = sql.SQLITE_DONE;
@@ -48,6 +41,8 @@ pub fn init(file_path: [:0]const u8) !Rooted {
     };
 
     if (self.isEmpty()) {
+        std.debug.print("creating db schema\n", .{});
+
         const schema =
             \\ PRAGMA journal_mode = OFF;
             \\ PRAGMA synchronous = 0;
@@ -190,6 +185,9 @@ pub fn commitTransaction(self: *Rooted) void {
 /// Should not be called outside of snapshot loading or slot rooting.
 /// TODO: write putRootedSlot(slot, []pk, []account) and make that public instead.
 pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedData) void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.put" });
+    defer zone.deinit();
+
     const stmt: *sql.sqlite3_stmt = if (put_stmt) |stmt| stmt else blk: {
         // Insert or update only if last_modified_slot is greater (excluded = VALUES)
         // https://sqlite.org/lang_upsert.html#examples

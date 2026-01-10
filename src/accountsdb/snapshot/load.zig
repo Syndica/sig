@@ -8,12 +8,10 @@ const zstd = @import("zstd");
 
 const Allocator = std.mem.Allocator;
 
-const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const GenesisConfig = sig.core.GenesisConfig;
 
-const AccountSharedData = sig.runtime.AccountSharedData;
 const GeyserWriter = sig.geyser.GeyserWriter;
 const GossipService = sig.gossip.GossipService;
 
@@ -142,7 +140,8 @@ pub fn loadSnapshot2(
         full_status_cache.deinit(allocator);
     }
 
-    const maybe_incremental_manifest: ?Manifest, const maybe_incremental_status_cache: ?StatusCache = blk: {
+    const maybe_incremental_manifest: ?Manifest, //
+    const maybe_incremental_status_cache: ?StatusCache = blk: {
         const incr_zone =
             tracy.Zone.init(@src(), .{ .name = "Rooted.insertFromSnapshot: incremental" });
         defer incr_zone.deinit();
@@ -228,7 +227,8 @@ pub fn loadSnapshot2(
     errdefer allocator.free(status_cache.bank_slot_deltas);
 
     const slot_history = blk: {
-        const account = (try rooted_db.get(allocator, sig.runtime.sysvar.SlotHistory.ID)) orelse return error.PubkeyNotInIndex;
+        const account = (try rooted_db.get(allocator, sig.runtime.sysvar.SlotHistory.ID)) orelse
+            return error.PubkeyNotInIndex;
         defer account.deinit(allocator);
 
         var fba = std.io.fixedBufferStream(account.data);
@@ -313,98 +313,57 @@ fn insertFromSnapshotArchive(
         .link_name_buffer = &tar_link_name_buf,
     });
 
-    // read version file
-    {
-        logger.debug().logf("  loading version file", .{});
-
-        const tar_file: @TypeOf(tar_iter).File = while (true) {
-            const tar_file = (try tar_iter.next()) orelse return error.MissingFile;
-            if (tar_file.kind == .file) break tar_file;
-        };
-
-        if (!std.mem.eql(u8, tar_file.name, "version"))
-            return error.UnexpectedFile;
-
-        const expected_version = "1.2.0";
-        var version: [expected_version.len]u8 = undefined;
-        if ((try tar_file.reader().readAll(&version)) != version.len)
-            return error.InvalidVersion;
-        if (!std.mem.eql(u8, &version, expected_version)) {
-            return error.InvalidVersion;
-        }
+    var maybe_version: ?[5]u8 = null;
+    var maybe_manifest: ?Manifest = null;
+    var maybe_status_cache: ?StatusCache = null;
+    errdefer {
+        if (maybe_manifest) |manifest| manifest.deinit(allocator);
+        if (maybe_status_cache) |status_cache| status_cache.deinit(allocator);
     }
 
-    // read manifest file
-    const manifest = blk: {
-        const inner_zone = tracy.Zone.init(@src(), .{ .name = "Snapshot.readManifest" });
-        defer inner_zone.deinit();
+    const manifest_path = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{slot_and_hash.slot});
 
-        logger.debug().logf("  loading manifest file", .{});
+    rooted_db.beginTransaction();
+    defer rooted_db.commitTransaction();
 
-        const tar_file: @TypeOf(tar_iter).File = while (true) {
-            const tar_file = (try tar_iter.next()) orelse return error.MissingFile;
-            if (tar_file.kind == .file) break tar_file;
-        };
+    var account_data_buf: std.ArrayListUnmanaged(u8) = .{};
+    try account_data_buf.ensureTotalCapacity(allocator, 10 * 1024 * 1024);
+    defer account_data_buf.deinit(allocator);
 
-        const manifest_path = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{slot_and_hash.slot});
-        if (!std.mem.eql(u8, tar_file.name, manifest_path.constSlice()))
-            return error.UnexpectedFile;
+    while (try tar_iter.next()) |tar_file| {
+        if (tar_file.kind != .file) continue;
 
-        break :blk try Manifest.decodeFromBincode(allocator, tar_file.reader());
-    };
-    errdefer manifest.deinit(allocator);
+        // Read /version
+        if (std.mem.eql(u8, tar_file.name, "version")) {
+            if (maybe_version) |_| return error.DuplicateVersion;
+            maybe_version = @as([5]u8, undefined);
 
-    // read status cache
-    const status_cache = blk: {
-        const inner_zone = tracy.Zone.init(@src(), .{ .name = "Snapshot.readStatusCache" });
-        defer inner_zone.deinit();
+            if ((try tar_file.reader().readAll(&maybe_version.?)) != maybe_version.?.len)
+                return error.InvalidVersion;
+            if (!std.mem.eql(u8, &maybe_version.?, "1.2.0"))
+                return error.InvalidVersion;
 
-        logger.debug().logf("  loading status cache file", .{});
+            // Read /snapshot/status_cache
+        } else if (std.mem.eql(u8, tar_file.name, "snapshots/status_cache")) {
+            const inner_zone = tracy.Zone.init(@src(), .{ .name = "Snapshot.readStatusCache" });
+            defer inner_zone.deinit();
 
-        const tar_file: @TypeOf(tar_iter).File = while (true) {
-            const tar_file = (try tar_iter.next()) orelse return error.MissingFile;
-            if (tar_file.kind == .file) break tar_file;
-        };
+            if (maybe_status_cache) |_| return error.DuplicateStatusCache;
+            maybe_status_cache = try StatusCache.decodeFromBincode(allocator, tar_file.reader());
 
-        if (!std.mem.eql(u8, tar_file.name, "snapshots/status_cache"))
-            return error.UnexpectedFile;
+            // Read /snapshot/{slot}/{slot}
+        } else if (std.mem.eql(u8, tar_file.name, manifest_path.constSlice())) {
+            const inner_zone = tracy.Zone.init(@src(), .{ .name = "Snapshot.readManifest" });
+            defer inner_zone.deinit();
 
-        break :blk try StatusCache.decodeFromBincode(allocator, tar_file.reader());
-    };
-    errdefer status_cache.deinit(allocator);
+            if (maybe_manifest) |_| return error.DuplicateManifest;
+            maybe_manifest = try Manifest.decodeFromBincode(allocator, tar_file.reader());
 
-    // read account files
-    const expected_account_files = manifest.accounts_db_fields.file_map.count();
-    if (expected_account_files > 0 and options.put_accounts) {
-        const inner_zone = tracy.Zone.init(@src(), .{ .name = "Snapshot.readAccountFiles" });
-        defer inner_zone.deinit();
+            // Read /accounts/{slot}.{id}
+        } else if (std.mem.startsWith(u8, tar_file.name, "accounts/")) {
+            const inner_zone = tracy.Zone.init(@src(), .{ .name = "Snapshot.readAccountFile" });
+            defer inner_zone.deinit();
 
-        logger.debug().logf("  loading {} account files", .{expected_account_files});
-
-        rooted_db.beginTransaction();
-        defer rooted_db.commitTransaction();
-
-        var account_data_buf: std.ArrayListUnmanaged(u8) = .{};
-        defer account_data_buf.deinit(allocator);
-
-        const progress = std.Progress.start(.{});
-        defer progress.end();
-
-        var progress_node = progress.start("loading account files", expected_account_files);
-        defer progress_node.end();
-
-        var found_account_files: usize = 0;
-        while (true) : (found_account_files += 1) {
-            defer progress_node.completeOne();
-
-            const tar_file: @TypeOf(tar_iter).File = (while (true) {
-                const tar_file = (try tar_iter.next()) orelse break null;
-                if (tar_file.kind == .file) break tar_file;
-            }) orelse break;
-
-            // Validate account file name
-            if (!std.mem.startsWith(u8, tar_file.name, "accounts/"))
-                return error.InvalidAccountFile;
             const split = std.mem.indexOf(u8, tar_file.name, ".") orelse
                 return error.InvalidAccountFile;
             if (tar_file.name.len - 1 == split) return error.InvalidAccountFile;
@@ -413,14 +372,23 @@ fn insertFromSnapshotArchive(
             const id = std.fmt.parseInt(u32, tar_file.name[split + 1 ..], 10) catch
                 return error.InvalidAccountFile;
 
-            const info = manifest.accounts_db_fields.file_map.get(slot) orelse
+            if (maybe_version == null) return error.MissingVersion;
+            if (maybe_manifest == null) return error.MissingManifest;
+            if (maybe_status_cache == null) return error.MissingStatusCache;
+
+            // Skip account files
+            if (!options.put_accounts) {
+                break;
+            }
+
+            const info = maybe_manifest.?.accounts_db_fields.file_map.get(slot) orelse
                 return error.InvalidAccountFile;
             if (info.id.toInt() != id)
                 continue; // TODO: error?
             if (info.length > tar_file.size)
                 return error.InvalidAccountFile;
 
-            // read accounts from file
+            // Insert accounts in AccountFile into Rooted db
             var account_file_stream = std.io.limitedReader(tar_file.reader(), info.length);
             while (account_file_stream.bytes_left > 0) {
                 const r = account_file_stream.reader();
@@ -478,21 +446,22 @@ fn insertFromSnapshotArchive(
                     },
                 });
             }
-        }
 
-        // TODO: figure out how to verify incremental snapshot count (is it collapsed?)
-        switch (options.snapshot_type) {
-            .incremental => {},
-            .full => {
-                if (found_account_files < expected_account_files)
-                    return error.MissingFiles;
-                if (found_account_files > expected_account_files)
-                    return error.TooManyAccountFiles;
-            },
+            // Read unknown tar file
+        } else {
+            logger.err().logf(
+                "invalid file in snapshot tar:\"{s}\" len:{}",
+                .{ tar_file.name, tar_file.size },
+            );
+            return error.InvalidTar;
         }
     }
 
-    return .{ manifest, status_cache };
+    if (maybe_version == null) return error.MissingVersion;
+    return .{
+        maybe_manifest orelse return error.MissingManifest,
+        maybe_status_cache orelse return error.MissingStatusCache,
+    };
 }
 
 pub fn loadSnapshot(
