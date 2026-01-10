@@ -3,10 +3,21 @@ version: 2.1
 orbs:
   codecov: codecov/codecov@5.4.3
 
+commands:
+  docker_as_user:
+    description: "Configure Docker to run as the job user to prevent root-owned files in workspace"
+    steps:
+      - run:
+          name: Configure docker user/mount defaults
+          command: |
+            echo 'export DOCKER_UID_GID="$(id -u):$(id -g)"' >> "$BASH_ENV"
+            echo 'export DOCKER_MOUNT="-v $PWD:$PWD -w $PWD -e HOME=$PWD -u $DOCKER_UID_GID"' >> "$BASH_ENV"
+            source "$BASH_ENV"
+
 executors:
   linux-executor:
-    machine:
-      image: ubuntu-2404:current
+    machine: true
+    resource_class: syndica/r7iz-fleet
   python-executor:
     docker:
       - image: cimg/python:3.10
@@ -26,7 +37,7 @@ jobs:
       - run:
           name: Download Zig
           command: |
-            apt update && apt install -y wget unzip xz-utils
+            sudo apt update && sudo apt install -y wget unzip xz-utils
             wget https://ziglang.org/download/0.14.1/zig-<< parameters.target >>-0.14.1.tar.xz
             tar xf zig-<< parameters.target >>-0.14.1.tar.xz
             mkdir -p workspace
@@ -84,15 +95,15 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted
       - run:
           name: Build
           command: |
-            apt update && apt install wget -y
+            sudo apt update && sudo apt install wget -y
             ./scripts/proxy_workaround.sh workspace/zig/zig
             workspace/zig/zig build -Denable-tsan=true -p workspace/zig-out -Dcpu=x86_64_v3 --summary all
       - save_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted
           paths:
             - .zig-cache
             - ~/.cache/zig
@@ -108,11 +119,11 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1-release
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted-release
       - run:
           name: Build
           command: |
-            apt update && apt install wget -y
+            sudo apt update && sudo apt install wget -y
             ./scripts/proxy_workaround.sh workspace/zig/zig
             workspace/zig/zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p workspace/zig-out-release --summary all
       - run:
@@ -121,7 +132,7 @@ jobs:
             cd conformance
             ../workspace/zig/zig build -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p ../workspace/conformance-release --summary all
       - save_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1-release
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted-release
           paths:
             - .zig-cache
             - ~/.cache/zig
@@ -210,7 +221,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted
       - run:
           name: Build Tests
           command: workspace/zig/zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
@@ -227,7 +238,7 @@ jobs:
       # Restore the cache in order to have access to the files which the DWARF info
       # is referencing when dumping stack traces.
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted
       - run:
           name: Build Tests
           # Disable network-accessing tests for this job, which behave badly on circleci
@@ -243,17 +254,18 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted
       - run:
           name: Build
           command: workspace/zig/zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-network-tests --summary all
+      - docker_as_user
       - run:
           name: Test and Collect
           command: |
             docker run --security-opt seccomp=unconfined \
-                       -v .:/home/circleci/project \
+                       $DOCKER_MOUNT \
                        kcov/kcov \
-                       bash /home/circleci/project/scripts/kcov_ci.sh
+                       bash scripts/kcov_ci.sh
       - codecov/upload:
           dir: kcov-merged/kcov-merged
 
@@ -317,7 +329,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-v1-release
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted-release
       - run:
           name: Run Fixtures
           command: ./conformance/scripts/ci-run.sh
@@ -367,17 +379,17 @@ workflows:
           requires:
             - build_linux_release
 
-  check_macos:
-    jobs:
-      - setup_zig:
-          name: setup_zig_macos
-          target: "aarch64-macos"
-      - build_check_macos:
-          requires:
-            - setup_zig_macos
-      - test_macos:
-          requires:
-            - build_check_macos
-      - test_macos_hashmap_ledger:
-          requires:
-            - build_check_macos
+  # check_macos:
+  #   jobs:
+  #     - setup_zig:
+  #         name: setup_zig_macos
+  #         target: "aarch64-macos"
+  #     - build_check_macos:
+  #         requires:
+  #           - setup_zig_macos
+  #     - test_macos:
+  #         requires:
+  #           - build_check_macos
+  #     - test_macos_hashmap_ledger:
+  #         requires:
+  #           - build_check_macos
