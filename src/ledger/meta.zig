@@ -33,16 +33,18 @@ pub const SlotMeta = struct {
     parent_slot: ?Slot,
     /// The list of slots, each of which contains a block that derives
     /// from this one.
-    child_slots: std.ArrayList(Slot),
+    child_slots: std.ArrayListUnmanaged(Slot),
     /// Connected status flags of this slot
     connected_flags: ConnectedFlags,
     /// Shreds indices which are marked data complete.  That is, those that have the
     /// [`ShredFlags::DATA_COMPLETE_SHRED`][`crate::shred::ShredFlags::DATA_COMPLETE_SHRED`] set.
-    completed_data_indexes: SortedSet(u32),
+    completed_data_indexes: DataIndexes,
+
+    const DataIndexes = SortedSet(u32, .{ .empty_key = std.math.maxInt(u32) });
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, slot: Slot, parent_slot: ?Slot) Self {
+    pub fn init(slot: Slot, parent_slot: ?Slot) Self {
         const connected_flags = if (slot == 0)
             // Slot 0 is the start, mark it as having its' parent connected
             // such that slot 0 becoming full will be updated as connected
@@ -57,21 +59,22 @@ pub const SlotMeta = struct {
             .received = 0,
             .first_shred_timestamp_milli = 0,
             .last_index = null,
-            .child_slots = std.ArrayList(Slot).init(allocator),
-            .completed_data_indexes = SortedSet(u32).init(allocator),
+            .child_slots = .empty,
+            .completed_data_indexes = .empty,
         };
     }
 
-    pub fn deinit(self: Self) void {
-        self.child_slots.deinit();
-        self.completed_data_indexes.deinit();
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        self.child_slots.deinit(allocator);
+        self.completed_data_indexes.deinit(allocator);
     }
 
     pub fn clone(self: Self, allocator: Allocator) Allocator.Error!Self {
-        var child_slots = try std.ArrayList(Slot).initCapacity(
+        var child_slots = try std.ArrayListUnmanaged(Slot).initCapacity(
             allocator,
             self.child_slots.items.len,
         );
+        errdefer child_slots.deinit(allocator);
         child_slots.appendSliceAssumeCapacity(self.child_slots.items);
         return .{
             .slot = self.slot,
@@ -82,7 +85,7 @@ pub const SlotMeta = struct {
             .first_shred_timestamp_milli = self.first_shred_timestamp_milli,
             .last_index = self.last_index,
             .child_slots = child_slots,
-            .completed_data_indexes = try self.completed_data_indexes.clone(),
+            .completed_data_indexes = try self.completed_data_indexes.clone(allocator),
         };
     }
 
@@ -218,8 +221,15 @@ pub const ErasureMeta = struct {
     } {
         const c_start, const c_end = self.codeShredsIndices();
         const d_start, const d_end = self.dataShredsIndices();
-        const num_code = index.code_index.range(c_start, c_end).len;
-        const num_data = index.data_index.range(d_start, d_end).len;
+
+        const num_code = blk: {
+            var iter = index.code_index.iteratorRanged(c_start, c_end, .start);
+            break :blk iter.count();
+        };
+        const num_data = blk: {
+            var iter = index.code_index.iteratorRanged(d_start, d_end, .start);
+            break :blk iter.count();
+        };
 
         const data_missing = self.config.num_data -| num_data;
         const num_needed = data_missing -| num_code;
@@ -267,21 +277,21 @@ pub const Index = struct {
     data_index: ShredIndex,
     code_index: ShredIndex,
 
-    pub fn init(allocator: std.mem.Allocator, slot: Slot) Index {
+    pub fn init(slot: Slot) Index {
         return .{
             .slot = slot,
-            .data_index = ShredIndex.init(allocator),
-            .code_index = ShredIndex.init(allocator),
+            .data_index = .empty,
+            .code_index = .empty,
         };
     }
 
-    pub fn deinit(self: *Index) void {
-        self.data_index.deinit();
-        self.code_index.deinit();
+    pub fn deinit(self: *Index, allocator: std.mem.Allocator) void {
+        self.data_index.deinit(allocator);
+        self.code_index.deinit(allocator);
     }
 };
 
-pub const ShredIndex = SortedSet(u64);
+pub const ShredIndex = SortedSet(u64, .{ .empty_key = std.math.maxInt(u64) });
 
 pub const TransactionStatusMeta = sig.ledger.transaction_status.TransactionStatusMeta;
 

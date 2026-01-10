@@ -51,13 +51,19 @@ pub fn handleChaining(
     for (keys[delete_i..count]) |k| {
         if (working_set.fetchRemove(k)) |entry| {
             var slot_meta_working_set_entry = entry.value;
-            slot_meta_working_set_entry.deinit();
+            slot_meta_working_set_entry.deinit(allocator);
         }
     }
 
     // handle chaining
     var new_chained_slots = AutoHashMap(u64, SlotMeta).init(allocator);
-    defer deinitMapRecursive(&new_chained_slots);
+    defer {
+        var deinit_iter = new_chained_slots.iterator();
+        while (deinit_iter.next()) |entry| {
+            entry.value_ptr.deinit(allocator);
+        }
+        new_chained_slots.deinit();
+    }
     for (keys[0..keep_i]) |slot| {
         try handleChainingForSlot(
             allocator,
@@ -111,7 +117,7 @@ fn handleChainingForSlot(
 
             // This is a newly inserted slot/orphan so run the chaining logic to link it to a
             // newly discovered parent
-            try chainNewSlotToPrevSlot(prev_slot_meta, slot, slot_meta);
+            try chainNewSlotToPrevSlot(allocator, prev_slot_meta, slot, slot_meta);
 
             // If the parent of `slot` is a newly inserted orphan, insert it into the orphans
             // column family
@@ -170,7 +176,7 @@ fn findSlotMetaElseCreate(
     entry.value_ptr.* = if (try db.get(allocator, schema.slot_meta, slot)) |m|
         m
     else
-        SlotMeta.init(allocator, slot, null);
+        SlotMeta.init(slot, null);
     return entry.value_ptr;
 }
 
@@ -220,11 +226,12 @@ fn traverseChildrenMut(
 
 /// agave: chain_new_slot_to_prev_slot
 fn chainNewSlotToPrevSlot(
+    allocator: Allocator,
     prev_slot_meta: *SlotMeta,
     current_slot: Slot,
     current_slot_meta: *SlotMeta,
 ) !void {
-    try prev_slot_meta.child_slots.append(current_slot);
+    try prev_slot_meta.child_slots.append(allocator, current_slot);
     if (prev_slot_meta.isConnected()) {
         _ = current_slot_meta.setParentConnected();
     }

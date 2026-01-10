@@ -7,7 +7,7 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const StakeAndVoteAccountsMap = sig.core.vote_accounts.StakeAndVoteAccountsMap;
 
-const SortedMap = sig.utils.collections.SortedMapUnmanaged;
+const SortedMap = sig.utils.collections.SortedMap;
 
 /// Analogous to [MaxAllowableDrift](https://github.com/anza-xyz/agave/blob/e0bd9224fe60d8caa35bcca8daf6c8103ce424ec/runtime/src/stake_weighted_timestamp.rs#L21)
 pub const MaxAllowableDrift = struct {
@@ -38,7 +38,11 @@ pub fn calculateStakeWeightedTimestamp(
     max_allowable_drift: MaxAllowableDrift,
     fix_estimate_into_u64: bool,
 ) Allocator.Error!?i64 {
-    var stakes_per_timestamp = SortedMap(i64, u128).empty;
+    var stakes_per_timestamp: SortedMap(
+        i64,
+        u128,
+        .{ .empty_key = std.math.maxInt(i64) },
+    ) = .empty;
     defer stakes_per_timestamp.deinit(allocator);
     var total_stake: u128 = 0;
 
@@ -63,11 +67,12 @@ pub fn calculateStakeWeightedTimestamp(
     var stake_accumulator: u128 = 0;
     var estimate_s: i64 = 0;
 
-    for (stakes_per_timestamp.keys()) |timestamp_s| {
-        const stake = stakes_per_timestamp.get(timestamp_s).?;
+    var iter = stakes_per_timestamp.iterator();
+    while (iter.next()) |entry| {
+        const stake = entry.value_ptr.*;
         stake_accumulator +|= stake;
         if (stake_accumulator > total_stake / 2) {
-            estimate_s = timestamp_s;
+            estimate_s = entry.key_ptr.*;
             break;
         }
     }

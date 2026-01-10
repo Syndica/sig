@@ -44,6 +44,8 @@ const handleChaining = lib.slot_chaining.handleChaining;
 const recover = lib.recovery.recover;
 const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
+const DataIndexes = SortedSet(u32, .{ .empty_key = std.math.maxInt(u32) });
+
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
 const Logger = sig.trace.Logger("shred_inserter");
@@ -365,8 +367,13 @@ pub fn insertShreds(
     //
     var merkle_chaining_timer = Timer.start();
 
-    const em0_keys, const em0_values = state.erasure_metas.items();
-    for (em0_keys, em0_values) |erasure_set, working_em| if (working_em == .dirty) {
+    var iter = state.erasure_metas.iterator();
+    while (iter.next()) |entry| {
+        const erasure_set = entry.key_ptr.*;
+        const working_em = entry.value_ptr.*;
+
+        if (working_em != .dirty) continue;
+
         const slot = erasure_set.slot;
         const erasure_meta: ErasureMeta = working_em.dirty;
         if (try self.hasDuplicateShredsInSlot(slot)) {
@@ -386,7 +393,7 @@ pub fn insertShreds(
             erasure_meta,
             state.merkleRootMetas(),
         );
-    };
+    }
 
     //////////////////////////////////////////////////////
     // check backward chaining for each merkle root
@@ -464,7 +471,12 @@ fn checkInsertCodeShred(
     //     .record_shred(shred.slot(), shred.erasure_set_index(), shred_source, None);
     _ = shred_source;
 
-    const was_inserted = !std.meta.isError(insertCodeShred(index_meta, shred, write_batch));
+    const was_inserted = !std.meta.isError(insertCodeShred(
+        state.allocator,
+        index_meta,
+        shred,
+        write_batch,
+    ));
 
     if (was_inserted) {
         index_meta_working_set_entry.did_insert_occur = true;
@@ -728,6 +740,7 @@ fn checkInsertDataShred(
 
 /// agave: insert_coding_shred
 fn insertCodeShred(
+    allocator: std.mem.Allocator,
     index_meta: *meta.Index,
     shred: CodeShred,
     write_batch: *WriteBatch,
@@ -738,7 +751,7 @@ fn insertCodeShred(
     assertOk(shred.sanitize());
 
     try write_batch.put(schema.code_shred, .{ slot, shred_index }, shred.payload);
-    try index_meta.code_index.put(shred_index);
+    try index_meta.code_index.put(allocator, shred_index, {});
 }
 
 /// Check if the shred already exists in ledger
@@ -856,7 +869,7 @@ fn insertDataShred(
     } else slot_meta.consecutive_received_from_0;
 
     try write_batch.put(schema.data_shred, .{ slot, index }, shred.payload);
-    try data_index.put(index);
+    try data_index.put(allocator, index, {});
 
     var newly_completed_data_sets = ArrayList(CompletedDataSetInfo).init(allocator);
     const shred_indices = try updateSlotMeta(
@@ -899,7 +912,7 @@ fn sendSlotFullTiming(self: *const ShredInserter, slot: Slot) void {
 fn tryShredRecovery(
     self: *const ShredInserter,
     allocator: Allocator,
-    erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)),
+    erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta), .{}),
     index_working_set: *AutoHashMap(u64, IndexMetaWorkingSetEntry),
     shred_store: ShredWorkingStore,
     reed_solomon_cache: *ReedSolomonCache,
@@ -909,10 +922,13 @@ fn tryShredRecovery(
     // 2. For new data shreds, check if an erasure set exists. If not, don't try recovery
     // 3. Before trying recovery, check if enough number of shreds have been received
     // 3a. Enough number of shreds = (#data + #code shreds) > erasure.num_data
-    const keys, const values = erasure_metas.items();
     // let index = &mut index_meta_entry.index;
-    for (keys, values) |erasure_set, *working_erasure_meta| {
-        const erasure_meta = working_erasure_meta.asRef();
+
+    var iter = erasure_metas.iterator();
+    while (iter.next()) |entry| {
+        const erasure_meta: *const ErasureMeta = entry.value_ptr.asRef();
+        const erasure_set = entry.key_ptr.*;
+
         var index_meta_entry = index_working_set.get(erasure_set.slot) orelse {
             return error.Unwrap; // TODO: consider all the unwraps
         };
@@ -948,6 +964,7 @@ fn tryShredRecovery(
             },
         }
     }
+
     return std.ArrayList(Shred).init(allocator);
 }
 
@@ -1099,24 +1116,29 @@ fn updateCompletedDataIndexes(
     new_shred_index: u32,
     received_data_shreds: *meta.ShredIndex,
     /// Shreds indices which are marked data complete.
-    completed_data_indexes: *SortedSet(u32),
+    completed_data_indexes: *DataIndexes,
 ) Allocator.Error!ArrayList([2]u32) {
     var shred_indices = ArrayList(u32).init(allocator);
     defer shred_indices.deinit();
-    const subslice = completed_data_indexes.range(null, new_shred_index);
-    const start_shred_index = if (subslice.len == 0) 0 else subslice[subslice.len - 1];
+
+    const start_shred_index = blk: {
+        var iter = completed_data_indexes.iteratorRanged(0, new_shred_index, .end);
+        break :blk if (iter.prev()) |entry| entry.key_ptr.* else 0;
+    };
+
     // Consecutive entries i, k, j in this vector represent potential ranges [i, k),
     // [k, j) that could be completed data ranges
     try shred_indices.append(start_shred_index);
     // `new_shred_index` is data complete, so need to insert here into the
     // `completed_data_indexes`
     if (is_last_in_data) {
-        try completed_data_indexes.put(new_shred_index);
+        try completed_data_indexes.put(allocator, new_shred_index, {});
         try shred_indices.append(new_shred_index + 1);
     }
-    const new_subslice = completed_data_indexes.range(new_shred_index + 1, null);
-    if (new_subslice.len != 0) {
-        try shred_indices.append(new_subslice[0]);
+
+    {
+        var iter = completed_data_indexes.iteratorRanged(new_shred_index + 1, null, .start);
+        if (iter.next()) |entry| try shred_indices.append(entry.key_ptr.*);
     }
 
     var ret = ArrayList([2]u32).init(allocator);
@@ -1125,7 +1147,9 @@ fn updateCompletedDataIndexes(
         const begin = shred_indices.items[i];
         const end = shred_indices.items[i + 1];
         const num_shreds: usize = @intCast(end - begin);
-        if (received_data_shreds.range(begin, end).len == num_shreds) {
+
+        var iter = received_data_shreds.iteratorRanged(begin, end, .start);
+        if (iter.count() == num_shreds) {
             try ret.append(.{ begin, end - 1 });
         }
         i += 1;
@@ -1345,7 +1369,7 @@ test "chaining basic" {
     result.deinit();
     {
         var slot_meta = (try state.ledger.db.get(allocator, schema.slot_meta, 1)).?;
-        defer slot_meta.deinit();
+        defer slot_meta.deinit(allocator);
         try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected());
         try std.testing.expectEqual(0, slot_meta.parent_slot);
@@ -1357,7 +1381,7 @@ test "chaining basic" {
     result.deinit();
     {
         var slot_meta = (try state.ledger.db.get(allocator, schema.slot_meta, 1)).?;
-        defer slot_meta.deinit();
+        defer slot_meta.deinit(allocator);
         try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected()); // since 0 is not yet inserted
         try std.testing.expectEqual(0, slot_meta.parent_slot);
@@ -1365,7 +1389,7 @@ test "chaining basic" {
     }
     {
         var slot_meta = (try state.ledger.db.get(allocator, schema.slot_meta, 2)).?;
-        defer slot_meta.deinit();
+        defer slot_meta.deinit(allocator);
         try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected()); // since 0 is not yet inserted
         try std.testing.expectEqual(1, slot_meta.parent_slot);
@@ -1377,7 +1401,7 @@ test "chaining basic" {
     result.deinit();
     {
         var slot_meta = (try state.ledger.db.get(allocator, schema.slot_meta, 0)).?;
-        defer slot_meta.deinit();
+        defer slot_meta.deinit(allocator);
         try std.testing.expectEqualSlices(u64, &.{1}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
         try std.testing.expectEqual(0, slot_meta.parent_slot);
@@ -1385,7 +1409,7 @@ test "chaining basic" {
     }
     {
         var slot_meta = (try state.ledger.db.get(allocator, schema.slot_meta, 1)).?;
-        defer slot_meta.deinit();
+        defer slot_meta.deinit(allocator);
         try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
         try std.testing.expectEqual(0, slot_meta.parent_slot);
@@ -1393,7 +1417,7 @@ test "chaining basic" {
     }
     {
         var slot_meta = (try state.ledger.db.get(allocator, schema.slot_meta, 2)).?;
-        defer slot_meta.deinit();
+        defer slot_meta.deinit(allocator);
         try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
         try std.testing.expectEqual(1, slot_meta.parent_slot);

@@ -377,7 +377,7 @@ pub fn insertDataForBlockTest(
     var result_writer = state.resultWriter();
     try result_writer.setRoots(&.{ slot - 1, slot, slot + 1 });
 
-    const parent_meta = SlotMeta.init(allocator, 0, null);
+    const parent_meta = SlotMeta.init(0, null);
     try db.put(schema.slot_meta, slot - 1, parent_meta);
 
     var expected_transactions = std.ArrayList(VersionedTransactionWithStatusMeta).init(allocator);

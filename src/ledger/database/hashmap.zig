@@ -463,26 +463,26 @@ fn serializeValue(allocator: Allocator, value: anytype) !RcSlice(u8) {
 const SharedHashMap = struct {
     /// must be the same as SharedHashmapDB.storage_allocator
     allocator: Allocator,
-    map: SortedMap([]const u8, RcSlice(u8)),
+    map: SortedMap([]const u8, RcSlice(u8), .{ .empty_key = "emptykey" }),
     lock: RwLock,
 
     const Self = @This();
 
-    fn init(allocator: Allocator) Allocator.Error!Self {
+    fn init(allocator: Allocator) Self {
         return .{
             .allocator = allocator,
-            .map = SortedMap([]const u8, RcSlice(u8)).init(allocator),
+            .map = .empty,
             .lock = .{},
         };
     }
 
     pub fn deinit(self: *Self) void {
-        const keys, const values = self.map.items();
-        for (keys, values) |key, value| {
-            self.allocator.free(key);
-            value.deinit(self.allocator);
+        var iter = self.map.iterator();
+        while (iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(self.allocator);
         }
-        self.map.deinit();
+        self.map.deinit(self.allocator);
     }
 
     pub fn count(self: *Self) usize {
@@ -495,7 +495,7 @@ const SharedHashMap = struct {
     pub fn put(self: *Self, key: []const u8, value: RcSlice(u8)) Allocator.Error!void {
         self.lock.lock();
         defer self.lock.unlock();
-        const entry = try self.map.getOrPut(key);
+        const entry = try self.map.getOrPut(self.allocator, key);
         if (entry.found_existing) {
             self.allocator.free(key);
             entry.value_ptr.deinit(self.allocator);
@@ -512,7 +512,7 @@ const SharedHashMap = struct {
         const key, const value = lock: {
             self.lock.lock();
             defer self.lock.unlock();
-            const entry = self.map.fetchSwapRemove(key_) orelse return;
+            const entry = self.map.fetchRemove(key_) orelse return;
             break :lock .{ entry.key, entry.value };
         };
         self.allocator.free(key);

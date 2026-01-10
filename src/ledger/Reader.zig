@@ -6,6 +6,8 @@ const tracy = @import("tracy");
 // std
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
+
 const AutoHashMap = std.AutoHashMap;
 
 // sig common
@@ -41,6 +43,8 @@ const TransactionError = ledger_mod.transaction_status.TransactionError;
 const schema = ledger_mod.schema.schema;
 const key_serializer = ledger_mod.database.key_serializer;
 const shredder = ledger_mod.shredder;
+
+const DataIndexes = SortedSet(u32, .{ .empty_key = std.math.maxInt(u32) });
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
@@ -95,9 +99,9 @@ pub fn slotRangeConnected(
         schema.slot_meta,
         starting_slot,
     ) orelse return false;
-    defer start_slot_meta.deinit();
+    defer start_slot_meta.deinit(allocator);
     // need a reference so the start_slot_meta.deinit works correctly
-    var child_slots: *ArrayList(Slot) = &start_slot_meta.child_slots;
+    var child_slots: *ArrayListUnmanaged(Slot) = &start_slot_meta.child_slots;
 
     // TODO: revisit this with more extensive testing. how does agave work fine with
     //       supposed bugs? it may be worth opening a PR in agave with the presumed fix
@@ -109,13 +113,13 @@ pub fn slotRangeConnected(
         const slot = child_slots.items[i];
         if (try self.ledger.db.get(allocator, schema.slot_meta, slot)) |_slot_meta| {
             var slot_meta = _slot_meta;
-            defer slot_meta.deinit();
+            defer slot_meta.deinit(allocator);
 
             if (slot_meta.isFull()) {
                 std.debug.assert(last_slot == slot - 1);
                 // this append is the same as agave, but is it redundant?
                 // does the list already have these slots?
-                try child_slots.appendSlice(slot_meta.child_slots.items);
+                try child_slots.appendSlice(allocator, slot_meta.child_slots.items);
             } else {
                 return false; // this is missing from agave, which seems like a bug
             }
@@ -461,7 +465,7 @@ pub fn getCompleteBlockWithEntries(
             .logf("getCompleteBlockWithEntries failed for slot {} (missing SlotMeta)", .{slot});
         return error.SlotUnavailable;
     };
-    defer slot_meta.deinit();
+    defer slot_meta.deinit(allocator);
     if (!slot_meta.isFull()) {
         self.logger.debug()
             .logf("getCompleteBlockWithEntries failed for slot {} (slot not full)", .{slot});
@@ -1138,7 +1142,7 @@ fn getCompletedRanges(
         return .{ CompletedRanges.init(allocator), null };
     }
     var slot_meta: SlotMeta = maybe_slot_meta.?;
-    defer slot_meta.deinit();
+    defer slot_meta.deinit(allocator);
 
     // Find all the ranges for the completed data blocks
     const completed_ranges = try getCompletedDataRanges(
@@ -1156,7 +1160,7 @@ fn getCompletedRanges(
 fn getCompletedDataRanges(
     allocator: Allocator,
     start_index: u32,
-    completed_data_indexes: *SortedSet(u32),
+    completed_data_indexes: *DataIndexes,
     consumed: u32,
 ) Allocator.Error!CompletedRanges {
     // `consumed` is the next missing shred index, but shred `i` existing in
@@ -1164,10 +1168,15 @@ fn getCompletedDataRanges(
     std.debug.assert(!completed_data_indexes.contains(consumed));
     var ranges = CompletedRanges.init(allocator);
     var begin: u32 = start_index;
-    for (completed_data_indexes.range(start_index, consumed)) |index| {
+
+    // TODO: check: inclusive or exclusive?
+    var iter = completed_data_indexes.iteratorRanged(start_index, consumed, .start);
+    while (iter.next()) |entry| {
+        const index = entry.key_ptr.*;
         try ranges.append(.{ begin, index + 1 });
         begin = index + 1;
     }
+
     return ranges;
 }
 
@@ -1325,10 +1334,10 @@ pub fn getSlotsSince(
     for (slots) |slot| {
         if (try self.ledger.db.get(allocator, schema.slot_meta, slot)) |meta| {
             var child_slots = meta.child_slots;
-            errdefer child_slots.deinit();
+            errdefer child_slots.deinit(allocator);
             var cdi = meta.completed_data_indexes;
-            cdi.deinit();
-            try map.put(allocator, slot, child_slots.moveToUnmanaged());
+            cdi.deinit(allocator);
+            try map.put(allocator, slot, child_slots);
         }
     }
     return map;
@@ -1629,19 +1638,22 @@ pub const AncestorIterator = struct {
     }
 
     pub fn next(self: *AncestorIterator) !?Slot {
-        if (self.next_slot) |slot| {
-            if (slot == 0) {
-                self.next_slot = null;
-            } else if (try self.db.get(self.allocator, schema.slot_meta, slot)) |slot_meta| {
-                defer slot_meta.deinit();
-                self.next_slot = slot_meta.parent_slot;
-            } else {
-                self.next_slot = null;
-            }
+        const slot = self.next_slot orelse return null;
 
+        if (slot == 0) {
+            self.next_slot = null;
             return slot;
         }
-        return null;
+
+        var slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, slot) orelse {
+            self.next_slot = null;
+            return slot;
+        };
+        defer slot_meta.deinit(self.allocator);
+
+        self.next_slot = slot_meta.parent_slot;
+
+        return slot;
     }
 };
 
@@ -1890,7 +1902,7 @@ test slotMetaIterator {
     var slot_metas = ArrayList(SlotMeta).init(allocator);
     defer {
         for (slot_metas.items) |*slot_meta| {
-            slot_meta.deinit();
+            slot_meta.deinit(allocator);
         }
         slot_metas.deinit();
     }
@@ -1901,13 +1913,13 @@ test slotMetaIterator {
     const roots: [3]Slot = .{ 1, 2, 3 };
     var parent_slot: ?Slot = null;
     for (roots, 0..) |slot, i| {
-        var slot_meta = SlotMeta.init(allocator, slot, parent_slot);
+        var slot_meta = SlotMeta.init(slot, parent_slot);
         // ensure isFull() is true
         slot_meta.last_index = 1;
         slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
         // update next slots
         if (i + 1 < roots.len) {
-            try slot_meta.child_slots.append(roots[i + 1]);
+            try slot_meta.child_slots.append(allocator, roots[i + 1]);
         }
         try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
         // connect the chain
@@ -1923,7 +1935,7 @@ test slotMetaIterator {
     var index: u64 = 0;
     while (try iter.next()) |entry| {
         var slot_meta = entry[1];
-        defer slot_meta.deinit();
+        defer slot_meta.deinit(allocator);
 
         try std.testing.expectEqual(slot_metas.items[index].slot, slot_meta.slot);
         try std.testing.expectEqual(slot_metas.items[index].last_index, slot_meta.last_index);
@@ -1972,14 +1984,14 @@ test slotRangeConnected {
     // 1 -> 2 -> 3
     var parent_slot: ?Slot = null;
     for (roots, 0..) |slot, i| {
-        var slot_meta = SlotMeta.init(allocator, slot, parent_slot);
-        defer slot_meta.deinit();
+        var slot_meta = SlotMeta.init(slot, parent_slot);
+        defer slot_meta.deinit(allocator);
         // ensure isFull() is true
         slot_meta.last_index = 1;
         slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
         // update next slots
         if (i + 1 < roots.len) {
-            try slot_meta.child_slots.append(roots[i + 1]);
+            try slot_meta.child_slots.append(allocator, roots[i + 1]);
         }
         try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
         // connect the chain
@@ -1995,8 +2007,8 @@ test slotRangeConnected {
     try std.testing.expectEqual(true, is_connected);
 
     // insert a non-full last_slot
-    var slot_meta = SlotMeta.init(allocator, 4, parent_slot);
-    defer slot_meta.deinit();
+    var slot_meta = SlotMeta.init(4, parent_slot);
+    defer slot_meta.deinit(allocator);
     // ensure isFull() is FALSE
     slot_meta.last_index = 1;
     try write_batch2.put(schema.slot_meta, slot_meta.slot, slot_meta);
@@ -2019,7 +2031,7 @@ test highestSlot {
     {
         // insert a shred
         const shred_slot = 10;
-        var slot_meta = SlotMeta.init(allocator, shred_slot, null);
+        var slot_meta = SlotMeta.init(shred_slot, null);
         slot_meta.last_index = 21;
         slot_meta.received = 1;
 
@@ -2039,7 +2051,7 @@ test highestSlot {
 
     {
         // insert another shred at a higher slot
-        var slot_meta2 = SlotMeta.init(allocator, 100, null);
+        var slot_meta2 = SlotMeta.init(100, null);
         slot_meta2.last_index = 21;
         slot_meta2.received = 1;
 
@@ -2076,7 +2088,7 @@ test lowestSlot {
     shred.data.common.index = shred_index;
 
     // insert a shred
-    var slot_meta = SlotMeta.init(allocator, shred_slot, null);
+    var slot_meta = SlotMeta.init(shred_slot, null);
     slot_meta.last_index = 21;
     slot_meta.received = 1;
 
@@ -2162,7 +2174,7 @@ test findMissingDataIndexes {
     shred.data.common.variant = variant;
     try ledger_mod.shred.overwriteShredForTest(allocator, &shred, &(.{2} ** 100));
 
-    var slot_meta = SlotMeta.init(allocator, shred_slot, null);
+    var slot_meta = SlotMeta.init(shred_slot, null);
     slot_meta.last_index = 4;
 
     var write_batch = try state.db.initWriteBatch();
@@ -2661,7 +2673,7 @@ test getConfirmedSignaturesForAddress {
     try write_batch.put(schema.rooted_slots, slot, true);
 
     // add a slot meta for genesis check
-    var slot_meta = SlotMeta.init(allocator, 0, null);
+    var slot_meta = SlotMeta.init(0, null);
     slot_meta.received = 1;
     try write_batch.put(schema.slot_meta, 0, slot_meta);
 

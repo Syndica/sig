@@ -38,7 +38,7 @@ pub const OptimisticVotesTracker = struct {
 /// Analogous to [OptimisticConfirmationVerifier](https://github.com/anza-xyz/agave/blob/9d8bf065f7aad8257addfc5639ae5cea4e743204/core/src/optimistic_confirmation_verifier.rs#L11)
 pub const OptimisticConfirmationVerifier = struct {
     snapshot_start_slot: Slot,
-    unchecked_slots: sig.utils.collections.SortedSetUnmanaged(sig.core.hash.SlotAndHash),
+    unchecked_slots: sig.utils.collections.SortedSet(sig.core.hash.SlotAndHash, .{}),
     last_optimistic_slot_ts: sig.time.Instant,
 
     pub fn deinit(
@@ -70,24 +70,28 @@ pub const OptimisticConfirmationVerifier = struct {
             ancestors: *const sig.core.Ancestors,
         },
     ) ![]const sig.core.hash.SlotAndHash {
+        var after_root: sig.utils.collections.SortedSet(sig.core.hash.SlotAndHash, .{}) = .empty;
+        var after_root_moved: bool = false;
+        defer if (!after_root_moved) after_root.deinit(allocator);
+
         var before_or_equal_root: std.ArrayListUnmanaged(sig.core.hash.SlotAndHash) = .empty;
         defer before_or_equal_root.deinit(allocator);
+        try before_or_equal_root.ensureUnusedCapacity(allocator, self.unchecked_slots.count());
 
-        var after_root: sig.utils.collections.SortedSetUnmanaged(sig.core.hash.SlotAndHash) = .empty;
-
-        const items = self.unchecked_slots.items();
-        try before_or_equal_root.ensureTotalCapacityPrecise(allocator, items.len);
-        for (items) |sah| {
+        var iter = self.unchecked_slots.iterator();
+        while (iter.next()) |entry| {
+            const sah = entry.key_ptr.*;
             if (sah.slot > root.slot) {
-                try after_root.put(allocator, sah);
+                try after_root.put(allocator, sah, {});
             } else {
                 before_or_equal_root.appendAssumeCapacity(sah);
             }
         }
 
-        const old_set = self.unchecked_slots;
+        var old_set = self.unchecked_slots;
         self.unchecked_slots = after_root;
         old_set.deinit(allocator);
+        after_root_moved = true;
 
         var optimistic_root_not_rooted: std.ArrayListUnmanaged(sig.core.hash.SlotAndHash) = .empty;
         errdefer optimistic_root_not_rooted.deinit(allocator);
@@ -127,7 +131,7 @@ pub const OptimisticConfirmationVerifier = struct {
                 ) catch |err| {
                     logger.err().logf("insertOptimisticSlot: {s}", .{@errorName(err)});
                 };
-                try self.unchecked_slots.put(allocator, slot_and_hash);
+                try self.unchecked_slots.put(allocator, slot_and_hash, {});
             }
         }
 

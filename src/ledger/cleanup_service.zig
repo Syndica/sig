@@ -429,12 +429,12 @@ test "findSlotsToClean" {
     defer state.deinit();
 
     // set highest and lowest slot by inserting slot_meta
-    var lowest_slot_meta = ledger.meta.SlotMeta.init(allocator, 10, null);
-    defer lowest_slot_meta.deinit();
+    var lowest_slot_meta = ledger.meta.SlotMeta.init(10, null);
+    defer lowest_slot_meta.deinit(allocator);
     lowest_slot_meta.received = 10;
 
-    var highest_slot_meta = ledger.meta.SlotMeta.init(allocator, 20, null);
-    defer highest_slot_meta.deinit();
+    var highest_slot_meta = ledger.meta.SlotMeta.init(20, null);
+    defer highest_slot_meta.deinit(allocator);
     highest_slot_meta.received = 20;
 
     {
