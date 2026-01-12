@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 
 const HashMap = std.AutoArrayHashMapUnmanaged;
@@ -78,6 +79,9 @@ pub const StatusCache = struct {
         blockhash: *const Hash,
         ancestors: *const Ancestors,
     ) ?Fork {
+        const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.getStatus" });
+        defer zone.deinit();
+
         var state = self.state.read();
         defer state.unlock();
 
@@ -104,6 +108,9 @@ pub const StatusCache = struct {
         key: []const u8,
         slot: Slot,
     ) error{OutOfMemory}!void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.insert" });
+        defer zone.deinit();
+
         const max_key_index = key.len -| (CACHED_KEY_SIZE + 1);
 
         var state = self.state.write();
@@ -129,7 +136,7 @@ pub const StatusCache = struct {
 
         const lookup_key: [CACHED_KEY_SIZE]u8 = key[key_index..][0..CACHED_KEY_SIZE].*;
 
-        const forks = try hash_map.getOrPutValue(allocator, lookup_key, ForkStatus{});
+        const forks = try hash_map.getOrPutValue(allocator, lookup_key, .empty);
         try forks.value_ptr.append(allocator, .{ .slot = slot });
 
         // Add this key slice to the list of key slices for this slot and blockhash combo.
@@ -146,6 +153,9 @@ pub const StatusCache = struct {
     }
 
     pub fn addRoot(self: *StatusCache, allocator: std.mem.Allocator, fork: Slot) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.addRoot" });
+        defer zone.deinit();
+
         var state = self.state.write();
         defer state.unlock();
 

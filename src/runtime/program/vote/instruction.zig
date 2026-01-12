@@ -475,13 +475,13 @@ pub const Instruction = union(enum(u32)) {
         allocator: std.mem.Allocator,
         account_metas: []const InstructionAccount,
     ) std.mem.Allocator.Error!sig.core.Instruction {
-        const account_metas_duped = try allocator.dupe(InstructionAccount, account_metas);
-        errdefer allocator.free(account_metas_duped);
+        const accounts_duped = try allocator.dupe(InstructionAccount, account_metas);
+        errdefer allocator.free(accounts_duped);
         return try sig.core.Instruction.initUsingBincodeAlloc(
             allocator,
             Instruction,
             vote_program.ID,
-            account_metas_duped,
+            accounts_duped,
             &vote_instruction,
         );
     }

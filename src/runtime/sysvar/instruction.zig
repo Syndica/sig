@@ -88,6 +88,7 @@ test serializeInstructions {
                 .{ .pubkey = id0, .is_signer = false, .is_writable = false },
             },
             .data = &.{0},
+            .owned_data = false,
         },
         .{
             .program_id = program_id0,
@@ -95,6 +96,7 @@ test serializeInstructions {
                 .{ .pubkey = id1, .is_signer = true, .is_writable = false },
             },
             .data = &.{0},
+            .owned_data = false,
         },
         .{
             .program_id = program_id1,
@@ -102,6 +104,7 @@ test serializeInstructions {
                 .{ .pubkey = id2, .is_signer = false, .is_writable = true },
             },
             .data = &.{0},
+            .owned_data = false,
         },
         .{
             .program_id = program_id1,
@@ -109,6 +112,7 @@ test serializeInstructions {
                 .{ .pubkey = id3, .is_signer = true, .is_writable = true },
             },
             .data = &.{0},
+            .owned_data = false,
         },
     };
 

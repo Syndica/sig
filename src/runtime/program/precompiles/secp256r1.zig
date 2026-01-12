@@ -176,6 +176,7 @@ pub fn newInstruction(
         .program_id = ID,
         .accounts = &.{},
         .data = try instruction_data.toOwnedSlice(),
+        .owned_data = true,
     };
 }
 

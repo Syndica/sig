@@ -51,6 +51,9 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
             account: AccountSharedData,
             new_rate_activation_epoch: ?Epoch,
         ) !void {
+            const zone = tracy.Zone.init(@src(), .{ .name = "checkAndStore" });
+            defer zone.deinit();
+
             if (account.lamports == 0) {
                 if (vote_program.ID.equals(&account.owner)) {
                     var stakes, var stakes_guard = self.stakes.writeWithLock();

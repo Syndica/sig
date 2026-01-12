@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../../../sig.zig");
 
 const nonce = sig.runtime.nonce;
@@ -22,6 +23,9 @@ pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "system: execute" });
+    defer zone.deinit();
+
     // Default compute units for the system program are applied via the declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/v2.0.22/programs/system/src/system_processor.rs#L298
     try ic.tc.consumeCompute(system_program.COMPUTE_UNITS);
@@ -118,6 +122,9 @@ fn executeCreateAccount(
     space: u64,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "executeCreateAccount" });
+    defer zone.deinit();
+
     try ic.ixn_info.checkNumberOfAccounts(2);
     try createAccount(
         allocator,
@@ -127,7 +134,7 @@ fn executeCreateAccount(
         lamports,
         space,
         owner,
-        ic.ixn_info.account_metas.buffer[1].pubkey,
+        ic.ixn_info.account_metas.items[1].pubkey,
     );
 }
 
@@ -141,10 +148,13 @@ fn executeCreateAccountWithSeed(
     space: u64,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "executeCreateAccountWithSeed" });
+    defer zone.deinit();
+
     try ic.ixn_info.checkNumberOfAccounts(2);
     try checkSeedAddress(
         ic,
-        ic.ixn_info.account_metas.buffer[1].pubkey,
+        ic.ixn_info.account_metas.items[1].pubkey,
         base,
         owner,
         seed,
@@ -167,6 +177,9 @@ fn executeAssign(
     ic: *InstructionContext,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "executeAssign" });
+    defer zone.deinit();
+
     try ic.ixn_info.checkNumberOfAccounts(1);
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -183,6 +196,9 @@ fn executeTransfer(
     ic: *InstructionContext,
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "executeTransfer" });
+    defer zone.deinit();
+
     try ic.ixn_info.checkNumberOfAccounts(2);
     try transfer(
         ic,
@@ -199,14 +215,17 @@ fn executeTransferWithSeed(
     from_seed: []const u8,
     from_owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "executeTransferWithSeed" });
+    defer zone.deinit();
+
     try ic.ixn_info.checkNumberOfAccounts(3);
 
     const from_index = 0;
     const from_base_index = 1;
     const to_index = 2;
 
-    const from_base_pubkey = ic.ixn_info.account_metas.buffer[from_base_index].pubkey;
-    const from_pubkey = ic.ixn_info.account_metas.buffer[from_index].pubkey;
+    const from_base_pubkey = ic.ixn_info.account_metas.items[from_base_index].pubkey;
+    const from_pubkey = ic.ixn_info.account_metas.items[from_index].pubkey;
 
     if (!try ic.ixn_info.isIndexSigner(from_base_index)) {
         try ic.tc.log("Transfer: `from` account {} must sign", .{from_base_pubkey});
@@ -235,6 +254,9 @@ fn executeAdvanceNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "executeAdvanceNonceAccount" });
+    defer zone.deinit();
+
     try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
@@ -256,6 +278,9 @@ fn executeWithdrawNonceAccount(
     ic: *InstructionContext,
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "executeWithdrawNonceAccount" });
+    defer zone.deinit();
+
     try ic.ixn_info.checkNumberOfAccounts(2);
 
     _ = try ic.getSysvarWithAccountCheck(RecentBlockhashes, 2);
@@ -271,6 +296,9 @@ fn executeInitializeNonceAccount(
     ic: *InstructionContext,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "executeInitializeNonceAccount" });
+    defer zone.deinit();
+
     try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
@@ -300,6 +328,9 @@ fn executeAuthorizeNonceAccount(
     ic: *InstructionContext,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "executeAuthorizeNonceAccount" });
+    defer zone.deinit();
+
     try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
@@ -318,6 +349,9 @@ fn executeUpgradeNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "executeUpgradeNonceAccount" });
+    defer zone.deinit();
+
     try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
@@ -341,6 +375,9 @@ fn executeAllocate(
     ic: *InstructionContext,
     space: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "executeAllocate" });
+    defer zone.deinit();
+
     try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
@@ -358,6 +395,9 @@ fn executeAllocateWithSeed(
     space: u64,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "executeAllocateWithSeed" });
+    defer zone.deinit();
+
     try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
@@ -383,6 +423,9 @@ fn executeAssignWithSeed(
     seed: []const u8,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "executeAssignWithSeed" });
+    defer zone.deinit();
+
     try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
@@ -411,6 +454,9 @@ fn createAccount(
     owner: Pubkey,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
+    var zone = tracy.Zone.init(@src(), .{ .name = "createAccount" });
+    defer zone.deinit();
+
     {
         var account = try ic.borrowInstructionAccount(to_index);
         defer account.release();
@@ -443,6 +489,9 @@ fn assign(
     owner: Pubkey,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "assign" });
+    defer zone.deinit();
+
     if (account.account.owner.equals(&owner)) return;
 
     if (!ic.ixn_info.isPubkeySigner(authority)) {
@@ -463,7 +512,7 @@ fn transfer(
     if (!try ic.ixn_info.isIndexSigner(from_index)) {
         try ic.tc.log(
             "Transfer: `from` account {} must sign",
-            .{ic.ixn_info.account_metas.buffer[from_index].pubkey},
+            .{ic.ixn_info.account_metas.items[from_index].pubkey},
         );
         return InstructionError.MissingRequiredSignature;
     }

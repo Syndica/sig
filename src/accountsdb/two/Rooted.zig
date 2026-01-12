@@ -338,6 +338,9 @@ pub fn get(
     allocator: std.mem.Allocator,
     address: Pubkey,
 ) error{OutOfMemory}!?AccountSharedData {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.get" });
+    defer zone.deinit();
+
     return try self.getInner(allocator, address);
 }
 

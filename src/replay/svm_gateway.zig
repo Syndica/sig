@@ -27,7 +27,8 @@ const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 const initDurableNonceFromHash = sig.runtime.nonce.initDurableNonceFromHash;
 
 pub fn executeTransaction(
-    allocator: Allocator,
+    programs_allocator: Allocator,
+    tmp_allocator: Allocator,
     svm_gateway: *SvmGateway,
     transaction: *const RuntimeTransaction,
 ) !TransactionResult(ProcessedTransaction) {
@@ -37,7 +38,8 @@ pub fn executeTransaction(
     const environment = try svm_gateway.environment();
 
     return try sig.runtime.transaction_execution.loadAndExecuteTransaction(
-        allocator,
+        programs_allocator,
+        tmp_allocator,
         transaction,
         svm_gateway.params.account_store,
         &environment,
@@ -123,6 +125,9 @@ pub const SvmGateway = struct {
     }
 
     pub fn deinit(self: *const SvmGateway, allocator: Allocator) void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "SvmGateway.deinit" });
+        defer zone.deinit();
+
         var bhq = self.state.blockhash_queue;
         bhq.unlock();
 

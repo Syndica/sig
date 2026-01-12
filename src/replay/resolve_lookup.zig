@@ -54,6 +54,7 @@ pub const ResolvedTransaction = struct {
     pub fn deinit(self: ResolvedTransaction, allocator: Allocator) void {
         var acc = self.accounts;
         acc.deinit(allocator);
+        for (self.instructions) |instr| instr.deinit(allocator);
         allocator.free(self.instructions);
     }
 
@@ -118,6 +119,9 @@ pub fn resolveBatch(
     batch: []const Transaction,
     params: SlotResolver,
 ) !ResolvedBatch {
+    const zone = tracy.Zone.init(@src(), .{ .name = "resolveBatch" });
+    defer zone.deinit();
+
     var accounts = try std.ArrayListUnmanaged(LockableAccount)
         .initCapacity(allocator, Transaction.numAccounts(batch));
     errdefer accounts.deinit(allocator);
@@ -152,6 +156,9 @@ pub fn resolveTransaction(
     transaction: Transaction,
     params: SlotResolver,
 ) !ResolvedTransaction {
+    const zone = tracy.Zone.init(@src(), .{ .name = "resolveTransaction" });
+    defer zone.deinit();
+
     const message = transaction.msg;
 
     const lookups = try resolveLookupTableAccounts(
@@ -198,9 +205,15 @@ pub fn resolveTransaction(
 
     // construct instructions
     const instructions = try allocator.alloc(InstructionInfo, message.instructions.len);
-    errdefer allocator.free(instructions);
+    errdefer {
+        for (instructions) |instr| instr.deinit(allocator);
+        allocator.free(instructions);
+    }
+
     for (message.instructions, instructions) |input_ix, *output_ix| {
         var account_metas = InstructionInfo.AccountMetas{};
+        errdefer account_metas.deinit(allocator);
+
         var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
         for (input_ix.account_indexes, 0..) |index_in_transaction, i| {
             // find first usage of this account in this instruction
@@ -210,7 +223,7 @@ pub fn resolveTransaction(
             // expand the account metadata
             if (index_in_transaction >= accounts.len) return error.InvalidAccountIndex;
             const account = accounts.get(index_in_transaction);
-            (account_metas.addOne() catch break).* = .{
+            (account_metas.addOne(allocator) catch break).* = .{
                 .pubkey = account.pubkey,
                 .is_signer = account.is_signer,
                 .is_writable = account.is_writable,
@@ -229,6 +242,7 @@ pub fn resolveTransaction(
             .account_metas = account_metas,
             .dedupe_map = dedupe_map,
             .instruction_data = input_ix.data,
+            .owned_instruction_data = false,
         };
     }
     return .{
@@ -516,7 +530,7 @@ test resolveBatch {
     ) |input_ix, output_ix, expect| {
         for (
             input_ix.account_indexes,
-            output_ix.account_metas.slice(),
+            output_ix.account_metas.items,
             expect.index_in_transaction,
             expect.is_signer,
             expect.is_writable,

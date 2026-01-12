@@ -14,10 +14,11 @@ pub const Instruction = struct {
     /// Data is the binary encoding of the program instruction and its
     /// arguments. The lifetime of the data must outlive the instruction.
     data: []const u8,
+    owned_data: bool,
 
     pub fn deinit(self: Instruction, allocator: std.mem.Allocator) void {
+        if (self.owned_data) allocator.free(self.data);
         allocator.free(self.accounts);
-        allocator.free(self.data);
     }
 
     // https://github.com/anza-xyz/agave/blob/3bbabb38c5800b197841eb79037a82e88e174440/sdk/instruction/src/lib.rs#L221
@@ -38,6 +39,7 @@ pub const Instruction = struct {
             .program_id = program_id,
             .accounts = accounts,
             .data = serialized,
+            .owned_data = true,
         };
     }
 };

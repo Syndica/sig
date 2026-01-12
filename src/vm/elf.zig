@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 const sbpf = @import("sbpf.zig");
 const memory = @import("memory.zig");
 
@@ -495,6 +496,9 @@ pub const Elf = struct {
             version: sbpf.Version,
             config: Config,
         ) !void {
+            const zone = tracy.Zone.init(@src(), .{ .name = "Elf.Data.relocate" });
+            defer zone.deinit();
+
             const text_section_index = self.getShdrIndexByName(headers, ".text") orelse
                 return error.ShdrNotFound;
 

@@ -48,7 +48,9 @@ pub fn build(b: *Build) void {
             .target = target,
             .optimize = optimize,
             .omit_frame_pointer = false,
-            .fuzz = true,
+            // NOTE: enable fuzzing for when we actually want to fuzz. This only slows us down when
+            // running fixtures.
+            .fuzz = false,
             .imports = &common_imports,
         }),
     });

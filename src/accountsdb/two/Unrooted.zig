@@ -6,6 +6,7 @@
 //!
 
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../../sig.zig");
 
 const Atomic = std.atomic.Value;
@@ -68,6 +69,9 @@ pub fn put(
     address: Pubkey,
     data: AccountSharedData,
 ) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.put" });
+    defer zone.deinit();
+
     const index = slot % MAX_SLOTS;
     const entry = &self.slots[index];
 
@@ -93,6 +97,12 @@ pub fn get(
     address: Pubkey,
     ancestors: *const Ancestors,
 ) ?Account {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.get" });
+    defer zone.deinit();
+
+    var n_gets: u32 = 0;
+    defer zone.value(n_gets);
+
     var best_slot: Slot = 0;
     var result: ?Account = null;
 
@@ -103,6 +113,7 @@ pub fn get(
         defer index.lock.unlockShared();
 
         if (index.slot >= best_slot and ancestors.containsSlot(index.slot)) {
+            n_gets += 1;
             const data = index.entries.get(address) orelse continue;
             result = data.asAccount();
             best_slot = index.slot;

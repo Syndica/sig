@@ -148,14 +148,15 @@ pub fn TransactionResult(comptime T: type) type {
 
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L323-L324
 pub fn loadAndExecuteTransaction(
-    allocator: std.mem.Allocator,
+    programs_allocator: std.mem.Allocator,
+    tmp_allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
     account_store: SlotAccountStore,
     env: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
     program_map: *ProgramMap,
 ) AccountLoadError!TransactionResult(ProcessedTransaction) {
-    var zone = tracy.Zone.init(@src(), .{ .name = "executeTransaction" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "loadAndExecuteTransaction" });
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
 
@@ -173,7 +174,7 @@ pub fn loadAndExecuteTransaction(
     }
 
     const maybe_nonce_info = switch (try sig.runtime.check_transactions.checkAge(
-        allocator,
+        tmp_allocator,
         transaction,
         account_store.reader(),
         env.blockhash_queue,
@@ -185,7 +186,7 @@ pub fn loadAndExecuteTransaction(
         .err => |e| return .{ .err = e },
     };
     var nonce_account_is_owned = true;
-    defer if (nonce_account_is_owned) if (maybe_nonce_info) |n| allocator.free(n.account.data);
+    defer if (nonce_account_is_owned) if (maybe_nonce_info) |n| tmp_allocator.free(n.account.data);
 
     const compute_budget_limits = switch (compute_budget_program.sanitize(
         transaction.compute_budget_instruction_details,
@@ -205,7 +206,7 @@ pub fn loadAndExecuteTransaction(
 
     nonce_account_is_owned = false;
     const fees, var rollbacks = switch (try sig.runtime.check_transactions.checkFeePayer(
-        allocator,
+        tmp_allocator,
         transaction,
         account_store,
         &compute_budget_limits,
@@ -218,11 +219,11 @@ pub fn loadAndExecuteTransaction(
         .ok => |x| x,
         .err => |e| return .{ .err = e },
     };
-    errdefer for (rollbacks.slice()) |r| r.deinit(allocator);
+    errdefer for (rollbacks.slice()) |r| r.deinit(tmp_allocator);
 
     var loaded_accounts = switch (try account_loader.loadTransactionAccounts(
         account_store.reader(),
-        allocator,
+        tmp_allocator,
         transaction,
         env.rent_collector,
         env.feature_set,
@@ -232,7 +233,7 @@ pub fn loadAndExecuteTransaction(
         .ok => |x| x,
         .err => |err| {
             var writes = ProcessedTransaction.Writes{};
-            errdefer while (writes.pop()) |item| item.account.deinit(allocator);
+            errdefer while (writes.pop()) |item| item.account.deinit(tmp_allocator);
             var loaded_accounts_data_size: u32 = 0;
             while (rollbacks.pop()) |rollback| {
                 const item = writes.addOne() catch unreachable;
@@ -250,10 +251,10 @@ pub fn loadAndExecuteTransaction(
             } };
         },
     };
-    errdefer for (loaded_accounts.accounts.slice()) |acct| acct.deinit(allocator);
+    errdefer for (loaded_accounts.accounts.slice()) |acct| acct.deinit(tmp_allocator);
 
     for (loaded_accounts.accounts.slice()) |account| try program_loader.loadIfProgram(
-        allocator,
+        programs_allocator,
         program_map,
         account.pubkey,
         &account.account,
@@ -263,7 +264,7 @@ pub fn loadAndExecuteTransaction(
     );
 
     const executed_transaction = try executeTransaction(
-        allocator,
+        tmp_allocator,
         transaction,
         loaded_accounts.accounts.slice(),
         &compute_budget_limits,
@@ -281,14 +282,14 @@ pub fn loadAndExecuteTransaction(
             if (is_writable)
                 writes.append(account) catch unreachable
             else
-                account.deinit(allocator);
+                account.deinit(tmp_allocator);
         }
-        while (rollbacks.pop()) |rollback| rollback.deinit(allocator);
+        while (rollbacks.pop()) |rollback| rollback.deinit(tmp_allocator);
     } else {
         while (rollbacks.pop()) |account| writes.append(account) catch unreachable;
         if (config.failed_accounts) |f|
             f.* = loaded_accounts.accounts
-        else for (loaded_accounts.accounts.slice()) |a| a.deinit(allocator);
+        else for (loaded_accounts.accounts.slice()) |a| a.deinit(tmp_allocator);
     }
 
     for (writes.slice()) |*acct| try wrapDB(account_store.put(acct.pubkey, acct.account));
@@ -572,6 +573,7 @@ test getInstructionDatasSliceForPrecompiles {
             .account_metas = .{},
             .dedupe_map = @splat(0xff),
             .instruction_data = "data",
+            .owned_instruction_data = false,
             .initial_account_lamports = 0,
         }};
 
@@ -596,6 +598,7 @@ test getInstructionDatasSliceForPrecompiles {
                 .account_metas = .{},
                 .dedupe_map = @splat(0xff),
                 .instruction_data = "one",
+                .owned_instruction_data = false,
                 .initial_account_lamports = 0,
             },
             .{
@@ -606,6 +609,7 @@ test getInstructionDatasSliceForPrecompiles {
                 .account_metas = .{},
                 .dedupe_map = @splat(0xff),
                 .instruction_data = "two",
+                .owned_instruction_data = false,
                 .initial_account_lamports = 0,
             },
             .{
@@ -616,6 +620,7 @@ test getInstructionDatasSliceForPrecompiles {
                 .account_metas = .{},
                 .dedupe_map = @splat(0xff),
                 .instruction_data = "three",
+                .owned_instruction_data = false,
                 .initial_account_lamports = 0,
             },
         };
@@ -701,6 +706,23 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .is_writable = false,
     });
 
+    var metas: sig.runtime.InstructionInfo.AccountMetas = .empty;
+    defer metas.deinit(allocator);
+    try metas.appendSlice(allocator, &.{ // sender, receiver, system program
+        .{
+            .pubkey = sender_key,
+            .index_in_transaction = 0,
+            .is_signer = true,
+            .is_writable = true,
+        },
+        .{
+            .pubkey = receiver_key,
+            .index_in_transaction = 1,
+            .is_signer = false,
+            .is_writable = true,
+        },
+    });
+
     var transaction: RuntimeTransaction = .{
         .signature_count = 1,
         .fee_payer = sender_key,
@@ -711,20 +733,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
                 .pubkey = sig.runtime.program.system.ID,
                 .index_in_transaction = 2,
             },
-            .account_metas = try .fromSlice(&.{ // sender, receiver, system program
-                .{
-                    .pubkey = sender_key,
-                    .index_in_transaction = 0,
-                    .is_signer = true,
-                    .is_writable = true,
-                },
-                .{
-                    .pubkey = receiver_key,
-                    .index_in_transaction = 1,
-                    .is_signer = false,
-                    .is_writable = true,
-                },
-            }),
+            .account_metas = metas,
             .dedupe_map = blk: {
                 var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
                 dedupe_map[0] = 0;
@@ -732,6 +741,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
                 break :blk dedupe_map;
             },
             .instruction_data = transfer_instruction_data,
+            .owned_instruction_data = false,
         }},
         .accounts = accounts,
         .num_lookup_tables = 0,
@@ -832,6 +842,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         defer program_map.deinit(allocator);
         const result = try loadAndExecuteTransaction(
             allocator,
+            allocator,
             &transaction,
             .{ .account_shared_data_map = .{ allocator, &account_map } },
             &environment,
@@ -867,6 +878,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         var program_map = ProgramMap.empty;
         defer program_map.deinit(allocator);
         const result = try loadAndExecuteTransaction(
+            allocator,
             allocator,
             &transaction,
             .{ .account_shared_data_map = .{ allocator, &account_map } },
