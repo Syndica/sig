@@ -86,14 +86,15 @@ pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot, ancestors: *const Ancest
     // we want to show that we'll never need to iterate over more than MAX_SLOTs cases.
     std.debug.assert(ancestors.ancestors.count() < Unrooted.MAX_SLOTS);
 
-    // TODO: We can probably avoid running through the full range of slots
-    // by computing something like:
-    // range = new_slot - old_slot;
-    // for (0..range) |i| (old_slot + i) % MAX_SLOTS;
+    const start_slot = if (self.rooted.largest_rooted_slot) |lrs| lrs + 1 else 0;
+    const range = newly_rooted_slot - start_slot + 1;
 
-    for (self.unrooted.slots) |*index| {
+    for (0..range) |i| {
+        const slot = start_slot + i;
+        const index = &self.unrooted.slots[slot % Unrooted.MAX_SLOTS];
+
         if (index.is_empty.load(.acquire)) continue;
-        if (index.slot > newly_rooted_slot) continue;
+        if (index.slot != slot) continue;
 
         index.lock.lock();
         defer index.lock.unlock();
@@ -247,5 +248,42 @@ test "many slots, same account" {
     db.onSlotRooted(Unrooted.MAX_SLOTS * 2, &ancestors);
     for (db.unrooted.slots) |entry| {
         std.debug.assert(entry.is_empty.load(.acquire));
+    }
+}
+
+test "rooting must handle wraparound and non-consecutive roots" {
+    const allocator = std.testing.allocator;
+
+    var test_state = try Db.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    var ancestors = Ancestors.EMPTY;
+    defer ancestors.deinit(allocator);
+
+    for (0..Unrooted.MAX_SLOTS * 2) |slot| {
+        try ancestors.addSlot(allocator, slot);
+        ancestors.cleanup();
+
+        try db.put(slot, .ZEROES, .{
+            .lamports = slot * 10,
+            .data = &.{},
+            .owner = .ZEROES,
+            .executable = false,
+            .rent_epoch = 0,
+        });
+
+        {
+            const account = try db.get(allocator, .ZEROES, &ancestors);
+            defer account.?.deinit(allocator);
+            try std.testing.expectEqual(slot * 10, account.?.lamports);
+        }
+
+        if (slot % 2 == 0) {
+            db.onSlotRooted(slot, &ancestors);
+            const account = try db.get(allocator, .ZEROES, &ancestors);
+            defer account.?.deinit(allocator);
+            try std.testing.expectEqual(slot * 10, account.?.lamports);
+        }
     }
 }
