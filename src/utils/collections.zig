@@ -593,6 +593,8 @@ pub fn SortedMapUnmanagedCustom(
     comptime V: type,
     comptime config: SortedMapConfig(K),
 ) type {
+    const order = config.orderFn;
+
     return struct {
         inner: Inner,
         max: ?K,
@@ -701,7 +703,12 @@ pub fn SortedMapUnmanagedCustom(
             key: K,
             value: V,
         ) std.mem.Allocator.Error!void {
-            try self.inner.put(allocator, key, value);
+            try self.ensureUnusedCapacity(allocator, 1);
+            self.putAssumeCapacity(key, value);
+        }
+
+        pub fn putAssumeCapacity(self: *SortedMapSelf, key: K, value: V) void {
+            self.inner.putAssumeCapacity(key, value);
             if (self.max == null or order(key, self.max.?) == .gt) {
                 self.max = key;
             } else {
@@ -858,6 +865,22 @@ pub fn SortedMapUnmanagedCustom(
             }{ .items = self.inner.entries.slice() });
             self.is_sorted = true;
         }
+
+        pub fn capacity(self: *const SortedMapSelf) usize {
+            return self.inner.capacity();
+        }
+
+        pub fn unusedCapacity(self: *const SortedMapSelf) usize {
+            return self.inner.capacity() - self.count();
+        }
+
+        pub fn ensureUnusedCapacity(
+            self: *SortedMapSelf,
+            gpa: std.mem.Allocator,
+            additional_capacity: usize,
+        ) Allocator.Error!void {
+            try self.inner.ensureUnusedCapacity(gpa, additional_capacity);
+        }
     };
 }
 
@@ -881,7 +904,7 @@ pub fn SortedMapConfig(comptime K: type) type {
         .{ std.array_hash_map.AutoContext(K), !std.array_hash_map.autoEqlIsCheap(K) };
 
     return struct {
-        orderFn: fn (a: anytype, b: anytype) std.math.Order = order,
+        orderFn: fn (a: K, b: K) std.math.Order = defaultOrderFn(K),
         /// passthrough to std.ArrayHashMap
         Context: type = default_Context,
         /// passthrough to std.ArrayHashMap
@@ -889,29 +912,30 @@ pub fn SortedMapConfig(comptime K: type) type {
     };
 }
 
-pub fn order(a: anytype, b: anytype) std.math.Order {
-    const T: type = @TypeOf(a);
-    if (T != @TypeOf(b)) @compileError("types do not match");
-    const info = @typeInfo(T);
-    switch (info) {
-        .int, .float => return std.math.order(a, b),
-        .@"struct", .@"enum", .@"union", .@"opaque" => {
-            if (@hasDecl(T, "order") and
-                (@TypeOf(T.order) == fn (a: T, b: T) std.math.Order or
-                    @TypeOf(T.order) == fn (a: anytype, b: anytype) std.math.Order))
-            {
-                return T.order(a, b);
+fn defaultOrderFn(comptime K: type) fn (lhs: K, rhs: K) std.math.Order {
+    return struct {
+        fn orderFn(lhs: K, rhs: K) std.math.Order {
+            switch (@typeInfo(K)) {
+                .int, .float => return std.math.order(lhs, rhs),
+                .@"struct", .@"enum", .@"union", .@"opaque" => {
+                    if (@hasDecl(K, "order") and
+                        (@TypeOf(K.order) == fn (lhs: K, rhs: K) std.math.Order or
+                            @TypeOf(K.order) == fn (lhs: anytype, rhs: anytype) std.math.Order))
+                    {
+                        return K.order(lhs, rhs);
+                    }
+                },
+                .pointer => |info| {
+                    const child = @typeInfo(info.child);
+                    if (info.size == .slice and (child == .int or child == .float)) {
+                        return orderSlices(info.child, std.math.order, lhs, rhs);
+                    }
+                },
+                else => {},
             }
-        },
-        .pointer => {
-            const child = @typeInfo(info.pointer.child);
-            if (info.pointer.size == .slice and (child == .int or child == .float)) {
-                return orderSlices(info.pointer.child, std.math.order, a, b);
-            }
-        },
-        else => {},
-    }
-    @compileError(std.fmt.comptimePrint("`order` not supported for {}", .{T}));
+            @compileError("default order not supported for " ++ @typeName(K));
+        }
+    }.orderFn;
 }
 
 pub const BinarySearchResult = union(enum) {
@@ -1292,6 +1316,7 @@ test "binarySearch slice of slices" {
         &.{ 0, 0, 40 },
     };
 
+    const order = defaultOrderFn([]const u8);
     try std.testing.expectEqual(
         BinarySearchResult{ .found = 3 },
         binarySearch([]const u8, &slices, &.{ 0, 0, 40 }, .any, order),

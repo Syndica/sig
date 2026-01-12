@@ -121,7 +121,7 @@ pub const TowerConsensus = struct {
 
     pub fn deinit(self: TowerConsensus, allocator: Allocator) void {
         self.replay_tower.deinit(allocator);
-        self.fork_choice.deinit();
+        self.fork_choice.deinit(allocator);
 
         var latest_validator_votes = self.latest_validator_votes;
         latest_validator_votes.deinit(allocator);
@@ -153,7 +153,7 @@ pub const TowerConsensus = struct {
             deps.slot_tracker,
             deps.ledger,
         );
-        errdefer fork_choice.deinit();
+        errdefer fork_choice.deinit(allocator);
 
         const root_ref = deps.slot_tracker.get(deps.slot_tracker.root).?;
         const root_ancestors = &root_ref.constants.ancestors;
@@ -221,17 +221,13 @@ pub const TowerConsensus = struct {
         // initialize a new HeaviestSubtreeForkChoice
         //
         // Analogous to [`new_from_frozen_banks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/consensus/heaviest_subtree_fork_choice.rs#L235)
-        var heaviest_subtree_fork_choice: HeaviestSubtreeForkChoice =
-            try .init(
-                allocator,
-                .from(logger),
-                .{
-                    .slot = root_slot,
-                    .hash = root_hash,
-                },
-                sig.prometheus.globalRegistry(),
-            );
-        errdefer heaviest_subtree_fork_choice.deinit();
+        var heaviest_subtree_fork_choice: HeaviestSubtreeForkChoice = try .init(
+            allocator,
+            .from(logger),
+            .{ .slot = root_slot, .hash = root_hash },
+            sig.prometheus.globalRegistry(),
+        );
+        errdefer heaviest_subtree_fork_choice.deinit(allocator);
 
         var prev_slot = root_slot;
         for (frozen_slots.keys(), frozen_slots.values()) |slot, info| {
@@ -242,6 +238,7 @@ pub const TowerConsensus = struct {
                 prev_slot = slot;
                 const parent_bank_hash = info.constants.parent_hash;
                 try heaviest_subtree_fork_choice.addNewLeafSlot(
+                    allocator,
                     .{ .slot = slot, .hash = frozen_hash },
                     .{ .slot = info.constants.parent_slot, .hash = parent_bank_hash },
                 );
@@ -262,7 +259,7 @@ pub const TowerConsensus = struct {
 
         while (try duplicate_slots.nextKey()) |slot| {
             const ref = slot_tracker.get(slot) orelse continue;
-            try heaviest_subtree_fork_choice.markForkInvalidCandidate(&.{
+            try heaviest_subtree_fork_choice.markForkInvalidCandidate(allocator, &.{
                 .slot = slot,
                 .hash = ref.state.hash.readCopy().?,
             });
@@ -1646,7 +1643,7 @@ fn checkAndHandleNewRoot(
     }
 
     // Update forkchoice
-    try fork_choice.setTreeRoot(&.{
+    try fork_choice.setTreeRoot(allocator, &.{
         .slot = new_root,
         .hash = root_hash,
     });
@@ -1873,10 +1870,8 @@ test "processResult and handleDuplicateConfirmedFork" {
         .slot = 1,
         .hash = .parse("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"),
     };
-    const children = sig.utils.collections.SortedMap(SlotAndHash, void).init(allocator);
-    defer children.deinit();
 
-    try consensus.fork_choice.fork_infos.put(slot_hash, .{
+    try consensus.fork_choice.fork_infos.put(allocator, slot_hash, .{
         .logger = .FOR_TESTS,
         .stake_for_slot = 0,
         .stake_for_subtree = 0,
@@ -1884,7 +1879,7 @@ test "processResult and handleDuplicateConfirmedFork" {
         .heaviest_subtree_slot = slot_hash,
         .deepest_slot = slot_hash,
         .parent = null,
-        .children = children,
+        .children = .empty,
         .latest_duplicate_ancestor = null,
         .is_duplicate_confirmed = false,
     });
