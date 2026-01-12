@@ -1,5 +1,13 @@
+comptime {
+    switch (@import("builtin").cpu.arch) {
+        // TODO(0.15): LLVM 20 and 21 miscompile the vectorized memcpy on aarch64.
+        .aarch64 => {},
+        else => @export(&memcpy, .{ .name = "memcpy", .linkage = .strong }),
+    }
+}
+
 // https://github.com/facebook/folly/blob/1c8bc50e88804e2a7361a57cd9b551dd10f6c5fd/folly/memcpy.S
-export fn memcpy(maybe_dest: ?[*]u8, maybe_src: ?[*]const u8, len: usize) callconv(.C) ?[*]u8 {
+fn memcpy(maybe_dest: ?[*]u8, maybe_src: ?[*]const u8, len: usize) callconv(.c) ?[*]u8 {
     @disableIntrinsics();
 
     if (len == 0) {
