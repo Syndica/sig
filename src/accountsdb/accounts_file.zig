@@ -368,7 +368,7 @@ pub const AccountFile = struct {
         };
     }
 
-    pub const max_header_buf_len = max_size: {
+    const max_header_buf_len = max_size: {
         var max_size = 0;
         for (0..@sizeOf(u64)) |i| {
             var start = i;

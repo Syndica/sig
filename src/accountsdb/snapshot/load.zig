@@ -56,6 +56,8 @@ const LoadSnapshotOptions = struct {
     metadata_only: bool = false,
 };
 
+/// Similar to `loadSnapshot`, but avoids untar-ing the snapshot into files on disk.
+/// If provided, populates a Rooted DB instance with the accounts if DB is empty.
 pub fn loadSnapshot2(
     allocator: Allocator,
     rooted_db: *Rooted,

@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const sig = @import("../../sig.zig");
-pub const Rooted = @import("Rooted2.zig");
+pub const Rooted = @import("Rooted.zig");
 pub const Unrooted = @import("Unrooted.zig");
 
 const Pubkey = sig.core.Pubkey;

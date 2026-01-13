@@ -355,7 +355,7 @@ pub fn paddingBytes(
 }
 
 /// Minimal implemenation of `std.tar.Header` since it's no longer `pub`
-pub const TarHeaderMinimal = struct {
+const TarHeaderMinimal = struct {
     bytes: *const [SIZE]u8,
 
     const SIZE = 512;

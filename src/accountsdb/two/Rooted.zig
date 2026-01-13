@@ -35,72 +35,37 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         break :blk maybe_db orelse return error.SqliteDbNull;
     };
 
-    const schema =
-        \\ PRAGMA journal_mode = OFF;
-        \\ PRAGMA synchronous = 0;
-        \\ PRAGMA cache_size = 1000000;
-        \\ PRAGMA locking_mode = EXCLUSIVE;
-        \\ PRAGMA temp_store = MEMORY;
-        \\ PRAGMA page_size = 65536;
-        \\
-        \\CREATE TABLE IF NOT EXISTS entries (
-        \\  address BLOB(32) NOT NULL UNIQUE,
-        \\  lamports INTEGER NOT NULL,
-        \\  data BLOB NOT NULL,
-        \\  owner BLOB(32) NOT NULL,
-        \\  executable INTEGER NOT NULL,
-        \\  rent_epoch INTEGER NOT NULL,
-        \\  last_modified_slot INTEGER NOT NULL
-        \\);
-    ;
-
-    if (sql.sqlite3_exec(db, schema, null, null, null) != OK) {
-        std.debug.print("err  {s}\n", .{sql.sqlite3_errmsg(db)});
-        return error.FailedToCreateTables;
-    }
-
-    return .{
+    var self: Rooted = .{
         .handle = db,
         .largest_rooted_slot = null,
     };
-}
 
-pub fn initSnapshot(
-    allocator: std.mem.Allocator,
-    file_path: [:0]const u8,
-    /// Set to directory which contains snapshot account files to pre-load the rooted storage from them.
-    accounts_dir: std.fs.Dir,
-) !Rooted {
-    const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.initSnapshot" });
-    defer zone.deinit();
+    if (self.isEmpty()) {
+        std.debug.print("creating db schema\n", .{});
 
-    const db = blk: {
-        var maybe_db: ?*sql.sqlite3 = null;
-        if (sql.sqlite3_open(file_path.ptr, &maybe_db) != OK)
-            return error.FailedToOpenDb;
-        break :blk maybe_db orelse return error.SqliteDbNull;
-    };
+        const schema =
+            \\ PRAGMA journal_mode = OFF;
+            \\ PRAGMA synchronous = 0;
+            \\ PRAGMA cache_size = 1000000;
+            \\ PRAGMA locking_mode = EXCLUSIVE;
+            \\ PRAGMA temp_store = MEMORY;
+            \\ PRAGMA page_size = 65536;
+            \\
+            \\CREATE TABLE IF NOT EXISTS entries (
+            \\  address BLOB(32) NOT NULL UNIQUE,
+            \\  lamports INTEGER NOT NULL,
+            \\  data BLOB NOT NULL,
+            \\  owner BLOB(32) NOT NULL,
+            \\  executable INTEGER NOT NULL,
+            \\  rent_epoch INTEGER NOT NULL,
+            \\  last_modified_slot INTEGER NOT NULL
+            \\);
+        ;
 
-    const db_has_entries = blk: {
-        const query = "SELECT count(*) from entries";
-
-        var stmt: ?*sql.sqlite3_stmt = null;
-        defer if (stmt) |st| std.debug.assert(sql.sqlite3_finalize(st) == OK);
-        const prep_err = sql.sqlite3_prepare_v2(db, query, -1, &stmt, null);
-        if (prep_err != OK) break :blk false; // table does not exist
-
-        const rc = sql.sqlite3_step(stmt);
-        if (rc != ROW) break :blk false; // other err
-
-        break :blk sql.sqlite3_column_int64(stmt, 0) > 0;
-    };
-
-    var self: Rooted = try .init(file_path);
-    if (db_has_entries) {
-        std.debug.print("db has entries, skipping load from snapshot\n", .{});
-    } else {
-        std.debug.print("db is empty -  loading from snapshot!\n", .{});
-        try self.insertFromSnapshot(allocator, accounts_dir);
+        if (sql.sqlite3_exec(db, schema, null, null, null) != OK) {
+            std.debug.print("err  {s}\n", .{sql.sqlite3_errmsg(db)});
+            return error.FailedToCreateTables;
+        }
     }
 
     return self;
@@ -122,168 +87,35 @@ pub fn deinitThreadLocals() void {
     }
 }
 
-fn accountsHash(self: *Rooted) !sig.core.LtHash {
-    const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.accountsHash" });
-    defer zone.deinit();
+pub fn isEmpty(self: *Rooted) bool {
+    const query = "SELECT count(*) from entries";
 
-    const query =
-        \\SELECT address, owner, data, lamports, executable, rent_epoch, last_modified_slot FROM entries;
-    ;
+    var stmt: ?*sql.sqlite3_stmt = null;
+    defer if (stmt) |st| std.debug.assert(sql.sqlite3_finalize(st) == OK);
+    const prep_err = sql.sqlite3_prepare_v2(self.handle, query, -1, &stmt, null);
+    if (prep_err != OK) return true; // table does not exist
 
-    var stmt: ?*sql.sqlite3_stmt = undefined;
-    if (sql.sqlite3_prepare_v2(self.handle, query, -1, &stmt, null) != OK)
-        return error.FailedToPrepareGet;
-    defer err(self, sql.sqlite3_finalize(stmt));
+    const rc = sql.sqlite3_step(stmt);
+    if (rc != ROW) return true; // other err
 
-    var hash: sig.core.LtHash = .IDENTITY;
-
-    while (true) {
-        const step_result = sql.sqlite3_step(stmt);
-        switch (step_result) {
-            ROW => {},
-            DONE => break,
-            else => err(self, step_result),
-        }
-
-        const pubkey = blk: {
-            const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 0));
-            const slice = ptr[0..@intCast(sql.sqlite3_column_bytes(stmt, 0))];
-            std.debug.assert(slice.len == Pubkey.SIZE);
-            break :blk try Pubkey.fromBytes(slice[0..32].*);
-        };
-
-        const owner = blk: {
-            const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 1));
-            const slice = ptr[0..@intCast(sql.sqlite3_column_bytes(stmt, 1))];
-            std.debug.assert(slice.len == Pubkey.SIZE);
-            break :blk try Pubkey.fromBytes(slice[0..32].*);
-        };
-
-        const data = blk: {
-            const len: usize = @intCast(sql.sqlite3_column_bytes(stmt, 2));
-            if (len == 0) break :blk &.{}; // sqlite returns null pointers for 0-len data
-            const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 2));
-            break :blk ptr[0..len];
-        };
-
-        const lamports: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 3));
-        const executable: bool = sql.sqlite3_column_int(stmt, 4) != 0;
-        const rent_epoch: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 5));
-
-        const account: AccountSharedData = .{
-            .lamports = lamports,
-            .data = @constCast(data),
-            .owner = owner,
-            .executable = executable,
-            .rent_epoch = rent_epoch,
-        };
-
-        hash.mixIn(account.asAccount().ltHash(pubkey));
-    }
-
-    return hash;
+    return sql.sqlite3_column_int64(stmt, 0) == 0;
 }
 
-fn insertFromSnapshot(
+/// Returns `null` if no such account exists.
+///
+/// The `data` field in the returned `AccountSharedData` is owned by the caller and is allocated
+/// by the provided allocator.
+///
+/// TODO: we really don't want to be doing these clones, so some other solution would be good.
+/// TODO: getBatched() to SELECT from multiple pubkeys
+pub fn get(
     self: *Rooted,
     allocator: std.mem.Allocator,
-    accounts_dir: std.fs.Dir,
-) !void {
-    const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.insertFromSnapshot" });
+    address: Pubkey,
+) error{OutOfMemory}!?AccountSharedData {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.get" });
     defer zone.deinit();
 
-    const accounts_entries = try getEntries(allocator, accounts_dir);
-    defer allocator.free(accounts_entries);
-
-    self.err(sql.sqlite3_exec(self.handle, "BEGIN TRANSACTION;", null, null, null));
-
-    var bp = try sig.accounts_db.buffer_pool.BufferPool.init(allocator, 20480 + 2);
-    defer bp.deinit(allocator);
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    {
-        const loading_zone = tracy.Zone.init(
-            @src(),
-            .{ .name = "Rooted.insertFromSnapshot: loading files" },
-        );
-        defer loading_zone.deinit();
-
-        const progress = std.Progress.start(.{});
-        defer progress.end();
-        var progress_node = progress.start("loading account files", accounts_entries.len);
-
-        for (accounts_entries) |entry| {
-            var entry_path_buffer: [std.fs.max_path_bytes]u8 = undefined;
-            const entry_path = try std.fmt.bufPrint(
-                &entry_path_buffer,
-                "{d}.{d}",
-                .{ entry.slot, entry.id },
-            );
-            const file = try accounts_dir.openFile(entry_path, .{});
-            defer file.close();
-
-            // TODO: assuming length is the file length is technically not correct
-            const accounts_file = try AccountFile.init(
-                file,
-                .{ .id = .fromInt(entry.id), .length = (try file.stat()).size },
-                entry.slot,
-            );
-
-            const file_zone = tracy.Zone.init(
-                @src(),
-                .{ .name = "Rooted.insertFromSnapshot: accounts files" },
-            );
-            defer file_zone.deinit();
-
-            defer _ = arena.reset(.retain_capacity);
-
-            var n_accounts_in_file: u48 = 0;
-
-            var accounts = accounts_file.iterator(&bp);
-            while (try accounts.next(arena.allocator())) |account| {
-                defer account.deinit(arena.allocator());
-
-                const cloned_data = try account.data.dupeAllocatedOwned(arena.allocator());
-                defer cloned_data.deinit(arena.allocator());
-
-                const data = @constCast(cloned_data.owned_allocation);
-
-                self.put(
-                    account.store_info.pubkey,
-                    accounts_file.slot,
-                    .{
-                        .data = data,
-                        .executable = account.account_info.executable,
-                        .lamports = account.account_info.lamports,
-                        .owner = account.account_info.owner,
-                        .rent_epoch = account.account_info.rent_epoch,
-                    },
-                );
-
-                n_accounts_in_file += 1;
-            }
-            progress_node.completeOne();
-            file_zone.value(n_accounts_in_file);
-        }
-
-        progress_node.end();
-    }
-
-    {
-        const commit_zone = tracy.Zone.init(
-            @src(),
-            .{ .name = "Rooted.insertFromSnapshot: committing" },
-        );
-        defer commit_zone.deinit();
-
-        std.debug.print("committing\n", .{});
-        self.err(sql.sqlite3_exec(self.handle, "COMMIT;", null, null, null));
-    }
-}
-
-fn getInner(self: *Rooted, allocator: std.mem.Allocator, address: Pubkey) !?AccountSharedData {
     const stmt: *sql.sqlite3_stmt = if (get_stmt) |stmt| stmt else blk: {
         const query =
             \\SELECT lamports, data, owner, executable, rent_epoch 
@@ -326,23 +158,6 @@ fn getInner(self: *Rooted, allocator: std.mem.Allocator, address: Pubkey) !?Acco
     };
 }
 
-/// Returns `null` if no such account exists.
-///
-/// The `data` field in the returned `AccountSharedData` is owned by the caller and is allocated
-/// by the provided allocator.
-///
-/// TODO: we really don't want to be doing these clones, so some other solution would be good.
-pub fn get(
-    self: *Rooted,
-    allocator: std.mem.Allocator,
-    address: Pubkey,
-) error{OutOfMemory}!?AccountSharedData {
-    const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.get" });
-    defer zone.deinit();
-
-    return try self.getInner(allocator, address);
-}
-
 pub fn getLargestRootedSlot(self: *const Rooted) ?Slot {
     if (!builtin.is_test) @compileError("only used in tests");
     return self.largest_rooted_slot;
@@ -361,17 +176,34 @@ pub fn beginTransaction(self: *Rooted) void {
 }
 
 pub fn commitTransaction(self: *Rooted) void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.commitTransaction" });
+    defer zone.deinit();
+
     self.err(sql.sqlite3_exec(self.handle, "COMMIT;", null, null, null));
 }
 
 /// Should not be called outside of snapshot loading or slot rooting.
 /// TODO: write putRootedSlot(slot, []pk, []account) and make that public instead.
 pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedData) void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.put" });
+    defer zone.deinit();
+
     const stmt: *sql.sqlite3_stmt = if (put_stmt) |stmt| stmt else blk: {
+        // Insert or update only if last_modified_slot is greater (excluded = VALUES)
+        // https://sqlite.org/lang_upsert.html#examples
         const query =
-            \\INSERT OR REPLACE INTO entries 
+            \\INSERT INTO entries 
             \\(address, lamports, data, owner, executable, rent_epoch, last_modified_slot)
-            \\VALUES (?, ?, ?, ?, ?, ?, ?);
+            \\VALUES (?, ?, ?, ?, ?, ?, ?)
+            \\ON CONFLICT(address) DO UPDATE SET
+            \\  lamports=excluded.lamports,
+            \\  data=excluded.data,
+            \\  owner=excluded.owner,
+            \\  executable=excluded.executable,
+            \\  rent_epoch=excluded.rent_epoch,
+            \\  last_modified_slot=excluded.last_modified_slot
+            \\WHERE excluded.last_modified_slot > entries.last_modified_slot
+            \\;
         ;
         self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &put_stmt, null));
         break :blk put_stmt.?;
@@ -401,41 +233,4 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
 
     const result = sql.sqlite3_step(stmt);
     if (result != DONE) self.err(result);
-}
-
-const AccountFile = sig.accounts_db.accounts_file.AccountFile;
-
-// Represents an account file
-const Entry = struct {
-    slot: Slot,
-    id: u32,
-};
-
-fn getEntries(allocator: std.mem.Allocator, accounts_dir: std.fs.Dir) ![]Entry {
-    var entries: std.ArrayList(Entry) = .init(allocator);
-    errdefer entries.deinit();
-
-    var accounts_iter = accounts_dir.iterate();
-    while (try accounts_iter.next()) |entry| {
-        if (entry.kind != .file) return error.BadAccountsDir;
-        const split = std.mem.indexOf(u8, entry.name, ".") orelse return error.BadAccountsDir;
-        if (entry.name.len - 1 == split) return error.BadAccountsDir;
-        const slot_str = entry.name[0..split];
-        const id_str = entry.name[split + 1 ..];
-
-        const slot = try std.fmt.parseInt(u64, slot_str, 10);
-        const id = try std.fmt.parseInt(u32, id_str, 10);
-        try entries.append(.{ .slot = slot, .id = id });
-    }
-
-    const lessThanFn = struct {
-        fn f(context: void, lhs: Entry, rhs: Entry) bool {
-            _ = context;
-            return lhs.slot < rhs.slot;
-        }
-    }.f;
-
-    std.mem.sort(Entry, entries.items, {}, lessThanFn);
-
-    return try entries.toOwnedSlice();
 }
