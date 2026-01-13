@@ -298,6 +298,16 @@ pub fn build(b: *Build) !void {
     };
     // zig fmt: on
 
+    const memcpy = b.addObject(.{
+        .name = "memcpy",
+        .root_module = b.createModule(.{
+            .target = config.target,
+            .optimize = config.optimize,
+            .root_source_file = b.path("src/memcpy.zig"),
+            .pic = true,
+        }),
+    });
+
     const sig_mod = b.addModule("sig", .{
         .root_source_file = b.path("src/sig.zig"),
         .target = config.target,
@@ -323,6 +333,7 @@ pub fn build(b: *Build) !void {
         }),
         .use_llvm = config.use_llvm,
     });
+    sig_exe.root_module.addObject(memcpy);
     sig_exe.root_module.addImport("cli", cli_mod);
 
     // make sure pyroscope's got enough info to profile
@@ -346,6 +357,7 @@ pub fn build(b: *Build) !void {
         .filters = config.filters orelse &.{},
         .use_llvm = config.use_llvm,
     });
+    unit_tests_exe.root_module.addObject(memcpy);
     unit_tests_exe.root_module.addImport("cli", cli_mod);
     switch (config.ledger_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
@@ -365,6 +377,7 @@ pub fn build(b: *Build) !void {
             .link_libc = true,
         }),
     });
+    fuzz_exe.root_module.addObject(memcpy);
     fuzz_exe.root_module.addImport("cli", cli_mod);
     switch (config.ledger_db) {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
@@ -384,6 +397,7 @@ pub fn build(b: *Build) !void {
             .link_libc = true,
         }),
     });
+    benchmark_exe.root_module.addObject(memcpy);
     benchmark_exe.root_module.addImport("cli", cli_mod);
 
     // make sure pyroscope's got enough info to profile
@@ -406,6 +420,7 @@ pub fn build(b: *Build) !void {
             .sanitize_thread = config.enable_tsan,
         }),
     });
+    geyser_reader_exe.root_module.addObject(memcpy);
     geyser_reader_exe.root_module.addImport("sig", sig_mod);
     geyser_reader_exe.root_module.addImport("cli", cli_mod);
     addInstallAndRun(b, geyser_reader_step, geyser_reader_exe, config);
@@ -420,6 +435,7 @@ pub fn build(b: *Build) !void {
             .error_tracing = config.error_tracing,
         }),
     });
+    vm_exe.root_module.addObject(memcpy);
     vm_exe.root_module.addImport("sig", sig_mod);
     vm_exe.root_module.addImport("cli", cli_mod);
     addInstallAndRun(b, vm_step, vm_exe, config);

@@ -34,6 +34,8 @@ const updateRecentBlockhashes = replay.update_sysvar.updateRecentBlockhashes;
 pub const FreezeParams = struct {
     logger: Logger,
 
+    thread_pool: *sig.sync.ThreadPool,
+
     slot_hash: *sig.sync.RwMux(?Hash),
     accounts_lt_hash: *sig.sync.Mux(?LtHash),
 
@@ -43,6 +45,7 @@ pub const FreezeParams = struct {
     pub fn init(
         logger: Logger,
         account_store: AccountStore,
+        thread_pool: *sig.sync.ThreadPool,
         epoch: *const EpochConstants,
         state: *SlotState,
         constants: *const SlotConstants,
@@ -52,6 +55,7 @@ pub const FreezeParams = struct {
         return .{
             .logger = logger,
             .slot_hash = &state.hash,
+            .thread_pool = thread_pool,
             .accounts_lt_hash = &state.accounts_lt_hash,
             .hash_slot = .{
                 .account_reader = account_store.reader(),
@@ -105,7 +109,11 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
 
     try finalizeState(allocator, params.finalize_state);
 
-    const maybe_lt_hash, slot_hash.mut().* = try hashSlot(allocator, params.hash_slot);
+    const maybe_lt_hash, slot_hash.mut().* = try hashSlot(
+        allocator,
+        params.hash_slot,
+        params.thread_pool,
+    );
     if (maybe_lt_hash) |lt_hash| params.accounts_lt_hash.set(lt_hash);
 
     params.logger.info().logf(
@@ -282,7 +290,11 @@ pub const HashSlotParams = struct {
 };
 
 /// Calculates the slot hash (known as the "bank hash" in agave)
-pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash, Hash } {
+pub fn hashSlot(
+    allocator: Allocator,
+    params: HashSlotParams,
+    thread_pool: *sig.sync.ThreadPool,
+) !struct { ?LtHash, Hash } {
     var zone = tracy.Zone.init(@src(), .{ .name = "hashSlot" });
     defer zone.deinit();
 
@@ -309,6 +321,7 @@ pub fn hashSlot(allocator: Allocator, params: HashSlotParams) !struct { ?LtHash,
         var lt_hash = params.parent_lt_hash.* orelse return error.UnknownParentLtHash;
         lt_hash.mixIn(try deltaLtHash(
             allocator,
+            thread_pool,
             params.account_reader,
             params.slot,
             &parent_ancestors,
@@ -369,49 +382,106 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
 
 /// Returns the lattice hash of every account that was modified in the slot.
 pub fn deltaLtHash(
-    tmp_alloc: std.mem.Allocator,
+    allocator: std.mem.Allocator,
+    _: *sig.sync.ThreadPool, // TODO: remove
     account_reader: AccountReader,
     slot: Slot,
     parent_ancestors: *const Ancestors,
 ) !LtHash {
     assert(!parent_ancestors.containsSlot(slot));
 
-    var arena = std.heap.ArenaAllocator.init(tmp_alloc);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const Task = struct {
+        fn run(
+            gpa: std.mem.Allocator,
+            slot_index: *sig.accounts_db.Two.Unrooted.SlotIndex,
+            db: *sig.accounts_db.Two,
+            ancestors: *const Ancestors,
+            hash: *LtHash,
+            start_index: usize,
+            end_index: usize,
+        ) !void {
+            const entries = slot_index.entries;
+            const accounts = entries.values()[start_index..end_index];
+            const keys = entries.keys()[start_index..end_index];
 
-    // TODO: perf - consider using a thread pool
-    // TODO: perf - consider caching old hashes
+            var arena_state: std.heap.ArenaAllocator = .init(gpa);
+            defer arena_state.deinit();
+            const arena = arena_state.allocator();
+
+            for (accounts, keys) |data, key| {
+                const account = data.asAccount();
+                if (try db.get(arena, key, ancestors)) |old_account| {
+                    if (!old_account.equals(&account)) {
+                        hash.mixOut(old_account.ltHash(key));
+                        hash.mixIn(account.ltHash(key));
+                    }
+                } else hash.mixIn(account.ltHash(key));
+            }
+        }
+    };
 
     var iterator = account_reader.slotModifiedIterator(slot) orelse return .IDENTITY;
     defer iterator.unlock();
 
-    var hash = LtHash.IDENTITY;
-    var i: usize = 0;
-    while (try iterator.next(allocator)) |pubkey_account| : (i += 1) {
-        const pubkey, const account = pubkey_account;
-        defer account.deinit(allocator);
+    const NUM_THREADS = 8;
 
-        if (try account_reader.forSlot(parent_ancestors).get(allocator, pubkey)) |old_acct| {
-            defer old_acct.deinit(allocator);
+    // TODO: We want to improve how the delta lthashes are computed even further.
+    // We want to incrementally build up the lthash over the course of the runtime
+    // execution, simply queuing it as a task in the general txn-exec pool. We have
+    // large enough gaps in the transaction scheduling graph that we can trivially
+    // compute (and over-compute, by re-hashing the same account modifications several times)
+    // during the execution.
+    const Pool = sig.utils.thread.ScopedThreadPool(Task.run);
+    var tp: *Pool = try .init(allocator, NUM_THREADS);
+    defer tp.deinit(allocator);
 
-            if (!old_acct.equals(&account)) {
-                hash.mixOut(old_acct.ltHash(pubkey));
-                hash.mixIn(account.ltHash(pubkey));
-            }
-        } else {
-            hash.mixIn(account.ltHash(pubkey));
-        }
+    var hashes: [NUM_THREADS]LtHash = @splat(.IDENTITY);
+    var start_index: usize = 0;
+    for (0..NUM_THREADS) |i| {
+        const chunk_size = iterator.len() / NUM_THREADS;
+        const end_index = switch (i) {
+            NUM_THREADS - 1 => iterator.len(),
+            else => start_index + chunk_size,
+        };
+        defer start_index = end_index;
+
+        try tp.schedule(allocator, .{
+            allocator,
+            iterator.accounts_db_two.slot,
+            account_reader.accounts_db_two,
+            parent_ancestors,
+            &hashes[i],
+            start_index,
+            end_index,
+        });
     }
 
-    return hash;
+    try tp.join();
+
+    var final: LtHash = .IDENTITY;
+    for (hashes) |hash| final = final.add(hash);
+    return final;
 }
 
 test "deltaLtHash is identity for 0 accounts" {
-    try std.testing.expectEqual(
-        LtHash.IDENTITY,
-        try deltaLtHash(std.testing.allocator, .noop, 0, &Ancestors{}),
-    );
+    const allocator = std.testing.allocator;
+
+    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+
+    var tp: sig.sync.ThreadPool = .init(.{});
+    defer {
+        tp.shutdown();
+        tp.deinit();
+    }
+
+    try std.testing.expectEqual(LtHash.IDENTITY, try deltaLtHash(
+        allocator,
+        &tp,
+        .{ .accounts_db_two = &test_state.db },
+        0,
+        &Ancestors{},
+    ));
 }
 
 test "deltaMerkleHash for 0 accounts" {
@@ -436,9 +506,9 @@ test "deltaMerkleHash for 0 accounts" {
 test "freezeSlot: trivial e2e merkle hash test" {
     const allocator = std.testing.allocator;
 
-    var accounts = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
-    defer accounts.deinit();
-    const account_store = accounts.accountStore();
+    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const account_store: AccountStore = .{ .accounts_db_two = &test_state.db };
 
     const epoch = EpochConstants.genesis(.default(allocator));
     defer epoch.deinit(allocator);
@@ -449,10 +519,21 @@ test "freezeSlot: trivial e2e merkle hash test" {
     var state: SlotState = .GENESIS;
     defer state.deinit(allocator);
 
-    try freezeSlot(
-        allocator,
-        .init(.FOR_TESTS, account_store, &epoch, &state, &constants, 0, .ZEROES),
-    );
+    var tp: sig.sync.ThreadPool = .init(.{});
+    defer {
+        tp.shutdown();
+        tp.deinit();
+    }
+    try freezeSlot(allocator, .init(
+        .FOR_TESTS,
+        account_store,
+        &tp,
+        &epoch,
+        &state,
+        &constants,
+        0,
+        .ZEROES,
+    ));
 
     try std.testing.expectEqual(
         Hash.parse("8C4gpDhMz9RfajteNCf9nFb5pyj3SkFcpTs6uXAzYKoF"),
@@ -481,43 +562,44 @@ test "freezeSlot: trivial e2e merkle hash test" {
 test "freezeSlot: trivial e2e lattice hash test" {
     const allocator = std.testing.allocator;
 
-    var simple_db: sig.accounts_db.ThreadSafeAccountMap = .init(allocator);
-    defer simple_db.deinit();
+    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const real_state = &test_state.db;
 
-    var real_state, var tmp_dir = try sig.accounts_db.Two.initTest(allocator);
+    var tp: sig.sync.ThreadPool = .init(.{});
     defer {
-        sig.accounts_db.Two.Rooted.deinitThreadLocals();
-        real_state.deinit();
-        tmp_dir.cleanup();
+        tp.shutdown();
+        tp.deinit();
     }
 
-    for ([_]sig.accounts_db.AccountStore{
-        simple_db.accountStore(),
-        .{ .accounts_db_two = &real_state },
-    }) |account_store| {
-        errdefer std.log.err("Failed with implementation '{s}'", .{@tagName(account_store)});
+    const account_store: sig.accounts_db.AccountStore = .{ .accounts_db_two = real_state };
 
-        const epoch = EpochConstants.genesis(.default(allocator));
-        defer epoch.deinit(allocator);
+    const epoch = EpochConstants.genesis(.default(allocator));
+    defer epoch.deinit(allocator);
 
-        var constants = try SlotConstants.genesis(allocator, .DEFAULT);
-        defer constants.deinit(allocator);
-        constants.feature_set.setSlot(.accounts_lt_hash, 0);
-        constants.feature_set.setSlot(.remove_accounts_delta_hash, 0);
+    var constants = try SlotConstants.genesis(allocator, .DEFAULT);
+    defer constants.deinit(allocator);
+    constants.feature_set.setSlot(.accounts_lt_hash, 0);
+    constants.feature_set.setSlot(.remove_accounts_delta_hash, 0);
 
-        var state: SlotState = .GENESIS;
-        defer state.deinit(allocator);
+    var state: SlotState = .GENESIS;
+    defer state.deinit(allocator);
 
-        try freezeSlot(
-            allocator,
-            .init(.FOR_TESTS, account_store, &epoch, &state, &constants, 0, .ZEROES),
-        );
+    try freezeSlot(allocator, .init(
+        .FOR_TESTS,
+        account_store,
+        &tp,
+        &epoch,
+        &state,
+        &constants,
+        0,
+        .ZEROES,
+    ));
 
-        try std.testing.expectEqual(
-            Hash.parse("B513RgkSxeiHv4hJ3aaBfkoveWKeB6575S3CtG64AirS"),
-            state.hash.readCopy().?,
-        );
-    }
+    try std.testing.expectEqual(
+        Hash.parse("B513RgkSxeiHv4hJ3aaBfkoveWKeB6575S3CtG64AirS"),
+        state.hash.readCopy().?,
+    );
 }
 
 // Ensures that the merkle and lattice hashes are both identical to agave for
@@ -537,10 +619,11 @@ test "delta hashes with many accounts" {
     const allocator = std.testing.allocator;
     const generate_rust_code = false;
 
-    var accounts = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
-    defer accounts.deinit();
+    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
 
-    var rng = std.Random.DefaultPrng.init(0);
+    var rng: std.Random.Xoshiro256 = .init(0);
     const random = rng.random();
 
     var addresses = try std.ArrayListUnmanaged(Pubkey).initCapacity(allocator, 400);
@@ -575,7 +658,7 @@ test "delta hashes with many accounts" {
             const data = try allocator.alloc(u8, random.int(u8));
             defer allocator.free(data);
             random.bytes(data);
-            const account = AccountSharedData{
+            const account: AccountSharedData = .{
                 .data = data,
                 .owner = Pubkey.initRandom(random),
                 .rent_epoch = random.int(sig.core.Epoch),
@@ -608,7 +691,7 @@ test "delta hashes with many accounts" {
                 });
             }
 
-            try accounts.put(slot, address, account);
+            try db.put(slot, address, account);
         }
         if (generate_rust_code) std.debug.print("][0..]));\n", .{});
     }
@@ -630,13 +713,24 @@ test "delta hashes with many accounts" {
     try parent_ancestors.ancestors.put(allocator, 0, {});
     try parent_ancestors.ancestors.put(allocator, 1, {});
 
+    var tp: sig.sync.ThreadPool = .init(.{});
+    defer {
+        tp.shutdown();
+        tp.deinit();
+    }
+
     const actual_lt_hash = try deltaLtHash(
         allocator,
-        accounts.accountReader(),
+        &tp,
+        .{ .accounts_db_two = db },
         hash_slot,
         &parent_ancestors,
     );
-    const actual_merkle_hash = try deltaMerkleHash(accounts.accountReader(), allocator, hash_slot);
+    const actual_merkle_hash = try deltaMerkleHash(
+        .{ .accounts_db_two = db },
+        allocator,
+        hash_slot,
+    );
 
     try std.testing.expectEqualSlices(u16, &expected_lt_hash, &actual_lt_hash.data);
     try std.testing.expectEqualSlices(u8, &expected_merkle_hash.data, &actual_merkle_hash.data);

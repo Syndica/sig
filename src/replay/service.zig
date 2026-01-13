@@ -428,7 +428,9 @@ pub fn newSlotFromParent(
 
     var ancestors = try parent_constants.ancestors.clone(allocator);
     errdefer ancestors.deinit(allocator);
-    try ancestors.ancestors.put(allocator, slot, {});
+
+    try ancestors.addSlot(allocator, slot);
+    ancestors.cleanup();
 
     var feature_set = try getActiveFeatures(allocator, account_reader.forSlot(&ancestors), slot);
 
@@ -543,6 +545,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                 try replay.freeze.freezeSlot(state.allocator, .init(
                     .from(state.logger),
                     state.account_store,
+                    &state.thread_pool,
                     &epoch,
                     slot_info.state,
                     slot_info.constants,
@@ -570,10 +573,10 @@ fn bypassConsensus(state: *ReplayState) !void {
 
         try state.status_cache.addRoot(state.allocator, new_root);
 
+        const slot_constants = slot_tracker.get(new_root).?;
         try state.account_store.onSlotRooted(
-            state.allocator,
             new_root,
-            slot_tracker.get(new_root).?.constants.fee_rate_governor.lamports_per_signature,
+            &slot_constants.constants.ancestors,
         );
     }
 }
@@ -849,7 +852,7 @@ test "process runs without error with no replay results" {
     // TODO: run consensus in the tests that actually execute blocks for better
     // coverage. currently consensus panics or hangs if you run it with actual data
     try consensus.process(allocator, .{
-        .account_store = .{ .thread_safe_map = &dep_stubs.accountsdb },
+        .account_store = dep_stubs.accountStore(),
         .ledger = &dep_stubs.ledger,
         .gossip_votes = null,
         .slot_tracker = &replay_state.slot_tracker,
@@ -1001,7 +1004,7 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     defer accounts.deinit();
     for (accounts.value) |test_account| {
         _, const address, const account = try test_account.toAccount();
-        try dep_stubs.accountsdb.put(snapshot_slot, address, account);
+        try dep_stubs.accounts_db_state.db.put(snapshot_slot, address, account);
     }
 
     // calculate leader schedule
@@ -1083,16 +1086,14 @@ fn parseBincodeFromGzipFile(
 /// outlive replay, and is used by replay.
 pub const DependencyStubs = struct {
     allocator: Allocator,
-    accountsdb: sig.accounts_db.ThreadSafeAccountMap,
-    dir: std.testing.TmpDir,
+    accounts_db_state: sig.accounts_db.Two.TestContext,
     ledger: Ledger,
     senders: TowerConsensus.Senders,
     receivers: TowerConsensus.Receivers,
     replay_votes_channel: *Channel(ParsedVote),
 
     pub fn deinit(self: *DependencyStubs) void {
-        self.accountsdb.deinit();
-        self.dir.cleanup();
+        self.accounts_db_state.deinit();
         self.ledger.deinit();
         self.senders.destroy();
         self.receivers.destroy();
@@ -1101,13 +1102,11 @@ pub const DependencyStubs = struct {
     }
 
     pub fn init(allocator: Allocator, logger: Logger) !DependencyStubs {
-        var accountsdb = sig.accounts_db.ThreadSafeAccountMap.init(allocator);
-        errdefer accountsdb.deinit();
+        var test_state = try sig.accounts_db.Two.initTest(allocator);
+        errdefer test_state.deinit();
 
-        var dir = std.testing.tmpDir(.{});
-        errdefer dir.cleanup();
-
-        const ledger_path = try dir.dir.realpathAlloc(allocator, ".");
+        try test_state.tmp.dir.makeDir("ledger");
+        const ledger_path = try test_state.tmp.dir.realpathAlloc(allocator, "ledger/");
         defer allocator.free(ledger_path);
 
         var ledger = try Ledger.init(allocator, .from(logger), ledger_path, null);
@@ -1124,13 +1123,20 @@ pub const DependencyStubs = struct {
 
         return .{
             .allocator = allocator,
-            .accountsdb = accountsdb,
-            .dir = dir,
+            .accounts_db_state = test_state,
             .ledger = ledger,
             .senders = senders,
             .receivers = receivers,
             .replay_votes_channel = replay_votes_channel,
         };
+    }
+
+    pub fn accountStore(self: *DependencyStubs) AccountStore {
+        return .{ .accounts_db_two = &self.accounts_db_state.db };
+    }
+
+    pub fn accountReader(self: *DependencyStubs) AccountReader {
+        return .{ .accounts_db_two = &self.accounts_db_state.db };
     }
 
     /// Initialize replay service with stubbed inputs.
@@ -1174,7 +1180,7 @@ pub const DependencyStubs = struct {
                 .authorized_voters = &.{},
             },
             .epoch_schedule = .INIT,
-            .account_store = self.accountsdb.accountStore(),
+            .account_store = self.accountStore(),
             .ledger = &self.ledger,
             .slot_leaders = .{
                 .state = undefined,
@@ -1216,7 +1222,7 @@ pub const DependencyStubs = struct {
 
         const feature_set = try sig.replay.service.getActiveFeatures(
             allocator,
-            self.accountsdb.accountReader().forSlot(&bank_fields.ancestors),
+            .{ .accounts_db_two = .{ &self.accounts_db_state.db, &bank_fields.ancestors } },
             bank_fields.slot,
         );
 
@@ -1247,7 +1253,7 @@ pub const DependencyStubs = struct {
                 .node = null,
                 .authorized_voters = &.{},
             },
-            .account_store = self.accountsdb.accountStore(),
+            .account_store = self.accountStore(),
             .ledger = &self.ledger,
             .epoch_schedule = bank_fields.epoch_schedule,
             .slot_leaders = slot_leaders,

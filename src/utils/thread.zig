@@ -132,6 +132,8 @@ pub fn ScopedThreadPool(comptime func: anytype) type {
         has_error: std.atomic.Value(bool) = .init(false),
         set_error: Error = undefined,
 
+        borrowed: bool,
+
         const Self = @This();
         const ScopedTask = struct {
             pool_task: ThreadPool.Task = .{ .callback = run },
@@ -167,17 +169,20 @@ pub fn ScopedThreadPool(comptime func: anytype) type {
 
         pub fn init(allocator: Allocator, max_threads: usize) !*Self {
             const self = try allocator.create(Self);
-            self.* = .{ .thread_pool = .init(.{ .max_threads = @intCast(max_threads) }) };
+            self.* = .{
+                .thread_pool = .init(.{ .max_threads = @intCast(max_threads) }),
+                .borrowed = false,
+            };
             return self;
         }
 
         pub fn deinit(self: *Self, allocator: Allocator) void {
             self.wait_group.wait();
             self.scoped_tasks.deinit(allocator);
-
-            self.thread_pool.shutdown();
-            self.thread_pool.deinit();
-
+            if (!self.borrowed) {
+                self.thread_pool.shutdown();
+                self.thread_pool.deinit();
+            }
             allocator.destroy(self);
         }
 

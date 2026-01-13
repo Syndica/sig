@@ -910,7 +910,7 @@ test "prepareSlot: empty and dead slots are handled correctly" {
 
     const constants, const slot_state = try sig.replay.service.newSlotFromParent(
         allocator,
-        dep_stubs.accountsdb.accountReader(),
+        .{ .accounts_db_two = &dep_stubs.accounts_db_state.db },
         epoch.?.ticks_per_slot,
         0,
         root.?.constants,
@@ -996,7 +996,7 @@ fn testReplaySlot(
 
 pub const TestState = struct {
     // shared for multiple things
-    account_map: sig.accounts_db.ThreadSafeAccountMap,
+    accounts_db: sig.accounts_db.Two.TestContext,
     status_cache: sig.core.StatusCache,
     ancestors: Ancestors,
 
@@ -1016,10 +1016,7 @@ pub const TestState = struct {
     // resolver
     slot_hashes: SlotHashes,
 
-    // Channels.
     replay_votes_channel: *sig.sync.Channel(ParsedVote),
-
-    // scheduler
     exit: Atomic(bool),
 
     pub fn init(allocator: Allocator) !TestState {
@@ -1037,14 +1034,17 @@ pub const TestState = struct {
         errdefer blockhash_queue.deinit(allocator);
         try blockhash_queue.insertGenesisHash(allocator, .ZEROES, 1);
 
-        var ancestors = Ancestors{};
+        var ancestors: Ancestors = .{};
         errdefer ancestors.deinit(allocator);
         try ancestors.addSlot(allocator, 0);
 
         const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(allocator);
 
+        var test_context = try sig.accounts_db.Two.initTest(allocator);
+        errdefer test_context.deinit();
+
         return .{
-            .account_map = sig.accounts_db.ThreadSafeAccountMap.init(allocator),
+            .accounts_db = test_context,
             .status_cache = .DEFAULT,
             .ancestors = ancestors,
             .slot = 0,
@@ -1063,7 +1063,7 @@ pub const TestState = struct {
     }
 
     pub fn deinit(self: *TestState, allocator: Allocator) void {
-        self.account_map.deinit();
+        self.accounts_db.deinit();
         self.status_cache.deinit(allocator);
         self.ancestors.deinit(allocator);
         var bhq = self.blockhash_queue.tryWrite() orelse unreachable;
@@ -1077,7 +1077,7 @@ pub const TestState = struct {
     }
 
     pub fn accountStore(self: *TestState) AccountStore {
-        return self.account_map.accountStore();
+        return .{ .accounts_db_two = &self.accounts_db.db };
     }
 
     pub fn svmParams(self: *TestState) SvmGateway.Params {
@@ -1086,7 +1086,7 @@ pub const TestState = struct {
             .max_age = self.max_age,
             .lamports_per_signature = self.lamports_per_signature,
             .blockhash_queue = &self.blockhash_queue,
-            .account_store = self.account_map.accountStore().forSlot(self.slot, &self.ancestors),
+            .account_store = self.accountStore().forSlot(self.slot, &self.ancestors),
             .ancestors = &self.ancestors,
             .feature_set = self.feature_set,
             .rent_collector = &self.rent_collector,
@@ -1095,8 +1095,7 @@ pub const TestState = struct {
         };
     }
 
-    pub fn committer(self: *TestState, allocator: Allocator) !Committer {
-        _ = allocator; // autofix
+    pub fn committer(self: *TestState) Committer {
         return .{
             .logger = .FOR_TESTS,
             .slot_state = &self.slot_state,
@@ -1110,7 +1109,7 @@ pub const TestState = struct {
     pub fn resolver(self: *TestState) SlotResolver {
         return .{
             .slot = self.slot,
-            .account_reader = self.account_map.accountReader().forSlot(&self.ancestors),
+            .account_reader = .{ .accounts_db_two = .{ &self.accounts_db.db, &self.ancestors } },
             .reserved_accounts = &.empty,
             .slot_hashes = .INIT,
         };
@@ -1147,7 +1146,7 @@ pub const TestState = struct {
             .transactions = transactions,
             .last_entry = .ZEROES,
             .svm_gateway = svm_gateway,
-            .committer = try self.committer(allocator),
+            .committer = self.committer(),
             .verify_ticks_params = verify_ticks_params,
             .account_store = self.accountStore(),
         };
@@ -1164,14 +1163,14 @@ pub const TestState = struct {
         self: *TestState,
         allocator: Allocator,
         transactions: []const sig.core.Transaction,
-    ) sig.accounts_db.ThreadSafeAccountMap.PutError!void {
+    ) !void {
         var bhq = self.blockhash_queue.write();
         defer bhq.unlock();
         for (transactions) |transaction| {
             try bhq.mut().insertHash(allocator, transaction.msg.recent_blockhash, 1);
             var account = sig.runtime.AccountSharedData.EMPTY;
             account.lamports = 100_000;
-            try self.account_map.put(self.slot, transaction.msg.account_keys[0], account);
+            try self.accounts_db.db.put(self.slot, transaction.msg.account_keys[0], account);
         }
     }
 };
