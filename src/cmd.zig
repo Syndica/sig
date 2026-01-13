@@ -30,7 +30,7 @@ const downloadSnapshotsFromGossip = sig.accounts_db.snapshot.downloadSnapshotsFr
 const getShredAndIPFromEchoServer = sig.net.echo.getShredAndIPFromEchoServer;
 const getWallclockMs = sig.time.getWallclockMs;
 const globalRegistry = sig.prometheus.globalRegistry;
-const loadSnapshot = sig.accounts_db.snapshot.loadSnapshot;
+const loadSnapshot2 = sig.accounts_db.snapshot.load.loadSnapshot2;
 const servePrometheus = sig.prometheus.servePrometheus;
 
 const Logger = sig.trace.Logger("cmd");
@@ -1142,7 +1142,7 @@ fn validator(
     defer rooted_db.deinit();
 
     // snapshot
-    var loaded_snapshot = try sig.accounts_db.snapshot.load.loadSnapshot2(
+    var loaded_snapshot = try loadSnapshot2(
         allocator,
         &rooted_db,
         cfg.accounts_db,
@@ -1391,7 +1391,7 @@ fn replayOffline(
     defer rooted_db.deinit();
 
     // snapshot
-    var loaded_snapshot = try sig.accounts_db.snapshot.load.loadSnapshot2(
+    var loaded_snapshot = try loadSnapshot2(
         allocator,
         &rooted_db,
         cfg.accounts_db,
@@ -1698,8 +1698,16 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         allocator.destroy(geyser.exit);
         allocator.destroy(geyser);
     };
-    var loaded_snapshot = try loadSnapshot(
+    
+    const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
+    defer allocator.free(rooted_file);
+
+    var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
+    defer rooted_db.deinit();
+
+    var loaded_snapshot = try loadSnapshot2(
         allocator,
+        &rooted_db,
         cfg.accounts_db,
         try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
         .from(app_base.logger),
@@ -1726,8 +1734,16 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     = try getLeaderScheduleFromCli(allocator, cfg) orelse b: {
         app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
 
-        var loaded_snapshot = loadSnapshot(
+        const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
+        const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
+        defer allocator.free(rooted_file);
+
+        var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
+        defer rooted_db.deinit();
+
+        var loaded_snapshot = loadSnapshot2(
             allocator,
+            &rooted_db,
             cfg.accounts_db,
             try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
             .from(app_base.logger),
