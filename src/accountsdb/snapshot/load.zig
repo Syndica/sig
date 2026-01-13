@@ -341,6 +341,9 @@ fn insertFromSnapshotArchive(
         .{std.fmt.fmtDuration(timer.read())},
     );
 
+    rooted_db.beginTransaction();
+    defer rooted_db.commitTransaction();
+
     const file = try snapshot_dir.openFile(snapshot_path, .{ .mode = .read_only });
     defer file.close();
 
@@ -386,9 +389,6 @@ fn insertFromSnapshotArchive(
 
     const manifest_path = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{slot_and_hash.slot});
 
-    rooted_db.beginTransaction();
-    defer rooted_db.commitTransaction();
-
     var account_data_buf: std.ArrayListUnmanaged(u8) = .{};
     try account_data_buf.ensureTotalCapacity(allocator, 10 * 1024 * 1024);
     defer account_data_buf.deinit(allocator);
@@ -398,6 +398,9 @@ fn insertFromSnapshotArchive(
 
         // Read /version
         if (std.mem.eql(u8, tar_file.name, "version")) {
+            const tar_zone = tracy.Zone.init(@src(), .{ .name = "Snapshot.readVersion" });
+            defer tar_zone.deinit();
+
             if (maybe_version) |_| return error.DuplicateVersion;
             maybe_version = @as([5]u8, undefined);
 
@@ -456,6 +459,9 @@ fn insertFromSnapshotArchive(
             var account_file_stream = std.io.limitedReader(tar_file.reader(), info.length);
             while (account_file_stream.bytes_left > 0) {
                 const r = account_file_stream.reader();
+
+                const account_zone = tracy.Zone.init(@src(), .{ .name = "Snapshot.readAccount" });
+                defer account_zone.deinit();
 
                 const header = r.readStructEndian(
                     extern struct {
