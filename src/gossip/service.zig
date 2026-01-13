@@ -384,6 +384,8 @@ pub const GossipService = struct {
             for (push_msg_queue.queue.items) |*v| v.deinit(push_msg_queue.data_allocator);
             push_msg_queue.queue.deinit();
         }
+
+        // self.broker.deinit();
     }
 
     pub const RunThreadsParams = struct {
@@ -2047,6 +2049,12 @@ pub const LocalMessageBroker = struct {
                 try channel.send(cloned_vote);
             },
             else => {},
+        }
+    }
+
+    fn deinit(self: *const LocalMessageBroker) void {
+        if (self.vote_collector) |vcs| {
+            while (vcs.tryReceive()) |vote| vote.deinit(vcs.allocator);
         }
     }
 };
