@@ -26,11 +26,10 @@ const PubkeyVote = struct {
 
 /// Analogous to [ForkInfo](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L92)
 const ForkInfo = struct {
-    /// Amount of stake that has voted for exactly this slot
-    stake_for_slot: ForkWeight,
-    /// Amount of stake that has voted for this slot and the subtree
-    /// rooted at this slot
-    stake_for_subtree: ForkWeight,
+    /// Amount of stake that has voted for exactly this slot, i.e. measure of fork weight.
+    stake_for_slot: u64,
+    /// Amount of stake that has voted for this slot and the subtree rooted at this slot, i.e. measure of fork weight.
+    stake_for_subtree: u64,
     /// Tree height for the subtree rooted at this slot
     height: usize,
     /// Heaviest slot in the subtree rooted at this slot, does not
@@ -52,8 +51,6 @@ const ForkInfo = struct {
     /// It means that the network has reached consensus that this fork is the valid one,
     /// and all competing forks for the same slot are invalid.
     is_duplicate_confirmed: bool,
-
-    const ForkWeight = u64;
 
     const Children = SortedMapCustom(SlotAndHash, void, .{
         .orderFn = SlotAndHash.order,
