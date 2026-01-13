@@ -9,6 +9,7 @@ const Rooted = @This();
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const AccountSharedData = sig.runtime.AccountSharedData;
+const ThreadPool = sig.sync.ThreadPool;
 
 const OK = sql.SQLITE_OK;
 const DONE = sql.SQLITE_DONE;
@@ -40,7 +41,7 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         .largest_rooted_slot = null,
     };
 
-    if (self.isEmpty()) {
+    if (self.count() == 0) {
         std.debug.print("creating db schema\n", .{});
 
         const schema =
@@ -87,18 +88,18 @@ pub fn deinitThreadLocals() void {
     }
 }
 
-pub fn isEmpty(self: *Rooted) bool {
+pub fn count(self: *const Rooted) u64 {
     const query = "SELECT count(*) from entries";
 
     var stmt: ?*sql.sqlite3_stmt = null;
     defer if (stmt) |st| std.debug.assert(sql.sqlite3_finalize(st) == OK);
     const prep_err = sql.sqlite3_prepare_v2(self.handle, query, -1, &stmt, null);
-    if (prep_err != OK) return true; // table does not exist
+    if (prep_err != OK) return 0; // table does not exist
 
     const rc = sql.sqlite3_step(stmt);
-    if (rc != ROW) return true; // other err
+    if (rc != ROW) return 0; // other err
 
-    return sql.sqlite3_column_int64(stmt, 0) == 0;
+    return @intCast(sql.sqlite3_column_int64(stmt, 0));
 }
 
 /// Returns `null` if no such account exists.
@@ -158,12 +159,143 @@ pub fn get(
     };
 }
 
+pub fn computeLtHash(
+    self: *const Rooted,
+    allocator: std.mem.Allocator,
+    pool: *ThreadPool,
+) !sig.core.LtHash {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.computeLtHash" });
+    defer zone.deinit();
+
+    const Worker = struct {
+        task: ThreadPool.Task = .{ .callback = @This().run },
+        wg: *std.Thread.WaitGroup,
+        rooted: *const Rooted,
+        lt_hash: sig.core.LtHash,
+        offset: u64,
+        limit: u64,
+
+        fn run(task: *ThreadPool.Task) void {
+            const worker: *@This() = @alignCast(@fieldParentPtr("task", task));
+            defer worker.wg.finish();
+
+            worker.lt_hash = worker.rooted.computeLtHashForAccountRange(
+                worker.offset,
+                worker.limit,
+            ) catch |e| std.debug.panic("computeLtHash fail: {}", .{e});
+        }
+    };
+
+    const total_accounts = self.count();
+    const num_workers = @min(total_accounts, pool.max_threads);
+    const accounts_per_worker = @max(1, total_accounts / pool.max_threads);
+
+    var workers: std.ArrayListUnmanaged(Worker) = .{};
+    try workers.ensureTotalCapacity(allocator, num_workers);
+    defer workers.deinit(allocator);
+
+    {
+        var wg = std.Thread.WaitGroup{};
+        wg.startMany(num_workers);
+        defer wg.wait();
+
+        var batch = ThreadPool.Batch{};
+        defer pool.schedule(batch);
+
+        for (0..num_workers) |i| {
+            const start = i * accounts_per_worker;
+            const end = if (i == num_workers - 1) total_accounts else (i + 1) * accounts_per_worker;
+
+            const worker = workers.addOneAssumeCapacity();
+            worker.* = .{
+                .rooted = self,
+                .wg = &wg,
+                .lt_hash = undefined, // filled in by worker
+                .offset = start,
+                .limit = end - start,
+            };
+            batch.push(.from(&worker.task));
+        }
+    }
+
+    var lt_hash: sig.core.LtHash = .IDENTITY;
+    for (workers.items) |*worker| lt_hash.mixIn(worker.lt_hash);
+    return lt_hash;
+}
+
+fn computeLtHashForAccountRange(
+    self: *const Rooted,
+    offset: u64,
+    limit: u64,
+) !sig.core.LtHash {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.LtHash" });
+    defer zone.deinit();
+
+    const query =
+        \\SELECT 
+        \\address, owner, data, lamports, executable, rent_epoch
+        \\FROM entries LIMIT ? OFFSET ?;
+    ;
+
+    var stmt: ?*sql.sqlite3_stmt = undefined;
+    self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &stmt, null));
+    defer self.err(sql.sqlite3_finalize(stmt));
+
+    self.err(sql.sqlite3_bind_blob(stmt, 1, &limit, @sizeOf(u64), sql.SQLITE_STATIC));
+    self.err(sql.sqlite3_bind_blob(stmt, 2, &offset, @sizeOf(u64), sql.SQLITE_STATIC));
+
+    var lt_hash: sig.core.LtHash = .IDENTITY;
+    while (true) {
+        const step_result = sql.sqlite3_step(stmt);
+        switch (step_result) {
+            ROW => {},
+            DONE => break,
+            else => err(self, step_result),
+        }
+
+        const pubkey = blk: {
+            const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 0));
+            const slice = ptr[0..@intCast(sql.sqlite3_column_bytes(stmt, 0))];
+            std.debug.assert(slice.len == Pubkey.SIZE);
+            break :blk try Pubkey.fromBytes(slice[0..32].*);
+        };
+
+        const owner = blk: {
+            const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 1));
+            const slice = ptr[0..@intCast(sql.sqlite3_column_bytes(stmt, 1))];
+            std.debug.assert(slice.len == Pubkey.SIZE);
+            break :blk try Pubkey.fromBytes(slice[0..32].*);
+        };
+
+        const data = blk: {
+            const len: usize = @intCast(sql.sqlite3_column_bytes(stmt, 2));
+            if (len == 0) break :blk &.{}; // sqlite returns null pointers for 0-len data
+            const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 2));
+            break :blk ptr[0..len];
+        };
+
+        const lamports: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 3));
+        const executable: bool = sql.sqlite3_column_int(stmt, 4) != 0;
+        const rent_epoch: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 5));
+
+        const account: sig.core.Account = .{
+            .data = .{ .unowned_allocation = data },
+            .executable = executable,
+            .lamports = lamports,
+            .owner = owner,
+            .rent_epoch = rent_epoch,
+        };
+        lt_hash.mixIn(account.ltHash(pubkey));
+    }
+    return lt_hash;
+}
+
 pub fn getLargestRootedSlot(self: *const Rooted) ?Slot {
     if (!builtin.is_test) @compileError("only used in tests");
     return self.largest_rooted_slot;
 }
 
-fn err(self: *Rooted, code: c_int) void {
+fn err(self: *const Rooted, code: c_int) void {
     if (code == OK) return;
     std.debug.panic(
         "internal accountsdb sqlite error ({}): {s}\n",

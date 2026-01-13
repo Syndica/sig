@@ -12,6 +12,8 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const GenesisConfig = sig.core.GenesisConfig;
 
+const ThreadPool = sig.sync.ThreadPool;
+
 const GeyserWriter = sig.geyser.GeyserWriter;
 const GossipService = sig.gossip.GossipService;
 
@@ -69,6 +71,15 @@ pub fn loadSnapshot2(
     const zone = tracy.Zone.init(@src(), .{ .name = "loadSnapshot2" });
     defer zone.deinit();
 
+    // For rooted.computeLtHash
+    var pool: ThreadPool = .init(.{
+        .max_threads = @intCast(@max(1, try std.Thread.getCpuCount())),
+    });
+    defer {
+        pool.shutdown();
+        pool.deinit();
+    }
+
     const snapshot_dir_str = db_config.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
@@ -115,8 +126,8 @@ pub fn loadSnapshot2(
 
     // Unpack snapshots directly into Rooted.
 
-    const db_has_entries = !rooted_db.isEmpty();
-    if (db_has_entries) {
+    const db_populate = rooted_db.count() == 0;
+    if (!db_populate) {
         logger.info().logf("db has entries, skipping load from snapshot\n", .{});
     } else {
         logger.info().logf("db is empty -  loading from snapshot!\n", .{});
@@ -134,12 +145,27 @@ pub fn loadSnapshot2(
             snapshot_dir,
             path.constSlice(),
             .{ .slot = snapshot_files.full.slot, .hash = snapshot_files.full.hash },
-            .{ .snapshot_type = .full, .put_accounts = !db_has_entries },
+            .{ .snapshot_type = .full, .put_accounts = db_populate },
         );
     };
     errdefer {
         full_manifest.deinit(allocator);
         full_status_cache.deinit(allocator);
+    }
+
+    const verify_hashes = !load_options.metadata_only and load_options.validate_snapshot;
+    if (verify_hashes) {
+        const lt_hash = try rooted_db.computeLtHash(allocator, &pool);
+        if (!full_manifest.bank_extra.accounts_lt_hash.eql(lt_hash)) {
+            logger.err().logf(
+                "incorrect snapshot accounts delta hash: expected vs calculated: {} vs {}",
+                .{
+                    full_manifest.bank_extra.accounts_lt_hash.checksum(),
+                    lt_hash.checksum(),
+                },
+            );
+            return error.IncorrectAccountsDeltaHash;
+        }
     }
 
     const maybe_incremental_manifest: ?Manifest, //
@@ -157,23 +183,36 @@ pub fn loadSnapshot2(
             snapshot_dir,
             incremental_path.constSlice(),
             info.slotAndHash(),
-            .{ .snapshot_type = .incremental, .put_accounts = !db_has_entries },
+            .{ .snapshot_type = .incremental, .put_accounts = db_populate },
         );
         break :blk .{ manifest, status_cache };
     };
     errdefer if (maybe_incremental_manifest) |manifest| manifest.deinit(allocator);
     errdefer if (maybe_incremental_status_cache) |status_cache| status_cache.deinit(allocator);
 
+    if (maybe_incremental_manifest) |*inc_manifest| {
+        // Due to layout of DB, can only verify incremental snapshot if we've just inserted it.
+        if (verify_hashes and db_populate) {
+            const lt_hash = try rooted_db.computeLtHash(allocator, &pool);
+            if (!inc_manifest.bank_extra.accounts_lt_hash.eql(lt_hash)) {
+                logger.err().logf(
+                    "incorrect incremental accounts delta hash: expected vs calculated: {} vs {}",
+                    .{
+                        inc_manifest.bank_extra.accounts_lt_hash.checksum(),
+                        lt_hash.checksum(),
+                    },
+                );
+                return error.IncorrectAccountsDeltaHash;
+            }
+        }
+    }
+
     const combined_manifest: FullAndIncrementalManifest = .{
         .full = full_manifest,
         .incremental = maybe_incremental_manifest,
     };
 
-    const collapsed_manifest = if (load_options.metadata_only)
-        try combined_manifest.collapse(allocator)
-    else
-        // TODO: validate snapshot: accounts_db.loadWithDefaults
-        try combined_manifest.collapse(allocator);
+    const collapsed_manifest = try combined_manifest.collapse(allocator);
     errdefer collapsed_manifest.deinit(allocator);
 
     // Fake accounts_db as not used.
@@ -202,6 +241,10 @@ pub fn loadSnapshot2(
 
     if (load_options.metadata_only) {
         logger.info().log("accounts-db setup done...");
+
+        full_status_cache.deinit(allocator);
+        if (maybe_incremental_status_cache) |status_cache| status_cache.deinit(allocator);
+
         return .{
             .allocator = allocator,
             .accounts_db = accounts_db,
@@ -377,6 +420,7 @@ fn insertFromSnapshotArchive(
             if (maybe_version == null) return error.MissingVersion;
             if (maybe_manifest == null) return error.MissingManifest;
             if (maybe_status_cache == null) return error.MissingStatusCache;
+            rooted_db.largest_rooted_slot = maybe_manifest.?.accounts_db_fields.slot;
 
             // Skip account files
             if (!options.put_accounts) {
