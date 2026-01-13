@@ -178,8 +178,8 @@ pub const ForkChoice = struct {
     fn updateMetrics(self: *const ForkChoice) void {
         const now = Instant.now();
         const update_interval = now.elapsedSince(self.last_root_time);
-        self.metrics.fork_choice_update_interval.observe(update_interval.asMicros());
-        self.metrics.fork_choice_updates.inc();
+        self.metrics.update_interval.observe(update_interval.asMicros());
+        self.metrics.updates.inc();
 
         // Calculate basic consensus metrics
         var total_stake: u64 = 0;
@@ -467,6 +467,7 @@ pub const ForkChoice = struct {
                 }
             }
         }
+        self.metrics.pubkey_vote_batch_size.set(pubkey_votes.len);
 
         try self.latest_votes.ensureUnusedCapacity(allocator, pubkey_votes.len);
         for (pubkey_votes) |pubkey_vote| {
@@ -5032,9 +5033,12 @@ pub const ForkChoiceMetrics = struct {
     total_stake_in_tree: *sig.prometheus.Gauge(u64),
 
     /// Number of fork choice updates - indicates consensus activity and health
-    fork_choice_updates: *sig.prometheus.Counter,
+    updates: *sig.prometheus.Counter,
     /// Time between fork choice updates (seconds) - performance and network health indicator
-    fork_choice_update_interval: *sig.prometheus.Histogram,
+    update_interval: *sig.prometheus.Histogram,
+
+    /// The number of pubkey votes added per batch.
+    pubkey_vote_batch_size: *sig.prometheus.Gauge(u64),
 
     pub const prefix = "fork_choice";
 
@@ -5044,13 +5048,13 @@ pub const ForkChoiceMetrics = struct {
 
     pub fn histogramBucketsForField(comptime field_name: []const u8) []const f64 {
         const HistogramKind = enum {
-            fork_choice_update_interval,
+            update_interval,
         };
 
         const time_interval_buckets = &.{ 0.001, 0.01, 0.1, 1, 10, 100, 1000 }; // seconds
 
         return switch (@field(HistogramKind, field_name)) {
-            .fork_choice_update_interval => time_interval_buckets,
+            .update_interval => time_interval_buckets,
         };
     }
 };
