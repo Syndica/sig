@@ -133,7 +133,8 @@ pub fn loadSnapshot2(
         logger.info().logf("db is empty -  loading from snapshot!", .{});
     }
 
-    const full_manifest, const full_status_cache = blk: {
+    const full_manifest: Manifest, //
+    var full_status_cache: StatusCache = blk: {
         const full_zone = tracy.Zone.init(@src(), .{ .name = "insertFromSnapshot: full" });
         defer full_zone.deinit();
 
@@ -148,17 +149,13 @@ pub fn loadSnapshot2(
             .{ .snapshot_type = .full, .put_accounts = db_populate },
         );
     };
-    errdefer {
-        full_manifest.deinit(allocator);
-        full_status_cache.deinit(allocator);
-    }
+    defer full_manifest.deinit(allocator);
+    errdefer full_status_cache.deinit(allocator);
 
     const verify_hashes = !load_options.metadata_only and load_options.validate_snapshot;
     if (verify_hashes) {
         var timer = try std.time.Timer.start();
-        logger.info().logf("verifying snapshot accounts_lt_hash: {}", .{
-            full_manifest.bank_extra.accounts_lt_hash.checksum()
-        });
+        logger.info().logf("verifying snapshot accounts_lt_hash: {}", .{full_manifest.bank_extra.accounts_lt_hash.checksum()});
         defer logger.info().logf(
             "LtHash verified in {}",
             .{std.fmt.fmtDuration(timer.read())},
@@ -167,7 +164,7 @@ pub fn loadSnapshot2(
         const lt_hash = try rooted_db.computeLtHash(allocator, &pool);
         if (!full_manifest.bank_extra.accounts_lt_hash.eql(lt_hash)) {
             logger.err().logf(
-                "incorrect snapshot accounts delta hash: expected vs calculated: {} vs {}",
+                "incorrect snapshot accounts hash: expected vs calculated: {} vs {}",
                 .{
                     full_manifest.bank_extra.accounts_lt_hash.checksum(),
                     lt_hash.checksum(),
@@ -178,7 +175,7 @@ pub fn loadSnapshot2(
     }
 
     const maybe_incremental_manifest: ?Manifest, //
-    const maybe_incremental_status_cache: ?StatusCache = blk: {
+    var maybe_incremental_status_cache: ?StatusCache = blk: {
         const incr_zone =
             tracy.Zone.init(@src(), .{ .name = "Rooted.insertFromSnapshot: incremental" });
         defer incr_zone.deinit();
@@ -196,16 +193,14 @@ pub fn loadSnapshot2(
         );
         break :blk .{ manifest, status_cache };
     };
-    errdefer if (maybe_incremental_manifest) |manifest| manifest.deinit(allocator);
+    defer if (maybe_incremental_manifest) |manifest| manifest.deinit(allocator);
     errdefer if (maybe_incremental_status_cache) |status_cache| status_cache.deinit(allocator);
 
     if (maybe_incremental_manifest) |*inc_manifest| {
         // Due to layout of DB, can only verify incremental snapshot if we've just inserted it.
         if (verify_hashes and db_populate) {
             var timer = try std.time.Timer.start();
-            logger.info().logf("verifying incremental accounts_lt_hash: {}", .{
-                inc_manifest.bank_extra.accounts_lt_hash.checksum()
-            });
+            logger.info().logf("verifying incremental accounts_lt_hash: {}", .{inc_manifest.bank_extra.accounts_lt_hash.checksum()});
             defer logger.info().logf(
                 "LtHash verified in {}",
                 .{std.fmt.fmtDuration(timer.read())},
@@ -214,7 +209,7 @@ pub fn loadSnapshot2(
             const lt_hash = try rooted_db.computeLtHash(allocator, &pool);
             if (!inc_manifest.bank_extra.accounts_lt_hash.eql(lt_hash)) {
                 logger.err().logf(
-                    "incorrect incremental accounts delta hash: expected vs calculated: {} vs {}",
+                    "incorrect incremental accounts hash: expected vs calculated: {} vs {}",
                     .{
                         inc_manifest.bank_extra.accounts_lt_hash.checksum(),
                         lt_hash.checksum(),
@@ -229,7 +224,9 @@ pub fn loadSnapshot2(
         .full = full_manifest,
         .incremental = maybe_incremental_manifest,
     };
+    // NOTE: do not call combined_manifest.deinit() as Manifest deinits are already deferred above.
 
+    // Clones the manifests
     const collapsed_manifest = try combined_manifest.collapse(allocator);
     errdefer collapsed_manifest.deinit(allocator);
 
@@ -260,6 +257,7 @@ pub fn loadSnapshot2(
     if (load_options.metadata_only) {
         logger.info().log("accounts-db setup done...");
 
+        // Cleanup status caches.
         full_status_cache.deinit(allocator);
         if (maybe_incremental_status_cache) |status_cache| status_cache.deinit(allocator);
 
@@ -274,20 +272,22 @@ pub fn loadSnapshot2(
         };
     }
 
-    // validate the status cache
+    // validate the status cache of the latest slot
 
-    const status_cache: StatusCache = .{
-        // TODO: is this correct?
-        .bank_slot_deltas = try std.mem.concat(
-            allocator,
-            sig.accounts_db.snapshot.data.BankSlotDelta,
-            &.{
-                full_status_cache.bank_slot_deltas,
-                if (maybe_incremental_status_cache) |sc| sc.bank_slot_deltas else &.{},
-            },
-        ),
+    const status_cache = blk: {
+        // Consume both.
+        defer full_status_cache = .EMPTY;
+        defer maybe_incremental_status_cache = null;
+
+        // Incremental takes precedent.
+        if (maybe_incremental_status_cache) |inc_status_cache| {
+            full_status_cache.deinit(allocator);
+            break :blk inc_status_cache;
+        }
+
+        break :blk full_status_cache;
     };
-    errdefer allocator.free(status_cache.bank_slot_deltas);
+    errdefer status_cache.deinit(allocator);
 
     const slot_history = blk: {
         const account = (try rooted_db.get(allocator, sig.runtime.sysvar.SlotHistory.ID)) orelse
