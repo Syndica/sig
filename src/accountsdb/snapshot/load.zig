@@ -155,7 +155,10 @@ pub fn loadSnapshot2(
     const verify_hashes = !load_options.metadata_only and load_options.validate_snapshot;
     if (verify_hashes) {
         var timer = try std.time.Timer.start();
-        logger.info().logf("verifying snapshot accounts_lt_hash: {}", .{full_manifest.bank_extra.accounts_lt_hash.checksum()});
+        logger.info().logf(
+            "verifying snapshot accounts_lt_hash: {}",
+            .{full_manifest.bank_extra.accounts_lt_hash.checksum()},
+        );
         defer logger.info().logf(
             "LtHash verified in {}",
             .{std.fmt.fmtDuration(timer.read())},
@@ -200,7 +203,10 @@ pub fn loadSnapshot2(
         // Due to layout of DB, can only verify incremental snapshot if we've just inserted it.
         if (verify_hashes and db_populate) {
             var timer = try std.time.Timer.start();
-            logger.info().logf("verifying incremental accounts_lt_hash: {}", .{inc_manifest.bank_extra.accounts_lt_hash.checksum()});
+            logger.info().logf(
+                "verifying incremental accounts_lt_hash: {}",
+                .{inc_manifest.bank_extra.accounts_lt_hash.checksum()},
+            );
             defer logger.info().logf(
                 "LtHash verified in {}",
                 .{std.fmt.fmtDuration(timer.read())},
@@ -765,4 +771,32 @@ test loadSnapshot {
         },
     );
     loaded_snapshot.deinit();
+
+    {
+        const rooted_path = try std.fs.path.join(allocator, &.{ path, "accounts.db" });
+        defer allocator.free(rooted_path);
+
+        var rooted_db: Rooted = try .init(rooted_path);
+        defer rooted_db.deinit();
+
+        var loaded_snapshot2 = try loadSnapshot2(
+            allocator,
+            &rooted_db,
+            .{
+                .snapshot_dir = path,
+                .number_of_index_shards = 4,
+                .num_threads_snapshot_unpack = 1,
+                .num_threads_snapshot_load = 1,
+                .accounts_per_file_estimate = 500,
+            },
+            sig.TEST_DATA_DIR ++ "/genesis.bin",
+            .FOR_TESTS,
+            .{
+                .gossip_service = null,
+                .geyser_writer = null,
+                .validate_snapshot = true,
+            },
+        );
+        loaded_snapshot2.deinit();
+    }
 }
