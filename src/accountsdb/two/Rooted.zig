@@ -241,8 +241,8 @@ fn computeLtHashForAccountRange(
     self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &stmt, null));
     defer self.err(sql.sqlite3_finalize(stmt));
 
-    self.err(sql.sqlite3_bind_blob(stmt, 1, &limit, @sizeOf(u64), sql.SQLITE_STATIC));
-    self.err(sql.sqlite3_bind_blob(stmt, 2, &offset, @sizeOf(u64), sql.SQLITE_STATIC));
+    self.err(sql.sqlite3_bind_int64(stmt, 1, @intCast(limit)));
+    self.err(sql.sqlite3_bind_int64(stmt, 2, @intCast(offset)));
 
     var lt_hash: sig.core.LtHash = .IDENTITY;
     while (true) {
@@ -250,7 +250,7 @@ fn computeLtHashForAccountRange(
         switch (step_result) {
             ROW => {},
             DONE => break,
-            else => err(self, step_result),
+            else => self.err(step_result),
         }
 
         const pubkey = blk: {

@@ -128,9 +128,9 @@ pub fn loadSnapshot2(
 
     const db_populate = rooted_db.count() == 0;
     if (!db_populate) {
-        logger.info().logf("db has entries, skipping load from snapshot\n", .{});
+        logger.info().logf("db has entries, skipping load from snapshot", .{});
     } else {
-        logger.info().logf("db is empty -  loading from snapshot!\n", .{});
+        logger.info().logf("db is empty -  loading from snapshot!", .{});
     }
 
     const full_manifest, const full_status_cache = blk: {
@@ -155,6 +155,15 @@ pub fn loadSnapshot2(
 
     const verify_hashes = !load_options.metadata_only and load_options.validate_snapshot;
     if (verify_hashes) {
+        var timer = try std.time.Timer.start();
+        logger.info().logf("verifying snapshot accounts_lt_hash: {}", .{
+            full_manifest.bank_extra.accounts_lt_hash.checksum()
+        });
+        defer logger.info().logf(
+            "LtHash verified in {}",
+            .{std.fmt.fmtDuration(timer.read())},
+        );
+
         const lt_hash = try rooted_db.computeLtHash(allocator, &pool);
         if (!full_manifest.bank_extra.accounts_lt_hash.eql(lt_hash)) {
             logger.err().logf(
@@ -193,6 +202,15 @@ pub fn loadSnapshot2(
     if (maybe_incremental_manifest) |*inc_manifest| {
         // Due to layout of DB, can only verify incremental snapshot if we've just inserted it.
         if (verify_hashes and db_populate) {
+            var timer = try std.time.Timer.start();
+            logger.info().logf("verifying incremental accounts_lt_hash: {}", .{
+                inc_manifest.bank_extra.accounts_lt_hash.checksum()
+            });
+            defer logger.info().logf(
+                "LtHash verified in {}",
+                .{std.fmt.fmtDuration(timer.read())},
+            );
+
             const lt_hash = try rooted_db.computeLtHash(allocator, &pool);
             if (!inc_manifest.bank_extra.accounts_lt_hash.eql(lt_hash)) {
                 logger.err().logf(
