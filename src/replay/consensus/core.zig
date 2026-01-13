@@ -347,6 +347,7 @@ pub const TowerConsensus = struct {
             ledger: *Ledger,
             /// Scanned by the vote collector if provided.
             gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
+            gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
             slot_tracker: *SlotTracker,
             epoch_tracker: *sig.core.EpochTracker,
             progress_map: *ProgressMap,
@@ -454,7 +455,7 @@ pub const TowerConsensus = struct {
         try self.executeProtocol(
             allocator,
             params.ledger,
-            null, // TODO
+            params.gossip_table,
             &ancestors,
             &descendants,
             params.slot_tracker,
@@ -1051,7 +1052,7 @@ fn upcomingLeaderTpuVoteSockets(
             const leader_pubkey = leader_pubkey_ptr.*;
             const contact_info =
                 gossip_table.getThreadSafeContactInfo(leader_pubkey) orelse continue;
-            const socket_addr = contact_info.tpu_addr orelse continue;
+            const socket_addr = contact_info.tpu_vote_addr orelse continue;
             seen_sockets.putAssumeCapacity(socket_addr, {});
         }
     }
@@ -4847,6 +4848,7 @@ test "edge cases - duplicate slot" {
         .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_votes = null,
+        .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &replay_state.progress_map,
@@ -5019,6 +5021,7 @@ test "edge cases - duplicate confirmed slot" {
         .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_votes = null,
+        .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &replay_state.progress_map,
@@ -5203,6 +5206,7 @@ test "edge cases - gossip verified vote hashes" {
         .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_votes = null,
+        .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &replay_state.progress_map,
@@ -5380,6 +5384,7 @@ test "vote on heaviest frozen descendant with no switch" {
         .account_store = stubs.accountStore(),
         .ledger = &stubs.ledger,
         .gossip_votes = null,
+        .gossip_table = null,
         .slot_tracker = &slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &progress,
@@ -5601,6 +5606,7 @@ test "vote accounts with landed votes populate bank stats" {
         .account_store = stubs.accountStore(),
         .ledger = &stubs.ledger,
         .gossip_votes = null,
+        .gossip_table = null,
         .slot_tracker = &slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &progress,
@@ -5904,6 +5910,7 @@ test "root advances after vote satisfies lockouts" {
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -5966,6 +5973,7 @@ test "root advances after vote satisfies lockouts" {
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -6049,6 +6057,7 @@ test "root advances after vote satisfies lockouts" {
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -6227,6 +6236,7 @@ test "vote refresh when no new vote available" {
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -6254,6 +6264,7 @@ test "vote refresh when no new vote available" {
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -6523,6 +6534,7 @@ test "detect and mark duplicate confirmed fork" {
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -6698,6 +6710,7 @@ test "detect and mark duplicate slot" {
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -7079,6 +7092,7 @@ test "successful fork switch (switch_proof)" {
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -7121,6 +7135,7 @@ test "successful fork switch (switch_proof)" {
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -7183,6 +7198,7 @@ test "successful fork switch (switch_proof)" {
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -7257,6 +7273,7 @@ test "successful fork switch (switch_proof)" {
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,

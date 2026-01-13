@@ -1681,6 +1681,7 @@ fn validator(
         &app_base,
         if (maybe_vote_sockets) |*vs| vs else null,
         &gossip_votes,
+        &gossip_service.gossip_table_rw,
     );
 
     const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
@@ -1864,6 +1865,7 @@ fn replayOffline(
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
+        null,
         null,
         null,
     );
@@ -2762,6 +2764,7 @@ const ReplayAndConsensusServiceState = struct {
         app_base: *const AppBase,
         vote_sockets: ?*const replay.consensus.core.VoteSockets,
         gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
+        gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     ) !std.Thread {
         return try app_base.spawnService(
             "replay",
@@ -2782,6 +2785,7 @@ const ReplayAndConsensusServiceState = struct {
                     .senders = c.senders,
                     .receivers = c.receivers,
                     .vote_sockets = vote_sockets,
+                    .gossip_table = gossip_table,
                 } else null,
             },
         );
