@@ -2057,6 +2057,12 @@ pub const LocalMessageBroker = struct {
             else => {},
         }
     }
+
+    fn deinit(self: *const LocalMessageBroker) void {
+        if (self.vote_collector) |vcs| {
+            while (vcs.tryReceive()) |vote| vote.deinit(vcs.allocator);
+        }
+    }
 };
 
 /// stats that we publish to prometheus
