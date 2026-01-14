@@ -538,6 +538,57 @@ const PerThread = struct {
     }
 };
 
+test "batched sends multiple messages to different addresses" {
+    const allocator = std.testing.allocator;
+
+    var send_sock = try UdpSocket.create(.ipv4, .udp);
+    try send_sock.bindToPort(48278);
+    defer send_sock.close();
+
+    var recv1_sock = try UdpSocket.create(.ipv4, .udp);
+    try recv1_sock.bindToPort(48279);
+    defer recv1_sock.close();
+
+    var recv2_sock = try UdpSocket.create(.ipv4, .udp);
+    try recv2_sock.bindToPort(48280);
+    defer recv2_sock.close();
+
+    var chan = try Channel(Packet).init(std.testing.allocator);
+    defer chan.deinit();
+    var exit = std.atomic.Value(bool).init(false);
+
+    const sender = try SocketThread.spawnSender(
+        allocator,
+        .FOR_TESTS,
+        send_sock,
+        &chan,
+        .{ .unordered = &exit },
+        .{},
+    );
+    defer sender.join();
+    defer exit.store(true, .release);
+
+    try chan.send(.{
+        .buffer = @splat(1),
+        .size = 1,
+        .addr = try network.EndPoint.parse("127.0.0.1:48279"),
+        .flags = .{},
+    });
+
+    try chan.send(.{
+        .buffer = @splat(2),
+        .size = 1,
+        .addr = try network.EndPoint.parse("127.0.0.1:48280"),
+        .flags = .{},
+    });
+
+    var byte: [1]u8 = .{0};
+    _ = try recv1_sock.receive(&byte);
+    try std.testing.expectEqual(1, byte[0]);
+    _ = try recv2_sock.receive(&byte);
+    try std.testing.expectEqual(2, byte[0]);
+}
+
 // TODO: Evaluate when XevThread socket backend is beneficial.
 const SocketBackend = PerThread;
 
