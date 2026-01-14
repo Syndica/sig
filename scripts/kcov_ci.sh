@@ -2,7 +2,6 @@
 
 set -exo pipefail
 
-cd /home/circleci/project
 mkdir kcov-output 
 
 echo "=> Running kcov on tests" 
