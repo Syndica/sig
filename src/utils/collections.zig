@@ -292,18 +292,29 @@ test "SplitUnionList: addOne, get, and swapRemove" {
 
 pub fn SortedTreeConfig(comptime Key: type) type {
     const can_default_key = switch (@typeInfo(Key)) {
-        .@"struct", .@"enum", .@"union" => @hasDecl(Key, "empty"),
+        .@"struct", .@"enum", .@"union" => @hasDecl(Key, "empty") and @TypeOf(Key.empty) == Key,
         else => false,
     };
+
+    const eql = struct {
+        fn f(a: Key, b: Key) bool {
+            return if (Key == []const u8)
+                std.mem.eql(u8, a, b)
+            else
+                std.meta.eql(a, b);
+        }
+    }.f;
 
     return if (can_default_key)
         struct {
             orderFn: fn (a: anytype, b: anytype) std.math.Order = order,
+            eql_fn: fn (a: Key, b: Key) bool = eql,
             empty_key: Key = Key.empty,
         }
     else
         struct {
             orderFn: fn (a: anytype, b: anytype) std.math.Order = order,
+            eql_fn: fn (a: Key, b: Key) bool = eql,
             empty_key: Key,
         };
 }
@@ -318,7 +329,7 @@ pub fn SortedMap(
     comptime config: SortedTreeConfig(Key),
 ) type {
     return struct {
-        data: std.ArrayListUnmanaged(u8),
+        data: std.ArrayListAlignedUnmanaged(u8, node_alignment),
         tree: struct { root: Offset, height: u8, count: u32 },
 
         pub const empty: Self = .{
@@ -354,6 +365,12 @@ pub fn SortedMap(
             }
         };
 
+        const node_alignment = @max(
+            @alignOf(LeafNode),
+            @alignOf(InnerNode),
+            @alignOf(Value),
+        );
+
         pub const Entry = struct {
             key_ptr: *const Key,
             value_ptr: *Value,
@@ -379,6 +396,14 @@ pub fn SortedMap(
             start: ?Key = null,
 
             pub fn next(self: *Iterator) ?Entry {
+                return self.nextInner(.exclusive);
+            }
+
+            pub fn nextInclusive(self: *Iterator) ?Entry {
+                return self.nextInner(.inclusive);
+            }
+
+            fn nextInner(self: *Iterator, mode: enum { inclusive, exclusive }) ?Entry {
                 if (self.sorted_tree.tree.root == no_root) return null;
 
                 var node_offset: Offset = self.path.node_stack[self.sorted_tree.tree.height];
@@ -391,7 +416,11 @@ pub fn SortedMap(
                     if (idx < B and !keysEql(leaf.keys[idx], EMPTY_KEY)) {
                         // support ending early
                         if (self.end) |end_key| {
-                            if (config.orderFn(leaf.keys[idx], end_key) == .gt) return null;
+                            const early_return = switch (mode) {
+                                .exclusive => config.orderFn(leaf.keys[idx], end_key) != .lt,
+                                .inclusive => config.orderFn(leaf.keys[idx], end_key) == .gt,
+                            };
+                            if (early_return) return null;
                         }
 
                         const result: Entry = .{
@@ -440,70 +469,77 @@ pub fn SortedMap(
             pub fn prev(self: *Iterator) ?Entry {
                 if (self.sorted_tree.tree.root == no_root) return null;
 
-                const height = self.sorted_tree.tree.height;
+                var node_offset: Offset = self.path.node_stack[self.sorted_tree.tree.height];
 
-                var leaf_offset = self.path.node_stack[height];
-                var leaf = self.sorted_tree.asPtr(LeafNode, leaf_offset);
-                var idx = self.path.idx_stack[height];
+                while (true) {
+                    const leaf = self.sorted_tree.asPtr(LeafNode, node_offset);
+                    const idx = self.path.idx_stack[self.sorted_tree.tree.height];
 
-                if (idx > 0) {
-                    idx -= 1;
-                    while (idx > 0 and keysEql(leaf.keys[idx], EMPTY_KEY)) {
-                        idx -= 1;
-                    }
-                    if (!keysEql(leaf.keys[idx], EMPTY_KEY)) {
+                    if (idx < B and !keysEql(leaf.keys[idx], EMPTY_KEY)) {
                         if (self.start) |start_key| {
                             if (config.orderFn(leaf.keys[idx], start_key) == .lt) return null;
                         }
-                        self.path.idx_stack[height] = idx;
-                        return .{
+
+                        const result: Entry = .{
                             .key_ptr = &leaf.keys[idx],
                             .value_ptr = &leaf.values[idx],
                         };
+
+                        self.path.idx_stack[self.sorted_tree.tree.height] -%= 1;
+
+                        return result;
                     }
-                }
 
-                var h = height;
-                while (h > 0) {
-                    h -= 1;
-                    const parent_idx = self.path.idx_stack[h];
-
-                    if (parent_idx > 0) {
+                    // try to find previous leaf node
+                    var found_parent = false;
+                    var h = self.sorted_tree.tree.height;
+                    while (h > 0) {
+                        h -= 1;
                         const parent_node = self.path.node_stack[h];
-                        self.path.idx_stack[h] = parent_idx - 1;
+                        const parent_idx = self.path.idx_stack[h];
                         const parent_inner = self.sorted_tree.asPtr(InnerNode, parent_node);
-                        leaf_offset = parent_inner.values[parent_idx - 1];
-
-                        for (h + 1..height) |hh| {
-                            self.path.node_stack[hh] = leaf_offset;
-                            const inner = self.sorted_tree.asPtr(InnerNode, leaf_offset);
-                            const last_idx = lastNonEmpty(&inner.keys);
-                            self.path.idx_stack[hh] = last_idx;
-                            leaf_offset = inner.values[last_idx];
+                        if (parent_idx > 0 and !keysEql(parent_inner.keys[parent_idx - 1], EMPTY_KEY)) {
+                            node_offset = parent_inner.values[parent_idx - 1];
+                            self.path.idx_stack[h] = parent_idx - 1;
+                            // Descend to rightmost leaf
+                            var hh: u8 = h + 1;
+                            while (hh <= self.sorted_tree.tree.height) : (hh += 1) {
+                                const inner = self.sorted_tree.asPtr(InnerNode, node_offset);
+                                const last_idx = lastNonEmpty(&inner.keys);
+                                self.path.idx_stack[hh] = last_idx;
+                                self.path.node_stack[hh] = node_offset;
+                                if (hh == self.sorted_tree.tree.height) break;
+                                node_offset = inner.values[last_idx];
+                            }
+                            found_parent = true;
+                            break;
                         }
-
-                        self.path.node_stack[height] = leaf_offset;
-                        leaf = self.sorted_tree.asPtr(LeafNode, leaf_offset);
-                        const leaf_idx = lastNonEmpty(&leaf.keys);
-                        self.path.idx_stack[height] = leaf_idx;
-
-                        if (self.start) |start_key| {
-                            if (config.orderFn(leaf.keys[leaf_idx], start_key) == .lt) return null;
-                        }
-
-                        return .{
-                            .key_ptr = &leaf.keys[leaf_idx],
-                            .value_ptr = &leaf.values[leaf_idx],
-                        };
                     }
+                    if (!found_parent) return null; // iteration finished
                 }
-
-                return null;
             }
 
-            pub fn count(self: *Iterator) u32 {
+            pub fn countForwards(self: *Iterator) u32 {
                 var i: u32 = 0;
                 while (self.next()) |_| i += 1;
+                return i;
+            }
+
+            pub fn countBackwards(self: *Iterator) u32 {
+                var i: u32 = 0;
+                while (self.prev()) |_| i += 1;
+                return i;
+            }
+
+            pub fn countForwardsInclusive(self: *Iterator) u32 {
+                var i: u32 = 0;
+                while (self.nextInclusive()) |_| i += 1;
+                return i;
+            }
+
+            pub fn countBackwardsInclusive(self: *Iterator) u32 {
+                var i: u32 = 0;
+                while (self.prev()) |_| i += 1;
                 return i;
             }
         };
@@ -641,6 +677,7 @@ pub fn SortedMap(
                 .sorted_tree = self,
                 .path = path,
                 .end = maybe_end,
+                .start = maybe_start,
             };
 
             switch (begin) {
@@ -710,6 +747,8 @@ pub fn SortedMap(
             };
         }
 
+        // NOTE: this function assumes a total ordering - comparing two trees with a partial
+        // ordering would require using memory.
         pub fn eql(self: *const Self, other: *const Self) bool {
             var self_iter = self.iterator();
             var other_iter = other.iterator();
@@ -786,14 +825,18 @@ pub fn SortedMap(
         }
 
         fn keysEql(a: Key, b: Key) bool {
-            return config.orderFn(a, b) == .eq;
+            return config.eql_fn(a, b);
         }
 
         fn allocNode(self: *Self, allocator: std.mem.Allocator, Node: type) !Offset {
-            try self.data.ensureUnusedCapacity(allocator, @sizeOf(Node));
-            const new_node_offset: Offset = @intCast(self.data.items.len);
+            const padding_len = std.mem.alignForward(usize, self.data.items.len, node_alignment) -
+                self.data.items.len;
+
+            try self.data.ensureUnusedCapacity(allocator, @sizeOf(Node) + padding_len);
+
+            const new_node_offset: Offset = @intCast(self.data.items.len + padding_len);
             self.data.items.len += @sizeOf(Node);
-            const node: *Node = @alignCast(@ptrCast(self.data.items[new_node_offset..][0..@sizeOf(Node)]));
+            const node: *Node = @alignCast(@ptrCast(self.data.items[padding_len..][new_node_offset..][0..@sizeOf(Node)]));
             node.* = .{ .keys = @splat(EMPTY_KEY), .values = @splat(undefined) };
             return new_node_offset;
         }
@@ -1109,8 +1152,6 @@ test "SortedMap basics" {
     };
 
     for (values) |val| {
-        // std.debug.print("val: {}\n", .{val});
-
         try x.put(allocator, val.@"0", val.@"1");
     }
 
@@ -1125,19 +1166,6 @@ test "SortedMap basics" {
     try std.testing.expect(!x.remove(100000000));
     try std.testing.expect(!x.remove(-123131231));
     try std.testing.expect(!x.remove(345635635));
-
-    // var iter = x.iteratorRanged(0, 100, .start);
-    // while (iter.next()) |entry| {
-    //     // std.debug.print("key: {}\n", .{entry.key_ptr.*});
-    // }
-
-    // // std.debug.print("1: {}\n", .{1});
-
-    // var iter2 = x.iteratorRanged(0, 100, .end);
-
-    // while (iter2.prev()) |entry| {
-    //     // std.debug.print("key: {}\n", .{entry.key_ptr.*});
-    // }
 }
 
 pub fn Bound(comptime T: type) type {
@@ -1467,47 +1495,64 @@ test "SortedMap bincode round trip does not break sorting" {
     try std.testing.expectEqual(5, iter.next().?.key_ptr.*);
 }
 
-// test "SortedMap range" {
-//     const allocator = std.testing.allocator;
+fn testRange(
+    expected: []const u8,
+    iterator: SortedSet(u8, .{ .empty_key = std.math.maxInt(u8) }).Iterator,
+) !void {
+    const allocator = std.testing.allocator;
 
-//     var set: SortedSet(u8, .{ .empty_key = std.math.maxInt(u8) }) = .empty;
-//     defer set.deinit(allocator);
+    var found_data: std.ArrayListUnmanaged(u8) = .empty;
+    defer found_data.deinit(allocator);
 
-//     try set.put(allocator, 5, {});
-//     try set.put(allocator, 3, {});
-//     try set.put(allocator, 1, {});
-//     try set.put(allocator, 3, {});
+    var iter = iterator;
+    while (iter.next()) |entry| {
+        try found_data.append(allocator, entry.key_ptr.*);
+    }
 
-//     try expectEqualSlices(u8, &.{ 1, 3, 5 }, set.range(null, null));
-//     try expectEqualSlices(u8, &.{}, set.range(0, 0));
-//     try expectEqualSlices(u8, &.{}, set.range(10, 10));
-//     try expectEqualSlices(u8, &.{}, set.range(10, 11));
-//     try expectEqualSlices(u8, &.{}, set.range(12, 11));
-//     try expectEqualSlices(u8, &.{1}, set.range(null, 3));
-//     try expectEqualSlices(u8, &.{ 1, 3 }, set.range(null, 4));
-//     try expectEqualSlices(u8, &.{ 1, 3 }, set.range(null, 5));
-//     try expectEqualSlices(u8, &.{ 1, 3, 5 }, set.range(null, 6));
-//     try expectEqualSlices(u8, &.{ 1, 3, 5 }, set.range(0, null));
-//     try expectEqualSlices(u8, &.{ 1, 3, 5 }, set.range(1, null));
-//     try expectEqualSlices(u8, &.{ 3, 5 }, set.range(2, null));
-//     try expectEqualSlices(u8, &.{ 3, 5 }, set.range(3, null));
-//     try expectEqualSlices(u8, &.{5}, set.range(4, null));
-//     try expectEqualSlices(u8, &.{5}, set.range(5, null));
-//     try expectEqualSlices(u8, &.{ 1, 3, 5 }, set.range(1, 6));
-//     try expectEqualSlices(u8, &.{ 1, 3 }, set.range(1, 5));
-//     try expectEqualSlices(u8, &.{ 1, 3 }, set.range(1, 4));
-//     try expectEqualSlices(u8, &.{1}, set.range(1, 3));
-//     try expectEqualSlices(u8, &.{1}, set.range(1, 2));
-//     try expectEqualSlices(u8, &.{}, set.range(1, 1));
-//     try expectEqualSlices(u8, &.{ 3, 5 }, set.range(2, 6));
-//     try expectEqualSlices(u8, &.{ 3, 5 }, set.range(3, 6));
-//     try expectEqualSlices(u8, &.{5}, set.range(4, 6));
-//     try expectEqualSlices(u8, &.{5}, set.range(5, 6));
-//     try expectEqualSlices(u8, &.{3}, set.range(3, 4));
-//     try expectEqualSlices(u8, &.{}, set.range(3, 3));
-//     try expectEqualSlices(u8, &.{}, set.range(2, 3));
-//     try expectEqualSlices(u8, &.{}, set.range(2, 2));
-// }
+    try std.testing.expectEqualSlices(u8, expected, found_data.items);
+}
+
+test "SortedMap.iteratorRanged" {
+    const allocator = std.testing.allocator;
+
+    var set: SortedSet(u8, .{ .empty_key = std.math.maxInt(u8) }) = .empty;
+    defer set.deinit(allocator);
+
+    try set.put(allocator, 5, {});
+    try set.put(allocator, 3, {});
+    try set.put(allocator, 1, {});
+    try set.put(allocator, 3, {});
+
+    try testRange(&.{ 1, 3, 5 }, set.iteratorRanged(null, null, .start));
+    try testRange(&.{}, set.iteratorRanged(0, 0, .start));
+    try testRange(&.{}, set.iteratorRanged(10, 10, .start));
+    try testRange(&.{}, set.iteratorRanged(10, 11, .start));
+    try testRange(&.{}, set.iteratorRanged(12, 11, .start));
+    try testRange(&.{1}, set.iteratorRanged(null, 3, .start));
+    try testRange(&.{ 1, 3 }, set.iteratorRanged(null, 4, .start));
+    try testRange(&.{ 1, 3 }, set.iteratorRanged(null, 5, .start));
+    try testRange(&.{ 1, 3, 5 }, set.iteratorRanged(null, 6, .start));
+    try testRange(&.{ 1, 3, 5 }, set.iteratorRanged(0, null, .start));
+    try testRange(&.{ 1, 3, 5 }, set.iteratorRanged(1, null, .start));
+    try testRange(&.{ 3, 5 }, set.iteratorRanged(2, null, .start));
+    try testRange(&.{ 3, 5 }, set.iteratorRanged(3, null, .start));
+    try testRange(&.{5}, set.iteratorRanged(4, null, .start));
+    try testRange(&.{5}, set.iteratorRanged(5, null, .start));
+    try testRange(&.{ 1, 3, 5 }, set.iteratorRanged(1, 6, .start));
+    try testRange(&.{ 1, 3 }, set.iteratorRanged(1, 5, .start));
+    try testRange(&.{ 1, 3 }, set.iteratorRanged(1, 4, .start));
+    try testRange(&.{1}, set.iteratorRanged(1, 3, .start));
+    try testRange(&.{1}, set.iteratorRanged(1, 2, .start));
+    try testRange(&.{}, set.iteratorRanged(1, 1, .start));
+    try testRange(&.{ 3, 5 }, set.iteratorRanged(2, 6, .start));
+    try testRange(&.{ 3, 5 }, set.iteratorRanged(3, 6, .start));
+    try testRange(&.{5}, set.iteratorRanged(4, 6, .start));
+    try testRange(&.{5}, set.iteratorRanged(5, 6, .start));
+    try testRange(&.{3}, set.iteratorRanged(3, 4, .start));
+    try testRange(&.{}, set.iteratorRanged(3, 3, .start));
+    try testRange(&.{}, set.iteratorRanged(2, 3, .start));
+    try testRange(&.{}, set.iteratorRanged(2, 2, .start));
+}
 
 test binarySearch {
     const items: [4]u8 = .{ 1, 3, 3, 5 };
@@ -1739,6 +1784,133 @@ test "SortedMap" {
     try expect(map.remove(3));
     try expect(!map.remove(3));
     try expect(map.remove(1));
+}
+
+test "SortedMap.put primitives" {
+    const allocator = std.testing.allocator;
+
+    var map: SortedMap(i32, u128, .{ .empty_key = std.math.maxInt(i32) }) = .empty;
+    defer map.deinit(allocator);
+    try std.testing.expectEqual(0, map.count());
+
+    try map.put(allocator, 5, 500);
+    try std.testing.expectEqual(1, map.count());
+    try std.testing.expectEqual(@as(?u128, 500), map.get(5));
+
+    try map.put(allocator, 5, 600);
+    try std.testing.expectEqual(@as(u32, 1), map.count());
+    try std.testing.expectEqual(@as(?u128, 600), map.get(5));
+
+    try map.put(allocator, 1, 100);
+    try map.put(allocator, 3, 300);
+    try map.put(allocator, 2, 200);
+    try map.put(allocator, 4, 400);
+    try map.put(allocator, 5, 500);
+
+    var iter = map.iterator();
+    var i: u16 = 1;
+    while (iter.next()) |entry| : (i += 1) {
+        try std.testing.expectEqual(i, entry.key_ptr.*);
+        try std.testing.expectEqual(i * 100, entry.value_ptr.*);
+    }
+
+    var large_map: SortedMap(i32, i32, .{ .empty_key = std.math.maxInt(i32) }) = .empty;
+    defer large_map.deinit(allocator);
+
+    for (0..100) |j| {
+        try large_map.put(allocator, @intCast(j), @intCast(j * 10));
+    }
+    try std.testing.expectEqual(@as(u32, 100), large_map.count());
+
+    var large_iter = large_map.iterator();
+    var count: u32 = 0;
+    while (large_iter.next()) |_| count += 1;
+    try std.testing.expectEqual(@as(u32, 100), count);
+}
+
+test "SortedMap.getOrPut" {
+    const allocator = std.testing.allocator;
+
+    var map: SortedMap(i32, i32, .{ .empty_key = std.math.maxInt(i32) }) = .empty;
+    defer map.deinit(allocator);
+
+    const entry1 = try map.getOrPut(allocator, 100);
+    try std.testing.expect(!entry1.found_existing);
+    try std.testing.expectEqual(100, entry1.key_ptr.*);
+    try std.testing.expectEqual(1, map.count());
+    entry1.value_ptr.* = 500;
+
+    const entry2 = try map.getOrPut(allocator, 100);
+    try std.testing.expect(entry2.found_existing);
+    try std.testing.expectEqual(100, entry2.key_ptr.*);
+    try std.testing.expectEqual(500, entry2.value_ptr.*);
+    try std.testing.expectEqual(1, map.count());
+
+    try std.testing.expectEqual(entry1.value_ptr, entry2.value_ptr);
+
+    (try map.getOrPut(allocator, 200)).value_ptr.* = 2000;
+    (try map.getOrPut(allocator, 300)).value_ptr.* = 3000;
+
+    try std.testing.expectEqual(3, map.count());
+    try std.testing.expectEqual(2000, map.get(200).?);
+    try std.testing.expectEqual(3000, map.get(300).?);
+}
+
+test "SortedMap.iteratorRanged bidirectional" {
+    const allocator = std.testing.allocator;
+
+    var map: SortedMap(i32, i32, .{ .empty_key = std.math.maxInt(i32) }) = .empty;
+    defer map.deinit(allocator);
+
+    try map.put(allocator, 0, 0);
+    try map.put(allocator, 1, 10);
+    try map.put(allocator, 2, 20);
+    try map.put(allocator, 3, 30);
+
+    // forward iteration
+    {
+        var iter = map.iteratorRanged(null, null, .start);
+        var count: u32 = 0;
+        var keys: [4]i32 = undefined;
+
+        while (iter.next()) |entry| {
+            keys[count] = entry.key_ptr.*;
+            count += 1;
+        }
+
+        try std.testing.expectEqual(4, count);
+        try std.testing.expectEqualSlices(i32, &.{ 0, 1, 2, 3 }, &keys);
+    }
+
+    // backward iteration
+    {
+        var iter = map.iteratorRanged(null, null, .end);
+        var count: u32 = 0;
+        var keys: [4]i32 = undefined;
+
+        while (iter.prev()) |entry| {
+            keys[count] = entry.key_ptr.*;
+            count += 1;
+        }
+
+        try std.testing.expectEqual(4, count);
+        try std.testing.expectEqualSlices(i32, &.{ 3, 2, 1, 0 }, &keys);
+    }
+
+    // backward ranged
+    {
+        var iter = map.iteratorRanged(1, 3, .end);
+        var count: u32 = 0;
+        var keys: [3]i32 = undefined;
+
+        while (iter.prev()) |entry| {
+            keys[count] = entry.key_ptr.*;
+            count += 1;
+        }
+
+        try std.testing.expectEqual(3, count);
+        try std.testing.expectEqualSlices(i32, &.{ 3, 2, 1 }, &keys);
+    }
 }
 
 test "checkAllAllocationFailures in cloneMapAndValues" {

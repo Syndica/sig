@@ -48,12 +48,16 @@ pub fn calculateStakeWeightedTimestamp(
 
     for (recent_timestamps) |timestamp_entry| {
         const vote_pubkey, const timestamp_slot, const timestamp = timestamp_entry;
+
         const offset_s = (ns_per_slot *| (slot -| timestamp_slot)) / 1_000_000_000;
         const estimate_s = timestamp +| @as(i64, @intCast(offset_s));
         const stake = if (vote_accounts.getPtr(vote_pubkey)) |vote_account_entry|
             vote_account_entry.stake
         else
             0;
+
+        if (estimate_s == std.math.maxInt(i64)) unreachable;
+
         const entry = try stakes_per_timestamp.getOrPut(allocator, estimate_s);
         if (entry.found_existing)
             entry.value_ptr.* +|= stake
@@ -199,7 +203,7 @@ test "uses median: low-staked outliers" {
     {
         const recent_timestamps = [_]struct { Pubkey, Slot, i64 }{
             .{ pubkey_0, slot, recent_timestamp },
-            .{ pubkey_1, slot, std.math.maxInt(i64) },
+            .{ pubkey_1, slot, std.math.maxInt(i64) - 1 },
             .{ pubkey_2, slot, recent_timestamp },
             .{ pubkey_3, slot, recent_timestamp },
             .{ pubkey_4, slot, recent_timestamp },
@@ -222,7 +226,7 @@ test "uses median: low-staked outliers" {
     {
         const recent_timestamps = [_]struct { Pubkey, Slot, i64 }{
             .{ pubkey_0, slot, 0 },
-            .{ pubkey_1, slot, std.math.maxInt(i64) },
+            .{ pubkey_1, slot, std.math.maxInt(i64) - 1 },
             .{ pubkey_2, slot, recent_timestamp },
             .{ pubkey_3, slot, recent_timestamp },
             .{ pubkey_4, slot, recent_timestamp },
@@ -279,7 +283,7 @@ test "uses median: high-staked outliers" {
 
         const recent_timestamps = [_]struct { Pubkey, Slot, i64 }{
             .{ pubkey_0, slot, 0 },
-            .{ pubkey_1, slot, std.math.maxInt(i64) },
+            .{ pubkey_1, slot, std.math.maxInt(i64) - 1 },
             .{ pubkey_2, slot, recent_timestamp },
         };
 

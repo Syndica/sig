@@ -65,7 +65,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 allocator.free(maps);
             }
             inline for (0..column_families.len) |i| {
-                maps[i] = try SharedHashMap.init(batch_allocator.allocator());
+                maps[i] = SharedHashMap.init(batch_allocator.allocator());
             }
             return .{
                 .fast_allocator = allocator,
@@ -222,13 +222,16 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                     },
                     .delete_range => |delete_range_ix| {
                         const cf_index, const start, const end = delete_range_ix;
-                        const keys, _ = self.maps[cf_index].map.range(start, end);
-                        const to_delete = try batch.fast_allocator.alloc([]const u8, keys.len);
-                        defer batch.fast_allocator.free(to_delete);
-                        for (keys, 0..) |key, i| {
-                            to_delete[i] = key;
+
+                        var iter = self.maps[cf_index].map.iteratorRanged(start, end, .start);
+                        var to_delete: std.ArrayListUnmanaged([]const u8) = .empty;
+                        defer to_delete.deinit(batch.fast_allocator);
+
+                        while (iter.next()) |entry| {
+                            try to_delete.append(batch.fast_allocator, entry.key_ptr.*);
                         }
-                        for (to_delete) |delete_key| {
+
+                        for (to_delete.items) |delete_key| {
                             self.maps[cf_index].delete(delete_key);
                         }
                     },
@@ -341,40 +344,57 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             shared_map.lock.lockShared();
             defer shared_map.lock.unlockShared();
 
-            const keys, const vals = if (start) |start_| b: {
-                const search_bytes = try key_serializer.serializeAlloc(self.fast_allocator, start_);
-                defer self.fast_allocator.free(search_bytes);
-                break :b switch (direction) {
-                    .forward => map.rangeCustom(.{ .inclusive = search_bytes }, null),
-                    .reverse => map.rangeCustom(null, .{ .inclusive = search_bytes }),
-                };
-            } else map.items();
-            std.debug.assert(keys.len == vals.len);
+            var iter = if (start == null)
+                map.iterator()
+            else switch (direction) {
+                .forward => map.iteratorRanged(
+                    try key_serializer.serializeAlloc(self.fast_allocator, start.?),
+                    null,
+                    .start,
+                ),
+                .reverse => map.iteratorRanged(
+                    null,
+                    try key_serializer.serializeAlloc(self.fast_allocator, start.?),
+                    .start,
+                ),
+            };
+            defer {
+                if (iter.start) |start_bytes| self.fast_allocator.free(start_bytes);
+                if (iter.end) |end_bytes| self.fast_allocator.free(end_bytes);
+            }
 
-            const copied_keys = try self.storage_allocator.alloc([]const u8, keys.len);
-            errdefer self.storage_allocator.free(copied_keys);
-            const copied_vals = try self.storage_allocator.alloc(RcSlice(u8), vals.len);
-            errdefer self.storage_allocator.free(copied_vals);
-            for (0..keys.len) |i| {
-                errdefer for (0..i) |n| {
-                    self.storage_allocator.free(copied_keys[n]);
-                    copied_vals[n].deinit(self.storage_allocator);
-                };
-                copied_keys[i] = try self.storage_allocator.dupe(u8, keys[i]);
-                errdefer self.storage_allocator.free(copied_keys[i]);
-                copied_vals[i] = vals[i].acquire();
+            const len = blk: {
+                var iter_copied = iter;
+                break :blk iter_copied.countForwardsInclusive();
+            };
+
+            var copied_keys: std.ArrayListUnmanaged([]const u8) = try .initCapacity(self.storage_allocator, len);
+            errdefer {
+                for (copied_keys.items) |key| self.storage_allocator.free(key);
+                copied_keys.deinit(self.storage_allocator);
+            }
+
+            var copied_vals: std.ArrayListUnmanaged(RcSlice(u8)) = try .initCapacity(self.storage_allocator, len);
+            errdefer {
+                for (copied_vals.items) |val| val.deinit(self.storage_allocator);
+                copied_vals.deinit(self.storage_allocator);
+            }
+
+            while (iter.nextInclusive()) |entry| {
+                copied_keys.appendAssumeCapacity(try self.storage_allocator.dupe(u8, entry.key_ptr.*));
+                copied_vals.appendAssumeCapacity(entry.value_ptr.acquire());
             }
 
             return .{
                 .allocator = self.fast_allocator,
                 .storage_allocator = self.storage_allocator,
-                .keys = copied_keys,
-                .vals = copied_vals,
+                .keys = try copied_keys.toOwnedSlice(self.storage_allocator),
+                .vals = try copied_vals.toOwnedSlice(self.storage_allocator),
                 .cursor = switch (direction) {
                     .forward => 0,
-                    .reverse => keys.len,
+                    .reverse => len,
                 },
-                .size = keys.len,
+                .size = len,
             };
         }
 

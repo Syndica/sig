@@ -271,7 +271,7 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
             // frozen later
             const vps_gop = try self.votes_per_slot.getOrPut(allocator, vote_slot);
             errdefer if (!vps_gop.found_existing) {
-                std.debug.assert(self.votes_per_slot.orderedRemove(vps_gop.key_ptr.*));
+                std.debug.assert(self.votes_per_slot.remove(vps_gop.key_ptr.*));
             };
             const hash_to_votes: *HashToVotesMap = vps_gop.value_ptr;
 
@@ -1550,11 +1550,31 @@ const TestData = struct {
         errdefer descendants.deinit(allocator);
         errdefer for (descendants.values()) |*child_set| child_set.deinit(allocator);
         try descendants.ensureUnusedCapacity(allocator, 4);
-        descendants.putAssumeCapacity(0, try .init(allocator, &.{ 1, 2, 3 }, &.{}));
-        descendants.putAssumeCapacity(1, try .init(allocator, &.{ 3, 2 }, &.{}));
-        descendants.putAssumeCapacity(2, try .init(allocator, &.{3}, &.{}));
+        descendants.putAssumeCapacity(0, blk: {
+            var set: SlotSet = .empty;
+            errdefer set.deinit(allocator);
+            try set.put(allocator, 1, {});
+            try set.put(allocator, 2, {});
+            try set.put(allocator, 3, {});
+
+            break :blk set;
+        });
+        descendants.putAssumeCapacity(1, blk: {
+            var set: SlotSet = .empty;
+            errdefer set.deinit(allocator);
+            try set.put(allocator, 3, {});
+            try set.put(allocator, 2, {});
+
+            break :blk set;
+        });
+        descendants.putAssumeCapacity(2, blk: {
+            var set: SlotSet = .empty;
+            errdefer set.deinit(allocator);
+            try set.put(allocator, 3, {});
+
+            break :blk set;
+        });
         descendants.putAssumeCapacity(3, .empty);
-        for (descendants.values()) |*slot_set| slot_set.sort();
 
         return .{
             .slot_tracker = slot_tracker,
@@ -1591,19 +1611,27 @@ test "apply state changes" {
         .slot = duplicate_slot,
         .hash = duplicate_slot_hash,
     }).?);
-    for ([_][]const Slot{
-        descendants.getPtr(duplicate_slot).?.keys(),
-        &.{duplicate_slot},
-    }) |child_slot_set| {
-        for (child_slot_set) |child_slot| {
-            try std.testing.expectEqual(
-                duplicate_slot,
-                heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
-                    .slot = child_slot,
-                    .hash = slot_tracker.slots.get(child_slot).?.state.hash.readCopy().?,
-                }).?,
-            );
-        }
+
+    var iter = descendants.getPtr(duplicate_slot).?.iterator();
+    while (iter.next()) |entry| {
+        const child_slot = entry.key_ptr.*;
+        try std.testing.expectEqual(
+            duplicate_slot,
+            heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+                .slot = child_slot,
+                .hash = slot_tracker.slots.get(child_slot).?.state.hash.readCopy().?,
+            }).?,
+        );
+    }
+    {
+        const child_slot = duplicate_slot;
+        try std.testing.expectEqual(
+            duplicate_slot,
+            heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+                .slot = child_slot,
+                .hash = slot_tracker.slots.get(child_slot).?.state.hash.readCopy().?,
+            }).?,
+        );
     }
 
     var duplicate_slots_to_repair: SlotData.DuplicateSlotsToRepair = .empty;
@@ -1772,20 +1800,29 @@ test "apply state changes duplicate confirmed matches frozen" {
         try confirmed_non_dupe_frozen_hash.finalize(duplicate_slot, ledger.resultWriter());
     }
 
-    for ([_][]const Slot{
-        descendants.getPtr(duplicate_slot).?.keys(),
-        &.{duplicate_slot},
-    }) |child_slot_set| {
-        for (child_slot_set) |child_slot| {
-            try std.testing.expectEqual(
-                null,
-                heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
-                    .slot = child_slot,
-                    .hash = slot_tracker.slots.get(child_slot).?.state.hash.readCopy().?,
-                }),
-            );
-        }
+    var iter = descendants.iterator();
+    while (iter.next()) |entry| {
+        const child_slot = entry.key_ptr.*;
+        try std.testing.expectEqual(
+            null,
+            heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+                .slot = child_slot,
+                .hash = slot_tracker.slots.get(child_slot).?.state.hash.readCopy().?,
+            }),
+        );
     }
+
+    {
+        const child_slot = duplicate_slot;
+        try std.testing.expectEqual(
+            null,
+            heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+                .slot = child_slot,
+                .hash = slot_tracker.slots.get(child_slot).?.state.hash.readCopy().?,
+            }),
+        );
+    }
+
     try std.testing.expectEqual(true, heaviest_subtree_fork_choice.isCandidate(&.{
         .slot = duplicate_slot,
         .hash = our_duplicate_slot_hash,
@@ -1871,19 +1908,29 @@ test "apply state changes slot frozen and duplicate confirmed matches frozen" {
         try confirmed_non_dupe_frozen_hash.finalize(duplicate_slot, ledger.resultWriter());
     }
 
-    for ([_][]const Slot{
-        descendants.getPtr(duplicate_slot).?.keys(),
-        &.{duplicate_slot},
-    }) |child_slot_set| {
-        for (child_slot_set) |child_slot| {
-            try std.testing.expectEqual(
-                null,
-                heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
-                    .slot = child_slot,
-                    .hash = slot_tracker.get(child_slot).?.state.hash.readCopy().?,
-                }),
-            );
-        }
+    var iter = descendants.iterator();
+    while (iter.next()) |entry| {
+        const child_slot = entry.key_ptr.*;
+
+        try std.testing.expectEqual(
+            null,
+            heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+                .slot = child_slot,
+                .hash = slot_tracker.get(child_slot).?.state.hash.readCopy().?,
+            }),
+        );
+    }
+
+    {
+        const child_slot = duplicate_slot;
+
+        try std.testing.expectEqual(
+            null,
+            heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+                .slot = child_slot,
+                .hash = slot_tracker.get(child_slot).?.state.hash.readCopy().?,
+            }),
+        );
     }
 
     try std.testing.expectEqual(true, heaviest_subtree_fork_choice.isCandidate(&.{

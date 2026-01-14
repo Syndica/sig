@@ -224,11 +224,11 @@ pub const ErasureMeta = struct {
 
         const num_code = blk: {
             var iter = index.code_index.iteratorRanged(c_start, c_end, .start);
-            break :blk iter.count();
+            break :blk iter.countForwards();
         };
         const num_data = blk: {
-            var iter = index.code_index.iteratorRanged(d_start, d_end, .start);
-            break :blk iter.count();
+            var iter = index.data_index.iteratorRanged(d_start, d_end, .start);
+            break :blk iter.countForwards();
         };
 
         const data_missing = self.config.num_data -| num_data;

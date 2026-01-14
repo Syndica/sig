@@ -211,6 +211,7 @@ pub fn insertShreds(
     errdefer newly_completed_data_sets.deinit();
     for (shreds, is_repaired) |shred, is_repair| {
         const shred_source: ShredSource = if (is_repair) .repaired else .turbine;
+
         switch (shred) {
             .data => |data_shred| {
                 if (options.shred_tracker) |tracker| {
@@ -932,6 +933,7 @@ fn tryShredRecovery(
         var index_meta_entry = index_working_set.get(erasure_set.slot) orelse {
             return error.Unwrap; // TODO: consider all the unwraps
         };
+
         switch (erasure_meta.status(&index_meta_entry.index)) {
             .can_recover => return try recoverShreds(
                 .from(self.logger),
@@ -1149,7 +1151,7 @@ fn updateCompletedDataIndexes(
         const num_shreds: usize = @intCast(end - begin);
 
         var iter = received_data_shreds.iteratorRanged(begin, end, .start);
-        if (iter.count() == num_shreds) {
+        if (iter.countForwards() == num_shreds) {
             try ret.append(.{ begin, end - 1 });
         }
         i += 1;
@@ -1610,6 +1612,7 @@ test "recovery" {
     for (data_shreds) |data_shred| {
         const key = .{ data_shred.data.common.slot, data_shred.data.common.index };
         const actual_shred = try state.ledger.db.getBytes(schema.data_shred, key);
+
         defer actual_shred.?.deinit();
         try std.testing.expectEqualSlices(u8, data_shred.payload(), actual_shred.?.data);
     }

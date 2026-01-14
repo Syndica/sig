@@ -447,7 +447,7 @@ pub const TowerConsensus = struct {
                     try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
                     const descendants_gop =
                         try descendants.getOrPutValue(arena, ancestor_slot, .empty);
-                    try descendants_gop.value_ptr.put(arena, slot);
+                    try descendants_gop.value_ptr.put(arena, slot, {});
                 }
             }
             break :cluster_sync_and_ancestors_descendants .{ ancestors, descendants };
@@ -7231,7 +7231,7 @@ test "successful fork switch (switch_proof)" {
     var ancestors_map2 =
         std.AutoArrayHashMapUnmanaged(Slot, sig.core.Ancestors).empty;
     var descendants_map2 =
-        std.AutoArrayHashMapUnmanaged(Slot, sig.utils.collections.SortedSetUnmanaged(Slot)).empty;
+        std.AutoArrayHashMapUnmanaged(Slot, SlotSet).empty;
     defer {
         var it = ancestors_map2.iterator();
         while (it.next()) |entry| entry.value_ptr.deinit(allocator);
@@ -7252,7 +7252,7 @@ test "successful fork switch (switch_proof)" {
         for (slot_ancestors.keys()) |a| {
             try gop.value_ptr.addSlot(allocator, a);
             const dg = try descendants_map2.getOrPutValue(allocator, a, .empty);
-            try dg.value_ptr.put(allocator, slot);
+            try dg.value_ptr.put(allocator, slot, {});
         }
     }
 

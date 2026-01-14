@@ -4533,7 +4533,7 @@ test "switch threshold" {
         // Test 7b: Adding unfrozen descendant (10000) shouldn't remove slot 14 from consideration
         {
             const desc_14 = descendants.getPtr(14).?;
-            try desc_14.put(allocator, 10000);
+            try desc_14.put(allocator, 10000, {});
 
             const decision2 = try tower.makeCheckSwitchThresholdDecision(
                 allocator,
@@ -4552,7 +4552,7 @@ test "switch threshold" {
             );
 
             // Clean up descendant
-            _ = desc_14.orderedRemove(10000);
+            _ = desc_14.remove(10000);
         }
 
         if (progress.map.getPtr(14)) |fork_progress| {
