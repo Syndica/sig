@@ -147,7 +147,7 @@ fn getRewardDistributionNumBlocks(
         MAX_FACTOR_OF_REWARD_BLOCKS_IN_EPOCH,
     );
 
-    return if (num_chunks < 1) 1 else if (num_chunks > max_chunks) max_chunks else num_chunks;
+    return @min(@max(num_chunks, 1), max_chunks);
 }
 
 fn createEpochRewardsSysvar(
@@ -253,7 +253,9 @@ fn storeVoteAccountsPartitioned(
             return error.MissingVoteAccount;
         defer account.deinit(allocator);
 
-        // TODO: NO NEED TO CLONE, CHANGE CHECK AND STORE TO USE ACCOUNT
+        // NOTE: Cloning should not be necessary here. Check and store only uses the account data to deserialise
+        // the stake state and obtain the delegation and credits observed. This will be addressed during
+        // transition to using stakes delegations deltas, so is acceptable for now.
         var account_shared_data = try AccountSharedData.fromAccount(allocator, &account);
         defer account_shared_data.deinit(allocator);
 
@@ -408,9 +410,8 @@ fn filterStakesDelegations(
         ), 1_000_000_000); // LAMPORTS_PER_SOL
 
         for (stakes.stake_accounts.keys(), stakes.stake_accounts.values()) |key, value| {
-            if (value.delegation.stake >= min_delegation) {
-                try result.append(allocator, .{ .pubkey = key, .stake = value });
-            }
+            if (value.delegation.stake < min_delegation) continue;
+            try result.append(allocator, .{ .pubkey = key, .stake = value });
         }
     } else {
         for (stakes.stake_accounts.keys(), stakes.stake_accounts.values()) |key, value| {
@@ -465,7 +466,7 @@ fn calculateStakeVoteRewards(
     );
 
     var partitioned_stake_rewards = std.ArrayListUnmanaged(PartitionedStakeReward){};
-    errdefer partitioned_stake_rewards.deinit(allocator);
+    defer partitioned_stake_rewards.deinit(allocator);
 
     // Use par iter?
     var total_stake_rewards: u64 = 0;
