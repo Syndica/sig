@@ -478,7 +478,7 @@ const PerThread = struct {
                 std.debug.assert(msgs.len == 0);
 
                 // setup for sending packet batch
-                for (packets.items) |packet| {
+                for (packets.items) |*packet| {
                     // we're just filling buffers here, let's not error
                     errdefer comptime unreachable;
 
