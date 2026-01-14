@@ -13,7 +13,7 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 pub const calculation = @import("calculation.zig");
 pub const distribution = @import("distribution.zig");
 pub const inflation_rewards = @import("inflation_rewards.zig");
-pub const EpochRewardsHasher = @import("EpochRewardsHasher.zig");
+pub const hasher = @import("hasher.zig");
 
 pub const REWARD_CALCULATION_NUM_BLOCKS: u64 = 1;
 
