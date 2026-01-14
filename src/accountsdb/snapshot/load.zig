@@ -159,7 +159,7 @@ pub fn loadSnapshot(
 
         const info = snapshot_files.incremental() orelse break :blk .{ null, null };
         const incremental_path = info.snapshotArchiveName();
-        const manifest, const status_cache = try insertFromSnapshotArchive(
+        break :blk try insertFromSnapshotArchive(
             allocator,
             logger,
             snapshot_dir,
@@ -167,7 +167,6 @@ pub fn loadSnapshot(
             maybe_rooted_db, // incremental doesnt have too many accounts to overwrite
             info.slotAndHash(),
         );
-        break :blk .{ manifest, status_cache };
     };
     errdefer if (maybe_incremental_manifest) |manifest| manifest.deinit(allocator);
     defer if (maybe_incremental_status_cache) |status_cache| status_cache.deinit(allocator);
@@ -234,11 +233,11 @@ pub fn loadSnapshot(
             return error.PubkeyNotInIndex;
         defer account.deinit(allocator);
 
-        var fba = std.io.fixedBufferStream(account.data);
+        var fbs = std.io.fixedBufferStream(account.data);
         break :blk try sig.bincode.read(
             allocator,
             sig.runtime.sysvar.SlotHistory,
-            fba.reader(),
+            fbs.reader(),
             .{},
         );
     };
