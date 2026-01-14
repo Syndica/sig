@@ -11,7 +11,7 @@ commands:
           name: Configure docker user/mount defaults
           command: |
             echo 'export DOCKER_UID_GID="$(id -u):$(id -g)"' >> "$BASH_ENV"
-            echo 'export DOCKER_MOUNT="-v $PWD:/project -w /project -e HOME=/project -u $DOCKER_UID_GID"' >> "$BASH_ENV"
+            echo 'export DOCKER_MOUNT="-v $PWD:$PWD -w $PWD -e HOME=$PWD -u $DOCKER_UID_GID"' >> "$BASH_ENV"
             source "$BASH_ENV"
 
 executors:
