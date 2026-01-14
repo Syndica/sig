@@ -169,35 +169,27 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
             stakes: *Stakes(stakes_type),
             new_activation_rate_epoch: ?Epoch,
         ) !void {
-            var delegated_stakes = std.AutoArrayHashMapUnmanaged(Pubkey, u64){};
-            defer delegated_stakes.deinit(allocator);
-
-            for (stakes.stake_accounts.values()) |stake_delegation| {
-                const delegation = stake_delegation.getDelegation();
-                const entry = try delegated_stakes.getOrPut(
-                    allocator,
-                    delegation.voter_pubkey,
-                );
-                if (!entry.found_existing) {
-                    entry.value_ptr.* = 0;
-                }
-                entry.value_ptr.* += delegation.getEffectiveStake(
-                    epoch,
-                    &stakes.stake_history,
-                    new_activation_rate_epoch,
-                );
-            }
-
             var new_vote_accounts = VoteAccounts{};
             errdefer new_vote_accounts.deinit(allocator);
             const keys = stakes.vote_accounts.vote_accounts.keys();
             const values = stakes.vote_accounts.vote_accounts.values();
             for (keys, values) |vote_pubkey, stake_and_vote_account| {
-                const delegated_stake = delegated_stakes.get(vote_pubkey) orelse 0;
                 try new_vote_accounts.vote_accounts.put(allocator, vote_pubkey, .{
-                    .stake = delegated_stake,
+                    .stake = 0,
                     .account = stake_and_vote_account.account.getAcquire(),
                 });
+            }
+
+            for (stakes.stake_accounts.values()) |stake_delegation| {
+                const delegation = stake_delegation.getDelegation();
+                const vote_account = new_vote_accounts.vote_accounts.getPtr(
+                    delegation.voter_pubkey,
+                ).?;
+                vote_account.stake += delegation.getEffectiveStake(
+                    epoch,
+                    &stakes.stake_history,
+                    new_activation_rate_epoch,
+                );
             }
 
             new_vote_accounts.staked_nodes = try VoteAccounts.computeStakedNodes(
@@ -670,8 +662,7 @@ pub const VoteAccounts = struct {
         random: std.Random,
         max_list_entries: usize,
     ) Allocator.Error!VoteAccounts {
-        // TODO: Uncomment once not required by bank init random
-        // if (!builtin.is_test) @compileError("only for testing");
+        if (!builtin.is_test) @compileError("only for testing");
 
         var self: VoteAccounts = .{};
         errdefer self.deinit(allocator);
@@ -750,7 +741,6 @@ pub const StakeAccount = struct {
 };
 
 pub const VoteAccount = struct {
-    // account: AccountSharedData,
     account: MinimalAccount,
     state: VoteState,
     rc: *sig.sync.ReferenceCounter,
@@ -874,6 +864,12 @@ pub const VoteAccount = struct {
             limit_allocator.backing_allocator,
             deserialized,
         );
+    }
+
+    pub fn equals(self: *const VoteAccount, other: *const VoteAccount) bool {
+        return self.account.lamports == other.account.lamports and
+            self.account.owner.equals(&other.account.owner) and
+            self.state.equals(&other.state);
     }
 
     pub fn initRandom(
@@ -1622,8 +1618,8 @@ test "staked nodes update" {
         defer maybe_old.?.deinit(allocator);
 
         try std.testing.expectEqual(42, maybe_old.?.stake);
-        // try std.testing.expect(account_0.equals(&maybe_old.?.account));
-        // try std.testing.expect(account_0.equals(&vote_accounts.getAccount(pubkey).?));
+        try std.testing.expect(account_0.equals(&maybe_old.?.account));
+        try std.testing.expect(account_0.equals(&vote_accounts.getAccount(pubkey).?));
         try std.testing.expectEqual(42, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(42, vote_accounts.staked_nodes.get(node_pubkey).?);
     }
@@ -1648,8 +1644,8 @@ test "staked nodes update" {
         defer maybe_old.?.deinit(allocator);
 
         try std.testing.expectEqual(42, maybe_old.?.stake);
-        // try std.testing.expect(account_0.equals(&maybe_old.?.account));
-        // try std.testing.expect(account_1.equals(&vote_accounts.getAccount(pubkey).?));
+        try std.testing.expect(account_0.equals(&maybe_old.?.account));
+        try std.testing.expect(account_1.equals(&vote_accounts.getAccount(pubkey).?));
         try std.testing.expectEqual(42, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(42, vote_accounts.staked_nodes.get(node_pubkey).?);
     }
@@ -1675,8 +1671,8 @@ test "staked nodes update" {
         defer maybe_old.?.deinit(allocator);
 
         try std.testing.expectEqual(42, maybe_old.?.stake);
-        // try std.testing.expect(account_1.equals(&maybe_old.?.account));
-        // try std.testing.expect(account_2.equals(&vote_accounts.getAccount(pubkey).?));
+        try std.testing.expect(account_1.equals(&maybe_old.?.account));
+        try std.testing.expect(account_2.equals(&vote_accounts.getAccount(pubkey).?));
         try std.testing.expectEqual(42, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(null, vote_accounts.staked_nodes.get(node_pubkey));
         try std.testing.expectEqual(42, vote_accounts.staked_nodes.get(new_node_pubkey).?);
@@ -1715,7 +1711,7 @@ test "staked nodes zero stake" {
         );
 
         try std.testing.expectEqual(null, maybe_old);
-        // try std.testing.expect(account_0.equals(&vote_accounts.getAccount(pubkey).?));
+        try std.testing.expect(account_0.equals(&vote_accounts.getAccount(pubkey).?));
         try std.testing.expectEqual(0, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(null, vote_accounts.staked_nodes.get(node_pubkey));
     }
@@ -1741,8 +1737,8 @@ test "staked nodes zero stake" {
         defer maybe_old.?.deinit(allocator);
 
         try std.testing.expectEqual(0, maybe_old.?.stake);
-        // try std.testing.expect(account_0.equals(&maybe_old.?.account));
-        // try std.testing.expect(account_1.equals(&vote_accounts.getAccount(pubkey).?));
+        try std.testing.expect(account_0.equals(&maybe_old.?.account));
+        try std.testing.expect(account_1.equals(&vote_accounts.getAccount(pubkey).?));
         try std.testing.expectEqual(0, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(null, vote_accounts.staked_nodes.get(node_pubkey));
         try std.testing.expectEqual(null, vote_accounts.staked_nodes.get(new_node_pubkey));
@@ -1782,6 +1778,4 @@ test "stakes activate epoch" {
     }
 
     try stakes_cache.activateEpoch(allocator, 1, null);
-
-    // TODO: Validation
 }
