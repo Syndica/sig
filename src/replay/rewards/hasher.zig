@@ -9,37 +9,15 @@ const Pubkey = sig.core.Pubkey;
 
 const PartitionedStakeReward = sig.replay.rewards.PartitionedStakeReward;
 
-pub const EpochRewardsHasher = @This();
-
-hasher: SipHasher13,
-partitions: usize,
-
-pub fn init(partitions: usize, seed: *const Hash) !EpochRewardsHasher {
-    const key: [SipHasher13.key_length]u8 = @splat(0);
-    var hasher = SipHasher13.init(&key);
-    _ = try hasher.writer().write(&seed.data);
-    return EpochRewardsHasher{
-        .hasher = hasher,
-        .partitions = partitions,
-    };
-}
-
-pub fn hashAddressToPartition(
-    self: EpochRewardsHasher,
-    address: *const Pubkey,
-) usize {
-    var v_self = self;
-    _ = try v_self.hasher.writer().write(&address.data);
-    return hashToPartition(v_self.hasher.finalInt(), v_self.partitions);
-}
-
 pub fn hashRewardsIntoPartitions(
     allocator: Allocator,
     stake_rewards: []const PartitionedStakeReward,
     parent_blockhash: *const Hash,
     num_partitions: usize,
 ) ![][]const usize {
-    const hasher = try EpochRewardsHasher.init(num_partitions, parent_blockhash);
+    const key: [SipHasher13.key_length]u8 = @splat(0);
+    var seeded_hasher = SipHasher13.init(&key);
+    _ = try seeded_hasher.writer().write(&parent_blockhash.data);
 
     var indices = try allocator.alloc(std.ArrayListUnmanaged(usize), num_partitions);
     for (indices) |*list| list.* = std.ArrayListUnmanaged(usize).empty;
@@ -49,7 +27,9 @@ pub fn hashRewardsIntoPartitions(
     }
 
     for (stake_rewards, 0..) |reward, index| {
-        const partition_index = hasher.hashAddressToPartition(&reward.stake_pubkey);
+        var hasher = seeded_hasher;
+        _ = try hasher.writer().write(&reward.stake_pubkey.data);
+        const partition_index = hashToPartition(hasher.finalInt(), num_partitions);
         try indices[partition_index].append(allocator, index);
     }
 
@@ -116,7 +96,7 @@ test hashRewardsIntoPartitions {
     }
 }
 
-test hashAddressToPartition {
+test hashToPartition {
     const partitions = 16;
     const max_u64 = std.math.maxInt(u64);
     try std.testing.expectEqual(0, hashToPartition(0, partitions));
@@ -128,20 +108,19 @@ test hashAddressToPartition {
     try std.testing.expectEqual(partitions - 1, hashToPartition(max_u64, partitions));
 }
 
-test EpochRewardsHasher {
-    const seed = Hash.parse("4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM");
+test "seed and address produce correct hash and partition" {
     const partitions = 10;
-    const ehasher = try EpochRewardsHasher.init(partitions, &seed);
-
-    const pubkey = Pubkey.parse("1113eKEmP3gmGaNeoKSVoYwPpyfTmrmizMbi1TqGj2");
-    const b1 = ehasher.hashAddressToPartition(&pubkey);
-    const b2 = ehasher.hashAddressToPartition(&pubkey);
-    try std.testing.expectEqual(3, b1);
-    try std.testing.expectEqual(b1, b2);
+    const seed = Hash.parse("4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM");
+    const address = Pubkey.parse("1113eKEmP3gmGaNeoKSVoYwPpyfTmrmizMbi1TqGj2");
 
     const key: [SipHasher13.key_length]u8 = @splat(0);
     var hasher = SipHasher13.init(&key);
     _ = try hasher.writer().write(&seed.data);
-    _ = try hasher.writer().write(&pubkey.data);
-    try std.testing.expectEqual(7021953457010218011, hasher.finalInt());
+    _ = try hasher.writer().write(&address.data);
+
+    const actual_hash = hasher.finalInt();
+    const actual_partition = hashToPartition(actual_hash, partitions);
+
+    try std.testing.expectEqual(7021953457010218011, actual_hash);
+    try std.testing.expectEqual(3, actual_partition);
 }

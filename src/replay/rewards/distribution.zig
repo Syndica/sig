@@ -54,7 +54,7 @@ pub fn distributePartitionedEpochRewards(
         ) orelse EpochRewards.INIT;
 
         const partition_indices =
-            try sig.replay.rewards.EpochRewardsHasher.hashRewardsIntoPartitions(
+            try sig.replay.rewards.hasher.hashRewardsIntoPartitions(
                 allocator,
                 stake_rewards.all_stake_rewards.entries,
                 &epoch_rewards_sysvar.parent_blockhash,
