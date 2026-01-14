@@ -42,8 +42,6 @@ pub fn init(file_path: [:0]const u8) !Rooted {
     };
 
     if (self.count() == 0) {
-        std.debug.print("creating db schema\n", .{});
-
         const schema =
             \\ PRAGMA journal_mode = OFF;
             \\ PRAGMA synchronous = 0;

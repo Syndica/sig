@@ -149,7 +149,7 @@ pub fn loadSnapshot2(
             .{ .snapshot_type = .full, .put_accounts = db_populate },
         );
     };
-    defer full_manifest.deinit(allocator);
+    errdefer full_manifest.deinit(allocator);
     errdefer full_status_cache.deinit(allocator);
 
     const verify_hashes = !load_options.metadata_only and load_options.validate_snapshot;
@@ -196,7 +196,7 @@ pub fn loadSnapshot2(
         );
         break :blk .{ manifest, status_cache };
     };
-    defer if (maybe_incremental_manifest) |manifest| manifest.deinit(allocator);
+    errdefer if (maybe_incremental_manifest) |manifest| manifest.deinit(allocator);
     errdefer if (maybe_incremental_status_cache) |status_cache| status_cache.deinit(allocator);
 
     if (maybe_incremental_manifest) |*inc_manifest| {
@@ -230,7 +230,8 @@ pub fn loadSnapshot2(
         .full = full_manifest,
         .incremental = maybe_incremental_manifest,
     };
-    // NOTE: do not call combined_manifest.deinit() as Manifest deinits are already deferred above.
+    // NOTE: do not call combined_manifest.deinit() as Manifest deinits are already errdefer above
+    // and its returned on success.
 
     // Clones the manifests
     const collapsed_manifest = try combined_manifest.collapse(allocator);
@@ -773,7 +774,7 @@ test loadSnapshot {
     loaded_snapshot.deinit();
 
     {
-        const rooted_path = try std.fs.path.join(allocator, &.{ path, "accounts.db" });
+        const rooted_path = try std.fs.path.joinZ(allocator, &.{ path, "accounts.db" });
         defer allocator.free(rooted_path);
 
         var rooted_db: Rooted = try .init(rooted_path);
