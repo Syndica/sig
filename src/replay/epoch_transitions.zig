@@ -88,28 +88,25 @@ pub fn updateEpochStakes(
     epoch_tracker: *EpochTracker,
 ) !void {
     const leader_schedule_epoch = epoch_tracker.schedule.getLeaderScheduleEpoch(slot);
-    if (!epoch_tracker.epochs.contains(leader_schedule_epoch)) {
-        const current = epoch_tracker.getForSlot(slot) orelse {
-            return error.EpochConstantsNotFound;
-        };
+    if (epoch_tracker.epochs.contains(leader_schedule_epoch)) return;
+    const current = epoch_tracker.getForSlot(slot) orelse return error.EpochConstantsNotFound;
 
-        const epoch_stakes = try getEpochStakes(
-            allocator,
-            leader_schedule_epoch,
-            stakes_cache,
-        );
-        errdefer epoch_stakes.deinit(allocator);
+    const epoch_stakes = try getEpochStakes(
+        allocator,
+        leader_schedule_epoch,
+        stakes_cache,
+    );
+    errdefer epoch_stakes.deinit(allocator);
 
-        try epoch_tracker.put(allocator, leader_schedule_epoch, .{
-            .hashes_per_tick = current.hashes_per_tick,
-            .ticks_per_slot = current.ticks_per_slot,
-            .ns_per_slot = current.ns_per_slot,
-            .genesis_creation_time = current.genesis_creation_time,
-            .slots_per_year = current.slots_per_year,
-            .stakes = epoch_stakes,
-            .rent_collector = current.rent_collector,
-        });
-    }
+    try epoch_tracker.put(allocator, leader_schedule_epoch, .{
+        .hashes_per_tick = current.hashes_per_tick,
+        .ticks_per_slot = current.ticks_per_slot,
+        .ns_per_slot = current.ns_per_slot,
+        .genesis_creation_time = current.genesis_creation_time,
+        .slots_per_year = current.slots_per_year,
+        .stakes = epoch_stakes,
+        .rent_collector = current.rent_collector,
+    });
 }
 
 /// Compute the epoch stakes for the given leader schedule epoch.
@@ -239,11 +236,13 @@ pub fn applyFeatureActivations(
     );
 
     if (new_feature_activations.active(.raise_block_limits_to_100m, slot)) {
-        // TODO: Implement
+        // TODO: Implement once cost tracker is added
+        // https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=149549898
         return error.RaiseBlockLimitsTo100MActivationNotImplemented;
     }
     if (new_feature_activations.active(.raise_account_cu_limit, slot)) {
-        // TODO: Implement
+        // TODO: Implement once cost tracker is added
+        // https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=149549898
         return error.RaiseAccountCuLimitActivationNotImplemented;
     }
 }
@@ -363,8 +362,10 @@ fn migrateBuiltinProgramToCoreBpf(
                 break :blk account;
             },
             .stateless_builtin => blk: {
-                if ((try slot_store.reader().get(allocator, builtin_program_id)) != null)
+                if ((try slot_store.reader().get(allocator, builtin_program_id))) |account| {
+                    defer account.deinit(allocator);
                     return error.AccountExists;
+                }
                 break :blk null;
             },
         },
@@ -374,7 +375,8 @@ fn migrateBuiltinProgramToCoreBpf(
                 program.bpf_loader.v3.ID,
             ) orelse unreachable; // agave/solana-address-1.0.0 panics on this case.
 
-            if ((try slot_store.reader().get(allocator, program_data_address)) != null) {
+            if ((try slot_store.reader().get(allocator, program_data_address))) |account| {
+                defer account.deinit(allocator);
                 return error.ProgramHasDataAccount;
             }
             break :blk program_data_address;
@@ -386,6 +388,7 @@ fn migrateBuiltinProgramToCoreBpf(
             allocator,
             migration_config.source_buffer_address,
         )) orelse return error.AccountNotFound;
+        defer buffer_account.deinit(allocator);
 
         if (!buffer_account.owner.equals(&loader_v3.ID))
             return error.IncorrectOwner;
@@ -406,8 +409,8 @@ fn migrateBuiltinProgramToCoreBpf(
 
         break :blk switch (state) {
             .buffer => |args| .{
-                .account = buffer_account,
                 .authority = args.authority_address,
+                .lamports = buffer_account.lamports,
                 .data = buffer_data,
             },
             else => return error.InvalidBufferAccount,
@@ -479,7 +482,7 @@ fn migrateBuiltinProgramToCoreBpf(
     const old_data_size = std.math.add(
         u64,
         if (target.program_account) |account| account.data.len() else 0,
-        source.account.data.len(),
+        source.data.len,
     ) catch return error.ArithmeticOverflow;
     const new_data_size = std.math.add(
         u64,
@@ -488,69 +491,50 @@ fn migrateBuiltinProgramToCoreBpf(
     ) catch return error.ArithmeticOverflow;
 
     // Do the verification part of bpf_loader.v3.deployProgram
-    {
-        const compute_budget: sig.runtime.ComputeBudget = .DEFAULT;
-        try program.bpf_loader.verifyProgram(
-            allocator,
-            new_target_pda.data[loader_v3.State.PROGRAM_DATA_METADATA_SIZE..],
-            slot,
-            feature_set,
-            &compute_budget,
-            null, // no LogCollector
-        );
-    }
+    const compute_budget: sig.runtime.ComputeBudget = .DEFAULT;
+    try program.bpf_loader.verifyProgram(
+        allocator,
+        new_target_pda.data[loader_v3.State.PROGRAM_DATA_METADATA_SIZE..],
+        slot,
+        feature_set,
+        &compute_budget,
+        null, // no LogCollector
+    );
 
     // update capitalization
-    {
-        const lamports_to_burn = std.math.add(
-            u64,
-            if (target.program_account) |account| account.lamports else 0,
-            source.account.lamports,
-        ) catch return error.ArithmeticOverflow;
-        const lamports_to_fund = std.math.add(
-            u64,
-            new_target_account.lamports,
-            new_target_pda.lamports,
-        ) catch return error.ArithmeticOverflow;
+    const lamports_to_burn = std.math.add(
+        u64,
+        if (target.program_account) |account| account.lamports else 0,
+        source.lamports,
+    ) catch return error.ArithmeticOverflow;
+    const lamports_to_fund = std.math.add(
+        u64,
+        new_target_account.lamports,
+        new_target_pda.lamports,
+    ) catch return error.ArithmeticOverflow;
 
-        switch (std.math.order(lamports_to_burn, lamports_to_fund)) {
-            .gt => {
-                const delta = std.math.sub(
-                    u64,
-                    lamports_to_burn,
-                    lamports_to_fund,
-                ) catch return error.ArithmeticOverflow;
-                _ = capitalization.fetchSub(delta, .monotonic);
-            },
-            .lt => {
-                const delta = std.math.sub(
-                    u64,
-                    lamports_to_fund,
-                    lamports_to_burn,
-                ) catch return error.ArithmeticOverflow;
-                _ = capitalization.fetchAdd(delta, .monotonic);
-            },
-            .eq => {},
-        }
+    switch (std.math.order(lamports_to_burn, lamports_to_fund)) {
+        .gt => _ = capitalization.fetchSub(lamports_to_burn - lamports_to_fund, .monotonic),
+        .lt => _ = capitalization.fetchAdd(lamports_to_fund - lamports_to_burn, .monotonic),
+        .eq => {},
     }
 
-    {
-        // TODO: remove program_id from list of bank's built-ins
-        try slot_store.put(builtin_program_id, new_target_account);
-        try slot_store.put(target.program_data_address, new_target_pda);
-        try slot_store.put(migration_config.source_buffer_address, AccountSharedData.EMPTY);
-    }
+    try slot_store.put(builtin_program_id, new_target_account);
+    try slot_store.put(target.program_data_address, new_target_pda);
+    try slot_store.put(migration_config.source_buffer_address, AccountSharedData.EMPTY);
 
-    // calculate_and_update_accounts_data_size_delta_off_chain
-    {
-        // These are assert()!s
-        const old_size = std.math.cast(i64, old_data_size).?;
-        const new_size = std.math.cast(i64, new_data_size).?;
-        const delta_size = new_size -| old_size;
-        if (delta_size > 0) {
-            // TODO: update accounts_data_size_delta_off_chain atomically with saturading add delta.
-        }
-    }
+    // Agave asserts that 'old/new_data_size' is less than i64 max.
+    // [agave] https://github.com/anza-xyz/agave/blob/8fdea4cea8ad35a2b00211050ac29b46fccc1188/runtime/src/bank.rs#L6141
+    const old_size = std.math.cast(i64, old_data_size).?;
+    const new_size = std.math.cast(i64, new_data_size).?;
+    const delta_size = new_size -| old_size;
+    _ = delta_size;
+
+    // Update accounts_data_size_delta_off_chain
+    // TODO: We do not track accounts_data_size_delta_off_chain anywhere. If it is required we should
+    // add it to SlotState and updated everywhere.
+    // Issue: https://github.com/orgs/Syndica/projects/2?pane=issue&itemId=149662657&issue=Syndica%7Csig%7C1176
+    // if (delta_size > 0) { accounts_data_size_delta_off_chain += delta_size }
 }
 
 fn featureActivationSlotFromAccount(account: Account) !?u64 {
@@ -707,11 +691,11 @@ const TestEnvironment = struct {
         var ancestors = Ancestors.EMPTY;
         errdefer ancestors.deinit(allocator);
 
-        var epoch_tracker: EpochTracker = .{ .schedule = .INIT };
-        errdefer epoch_tracker.deinit(allocator);
-
         var epoch_constants = EpochConstants.genesis(genesis_config);
         errdefer epoch_constants.deinit(allocator);
+
+        var epoch_tracker: EpochTracker = .{ .schedule = .INIT };
+        errdefer epoch_tracker.deinit(allocator);
         try epoch_tracker.put(allocator, 0, epoch_constants);
 
         var slot_constants = try SlotConstants.genesis(allocator, .DEFAULT);
