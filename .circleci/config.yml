@@ -379,17 +379,17 @@ workflows:
           requires:
             - build_linux_release
 
-  # check_macos:
-  #   jobs:
-  #     - setup_zig:
-  #         name: setup_zig_macos
-  #         target: "aarch64-macos"
-  #     - build_check_macos:
-  #         requires:
-  #           - setup_zig_macos
-  #     - test_macos:
-  #         requires:
-  #           - build_check_macos
-  #     - test_macos_hashmap_ledger:
-  #         requires:
-  #           - build_check_macos
+  check_macos:
+    jobs:
+      - setup_zig:
+          name: setup_zig_macos
+          target: "aarch64-macos"
+      - build_check_macos:
+          requires:
+            - setup_zig_macos
+      - test_macos:
+          requires:
+            - build_check_macos
+      - test_macos_hashmap_ledger:
+          requires:
+            - build_check_macos
