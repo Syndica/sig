@@ -184,7 +184,7 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
                 const delegation = stake_delegation.getDelegation();
                 const vote_account = new_vote_accounts.vote_accounts.getPtr(
                     delegation.voter_pubkey,
-                ).?;
+                ) orelse continue;
                 vote_account.stake += delegation.getEffectiveStake(
                     epoch,
                     &stakes.stake_history,
