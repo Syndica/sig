@@ -5,8 +5,7 @@ const builtin = @import("builtin");
 const Instant = sig.time.Instant;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
-const SortedMap = sig.utils.collections.SortedMapUnmanaged;
-const SortedMapCustom = sig.utils.collections.SortedMapUnmanagedCustom;
+const SortedMap = sig.utils.collections.SortedMap;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const Slot = sig.core.Slot;
 const EpochStakesMap = sig.core.EpochStakesMap;
@@ -90,7 +89,7 @@ const ForkInfo = struct {
 
     pub const ChildSet = SortedMap(SlotAndHash, void, .{});
 
-    fn deinit(self: *const ForkInfo, allocator: std.mem.Allocator) void {
+    fn deinit(self: *ForkInfo, allocator: std.mem.Allocator) void {
         self.children.deinit(allocator);
     }
 
@@ -519,9 +518,8 @@ pub const ForkChoice = struct {
         while (iter.next()) |entry| {
             const node_key = entry.key_ptr.*;
             // SAFETY: Previous contains check ensures this won't panic.
-            const fork_info = self.fork_infos.getPtr(node_key).?;
-            fork_info.children.deinit(allocator);
-            _ = self.fork_infos.remove(node_key);
+            var kv = self.fork_infos.fetchSwapRemove(node_key).?;
+            kv.value.deinit(allocator);
         }
 
         const root_fork_info = self.fork_infos.getPtr(new_root.*) orelse
@@ -690,13 +688,17 @@ pub const ForkChoice = struct {
 
         // Notify all children that a parent was marked as invalid
         var children_hash_keys = try self.subtreeDiff(
+            allocator,
             invalid_slot_hash_key,
             &.{ .slot = 0, .hash = Hash.ZEROES },
         );
-        defer children_hash_keys.deinit();
+        defer children_hash_keys.deinit(allocator);
 
-        for (children_hash_keys.keys()) |child_hash_key| {
+        var iter = children_hash_keys.iterator();
+        while (iter.next()) |entry| {
+            const child_hash_key = entry.key_ptr.*;
             _ = try doInsertAggregateOperation(
+                allocator,
                 &update_operations,
                 UpdateOperation{ .mark_invalid = invalid_slot_hash_key.slot },
                 child_hash_key,
@@ -1051,7 +1053,7 @@ pub const ForkChoice = struct {
 
             var iter = children.iterator();
             while (iter.next()) |entry| {
-                try pending_keys.append(entry.key_ptr.*);
+                try pending_keys.append(allocator, entry.key_ptr.*);
             }
 
             try reachable_set.put(allocator, current_key, {});
@@ -1630,7 +1632,11 @@ pub const ForkChoice = struct {
             var current_fork_info = current_kv.value;
 
             try split_tree_fork_infos.put(allocator, current_node, current_fork_info);
-            try to_visit.appendSlice(allocator, current_fork_info.children.keys());
+
+            var iter = current_fork_info.children.iterator();
+            while (iter.next()) |child| {
+                try to_visit.append(allocator, child.key_ptr.*);
+            }
         }
 
         // Remove link from parent
@@ -3130,7 +3136,6 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
             &EpochSchedule.INIT,
         );
         defer generated_update_operations.deinit(allocator);
-        defer generated_update_operations.deinit(allocator);
 
         try std.testing.expect(
             try isUpdateOpsEqual(
@@ -3227,7 +3232,6 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
             &EpochSchedule.INIT,
         );
         defer generated_update_operations.deinit(allocator);
-        defer generated_update_operations.deinit(allocator);
 
         try std.testing.expect(
             try isUpdateOpsEqual(
@@ -3310,7 +3314,6 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
             &epoch_stakes,
             &EpochSchedule.INIT,
         );
-        defer generated_update_operations.deinit(allocator);
         defer generated_update_operations.deinit(allocator);
 
         try std.testing.expect(
@@ -5160,30 +5163,32 @@ const TestDuplicateForks = struct {
             var dup_children_4 = fork_choice.getChildren(&.{ .slot = 4, .hash = Hash.ZEROES }).?;
             var dup_iter = dup_children_4.iterator();
             std.debug.assert(
-                dup_iter.next().?.key_ptr.equals(duplicate_leaves_descended_from_4.items[0]),
+                dup_iter.next().?.key_ptr.equals(dupe_leaves_desc_from_4.items[0]),
             );
             std.debug.assert(
-                dup_iter.next().?.key_ptr.equals(duplicate_leaves_descended_from_4.items[1]),
+                dup_iter.next().?.key_ptr.equals(dupe_leaves_desc_from_4.items[1]),
             );
         }
 
-        var dup_children_5 = std.ArrayList(SlotAndHash).init(test_allocator);
-        defer dup_children_5.deinit();
+        var dup_children_5: std.ArrayListUnmanaged(SlotAndHash) = .empty;
+        defer dup_children_5.deinit(gpa);
 
         var children_5 = fork_choice.getChildren(&.{
             .slot = 5,
             .hash = .ZEROES,
         }).?;
 
-        for (children_5.keys()) |key| {
-            if (key.slot == duplicate_slot) {
-                dup_children_5.append(key) catch unreachable;
+        {
+            var iter = children_5.iterator();
+            while (iter.next()) |entry| {
+                const key = entry.key_ptr.*;
+                if (key.slot == duplicate_slot) dup_children_5.append(gpa, key) catch unreachable;
             }
         }
 
-        // std.mem.sort(SlotAndHash, dup_children_5.items, {}, compareSlotHashKey);
-        // std.debug.assert(dup_children_5.items[0].equals(duplicate_leaves_descended_from_5.items[0]));
-        // std.debug.assert(dup_children_5.items[1].equals(duplicate_leaves_descended_from_5.items[1]));
+        std.mem.sort(SlotAndHash, dup_children_5.items, {}, compareSlotHashKey);
+        std.debug.assert(dup_children_5.items[0].equals(dupe_leaves_desc_from_5.items[0]));
+        std.debug.assert(dup_children_5.items[1].equals(dupe_leaves_desc_from_5.items[1]));
 
         // Verify children of slot 6
         var dup_children_6: std.ArrayListUnmanaged(SlotAndHash) = .empty;
@@ -5194,15 +5199,17 @@ const TestDuplicateForks = struct {
             .hash = .ZEROES,
         }).?;
 
-        for (children_6.keys()) |key| {
-            if (key.slot == duplicate_slot) {
-                dup_children_6.append(key) catch unreachable;
+        {
+            var iter = children_6.iterator();
+            while (iter.next()) |entry| {
+                const key = entry.key_ptr.*;
+                if (key.slot == duplicate_slot) dup_children_6.append(gpa, key) catch unreachable;
             }
         }
 
-        // std.mem.sort(SlotAndHash, dup_children_6.items, {}, compareSlotHashKey);
-        // std.debug.assert(dup_children_6.items[0].equals(duplicate_leaves_descended_from_6.items[0]));
-        // std.debug.assert(dup_children_6.items[1].equals(duplicate_leaves_descended_from_6.items[1]));
+        std.mem.sort(SlotAndHash, dup_children_6.items, {}, compareSlotHashKey);
+        std.debug.assert(dup_children_6.items[0].equals(dupe_leaves_desc_from_6.items[0]));
+        std.debug.assert(dup_children_6.items[1].equals(dupe_leaves_desc_from_6.items[1]));
 
         return .{
             .fork_choice = fork_choice,

@@ -307,13 +307,13 @@ pub fn SortedTreeConfig(comptime Key: type) type {
 
     return if (can_default_key)
         struct {
-            orderFn: fn (a: anytype, b: anytype) std.math.Order = order,
+            orderFn: fn (a: Key, b: Key) std.math.Order = defaultOrderFn(Key),
             eql_fn: fn (a: Key, b: Key) bool = eql,
             empty_key: Key = Key.empty,
         }
     else
         struct {
-            orderFn: fn (a: anytype, b: anytype) std.math.Order = order,
+            orderFn: fn (a: Key, b: Key) std.math.Order = defaultOrderFn(Key),
             eql_fn: fn (a: Key, b: Key) bool = eql,
             empty_key: Key,
         };
