@@ -386,7 +386,7 @@ pub const BenchmarkLedgerSlow = struct {
             slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
             // update next slots
             if (slot < (slot_per_epoch + 1)) {
-                try slot_meta.child_slots.append(slot + 1);
+                try slot_meta.child_slots.append(allocator, slot + 1);
             }
             try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
             // connect the chain
