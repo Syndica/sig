@@ -10,7 +10,6 @@ const Random = std.Random;
 const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;
-const EpochContextManager = sig.adapter.EpochContextManager;
 const GossipTable = sig.gossip.GossipTable;
 const Logger = sig.trace.Logger("shred_network.service");
 const Packet = sig.net.Packet;
@@ -53,7 +52,7 @@ pub const ShredNetworkDependencies = struct {
     /// Shared state that is read from gossip
     my_shred_version: *const Atomic(u16),
     my_contact_info: ThreadSafeContactInfo,
-    epoch_context_mgr: *EpochContextManager,
+    magic_tracker: *sig.core.magic_info.MagicTracker,
     n_retransmit_threads: ?usize,
     overwrite_turbine_stake_for_testing: bool,
     /// RPC Observability
@@ -105,9 +104,8 @@ pub fn start(
         .repair_socket = repair_socket,
         .turbine_socket = turbine_socket,
         .shred_version = deps.my_shred_version,
-        .root_slot = conf.root_slot,
         .maybe_retransmit_shred_sender = if (conf.retransmit) retransmit_channel else null,
-        .leader_schedule = deps.epoch_context_mgr.slotLeaders(),
+        .magic_tracker = deps.magic_tracker,
         .tracker = shred_tracker,
         .inserter = deps.ledger.shredInserter(),
     });
@@ -126,7 +124,7 @@ pub fn start(
             .{shred_network.shred_retransmitter.ShredRetransmitterParams{
                 .allocator = deps.allocator,
                 .my_contact_info = deps.my_contact_info,
-                .epoch_context_mgr = deps.epoch_context_mgr,
+                .magic_tracker = deps.magic_tracker,
                 .gossip_table_rw = deps.gossip_table_rw,
                 .receiver = retransmit_channel,
                 .maybe_num_retransmit_threads = deps.n_retransmit_threads,
@@ -224,11 +222,11 @@ test "start and stop gracefully" {
     defer gossip_table.deinit();
     var gossip_table_rw = RwMux(GossipTable).init(gossip_table);
 
-    var epoch_ctx = try EpochContextManager.init(allocator, sig.core.EpochSchedule.INIT);
-    defer epoch_ctx.deinit();
-
     var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
+
+    var magic_tracker = sig.core.magic_info.MagicTracker.init(.default, 0, .INIT);
+    defer magic_tracker.deinit(allocator);
 
     const deps: ShredNetworkDependencies = .{
         .allocator = allocator,
@@ -241,9 +239,9 @@ test "start and stop gracefully" {
         .gossip_table_rw = &gossip_table_rw,
         .my_shred_version = &shred_version,
         .my_contact_info = contact_info,
-        .epoch_context_mgr = &epoch_ctx,
         .n_retransmit_threads = 1,
         .overwrite_turbine_stake_for_testing = true,
+        .magic_tracker = &magic_tracker,
     };
 
     var timer = sig.time.Timer.start();
