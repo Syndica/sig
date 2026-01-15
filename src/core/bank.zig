@@ -369,7 +369,11 @@ pub fn parseStakes(
             return error.StakeAccountNotFound;
         defer account.deinit(allocator);
 
-        // If the vote account is not cached, it must be unintialized or invalid in accounts DB
+        // Stake accounts may be orphaned in the sense that they reference closed, uninitialized, or
+        // invalid vote accounts. Such stake accounts are still considered valid and remain in the stakes
+        // cache until they are explicitly removed (eg, via deactivation and withdrawal). Since the
+        // vote accounts cache contains ALL valid vote accounts, if a stake account references a vote
+        // account which is not cached, the vote account must either be closed, uninitialized or invalid.
         const voter_pubkey = value.voter_pubkey;
         if (stakes.vote_accounts.getAccount(voter_pubkey) == null) {
             if (try account_reader.get(allocator, voter_pubkey)) |vote_account| {
@@ -407,11 +411,8 @@ pub fn parseStakes(
             .{},
         );
 
-        const stake = state.getStake() orelse
-            return error.InvalidStakeAccount;
-
-        if (!stake.delegation.eql(&value.getDelegation()))
-            return error.InvalidDelegation;
+        const stake = state.getStake() orelse return error.InvalidStakeAccount;
+        if (!stake.delegation.eql(&value.getDelegation())) return error.InvalidDelegation;
 
         try stake_accounts.put(allocator, key, StakeStateV2.Stake{
             .delegation = value,
@@ -419,15 +420,45 @@ pub fn parseStakes(
         });
     }
 
-    // TODO: Validate vote accounts. We should consider changing the type of VoteAccount used
-    // in the bank fields to contain the full AccountSharedData again so that we can check for
-    // consistency against accounts DB. We may then convert into our more lightweight VoteAccount
-    // representation after validation.
-    const vote_accounts = try stakes.vote_accounts.clone(allocator);
-    errdefer vote_accounts.deinit(allocator);
+    // NOTE: Validate vote accounts currently only performs partial verification. It does not fully
+    // verify that the account in accounts db matches the account in the snapshot stakes cache because
+    // our internal VoteAccount representation does not contain the full account info or data. Instead
+    // we verify that the VoteState, account lamports, and account owner are valid. We do not verify
+    // that the account rent_epoch, executable flag are consistent, or that the serialised data is
+    // identical (potential for trailing bytes...).
+    //
+    // This could be addressed by deserializing the full vote account as it is stored in the snapshot,
+    // and converting to our lighter weight type after validation.
+    const voters = try stakes.vote_accounts.clone(allocator);
+    errdefer voters.deinit(allocator);
+    for (voters.vote_accounts.keys(), voters.vote_accounts.values()) |address, account| {
+        const db_account = try account_reader.get(allocator, address) orelse
+            return error.VoteAccountNotFound;
+        defer db_account.deinit(allocator);
+
+        // Validate owner and lamports
+        const minimal_account = account.account.account; // Not a nice api, need to improve.
+        if (minimal_account.lamports != db_account.lamports or
+            !minimal_account.owner.equals(&db_account.owner)) return error.InvalidVoteAccount;
+
+        // Validate VoteState
+        const cached_vote_state = account.account.state;
+        const db_account_data = try db_account.data.readAllAllocate(allocator);
+        defer allocator.free(db_account_data);
+
+        const db_versioned_vote_state = try sig.bincode.readFromSlice(
+            allocator,
+            sig.runtime.program.vote.state.VoteStateVersions,
+            db_account_data,
+            .{},
+        );
+        const db_vote_state = try db_versioned_vote_state.convertToCurrent(allocator);
+
+        if (!db_vote_state.equals(&cached_vote_state)) return error.InvalidVoteAccount;
+    }
 
     return Stakes(.stake){
-        .vote_accounts = vote_accounts,
+        .vote_accounts = voters,
         .stake_accounts = stake_accounts,
         .epoch = stakes.epoch,
         .stake_history = stakes.stake_history,
