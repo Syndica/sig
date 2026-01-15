@@ -663,7 +663,7 @@ fn sendmmsg(
     while (true) {
         const rc = std.os.linux.sendmmsg(sockfd, msgvec.ptr, @intCast(msgvec.len), flags);
 
-        return switch (std.posix.errno(rc)) {
+        return switch (std.os.linux.E.init(rc)) {
             .SUCCESS => @intCast(rc),
             .ACCES => error.AccessDenied,
             .AGAIN => error.WouldBlock,

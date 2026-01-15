@@ -1125,7 +1125,10 @@ fn sendVoteToLeaders(
                 tpu_vote_socket,
                 sockets,
             ) catch |err| {
-                logger.err().logf("Failed to send vote to leader: {}", .{err});
+                logger.err().logf(
+                    "Failed to send vote to leader '{}': {}",
+                    .{ tpu_vote_socket, err },
+                );
             };
         }
     } else {
