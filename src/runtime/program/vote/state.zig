@@ -500,7 +500,7 @@ pub const AuthorizedVoters = struct {
         var authorized_voters: AuthorizedVoters = .EMPTY;
         errdefer authorized_voters.deinit(allocator);
 
-        for (0..try reader.readInt(usize, .little)) |_| {
+        for (0..try reader.readInt(u64, .little)) |_| {
             const epoch = try reader.readInt(u64, .little);
             var pubkey = Pubkey.ZEROES;
             const bytes_read = try reader.readAll(&pubkey.data);
@@ -511,13 +511,13 @@ pub const AuthorizedVoters = struct {
         return authorized_voters;
     }
 
-    pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
-        var authorized_voters: AuthorizedVoters = data;
-        try writer.writeInt(usize, authorized_voters.len(), .little);
-        const items = authorized_voters.voters.items();
-        for (items[0], items[1]) |k, v| {
-            try writer.writeInt(u64, k, .little);
-            try writer.writeAll(&v.data);
+    pub fn serialize(writer: anytype, data: AuthorizedVoters, _: sig.bincode.Params) !void {
+        var authorized_voters = data;
+        try writer.writeInt(u64, data.len(), .little);
+        const epochs, const pubkeys = authorized_voters.voters.items();
+        for (epochs, pubkeys) |epoch, key| {
+            try writer.writeInt(u64, epoch, .little);
+            try writer.writeAll(&key.data);
         }
     }
 
@@ -598,7 +598,7 @@ const CircBufV1 = struct {
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L20
-pub const VoteStateVersions = union(enum) {
+pub const VoteStateVersions = union(enum(u32)) {
     v0_23_5: VoteState0_23_5,
     v1_14_11: VoteState1_14_11,
     current: VoteState,
@@ -640,11 +640,15 @@ pub const VoteStateVersions = union(enum) {
     pub fn convertToCurrent(self: VoteStateVersions, allocator: Allocator) !VoteState {
         switch (self) {
             .v0_23_5 => |state| {
-                const authorized_voters = try AuthorizedVoters.init(
-                    allocator,
-                    state.voter_epoch,
-                    state.voter,
-                );
+                // [agave] https://github.com/anza-xyz/solana-sdk/blob/ddf6523f688f1514baee2890d265bf12f0fe4c49/vote-interface/src/state/vote_state_versions.rs#L48-L52
+                const authorized_voters: AuthorizedVoters = if (state.voter.isZeroed())
+                    .EMPTY
+                else
+                    try AuthorizedVoters.init(
+                        allocator,
+                        state.voter_epoch,
+                        state.voter,
+                    );
                 errdefer authorized_voters.deinit(allocator);
 
                 const votes = try VoteStateVersions.landedVotesFromLockouts(
@@ -850,34 +854,26 @@ pub const VoteState1_14_11 = struct {
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L422
 pub const VoteState = struct {
-    /// the node that votes in this account
+    /// The node that votes in this account.
     node_pubkey: Pubkey,
-
-    /// the signer for withdrawals
+    /// The signer for withdrawals.
     withdrawer: Pubkey,
-    /// percentage (0-100) that represents what part of a rewards
-    ///  payout should be given to this VoteAccount
+    /// Percentage (must be in [0, 100]), that represents what part of
+    /// a rewards payout should be given to this VoteAccount.
     commission: u8,
-
     votes: std.ArrayListUnmanaged(LandedVote),
-
-    // This usually the last Lockout which was popped from self.votes.
-    // However, it can be arbitrary slot, when being used inside Tower
+    /// This is usually the last Lockout which was poped from `votes`,
+    /// however, it may be an arbitrary slot when being used inside Tower.
     root_slot: ?Slot,
-
-    /// the signer for vote transactions
+    /// The signer for Vote transactions.
     voters: AuthorizedVoters,
-
-    /// history of prior authorized voters and the epochs for which
-    /// they were set, the bottom end of the range is inclusive,
-    /// the top of the range is exclusive
+    /// A history of prior authorized voters and the epochs for which
+    /// they were set.
+    /// The bottom end of the range is inclusive and the top is exclusive.
     prior_voters: CircBufV1,
-
-    /// history of how many credits earned by the end of each epoch
-    ///  each tuple is (Epoch, credits, prev_credits)
+    /// A history of how many credits earned by the end of each epoch.
     epoch_credits: std.ArrayListUnmanaged(EpochCredit),
-
-    /// most recent timestamp submitted with a vote
+    /// The most recent timestamp submitted with a vote.
     last_timestamp: BlockTimestamp,
 
     /// Upper limit on the size of the Vote State
@@ -1511,25 +1507,18 @@ pub const VoteState = struct {
         proposed_hash: Hash,
         slot_hashes: *const SlotHashes,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
-        const slot_hash_entries = slot_hashes.entries.constSlice();
+        if (proposed_lockouts.items.len == 0) return VoteError.empty_slots;
 
-        if (proposed_lockouts.items.len == 0) {
-            return VoteError.empty_slots;
-        }
-
-        // must be nonempty, checked above
+        // If the proposed state is too old, return `vote_too_old`.
         const last_proposed_slot = proposed_lockouts.getLast().slot;
-        // If the proposed state is not new enough, return
         if (self.votes.getLastOrNull()) |last_vote| {
             if (last_proposed_slot <= last_vote.lockout.slot) {
                 return VoteError.vote_too_old;
             }
         }
 
-        if (slot_hash_entries.len == 0) {
-            return VoteError.slots_mismatch;
-        }
-
+        const slot_hash_entries = slot_hashes.entries.constSlice();
+        if (slot_hash_entries.len == 0) return VoteError.slots_mismatch;
         const earliest_slot_hash_in_history = slot_hash_entries[slot_hash_entries.len - 1].slot;
 
         // Check if the proposed vote state is too old to be in the SlotHash history
@@ -1567,16 +1556,15 @@ pub const VoteState = struct {
         // we use this mutable root to fold checking the root slot into the below loop
         // for performance
         var root_to_check = proposed_root.*;
-        var proposed_lockouts_index: usize = 0;
-        // index into the slot_hashes, starting at the oldest known
-        // slot hash
+        var proposed_lockouts_index: u64 = 0;
+        // index into the slot_hashes, starting at the oldest known slot hash
         var slot_hashes_index = slot_hash_entries.len;
-        var proposed_lockouts_indices_to_filter = std.BoundedArray(
-            usize,
-            MAX_LOCKOUT_HISTORY,
-        ).init(
-            0,
-        ) catch return InstructionError.ProgramArithmeticOverflow;
+        // The maximum number of elements is bounded by the maximum instruction size possible.
+        var lockouts_to_filter: std.BoundedArray(
+            u64,
+            sig.vm.syscalls.cpi.MAX_DATA_LEN / @sizeOf(u64),
+        ) = .{};
+
         // Note:
         //
         // 1) `proposed_lockouts` is sorted from oldest/smallest vote to newest/largest
@@ -1588,35 +1576,23 @@ pub const VoteState = struct {
         //
         // We check every proposed lockout because have to ensure that every slot is actually part of
         // the history, not just the most recent ones
-        while (proposed_lockouts_index < proposed_lockouts.*.items.len and
-            slot_hashes_index > 0)
-        {
-            const proposed_vote_slot: Slot = blk: {
-                if (root_to_check) |root| {
-                    break :blk root;
-                } else {
-                    break :blk proposed_lockouts.*.items[proposed_lockouts_index].slot;
-                }
-            };
+        while (proposed_lockouts_index < proposed_lockouts.items.len and slot_hashes_index > 0) {
+            const proposed_vote_slot: Slot = if (root_to_check) |root|
+                root
+            else
+                proposed_lockouts.items[proposed_lockouts_index].slot;
 
             if (root_to_check == null and
                 proposed_lockouts_index > 0 and
-                proposed_vote_slot <= proposed_lockouts.*.items[
-                    std.math.sub(usize, proposed_lockouts_index, 1) catch
-                        return InstructionError.ProgramArithmeticOverflow
-                ].slot)
+                proposed_vote_slot <= proposed_lockouts.items[proposed_lockouts_index - 1].slot)
             {
                 return VoteError.slots_not_ordered;
             }
-            const ancestor_slot = slot_hash_entries[
-                std.math.sub(usize, slot_hashes_index, 1) catch
-                    return InstructionError.ProgramArithmeticOverflow
-            ].slot;
+            const ancestor_slot = slot_hash_entries[slot_hashes_index - 1].slot;
 
             // Find if this slot in the proposed vote state exists in the SlotHashes history
             // to confirm if it was a valid ancestor on this fork
-            const order = std.math.order(proposed_vote_slot, ancestor_slot);
-            switch (order) {
+            switch (std.math.order(proposed_vote_slot, ancestor_slot)) {
                 .lt => {
                     if (slot_hashes_index == slot_hash_entries.len) {
                         // The vote slot does not exist in the SlotHashes history because it's too old,
@@ -1630,9 +1606,9 @@ pub const VoteState = struct {
                             // 2) Doesn't already exist in vote state
                             //
                             // Then filter it out
-                            proposed_lockouts_indices_to_filter.append(
-                                @as(usize, proposed_lockouts_index),
-                            ) catch return InstructionError.ProgramArithmeticOverflow;
+                            // NOTE: It is not possible for this to run out of capacity, as
+                            // the instruction data could not contain enough lockouts.
+                            lockouts_to_filter.appendAssumeCapacity(proposed_lockouts_index);
                         }
                         if (root_to_check) |new_proposed_root| {
                             // 1. Because `root_to_check.is_some()`, then we know that
@@ -1647,28 +1623,23 @@ pub const VoteState = struct {
                             }
                             root_to_check = null;
                         } else {
-                            proposed_lockouts_index = std.math.add(
-                                usize,
-                                proposed_lockouts_index,
-                                1,
-                            ) catch return InstructionError.ProgramArithmeticOverflow;
+                            proposed_lockouts_index += 1;
                         }
                         continue;
                     } else {
                         // If the vote slot is new enough to be in the slot history,
                         // but is not part of the slot history, then it must belong to another fork,
                         // which means this proposed vote state is invalid.
-                        if (root_to_check != null) {
-                            return VoteError.root_on_different_fork;
-                        } else {
+                        if (root_to_check == null) {
                             return VoteError.slots_mismatch;
+                        } else {
+                            return VoteError.root_on_different_fork;
                         }
                     }
                 },
                 .gt => {
                     // Decrement `slot_hashes_index` to find newer slots in the SlotHashes history
-                    slot_hashes_index = std.math.sub(usize, slot_hashes_index, 1) catch
-                        return InstructionError.ProgramArithmeticOverflow;
+                    slot_hashes_index -= 1;
                     continue;
                 },
                 .eq => {
@@ -1678,19 +1649,14 @@ pub const VoteState = struct {
                     if (root_to_check != null) {
                         root_to_check = null;
                     } else {
-                        proposed_lockouts_index = std.math.add(
-                            usize,
-                            proposed_lockouts_index,
-                            1,
-                        ) catch return InstructionError.ProgramArithmeticOverflow;
-                        slot_hashes_index = std.math.sub(usize, slot_hashes_index, 1) catch
-                            return InstructionError.ProgramArithmeticOverflow;
+                        proposed_lockouts_index += 1;
+                        slot_hashes_index -= 1;
                     }
                 },
             }
         }
 
-        if (proposed_lockouts_index != proposed_lockouts.*.items.len) {
+        if (proposed_lockouts_index != proposed_lockouts.items.len) {
             // The last vote slot in the proposed vote state did not exist in SlotHashes
             return VoteError.slots_mismatch;
         }
@@ -1726,33 +1692,24 @@ pub const VoteState = struct {
         // Filter out the irrelevant votes
         proposed_lockouts_index = 0;
         var filter_votes_index: usize = 0;
-
         var i: usize = 0;
-        while (i < proposed_lockouts.*.items.len) {
-            const should_retain = blk: {
-                if (filter_votes_index == proposed_lockouts_indices_to_filter.len) {
-                    break :blk true;
-                } else if (proposed_lockouts_index ==
-                    proposed_lockouts_indices_to_filter.get(filter_votes_index))
-                {
-                    filter_votes_index = std.math.add(usize, filter_votes_index, 1) catch
-                        return InstructionError.ProgramArithmeticOverflow;
-                    break :blk false;
-                } else {
-                    break :blk true;
-                }
+        while (i < proposed_lockouts.items.len) {
+            const should_retain = retain: {
+                if (filter_votes_index == lockouts_to_filter.len) {
+                    break :retain true;
+                } else if (proposed_lockouts_index == lockouts_to_filter.get(filter_votes_index)) {
+                    filter_votes_index += 1;
+                    break :retain false;
+                } else break :retain true;
             };
 
-            proposed_lockouts_index = std.math.add(usize, proposed_lockouts_index, 1) catch
-                return InstructionError.ProgramArithmeticOverflow;
-
-            if (!should_retain) {
-                _ = proposed_lockouts.*.orderedRemove(i);
-            } else {
+            proposed_lockouts_index += 1;
+            if (should_retain) {
                 i += 1;
+            } else {
+                _ = proposed_lockouts.orderedRemove(i);
             }
         }
-
         return null;
     }
 
@@ -1870,9 +1827,11 @@ pub const VoteState = struct {
             for (self.votes.items) |current_vote| {
                 // Sum credits for all votes in current state that are now rooted. (ie <= proposed_new_root).
                 if (current_vote.lockout.slot <= proposed_new_root) {
-                    earned_credits = std.math.add(u64, earned_credits, self.creditsForVoteAtIndex(
-                        current_vote_state_index,
-                    )) catch return InstructionError.ProgramArithmeticOverflow;
+                    earned_credits = std.math.add(
+                        u64,
+                        earned_credits,
+                        self.creditsForVoteAtIndex(current_vote_state_index),
+                    ) catch return InstructionError.ProgramArithmeticOverflow;
                     current_vote_state_index = std.math.add(
                         usize,
                         current_vote_state_index,
@@ -1985,6 +1944,10 @@ pub const VoteState = struct {
         // Everything is fine.
         return null;
     }
+};
+
+pub const VoteStateV4 = struct {
+    node_pubkey: Pubkey,
 };
 
 /// Re-export of the `VoteAuthorize` enum.

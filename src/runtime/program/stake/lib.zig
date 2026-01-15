@@ -87,7 +87,7 @@ pub fn execute(
                 allocator,
                 ic,
                 &me,
-                ic.ixn_info.getSigners().slice(),
+                ic.ixn_info.getSigners().constSlice(),
                 &authorized_pubkey,
                 stake_authorize,
                 &clock,
@@ -136,7 +136,7 @@ pub fn execute(
                 1,
                 &clock,
                 &stake_history,
-                ic.ixn_info.getSigners().slice(),
+                ic.ixn_info.getSigners().constSlice(),
                 ic.tc.feature_set,
             );
         },
@@ -153,7 +153,7 @@ pub fn execute(
                 0,
                 lamports,
                 1,
-                ic.ixn_info.getSigners().slice(),
+                ic.ixn_info.getSigners().constSlice(),
                 ic.tc.feature_set,
             );
         },
@@ -177,7 +177,7 @@ pub fn execute(
                 1,
                 &clock,
                 &stake_history,
-                ic.ixn_info.getSigners().slice(),
+                ic.ixn_info.getSigners().constSlice(),
             );
         },
         .withdraw => |lamports| {
@@ -214,14 +214,26 @@ pub fn execute(
             defer me.release();
             const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, 1);
 
-            try deactivate(allocator, ic, &me, &clock, ic.ixn_info.getSigners().slice());
+            try deactivate(
+                allocator,
+                ic,
+                &me,
+                &clock,
+                ic.ixn_info.getSigners().constSlice(),
+            );
         },
         .set_lockup => |lockup| {
             var me = try getStakeAccount(ic);
             defer me.release();
             const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
 
-            try setLockup(allocator, &me, &lockup, ic.ixn_info.getSigners().slice(), &clock);
+            try setLockup(
+                allocator,
+                &me,
+                &lockup,
+                ic.ixn_info.getSigners().constSlice(),
+                &clock,
+            );
         },
         .initialize_checked => {
             var me = try getStakeAccount(ic);
@@ -323,7 +335,13 @@ pub fn execute(
             };
 
             const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
-            try setLockup(allocator, &me, &lockup, ic.ixn_info.getSigners().slice(), &clock);
+            try setLockup(
+                allocator,
+                &me,
+                &lockup,
+                ic.ixn_info.getSigners().constSlice(),
+                &clock,
+            );
         },
         .get_minimum_delegation => {
             const min_delegation = getMinimumDelegation(ic.tc.slot, ic.tc.feature_set);

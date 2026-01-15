@@ -270,7 +270,10 @@ fn executeSyscall(
     );
     defer vm.deinit();
 
-    vm.registers.set(.r0, pb_vm.r0);
+    // NOTE: We do not set the value of r0, as it'll always be overridden by `dispatchSyscall`
+    // in the "real world". We might consider having every syscall set `r0 = 0` when they return
+    // without error, however this is generally more error-prone.
+    // vm.registers.set(.r0, pb_vm.r0);
     vm.registers.set(.r1, pb_vm.r1);
     vm.registers.set(.r2, pb_vm.r2);
     vm.registers.set(.r3, pb_vm.r3);

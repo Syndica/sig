@@ -33,6 +33,10 @@ const MM_INPUT_START = memory.INPUT_START;
 const MAX_PERMITTED_DATA_INCREASE = serialize.MAX_PERMITTED_DATA_INCREASE;
 const BPF_ALIGN_OF_U128 = serialize.BPF_ALIGN_OF_U128;
 
+/// Maximum CPI instruction data size.
+/// Also doubles as the maximum possible size of any instruction.
+pub const MAX_DATA_LEN = 10_240;
+
 /// SIMD-0339 based calculation of AccountInfo translation byte size. Fixed size of **80 bytes** for each AccountInfo broken down as:
 /// - 32 bytes for account address
 /// - 32 bytes for owner address
@@ -780,7 +784,7 @@ fn translateInstruction(
         if (account_metas.len >= InstructionInfo.MAX_ACCOUNT_METAS) {
             return SyscallError.MaxInstructionAccountsExceeded;
         }
-        if (data.len > 10 * 1024) {
+        if (data.len > MAX_DATA_LEN) {
             return SyscallError.MaxInstructionDataLenExceeded;
         }
 
