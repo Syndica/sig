@@ -498,7 +498,9 @@ pub fn SortedMap(
                         const parent_node = self.path.node_stack[h];
                         const parent_idx = self.path.idx_stack[h];
                         const parent_inner = self.sorted_tree.asPtr(InnerNode, parent_node);
-                        if (parent_idx > 0 and !keysEql(parent_inner.keys[parent_idx - 1], EMPTY_KEY)) {
+                        if (parent_idx > 0 and
+                            !keysEql(parent_inner.keys[parent_idx - 1], EMPTY_KEY))
+                        {
                             node_offset = parent_inner.values[parent_idx - 1];
                             self.path.idx_stack[h] = parent_idx - 1;
                             // Descend to rightmost leaf
@@ -836,7 +838,9 @@ pub fn SortedMap(
 
             const new_node_offset: Offset = @intCast(self.data.items.len + padding_len);
             self.data.items.len += @sizeOf(Node);
-            const node: *Node = @alignCast(@ptrCast(self.data.items[padding_len..][new_node_offset..][0..@sizeOf(Node)]));
+            const node: *Node = @alignCast(@ptrCast(
+                self.data.items[padding_len..][new_node_offset..][0..@sizeOf(Node)],
+            ));
             node.* = .{ .keys = @splat(EMPTY_KEY), .values = @splat(undefined) };
             return new_node_offset;
         }
@@ -1435,7 +1439,6 @@ pub fn deinitMapAndValues(allocator: Allocator, const_map: anytype) void {
 
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
-const expectEqualSlices = std.testing.expectEqualSlices;
 
 test SortedSet {
     const allocator = std.testing.allocator;
@@ -1591,26 +1594,6 @@ test "order slices" {
     try expectEqual(orderSlices(u8, std.math.order, &b, &e), .gt);
     try expectEqual(orderSlices(u8, std.math.order, &e, &b), .lt);
 }
-
-// test "SortedMap slice range" {
-//     const allocator = std.testing.allocator;
-
-//     var set: SortedSet([]const u8, .{ .empty_key = "empty" }) = .empty;
-//     defer set.deinit(allocator);
-
-//     try set.put(allocator, &.{ 0, 0, 10 }, {});
-//     try set.put(allocator, &.{ 0, 0, 20 }, {});
-//     try set.put(allocator, &.{ 0, 0, 30 }, {});
-//     try set.put(allocator, &.{ 0, 0, 40 }, {});
-
-//     const range = set.rangeCustom(null, .{ .inclusive = &.{ 0, 0, 40 } });
-
-//     try std.testing.expectEqual(4, range.len);
-//     try std.testing.expectEqualSlices(u8, &.{ 0, 0, 10 }, range[0]);
-//     try std.testing.expectEqualSlices(u8, &.{ 0, 0, 20 }, range[1]);
-//     try std.testing.expectEqualSlices(u8, &.{ 0, 0, 30 }, range[2]);
-//     try std.testing.expectEqualSlices(u8, &.{ 0, 0, 40 }, range[3]);
-// }
 
 test "binarySearch slice of slices" {
     const slices = [4][]const u8{

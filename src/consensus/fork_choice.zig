@@ -5155,18 +5155,20 @@ const TestDuplicateForks = struct {
             });
         }
 
-        // // Verify children of slot 4
-        // var dup_children_4 = fork_choice.getChildren(&.{
-        //     .slot = 4,
-        //     .hash = Hash.ZEROES,
-        // }).?;
+        // Verify children of slot 4
+        {
+            var dup_children_4 = fork_choice.getChildren(&.{ .slot = 4, .hash = Hash.ZEROES }).?;
+            var dup_iter = dup_children_4.iterator();
+            std.debug.assert(
+                dup_iter.next().?.key_ptr.equals(duplicate_leaves_descended_from_4.items[0]),
+            );
+            std.debug.assert(
+                dup_iter.next().?.key_ptr.equals(duplicate_leaves_descended_from_4.items[1]),
+            );
+        }
 
-        // std.mem.sort(SlotAndHash, dup_children_4.mutableKeys(), {}, compareSlotHashKey);
-        // std.debug.assert(dup_children_4.keys()[0].equals(duplicate_leaves_descended_from_4.items[0]));
-        // std.debug.assert(dup_children_4.keys()[1].equals(duplicate_leaves_descended_from_4.items[1]));
-
-        var dup_children_5: std.ArrayListUnmanaged(SlotAndHash) = .empty;
-        defer dup_children_5.deinit(gpa);
+        var dup_children_5 = std.ArrayList(SlotAndHash).init(test_allocator);
+        defer dup_children_5.deinit();
 
         var children_5 = fork_choice.getChildren(&.{
             .slot = 5,

@@ -578,14 +578,6 @@ pub const ShredWorkingStore = struct {
     }
 };
 
-pub fn deinitMapRecursive(map: anytype) void {
-    var iter = map.iterator();
-    while (iter.next()) |entry| {
-        entry.value_ptr.deinit();
-    }
-    map.deinit();
-}
-
 /// agave: is_newly_completed_slot
 pub fn isNewlyCompletedSlot(slot_meta: *const SlotMeta, backup_slot_meta: *const ?SlotMeta) bool {
     return slot_meta.isFull() and ( //

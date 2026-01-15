@@ -16,7 +16,6 @@ const SlotMeta = ledger.meta.SlotMeta;
 const SlotMetaWorkingSetEntry = shred_inserter.working_state.SlotMetaWorkingSetEntry;
 const WriteBatch = LedgerDB.WriteBatch;
 
-const deinitMapRecursive = shred_inserter.working_state.deinitMapRecursive;
 const isNewlyCompletedSlot = shred_inserter.working_state.isNewlyCompletedSlot;
 
 /// agave: handle_chaining
