@@ -601,7 +601,6 @@ pub fn panic(
     if (!std.unicode.utf8ValidateSlice(message)) {
         return SyscallError.InvalidString;
     }
-
     return SyscallError.Panic;
 }
 
