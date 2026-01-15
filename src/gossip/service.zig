@@ -43,7 +43,6 @@ const GossipMessage = sig.gossip.message.GossipMessage;
 const PruneData = sig.gossip.PruneData;
 const GossipTable = sig.gossip.table.GossipTable;
 const HashTimeQueue = sig.gossip.table.HashTimeQueue;
-const AutoArrayHashSet = sig.gossip.table.AutoArrayHashSet;
 const GossipPullFilter = sig.gossip.pull_request.GossipPullFilter;
 const Ping = sig.gossip.ping_pong.Ping;
 const Pong = sig.gossip.ping_pong.Pong;
@@ -1769,7 +1768,10 @@ pub const GossipService = struct {
             const from_pubkey = failed_origin_entry.key_ptr.*;
             const failed_origins_hashset = failed_origin_entry.value_ptr;
             defer failed_origins_hashset.deinit(allocator);
-            const from_endpoint = pubkey_to_endpoint.get(from_pubkey).?;
+            const from_endpoint = pubkey_to_endpoint.get(from_pubkey) orelse
+                // they didn't have a valid contact info with a valid gossip address,
+                // so we can't prune them
+                continue;
 
             const failed_origins: []Pubkey = failed_origins_hashset.keys();
             const prune_size = @min(failed_origins.len, MAX_PRUNE_DATA_NODES);
