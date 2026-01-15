@@ -1647,21 +1647,19 @@ pub const GossipService = struct {
         if (batch_push_messages.items.len == 0) {
             return;
         }
+        const allocator = self.allocator;
 
-        var pubkey_to_failed_origins = std.AutoArrayHashMap(
+        var pubkey_to_failed_origins: std.AutoArrayHashMapUnmanaged(
             Pubkey,
-            AutoArrayHashSet(Pubkey),
-        ).init(self.allocator);
+            std.AutoArrayHashMapUnmanaged(Pubkey, void),
+        ) = .empty;
 
-        var pubkey_to_endpoint = std.AutoArrayHashMap(
-            Pubkey,
-            EndPoint,
-        ).init(self.allocator);
+        var pubkey_to_endpoint: std.AutoArrayHashMapUnmanaged(Pubkey, EndPoint) = .empty;
 
         defer {
             // TODO: figure out a way to re-use these allocs
-            pubkey_to_failed_origins.deinit();
-            pubkey_to_endpoint.deinit();
+            pubkey_to_failed_origins.deinit(allocator);
+            pubkey_to_endpoint.deinit(allocator);
         }
 
         // pre-allocate memory to track insertion failures
@@ -1693,7 +1691,7 @@ pub const GossipService = struct {
                 const invalid_shred_count = full_len - values_to_insert.len;
 
                 var insert_fail_count: u64 = 0;
-                var failed_origins: ?*AutoArrayHashSet(Pubkey) = null;
+                var failed_origins: ?*std.AutoArrayHashMapUnmanaged(Pubkey, void) = null;
 
                 for (values_to_insert) |value| {
                     const wallclock = value.wallclock();
@@ -1707,13 +1705,13 @@ pub const GossipService = struct {
                             insert_fail_count += 1;
                             if (failed_origins == null) {
                                 const lookup_result = try pubkey_to_failed_origins
-                                    .getOrPut(push_message.from_pubkey.*);
+                                    .getOrPut(allocator, push_message.from_pubkey.*);
                                 if (!lookup_result.found_existing) {
-                                    lookup_result.value_ptr.* = .init(self.allocator);
+                                    lookup_result.value_ptr.* = .empty;
                                 }
                                 failed_origins = lookup_result.value_ptr;
                             }
-                            try failed_origins.?.put(value.id(), {});
+                            try failed_origins.?.put(allocator, value.id(), {});
                             value.deinit(self.gossip_data_allocator);
                         },
                     }
@@ -1747,7 +1745,11 @@ pub const GossipService = struct {
 
                 // track the endpoint
                 const from_gossip_endpoint = from_gossip_addr.toEndpoint();
-                try pubkey_to_endpoint.put(push_message.from_pubkey.*, from_gossip_endpoint);
+                try pubkey_to_endpoint.put(
+                    allocator,
+                    push_message.from_pubkey.*,
+                    from_gossip_endpoint,
+                );
             }
         }
 
@@ -1766,7 +1768,7 @@ pub const GossipService = struct {
         while (pubkey_to_failed_origins_iter.next()) |failed_origin_entry| {
             const from_pubkey = failed_origin_entry.key_ptr.*;
             const failed_origins_hashset = failed_origin_entry.value_ptr;
-            defer failed_origins_hashset.deinit();
+            defer failed_origins_hashset.deinit(allocator);
             const from_endpoint = pubkey_to_endpoint.get(from_pubkey).?;
 
             const failed_origins: []Pubkey = failed_origins_hashset.keys();
