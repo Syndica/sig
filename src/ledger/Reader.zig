@@ -1169,7 +1169,6 @@ fn getCompletedDataRanges(
     var ranges = CompletedRanges.init(allocator);
     var begin: u32 = start_index;
 
-    // TODO: check: inclusive or exclusive?
     var iter = completed_data_indexes.iteratorRanged(start_index, consumed, .start);
     while (iter.next()) |entry| {
         const index = entry.key_ptr.*;

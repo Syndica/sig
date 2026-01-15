@@ -1185,8 +1185,6 @@ pub const ForkChoice = struct {
                 };
 
                 if (update_operations.getEntry(add_label)) |existing_op| {
-                    std.debug.assert(existing_op.key_ptr.order(add_label) == .eq);
-
                     switch (existing_op.value_ptr.*) {
                         .add => |*stake| stake.* += stake_update,
                         else => {}, // Shouldn't happen for add label
