@@ -113,7 +113,7 @@ pub const RepairService = struct {
             .report = MultiSlotReport.init(allocator),
             .thread_pool = thread_pool,
             .metrics = try registry.initStruct(Metrics),
-            .prng = std.Random.DefaultPrng.init(std.testing.random_seed),
+            .prng = std.Random.DefaultPrng.init(0),
         };
     }
 
@@ -676,15 +676,27 @@ test "RepairService sends repair request to gossip peer" {
 
     // run test
     _ = try service.sendNecessaryRepairs();
-    var buf: [200]u8 = undefined;
-    const size = peer_socket.receive(&buf) catch 0;
 
-    // assertions
-    try std.testing.expect(160 == size);
-    const msg = try bincode.readFromSlice(allocator, RepairMessage, buf[0..160], .{});
-    try msg.verify(buf[0..160], Pubkey.fromPublicKey(&peer_keypair.public_key), @intCast(std.time.milliTimestamp()));
-    try std.testing.expect(msg.highest_window_index.slot == 13579);
-    try std.testing.expect(msg.highest_window_index.shred_index == 0);
+    var buf: [200]u8 = undefined;
+    var slots: [3]Slot = undefined;
+    var num_recv: usize = 0;
+    while (peer_socket.receive(&buf) catch null) |size| {
+        try std.testing.expectEqual(160, size);
+        const msg = try bincode.readFromSlice(allocator, RepairMessage, buf[0..160], .{});
+        try msg.verify(buf[0..160], Pubkey.fromPublicKey(&peer_keypair.public_key), @intCast(std.time.milliTimestamp()));
+        try std.testing.expect(msg.highest_window_index.slot >= 13579);
+        try std.testing.expectEqual(0, msg.highest_window_index.shred_index);
+        slots[num_recv] = msg.highest_window_index.slot;
+        num_recv += 1;
+    }
+
+    try std.testing.expectEqual(3, num_recv);
+
+    outer: for ([_]Slot{ 13579, 13580 }) |expected_slot| {
+        for (slots[0..num_recv]) |slot| if (slot == expected_slot) continue :outer;
+        std.debug.print("missing expected repair request for slot: {}\n", .{expected_slot});
+        return error.TestFailed;
+    }
 }
 
 test "RepairPeerProvider selects correct peers" {
