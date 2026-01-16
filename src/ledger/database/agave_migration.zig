@@ -80,56 +80,13 @@ const agave_schema = struct {
         .Key = Slot,
         .Value = agave_meta.SlotMeta,
     };
-    /// Every data shred received or recovered by the validator.
-    pub const data_shred: ColumnFamily = .{
-        .name = "data_shred",
-        .Key = struct { Slot, u64 },
-        .Value = []const u8,
-    };
 
-    /// Indicates whether a slot is "dead." A dead slot is a slot that has been downgraded by the
-    /// leader to have fewer shreds than they initially planned. This means it may not be possible
-    /// to derive a complete block from this slot.
-    pub const dead_slots: ColumnFamily = .{
-        .name = "dead_slots",
-        .Key = Slot,
-        .Value = bool,
-    };
-    /// Indicates whether the leader has produced duplicate blocks for the slot. If the leader
-    /// commits this offense, it means some of the data from the slot cannot be included properly in
-    /// the ledger.
-    pub const duplicate_slots: ColumnFamily = .{
-        .name = "duplicate_slots",
-        .Key = Slot,
-        .Value = sig_meta.DuplicateSlotProof,
-    };
-    // /// Indicates which slots are rooted. A slot is "rooted" when consensus is finalized for that
-    // /// slot. It means the block from that slot is permanently included on-chain.
-    // pub const rooted_slots: ColumnFamily = .{
-    //     .name = "roots",
-    //     .Key = Slot,
-    //     .Value = bool,
-    // };
-    /// Metadata about each Reed-Solomon erasure set, such as how many shreds are in the set.
-    pub const erasure_meta: ColumnFamily = .{
-        .name = "erasure_meta",
-        .Key = ErasureSetId,
-        .Value = sig_meta.ErasureMeta,
-    };
-    /// Tracks slots that we've received shreds for, but we haven't received any shreds for the
-    /// parent slot. A slot's parent is the slot that was supposed to come immediately before it.
-    pub const orphan_slots: ColumnFamily = .{
-        .name = "orphans",
-        .Key = Slot,
-        .Value = bool,
-    };
-    /// Index is a single data structure for every slot that indicates which shreds have been
-    /// received for that slot.
-    pub const index: ColumnFamily = .{
-        .name = "index",
-        .Key = Slot,
-        .Value = sig_meta.Index,
-    };
+    pub const data_shred = sig_schema.data_shred;
+    pub const dead_slots = sig_schema.dead_slots;
+    pub const duplicate_slots = sig_schema.duplicate_slots;
+    pub const erasure_meta = sig_schema.erasure_meta;
+    pub const orphan_slots = sig_schema.orphan_slots;
+    pub const index = sig_schema.index;
 };
 
 comptime {
