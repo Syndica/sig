@@ -2097,7 +2097,6 @@ pub fn deployProgram(
         tc.feature_set,
         &tc.compute_budget,
         tc.slot,
-        false,
         true,
     );
 
@@ -2110,7 +2109,7 @@ pub fn deployProgram(
     const source = try allocator.dupe(u8, data);
     defer allocator.free(source);
 
-    var executable = vm.Executable.fromBytes(
+    var executable = vm.elf.load(
         allocator,
         source,
         &environment.loader,

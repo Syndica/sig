@@ -9,7 +9,6 @@ const RegisterMap = sig.vm.interpreter.RegisterMap;
 const Error = syscalls.Error;
 const MemoryMap = sig.vm.memory.MemoryMap;
 const TransactionContext = sig.runtime.transaction_context.TransactionContext;
-const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/syscalls/src/mem_ops.rs#L3-L10
 fn consumeMemoryCompute(tc: *TransactionContext, length: u64) !void {

@@ -21,12 +21,7 @@ SECTIONS
         _heap_end = .;
         . = ALIGN(8);
    } :heap
-  .dynsym 0xFFFFFFFF00000000 : {
-    *(.dynsym)
-    . = ALIGN(8);
-  } :dynsym
-  .dynstr : { *(.dynstr) } :other
-  .strtab : { *(.strtab) } :other
+   .strtab : { *(.strtab) } :other
   /DISCARD/ : {
       *(.comment*)
       *(.eh_frame*)
@@ -35,6 +30,8 @@ SECTIONS
       *(.data*)
       *(.rel.dyn*)
       *(.dynamic)
+      *(.dynsym)
+      *(.dynstr)
     }
 }
 
@@ -42,7 +39,7 @@ PHDRS
 {
   text PT_LOAD FLAGS(1);
   rodata PT_LOAD FLAGS(4);
-  stack PT_GNU_STACK FLAGS(6);
+  stack PT_LOAD FLAGS(6);
   heap PT_LOAD FLAGS(6);
   dynsym PT_NULL FLAGS(0);
   other PT_NULL FLAGS(0);

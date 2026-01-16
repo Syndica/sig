@@ -689,7 +689,11 @@ pub fn createProgramAddress(
         check_aligned,
     );
 
-    const new_address = pubkey_utils.createProgramAddress(seeds.slice(), &.{}, program_id) catch {
+    const new_address = pubkey_utils.createProgramAddress(
+        seeds.constSlice(),
+        &.{},
+        program_id,
+    ) catch {
         registers.set(.r0, 1);
         return;
     };
@@ -786,16 +790,18 @@ fn callProgramAddressSyscall(
     }
 
     // seeds_addr is only finalized now, but should appear before the others.
-    try regions.appendSlice(&.{
-        memory.Region.init(.constant, std.mem.sliceAsBytes(seed_slices.items), seeds_addr),
-    });
+    try regions.append(memory.Region.init(
+        .constant,
+        std.mem.sliceAsBytes(seed_slices.items),
+        seeds_addr,
+    ));
     std.mem.sort(memory.Region, regions.items, {}, struct {
         fn less(_: void, r1: memory.Region, r2: memory.Region) bool {
             return r1.vm_addr_start < r2.vm_addr_start;
         }
     }.less);
 
-    var memory_map = try MemoryMap.init(allocator, regions.items, .v3, .{});
+    var memory_map = try MemoryMap.init(allocator, regions.items, .v2, .{});
     defer memory_map.deinit(allocator);
 
     var registers = RegisterMap.initFill(0);
@@ -829,7 +835,7 @@ test findProgramAddress {
     }
 
     const cost = tc.compute_budget.create_program_address_units;
-    const address = sig.runtime.program.bpf_loader.v3.ID;
+    const address = sig.runtime.program.bpf_loader.v2.ID;
     const max_tries: u64 = 256; // once per seed
 
     for (0..1000) |_| {
@@ -934,12 +940,10 @@ test createProgramAddress {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
-        .accounts = &.{
-            .{
-                .pubkey = Pubkey.initRandom(prng.random()),
-                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-            },
-        },
+        .accounts = &.{.{
+            .pubkey = Pubkey.initRandom(prng.random()),
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        }},
     });
     defer {
         testing.deinitTransactionContext(allocator, &tc);
@@ -950,7 +954,8 @@ test createProgramAddress {
     const address = sig.runtime.program.bpf_loader.v3.ID;
     tc.compute_meter = cost * 12; // enough for 12 calls to createProgramAddress
 
-    const exceeded_seed: []const u8 = &([_]u8{127} ** (pubkey_utils.MAX_SEED_LEN + 1));
+    const exceeded_seed: *const [pubkey_utils.MAX_SEED_LEN + 1]u8 = &@splat(127);
+
     try std.testing.expectError(
         SyscallError.BadSeeds,
         callProgramAddressSyscall(
@@ -974,7 +979,7 @@ test createProgramAddress {
         ),
     );
 
-    const max_seed: []const u8 = &([_]u8{0} ** pubkey_utils.MAX_SEED_LEN);
+    const max_seed: *const [pubkey_utils.MAX_SEED_LEN]u8 = &@splat(0);
     _ = try callProgramAddressSyscall(
         allocator,
         &tc,
@@ -984,10 +989,12 @@ test createProgramAddress {
         false,
     );
 
-    comptime var exceeded_seeds: []const []const u8 = &.{};
-    inline for (1..16) |i| {
-        exceeded_seeds = exceeded_seeds ++ &[_][]const u8{&[_]u8{@intCast(i + 1)}};
-    }
+    const exceeded_seeds: []const []const u8 = &.{
+        &.{2},  &.{3},  &.{4},  &.{5},  &.{6},
+        &.{7},  &.{8},  &.{9},  &.{10}, &.{11},
+        &.{12}, &.{13}, &.{14}, &.{15}, &.{16},
+    };
+
     _ = try callProgramAddressSyscall(
         allocator,
         &tc,
@@ -997,10 +1004,12 @@ test createProgramAddress {
         false,
     );
 
-    comptime var max_seeds: []const []const u8 = &.{};
-    inline for (0..17) |i| {
-        max_seeds = max_seeds ++ &[_][]const u8{&[_]u8{@intCast(i + 1)}};
-    }
+    const max_seeds: []const []const u8 = &.{
+        &.{1},  &.{2},  &.{3},  &.{4},  &.{5},  &.{6},
+        &.{7},  &.{8},  &.{9},  &.{10}, &.{11}, &.{12},
+        &.{13}, &.{14}, &.{15}, &.{16}, &.{17},
+    };
+
     try std.testing.expectError(
         SyscallError.BadSeeds,
         callProgramAddressSyscall(
@@ -1021,10 +1030,7 @@ test createProgramAddress {
         address,
         false,
     );
-    try std.testing.expect(
-        Pubkey.parse("BwqrghZA2htAcqq8dzP1WDAhTXYTYWj7CHxF5j7TDBAe")
-            .equals(&pk),
-    );
+    try std.testing.expect(pk.equals(&.parse("BwqrghZA2htAcqq8dzP1WDAhTXYTYWj7CHxF5j7TDBAe")));
 
     pk, _ = try callProgramAddressSyscall(
         allocator,
@@ -1122,7 +1128,7 @@ test allocFree {
             memory.Region.init(.mutable, &.{}, memory.STACK_START),
             memory.Region.init(.mutable, heap, memory.HEAP_START),
         },
-        .v3,
+        .v2,
         .{},
     );
     defer memory_map.deinit(allocator);
@@ -1221,7 +1227,7 @@ test getProcessedSiblingInstruction {
     var memory_map = try MemoryMap.init(
         allocator,
         &.{memory.Region.init(.mutable, &buffer, vm_addr)},
-        .v3,
+        .v2,
         .{},
     );
     defer memory_map.deinit(allocator);
@@ -1340,7 +1346,7 @@ test getEpochStake {
     {
         tc.compute_meter = tc.compute_budget.syscall_base_cost;
 
-        var memory_map = try MemoryMap.init(allocator, &.{}, .v3, .{});
+        var memory_map = try MemoryMap.init(allocator, &.{}, .v2, .{});
         defer memory_map.deinit(allocator);
 
         var registers = RegisterMap.initFill(0);
@@ -1363,7 +1369,7 @@ test getEpochStake {
 
         var memory_map = try MemoryMap.init(allocator, &.{
             memory.Region.init(.constant, vote_buffer, vote_addr),
-        }, .v3, .{});
+        }, .v2, .{});
         defer memory_map.deinit(allocator);
 
         var registers = RegisterMap.initFill(0);
@@ -1386,7 +1392,7 @@ test getEpochStake {
 
         var memory_map = try MemoryMap.init(allocator, &.{
             memory.Region.init(.constant, vote_buffer, vote_addr),
-        }, .v3, .{});
+        }, .v2, .{});
         defer memory_map.deinit(allocator);
 
         var registers = RegisterMap.initFill(0);
@@ -1411,7 +1417,7 @@ test getEpochStake {
 
         var memory_map = try MemoryMap.init(allocator, &.{
             memory.Region.init(.constant, vote_buffer, vote_addr),
-        }, .v3, .{});
+        }, .v2, .{});
         defer memory_map.deinit(allocator);
 
         var registers = RegisterMap.initFill(0);
@@ -1472,7 +1478,7 @@ test "set and get return data" {
         memory.Region.init(.constant, &data, src_addr),
         memory.Region.init(.mutable, &data_buffer, dst_addr),
         memory.Region.init(.mutable, &id_buffer, program_id_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     {

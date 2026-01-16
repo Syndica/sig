@@ -6,7 +6,6 @@ const sig = @import("../../sig.zig");
 const programs = sig.runtime.program;
 
 const Feature = sig.core.features.Feature;
-const FeatureSet = sig.core.FeatureSet;
 
 pub const TOTAL_COUNT_BUILTINS: usize = 12;
 pub const BUILTIN_COSTS: std.StaticStringMap(BuiltinCost) = costs: {

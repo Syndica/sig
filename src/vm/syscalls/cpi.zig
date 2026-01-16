@@ -715,7 +715,7 @@ fn translateAccounts(
             account_data_direct_mapping,
         );
 
-        try accounts.append(.{
+        accounts.appendAssumeCapacity(.{
             .index_in_caller = index_in_caller,
             .caller_account = caller_account,
             .update_caller_account_region = meta.is_writable or update_caller,
@@ -1024,7 +1024,7 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
             tc: *TransactionContext,
             memory_map: *MemoryMap,
             registers: *RegisterMap,
-        ) !void {
+        ) Error!void {
             const instruction_addr = registers.get(.r1);
             const account_infos_addr = registers.get(.r2);
             const account_infos_len = registers.get(.r3);
@@ -1069,9 +1069,11 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                 bpf_loader_program.v1.ID.equals(&instruction.program_id) or
                 bpf_loader_program.v2.ID.equals(&instruction.program_id) or
                 (bpf_loader_program.v3.ID.equals(&instruction.program_id) and
-                    isBpfLoaderV3InstructionBlacklisted(instruction.data, tc.feature_set, tc.slot)) or
+                    isV3InstructionBlacklisted(instruction.data, tc.feature_set, tc.slot)) or
                 (blk: {
-                    for (PRECOMPILES) |p| if (p.program_id.equals(&instruction.program_id)) break :blk true;
+                    for (PRECOMPILES) |p| {
+                        if (p.program_id.equals(&instruction.program_id)) break :blk true;
+                    }
                     break :blk false;
                 }))
             {
@@ -1170,7 +1172,7 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
 /// Returns whether the provided instruction is *not* allowed to be called.
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L202-L216
-fn isBpfLoaderV3InstructionBlacklisted(
+fn isV3InstructionBlacklisted(
     instruction_data: []const u8,
     feature_set: *const sig.core.FeatureSet,
     slot: sig.core.Slot,
@@ -1388,7 +1390,7 @@ test "CallerAccount.fromAccountInfoRust" {
             memory.Region.init(.mutable, &.{}, memory.HEAP_START), // nothing in the heap,
             memory.Region.init(.mutable, buffer, vm_addr), // INPUT_START
         },
-        .v3,
+        .v2,
         .{ .aligned_memory_mapping = false },
     );
     defer memory_map.deinit(allocator);
@@ -1444,7 +1446,7 @@ test "CallerAccount.fromAccountInfoC" {
             memory.Region.init(.mutable, buffer, memory.HEAP_START),
             // no INPUT_START
         },
-        .v3,
+        .v2,
         .{},
     );
     defer memory_map.deinit(allocator);
@@ -1528,7 +1530,7 @@ test "translateAccounts" {
             memory.Region.init(.mutable, &.{}, memory.HEAP_START), // nothing in the heap,
             memory.Region.init(.mutable, buffer, vm_addr), // INPUT_START
         },
-        .v3,
+        .v2,
         .{ .aligned_memory_mapping = false },
     );
     defer memory_map.deinit(allocator);
@@ -1688,7 +1690,7 @@ fn testTranslateInstruction(comptime AccountInfoType: type) !void {
             memory.Region.init(.mutable, &.{}, memory.HEAP_START),
             memory.Region.init(.mutable, buffer, vm_addr),
         },
-        .v3,
+        .v2,
         .{ .aligned_memory_mapping = false },
     );
     defer memory_map.deinit(allocator);
@@ -1750,7 +1752,7 @@ test "translateSigners" {
             memory.Region.init(.mutable, &.{}, memory.HEAP_START),
             memory.Region.init(.mutable, buffer, memory.INPUT_START),
         },
-        .v3,
+        .v2,
         .{ .aligned_memory_mapping = false },
     );
     defer memory_map.deinit(allocator);
@@ -1856,7 +1858,7 @@ const TestCallerAccount = struct {
             .memory_map = try MemoryMap.init(
                 allocator,
                 pinned_regions,
-                .v3,
+                .v2,
                 .{ .aligned_memory_mapping = false },
             ),
         };
@@ -2329,7 +2331,7 @@ fn testCpiCommon(comptime AccountType: type) !void {
                 memory.Region.init(.mutable, account_info_buffer, account_info_addr),
                 memory.Region.init(.mutable, account_data_buffer, account_data_addr),
             },
-            .v3,
+            .v2,
             .{ .aligned_memory_mapping = false },
         );
         defer memory_map.deinit(allocator);
@@ -2347,17 +2349,17 @@ fn testCpiCommon(comptime AccountType: type) !void {
     }
 }
 
-test isBpfLoaderV3InstructionBlacklisted {
+test isV3InstructionBlacklisted {
     const all_enabled = sig.core.features.Set.ALL_ENABLED_AT_GENESIS;
     const all_disabled = sig.core.features.Set.ALL_DISABLED;
-    try std.testing.expect(isBpfLoaderV3InstructionBlacklisted(&.{}, &all_disabled, 0));
-    try std.testing.expect(!isBpfLoaderV3InstructionBlacklisted(&.{3}, &all_disabled, 0));
-    try std.testing.expect(!isBpfLoaderV3InstructionBlacklisted(&.{4}, &all_disabled, 0));
-    try std.testing.expect(!isBpfLoaderV3InstructionBlacklisted(&.{5}, &all_disabled, 0));
-    try std.testing.expect(isBpfLoaderV3InstructionBlacklisted(&.{7}, &all_disabled, 0));
-    try std.testing.expect(!isBpfLoaderV3InstructionBlacklisted(&.{7}, &all_enabled, 0));
-    try std.testing.expect(!isBpfLoaderV3InstructionBlacklisted(&.{3}, &all_disabled, 0));
-    try std.testing.expect(isBpfLoaderV3InstructionBlacklisted(&.{8}, &all_disabled, 0));
-    try std.testing.expect(isBpfLoaderV3InstructionBlacklisted(&.{9}, &all_disabled, 0));
-    try std.testing.expect(!isBpfLoaderV3InstructionBlacklisted(&.{9}, &all_enabled, 0));
+    try std.testing.expect(isV3InstructionBlacklisted(&.{}, &all_disabled, 0));
+    try std.testing.expect(!isV3InstructionBlacklisted(&.{3}, &all_disabled, 0));
+    try std.testing.expect(!isV3InstructionBlacklisted(&.{4}, &all_disabled, 0));
+    try std.testing.expect(!isV3InstructionBlacklisted(&.{5}, &all_disabled, 0));
+    try std.testing.expect(isV3InstructionBlacklisted(&.{7}, &all_disabled, 0));
+    try std.testing.expect(!isV3InstructionBlacklisted(&.{7}, &all_enabled, 0));
+    try std.testing.expect(!isV3InstructionBlacklisted(&.{3}, &all_disabled, 0));
+    try std.testing.expect(isV3InstructionBlacklisted(&.{8}, &all_disabled, 0));
+    try std.testing.expect(isV3InstructionBlacklisted(&.{9}, &all_disabled, 0));
+    try std.testing.expect(!isV3InstructionBlacklisted(&.{9}, &all_enabled, 0));
 }
