@@ -330,7 +330,17 @@ pub fn SortedMap(
 ) type {
     return struct {
         data: std.ArrayListAlignedUnmanaged(u8, node_alignment),
-        tree: struct { root: Offset, height: u8, count: u32 },
+        tree: struct {
+            // TODO: fix bincode for Offset
+            pub const @"!bincode-config:root" = sig.bincode.FieldConfig(Offset){
+                .skip = true,
+                .default_value = no_root,
+            };
+
+            root: Offset,
+            height: u8,
+            count: u32,
+        },
 
         pub const empty: Self = .{
             .data = .empty,
@@ -338,9 +348,17 @@ pub fn SortedMap(
         };
 
         const Self = @This();
-        const Offset = u32; // index into self.data
 
-        const no_root = std.math.maxInt(Offset); // root is allocated on first insert
+        const Offset = packed struct {
+            idx: u30, // index into self.data
+            kind: enum(u2) { leaf, inner, key_value, invalid }, // for safety
+        };
+
+        // root is allocated on first insert
+        const no_root: Offset = .{
+            .idx = std.math.maxInt(u30),
+            .kind = .invalid,
+        };
         const B = 32;
         const max_height = 8; // allows for `pow(B / 2, height)` max entries
         const EMPTY_KEY = config.empty_key;
@@ -355,12 +373,12 @@ pub fn SortedMap(
             keys: [B]Key,
             values: [B]Value,
 
-            fn relativeOffset(kind: enum { key, value }, idx: u8) u32 {
+            fn relativeOffset(kind: enum { key, value }, idx: u8) u30 {
                 return switch (kind) {
                     .key => 0 +
-                        @as(u32, idx) * @sizeOf(Key),
+                        @as(u30, idx) * @sizeOf(Key),
                     .value => @offsetOf(LeafNode, "values") +
-                        @as(u32, idx) * @sizeOf(Value),
+                        @as(u30, idx) * @sizeOf(Value),
                 };
             }
         };
@@ -536,12 +554,6 @@ pub fn SortedMap(
             pub fn countForwardsInclusive(self: *Iterator) u32 {
                 var i: u32 = 0;
                 while (self.nextInclusive()) |_| i += 1;
-                return i;
-            }
-
-            pub fn countBackwardsInclusive(self: *Iterator) u32 {
-                var i: u32 = 0;
-                while (self.prev()) |_| i += 1;
                 return i;
             }
         };
@@ -831,23 +843,29 @@ pub fn SortedMap(
         }
 
         fn allocNode(self: *Self, allocator: std.mem.Allocator, Node: type) !Offset {
-            const padding_len = std.mem.alignForward(usize, self.data.items.len, node_alignment) -
-                self.data.items.len;
+            const old_len = self.data.items.len;
 
-            try self.data.ensureUnusedCapacity(allocator, @sizeOf(Node) + padding_len);
+            const padding_len = std.mem.alignForward(usize, old_len, node_alignment) -
+                old_len;
 
-            const new_node_offset: Offset = @intCast(self.data.items.len + padding_len);
-            self.data.items.len += @sizeOf(Node);
+            try self.data.ensureUnusedCapacity(allocator, padding_len + @sizeOf(Node));
+
+            const new_node_offset: Offset = .{
+                .idx = @intCast(old_len + padding_len),
+                .kind = if (Node == LeafNode) .leaf else .inner,
+            };
+
+            self.data.items.len += padding_len + @sizeOf(Node);
+            @memset(self.data.items[old_len..][0..padding_len], undefined);
             const node: *Node = @alignCast(@ptrCast(
-                self.data.items[padding_len..][new_node_offset..][0..@sizeOf(Node)],
+                self.data.items[new_node_offset.idx..][0..@sizeOf(Node)],
             ));
             node.* = .{ .keys = @splat(EMPTY_KEY), .values = @splat(undefined) };
+
             return new_node_offset;
         }
 
-        fn firstNonEmpty(keys: []const Key) u8 {
-            std.debug.assert(keys.len <= B);
-
+        fn firstNonEmpty(keys: *const [B]Key) u8 {
             var n_empty: u8 = 0;
             for (keys) |k| {
                 if (!keysEql(k, EMPTY_KEY)) break;
@@ -856,9 +874,7 @@ pub fn SortedMap(
             return n_empty;
         }
 
-        fn lastNonEmpty(keys: []const Key) u8 {
-            std.debug.assert(keys.len <= B);
-
+        fn lastNonEmpty(keys: *const [B]Key) u8 {
             var i: u8 = @intCast(keys.len);
             while (i > 0) {
                 i -= 1;
@@ -869,16 +885,22 @@ pub fn SortedMap(
 
         fn getSlice(self: *const Self, T: type, offset: Offset, len: usize) []T {
             if (len == 0) return &.{};
-            const bytes = self.data.items[offset..][0 .. @sizeOf(T) * len];
+            const bytes = self.data.items[offset.idx..][0 .. @sizeOf(T) * len];
             return @as([*]T, @ptrCast(@alignCast(bytes.ptr)))[0..len];
         }
 
         /// warning: these pointers will be regularly invalidated by arraylist growth
         fn asPtr(self: *const Self, T: type, offset: Offset) *T {
+            switch (T) {
+                LeafNode => std.debug.assert(offset.kind == .leaf),
+                InnerNode => std.debug.assert(offset.kind == .inner),
+                else => std.debug.assert(offset.kind == .key_value),
+            }
             return @ptrCast(self.getSlice(T, offset, 1).ptr);
         }
 
         fn lookup(self: *const Self, path: *Path, key: Key) ?Entry {
+            std.debug.assert(self.tree.root != no_root);
             path.key = key;
 
             // Traverse down inner nodes until we reach a LeafNode, recording the path.
@@ -935,7 +957,10 @@ pub fn SortedMap(
                 const leaf: *LeafNode = self.asPtr(LeafNode, leaf_node);
                 std.debug.assertReadable(std.mem.asBytes(leaf[0..1]));
 
-                const value_offset = leaf_node + LeafNode.relativeOffset(.value, idx);
+                const value_offset = Offset{
+                    .idx = leaf_node.idx + LeafNode.relativeOffset(.value, idx),
+                    .kind = .key_value,
+                };
                 const value: Value = self.asPtr(Value, value_offset).*;
 
                 insertAt(&leaf.keys, idx, k);
@@ -943,7 +968,10 @@ pub fn SortedMap(
 
                 break :blk .{
                     value_offset,
-                    leaf_node + LeafNode.relativeOffset(.key, idx),
+                    Offset{
+                        .idx = leaf_node.idx + LeafNode.relativeOffset(.key, idx),
+                        .kind = .key_value,
+                    },
                     !keysEql(leaf.keys[B - 2], EMPTY_KEY),
                 };
             };
@@ -967,11 +995,17 @@ pub fn SortedMap(
 
                 // Branchlessly reassign the value if it was moved to the new_leaf.
                 const new_idx = idx -% (B / 2);
-                const new_value_offset = new_node + LeafNode.relativeOffset(.value, new_idx);
+                const new_value_offset = Offset{
+                    .idx = new_node.idx + LeafNode.relativeOffset(.value, new_idx),
+                    .kind = .key_value,
+                };
 
                 if (new_idx < idx) {
                     value = new_value_offset;
-                    key_offset = new_node + LeafNode.relativeOffset(.key, new_idx);
+                    key_offset = Offset{
+                        .idx = new_node.idx + LeafNode.relativeOffset(.key, new_idx),
+                        .kind = .key_value,
+                    };
                 }
 
                 // Ascend up the tree until we reach either the root or an non-full node
