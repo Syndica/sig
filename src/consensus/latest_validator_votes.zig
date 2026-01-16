@@ -18,8 +18,7 @@ const LatestVotes = std.AutoArrayHashMapUnmanaged(
 pub const LatestValidatorVotes = struct {
     max_gossip_frozen_votes: LatestVotes,
     max_replay_frozen_votes: LatestVotes,
-    // Pubkeys that had their `max_frozen_votes` updated since the last
-    // fork choice update
+    // Pubkeys that had their `max_frozen_votes` updated since the last fork choice update
     fork_choice_dirty_set: LatestVotes,
 
     pub const empty: LatestValidatorVotes = .{
@@ -84,11 +83,12 @@ pub const LatestValidatorVotes = struct {
             max_frozen_vote.value_ptr.* = .{ .slot = vote_slot, .hashes = .empty };
         } else if (vote_slot > max_frozen_vote.value_ptr.slot) {
             // Clean up existing entry if it exists
-            max_frozen_vote.value_ptr.hashes.deinit(allocator);
-            max_frozen_vote.value_ptr.* = .{ .slot = vote_slot, .hashes = .empty };
-            if (self.fork_choice_dirty_set.getEntry(vote_pubkey)) |existing_entry| {
-                existing_entry.value_ptr.hashes.deinit(allocator);
-                existing_entry.value_ptr.* = .{ .slot = vote_slot, .hashes = .empty };
+            max_frozen_vote.value_ptr.slot = vote_slot;
+            max_frozen_vote.value_ptr.hashes.clearRetainingCapacity();
+
+            if (self.fork_choice_dirty_set.getPtr(vote_pubkey)) |existing_entry| {
+                existing_entry.slot = vote_slot;
+                existing_entry.hashes.clearRetainingCapacity();
             }
         } else if (vote_slot != max_frozen_vote.value_ptr.slot or
             containsHash(max_frozen_vote.value_ptr.hashes.items, frozen_hash))
@@ -125,25 +125,22 @@ pub const LatestValidatorVotes = struct {
         ).empty;
         errdefer result.deinit(allocator);
 
-        for (self.fork_choice_dirty_set.keys(), self.fork_choice_dirty_set.values()) |
-            key,
-            value,
-        | {
+        for (
+            self.fork_choice_dirty_set.keys(),
+            self.fork_choice_dirty_set.values(),
+        ) |key, value| {
             const slot = value.slot;
-            if (value.slot >= root) {
-                for (value.hashes.items) |hash| {
-                    try result.append(
-                        allocator,
-                        .{ key, .{ .slot = slot, .hash = hash } },
-                    );
-                }
+            if (value.slot < root) continue;
+            try result.ensureUnusedCapacity(allocator, value.hashes.items.len);
+            for (value.hashes.items) |hash| {
+                result.appendAssumeCapacity(.{ key, .{ .slot = slot, .hash = hash } });
             }
         }
 
         for (self.fork_choice_dirty_set.values()) |*entry| {
             entry.hashes.deinit(allocator);
         }
-        self.fork_choice_dirty_set.clearAndFree(allocator);
+        self.fork_choice_dirty_set.clearRetainingCapacity();
         return result.toOwnedSlice(allocator);
     }
 
@@ -273,8 +270,7 @@ fn runFrozenBanksCheckAddVoteIsReplayTest(
 
         switch (vote_kind) {
             .replay => {
-                const dirty_entry =
-                    latest_validator_votes.fork_choice_dirty_set.get(vote_pubkey);
+                const dirty_entry = latest_validator_votes.fork_choice_dirty_set.get(vote_pubkey);
                 try testing.expect(dirty_entry != null);
                 try testing.expectEqual(dirty_entry.?.slot, vote_slot);
                 try testing.expectEqualSlices(
@@ -357,18 +353,15 @@ fn runFrozenBanksCheckAddVoteIsReplayTest(
         switch (vote_kind) {
             .replay => {
                 const dirty_entry =
-                    latest_validator_votes.fork_choice_dirty_set.get(new_vote_pubkey);
-                try testing.expect(dirty_entry != null);
-                try testing.expectEqual(dirty_entry.?.slot, vote_slot);
-                try testing.expectEqual(dirty_entry.?.hashes.items[0], new_frozen_hash2);
+                    latest_validator_votes.fork_choice_dirty_set.getPtr(new_vote_pubkey) orelse
+                    return error.TestExpectedNonNull;
+                try testing.expectEqual(dirty_entry.slot, vote_slot);
+                try testing.expectEqual(dirty_entry.hashes.items[0], new_frozen_hash2);
             },
-            .gossip => {
-                try testing.expect(
-                    !latest_validator_votes.fork_choice_dirty_set.contains(
-                        new_vote_pubkey,
-                    ),
-                );
-            },
+            .gossip => try testing.expectEqual(
+                null,
+                latest_validator_votes.fork_choice_dirty_set.getPtr(new_vote_pubkey),
+            ),
         }
     }
 }

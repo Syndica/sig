@@ -24,45 +24,12 @@ const PubkeyVote = struct {
     slot_hash: SlotAndHash,
 };
 
-const UpdateLabel = enum {
-    add,
-    mark_valid,
-    mark_invalid,
-    subtract,
-    aggregate,
-};
-
-const UpdateOperation = union(UpdateLabel) {
-    add: u64,
-    mark_valid: Slot,
-    mark_invalid: Slot,
-    subtract: u64,
-    aggregate,
-};
-
-const SlotAndHashLabel = struct {
-    slot_hash_key: SlotAndHash,
-    label: UpdateLabel,
-
-    fn order(a: SlotAndHashLabel, b: SlotAndHashLabel) std.math.Order {
-        return a.slot_hash_key.order(b.slot_hash_key);
-    }
-};
-
-const UpdateOperations = SortedMapCustom(SlotAndHashLabel, UpdateOperation, .{
-    .orderFn = SlotAndHashLabel.order,
-});
-
-const ForkWeight = u64;
-
 /// Analogous to [ForkInfo](https://github.com/anza-xyz/agave/blob/e7301b2a29d14df19c3496579cf8e271b493b3c6/core/src/consensus/heaviest_subtree_fork_choice.rs#L92)
 const ForkInfo = struct {
-    logger: Logger,
-    /// Amount of stake that has voted for exactly this slot
-    stake_for_slot: ForkWeight,
-    /// Amount of stake that has voted for this slot and the subtree
-    /// rooted at this slot
-    stake_for_subtree: ForkWeight,
+    /// Amount of stake that has voted for exactly this slot, i.e. measure of fork weight.
+    stake_for_slot: u64,
+    /// Amount of stake that has voted for this slot and the subtree rooted at this slot, i.e. measure of fork weight.
+    stake_for_subtree: u64,
     /// Tree height for the subtree rooted at this slot
     height: usize,
     /// Heaviest slot in the subtree rooted at this slot, does not
@@ -116,6 +83,7 @@ const ForkInfo = struct {
     /// it clears the latest invalid ancestor.
     fn updateWithNewlyValidAncestor(
         self: *ForkInfo,
+        logger: Logger,
         my_key: *const SlotAndHash,
         newly_duplicate_ancestor: Slot,
     ) void {
@@ -124,7 +92,7 @@ const ForkInfo = struct {
             // If the latest invalid ancestor is less than or equal to the newly valid ancestor,
             // clear the latest invalid ancestor
             if (latest_duplicate_ancestor <= newly_duplicate_ancestor) {
-                self.logger.info().logf(
+                logger.info().logf(
                     \\ Fork choice for {} clearing latest invalid ancestor
                     \\ {} because {} was duplicate confirmed
                 ,
@@ -143,6 +111,7 @@ const ForkInfo = struct {
     /// updates the latest invalid ancestor.
     fn updateWithNewlyInvalidAncestor(
         self: *ForkInfo,
+        logger: Logger,
         my_key: *const SlotAndHash,
         newly_duplicate_ancestor: Slot,
     ) void {
@@ -157,7 +126,7 @@ const ForkInfo = struct {
 
         // If the condition is met, update the latest duplicate ancestor
         if (should_update) {
-            self.logger.info().logf(
+            logger.info().logf(
                 "Fork choice for {} setting latest duplicate ancestor from {?} to {}",
                 .{ my_key, self.latest_duplicate_ancestor, newly_duplicate_ancestor },
             );
@@ -209,8 +178,8 @@ pub const ForkChoice = struct {
     fn updateMetrics(self: *const ForkChoice) void {
         const now = Instant.now();
         const update_interval = now.elapsedSince(self.last_root_time);
-        self.metrics.fork_choice_update_interval.observe(update_interval.asMicros());
-        self.metrics.fork_choice_updates.inc();
+        self.metrics.update_interval.observe(update_interval.asMicros());
+        self.metrics.updates.inc();
 
         // Calculate basic consensus metrics
         var total_stake: u64 = 0;
@@ -319,7 +288,6 @@ pub const ForkChoice = struct {
         } else {
             // Insert new entry
             try self.fork_infos.put(allocator, slot_hash_key, .{
-                .logger = self.logger,
                 .stake_for_slot = 0,
                 .stake_for_subtree = 0,
                 .height = 1,
@@ -438,18 +406,149 @@ pub const ForkChoice = struct {
         pubkey_votes: []const PubkeyVote,
         epoch_stakes: *const EpochStakesMap,
         epoch_schedule: *const EpochSchedule,
-    ) !SlotAndHash {
-        // Generate the set of updates
-        var update_ops = try self.generateUpdateOperations(
+    ) (std.mem.Allocator.Error || error{MultipleVotesForPubKey})!SlotAndHash {
+        const noop_ctx: struct {
+            pub fn addSlotStake(_: @This(), slot_hash_key: SlotAndHash, stake: u64) !void {
+                _ = slot_hash_key;
+                _ = stake;
+            }
+
+            pub fn subtractSlotStake(_: @This(), slot_hash_key: SlotAndHash, stake: u64) !void {
+                _ = slot_hash_key;
+                _ = stake;
+            }
+
+            pub fn aggregateSlot(_: @This(), slot_hash_key: SlotAndHash) !void {
+                _ = slot_hash_key;
+            }
+        } = .{};
+        return try self.addVotesWithCallbacks(
             allocator,
             pubkey_votes,
             epoch_stakes,
             epoch_schedule,
+            noop_ctx,
         );
-        defer update_ops.deinit(allocator);
+    }
 
-        // Finalize all updates
-        self.processUpdateOperations(&update_ops);
+    /// Executes operations for the fork choice tree based on new validator votes.
+    ///
+    /// This function processes a batch of validator votes and executes operations to:
+    /// 1) Remove stake from old votes (if they exist)
+    /// 2) Add stake to new votes
+    /// 3) Generate aggregate operations for affected forks
+    /// While notifying `ctx` about each of these operations in order.
+    ///
+    /// Key invariants:
+    /// - Votes older than the current tree root are ignored (they don't affect fork choice)
+    /// - Each pubkey can only appear once in the input batch
+    /// - Only the latest vote for each validator is considered (by slot, then by smallest hash)
+    /// - Stake is only updated if the validator has stake in the vote's epoch
+    ///
+    /// Analogous to [generate_update_operations](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L969),
+    /// except all operations are executed immediately instead of being encoded as instructions to execute later.
+    fn addVotesWithCallbacks(
+        self: *ForkChoice,
+        allocator: std.mem.Allocator,
+        pubkey_votes: []const PubkeyVote,
+        epoch_stakes: *const EpochStakesMap,
+        epoch_schedule: *const EpochSchedule,
+        /// Expects a value with methods:
+        /// * `fn subtractSlotStake(ctx, slot_hash_key: SlotAndHash, stake: u64) !void`
+        /// * `fn aggregateSlot(ctx, slot_hash_key: SlotAndHash) !void`
+        /// * `fn addSlotStake(slot_hash_key: SlotAndHash, stake: u64) !void`
+        ctx: anytype,
+    ) !SlotAndHash {
+        // Check for duplicate pubkeys in the same batch.
+        for (pubkey_votes, 0..) |current, i| {
+            for (pubkey_votes[i + 1 ..]) |next| {
+                if (current.pubkey.equals(&next.pubkey)) {
+                    return error.MultipleVotesForPubKey;
+                }
+            }
+        }
+        self.metrics.pubkey_vote_batch_size.set(pubkey_votes.len);
+
+        try self.latest_votes.ensureUnusedCapacity(allocator, pubkey_votes.len);
+        for (pubkey_votes) |pubkey_vote| {
+            const pubkey = pubkey_vote.pubkey;
+            const new_vote_slot_hash = pubkey_vote.slot_hash;
+            const new_vote_slot = new_vote_slot_hash.slot;
+            const new_vote_hash = new_vote_slot_hash.hash;
+
+            if (new_vote_slot < self.tree_root.slot) {
+                // Votes for slots older than the root are irrelevant
+                // because the root represents finalized consensus.
+                continue;
+            }
+
+            // Single lookup that handles both existing and new entries
+            const latest_vote_gop = try self.latest_votes.getOrPut(allocator, pubkey);
+            if (latest_vote_gop.found_existing) {
+                const old_latest_vote = latest_vote_gop.value_ptr.*;
+                const old_latest_vote_slot = old_latest_vote.slot;
+                const old_latest_vote_hash = old_latest_vote.hash;
+
+                // Filter out any votes or slots < any slot this pubkey has
+                // already voted for, we only care about the latest votes.
+                //
+                // If the new vote is for the same slot, but a different, smaller hash,
+                // then allow processing to continue as this is a duplicate version
+                // of the same slot.
+                if (new_vote_slot < old_latest_vote_slot or
+                    (new_vote_slot == old_latest_vote_slot and
+                        new_vote_hash.order(&old_latest_vote_hash) != .lt))
+                {
+                    continue;
+                }
+
+                const epoch = epoch_schedule.getEpoch(old_latest_vote_slot);
+                const stake_update = stake_update: {
+                    const stakes = epoch_stakes.get(epoch) orelse
+                        break :stake_update 0;
+                    const stake_and_vote_account =
+                        stakes.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
+                        break :stake_update 0;
+                    break :stake_update stake_and_vote_account.stake;
+                };
+
+                if (stake_update > 0) {
+                    self.subtractSlotStake(&old_latest_vote, stake_update);
+                    try ctx.subtractSlotStake(old_latest_vote, stake_update);
+
+                    var parent_iter = self.ancestorIterator(old_latest_vote);
+                    while (parent_iter.next()) |parent_slot_hash_key| {
+                        self.aggregateSlot(parent_slot_hash_key);
+                        try ctx.aggregateSlot(parent_slot_hash_key);
+                    }
+                }
+            }
+
+            // Update to new vote (whether new entry or replacing old)
+            latest_vote_gop.value_ptr.* = new_vote_slot_hash;
+
+            // Add this pubkey stake to new fork
+            const epoch = epoch_schedule.getEpoch(new_vote_slot_hash.slot);
+            const stake_update: u64 = stake_update: {
+                const stakes = epoch_stakes.get(epoch) orelse
+                    break :stake_update 0;
+                const stake_and_vote_account =
+                    stakes.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
+                    break :stake_update 0;
+                break :stake_update stake_and_vote_account.stake;
+            };
+
+            if (stake_update > 0) {
+                self.addSlotStake(&new_vote_slot_hash, stake_update);
+                try ctx.addSlotStake(new_vote_slot_hash, stake_update);
+
+                var parent_iter = self.ancestorIterator(new_vote_slot_hash);
+                while (parent_iter.next()) |parent_slot_hash_key| {
+                    self.aggregateSlot(parent_slot_hash_key);
+                    try ctx.aggregateSlot(parent_slot_hash_key);
+                }
+            }
+        }
 
         // Update metrics after processing votes
         self.updateMetrics();
@@ -563,7 +662,6 @@ pub const ForkChoice = struct {
         errdefer comptime unreachable;
 
         self.fork_infos.putAssumeCapacityNoClobber(root_parent, .{
-            .logger = .from(self.logger),
             .stake_for_slot = 0,
             .stake_for_subtree = root_info.stake_for_subtree,
             .height = root_info.height + 1,
@@ -635,30 +733,29 @@ pub const ForkChoice = struct {
             try newly_duplicate_confirmed_ancestors.register(ancestor_slot_hash_key);
         }
 
-        var update_operations: UpdateOperations = .empty;
-        defer update_operations.deinit(allocator);
-
-        // Notify all children that a parent was marked as valid.
-        var children_hash_keys = try self.subtreeDiff(
-            allocator,
-            valid_slot_hash_key,
-            &.{ .slot = 0, .hash = .ZEROES },
-        );
-        defer children_hash_keys.deinit(allocator);
-
-        try update_operations.ensureUnusedCapacity(allocator, children_hash_keys.count());
-        for (children_hash_keys.keys()) |child_hash_key| {
-            _ = try doInsertAggregateOperation(
+        { // Notify all children that a parent was marked as valid, from biggest to smallest slot.
+            var children_hash_keys = try self.subtreeDiff(
                 allocator,
-                &update_operations,
-                .{ .mark_valid = valid_slot_hash_key.slot },
-                child_hash_key,
+                valid_slot_hash_key,
+                &.{ .slot = 0, .hash = .ZEROES },
             );
+            defer children_hash_keys.deinit(allocator);
+
+            const children_hash_keys_keys = children_hash_keys.keys();
+            for (1..children_hash_keys_keys.len + 1) |i_plus_one| {
+                const rev_i = children_hash_keys.count() - i_plus_one;
+                const child_hash_key = children_hash_keys_keys[rev_i];
+
+                self.markForkValid(&child_hash_key, valid_slot_hash_key.slot);
+                self.aggregateSlot(child_hash_key);
+            }
         }
 
         // Aggregate across all ancestors to find new heaviest slots excluding this fork
-        try self.insertAggregateOperations(allocator, &update_operations, valid_slot_hash_key.*);
-        self.processUpdateOperations(&update_operations);
+        var parent_iter = self.ancestorIterator(valid_slot_hash_key.*);
+        while (parent_iter.next()) |parent_slot_hash_key| {
+            self.aggregateSlot(parent_slot_hash_key);
+        }
     }
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1330
@@ -675,30 +772,30 @@ pub const ForkChoice = struct {
             return error.DuplicateConfirmedCannotBeMarkedInvalid;
         }
 
-        var update_operations: UpdateOperations = .empty;
-        defer update_operations.deinit(allocator);
-
-        // Notify all children that a parent was marked as invalid
-        var children_hash_keys = try self.subtreeDiff(
-            allocator,
-            invalid_slot_hash_key,
-            &.{ .slot = 0, .hash = .ZEROES },
-        );
-        defer children_hash_keys.deinit(allocator);
-
-        try update_operations.ensureUnusedCapacity(allocator, children_hash_keys.count());
-        for (children_hash_keys.keys()) |child_hash_key| {
-            _ = try doInsertAggregateOperation(
+        {
+            // Notify all children that a parent was marked as invalid
+            var children_hash_keys = try self.subtreeDiff(
                 allocator,
-                &update_operations,
-                .{ .mark_invalid = invalid_slot_hash_key.slot },
-                child_hash_key,
+                invalid_slot_hash_key,
+                &.{ .slot = 0, .hash = .ZEROES },
             );
+            defer children_hash_keys.deinit(allocator);
+
+            const children_hash_keys_keys = children_hash_keys.keys();
+            for (1..children_hash_keys_keys.len + 1) |i_plus_one| {
+                const rev_i = children_hash_keys.count() - i_plus_one;
+                const child_hash_key = children_hash_keys_keys[rev_i];
+
+                self.markForkInvalid(child_hash_key, invalid_slot_hash_key.slot);
+                self.aggregateSlot(child_hash_key);
+            }
         }
 
         // Aggregate across all ancestors to find new heaviest slots excluding this fork
-        try self.insertAggregateOperations(allocator, &update_operations, invalid_slot_hash_key.*);
-        self.processUpdateOperations(&update_operations);
+        var parent_iter = self.ancestorIterator(invalid_slot_hash_key.*);
+        while (parent_iter.next()) |parent_slot_hash_key| {
+            self.aggregateSlot(parent_slot_hash_key);
+        }
     }
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L736
@@ -1039,212 +1136,6 @@ pub const ForkChoice = struct {
         return reachable_set;
     }
 
-    /// Generates update operations for the fork choice tree based on new validator votes.
-    ///
-    /// This function processes a batch of validator votes and produces operations to:
-    /// 1) Remove stake from old votes (if they exist)
-    /// 2) Add stake to new votes
-    /// 3) Generate aggregate operations for affected forks
-    ///
-    /// Key invariants:
-    /// - Votes older than the current tree root are ignored (they don't affect fork choice)
-    /// - Each pubkey can only appear once in the input batch
-    /// - Only the latest vote for each validator is considered (by slot, then by smallest hash)
-    /// - Stake is only updated if the validator has stake in the vote's epoch
-    ///
-    /// Analogous to [generate_update_operations](https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L969)
-    fn generateUpdateOperations(
-        self: *ForkChoice,
-        allocator: std.mem.Allocator,
-        pubkey_votes: []const PubkeyVote,
-        epoch_stakes: *const EpochStakesMap,
-        epoch_schedule: *const EpochSchedule,
-    ) !UpdateOperations {
-        var update_operations: UpdateOperations = .empty;
-        errdefer update_operations.deinit(allocator);
-
-        var observed_pubkeys: sig.utils.collections.PubkeyMap(Slot) = .empty;
-        defer observed_pubkeys.deinit(allocator);
-        try observed_pubkeys.ensureUnusedCapacity(allocator, pubkey_votes.len);
-
-        try self.latest_votes.ensureUnusedCapacity(allocator, @intCast(pubkey_votes.len));
-        for (pubkey_votes) |pubkey_vote| {
-            const pubkey = pubkey_vote.pubkey;
-            const new_vote_slot_hash = pubkey_vote.slot_hash;
-            const new_vote_slot = new_vote_slot_hash.slot;
-            const new_vote_hash = new_vote_slot_hash.hash;
-
-            if (new_vote_slot < self.tree_root.slot) {
-                // Votes for slots older than the root are irrelevant
-                // because the root represents finalized consensus.
-                continue;
-            }
-
-            // Check for duplicate pubkeys in the same batch
-            if (observed_pubkeys.contains(pubkey)) return error.MultipleVotesForPubKey;
-            observed_pubkeys.putAssumeCapacity(pubkey, new_vote_slot);
-
-            // Single lookup that handles both existing and new entries
-            const entry = try self.latest_votes.getOrPut(allocator, pubkey);
-            if (entry.found_existing) {
-                const old_latest_vote = entry.value_ptr.*;
-                const old_latest_vote_slot = old_latest_vote.slot;
-                const old_latest_vote_hash = old_latest_vote.hash;
-
-                // Filter out any votes or slots < any slot this pubkey has
-                // already voted for, we only care about the latest votes.
-                //
-                // If the new vote is for the same slot, but a different, smaller hash,
-                // then allow processing to continue as this is a duplicate version
-                // of the same slot.
-                if (new_vote_slot < old_latest_vote_slot or
-                    new_vote_slot == old_latest_vote_slot and
-                        new_vote_hash.order(&old_latest_vote_hash) != .lt)
-                {
-                    continue;
-                }
-
-                const epoch = epoch_schedule.getEpoch(old_latest_vote_slot);
-                const stake_update = stake_update: {
-                    const stakes = epoch_stakes.get(epoch) orelse
-                        break :stake_update 0;
-                    const stake_and_vote_account =
-                        stakes.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
-                        break :stake_update 0;
-                    break :stake_update stake_and_vote_account.stake;
-                };
-
-                if (stake_update > 0) {
-                    const subtract_op: UpdateOperation = .{ .subtract = stake_update };
-                    const subtract_label: SlotAndHashLabel = .{
-                        .slot_hash_key = old_latest_vote,
-                        .label = .subtract,
-                    };
-
-                    if (update_operations.getEntry(subtract_label)) |existing_op| {
-                        switch (existing_op.value_ptr.*) {
-                            .subtract => |*stake| stake.* += stake_update,
-                            else => {}, // Shouldn't happen for Subtract label
-                        }
-                    } else {
-                        try update_operations.put(allocator, subtract_label, subtract_op);
-                    }
-
-                    try self.insertAggregateOperations(
-                        allocator,
-                        &update_operations,
-                        old_latest_vote,
-                    );
-                }
-            }
-
-            // Update to new vote (whether new entry or replacing old)
-            entry.value_ptr.* = new_vote_slot_hash;
-
-            // Add this pubkey stake to new fork
-            const epoch = epoch_schedule.getEpoch(new_vote_slot_hash.slot);
-            const stake_update = stake_update: {
-                const stakes = epoch_stakes.get(epoch) orelse
-                    break :stake_update 0;
-                const stake_and_vote_account =
-                    stakes.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
-                    break :stake_update 0;
-                break :stake_update stake_and_vote_account.stake;
-            };
-
-            if (stake_update > 0) {
-                const add_op: UpdateOperation = .{ .add = stake_update };
-                const add_label: SlotAndHashLabel = .{
-                    .slot_hash_key = new_vote_slot_hash,
-                    .label = .add,
-                };
-
-                if (update_operations.getEntry(add_label)) |existing_op| {
-                    switch (existing_op.value_ptr.*) {
-                        .add => |*stake| stake.* += stake_update,
-                        else => {}, // Shouldn't happen for add label
-                    }
-                } else {
-                    try update_operations.put(allocator, add_label, add_op);
-                }
-
-                try self.insertAggregateOperations(
-                    allocator,
-                    &update_operations,
-                    new_vote_slot_hash,
-                );
-            }
-        }
-
-        return update_operations;
-    }
-
-    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1088
-    fn processUpdateOperations(
-        self: *const ForkChoice,
-        update_operations: *UpdateOperations,
-    ) void {
-        // Iterate through the update operations from greatest to smallest slot
-        // Sort the map to ensure keys are in order
-        update_operations.sort();
-        const keys, const values = update_operations.items();
-
-        // Iterate through the update operations from greatest to smallest slot
-        var i: usize = keys.len;
-        while (i > 0) {
-            i -= 1; // Move backward through the array
-            const slot_hash_key_label = keys[i];
-            const slot_hash_key = slot_hash_key_label.slot_hash_key;
-            const operation = values[i];
-            switch (operation) {
-                .mark_valid => |valid_slot| self.markForkValid(&slot_hash_key, valid_slot),
-                .mark_invalid => |invalid_slot| self.markForkInvalid(slot_hash_key, invalid_slot),
-                .aggregate => self.aggregateSlot(slot_hash_key),
-                .add => |stake| self.addSlotStake(&slot_hash_key, stake),
-                .subtract => |stake| self.subtractSlotStake(&slot_hash_key, stake),
-            }
-        }
-    }
-
-    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L780
-    fn insertAggregateOperations(
-        self: *const ForkChoice,
-        allocator: std.mem.Allocator,
-        update_operations: *UpdateOperations,
-        slot_hash_key: SlotAndHash,
-    ) !void {
-        try self.doInsertAggregateOperationsAcrossAncestors(
-            allocator,
-            update_operations,
-            null,
-            slot_hash_key,
-        );
-    }
-
-    /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L793
-    fn doInsertAggregateOperationsAcrossAncestors(
-        self: *const ForkChoice,
-        allocator: std.mem.Allocator,
-        update_operations: *UpdateOperations,
-        modify_fork_validity: ?UpdateOperation,
-        slot_hash_key: SlotAndHash,
-    ) !void {
-        var parent_iter = self.ancestorIterator(slot_hash_key);
-        while (parent_iter.next()) |parent_slot_hash_key| {
-            if (!try doInsertAggregateOperation(
-                allocator,
-                update_operations,
-                modify_fork_validity,
-                parent_slot_hash_key,
-            )) {
-                // If this parent was already inserted, we assume all the other parents have also
-                // already been inserted. This is to prevent iterating over the parents multiple times
-                // when we are aggregating leaves that have a lot of shared ancestors
-                break;
-            }
-        }
-    }
-
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L950
     ///
     /// Mark that `valid_slot` on the fork starting at `fork_to_modify_key` has been marked
@@ -1256,14 +1147,17 @@ pub const ForkChoice = struct {
         valid_slot: Slot,
     ) void {
         // Try to get a mutable reference to the fork info
-        if (self.fork_infos.getPtr(fork_to_modify_key.*)) |fork_info_to_modify| {
-            // Update the fork info with the newly valid ancestor
-            fork_info_to_modify.updateWithNewlyValidAncestor(fork_to_modify_key, valid_slot);
+        const fork_info_to_modify = self.fork_infos.getPtr(fork_to_modify_key.*) orelse return;
+        // Update the fork info with the newly valid ancestor
+        fork_info_to_modify.updateWithNewlyValidAncestor(
+            self.logger,
+            fork_to_modify_key,
+            valid_slot,
+        );
 
-            // If the fork's key matches the valid slot, mark it as duplicate confirmed
-            if (fork_to_modify_key.slot == valid_slot) {
-                fork_info_to_modify.is_duplicate_confirmed = true;
-            }
+        // If the fork's key matches the valid slot, mark it as duplicate confirmed
+        if (fork_to_modify_key.slot == valid_slot) {
+            fork_info_to_modify.is_duplicate_confirmed = true;
         }
     }
 
@@ -1278,10 +1172,13 @@ pub const ForkChoice = struct {
         invalid_slot: Slot,
     ) void {
         // Try to get a mutable reference to the fork info
-        if (self.fork_infos.getPtr(fork_to_modify_key)) |fork_info_to_modify| {
-            // Update the fork info with the newly invalid ancestor
-            fork_info_to_modify.updateWithNewlyInvalidAncestor(&fork_to_modify_key, invalid_slot);
-        }
+        const fork_info_to_modify = self.fork_infos.getPtr(fork_to_modify_key) orelse return;
+        // Update the fork info with the newly invalid ancestor
+        fork_info_to_modify.updateWithNewlyInvalidAncestor(
+            self.logger,
+            &fork_to_modify_key,
+            invalid_slot,
+        );
     }
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L850
@@ -1296,86 +1193,82 @@ pub const ForkChoice = struct {
         var is_duplicate_confirmed: bool = false;
 
         // Get the fork info for the given slot_hash_key
-        if (self.fork_infos.getPtr(slot_hash_key)) |fork_info| {
-            stake_for_subtree = fork_info.stake_for_slot;
+        // If the fork info does not exist, return early
+        const fork_info = self.fork_infos.getPtr(slot_hash_key) orelse return;
 
-            var heaviest_child_stake_for_subtree: u64 = 0;
-            var heaviest_child_slot_key: SlotAndHash = slot_hash_key;
-            var deepest_child_stake_for_subtree: u64 = 0;
-            var deepest_child_slot_key: SlotAndHash = slot_hash_key;
+        stake_for_subtree = fork_info.stake_for_slot;
 
-            // Iterate over the children of the current fork
-            for (fork_info.children.keys()) |child_key| {
-                const child_fork_info = self.fork_infos.get(child_key) orelse {
-                    std.debug.panic("Child must exist in fork_info map", .{});
-                };
+        var heaviest_child_stake_for_subtree: u64 = 0;
+        var heaviest_child_slot_key: SlotAndHash = slot_hash_key;
+        var deepest_child_stake_for_subtree: u64 = 0;
+        var deepest_child_slot_key: SlotAndHash = slot_hash_key;
 
-                const child_stake_for_subtree = child_fork_info.stake_for_subtree;
-                const child_height = child_fork_info.height;
-                is_duplicate_confirmed = is_duplicate_confirmed or
-                    child_fork_info.is_duplicate_confirmed;
+        // Iterate over the children of the current fork
+        for (fork_info.children.keys()) |child_key| {
+            const child_fork_info = self.fork_infos.get(child_key) orelse {
+                std.debug.panic("Child must exist in fork_info map", .{});
+            };
 
-                // Child forks that are not candidates still contribute to the weight
-                // of the subtree rooted at `slot_hash_key`. For instance:
-                //
-                // Build fork structure:
-                //
-                //
-                // (0)
-                // └── (1)
-                //     ├── (2)
-                //     │   └── (4)  <- 66%
-                //     └── (3)      <- 34%
-                //
-                //     If slot 4 is a duplicate slot, so no longer qualifies as a candidate until
-                //     the slot is confirmed, the weight of votes on slot 4 should still count towards
-                //     slot 2, otherwise we might pick slot 3 as the heaviest fork to build blocks on
-                //     instead of slot 2.
+            const child_stake_for_subtree = child_fork_info.stake_for_subtree;
+            const child_height = child_fork_info.height;
+            is_duplicate_confirmed = is_duplicate_confirmed or
+                child_fork_info.is_duplicate_confirmed;
 
-                // See comment above for why this check is outside of the `is_candidate` check.
+            // Child forks that are not candidates still contribute to the weight
+            // of the subtree rooted at `slot_hash_key`. For instance:
+            //
+            // Build fork structure:
+            //
+            //
+            // (0)
+            // └── (1)
+            //     ├── (2)
+            //     │   └── (4)  <- 66%
+            //     └── (3)      <- 34%
+            //
+            //     If slot 4 is a duplicate slot, so no longer qualifies as a candidate until
+            //     the slot is confirmed, the weight of votes on slot 4 should still count towards
+            //     slot 2, otherwise we might pick slot 3 as the heaviest fork to build blocks on
+            //     instead of slot 2.
 
-                // Add the child's stake to the subtree stake
-                stake_for_subtree += child_stake_for_subtree;
+            // See comment above for why this check is outside of the `is_candidate` check.
 
-                // Update the heaviest child if the child is a candidate and meets the conditions
-                if (child_fork_info.isCandidate() and
-                    (heaviest_child_slot_key.equals(slot_hash_key) or
-                        child_stake_for_subtree > heaviest_child_stake_for_subtree or
-                        (child_stake_for_subtree == heaviest_child_stake_for_subtree and
-                            child_key.order(heaviest_child_slot_key) == .lt)))
-                {
-                    heaviest_child_stake_for_subtree = child_stake_for_subtree;
-                    heaviest_child_slot_key = child_key;
-                    heaviest_slot_hash_key = child_fork_info.heaviest_subtree_slot;
-                }
+            // Add the child's stake to the subtree stake
+            stake_for_subtree += child_stake_for_subtree;
 
-                // Update the deepest child based on height, stake, and slot key
-                const is_first_child = deepest_child_slot_key.equals(slot_hash_key);
-                const is_deeper_child = child_height > deepest_child_height;
-                const is_heavier_child =
-                    child_stake_for_subtree > deepest_child_stake_for_subtree;
-                const is_earlier_child = child_key.order(deepest_child_slot_key) == .lt;
-
-                if (is_first_child or
-                    is_deeper_child or
-                    (child_height == deepest_child_height and is_heavier_child) or
-                    (child_height == deepest_child_height and
-                        child_stake_for_subtree == deepest_child_stake_for_subtree and
-                        is_earlier_child))
-                {
-                    deepest_child_height = child_height;
-                    deepest_child_stake_for_subtree = child_stake_for_subtree;
-                    deepest_child_slot_key = child_key;
-                    deepest_slot_hash_key = child_fork_info.deepest_slot;
-                }
+            // Update the heaviest child if the child is a candidate and meets the conditions
+            if (child_fork_info.isCandidate() and
+                (heaviest_child_slot_key.equals(slot_hash_key) or
+                    child_stake_for_subtree > heaviest_child_stake_for_subtree or
+                    (child_stake_for_subtree == heaviest_child_stake_for_subtree and
+                        child_key.order(heaviest_child_slot_key) == .lt)))
+            {
+                heaviest_child_stake_for_subtree = child_stake_for_subtree;
+                heaviest_child_slot_key = child_key;
+                heaviest_slot_hash_key = child_fork_info.heaviest_subtree_slot;
             }
-        } else {
-            // If the fork info does not exist, return early
-            return;
+
+            // Update the deepest child based on height, stake, and slot key
+            const is_first_child = deepest_child_slot_key.equals(slot_hash_key);
+            const is_deeper_child = child_height > deepest_child_height;
+            const is_heavier_child = child_stake_for_subtree > deepest_child_stake_for_subtree;
+            const is_earlier_child = child_key.order(deepest_child_slot_key) == .lt;
+
+            if (is_first_child or
+                is_deeper_child or
+                (child_height == deepest_child_height and is_heavier_child) or
+                (child_height == deepest_child_height and
+                    child_stake_for_subtree == deepest_child_stake_for_subtree and
+                    is_earlier_child))
+            {
+                deepest_child_height = child_height;
+                deepest_child_stake_for_subtree = child_stake_for_subtree;
+                deepest_child_slot_key = child_key;
+                deepest_slot_hash_key = child_fork_info.deepest_slot;
+            }
         }
 
         // Update the fork info with the aggregated values
-        const fork_info = self.fork_infos.getPtr(slot_hash_key).?;
         if (is_duplicate_confirmed and !fork_info.is_duplicate_confirmed) {
             self.logger.info().logf(
                 "Fork choice setting {} to duplicate confirmed",
@@ -1533,13 +1426,10 @@ pub const ForkChoice = struct {
     ) !void {
         const root = self.tree_root.slot;
 
-        var new_votes = std.ArrayListUnmanaged(PubkeyVote).empty;
+        var new_votes: std.ArrayListUnmanaged(PubkeyVote) = .empty;
         defer new_votes.deinit(allocator);
 
-        const dirty_votest = try latest_validator_votes.takeVotesDirtySet(
-            allocator,
-            root,
-        );
+        const dirty_votest = try latest_validator_votes.takeVotesDirtySet(allocator, root);
         defer allocator.free(dirty_votest);
 
         try new_votes.ensureUnusedCapacity(allocator, dirty_votest.len);
@@ -1582,18 +1472,16 @@ pub const ForkChoice = struct {
         const parent = split_tree_root.parent orelse
             return error.SplitNodeIsRoot;
 
-        var update_operations: UpdateOperations = .empty;
-        defer update_operations.deinit(allocator);
-
-        // Insert aggregate operations up to the root
-        try self.insertAggregateOperations(allocator, &update_operations, slot_hash_key);
-
         // Remove child link so that this slot cannot be chosen as best or deepest
         const parent_info = self.fork_infos.getPtr(parent) orelse return error.ParentNotFound;
         std.debug.assert(parent_info.children.orderedRemove(slot_hash_key));
 
-        // Aggregate
-        self.processUpdateOperations(&update_operations);
+        { // Insert aggregate operations up to the root
+            var parent_iter = self.ancestorIterator(slot_hash_key);
+            while (parent_iter.next()) |parent_slot_hash_key| {
+                self.aggregateSlot(parent_slot_hash_key);
+            }
+        }
 
         // Remove node + all children and add to new tree
         var split_tree_fork_infos: std.AutoArrayHashMapUnmanaged(SlotAndHash, ForkInfo) = .empty;
@@ -1668,52 +1556,6 @@ const AncestorIterator = struct {
         return self.current_slot_hash_key;
     }
 };
-
-/// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L814
-fn doInsertAggregateOperation(
-    allocator: std.mem.Allocator,
-    update_operations: *UpdateOperations,
-    modify_fork_validity: ?UpdateOperation,
-    slot_hash_key: SlotAndHash,
-) !bool {
-    const aggregate_label: SlotAndHashLabel = .{
-        .slot_hash_key = slot_hash_key,
-        .label = .aggregate,
-    };
-
-    if (update_operations.contains(aggregate_label)) {
-        return false;
-    }
-
-    if (modify_fork_validity) |mark_fork_validity| {
-        switch (mark_fork_validity) {
-            .mark_valid => |slot| {
-                try update_operations.put(
-                    allocator,
-                    .{
-                        .slot_hash_key = slot_hash_key,
-                        .label = .mark_valid,
-                    },
-                    .{ .mark_valid = slot },
-                );
-            },
-            .mark_invalid => |slot| {
-                try update_operations.put(
-                    allocator,
-                    .{
-                        .slot_hash_key = slot_hash_key,
-                        .label = .mark_invalid,
-                    },
-                    .{ .mark_invalid = slot },
-                );
-            },
-            else => {},
-        }
-    }
-
-    try update_operations.put(allocator, aggregate_label, .aggregate);
-    return true;
-}
 
 const createTestReplayTower = sig.consensus.replay_tower.createTestReplayTower;
 const createTestSlotHistory = sig.consensus.replay_tower.createTestSlotHistory;
@@ -3040,6 +2882,96 @@ test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_missing_candidate" {
     );
 }
 
+const UpdateOperations = std.MultiArrayList(struct {
+    key: SlotAndHash,
+    op: UpdateOperation,
+});
+
+const UpdateOperation = union(enum) {
+    add: u64,
+    mark_valid: Slot,
+    mark_invalid: Slot,
+    subtract: u64,
+    aggregate,
+};
+
+fn expectAddVotesUpdateOps(
+    fork_choice: *ForkChoice,
+    epoch_stakes: *const EpochStakesMap,
+    epoch_schedule: *const EpochSchedule,
+    pubkey_votes: []const PubkeyVote,
+    expected_slots_and_ops: []const struct { Slot, UpdateOperation },
+) !void {
+    if (!builtin.is_test) @compileError(
+        @src().fn_name ++ " is only intended for tests",
+    );
+
+    const allocator = std.testing.allocator;
+
+    var expected_update_operations: UpdateOperations = .empty;
+    defer expected_update_operations.deinit(allocator);
+    for (expected_slots_and_ops) |item| {
+        const slot, const update_op = item;
+        try expected_update_operations.append(
+            allocator,
+            .{ .key = .{ .slot = slot, .hash = .ZEROES }, .op = update_op },
+        );
+    }
+
+    var generated_update_operations: UpdateOperations = .empty;
+    defer generated_update_operations.deinit(allocator);
+
+    const add_votes_append_ctx: struct {
+        gpa: std.mem.Allocator,
+        update_operations: *UpdateOperations,
+
+        pub fn addSlotStake(ctx: @This(), slot_hash_key: SlotAndHash, stake: u64) !void {
+            try ctx.update_operations.append(ctx.gpa, .{
+                .key = slot_hash_key,
+                .op = .{ .add = stake },
+            });
+        }
+
+        pub fn subtractSlotStake(ctx: @This(), slot_hash_key: SlotAndHash, stake: u64) !void {
+            try ctx.update_operations.append(ctx.gpa, .{
+                .key = slot_hash_key,
+                .op = .{ .subtract = stake },
+            });
+        }
+
+        pub fn aggregateSlot(ctx: @This(), slot_hash_key: SlotAndHash) !void {
+            try ctx.update_operations.append(ctx.gpa, .{
+                .key = slot_hash_key,
+                .op = .aggregate,
+            });
+        }
+    } = .{
+        .gpa = allocator,
+        .update_operations = &generated_update_operations,
+    };
+
+    _ = try fork_choice.addVotesWithCallbacks(
+        allocator,
+        pubkey_votes,
+        epoch_stakes,
+        epoch_schedule,
+        add_votes_append_ctx,
+    );
+
+    const eks: []const SlotAndHash = expected_update_operations.items(.key);
+    const eus: []const UpdateOperation = expected_update_operations.items(.op);
+
+    const gks: []const SlotAndHash = generated_update_operations.items(.key);
+    const gus: []const UpdateOperation = generated_update_operations.items(.op);
+    for (eks, eus) |ek, eu| {
+        const found: usize = for (gks, gus, 0..) |gk, gu, i| {
+            if (eu != std.meta.activeTag(gu)) continue;
+            if (ek.equals(gk)) break i;
+        } else return error.NoMatchingSlotHash;
+        try std.testing.expectEqual(eu, gus[found]);
+    }
+}
+
 // Analogous to [test_generate_update_operations](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L2312)
 test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
     const allocator = std.testing.allocator;
@@ -3060,19 +2992,19 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
     try epoch_stakes.put(allocator, 0, versioned_stakes);
     try epoch_stakes.put(allocator, 1, versioned_stakes);
 
-    var fork_choice = try forkChoiceForTest(allocator, fork_tuples[0..]);
+    var fork_choice = try forkChoiceForTest(allocator, &fork_tuples);
     defer fork_choice.deinit(allocator);
 
-    {
-        const pubkey_votes = [_]PubkeyVote{
+    try expectAddVotesUpdateOps(
+        &fork_choice,
+        &epoch_stakes,
+        &EpochSchedule.INIT,
+        &.{
             .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = .ZEROES } },
             .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 4, .hash = .ZEROES } },
             .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 1, .hash = .ZEROES } },
-        };
-
-        var expected_update_operations: UpdateOperations = .empty;
-        defer expected_update_operations.deinit(allocator);
-        for ([_]struct { Slot, UpdateOperation }{
+        },
+        &.{
             // Add/remove from new/old forks
             .{ 1, .{ .add = stake } },
             .{ 3, .{ .add = stake } },
@@ -3082,63 +3014,36 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
             .{ 0, .aggregate },
             .{ 1, .aggregate },
             .{ 2, .aggregate },
-        }) |item| {
-            const slot, const update_op = item;
-            try expected_update_operations.put(
-                allocator,
-                .{ .slot_hash_key = .{ .slot = slot, .hash = .ZEROES }, .label = update_op },
-                update_op,
-            );
-        }
-
-        var generated_update_operations = try fork_choice.generateUpdateOperations(
-            allocator,
-            &pubkey_votes,
-            &epoch_stakes,
-            &EpochSchedule.INIT,
-        );
-        defer generated_update_operations.deinit(allocator);
-
-        try std.testing.expect(
-            try isUpdateOpsEqual(
-                &expected_update_operations,
-                &generated_update_operations,
-            ),
-        );
-    }
+        },
+    );
 
     // Everyone makes older/same votes, should be ignored
-    {
-        const pubkey_votes = [_]PubkeyVote{
+    try expectAddVotesUpdateOps(
+        &fork_choice,
+        &epoch_stakes,
+        &EpochSchedule.INIT,
+        &.{
             .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = .ZEROES } },
             .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 2, .hash = .ZEROES } },
             .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 1, .hash = .ZEROES } },
-        };
-
-        var generated_update_operations = try fork_choice.generateUpdateOperations(
-            allocator,
-            &pubkey_votes,
-            &epoch_stakes,
-            &EpochSchedule.INIT,
-        );
-        defer generated_update_operations.deinit(allocator);
-        try std.testing.expect(generated_update_operations.count() == 0);
-    }
+        },
+        &.{},
+    );
 
     // Some people make newer votes
-    {
-        const pubkey_votes = [_]PubkeyVote{
+    try expectAddVotesUpdateOps(
+        &fork_choice,
+        &epoch_stakes,
+        &EpochSchedule.INIT,
+        &.{
             // old, ignored
             .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 3, .hash = .ZEROES } },
             // new, switched forks
             .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 5, .hash = .ZEROES } },
             // new, same fork
             .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 3, .hash = .ZEROES } },
-        };
-
-        var expected_update_operations: UpdateOperations = .empty;
-        defer expected_update_operations.deinit(allocator);
-        for ([_]struct { Slot, UpdateOperation }{
+        },
+        &.{
             // Add/remove from new/old forks
             .{ 3, .{ .add = stake } },
             .{ 5, .{ .add = stake } },
@@ -3150,45 +3055,23 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
             .{ 1, .aggregate },
             .{ 2, .aggregate },
             .{ 3, .aggregate },
-        }) |item| {
-            const slot, const update_op = item;
-            try expected_update_operations.put(
-                allocator,
-                .{ .slot_hash_key = .{ .slot = slot, .hash = .ZEROES }, .label = update_op },
-                update_op,
-            );
-        }
-
-        var generated_update_operations = try fork_choice.generateUpdateOperations(
-            allocator,
-            &pubkey_votes,
-            &epoch_stakes,
-            &EpochSchedule.INIT,
-        );
-        defer generated_update_operations.deinit(allocator);
-
-        try std.testing.expect(
-            try isUpdateOpsEqual(
-                &expected_update_operations,
-                &generated_update_operations,
-            ),
-        );
-    }
+        },
+    );
 
     // People make new votes
-    {
-        const pubkey_votes = [_]PubkeyVote{
+    try expectAddVotesUpdateOps(
+        &fork_choice,
+        &epoch_stakes,
+        &EpochSchedule.INIT,
+        &.{
             // new, switch forks
             .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 4, .hash = .ZEROES } },
             // new, same fork
             .{ .pubkey = vote_pubkeys[1], .slot_hash = .{ .slot = 6, .hash = .ZEROES } },
             // new, same fork
             .{ .pubkey = vote_pubkeys[2], .slot_hash = .{ .slot = 6, .hash = .ZEROES } },
-        };
-
-        var expected_update_operations: UpdateOperations = .empty;
-        defer expected_update_operations.deinit(allocator);
-        for ([_]struct { Slot, UpdateOperation }{
+        },
+        &.{
             // Add/remove from new/old forks
             .{ 4, .{ .add = stake } },
             .{ 6, .{ .add = stake } },
@@ -3201,30 +3084,8 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
             .{ 2, .aggregate },
             .{ 3, .aggregate },
             .{ 5, .aggregate },
-        }) |item| {
-            const slot, const update_op = item;
-            try expected_update_operations.put(
-                allocator,
-                .{ .slot_hash_key = .{ .slot = slot, .hash = .ZEROES }, .label = update_op },
-                update_op,
-            );
-        }
-
-        var generated_update_operations = try fork_choice.generateUpdateOperations(
-            allocator,
-            &pubkey_votes,
-            &epoch_stakes,
-            &EpochSchedule.INIT,
-        );
-        defer generated_update_operations.deinit(allocator);
-
-        try std.testing.expect(
-            try isUpdateOpsEqual(
-                &expected_update_operations,
-                &generated_update_operations,
-            ),
-        );
-    }
+        },
+    );
 }
 
 // Analogous to [add_root_parent](https://github.com/anza-xyz/agave/blob/fac7555c94030ee08820261bfd53f4b3b4d0112e/core/src/consensus/heaviest_subtree_fork_choice.rs#L426)
@@ -5119,36 +4980,6 @@ const TestDuplicateForks = struct {
     }
 };
 
-fn isUpdateOpsEqual(expected: *UpdateOperations, actual: *UpdateOperations) !bool {
-    if (!builtin.is_test) {
-        @compileError("isUpdateOpsEqual should only be called in test mode");
-    }
-    const eks = expected.items()[0];
-    const gks = actual.items()[0];
-    try std.testing.expect(eks.len == gks.len);
-    for (eks) |ek| {
-        var found = false;
-        for (gks) |gk| {
-            if (ek.label == gk.label and ek.order(gk) == .eq) {
-                found = true;
-                break;
-            }
-        }
-        try std.testing.expect(found);
-    }
-
-    const eus = expected.items()[1];
-    const gus = actual.items()[1];
-    try std.testing.expect(eus.len == gus.len);
-    for (eus) |eu| {
-        const found: bool = for (gus) |gu| {
-            if (@intFromEnum(eu) == @intFromEnum(gu)) break true;
-        } else false;
-        try std.testing.expect(found);
-    }
-    return true;
-}
-
 pub fn testEpochStakes(
     allocator: std.mem.Allocator,
     pubkeys: []const Pubkey,
@@ -5161,24 +4992,21 @@ pub fn testEpochStakes(
 
     var vote_accounts: sig.core.vote_accounts.VoteAccounts = .{};
     errdefer vote_accounts.deinit(allocator);
+    try vote_accounts.vote_accounts.ensureUnusedCapacity(allocator, pubkeys.len);
 
     for (pubkeys) |pubkey| {
-        try vote_accounts.vote_accounts.put(
-            allocator,
-            pubkey,
-            .{
-                .stake = stake,
-                .account = try sig.core.vote_accounts.createRandomVoteAccount(
-                    allocator,
-                    random,
-                    Pubkey.initRandom(random),
-                ),
-            },
-        );
+        vote_accounts.vote_accounts.putAssumeCapacity(pubkey, .{
+            .stake = stake,
+            .account = try sig.core.vote_accounts.createRandomVoteAccount(
+                allocator,
+                random,
+                .initRandom(random),
+            ),
+        });
     }
 
-    const stakes = sig.core.epoch_stakes.EpochStakesGeneric(.delegation){
-        .stakes = sig.core.Stakes(.delegation){
+    return .{
+        .stakes = .{
             .vote_accounts = vote_accounts,
             .stake_delegations = .empty,
             .unused = 0,
@@ -5189,8 +5017,6 @@ pub fn testEpochStakes(
         .node_id_to_vote_accounts = .empty,
         .total_stake = pubkeys.len * stake,
     };
-
-    return stakes;
 }
 
 pub const ForkChoiceMetrics = struct {
@@ -5207,9 +5033,12 @@ pub const ForkChoiceMetrics = struct {
     total_stake_in_tree: *sig.prometheus.Gauge(u64),
 
     /// Number of fork choice updates - indicates consensus activity and health
-    fork_choice_updates: *sig.prometheus.Counter,
+    updates: *sig.prometheus.Counter,
     /// Time between fork choice updates (seconds) - performance and network health indicator
-    fork_choice_update_interval: *sig.prometheus.Histogram,
+    update_interval: *sig.prometheus.Histogram,
+
+    /// The number of pubkey votes added per batch.
+    pubkey_vote_batch_size: *sig.prometheus.Gauge(u64),
 
     pub const prefix = "fork_choice";
 
@@ -5219,13 +5048,13 @@ pub const ForkChoiceMetrics = struct {
 
     pub fn histogramBucketsForField(comptime field_name: []const u8) []const f64 {
         const HistogramKind = enum {
-            fork_choice_update_interval,
+            update_interval,
         };
 
         const time_interval_buckets = &.{ 0.001, 0.01, 0.1, 1, 10, 100, 1000 }; // seconds
 
         return switch (@field(HistogramKind, field_name)) {
-            .fork_choice_update_interval => time_interval_buckets,
+            .update_interval => time_interval_buckets,
         };
     }
 };
