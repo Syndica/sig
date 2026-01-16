@@ -272,12 +272,12 @@ fn resolveLookupTableAccounts(
         total_readonly += lookup.readonly_indexes.len;
     }
 
-    var writable_accounts = try std.ArrayListUnmanaged(Pubkey)
-        .initCapacity(allocator, total_writable);
+    var writable_accounts: std.ArrayListUnmanaged(Pubkey) =
+        try .initCapacity(allocator, total_writable);
     errdefer writable_accounts.deinit(allocator);
 
-    var readonly_accounts = try std.ArrayListUnmanaged(Pubkey)
-        .initCapacity(allocator, total_readonly);
+    var readonly_accounts: std.ArrayListUnmanaged(Pubkey) =
+        try .initCapacity(allocator, total_readonly);
     errdefer readonly_accounts.deinit(allocator);
 
     // handle lookup table accounts
@@ -294,19 +294,17 @@ fn resolveLookupTableAccounts(
         else
             table.meta.last_extended_slot_start_index;
 
+        std.debug.assert(table.meta.last_extended_slot_start_index <= table.addresses.len);
+
         // resolve writable addresses
         for (lookup.writable_indexes) |index| {
-            if (active_addresses_len <= index) {
-                return error.InvalidAddressLookupTableIndex;
-            }
+            if (index >= active_addresses_len) return error.InvalidAddressLookupTableIndex;
             writable_accounts.appendAssumeCapacity(table.addresses[index]);
         }
 
         // resolve readonly addresses
         for (lookup.readonly_indexes) |index| {
-            if (active_addresses_len <= index) {
-                return error.InvalidAddressLookupTableIndex;
-            }
+            if (index >= active_addresses_len) return error.InvalidAddressLookupTableIndex;
             readonly_accounts.appendAssumeCapacity(table.addresses[index]);
         }
     }
@@ -315,6 +313,99 @@ fn resolveLookupTableAccounts(
         .writable = try writable_accounts.toOwnedSlice(allocator),
         .readonly = try readonly_accounts.toOwnedSlice(allocator),
     };
+}
+
+test resolveLookupTableAccounts {
+    const allocator = std.testing.allocator;
+
+    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+
+    const slot = 1;
+
+    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
+    defer ancestors.deinit(allocator);
+
+    const account_reader: sig.accounts_db.SlotAccountReader = .{
+        .accounts_db_two = .{ &test_state.db, &ancestors },
+    };
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const table: AddressLookupTable = .{
+        .meta = .new(.initRandom(random)),
+        .addresses = &.{.initRandom(random)},
+    };
+
+    std.debug.assert(slot > table.meta.last_extended_slot);
+
+    const LOOKUP_TABLE_META_SIZE =
+        sig.runtime.program.address_lookup_table.state.LOOKUP_TABLE_META_SIZE;
+
+    var table_account_buf: [LOOKUP_TABLE_META_SIZE + @sizeOf(Pubkey)]u8 = undefined;
+    try AddressLookupTable.overwriteMetaData(&table_account_buf, table.meta);
+    @memcpy(
+        table_account_buf[LOOKUP_TABLE_META_SIZE..][0..@sizeOf(Pubkey)],
+        std.mem.asBytes(&table.addresses[0]),
+    );
+
+    const table_address: Pubkey = .initRandom(random);
+
+    try test_state.db.put(0, table_address, .{
+        .data = &table_account_buf,
+        .executable = false,
+        .lamports = 1,
+        .owner = sig.runtime.program.address_lookup_table.ID,
+        .rent_epoch = 0,
+    });
+
+    try std.testing.expectError(error.InvalidAddressLookupTableIndex, resolveLookupTableAccounts(
+        allocator,
+        account_reader,
+        &.{.{
+            .table_address = table_address,
+            .writable_indexes = &.{1}, // too large
+            .readonly_indexes = &.{0}, // the first key
+        }},
+        slot,
+        .INIT,
+    ));
+
+    try std.testing.expectError(error.InvalidAddressLookupTableIndex, resolveLookupTableAccounts(
+        allocator,
+        account_reader,
+        &.{.{
+            .table_address = table_address,
+            .writable_indexes = &.{0}, // the first key
+            .readonly_indexes = &.{1}, // too large
+        }},
+        slot,
+        .INIT,
+    ));
+
+    const actual = try resolveLookupTableAccounts(
+        allocator,
+        account_reader,
+        &.{.{
+            .table_address = table_address,
+            .writable_indexes = &.{0}, // the first key
+            .readonly_indexes = &.{0}, // the first key
+        }},
+        slot,
+        .INIT,
+    );
+    defer {
+        allocator.free(actual.readonly);
+        allocator.free(actual.writable);
+    }
+
+    const expected: LookupTableAccounts = .{
+        .readonly = table.addresses[0..1],
+        .writable = table.addresses[0..1],
+    };
+
+    try std.testing.expectEqualDeep(expected, actual);
 }
 
 fn getLookupTable(
