@@ -321,7 +321,7 @@ fn initTestDB(
     const dir = sig.TEST_STATE_DIR ++ "/blockstore";
     const path = comptimePrint("{s}/{s}/{s}", .{ dir, test_src.file, test_src.fn_name });
     try sig.ledger.tests.freshDir(path);
-    return try LedgerDB.open(allocator, .noop, path);
+    return try LedgerDB.open(allocator, .noop, path, false);
 }
 
 const InsertDataForBlockResult = struct {
