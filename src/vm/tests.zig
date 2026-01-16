@@ -86,6 +86,7 @@ fn testAsmWithMemory(
         m,
         &loader,
         stack_memory.len,
+        0,
         &tc,
     );
     defer vm.deinit();
@@ -2017,6 +2018,7 @@ test "pqr" {
             map,
             &loader,
             0,
+            0,
             &tc,
         );
         defer vm.deinit();
@@ -2031,7 +2033,6 @@ test "pqr divide by zero" {
     program[0] = @intFromEnum(OpCode.mov32_imm);
     program[16] = @intFromEnum(OpCode.exit_or_syscall);
 
-    // TODO: Why does this cause a transitive error when using inline?
     for ([_]OpCode{
         OpCode.udiv32_reg,
         OpCode.udiv64_reg,
@@ -2044,7 +2045,7 @@ test "pqr divide by zero" {
     }) |opcode| {
         program[8] = @intFromEnum(opcode);
 
-        const config: Config = .{ .maximum_version = .v2 };
+        const config: Config = .{ .maximum_version = .v4 };
 
         var registry: sig.vm.Registry = .{};
         var loader: SyscallMap = .ALL_DISABLED;
@@ -2058,7 +2059,7 @@ test "pqr divide by zero" {
         );
         defer executable.deinit(allocator);
 
-        const map = try MemoryMap.init(allocator, &.{}, .v3, .{});
+        const map = try MemoryMap.init(allocator, &.{}, .v4, .{});
         var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
         var cache, var tc = try createTransactionContext(
@@ -2076,6 +2077,7 @@ test "pqr divide by zero" {
             &executable,
             map,
             &loader,
+            0,
             0,
             &tc,
         );
@@ -2369,6 +2371,7 @@ pub fn testElfWithSyscalls(
         m,
         &loader,
         stack_memory.len,
+        0,
         &tc,
     );
     defer vm.deinit();
@@ -2461,7 +2464,7 @@ test "static syscall" {
 
 test "struct func pointer" {
     try testElfWithSyscalls(
-        .{},
+        .{ .minimum_version = .v3, .maximum_version = .v4 },
         sig.ELF_DATA_DIR ++ "struct_func_pointer.so",
         &.{},
         .{ 0x0102030405060708, 3 },
@@ -2608,7 +2611,7 @@ test "lddw cannot be last" {
 }
 
 test "invalid dst reg" {
-    inline for (.{ .v0, .v3 }) |sbpf_version| {
+    inline for (.{ .v0, .v4 }) |sbpf_version| {
         try testVerify(.{ .maximum_version = sbpf_version },
             \\entrypoint:
             \\  mov pc, 1
@@ -2618,7 +2621,7 @@ test "invalid dst reg" {
 }
 
 test "invalid src reg" {
-    inline for (.{ .v0, .v3 }) |sbpf_version| {
+    inline for (.{ .v0, .v4 }) |sbpf_version| {
         try testVerify(.{ .maximum_version = sbpf_version },
             \\entrypoint:
             \\  mov r0, pc
@@ -2671,7 +2674,7 @@ test "call lddw" {
 }
 
 test "callx r10" {
-    inline for (.{ .v0, .v3 }) |sbpf_version| {
+    inline for (.{ .v0, .v4 }) |sbpf_version| {
         try testVerify(.{ .maximum_version = sbpf_version },
             \\entrypoint:
             \\  callx r10
@@ -2838,7 +2841,7 @@ test "sdiv disabled" {
         "sdiv64 r0, 4",
         "sdiv64 r0, r1",
     }) |inst| {
-        inline for (.{ .v0, .v3 }) |sbpf_version| {
+        inline for (.{ .v0, .v4 }) |sbpf_version| {
             const assembly = try std.fmt.allocPrint(allocator,
                 \\entrypoint:
                 \\  {s}
@@ -2850,7 +2853,7 @@ test "sdiv disabled" {
                 assembly,
                 switch (sbpf_version) {
                     .v0 => error.UnsupportedInstruction,
-                    .v3 => {},
+                    .v4 => {},
                     else => unreachable,
                 },
             );
@@ -2859,7 +2862,7 @@ test "sdiv disabled" {
 }
 
 test "return instruction" {
-    inline for (.{ .v0, .v3 }) |sbpf_version| {
+    inline for (.{ .v0, .v4 }) |sbpf_version| {
         try testVerifyTextBytes(
             .{ .maximum_version = sbpf_version },
             &.{
@@ -2869,7 +2872,7 @@ test "return instruction" {
             },
             switch (sbpf_version) {
                 .v0 => error.UnsupportedInstruction,
-                .v3 => error.InvalidSyscall,
+                .v4 => error.InvalidSyscall,
                 else => unreachable,
             },
         );
@@ -2879,6 +2882,7 @@ test "return instruction" {
 test "return in v2" {
     try testVerify(.{},
         \\entrypoint:
+        \\  add64 r10, 0
         \\  mov r0, 2
         \\  return
     , {});
@@ -2887,6 +2891,7 @@ test "return in v2" {
 test "function without return" {
     try testVerify(.{},
         \\entrypoint:
+        \\  add64 r10, 0
         \\  mov r0, 2
         \\  add64 r0, 5
     , error.InvalidFunction);
@@ -2903,8 +2908,9 @@ pub fn testSyscall(
     ) anyerror!void,
     config: struct {
         align_memory_map: bool = false,
-        version: sbpf.Version = .v3,
+        version: sbpf.Version = .v4,
         compute_meter: u64 = 10_000,
+        feature_set: []const sig.runtime.testing.ExecuteContextsParams.FeatureParams = &.{},
     },
 ) !void {
     const testing = sig.runtime.testing;
@@ -2917,6 +2923,7 @@ pub fn testSyscall(
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }},
         .compute_meter = config.compute_meter,
+        .feature_set = config.feature_set,
     });
     defer {
         sig.runtime.testing.deinitTransactionContext(allocator, &tc);

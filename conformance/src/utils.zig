@@ -74,7 +74,7 @@ pub fn createTransactionContext(
         ptr
     else
         try allocator.create(FeatureSet);
-    feature_set.* = try createFeatureSet(instr_ctx);
+    feature_set.* = try loadFeatureSet(instr_ctx);
 
     const epoch_stakes = if (environment.epoch_stakes) |ptr|
         ptr
@@ -108,6 +108,7 @@ pub fn createTransactionContext(
     const log_collector = try sig.runtime.LogCollector.default(allocator);
     errdefer log_collector.deinit(allocator);
 
+    const slot = if (instr_ctx.slot_context) |slot_ctx| slot_ctx.slot else 0;
     tc.* = TransactionContext{
         .allocator = allocator,
         .feature_set = feature_set,
@@ -126,13 +127,16 @@ pub fn createTransactionContext(
         .return_data = .{},
         .accounts_resize_delta = 0,
         .compute_meter = instr_ctx.cu_avail,
-        .compute_budget = .init(instr_ctx.cu_avail),
+        .compute_budget = .init(
+            instr_ctx.cu_avail,
+            feature_set.active(.increase_cpi_account_info_limit, slot),
+        ),
         .custom_error = null,
         .log_collector = log_collector,
         .rent = sysvar_cache.get(sysvar.Rent) catch sysvar.Rent.INIT,
         .prev_blockhash = sig.core.Hash.ZEROES,
         .prev_lamports_per_signature = 0,
-        .slot = if (instr_ctx.slot_context) |slot_ctx| slot_ctx.slot else 0,
+        .slot = slot,
     };
     errdefer comptime unreachable;
 
@@ -169,18 +173,14 @@ pub fn deinitTransactionContext(
     tc.deinit();
 }
 
-pub fn createFeatureSet(pb_ctx: pb.InstrContext) !FeatureSet {
-    errdefer |err| {
-        std.debug.print("createFeatureSet: error={}\n", .{err});
-    }
-
-    const pb_epoch_context = pb_ctx.epoch_context orelse return FeatureSet.ALL_DISABLED;
-    const pb_feature_set = pb_epoch_context.features orelse return FeatureSet.ALL_DISABLED;
+pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
+    const epoch_context = ctx.epoch_context orelse return .ALL_DISABLED;
+    const pb_features = epoch_context.features orelse return .ALL_DISABLED;
 
     var feature_set: FeatureSet = .ALL_DISABLED;
-    for (pb_feature_set.features.items) |id| {
-        // only way for `setSlotId` to return an error is if the `id` didn't match.
-        feature_set.setSlotId(id, 0) catch continue;
+    for (pb_features.features.items) |id| {
+        // only way for `setSlotId` to fail is if the `id` doesn't exist.
+        feature_set.setSlotId(id, 0) catch std.debug.panic("unknown id: 0x{x}", .{id});
     }
     return feature_set;
 }

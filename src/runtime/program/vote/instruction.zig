@@ -487,6 +487,12 @@ pub const Instruction = union(enum(u32)) {
     }
 };
 
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/programs/vote/src/vote_state/handler.rs#L639-L645
+pub const Version = enum(u32) {
+    v3,
+    v4,
+};
+
 /// Helper function for more concisely initializing the account lists when serializing an instruction.
 fn accountMeta(
     pubkey: Pubkey,

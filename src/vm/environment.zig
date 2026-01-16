@@ -1,3 +1,4 @@
+const std = @import("std");
 const sig = @import("../sig.zig");
 const tracy = @import("tracy");
 
@@ -66,15 +67,14 @@ pub const Environment = struct {
             .enable_sbpf_v1_deployment_and_execution,
             slot,
         )) .v1 else .v0;
+        std.debug.assert(@intFromEnum(min_sbpf_version) <= @intFromEnum(max_sbpf_version));
 
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/syscalls/src/lib.rs#L319
         return .{
             .max_call_depth = compute_budget.max_call_depth,
             .stack_frame_size = compute_budget.stack_frame_size,
             .enable_address_translation = true,
-            .enable_stack_frame_gaps = !feature_set.active(
-                .bpf_account_data_direct_mapping,
-                slot,
-            ),
+            .enable_stack_frame_gaps = true,
             .instruction_meter_checkpoint_distance = 10000,
             .enable_instruction_meter = true,
             .enable_instruction_tracing = debugging_features,
@@ -84,7 +84,7 @@ pub const Environment = struct {
             .sanitize_user_provided_values = true,
             .optimize_rodata = false,
             .aligned_memory_mapping = !feature_set.active(
-                .bpf_account_data_direct_mapping,
+                .stricter_abi_and_runtime_constraints,
                 slot,
             ),
             .minimum_version = min_sbpf_version,
