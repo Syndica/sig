@@ -166,10 +166,7 @@ pub const ExecutionErrorKind = enum(u8) {
 pub const ExecutionError = SyscallError ||
     EbpfError ||
     InstructionError ||
-    error{
-        OutOfMemory,
-        Overflow,
-    };
+    error{OutOfMemory};
 
 pub fn getExecutionErrorKind(err: ExecutionError) ExecutionErrorKind {
     return convertExecutionError(err)[1];

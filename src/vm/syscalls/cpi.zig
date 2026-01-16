@@ -715,7 +715,7 @@ fn translateAccounts(
             account_data_direct_mapping,
         );
 
-        try accounts.append(.{
+        accounts.appendAssumeCapacity(.{
             .index_in_caller = index_in_caller,
             .caller_account = caller_account,
             .update_caller_account_region = meta.is_writable or update_caller,
@@ -1024,7 +1024,7 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
             tc: *TransactionContext,
             memory_map: *MemoryMap,
             registers: *RegisterMap,
-        ) !void {
+        ) Error!void {
             const instruction_addr = registers.get(.r1);
             const account_infos_addr = registers.get(.r2);
             const account_infos_len = registers.get(.r3);
@@ -1388,7 +1388,7 @@ test "CallerAccount.fromAccountInfoRust" {
             memory.Region.init(.mutable, &.{}, memory.HEAP_START), // nothing in the heap,
             memory.Region.init(.mutable, buffer, vm_addr), // INPUT_START
         },
-        .v3,
+        .v2,
         .{ .aligned_memory_mapping = false },
     );
     defer memory_map.deinit(allocator);
@@ -1444,7 +1444,7 @@ test "CallerAccount.fromAccountInfoC" {
             memory.Region.init(.mutable, buffer, memory.HEAP_START),
             // no INPUT_START
         },
-        .v3,
+        .v2,
         .{},
     );
     defer memory_map.deinit(allocator);
@@ -1528,7 +1528,7 @@ test "translateAccounts" {
             memory.Region.init(.mutable, &.{}, memory.HEAP_START), // nothing in the heap,
             memory.Region.init(.mutable, buffer, vm_addr), // INPUT_START
         },
-        .v3,
+        .v2,
         .{ .aligned_memory_mapping = false },
     );
     defer memory_map.deinit(allocator);
@@ -1688,7 +1688,7 @@ fn testTranslateInstruction(comptime AccountInfoType: type) !void {
             memory.Region.init(.mutable, &.{}, memory.HEAP_START),
             memory.Region.init(.mutable, buffer, vm_addr),
         },
-        .v3,
+        .v2,
         .{ .aligned_memory_mapping = false },
     );
     defer memory_map.deinit(allocator);
@@ -1750,7 +1750,7 @@ test "translateSigners" {
             memory.Region.init(.mutable, &.{}, memory.HEAP_START),
             memory.Region.init(.mutable, buffer, memory.INPUT_START),
         },
-        .v3,
+        .v2,
         .{ .aligned_memory_mapping = false },
     );
     defer memory_map.deinit(allocator);
@@ -1856,7 +1856,7 @@ const TestCallerAccount = struct {
             .memory_map = try MemoryMap.init(
                 allocator,
                 pinned_regions,
-                .v3,
+                .v2,
                 .{ .aligned_memory_mapping = false },
             ),
         };
@@ -2329,7 +2329,7 @@ fn testCpiCommon(comptime AccountType: type) !void {
                 memory.Region.init(.mutable, account_info_buffer, account_info_addr),
                 memory.Region.init(.mutable, account_data_buffer, account_data_addr),
             },
-            .v3,
+            .v2,
             .{ .aligned_memory_mapping = false },
         );
         defer memory_map.deinit(allocator);

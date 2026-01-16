@@ -73,29 +73,29 @@ fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEff
     const duped_elf_bytes = try allocator.dupe(u8, elf_bytes);
     defer allocator.free(duped_elf_bytes);
 
-    var elf = Elf.parse(allocator, duped_elf_bytes, &loader, config) catch {
-        return elf_effects;
-    };
-    errdefer elf.deinit(allocator);
-
-    var executable = Executable.fromElf(elf);
+    var executable = Elf.load(
+        allocator,
+        duped_elf_bytes,
+        &loader,
+        config,
+    ) catch return elf_effects;
     defer executable.deinit(allocator);
 
     const ro_data = switch (executable.ro_section) {
         .owned => |o| o.data,
         .borrowed => |a| executable.bytes[a.start..a.end],
     };
-    const text_bytes_index = elf.getShdrIndexByName(".text").?;
-    const text_bytes = try elf.headers.shdrSlice(text_bytes_index);
+
+    elf_effects.@"error" = 0;
     elf_effects.rodata = try protobuf.ManagedString.copy(ro_data, allocator);
     elf_effects.rodata_sz = ro_data.len;
     elf_effects.entry_pc = executable.entry_pc;
     elf_effects.text_off = executable.text_vaddr - memory.RODATA_START;
-    elf_effects.text_cnt = text_bytes.len / 8;
+    elf_effects.text_cnt = executable.instructions.len;
 
-    var map_iter = executable.function_registry.map.iterator();
     var calldests: std.AutoHashMapUnmanaged(u64, void) = .{};
     defer calldests.deinit(allocator);
+    var map_iter = executable.function_registry.map.iterator();
     while (map_iter.next()) |entry| {
         const fn_addr = entry.value_ptr.value;
         try calldests.put(allocator, fn_addr, {});

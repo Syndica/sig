@@ -17,11 +17,7 @@ pub const Version = enum(u32) {
     v1,
     /// SIMD-0174, SIMD-0173
     v2,
-    /// SIMD-0178, SIMD-0179, SIMD-0189
-    v3,
-    /// support other versions as well!
     reserved,
-    _,
 
     /// Enable SIMD-0166: SBPF dynamic stack frames
     pub fn enableDynamicStackFrames(version: Version) bool {
@@ -61,18 +57,27 @@ pub const Version = enum(u32) {
         return version.gte(.v2);
     }
 
+    // For sBPF v3, we simply assume it will never be used. Agave has not finalized
+    // the design, and none of our tests should be testing it. It would be a large
+    // maintance burden to keep updating it.
+    // That said, just for easy of migration once they do land on a design, we're
+    // keeping the helper function but hardcoded to false.
+
     /// Enable SIMD-0178: SBPF Static Syscalls
+    pub inline fn enableStaticSyscalls(_: Version) bool {
+        return false;
+    }
     /// Enable SIMD-0179: SBPF stricter verification constraints
-    pub fn enableStaticSyscalls(version: Version) bool {
-        return version.gte(.v3);
+    pub inline fn enableStricterVerification(_: Version) bool {
+        return false;
     }
     /// Enable SIMD-0189: SBPF stricter ELF headers
-    pub fn enableStricterElfHeaders(version: Version) bool {
-        return version.gte(.v3);
+    pub inline fn enableStricterElfHeaders(_: Version) bool {
+        return false;
     }
     /// ... SIMD-0189
-    pub fn enableLowerBytecodeVaddr(version: Version) bool {
-        return version.gte(.v3);
+    pub inline fn enableLowerBytecodeVaddr(_: Version) bool {
+        return false;
     }
 
     /// Ensure that rodata sections don't exceed their maximum allowed size and
@@ -719,6 +724,10 @@ pub const Instruction = packed struct(u64) {
             return error.CannotWriteR10;
         }
         return error.InvalidDestinationRegister;
+    }
+
+    pub fn isFunctionStartMarker(inst: Instruction) bool {
+        return inst.opcode == .add64_imm and inst.dst == .r10;
     }
 
     pub fn format(

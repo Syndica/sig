@@ -2033,7 +2033,6 @@ test "pqr divide by zero" {
     program[0] = @intFromEnum(OpCode.mov32_imm);
     program[16] = @intFromEnum(OpCode.exit_or_syscall);
 
-    // TODO: Why does this cause a transitive error when using inline?
     for ([_]OpCode{
         OpCode.udiv32_reg,
         OpCode.udiv64_reg,
@@ -2060,7 +2059,7 @@ test "pqr divide by zero" {
         );
         defer executable.deinit(allocator);
 
-        const map = try MemoryMap.init(allocator, &.{}, .v3, .{});
+        const map = try MemoryMap.init(allocator, &.{}, .v2, .{});
         var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
         var cache, var tc = try createTransactionContext(
@@ -2315,8 +2314,7 @@ pub fn testElfWithSyscalls(
     var loader: SyscallMap = .ALL_DISABLED;
     for (extra_syscalls) |syscall| loader.enable(syscall);
 
-    const elf = try Elf.parse(allocator, bytes, &loader, config);
-    var executable = Executable.fromElf(elf);
+    var executable = try Elf.load(allocator, bytes, &loader, config);
     defer executable.deinit(allocator);
 
     try executable.verify(&loader);
@@ -2465,7 +2463,7 @@ test "static syscall" {
 
 test "struct func pointer" {
     try testElfWithSyscalls(
-        .{},
+        .{ .minimum_version = .v0, .maximum_version = .v2 },
         sig.ELF_DATA_DIR ++ "struct_func_pointer.so",
         &.{},
         .{ 0x0102030405060708, 3 },
@@ -2612,7 +2610,7 @@ test "lddw cannot be last" {
 }
 
 test "invalid dst reg" {
-    inline for (.{ .v0, .v3 }) |sbpf_version| {
+    inline for (.{ .v0, .v2 }) |sbpf_version| {
         try testVerify(.{ .maximum_version = sbpf_version },
             \\entrypoint:
             \\  mov pc, 1
@@ -2622,7 +2620,7 @@ test "invalid dst reg" {
 }
 
 test "invalid src reg" {
-    inline for (.{ .v0, .v3 }) |sbpf_version| {
+    inline for (.{ .v0, .v2 }) |sbpf_version| {
         try testVerify(.{ .maximum_version = sbpf_version },
             \\entrypoint:
             \\  mov r0, pc
@@ -2675,7 +2673,7 @@ test "call lddw" {
 }
 
 test "callx r10" {
-    inline for (.{ .v0, .v3 }) |sbpf_version| {
+    inline for (.{ .v0, .v2 }) |sbpf_version| {
         try testVerify(.{ .maximum_version = sbpf_version },
             \\entrypoint:
             \\  callx r10
@@ -2715,7 +2713,7 @@ test "invalid return" {
         &.{
             0x9d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         },
-        error.UnsupportedInstruction,
+        error.UnknownOpCode,
     );
 }
 
@@ -2734,7 +2732,7 @@ test "unknown syscall" {
         .{},
         &.{
             0x95, 0x00, 0x00, 0x00, 0xBD, 0x59, 0x75, 0x20, // syscall sol_log_
-            0x9d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // return
+            0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // return
         },
         error.InvalidSyscall,
     );
@@ -2745,7 +2743,7 @@ test "known syscall" {
         .{},
         &.{
             0x95, 0x00, 0x00, 0x00, 0xBD, 0x59, 0x75, 0x20, // syscall sol_log_
-            0x9d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // return
+            0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // return
         },
         &.{.sol_log_},
         {},
@@ -2765,7 +2763,7 @@ test "neg invalid on v3" {
         \\entrypoint:
         \\  neg32 r0
         \\  exit
-    , error.UnsupportedInstruction);
+    , error.UnknownOpCode);
 }
 
 test "lddw invalid on v3" {
@@ -2773,7 +2771,7 @@ test "lddw invalid on v3" {
         \\entrypoint:
         \\  lddw r0, 0x1122334455667788
         \\  exit
-    , error.UnsupportedInstruction);
+    , error.UnknownOpCode);
 }
 
 test "le invalid on v3" {
@@ -2781,19 +2779,19 @@ test "le invalid on v3" {
         \\entrypoint:
         \\  le16 r0
         \\  exit
-    , error.UnsupportedInstruction);
+    , error.UnknownOpCode);
 
     try testVerify(.{},
         \\entrypoint:
         \\  le32 r0
         \\  exit
-    , error.UnsupportedInstruction);
+    , error.UnknownOpCode);
 
     try testVerify(.{},
         \\entrypoint:
         \\  le64 r0
         \\  exit
-    , error.UnsupportedInstruction);
+    , error.UnknownOpCode);
 }
 
 test "shift overflows" {
@@ -2842,7 +2840,7 @@ test "sdiv disabled" {
         "sdiv64 r0, 4",
         "sdiv64 r0, r1",
     }) |inst| {
-        inline for (.{ .v0, .v3 }) |sbpf_version| {
+        inline for (.{ .v0, .v2 }) |sbpf_version| {
             const assembly = try std.fmt.allocPrint(allocator,
                 \\entrypoint:
                 \\  {s}
@@ -2853,8 +2851,8 @@ test "sdiv disabled" {
                 .{ .maximum_version = sbpf_version },
                 assembly,
                 switch (sbpf_version) {
-                    .v0 => error.UnsupportedInstruction,
-                    .v3 => {},
+                    .v0 => error.UnknownOpCode,
+                    .v2 => {},
                     else => unreachable,
                 },
             );
@@ -2863,7 +2861,7 @@ test "sdiv disabled" {
 }
 
 test "return instruction" {
-    inline for (.{ .v0, .v3 }) |sbpf_version| {
+    inline for (.{ .v0, .v2 }) |sbpf_version| {
         try testVerifyTextBytes(
             .{ .maximum_version = sbpf_version },
             &.{
@@ -2871,11 +2869,7 @@ test "return instruction" {
                 0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // exit (v1), syscall (v2)
                 0x9d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // return
             },
-            switch (sbpf_version) {
-                .v0 => error.UnsupportedInstruction,
-                .v3 => error.InvalidSyscall,
-                else => unreachable,
-            },
+            error.UnknownOpCode,
         );
     }
 }
@@ -2885,15 +2879,7 @@ test "return in v2" {
         \\entrypoint:
         \\  mov r0, 2
         \\  return
-    , {});
-}
-
-test "function without return" {
-    try testVerify(.{},
-        \\entrypoint:
-        \\  mov r0, 2
-        \\  add64 r0, 5
-    , error.InvalidFunction);
+    , error.UnknownOpCode);
 }
 
 pub fn testSyscall(
@@ -2907,7 +2893,7 @@ pub fn testSyscall(
     ) anyerror!void,
     config: struct {
         align_memory_map: bool = false,
-        version: sbpf.Version = .v3,
+        version: sbpf.Version = .v2,
         compute_meter: u64 = 10_000,
         feature_set: []const sig.runtime.testing.ExecuteContextsParams.FeatureParams = &.{},
     },

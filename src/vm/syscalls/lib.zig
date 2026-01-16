@@ -795,7 +795,7 @@ fn callProgramAddressSyscall(
         }
     }.less);
 
-    var memory_map = try MemoryMap.init(allocator, regions.items, .v3, .{});
+    var memory_map = try MemoryMap.init(allocator, regions.items, .v2, .{});
     defer memory_map.deinit(allocator);
 
     var registers = RegisterMap.initFill(0);
@@ -829,7 +829,7 @@ test findProgramAddress {
     }
 
     const cost = tc.compute_budget.create_program_address_units;
-    const address = sig.runtime.program.bpf_loader.v3.ID;
+    const address = sig.runtime.program.bpf_loader.v2.ID;
     const max_tries: u64 = 256; // once per seed
 
     for (0..1000) |_| {
@@ -947,7 +947,7 @@ test createProgramAddress {
     }
 
     const cost = tc.compute_budget.create_program_address_units;
-    const address = sig.runtime.program.bpf_loader.v3.ID;
+    const address = sig.runtime.program.bpf_loader.v2.ID;
     tc.compute_meter = cost * 12; // enough for 12 calls to createProgramAddress
 
     const exceeded_seed: []const u8 = &([_]u8{127} ** (pubkey_utils.MAX_SEED_LEN + 1));
@@ -1122,7 +1122,7 @@ test allocFree {
             memory.Region.init(.mutable, &.{}, memory.STACK_START),
             memory.Region.init(.mutable, heap, memory.HEAP_START),
         },
-        .v3,
+        .v2,
         .{},
     );
     defer memory_map.deinit(allocator);
@@ -1221,7 +1221,7 @@ test getProcessedSiblingInstruction {
     var memory_map = try MemoryMap.init(
         allocator,
         &.{memory.Region.init(.mutable, &buffer, vm_addr)},
-        .v3,
+        .v2,
         .{},
     );
     defer memory_map.deinit(allocator);
@@ -1340,7 +1340,7 @@ test getEpochStake {
     {
         tc.compute_meter = tc.compute_budget.syscall_base_cost;
 
-        var memory_map = try MemoryMap.init(allocator, &.{}, .v3, .{});
+        var memory_map = try MemoryMap.init(allocator, &.{}, .v2, .{});
         defer memory_map.deinit(allocator);
 
         var registers = RegisterMap.initFill(0);
@@ -1363,7 +1363,7 @@ test getEpochStake {
 
         var memory_map = try MemoryMap.init(allocator, &.{
             memory.Region.init(.constant, vote_buffer, vote_addr),
-        }, .v3, .{});
+        }, .v2, .{});
         defer memory_map.deinit(allocator);
 
         var registers = RegisterMap.initFill(0);
@@ -1386,7 +1386,7 @@ test getEpochStake {
 
         var memory_map = try MemoryMap.init(allocator, &.{
             memory.Region.init(.constant, vote_buffer, vote_addr),
-        }, .v3, .{});
+        }, .v2, .{});
         defer memory_map.deinit(allocator);
 
         var registers = RegisterMap.initFill(0);
@@ -1411,7 +1411,7 @@ test getEpochStake {
 
         var memory_map = try MemoryMap.init(allocator, &.{
             memory.Region.init(.constant, vote_buffer, vote_addr),
-        }, .v3, .{});
+        }, .v2, .{});
         defer memory_map.deinit(allocator);
 
         var registers = RegisterMap.initFill(0);
@@ -1472,7 +1472,7 @@ test "set and get return data" {
         memory.Region.init(.constant, &data, src_addr),
         memory.Region.init(.mutable, &data_buffer, dst_addr),
         memory.Region.init(.mutable, &id_buffer, program_id_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     {

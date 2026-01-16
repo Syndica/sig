@@ -21,41 +21,6 @@ pub const Executable = struct {
     function_registry: Registry,
     config: Config,
 
-    /// Takes ownership of the `Elf`.
-    pub fn fromElf(elf: Elf) Executable {
-        const text_section_addr = elf.getShdrByName(".text").?.sh_addr;
-        const text_vaddr = if (elf.version.enableElfVaddr() and
-            text_section_addr >= memory.RODATA_START)
-            text_section_addr
-        else
-            text_section_addr +| memory.RODATA_START;
-
-        return .{
-            .bytes = elf.bytes,
-            .ro_section = elf.ro_section,
-            .instructions = elf.getInstructions(),
-            .version = elf.version,
-            .entry_pc = elf.entry_pc,
-            .from_asm = false,
-            .text_vaddr = text_vaddr,
-            .function_registry = elf.function_registry,
-            .config = elf.config,
-        };
-    }
-
-    pub fn fromBytes(
-        allocator: std.mem.Allocator,
-        source: []u8,
-        loader: *const SyscallMap,
-        config: Config,
-    ) !Executable {
-        const zone = tracy.Zone.init(@src(), .{ .name = "Executable.fromBytes" });
-        defer zone.deinit();
-
-        const elf = try Elf.parse(allocator, source, loader, config);
-        return fromElf(elf);
-    }
-
     pub fn fromAsm(
         allocator: std.mem.Allocator,
         source: []const u8,
@@ -123,10 +88,29 @@ pub const Executable = struct {
         };
     }
 
+    const VerifierError = error{
+        NoProgram,
+        DivisionByZero,
+        UnsupportedLEBEArgument,
+        LddwCannotBeLast,
+        IncompleteLddw,
+        JumpOutOfCode,
+        InvalidSourceRegister,
+        CannotWriteR10,
+        InvalidDestinationRegister,
+        UnknownOpCode,
+        InvalidRegister,
+        InvalidSyscall,
+        InvalidFunction,
+        UnalignedImmediate,
+        ShiftWithOverflow,
+        JumpToMiddleOfLddw,
+    };
+
     pub fn verify(
         self: *const Executable,
         loader: *const SyscallMap,
-    ) !void {
+    ) VerifierError!void {
         const zone = tracy.Zone.init(@src(), .{ .name = "Executable.Verify" });
         defer zone.deinit();
 
@@ -134,8 +118,6 @@ pub const Executable = struct {
         const instructions = self.instructions;
         if (instructions.len == 0) return error.NoProgram;
 
-        const map = self.function_registry.map;
-        var iter = map.iterator();
         var function_start: u64 = 0;
         var function_end: u64 = instructions.len;
 
@@ -144,11 +126,16 @@ pub const Executable = struct {
             const inst = instructions[pc];
             var store: bool = false;
 
-            if (version.enableStaticSyscalls() and map.contains(pc)) {
-                function_start = if (iter.next()) |entry| entry.key_ptr.* else 0;
-                const before_index = iter.index;
-                function_end = if (iter.next()) |entry| entry.key_ptr.* else instructions.len;
-                iter.index = before_index;
+            if (version.enableStricterVerification() and inst.isFunctionStartMarker()) {
+                function_start = pc;
+                function_end = pc +| 1;
+
+                while (function_end < instructions.len and
+                    !instructions[function_end].isFunctionStartMarker())
+                {
+                    function_end +|= 1;
+                }
+
                 switch (instructions[function_end -| 1].opcode) {
                     .ja, .@"return" => {},
                     else => return error.InvalidFunction,
@@ -201,7 +188,7 @@ pub const Executable = struct {
                 .arsh64_imm,
                 => if (inst.imm >= 64) return error.ShiftWithOverflow,
 
-                .neg32 => if (version.disableNegation()) return error.UnsupportedInstruction,
+                .neg32 => if (version.disableNegation()) return error.UnknownOpCode,
 
                 .mul32_reg,
                 .div32_reg,
@@ -226,12 +213,12 @@ pub const Executable = struct {
                     store = true;
                 },
 
-                .mul32_imm => if (version.enablePqr()) return error.UnsupportedInstruction,
+                .mul32_imm => if (version.enablePqr()) return error.UnknownOpCode,
                 .mod32_imm,
                 .div32_imm,
                 => if (!version.enablePqr()) {
                     if (inst.imm == 0) return error.DivisionByZero;
-                } else return error.UnsupportedInstruction,
+                } else return error.UnknownOpCode,
 
                 .udiv32_reg,
                 .udiv64_reg,
@@ -249,7 +236,7 @@ pub const Executable = struct {
                 .urem64_reg,
                 .srem32_reg,
                 .srem64_reg,
-                => if (!version.enablePqr()) return error.UnsupportedInstruction,
+                => if (!version.enablePqr()) return error.UnknownOpCode,
 
                 .udiv32_imm,
                 .udiv64_imm,
@@ -261,13 +248,13 @@ pub const Executable = struct {
                 .srem64_imm,
                 => if (version.enablePqr()) {
                     if (inst.imm == 0) return error.DivisionByZero;
-                } else return error.UnsupportedInstruction,
+                } else return error.UnknownOpCode,
 
-                .hor64_imm => if (!version.disableLddw()) return error.UnsupportedInstruction,
+                .hor64_imm => if (!version.disableLddw()) return error.UnknownOpCode,
 
                 .le, .be => {
                     if (inst.opcode == .le and version.disableLe()) {
-                        return error.UnsupportedInstruction;
+                        return error.UnknownOpCode;
                     }
                     switch (inst.imm) {
                         16, 32, 64 => {},
@@ -300,6 +287,7 @@ pub const Executable = struct {
                 .jslt_reg,
                 => {
                     const destination = @as(i64, @bitCast(pc)) + 1 + inst.off;
+
                     if (destination < 0 or
                         destination < function_start or
                         destination >= function_end)
@@ -317,7 +305,7 @@ pub const Executable = struct {
                 .ld_h_reg,
                 .ld_w_reg,
                 .ld_dw_reg,
-                => if (version.moveMemoryInstructionClasses()) return error.UnsupportedInstruction,
+                => if (version.moveMemoryInstructionClasses()) return error.UnknownOpCode,
 
                 .st_b_imm,
                 .st_h_imm,
@@ -329,14 +317,14 @@ pub const Executable = struct {
                 .st_dw_reg,
                 => if (!version.moveMemoryInstructionClasses()) {
                     store = true;
-                } else return error.UnsupportedInstruction,
+                } else return error.UnknownOpCode,
 
                 .ld_4b_reg,
-                => if (!version.moveMemoryInstructionClasses()) return error.UnsupportedInstruction,
+                => if (!version.moveMemoryInstructionClasses()) return error.UnknownOpCode,
                 .st_4b_reg,
                 => if (version.moveMemoryInstructionClasses()) {
                     store = true;
-                } else return error.UnsupportedInstruction,
+                } else return error.UnknownOpCode,
 
                 .ld_dw_imm => if (!version.disableLddw()) {
                     // If this is the last instructions, half of it is missing!
@@ -344,7 +332,7 @@ pub const Executable = struct {
                     pc += 1;
                     const next_instruction = instructions[pc];
                     if (@intFromEnum(next_instruction.opcode) != 0) return error.IncompleteLddw;
-                } else return error.UnsupportedInstruction,
+                } else return error.UnknownOpCode,
 
                 .call_imm => if (version.enableStaticSyscalls()) {
                     const target_pc = version.computeTargetPc(pc, inst);
@@ -361,19 +349,21 @@ pub const Executable = struct {
                     if (@intFromEnum(reg) >= 10) return error.InvalidRegister;
                 },
 
-                .@"return" => if (!version.enableStaticSyscalls())
-                    return error.UnsupportedInstruction,
+                .@"return" => if (!version.enableStaticSyscalls()) return error.UnknownOpCode,
                 .exit_or_syscall => if (version.enableStaticSyscalls() and
                     loader.get(inst.imm) == null)
                 {
                     return error.InvalidSyscall;
                 },
 
-                else => return error.UnsupportedInstruction,
+                else => return error.UnknownOpCode,
             }
 
             try inst.checkRegisters(store, version);
         }
+
+        // The program counter should now be equal to the number of instructions.
+        if (pc != instructions.len) return error.JumpOutOfCode;
     }
 
     /// When the executable comes from the assembler, we need to guarantee that the
@@ -533,12 +523,7 @@ pub const Assembler = struct {
                             .imm = 0,
                         },
                         .no_operand => .{
-                            // Harded to work for both `exit` and `return`, even though
-                            // the `exit` instruction was technically deprecated.
-                            .opcode = if (version == .v0)
-                                .exit_or_syscall
-                            else
-                                .@"return",
+                            .opcode = @enumFromInt(bind.opc),
                             .dst = .r0,
                             .src = .r0,
                             .off = 0,
@@ -742,11 +727,10 @@ pub const Assembler = struct {
         name: []const u8,
         version: sbpf.Version,
     ) i32 {
-        var target_pc: i64 = labels.get(name) orelse
+        const target_pc: i64 = labels.get(name) orelse
             std.debug.panic("label not found: {s}", .{name});
-        if (version.enableStaticSyscalls()) {
-            target_pc = target_pc - inst_ptr - 1;
-        }
+        _ = inst_ptr;
+        _ = version;
         return @intCast(target_pc);
     }
 
@@ -942,7 +926,7 @@ pub const Config = struct {
     enable_instruction_meter: bool = true,
     /// Enable instruction tracing
     enable_instruction_tracing: bool = false,
-    /// Enable dynamic string allocation for labels
+    /// Enable dynamic string allocation for labels. For debugging and testing!
     enable_symbol_and_section_labels: bool = false,
     /// Reject ELF files containing issues that the verifier did not catch before (up to v0.2.21)
     reject_broken_elfs: bool = false,
@@ -959,7 +943,7 @@ pub const Config = struct {
 
     /// Allowed [SBPFVersion]s
     minimum_version: sbpf.Version = .v0,
-    maximum_version: sbpf.Version = .v3,
+    maximum_version: sbpf.Version = .v2,
 
     pub fn stackSize(config: Config) u64 {
         return config.stack_frame_size * config.max_call_depth;

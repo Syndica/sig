@@ -87,10 +87,8 @@ pub fn main() !void {
     };
     var executable = if (cmd.assemble)
         try Executable.fromAsm(gpa, bytes, config)
-    else exec: {
-        const elf = try Elf.parse(gpa, bytes, &loader, config);
-        break :exec Executable.fromElf(elf);
-    };
+    else
+        try Elf.load(gpa, bytes, &loader, config);
     defer executable.deinit(gpa);
 
     try executable.verify(&loader);
@@ -162,7 +160,7 @@ const Cmd = struct {
                 .kind = .named,
                 .name_override = null,
                 .alias = .v,
-                .default_value = .v3,
+                .default_value = .v2,
                 .config = {},
                 .help = "sBPF version to execute under",
             },

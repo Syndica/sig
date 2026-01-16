@@ -11,13 +11,13 @@ fi
 
 LD_FLAGS="${LD} -z notext -shared --Bdynamic -entry entrypoint"
 C_FLAGS="-Werror -target sbf -O2 -fno-builtin -fPIC -Wno-override-module"
-C_FLAGS_V3="${C_FLAGS} -mcpu=v3"
+C_FLAGS_V2="${C_FLAGS} -mcpu=v2"
 
 CC_V0="${CC} ${C_FLAGS}"
-CC_V3="${CC} ${C_FLAGS_V3}"
+CC_V3="${CC} ${C_FLAGS_V2}"
 
 LD_V0="${LD_FLAGS} --script data/test-elfs/elf_sbpfv0.ld"
-LD_V3="${LD_FLAGS} -Bsymbolic --script data/test-elfs/elf.ld"
+LD_V2="${LD_FLAGS} -Bsymbolic --script data/test-elfs/elf.ld"
 
 V0_FILES=(reloc_64_64 
           reloc_64_relative 

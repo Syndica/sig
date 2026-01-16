@@ -55,12 +55,14 @@ pub const Environment = struct {
         const min_sbpf_version: SbpfVersion = if (!feature_set.active(
             .disable_sbpf_v0_execution,
             slot,
-        ) or feature_set.active(.reenable_sbpf_v0_execution, slot)) .v0 else .v3;
+        ) or feature_set.active(.reenable_sbpf_v0_execution, slot)) .v0 else .v2;
 
         const max_sbpf_version: SbpfVersion = if (feature_set.active(
             .enable_sbpf_v3_deployment_and_execution,
             slot,
-        )) .v3 else if (feature_set.active(
+        ))
+            @panic("v3 is not enabled on any clusters and has not been finalized")
+        else if (feature_set.active(
             .enable_sbpf_v2_deployment_and_execution,
             slot,
         )) .v2 else if (feature_set.active(
