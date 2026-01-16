@@ -10,20 +10,20 @@ pub const SlotAndHash = struct {
     slot: Slot,
     hash: Hash,
 
+    pub const empty: SlotAndHash = .{
+        .slot = std.math.maxInt(Slot),
+        .hash = .ZEROES,
+    };
+
     pub fn tuple(self: SlotAndHash) struct { Slot, Hash } {
         return .{ self.slot, self.hash };
     }
 
     pub fn order(a: SlotAndHash, b: SlotAndHash) std.math.Order {
-        if (a.slot == b.slot and a.hash.order(&b.hash) == .eq) {
-            return .eq;
-        } else if (a.slot < b.slot or a.slot == b.slot and (a.hash.order(&b.hash) == .lt)) {
-            return .lt;
-        } else if (a.slot > b.slot or a.slot == b.slot and (a.hash.order(&b.hash) == .gt)) {
-            return .gt;
-        } else {
-            unreachable;
+        if (a.slot == b.slot) {
+            return a.hash.order(&b.hash);
         }
+        return std.math.order(a.slot, b.slot);
     }
 
     pub fn equals(a: SlotAndHash, b: SlotAndHash) bool {

@@ -18,6 +18,8 @@ const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHas
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
+const SlotSet = collections.SortedSet(Slot, .{ .empty_key = std.math.maxInt(Slot) });
+
 const ledger_tests = sig.ledger.tests;
 
 pub const ProcessClusterSyncTimings = struct {
@@ -155,19 +157,34 @@ pub const SlotData = struct {
     latest_validator_votes: LatestValidatorVotes,
 
     /// Analogous to [DuplicateSlotsTracker](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L18)
-    pub const DuplicateSlots = collections.SortedSetUnmanaged(Slot);
+    pub const DuplicateSlots = collections.SortedSet(
+        Slot,
+        .{ .empty_key = std.math.maxInt(Slot) },
+    );
 
     /// Analogous to [DuplicateSlotsToRepair](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L19)
     pub const DuplicateSlotsToRepair = std.AutoArrayHashMapUnmanaged(Slot, Hash);
 
     /// Analogous to [PurgeRepairSlotCounter](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L20)
-    pub const PurgeRepairSlotCounters = collections.SortedMapUnmanaged(Slot, usize);
+    pub const PurgeRepairSlotCounters = collections.SortedMap(
+        Slot,
+        usize,
+        .{ .empty_key = std.math.maxInt(Slot) },
+    );
 
     /// Analogous to [EpochSlotsFrozenSlots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L22)
-    pub const EpochSlotsFrozenSlots = collections.SortedMapUnmanaged(Slot, Hash);
+    pub const EpochSlotsFrozenSlots = collections.SortedMap(
+        Slot,
+        Hash,
+        .{ .empty_key = std.math.maxInt(Slot) },
+    );
 
     /// Analogous to [DuplicateConfirmedSlots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L24)
-    pub const DuplicateConfirmedSlots = collections.SortedMapUnmanaged(Slot, Hash);
+    pub const DuplicateConfirmedSlots = collections.SortedMap(
+        Slot,
+        Hash,
+        .{ .empty_key = std.math.maxInt(Slot) },
+    );
 
     pub const empty: SlotData = .{
         .duplicate_confirmed_slots = .empty,
@@ -179,7 +196,7 @@ pub const SlotData = struct {
         .latest_validator_votes = .empty,
     };
 
-    pub fn deinit(self: SlotData, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *SlotData, allocator: std.mem.Allocator) void {
         self.duplicate_confirmed_slots.deinit(allocator);
         self.epoch_slots_frozen_slots.deinit(allocator);
 
@@ -194,20 +211,21 @@ pub const SlotData = struct {
 
 /// Analogous to [UnfrozenGossipVerifiedVoteHashes](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/unfrozen_gossip_verified_vote_hashes.rs#L8)
 pub const UnfrozenGossipVerifiedVoteHashes = struct {
-    votes_per_slot: sig.utils.collections.SortedMapUnmanaged(Slot, HashToVotesMap),
+    votes_per_slot: sig.utils.collections.SortedMap(
+        Slot,
+        HashToVotesMap,
+        .{ .empty_key = std.math.maxInt(Slot) },
+    ),
 
     const HashToVotesMap = std.AutoArrayHashMapUnmanaged(Hash, VoteList);
     const VoteList = std.ArrayListUnmanaged(Pubkey);
 
     pub const empty: UnfrozenGossipVerifiedVoteHashes = .{ .votes_per_slot = .empty };
 
-    pub fn deinit(self: UnfrozenGossipVerifiedVoteHashes, allocator: std.mem.Allocator) void {
-        var votes_per_slot = self.votes_per_slot;
-        for (votes_per_slot.values()) |*htvm| {
-            for (htvm.values()) |*vl| vl.deinit(allocator);
-            htvm.deinit(allocator);
-        }
-        votes_per_slot.deinit(allocator);
+    pub fn deinit(self: *UnfrozenGossipVerifiedVoteHashes, allocator: std.mem.Allocator) void {
+        var iter = self.votes_per_slot.iterator();
+        while (iter.next()) |entry| entry.value_ptr.deinit(allocator);
+        self.votes_per_slot.deinit(allocator);
     }
 
     /// Update `latest_validator_votes_for_frozen_slots` if gossip has seen a newer vote for a frozen slot.
@@ -253,7 +271,7 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
             // frozen later
             const vps_gop = try self.votes_per_slot.getOrPut(allocator, vote_slot);
             errdefer if (!vps_gop.found_existing) {
-                std.debug.assert(self.votes_per_slot.orderedRemove(vps_gop.key_ptr.*));
+                std.debug.assert(self.votes_per_slot.remove(vps_gop.key_ptr.*));
             };
             const hash_to_votes: *HashToVotesMap = vps_gop.value_ptr;
 
@@ -1073,7 +1091,7 @@ pub const check_slot_agrees_with_cluster = struct {
             return;
         } else {
             // Otherwise, add it to the set of processed slots, and proceed.
-            try duplicate_slots_tracker.put(allocator, slot);
+            try duplicate_slots_tracker.put(allocator, slot, {});
         }
 
         // TODO: consider putting a prometheus metric here, similar to how agave
@@ -1340,13 +1358,13 @@ const state_change = struct {
         }
 
         _ = duplicate_slots_to_repair.swapRemove(slot);
-        _ = purge_repair_slot_counter.orderedRemove(slot);
+        _ = purge_repair_slot_counter.remove(slot);
     }
 };
 
 const Descendants = std.AutoArrayHashMapUnmanaged(
     Slot,
-    sig.utils.collections.SortedMapUnmanaged(Slot, void),
+    SlotSet,
 );
 fn descendantsDeinit(allocator: std.mem.Allocator, descendants: Descendants) void {
     for (descendants.values()) |*child_set| child_set.deinit(allocator);
@@ -1532,11 +1550,31 @@ const TestData = struct {
         errdefer descendants.deinit(allocator);
         errdefer for (descendants.values()) |*child_set| child_set.deinit(allocator);
         try descendants.ensureUnusedCapacity(allocator, 4);
-        descendants.putAssumeCapacity(0, try .init(allocator, &.{ 1, 2, 3 }, &.{}));
-        descendants.putAssumeCapacity(1, try .init(allocator, &.{ 3, 2 }, &.{}));
-        descendants.putAssumeCapacity(2, try .init(allocator, &.{3}, &.{}));
+        descendants.putAssumeCapacity(0, blk: {
+            var set: SlotSet = .empty;
+            errdefer set.deinit(allocator);
+            try set.put(allocator, 1, {});
+            try set.put(allocator, 2, {});
+            try set.put(allocator, 3, {});
+
+            break :blk set;
+        });
+        descendants.putAssumeCapacity(1, blk: {
+            var set: SlotSet = .empty;
+            errdefer set.deinit(allocator);
+            try set.put(allocator, 3, {});
+            try set.put(allocator, 2, {});
+
+            break :blk set;
+        });
+        descendants.putAssumeCapacity(2, blk: {
+            var set: SlotSet = .empty;
+            errdefer set.deinit(allocator);
+            try set.put(allocator, 3, {});
+
+            break :blk set;
+        });
         descendants.putAssumeCapacity(3, .empty);
-        for (descendants.values()) |*slot_set| slot_set.sort();
 
         return .{
             .slot_tracker = slot_tracker,
@@ -1573,19 +1611,27 @@ test "apply state changes" {
         .slot = duplicate_slot,
         .hash = duplicate_slot_hash,
     }).?);
-    for ([_][]const Slot{
-        descendants.getPtr(duplicate_slot).?.keys(),
-        &.{duplicate_slot},
-    }) |child_slot_set| {
-        for (child_slot_set) |child_slot| {
-            try std.testing.expectEqual(
-                duplicate_slot,
-                heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
-                    .slot = child_slot,
-                    .hash = slot_tracker.slots.get(child_slot).?.state.hash.readCopy().?,
-                }).?,
-            );
-        }
+
+    var iter = descendants.getPtr(duplicate_slot).?.iterator();
+    while (iter.next()) |entry| {
+        const child_slot = entry.key_ptr.*;
+        try std.testing.expectEqual(
+            duplicate_slot,
+            heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+                .slot = child_slot,
+                .hash = slot_tracker.slots.get(child_slot).?.state.hash.readCopy().?,
+            }).?,
+        );
+    }
+    {
+        const child_slot = duplicate_slot;
+        try std.testing.expectEqual(
+            duplicate_slot,
+            heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+                .slot = child_slot,
+                .hash = slot_tracker.slots.get(child_slot).?.state.hash.readCopy().?,
+            }).?,
+        );
     }
 
     var duplicate_slots_to_repair: SlotData.DuplicateSlotsToRepair = .empty;
@@ -1754,20 +1800,29 @@ test "apply state changes duplicate confirmed matches frozen" {
         try confirmed_non_dupe_frozen_hash.finalize(duplicate_slot, ledger.resultWriter());
     }
 
-    for ([_][]const Slot{
-        descendants.getPtr(duplicate_slot).?.keys(),
-        &.{duplicate_slot},
-    }) |child_slot_set| {
-        for (child_slot_set) |child_slot| {
-            try std.testing.expectEqual(
-                null,
-                heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
-                    .slot = child_slot,
-                    .hash = slot_tracker.slots.get(child_slot).?.state.hash.readCopy().?,
-                }),
-            );
-        }
+    var iter = descendants.iterator();
+    while (iter.next()) |entry| {
+        const child_slot = entry.key_ptr.*;
+        try std.testing.expectEqual(
+            null,
+            heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+                .slot = child_slot,
+                .hash = slot_tracker.slots.get(child_slot).?.state.hash.readCopy().?,
+            }),
+        );
     }
+
+    {
+        const child_slot = duplicate_slot;
+        try std.testing.expectEqual(
+            null,
+            heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+                .slot = child_slot,
+                .hash = slot_tracker.slots.get(child_slot).?.state.hash.readCopy().?,
+            }),
+        );
+    }
+
     try std.testing.expectEqual(true, heaviest_subtree_fork_choice.isCandidate(&.{
         .slot = duplicate_slot,
         .hash = our_duplicate_slot_hash,
@@ -1853,19 +1908,29 @@ test "apply state changes slot frozen and duplicate confirmed matches frozen" {
         try confirmed_non_dupe_frozen_hash.finalize(duplicate_slot, ledger.resultWriter());
     }
 
-    for ([_][]const Slot{
-        descendants.getPtr(duplicate_slot).?.keys(),
-        &.{duplicate_slot},
-    }) |child_slot_set| {
-        for (child_slot_set) |child_slot| {
-            try std.testing.expectEqual(
-                null,
-                heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
-                    .slot = child_slot,
-                    .hash = slot_tracker.get(child_slot).?.state.hash.readCopy().?,
-                }),
-            );
-        }
+    var iter = descendants.iterator();
+    while (iter.next()) |entry| {
+        const child_slot = entry.key_ptr.*;
+
+        try std.testing.expectEqual(
+            null,
+            heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+                .slot = child_slot,
+                .hash = slot_tracker.get(child_slot).?.state.hash.readCopy().?,
+            }),
+        );
+    }
+
+    {
+        const child_slot = duplicate_slot;
+
+        try std.testing.expectEqual(
+            null,
+            heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+                .slot = child_slot,
+                .hash = slot_tracker.get(child_slot).?.state.hash.readCopy().?,
+            }),
+        );
     }
 
     try std.testing.expectEqual(true, heaviest_subtree_fork_choice.isCandidate(&.{
