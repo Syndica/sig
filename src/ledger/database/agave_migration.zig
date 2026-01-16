@@ -7,7 +7,6 @@ const Slot = sig.core.Slot;
 
 const sig_meta = ledger.meta;
 const ColumnFamily = ledger.database.ColumnFamily;
-const ErasureSetId = ledger.shred.ErasureSetId;
 const sig_schema = ledger.schema.schema;
 
 const Logger = sig.trace.Logger("agave-migrate");
