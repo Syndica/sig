@@ -667,8 +667,8 @@ test "hasTranslatableRepresentation" {
 }
 
 test "aligned vmap" {
-    var program_mem: [4]u8 = .{0xFF} ** 4;
-    var stack_mem: [4]u8 = .{0xDD} ** 4;
+    var program_mem: [4]u8 = @splat(0xFF);
+    var stack_mem: [4]u8 = @splat(0xDD);
 
     const allocator = std.testing.allocator; // needed for regions dupe
     var m = try MemoryMap.init(
@@ -711,8 +711,8 @@ test "aligned vmap" {
 
 // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L1240
 test "aligned region" {
-    var program_mem: [4]u8 = .{0xFF} ** 4;
-    var stack_mem: [4]u8 = .{0xDD} ** 4;
+    var program_mem: [4]u8 = @splat(0xFF);
+    var stack_mem: [4]u8 = @splat(0xDD);
 
     const allocator = std.testing.allocator; // needed for regions dupe
     var m = try MemoryMap.init(
@@ -737,8 +737,8 @@ test "aligned region" {
 }
 
 test "invalid memory region" {
-    var program_mem: [4]u8 = .{0xFF} ** 4;
-    var stack_mem: [4]u8 = .{0xDD} ** 4;
+    var program_mem: [4]u8 = @splat(0xFF);
+    var stack_mem: [4]u8 = @splat(0xDD);
 
     try expectError(
         error.InvalidMemoryRegion,
