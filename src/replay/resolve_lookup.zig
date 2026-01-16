@@ -257,6 +257,7 @@ pub const LookupTableAccounts = struct {
     readonly: []const Pubkey,
 };
 
+// [agave] https://github.com/anza-xyz/agave/blob/b7547496510defa0a5b7541d99386ce1526bed06/accounts-db/src/accounts.rs#L105
 fn resolveLookupTableAccounts(
     allocator: Allocator,
     account_reader: SlotAccountReader,
@@ -285,6 +286,7 @@ fn resolveLookupTableAccounts(
         const table = try getLookupTable(allocator, account_reader, lookup.table_address);
         defer allocator.free(table.addresses);
 
+        // [agave] https://github.com/anza-xyz/solana-sdk/blob/9521b39a20e62c5b58c07e29865e930db4627dc5/address-lookup-table-interface/src/state.rs#L201
         if (table.meta.status(slot, slot_hashes) == .Deactivated) {
             return error.AddressLookupTableNotFound;
         }
