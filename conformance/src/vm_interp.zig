@@ -129,10 +129,7 @@ fn executeVmTest(
         stricter_abi_and_runtime_constraints,
         mask_out_rent_epoch_in_vm_serialization,
     );
-    defer {
-        serialized.memory.deinit(allocator);
-        serialized.regions.deinit(allocator);
-    }
+    defer serialized.deinit(allocator);
     tc.serialized_accounts = serialized.account_metas;
 
     const rodata = try allocator.dupe(u8, vm_context.rodata.getSlice());

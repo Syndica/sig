@@ -222,10 +222,7 @@ fn executeSyscall(
         stricter_abi_and_runtime_constraints,
         mask_out_rent_epoch_in_vm_serialization,
     );
-    defer {
-        serialized.memory.deinit(allocator);
-        serialized.regions.deinit(allocator);
-    }
+    defer serialized.deinit(allocator);
     tc.serialized_accounts = serialized.account_metas;
 
     if (pb_vm.heap_max > HEAP_MAX) return error.InvalidHeapSize;
