@@ -223,7 +223,6 @@ pub fn build(b: *Build) !void {
     };
 
     const base58_mod = b.dependency("base58", dep_opts).module("base58");
-    const zig_network_mod = b.dependency("zig-network", dep_opts).module("network");
     const httpz_mod = b.dependency("httpz", dep_opts).module("httpz");
     const poseidon_mod = b.dependency("poseidon", dep_opts).module("poseidon");
     const xev_mod = b.dependency("xev", dep_opts).module("xev");
@@ -292,7 +291,6 @@ pub fn build(b: *Build) !void {
         .{ .name = "ssl",           .module = ssl_mod },
         .{ .name = "tracy",         .module = tracy_mod },
         .{ .name = "xev",           .module = xev_mod },
-        .{ .name = "zig-network",   .module = zig_network_mod },
         .{ .name = "zstd",          .module = zstd_mod },
         .{ .name = "table",         .module = gh_table },
     };

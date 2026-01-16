@@ -9,10 +9,6 @@
     .minimum_zig_version = "0.14.1",
     .fingerprint = 0xce1f2b0e2866b810,
     .dependencies = .{
-        .@"zig-network" = .{
-            .url = "git+https://github.com/ikskuh/zig-network#8f6a156a547da4b20030effa40ecba8f63b467a1",
-            .hash = "network-0.1.0-Pm-AghMmAQBfWhIrEM1V3X8VsqiCbCh0CrqNdPVwQ3LG",
-        },
         .httpz = .{
             .url = "git+https://github.com/karlseguin/http.zig#0ce9038e13c138423f68d95a475159039458e798",
             .hash = "httpz-0.0.0-PNVzrJ-0BgAp8WPkVfsFGNPRlRpBoU-8w0LxMDXBp37t",

@@ -1,5 +1,4 @@
 const std = @import("std");
-const network = @import("zig-network");
 const sig = @import("../sig.zig");
 
 const BitFlags = sig.utils.bitflags.BitFlags;
@@ -7,7 +6,7 @@ const BitFlags = sig.utils.bitflags.BitFlags;
 pub const Packet = struct {
     buffer: [DATA_SIZE]u8,
     size: usize,
-    addr: network.EndPoint,
+    addr: sig.net.SocketAddr,
     flags: Flags,
 
     pub const Flags = BitFlags(Flag);
@@ -19,14 +18,14 @@ pub const Packet = struct {
     pub const DATA_SIZE: usize = 1232;
 
     pub const ANY_EMPTY: Packet = .{
-        .addr = .{ .port = 0, .address = .{ .ipv4 = network.Address.IPv4.any } },
-        .buffer = .{0} ** DATA_SIZE,
+        .addr = .initIpv4(.{ 0, 0, 0, 0 }, 0),
+        .buffer = @splat(0),
         .size = 0,
         .flags = .{},
     };
 
     pub fn init(
-        addr: network.EndPoint,
+        addr: sig.net.SocketAddr,
         data_init: [DATA_SIZE]u8,
         size: usize,
     ) Packet {
@@ -56,7 +55,7 @@ pub const Packet = struct {
         try sig.bincode.write(fbs.writer(), bincodable_data, .{});
         self.size = fbs.pos;
         if (maybe_dest) |dest| {
-            self.addr = dest.toEndpoint();
+            self.addr = dest;
         }
     }
 

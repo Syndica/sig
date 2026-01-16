@@ -1,6 +1,5 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const network = @import("zig-network");
 
 const AtomicBool = std.atomic.Value(bool);
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;

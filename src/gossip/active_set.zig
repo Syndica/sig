@@ -1,9 +1,7 @@
 const std = @import("std");
-const network = @import("zig-network");
 const sig = @import("../sig.zig");
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const EndPoint = network.EndPoint;
 
 const Pubkey = sig.core.Pubkey;
 const Bloom = sig.bloom.Bloom;
@@ -95,8 +93,8 @@ pub const ActiveSet = struct {
         allocator: std.mem.Allocator,
         origin: Pubkey,
         table: *const GossipTable,
-    ) error{OutOfMemory}!std.ArrayList(EndPoint) {
-        var active_set_endpoints = try std.ArrayList(EndPoint).initCapacity(
+    ) error{OutOfMemory}!std.ArrayList(std.net.Address) {
+        var active_set_endpoints = try std.ArrayList(std.net.Address).initCapacity(
             allocator,
             GOSSIP_PUSH_FANOUT,
         );
@@ -116,7 +114,7 @@ pub const ActiveSet = struct {
                 continue;
             }
 
-            active_set_endpoints.appendAssumeCapacity(peer_gossip_addr.toEndpoint());
+            active_set_endpoints.appendAssumeCapacity(peer_gossip_addr.toAddress());
             if (active_set_endpoints.items.len == GOSSIP_PUSH_FANOUT) {
                 break;
             }

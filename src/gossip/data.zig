@@ -1,5 +1,4 @@
 const std = @import("std");
-const network = @import("zig-network");
 const sig = @import("../sig.zig");
 
 const testing = std.testing;
@@ -7,8 +6,6 @@ const bincode = sig.bincode;
 
 const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const UdpSocket = network.Socket;
-const TcpListener = network.Socket;
 const SocketAddr = sig.net.SocketAddr;
 const Hash = sig.core.Hash;
 const Signature = sig.core.Signature;
@@ -1292,9 +1289,9 @@ pub const ContactInfo = struct {
         for (self.sockets.items) |socket_entry| {
             port += socket_entry.offset;
             const addr = self.addrs.items[socket_entry.index];
-            const socket = switch (addr) {
-                .ipv4 => SocketAddr.initIpv4(addr.asV4(), port),
-                .ipv6 => SocketAddr.initIpv6(addr.asV6(), port),
+            const socket: SocketAddr = switch (addr) {
+                .ipv4 => |ipv4| .initIpv4(ipv4.octets, port),
+                .ipv6 => |ipv6| .initIpv6(ipv6.octets, port),
             };
             socket.sanitize() catch continue;
 
@@ -1354,7 +1351,7 @@ pub const ContactInfo = struct {
         var sockets = try ArrayList(SocketEntry).initCapacity(allocator, random.intRangeAtMost(usize, 4, 10));
 
         for (0..addrs.items.len) |_| {
-            addrs.appendAssumeCapacity(IpAddr.newIpv4(127, 0, 0, 1));
+            addrs.appendAssumeCapacity(.initIpv4(.{ 127, 0, 0, 1 }));
         }
 
         for (0..sockets.items.len) |_| {
@@ -1396,7 +1393,7 @@ pub const ContactInfo = struct {
         self.removeSocket(key);
 
         const offset: u16, const index: ?usize = blk: {
-            var offset = socket_addr.port();
+            var offset = socket_addr.getPort();
             const index = for (self.sockets.items, 0..) |socket, idx| {
                 offset = std.math.sub(u16, offset, socket.offset) catch break idx;
             } else null;
@@ -1543,39 +1540,7 @@ pub const ThreadSafeContactInfo = struct {
 /// This may be changed in the future to a union or enum as extensions are added.
 const Extension = void;
 
-const NodePort = union(enum) {
-    gossip: network.EndPoint,
-    repair: network.EndPoint,
-    rpc: network.EndPoint,
-    rpc_pubsub: network.EndPoint,
-    serve_repair: network.EndPoint,
-    tpu: network.EndPoint,
-    tpu_forwards: network.EndPoint,
-    tpu_forwards_quic: network.EndPoint,
-    tpu_quic: network.EndPoint,
-    tpu_vote: network.EndPoint,
-    turbine_recv: network.EndPoint,
-    turbine_recv_quic: network.EndPoint,
-};
-
-const Sockets = struct {
-    gossip: UdpSocket,
-    ip_echo: ?TcpListener,
-    turbine_recv: ArrayList(UdpSocket),
-    turbine_recv_quic: ArrayList(UdpSocket),
-    tpu: ArrayList(UdpSocket),
-    tpu_forwards: ArrayList(UdpSocket),
-    tpu_vote: ArrayList(UdpSocket),
-    broadcast: ArrayList(UdpSocket),
-    repair: UdpSocket,
-    retransmit_sockets: ArrayList(UdpSocket),
-    serve_repair: UdpSocket,
-    ancestor_hashes_requests: UdpSocket,
-    tpu_quic: UdpSocket,
-    tpu_forwards_quic: UdpSocket,
-};
-
-pub const SocketEntry = struct {
+const SocketEntry = struct {
     /// GossipMessageIdentifier, e.g. turbine_recv, tpu, etc
     key: SocketTag,
     /// IpAddr index in the accompanying addrs vector.
@@ -1712,7 +1677,7 @@ test "set & get socket on contact info" {
 
     var set_socket = ci.getSocket(.rpc);
     try testing.expect(set_socket.?.eql(&SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8899)));
-    try testing.expect(ci.addrs.items[0].eql(&IpAddr.newIpv4(127, 0, 0, 1)));
+    try testing.expectEqual(IpAddr.initIpv4(.{ 127, 0, 0, 1 }), ci.addrs.items[0]);
     try testing.expect(ci.sockets.items[0].eql(&.{ .key = .rpc, .index = 0, .offset = 8899 }));
 }
 
@@ -1805,7 +1770,7 @@ test "contact info bincode serialize matches rust bincode" {
         .extensions = ArrayList(Extension).init(testing.allocator),
     };
     defer sig_contact_info.deinit();
-    try sig_contact_info.addrs.append(IpAddr.newIpv4(127, 0, 0, 1));
+    try sig_contact_info.addrs.append(.initIpv4(.{ 127, 0, 0, 1 }));
     try sig_contact_info.sockets.append(.{ .key = .turbine_recv, .index = 0, .offset = 8001 });
     try sig_contact_info.sockets.append(.{ .key = .turbine_recv_quic, .index = 0, .offset = 1 });
     try sig_contact_info.sockets.append(.{ .key = .tpu, .index = 0, .offset = 1 });

@@ -28,7 +28,7 @@ pub fn getShredAndIPFromEchoServer(
         if (response.shred_version) |shred_version| {
             logger.info()
                 .field("shred_version", shred_version.value)
-                .field("ip", socket_addr.toString().constSlice())
+                .field("ip", socket_addr)
                 .log("ip echo response");
             my_shred_version = shred_version.value;
         }
@@ -235,9 +235,9 @@ const ConnectionTask = struct {
         _ = ip_echo_request;
         ip_echo_request_result.deinit();
 
-        const socket_addr = SocketAddr.fromIpV4Address(request.server.connection.address);
+        const socket_addr: SocketAddr = .initAddress(request.server.connection.address);
         const ip_echo_response: IpEchoResponse = .{
-            .address = .{ .ipv4 = socket_addr.V4.ip },
+            .address = socket_addr.ip(),
             // TODO: correct shred version needs to be propagated here
             .shred_version = .{ .value = 0 },
         };
@@ -335,6 +335,6 @@ test "net.echo: Server works" {
     const resp = try std.json.parseFromSlice(IpEchoResponse, std.testing.allocator, body, .{});
     defer resp.deinit();
 
-    try std.testing.expectEqual([4]u8{ 127, 0, 0, 1 }, resp.value.address.asV4());
+    try std.testing.expectEqual(IpAddr.initIpv4(.{ 127, 0, 0, 1 }), resp.value.address);
     try std.testing.expectEqual(ShredVersion{ .value = 0 }, resp.value.shred_version);
 }

@@ -481,23 +481,27 @@ const TestEnvironment = struct {
         // Add known nodes to the gossip table
         var my_contact_info: ThreadSafeContactInfo = undefined;
         for (0..params.num_known_nodes) |i| {
-            var contact_info = try ContactInfo.initRandom(
+            var contact_info: ContactInfo = try .initRandom(
                 params.allocator,
                 params.random,
-                Pubkey.initRandom(params.random),
+                .initRandom(params.random),
                 0,
                 0,
                 0,
             );
-            try contact_info.setSocket(.turbine_recv, SocketAddr.initRandom(params.random));
+            errdefer contact_info.deinit();
+            try contact_info.setSocket(
+                .turbine_recv,
+                .initRandom(params.random),
+            );
             _ = try gossip_table.insert(
                 .{
-                    .signature = sig.core.Signature.ZEROES,
+                    .signature = .ZEROES,
                     .data = .{ .ContactInfo = contact_info },
                 },
                 0,
             );
-            if (i == 0) my_contact_info = ThreadSafeContactInfo.fromContactInfo(contact_info);
+            if (i == 0) my_contact_info = .fromContactInfo(contact_info);
         }
 
         // Add stakes for the known nodes
@@ -865,13 +869,13 @@ pub fn makeTestCluster(params: struct {
         else
             Pubkey.initRandom(params.random);
         var contact_info = ContactInfo.init(params.allocator, pubkey, 0, 0);
-        try contact_info.setSocket(.turbine_recv, SocketAddr.init(
-            IpAddr.newIpv4(
+        try contact_info.setSocket(.turbine_recv, .init(
+            .initIpv4(.{
                 intRangeLessThanRust(u8, params.random, 128, 200),
                 params.random.int(u8),
                 params.random.int(u8),
                 params.random.int(u8),
-            ),
+            }),
             params.random.int(u16),
         ));
         _ = try gossip_table.insert(
