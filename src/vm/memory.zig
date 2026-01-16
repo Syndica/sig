@@ -395,7 +395,7 @@ pub const AlignedMemoryMap = struct {
     }
 };
 
-// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L870
+// [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/memory_region.rs#L187
 fn accessViolation(
     vm_addr: u64,
     version: sbpf.Version,
@@ -417,13 +417,9 @@ fn accessViolation(
 // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L183
 /// Memory mapping based on eytzinger search.
 const UnalignedMemoryMap = struct {
-    /// Mapped memory regions
     regions: []Region,
-    /// Copy of the regions vm_addr fields to improve cache density
     region_addresses: []u64,
-    // Executable sbpf_version
     version: sbpf.Version,
-    // VM configuration
     config: exe.Config,
 
     // CoW callback
@@ -667,8 +663,8 @@ test "hasTranslatableRepresentation" {
 }
 
 test "aligned vmap" {
-    var program_mem: [4]u8 = .{0xFF} ** 4;
-    var stack_mem: [4]u8 = .{0xDD} ** 4;
+    var program_mem: [4]u8 = @splat(0xFF);
+    var stack_mem: [4]u8 = @splat(0xDD);
 
     const allocator = std.testing.allocator; // needed for regions dupe
     var m = try MemoryMap.init(
@@ -677,7 +673,7 @@ test "aligned vmap" {
             Region.init(.mutable, &program_mem, RODATA_START),
             Region.init(.constant, &stack_mem, STACK_START),
         },
-        .v3,
+        .v2,
         .{},
     );
     defer m.deinit(allocator);
@@ -711,8 +707,8 @@ test "aligned vmap" {
 
 // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L1240
 test "aligned region" {
-    var program_mem: [4]u8 = .{0xFF} ** 4;
-    var stack_mem: [4]u8 = .{0xDD} ** 4;
+    var program_mem: [4]u8 = @splat(0xFF);
+    var stack_mem: [4]u8 = @splat(0xDD);
 
     const allocator = std.testing.allocator; // needed for regions dupe
     var m = try MemoryMap.init(
@@ -721,7 +717,7 @@ test "aligned region" {
             Region.init(.mutable, &program_mem, RODATA_START),
             Region.init(.constant, &stack_mem, STACK_START),
         },
-        .v3,
+        .v2,
         .{},
     );
     defer m.deinit(allocator);
@@ -737,8 +733,8 @@ test "aligned region" {
 }
 
 test "invalid memory region" {
-    var program_mem: [4]u8 = .{0xFF} ** 4;
-    var stack_mem: [4]u8 = .{0xDD} ** 4;
+    var program_mem: [4]u8 = @splat(0xFF);
+    var stack_mem: [4]u8 = @splat(0xDD);
 
     try expectError(
         error.InvalidMemoryRegion,
@@ -770,7 +766,7 @@ test "unaligned map overlap" {
                 Region.init(.constant, mem1, INPUT_START),
                 Region.init(.constant, mem2, INPUT_START + mem1.len - 1),
             },
-            .v3,
+            .v2,
             config,
         ),
     );
@@ -781,7 +777,7 @@ test "unaligned map overlap" {
             Region.init(.constant, mem1, INPUT_START),
             Region.init(.constant, mem2, INPUT_START + mem1.len),
         },
-        .v3,
+        .v2,
         config,
     );
     defer map.deinit(allocator);
@@ -805,7 +801,7 @@ test "unaligned map" {
             Region.init(.constant, &mem3, INPUT_START + mem1.len + mem2.len),
             Region.init(.constant, &mem4, INPUT_START + mem1.len + mem2.len + mem3.len),
         },
-        .v3,
+        .v2,
         config,
     );
     defer map.deinit(allocator);
@@ -842,7 +838,7 @@ test "unaligned region" {
             Region.init(.mutable, &mem1, INPUT_START),
             Region.init(.constant, &mem2, INPUT_START + 4),
         },
-        .v3,
+        .v2,
         config,
     );
     defer map.deinit(allocator);
@@ -861,7 +857,7 @@ test "empty unaligned memory map" {
     var mmap = try MemoryMap.init(
         allocator,
         &.{},
-        .v3,
+        .v2,
         .{ .aligned_memory_mapping = false },
     );
     defer mmap.deinit(allocator);
@@ -874,7 +870,7 @@ test "gapped map" {
         var map = try MemoryMap.init(allocator, &.{
             Region.init(.constant, &(.{0} ** 8), RODATA_START),
             Region.initGapped(.mutable, &mem1, STACK_START, 2),
-        }, .v3, .{ .aligned_memory_mapping = aligned });
+        }, .v2, .{ .aligned_memory_mapping = aligned });
         defer map.deinit(allocator);
 
         for (0..4) |frame| {
@@ -901,7 +897,7 @@ test "unaligned memory map store" {
         Region.init(.mutable, &mem2, INPUT_START + mem1.len),
         Region.init(.mutable, &mem3, INPUT_START + (mem1.len + mem2.len)),
         Region.init(.mutable, &mem4, INPUT_START + (mem1.len + mem2.len + mem3.len)),
-    }, .v3, .{ .aligned_memory_mapping = false });
+    }, .v2, .{ .aligned_memory_mapping = false });
     defer m.deinit(allocator);
 
     try m.store(u16, INPUT_START, 0x1122);
@@ -921,7 +917,7 @@ test "unaligned memory map fast paths" {
 
     const m = try MemoryMap.init(allocator, &.{
         Region.init(.mutable, &mem1, INPUT_START),
-    }, .v3, .{ .aligned_memory_mapping = false });
+    }, .v2, .{ .aligned_memory_mapping = false });
     defer m.deinit(allocator);
 
     try m.store(u64, INPUT_START, 0x1122334455667788);
@@ -946,7 +942,7 @@ test "unaligned memory map slow paths" {
     const m = try MemoryMap.init(allocator, &.{
         Region.init(.mutable, &mem1, INPUT_START),
         Region.init(.mutable, &mem2, INPUT_START + mem1.len),
-    }, .v3, .{ .aligned_memory_mapping = false });
+    }, .v2, .{ .aligned_memory_mapping = false });
     defer m.deinit(allocator);
 
     try m.store(u64, INPUT_START, 0x1122334455667788);

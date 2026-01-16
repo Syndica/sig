@@ -15,7 +15,6 @@ pub const Registry = executable.Registry;
 pub const Assembler = executable.Assembler;
 pub const Config = executable.Config;
 pub const Vm = interpreter.Vm;
-pub const Elf = elf.Elf;
 pub const Section = executable.Section;
 pub const SyscallFn = syscalls.SyscallFn;
 pub const SyscallMap = syscalls.Syscall.Registry;
@@ -166,10 +165,7 @@ pub const ExecutionErrorKind = enum(u8) {
 pub const ExecutionError = SyscallError ||
     EbpfError ||
     InstructionError ||
-    error{
-        OutOfMemory,
-        Overflow,
-    };
+    error{OutOfMemory};
 
 pub fn getExecutionErrorKind(err: ExecutionError) ExecutionErrorKind {
     return convertExecutionError(err)[1];

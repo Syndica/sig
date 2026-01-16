@@ -16,7 +16,6 @@ pub const testing = @import("testing.zig");
 pub const vote = @import("vote/lib.zig");
 pub const zk_elgamal = @import("zk_elgamal/lib.zig");
 
-const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 

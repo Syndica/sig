@@ -84,7 +84,6 @@ pub fn prepareBpfV3Test(
         &compute_budget,
         0,
         false,
-        false,
     );
 
     const program_map = try allocator.create(ProgramMap);

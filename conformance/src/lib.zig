@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("sig");
 
 comptime {
-    _ = @import("elf.zig");
+    _ = @import("elf_loader.zig");
     _ = @import("shred_parse.zig");
     _ = @import("instruction_execute.zig");
     _ = @import("vm_interp.zig");

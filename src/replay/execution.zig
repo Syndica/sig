@@ -328,10 +328,14 @@ pub fn replayBatch(
             return .exit;
         }
 
+        const instruction_limit = svm_gateway.params.feature_set.active(
+            .static_instruction_limit,
+            svm_gateway.params.slot,
+        );
         const hash, const compute_budget_details = switch (preprocessTransaction(
             transaction.transaction,
             .run_sig_verify,
-            svm_gateway.params.feature_set.active(.static_instruction_limit, svm_gateway.params.slot),
+            instruction_limit,
         )) {
             .ok => |res| res,
             .err => |err| return .{ .failure = err },

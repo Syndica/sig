@@ -210,7 +210,7 @@ test getSysvar {
                 memory.Region.init(.mutable, &buffer, buffer_addr),
                 memory.Region.init(.constant, &sysvar.Clock.ID.data, id_addr),
             },
-            .v3,
+            .v2,
             .{},
         );
         defer memory_map.deinit(allocator);
@@ -263,7 +263,7 @@ test getSysvar {
                 memory.Region.init(.mutable, &buffer, buffer_addr),
                 memory.Region.init(.constant, &sysvar.EpochSchedule.ID.data, id_addr),
             },
-            .v3,
+            .v2,
             .{},
         );
         defer memory_map.deinit(allocator);
@@ -303,7 +303,7 @@ test getSysvar {
         var memory_map = try MemoryMap.init(
             allocator,
             &.{memory.Region.init(.mutable, std.mem.asBytes(&obj), obj_addr)},
-            .v3,
+            .v2,
             .{},
         );
         defer memory_map.deinit(allocator);
@@ -336,7 +336,7 @@ test getSysvar {
                 memory.Region.init(.mutable, &buffer, buffer_addr),
                 memory.Region.init(.constant, &sysvar.Rent.ID.data, id_addr),
             },
-            .v3,
+            .v2,
             .{},
         );
         defer memory_map.deinit(allocator);
@@ -391,7 +391,7 @@ test getSysvar {
                 memory.Region.init(.mutable, &buffer, buffer_addr),
                 memory.Region.init(.constant, &sysvar.EpochRewards.ID.data, id_addr),
             },
-            .v3,
+            .v2,
             .{},
         );
         defer memory_map.deinit(allocator);
@@ -439,7 +439,7 @@ test getSysvar {
                 memory.Region.init(.mutable, &buffer, buffer_addr),
                 memory.Region.init(.constant, &sysvar.LastRestartSlot.ID.data, id_addr),
             },
-            .v3,
+            .v2,
             .{},
         );
         defer memory_map.deinit(allocator);
@@ -527,7 +527,7 @@ fn testGetStakeHistory(filled: bool) !void {
             memory.Region.init(.mutable, &buffer, buffer_addr),
             memory.Region.init(.constant, &sysvar.StakeHistory.ID.data, id_addr),
         },
-        .v3,
+        .v2,
         .{},
     );
     defer memory_map.deinit(allocator);
@@ -604,7 +604,7 @@ fn testGetSlotHashes(filled: bool) !void {
             memory.Region.init(.mutable, &buffer, buffer_addr),
             memory.Region.init(.constant, &sysvar.SlotHashes.ID.data, id_addr),
         },
-        .v3,
+        .v2,
         .{},
     );
     defer memory_map.deinit(allocator);

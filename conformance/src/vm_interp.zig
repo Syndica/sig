@@ -10,7 +10,6 @@ const SyscallContext = pb.SyscallContext;
 const Pubkey = sig.core.Pubkey;
 const svm = sig.vm;
 const Executable = svm.Executable;
-const Config = svm.Config;
 const Vm = svm.Vm;
 const Registry = svm.Registry;
 const Instruction = svm.sbpf.Instruction;
@@ -81,7 +80,7 @@ fn executeVmTest(
     const sbpf_version: Version = switch (vm_context.sbpf_version) {
         1 => .v1,
         2 => .v2,
-        3 => .v3,
+        3 => @panic("there should be no sbpf v3 harnesses"),
         else => .v0,
     };
 
@@ -89,7 +88,6 @@ fn executeVmTest(
         tc.feature_set,
         &tc.compute_budget,
         tc.slot,
-        false,
         false,
     );
     env.config.maximum_version = sbpf_version;

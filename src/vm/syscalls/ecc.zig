@@ -688,7 +688,7 @@ test "edwards curve group operations" {
     }
 
     var registers = sig.vm.interpreter.RegisterMap.initFill(0);
-    var memory_map = try MemoryMap.init(allocator, regions, .v3, .{});
+    var memory_map = try MemoryMap.init(allocator, regions, .v2, .{});
     defer memory_map.deinit(allocator);
 
     {
@@ -822,7 +822,7 @@ test "ristretto curve group operations" {
     }
 
     var registers = sig.vm.interpreter.RegisterMap.initFill(0);
-    var memory_map = try MemoryMap.init(allocator, regions, .v3, .{});
+    var memory_map = try MemoryMap.init(allocator, regions, .v2, .{});
     defer memory_map.deinit(allocator);
 
     {
@@ -932,7 +932,7 @@ test "multiscalar multiplication" {
             ristretto_points_addr,
         ),
         memory.Region.init(.mutable, &result_point, result_point_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     const compute_budget = sig.runtime.ComputeBudget.DEFAULT;
@@ -1033,7 +1033,7 @@ test "multiscalar multiplication large" {
             ristretto_points_addr,
         ),
         memory.Region.init(.mutable, &result_point, result_point_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -1162,7 +1162,7 @@ test "alt_bn128 add" {
     var memory_map = try MemoryMap.init(allocator, &.{
         memory.Region.init(.constant, input, input_addr),
         memory.Region.init(.mutable, &result_point, result_point_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     registers.set(.r1, 0); // ADD
@@ -1227,7 +1227,7 @@ test "alt_bn128 mul" {
     var memory_map = try MemoryMap.init(allocator, &.{
         memory.Region.init(.constant, input, input_addr),
         memory.Region.init(.mutable, &result_point, result_point_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     registers.set(.r1, 2); // MUL
@@ -1316,7 +1316,7 @@ test "alt_bn128 pairing" {
     var memory_map = try MemoryMap.init(allocator, &.{
         memory.Region.init(.constant, input, input_addr),
         memory.Region.init(.mutable, &result_point, result_point_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     registers.set(.r1, 3); // PAIRING
@@ -1380,7 +1380,7 @@ test "alt_bn128 g1 compress/decompress" {
         var memory_map = try MemoryMap.init(allocator, &.{
             memory.Region.init(.constant, entry, input_addr),
             memory.Region.init(.mutable, &buffer, result_point_addr),
-        }, .v3, .{});
+        }, .v2, .{});
         defer memory_map.deinit(allocator);
 
         {
@@ -1451,7 +1451,7 @@ test "alt_bn128 g2 compress/decompress" {
         var memory_map = try MemoryMap.init(allocator, &.{
             memory.Region.init(.constant, entry, input_addr),
             memory.Region.init(.mutable, &buffer, result_point_addr),
-        }, .v3, .{});
+        }, .v2, .{});
         defer memory_map.deinit(allocator);
 
         {
@@ -1521,7 +1521,7 @@ test "alt_bn128 compression failure cases" {
     var memory_map = try MemoryMap.init(allocator, &.{
         memory.Region.init(.constant, &entry, input_addr),
         memory.Region.init(.mutable, &buffer, result_point_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     // failure case: invalid data passed to decompress
@@ -1606,7 +1606,7 @@ test "alt_bn128 group op failure cases" {
     var memory_map = try MemoryMap.init(allocator, &.{
         memory.Region.init(.constant, &entry, input_addr),
         memory.Region.init(.mutable, &buffer, result_point_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     {
@@ -1668,7 +1668,7 @@ test "secp256k1_recover" {
         .init(.constant, &signature, signature_addr),
         .init(.constant, &invalid_signature, invalid_signature_addr),
         .init(.mutable, &result_point, result_point_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     var registers: sig.vm.interpreter.RegisterMap = .initFill(0);

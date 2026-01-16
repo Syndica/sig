@@ -130,7 +130,6 @@ fn executeSyscall(
     );
 
     const reject_broken_elfs = false;
-    const debugging_features = false;
     const direct_mapping = tc.feature_set.active(
         .account_data_direct_mapping,
         tc.slot,
@@ -139,7 +138,6 @@ fn executeSyscall(
         tc.feature_set,
         &tc.compute_budget,
         tc.slot,
-        debugging_features,
         reject_broken_elfs,
     );
     vm_environment.config = config;
@@ -317,15 +315,6 @@ fn executeSyscall(
             instr_info.program_meta.pubkey,
             err,
         );
-    }
-
-    // Special casing to return only the custom error for transactions which have
-    // encountered the loader v4 program or bpf loader v3 migrate instruction.
-    if (tc.custom_error == 0x30000000 or tc.custom_error == 0x40000000) {
-        return .{
-            .@"error" = tc.custom_error.?,
-            .input_data_regions = .init(allocator),
-        };
     }
 
     const effects = try utils.createSyscallEffect(allocator, .{

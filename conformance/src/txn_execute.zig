@@ -358,7 +358,6 @@ fn executeTxnContext(
                 &compute_budget,
                 slot,
                 false,
-                false,
             );
         }
 
@@ -908,12 +907,6 @@ fn serializeOutput(
 
     const errors = utils.convertTransactionError(txn.err);
 
-    // Special casing to return only the custom error for transactions which have
-    // encountered the loader v4 program or bpf loader v3 migrate instruction.
-    if (errors.custom_error == 0x30000000 or errors.custom_error == 0x40000000) {
-        return .{ .custom_error = errors.custom_error };
-    }
-
     var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
     errdefer acct_states.deinit();
     if (result.ok.outputs != null and result.ok.err != null) {
@@ -932,22 +925,6 @@ fn serializeOutput(
             } else false;
 
             if (was_an_input_and_is_writable) try acct_states.append(
-                try sharedAccountToState(allocator, account.pubkey, account.account),
-            );
-        }
-    } else if (result.ok.outputs == null and result.ok.err != null) {
-        // This block exists solely to replicate a bug in solfuzz_agave.
-        // solfuzz_agave zips the rollback accounts with the list of all
-        // accounts, but they don't line up correctly. The rollback accounts are
-        // actually all writeable, but solfuzz_agave filters them out because it
-        // mistakenly compares them against the is_writable field from a totally
-        // different account. This is nonsense, but we need to replicate the bug
-        // in order to return a conformant set of accounts.
-        // https://github.com/firedancer-io/solfuzz-agave/blob/dfbb3f36a3866a82db5eed03fde068940297858e/src/txn_fuzzer.rs#L553
-        // https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=139114012
-        const writes = result.ok.writes.slice();
-        for (writes, sanitized.accounts.items(.is_writable)[0..writes.len]) |account, is_writable| {
-            if (is_writable) try acct_states.append(
                 try sharedAccountToState(allocator, account.pubkey, account.account),
             );
         }

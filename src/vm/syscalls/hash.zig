@@ -201,7 +201,7 @@ test poseidon {
             .sol_log_,
             .sol_panic_,
         },
-        .{ 0, 48526 },
+        .{ 0, 48583 },
     );
 }
 

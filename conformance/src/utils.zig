@@ -492,7 +492,6 @@ pub fn createSyscallEffect(allocator: std.mem.Allocator, params: struct {
         .cu_avail = params.tc.compute_meter,
         .heap = try ManagedString.copy(params.heap, allocator),
         .stack = try ManagedString.copy(params.stack, allocator),
-        .inputdata = .Empty, // Deprecated
         .input_data_regions = input_data_regions,
         .frame_count = params.frame_count,
         .log = try ManagedString.copy(log.items, allocator),
@@ -696,7 +695,6 @@ pub fn printPbSyscallEffects(ctx: pb.SyscallEffects) !void {
     try std.fmt.format(writer, ",\n\tcu_avail: {}", .{ctx.cu_avail});
     try std.fmt.format(writer, ",\n\theap.len: {}", .{ctx.heap.getSlice().len});
     try std.fmt.format(writer, ",\n\tstack.len: {}", .{ctx.stack.getSlice().len});
-    // try std.fmt.format(writer, ",\n\tinputdata: {any}", .{ctx.inputdata.getSlice()}); // Deprecated
     try std.fmt.format(writer, ",\n\tinput_data_regions: [", .{});
     for (ctx.input_data_regions.items) |region| {
         try writer.writeAll("\n\t\tInputDataRegion {");

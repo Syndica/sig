@@ -2120,7 +2120,6 @@ pub fn verifyProgram(
         feature_set,
         compute_budget,
         slot,
-        false,
         true,
     );
 
@@ -2133,7 +2132,7 @@ pub fn verifyProgram(
     const source = try allocator.dupe(u8, data);
     defer allocator.free(source);
 
-    var executable = vm.Executable.fromBytes(
+    var executable = vm.elf.load(
         allocator,
         source,
         &environment.loader,
