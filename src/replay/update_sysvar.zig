@@ -10,6 +10,7 @@ const bincode = sig.bincode;
 const sysvars = sig.runtime.sysvar;
 
 const AccountStore = sig.accounts_db.AccountStore;
+const SlotAccountStore = sig.accounts_db.SlotAccountStore;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const Epoch = sig.core.Epoch;
@@ -68,11 +69,10 @@ pub fn updateSysvarsForNewSlot(
     const parent_slots_epoch = epoch_schedule.getEpoch(constants.parent_slot);
 
     const sysvar_deps = UpdateSysvarAccountDeps{
-        .account_store = account_store,
-        .capitalization = &state.capitalization,
-        .ancestors = &constants.ancestors,
-        .rent = &epoch_info.rent_collector.rent,
         .slot = slot,
+        .slot_store = account_store.forSlot(slot, &constants.ancestors),
+        .rent = &epoch_info.rent_collector.rent,
+        .capitalization = &state.capitalization,
     };
 
     try updateSlotHashes(allocator, constants.parent_slot, constants.parent_hash, sysvar_deps);
@@ -191,7 +191,7 @@ pub fn updateClock(allocator: Allocator, deps: UpdateClockDeps) !void {
         deps.epoch_stakes,
         deps.ns_per_slot,
         deps.genesis_creation_time,
-        deps.update_sysvar_deps.account_store.reader().forSlot(deps.update_sysvar_deps.ancestors),
+        deps.update_sysvar_deps.slot_store.reader(),
         deps.update_sysvar_deps.slot,
         deps.epoch,
         deps.parent_slots_epoch,
@@ -217,7 +217,7 @@ pub fn updateLastRestartSlot(
     if (try getSysvarFromAccount(
         LastRestartSlot,
         allocator,
-        deps.account_store.reader().forSlot(deps.ancestors),
+        deps.slot_store.reader(),
     )) |current| {
         // Only write a new LastRestartSlot if it has changed.
         if (new_last_restart_slot == current.last_restart_slot) return;
@@ -238,7 +238,7 @@ pub fn updateSlotHistory(allocator: Allocator, deps: UpdateSysvarAccountDeps) !v
     var slot_history: SlotHistory = try getSysvarFromAccount(
         SlotHistory,
         allocator,
-        deps.account_store.reader().forSlot(deps.ancestors),
+        deps.slot_store.reader(),
     ) orelse try SlotHistory.init(allocator);
     defer slot_history.deinit(allocator);
 
@@ -256,7 +256,7 @@ pub fn updateSlotHashes(
     var slot_hashes: SlotHashes = try getSysvarFromAccount(
         SlotHashes,
         allocator,
-        deps.account_store.reader().forSlot(deps.ancestors),
+        deps.slot_store.reader(),
     ) orelse .INIT;
 
     slot_hashes.add(parent_slot, parent_hash);
@@ -314,11 +314,10 @@ pub fn updateRecentBlockhashes(
 }
 
 pub const UpdateSysvarAccountDeps = struct {
-    account_store: AccountStore,
-    capitalization: *Atomic(u64),
-    ancestors: *const Ancestors,
-    rent: *const Rent,
     slot: Slot,
+    slot_store: SlotAccountStore,
+    capitalization: *Atomic(u64),
+    rent: *const Rent,
 };
 
 /// Update sysvar account is used to update sysvar accounts in the validator runtime
@@ -334,7 +333,7 @@ pub fn updateSysvarAccount(
     deps: UpdateSysvarAccountDeps,
 ) !void {
     const maybe_old_account =
-        try deps.account_store.reader().forSlot(deps.ancestors).get(allocator, Sysvar.ID);
+        try deps.slot_store.reader().get(allocator, Sysvar.ID);
     defer if (maybe_old_account) |old_account| old_account.deinit(allocator);
 
     const new_account = try createSysvarAccount(
@@ -356,7 +355,7 @@ pub fn updateSysvarAccount(
         _ = deps.capitalization.fetchAdd(new_account.lamports, .monotonic);
     }
 
-    try deps.account_store.put(deps.slot, Sysvar.ID, new_account);
+    try deps.slot_store.put(Sysvar.ID, new_account);
 }
 
 /// Create a new sysvar account with the provided sysvar data. If an old account is provided,
@@ -858,14 +857,13 @@ test "update all sysvars" {
     // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
     slot = slot + 1;
     const update_sysvar_deps: UpdateSysvarAccountDeps = .{
-        .account_store = .{ .accounts_db_two = db },
+        .slot_store = .{ .accounts_db_two = .{ db, slot, &ancestors } },
         .capitalization = &capitalization,
-        .ancestors = &ancestors,
         .rent = &rent,
         .slot = slot,
     };
     try ancestors.ancestors.put(allocator, slot, {});
-    const account_reader = update_sysvar_deps.account_store.reader().forSlot(&ancestors);
+    const account_reader = update_sysvar_deps.slot_store.reader();
 
     { // updateClock
         _, const old_account =

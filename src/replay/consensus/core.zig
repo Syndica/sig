@@ -5571,7 +5571,10 @@ test "vote accounts with landed votes populate bank stats" {
         const stakes_ptr, var stakes_guard = slot1_ref.state.stakes_cache.stakes.writeWithLock();
         defer stakes_guard.unlock();
         stakes_ptr.deinit(allocator);
-        stakes_ptr.* = try epoch_consts_ptr.stakes.stakes.clone(allocator);
+        stakes_ptr.* = try sig.core.bank.parseStakesForTest(
+            allocator,
+            &epoch_consts_ptr.stakes.stakes,
+        );
     }
 
     // Progress map for root and slot 1
@@ -6489,7 +6492,10 @@ test "detect and mark duplicate confirmed fork" {
             const stakes_ptr, var stakes_guard = slot1_ref.state.stakes_cache.stakes.writeWithLock();
             defer stakes_guard.unlock();
             stakes_ptr.deinit(allocator);
-            stakes_ptr.* = try epoch_consts_ptr.stakes.stakes.clone(allocator);
+            stakes_ptr.* = try sig.core.bank.parseStakesForTest(
+                allocator,
+                &epoch_consts_ptr.stakes.stakes,
+            );
         }
 
         {
@@ -6497,7 +6503,10 @@ test "detect and mark duplicate confirmed fork" {
             const stakes_ptr, var stakes_guard = slot2_ref.state.stakes_cache.stakes.writeWithLock();
             defer stakes_guard.unlock();
             stakes_ptr.deinit(allocator);
-            stakes_ptr.* = try epoch_consts_ptr.stakes.stakes.clone(allocator);
+            stakes_ptr.* = try sig.core.bank.parseStakesForTest(
+                allocator,
+                &epoch_consts_ptr.stakes.stakes,
+            );
         }
     }
 
@@ -6967,21 +6976,30 @@ test "successful fork switch (switch_proof)" {
             const stakes_ptr1, var g1 = s1.state.stakes_cache.stakes.writeWithLock();
             defer g1.unlock();
             stakes_ptr1.deinit(allocator);
-            stakes_ptr1.* = try epoch_consts_ptr.stakes.stakes.clone(allocator);
+            stakes_ptr1.* = try sig.core.bank.parseStakesForTest(
+                allocator,
+                &epoch_consts_ptr.stakes.stakes,
+            );
         }
         {
             const s2 = slot_tracker.get(2).?;
             const stakes_ptr2, var g2 = s2.state.stakes_cache.stakes.writeWithLock();
             defer g2.unlock();
             stakes_ptr2.deinit(allocator);
-            stakes_ptr2.* = try epoch_consts_ptr.stakes.stakes.clone(allocator);
+            stakes_ptr2.* = try sig.core.bank.parseStakesForTest(
+                allocator,
+                &epoch_consts_ptr.stakes.stakes,
+            );
         }
         {
             const s4 = slot_tracker.get(4).?;
             const stakes_ptr4, var g4 = s4.state.stakes_cache.stakes.writeWithLock();
             defer g4.unlock();
             stakes_ptr4.deinit(allocator);
-            stakes_ptr4.* = try epoch_consts_ptr.stakes.stakes.clone(allocator);
+            stakes_ptr4.* = try sig.core.bank.parseStakesForTest(
+                allocator,
+                &epoch_consts_ptr.stakes.stakes,
+            );
         }
     }
     defer epoch_tracker.deinit(allocator);

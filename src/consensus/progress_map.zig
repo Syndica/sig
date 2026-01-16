@@ -667,7 +667,7 @@ pub const PropagatedStats = struct {
         try self.addNodePubkeyInternal(
             allocator,
             node_pubkey,
-            nva.vote_accounts,
+            nva.vote_accounts.items,
             epoch_vote_accounts.*,
         );
     }
@@ -677,7 +677,7 @@ pub const PropagatedStats = struct {
         allocator: std.mem.Allocator,
         node_pubkey: Pubkey,
         vote_account_pubkeys: []const Pubkey,
-        epoch_vote_accounts: sig.core.vote_accounts.StakeAndVoteAccountsMap,
+        epoch_vote_accounts: sig.core.stakes.StakeAndVoteAccountsMap,
     ) std.mem.Allocator.Error!void {
         try self.propagated_node_ids.put(allocator, node_pubkey, {});
 
@@ -1251,7 +1251,8 @@ test "ForkProgress.init" {
         try .fromBankFields(allocator, &bank_data, .ALL_DISABLED);
     defer slot_consts.deinit(allocator);
 
-    var slot_state: sig.core.SlotState = try .fromBankFields(allocator, &bank_data, null);
+    var slot_state: sig.core.SlotState =
+        try .fromBankFieldsForTest(allocator, &bank_data, null);
     defer slot_state.deinit(allocator);
 
     const slot_info: replay.trackers.SlotTracker.Reference = .{
@@ -1459,7 +1460,7 @@ test "addNodePubkeyInternal" {
         break :blk pubkeys;
     };
 
-    var epoch_vote_accounts: sig.core.vote_accounts.StakeAndVoteAccountsMap = .empty;
+    var epoch_vote_accounts: sig.core.stakes.StakeAndVoteAccountsMap = .empty;
     defer sig.utils.collections.deinitMapAndValues(allocator, epoch_vote_accounts);
     for (vote_account_pubkeys1[num_vote_accounts - staked_vote_accounts ..]) |pubkey| {
         try epoch_vote_accounts.ensureUnusedCapacity(allocator, 1);

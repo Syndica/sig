@@ -1415,10 +1415,10 @@ const TestData = struct {
                     .collector_id = .initRandom(random),
                     .max_tick_height = random.int(u64),
                     .fee_rate_governor = .initRandom(random),
-                    .epoch_reward_status = .inactive,
                     .ancestors = .{ .ancestors = .empty },
                     .feature_set = .ALL_DISABLED,
                     .reserved_accounts = .empty,
+                    .inflation = .DEFAULT,
                 },
                 .state = .{
                     .blockhash_queue = .init(.DEFAULT),
@@ -1432,6 +1432,7 @@ const TestData = struct {
                     .stakes_cache = .EMPTY,
                     .collected_transaction_fees = .init(random.int(u64)),
                     .collected_priority_fees = .init(random.int(u64)),
+                    .reward_status = .inactive,
                 },
             };
         }

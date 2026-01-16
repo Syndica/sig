@@ -1921,16 +1921,39 @@ pub fn deployProgram(
     program_id: Pubkey,
     owner_id: Pubkey,
     data: []const u8,
-    slot: u64,
+    deploy_slot: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    _ = slot;
+    _ = deploy_slot;
     _ = owner_id;
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
-    var environment = vm.Environment.initV1(
+    try verifyProgram(
+        allocator,
+        data,
+        tc.slot,
         tc.feature_set,
         &tc.compute_budget,
-        tc.slot,
+        if (tc.log_collector) |*lc| lc else null,
+    );
+
+    try tc.log("Deploying program {}", .{program_id});
+
+    // Remove from the program map since it should not be accessible on this slot anymore.
+    _ = try tc.program_map.fetchPut(allocator, program_id, .failed);
+}
+
+pub fn verifyProgram(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    slot: sig.core.Slot,
+    feature_set: *const sig.core.FeatureSet,
+    compute_budget: *const sig.runtime.ComputeBudget,
+    log_collector: ?*sig.runtime.LogCollector,
+) !void {
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
+    var environment = vm.Environment.initV1(
+        feature_set,
+        compute_budget,
+        slot,
         false,
         true,
     );
@@ -1950,21 +1973,15 @@ pub fn deployProgram(
         &environment.loader,
         environment.config,
     ) catch |err| {
-        try tc.log("{s}", .{@errorName(err)});
+        if (log_collector) |lc| try lc.log(allocator, "{s}", .{@errorName(err)});
         return InstructionError.InvalidAccountData;
     };
     defer executable.deinit(allocator);
 
     executable.verify(&environment.loader) catch |err| {
-        try tc.log("{s}", .{@errorName(err)});
+        if (log_collector) |lc| try lc.log(allocator, "{s}", .{@errorName(err)});
         return InstructionError.InvalidAccountData;
     };
-
-    try tc.log("Deploying program {}", .{program_id});
-
-    // Remove from the program map since it should not be accessible on this slot anymore.
-    const old_program = try tc.program_map.fetchPut(allocator, program_id, .failed);
-    if (old_program) |p| p.deinit(allocator);
 }
 
 test executeV3InitializeBuffer {
