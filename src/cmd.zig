@@ -194,6 +194,12 @@ pub fn main() !void {
             current_config.accounts_db.snapshot_dir = params.snapshot_dir;
             try printManifest(gpa, current_config);
         },
+        .ledger_tool => |params| {
+            switch (params.subcmd orelse return error.MissingSubcommand) {
+                .bounds => try ledgerBounds(gpa),
+                .retain => |retain_params| try ledgerRetain(gpa, retain_params),
+            }
+        },
         .leader_schedule => |params| {
             current_config.shred_version = params.shred_version;
             current_config.leader_schedule_path = params.leader_schedule;
@@ -242,6 +248,7 @@ const Cmd = struct {
         snapshot_validate: SnapshotValidate,
         snapshot_create: SnapshotCreate,
         print_manifest: PrintManifest,
+        ledger_tool: LedgerTool,
         leader_schedule: LeaderScheduleSubCmd,
         test_transaction_sender: TestTransactionSender,
         mock_rpc_server: MockRpcServer,
@@ -268,6 +275,7 @@ const Cmd = struct {
                 .snapshot_validate = SnapshotValidate.cmd_info,
                 .snapshot_create = SnapshotCreate.cmd_info,
                 .print_manifest = PrintManifest.cmd_info,
+                .ledger_tool = LedgerTool.cmd_info,
                 .leader_schedule = LeaderScheduleSubCmd.cmd_info,
                 .test_transaction_sender = TestTransactionSender.cmd_info,
                 .mock_rpc_server = MockRpcServer.cmd_info,
@@ -923,6 +931,82 @@ const Cmd = struct {
             .sub = .{
                 .snapshot_dir = snapshot_dir_arg,
             },
+        };
+    };
+
+    const LedgerTool = struct {
+        subcmd: ?union(enum) {
+            bounds: Bounds,
+            retain: Retain,
+        },
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Ledger inspection and manipulation tools.",
+                .long =
+                \\Tools for inspecting and manipulating the validator's ledger.
+                \\The ledger is located at ./validator/ledger.
+                ,
+            },
+            .sub = .{
+                .subcmd = .{
+                    .bounds = Bounds.cmd_info,
+                    .retain = Retain.cmd_info,
+                },
+            },
+        };
+
+        const Bounds = struct {
+            const cmd_info: cli.CommandInfo(@This()) = .{
+                .help = .{
+                    .short = "Print the lowest and highest slots in the ledger.",
+                    .long =
+                    \\Queries the ledger and prints the slot bounds.
+                    \\Useful for understanding what slot range the ledger currently contains.
+                    ,
+                },
+                .sub = .{},
+            };
+        };
+
+        const Retain = struct {
+            start_slot: ?Slot,
+            end_slot: ?Slot,
+
+            const cmd_info: cli.CommandInfo(@This()) = .{
+                .help = .{
+                    .short = "Retain slots within a range, purging everything outside.",
+                    .long =
+                    \\Keeps slots within the specified range [start, end] and purges all
+                    \\slots outside that range. At least one of --start-slot or --end-slot
+                    \\must be specified. If only one is provided, the other defaults to the
+                    \\ledger's lowest or highest slot respectively.
+                    \\
+                    \\Examples:
+                    \\  sig ledger-tool retain -s 1000        # Keep slots 1000 to highest
+                    \\  sig ledger-tool retain -e 5000        # Keep slots lowest to 5000
+                    \\  sig ledger-tool retain -s 1000 -e 5000  # Keep slots 1000 to 5000
+                    ,
+                },
+                .sub = .{
+                    .start_slot = .{
+                        .kind = .named,
+                        .name_override = "start-slot",
+                        .alias = .s,
+                        .default_value = null,
+                        .config = {},
+                        .help = "First slot to retain (inclusive). Defaults to lowest slot in ledger.",
+                    },
+                    .end_slot = .{
+                        .kind = .named,
+                        .name_override = "end-slot",
+                        .alias = .e,
+                        .default_value = null,
+                        .config = {},
+                        .help = "Last slot to retain (inclusive). Defaults to highest slot in ledger.",
+                    },
+                },
+            };
         };
     };
 
@@ -1629,6 +1713,115 @@ fn printManifest(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
 
     // TODO: support better inspection of snapshots (maybe dump to a file as json?)
     std.debug.print("full snapshots: {any}\n", .{snapshots.full.bank_fields});
+}
+
+fn ledgerBounds(allocator: std.mem.Allocator) !void {
+    const ledger_path = sig.VALIDATOR_DIR ++ "ledger";
+
+    var ledger = Ledger.init(allocator, .noop, ledger_path, null) catch |err| {
+        std.debug.print("Error: Failed to open ledger at {s}: {}\n", .{ ledger_path, err });
+        return err;
+    };
+    defer ledger.deinit();
+
+    const reader = ledger.reader();
+    const highest = reader.highestSlot() catch |err| {
+        std.debug.print("Error: Failed to query ledger: {}\n", .{err});
+        return err;
+    } orelse {
+        std.debug.print("Error: Ledger is empty\n", .{});
+        return error.LedgerEmpty;
+    };
+
+    const lowest = reader.lowestSlot() catch |err| {
+        std.debug.print("Error: Failed to query ledger: {}\n", .{err});
+        return err;
+    };
+
+    std.debug.print("Ledger bounds: {} to {}\n", .{ lowest, highest });
+}
+
+fn ledgerRetain(allocator: std.mem.Allocator, params: Cmd.LedgerTool.Retain) !void {
+    if (params.start_slot == null and params.end_slot == null) {
+        std.debug.print("Error: At least one of --start-slot or --end-slot must be specified\n", .{});
+        return error.MissingArgument;
+    }
+
+    const ledger_path = sig.VALIDATOR_DIR ++ "ledger";
+
+    var ledger = Ledger.init(allocator, .noop, ledger_path, null) catch |err| {
+        std.debug.print("Error: Failed to open ledger at {s}: {}\n", .{ ledger_path, err });
+        return err;
+    };
+    defer ledger.deinit();
+
+    const reader = ledger.reader();
+    const highest = reader.highestSlot() catch |err| {
+        std.debug.print("Error: Failed to query ledger: {}\n", .{err});
+        return err;
+    } orelse {
+        std.debug.print("Error: Ledger is empty\n", .{});
+        return error.LedgerEmpty;
+    };
+
+    const lowest = reader.lowestSlot() catch |err| {
+        std.debug.print("Error: Failed to query ledger: {}\n", .{err});
+        return err;
+    };
+
+    const retain_start = params.start_slot orelse lowest;
+    const retain_end = params.end_slot orelse highest;
+
+    if (retain_start > highest or retain_end < lowest) {
+        std.debug.print(
+            "Error: Retain range [{}, {}] has no overlap with ledger bounds [{}, {}]\n",
+            .{ retain_start, retain_end, lowest, highest },
+        );
+        return error.RangeOutsideLedger;
+    }
+
+    if (retain_start <= lowest and retain_end >= highest) {
+        std.debug.print("Nothing to purge - ledger already contains only slots {} to {}\n", .{ lowest, highest });
+        return;
+    }
+
+    var purged_below = false;
+    if (retain_start > lowest) {
+        purged_below = try sig.ledger.cleanup_service.purgeSlots(&ledger.db, lowest, retain_start - 1);
+    }
+
+    var purged_above = false;
+    if (retain_end < highest) {
+        purged_above = try sig.ledger.cleanup_service.purgeSlots(&ledger.db, retain_end + 1, highest);
+    }
+
+    if (purged_below or purged_above) {
+        var buf: [128]u8 = undefined;
+        var purge_desc: []const u8 = "";
+
+        if (purged_below and purged_above) {
+            purge_desc = std.fmt.bufPrint(&buf, "(purged {}-{} and {}-{})", .{
+                lowest,
+                retain_start - 1,
+                retain_end + 1,
+                highest,
+            }) catch "(purged outside range)";
+        } else if (purged_below) {
+            purge_desc = std.fmt.bufPrint(&buf, "(purged {}-{})", .{
+                lowest,
+                retain_start - 1,
+            }) catch "(purged below range)";
+        } else {
+            purge_desc = std.fmt.bufPrint(&buf, "(purged {}-{})", .{
+                retain_end + 1,
+                highest,
+            }) catch "(purged above range)";
+        }
+
+        std.debug.print("Retained slots {} to {} {s}\n", .{ retain_start, retain_end, purge_desc });
+    } else {
+        std.debug.print("No slots purged - retain range [{}, {}] covers all data\n", .{ retain_start, retain_end });
+    }
 }
 
 // fn createSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
