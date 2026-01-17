@@ -7,6 +7,7 @@ const getAccountPerFileEstimateFromCluster =
     sig.accounts_db.db.getAccountPerFileEstimateFromCluster;
 
 pub const Cmd = struct {
+    validator_dir: []const u8 = sig.VALIDATOR_DIR,
     gossip: Gossip = .{},
     shred_network: ShredNetwork = .{},
     accounts_db: AccountsDB = .{},

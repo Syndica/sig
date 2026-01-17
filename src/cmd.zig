@@ -123,15 +123,38 @@ pub fn main() !void {
             current_config.shred_version = params.shred_version;
             current_config.leader_schedule_path = params.leader_schedule;
             current_config.vote_account = params.vote_account;
+            current_config.validator_dir = params.validator_dir;
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
             current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+
+            // Derive snapshot_dir from validator_dir if using default
+            var derived_snapshot_dir: ?[]const u8 = null;
+            if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
+                derived_snapshot_dir = try std.fs.path.join(gpa, &.{ params.validator_dir, "accounts_db" });
+                current_config.accounts_db.snapshot_dir = derived_snapshot_dir.?;
+            } else {
+                current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            }
+            defer if (derived_snapshot_dir) |p| gpa.free(p);
+
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
-            params.geyser.apply(&current_config);
+
+            // Derive geyser pipe_path from validator_dir if using default
+            var derived_geyser_pipe: ?[]const u8 = null;
+            if (std.mem.eql(u8, params.geyser.pipe_path, sig.VALIDATOR_DIR ++ "geyser.pipe")) {
+                derived_geyser_pipe = try std.fs.path.join(gpa, &.{ params.validator_dir, "geyser.pipe" });
+                current_config.geyser.pipe_path = derived_geyser_pipe.?;
+            } else {
+                current_config.geyser.pipe_path = params.geyser.pipe_path;
+            }
+            defer if (derived_geyser_pipe) |p| gpa.free(p);
+
+            current_config.geyser.enable = params.geyser.enable;
+            current_config.geyser.writer_fba_bytes = params.geyser.writer_fba_bytes;
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.stop_at_slot = params.stop_at_slot;
@@ -142,14 +165,37 @@ pub fn main() !void {
         .replay_offline => |params| {
             current_config.shred_version = params.shred_version;
             current_config.leader_schedule_path = params.leader_schedule;
+            current_config.validator_dir = params.validator_dir;
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+
+            // Derive snapshot_dir from validator_dir if using default
+            var derived_snapshot_dir: ?[]const u8 = null;
+            if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
+                derived_snapshot_dir = try std.fs.path.join(gpa, &.{ params.validator_dir, "accounts_db" });
+                current_config.accounts_db.snapshot_dir = derived_snapshot_dir.?;
+            } else {
+                current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            }
+            defer if (derived_snapshot_dir) |p| gpa.free(p);
+
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
-            params.geyser.apply(&current_config);
+
+            // Derive geyser pipe_path from validator_dir if using default
+            var derived_geyser_pipe: ?[]const u8 = null;
+            if (std.mem.eql(u8, params.geyser.pipe_path, sig.VALIDATOR_DIR ++ "geyser.pipe")) {
+                derived_geyser_pipe = try std.fs.path.join(gpa, &.{ params.validator_dir, "geyser.pipe" });
+                current_config.geyser.pipe_path = derived_geyser_pipe.?;
+            } else {
+                current_config.geyser.pipe_path = params.geyser.pipe_path;
+            }
+            defer if (derived_geyser_pipe) |p| gpa.free(p);
+
+            current_config.geyser.enable = params.geyser.enable;
+            current_config.geyser.writer_fba_bytes = params.geyser.writer_fba_bytes;
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.stop_at_slot = params.stop_at_slot;
@@ -158,6 +204,7 @@ pub fn main() !void {
         .shred_network => |params| {
             current_config.shred_version = params.shred_version;
             current_config.leader_schedule_path = params.leader_schedule;
+            current_config.validator_dir = params.validator_dir;
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
@@ -196,8 +243,8 @@ pub fn main() !void {
         },
         .ledger_tool => |params| {
             switch (params.subcmd orelse return error.MissingSubcommand) {
-                .bounds => try ledgerBounds(gpa),
-                .retain => |retain_params| try ledgerRetain(gpa, retain_params),
+                .bounds => try ledgerBounds(gpa, params.validator_dir),
+                .retain => |retain_params| try ledgerRetain(gpa, params.validator_dir, retain_params),
             }
         },
         .leader_schedule => |params| {
@@ -354,6 +401,16 @@ const Cmd = struct {
         .help = "path to snapshot directory" ++
             " (where snapshots are downloaded and/or unpacked to/from)" ++
             " - default: {VALIDATOR_DIR}/accounts_db",
+    };
+
+    const validator_dir_arg: cli.ArgumentInfo([]const u8) = .{
+        .kind = .named,
+        .name_override = "validator-dir",
+        .alias = .d,
+        .default_value = sig.VALIDATOR_DIR,
+        .config = .string,
+        .help = "base directory for validator data (ledger, accounts_db, geyser)" ++
+            " - default: validator/",
     };
 
     const genesis_file_path_arg: cli.ArgumentInfo(?[]const u8) = .{
@@ -772,6 +829,7 @@ const Cmd = struct {
         stop_at_slot: ?sig.core.Slot,
         voting_enabled: bool,
         rpc_port: ?u16,
+        validator_dir: []const u8,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -796,6 +854,7 @@ const Cmd = struct {
                 .voting_enabled = voting_enabled_arg,
                 .rpc_port = rpc_port_arg,
                 .stop_at_slot = stop_at_slot_arg,
+                .validator_dir = validator_dir_arg,
             },
         };
     };
@@ -810,6 +869,7 @@ const Cmd = struct {
         overwrite_stake_for_testing: bool,
         no_retransmit: bool,
         snapshot_metadata_only: bool,
+        validator_dir: []const u8,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -857,6 +917,7 @@ const Cmd = struct {
                     .config = {},
                     .help = "load only the snapshot metadata",
                 },
+                .validator_dir = validator_dir_arg,
             },
         };
     };
@@ -935,6 +996,7 @@ const Cmd = struct {
     };
 
     const LedgerTool = struct {
+        validator_dir: []const u8,
         subcmd: ?union(enum) {
             bounds: Bounds,
             retain: Retain,
@@ -945,10 +1007,11 @@ const Cmd = struct {
                 .short = "Ledger inspection and manipulation tools.",
                 .long =
                 \\Tools for inspecting and manipulating the validator's ledger.
-                \\The ledger is located at ./validator/ledger.
+                \\The ledger is located at <validator-dir>/ledger.
                 ,
             },
             .sub = .{
+                .validator_dir = validator_dir_arg,
                 .subcmd = .{
                     .bounds = Bounds.cmd_info,
                     .retain = Retain.cmd_info,
@@ -1224,6 +1287,7 @@ fn validator(
         allocator,
         cfg.accounts_db,
         try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
+        cfg.validator_dir,
         .from(app_base.logger),
         .{
             .gossip_service = gossip_service,
@@ -1254,10 +1318,13 @@ fn validator(
     const bank_fields = &collapsed_manifest.bank_fields;
 
     // ledger
+    const ledger_path = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    defer allocator.free(ledger_path);
+
     var ledger = try Ledger.init(
         allocator,
         .from(app_base.logger),
-        sig.VALIDATOR_DIR ++ "ledger",
+        ledger_path,
         app_base.metrics_registry,
     );
     defer ledger.deinit();
@@ -1479,6 +1546,7 @@ fn replayOffline(
         allocator,
         cfg.accounts_db,
         try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
+        cfg.validator_dir,
         .from(app_base.logger),
         .{
             .gossip_service = null,
@@ -1519,10 +1587,13 @@ fn replayOffline(
     }
 
     // ledger
+    const ledger_path = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    defer allocator.free(ledger_path);
+
     var ledger = try Ledger.init(
         allocator,
         .from(app_base.logger),
-        sig.VALIDATOR_DIR ++ "ledger",
+        ledger_path,
         app_base.metrics_registry,
     );
     defer ledger.deinit();
@@ -1645,10 +1716,13 @@ fn shredNetwork(
         .{ &rpc_epoch_ctx_service, app_base.exit },
     );
 
+    const ledger_path = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    defer allocator.free(ledger_path);
+
     var ledger = try Ledger.init(
         allocator,
         .from(app_base.logger),
-        sig.VALIDATOR_DIR ++ "ledger",
+        ledger_path,
         app_base.metrics_registry,
     );
     defer ledger.deinit();
@@ -1715,8 +1789,9 @@ fn printManifest(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     std.debug.print("full snapshots: {any}\n", .{snapshots.full.bank_fields});
 }
 
-fn ledgerBounds(allocator: std.mem.Allocator) !void {
-    const ledger_path = sig.VALIDATOR_DIR ++ "ledger";
+fn ledgerBounds(allocator: std.mem.Allocator, validator_dir: []const u8) !void {
+    const ledger_path = try std.fs.path.join(allocator, &.{ validator_dir, "ledger" });
+    defer allocator.free(ledger_path);
 
     var ledger = Ledger.init(allocator, .noop, ledger_path, null) catch |err| {
         std.debug.print("Error: Failed to open ledger at {s}: {}\n", .{ ledger_path, err });
@@ -1741,13 +1816,14 @@ fn ledgerBounds(allocator: std.mem.Allocator) !void {
     std.debug.print("Ledger bounds: {} to {}\n", .{ lowest, highest });
 }
 
-fn ledgerRetain(allocator: std.mem.Allocator, params: Cmd.LedgerTool.Retain) !void {
+fn ledgerRetain(allocator: std.mem.Allocator, validator_dir: []const u8, params: Cmd.LedgerTool.Retain) !void {
     if (params.start_slot == null and params.end_slot == null) {
         std.debug.print("Error: At least one of --start-slot or --end-slot must be specified\n", .{});
         return error.MissingArgument;
     }
 
-    const ledger_path = sig.VALIDATOR_DIR ++ "ledger";
+    const ledger_path = try std.fs.path.join(allocator, &.{ validator_dir, "ledger" });
+    defer allocator.free(ledger_path);
 
     var ledger = Ledger.init(allocator, .noop, ledger_path, null) catch |err| {
         std.debug.print("Error: Failed to open ledger at {s}: {}\n", .{ ledger_path, err });
@@ -1907,6 +1983,7 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         allocator,
         cfg.accounts_db,
         try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
+        cfg.validator_dir,
         .from(app_base.logger),
         .{
             .gossip_service = null,
@@ -1935,6 +2012,7 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
             allocator,
             cfg.accounts_db,
             try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
+            cfg.validator_dir,
             .from(app_base.logger),
             .{
                 .gossip_service = null,

@@ -49,13 +49,14 @@ pub fn loadSnapshot(
     allocator: Allocator,
     db_config: sig_config.AccountsDB,
     genesis_file_path: []const u8,
+    validator_dir_path: []const u8,
     logger: Logger,
     load_options: LoadSnapshotOptions,
 ) !LoadedSnapshot {
     const zone = tracy.Zone.init(@src(), .{ .name = "loadSnapshot" });
     defer zone.deinit();
 
-    var validator_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR, .{});
+    var validator_dir = try std.fs.cwd().makeOpenPath(validator_dir_path, .{});
     defer validator_dir.close();
 
     const snapshot_dir_str = db_config.snapshot_dir;
@@ -209,6 +210,7 @@ test loadSnapshot {
             .accounts_per_file_estimate = 500,
         },
         sig.TEST_DATA_DIR ++ "/genesis.bin",
+        path,
         .noop,
         .{
             .gossip_service = null,
@@ -230,6 +232,7 @@ test loadSnapshot {
             .accounts_per_file_estimate = 500,
         },
         sig.TEST_DATA_DIR ++ "/WRONG-genesis.bin",
+        path,
         .noop,
         .{
             .gossip_service = null,
@@ -248,6 +251,7 @@ test loadSnapshot {
             .accounts_per_file_estimate = 500,
         },
         sig.TEST_DATA_DIR ++ "/genesis.bin",
+        path,
         .noop,
         .{
             .gossip_service = null,
@@ -268,6 +272,7 @@ test loadSnapshot {
             .accounts_per_file_estimate = 500,
         },
         sig.TEST_DATA_DIR ++ "/genesis.bin",
+        path,
         .FOR_TESTS,
         .{
             .gossip_service = null,
