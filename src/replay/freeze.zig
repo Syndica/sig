@@ -380,42 +380,54 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
     return hash;
 }
 
-/// Returns the lattice hash of every account that was modified in the slot.
 pub fn deltaLtHash(
     allocator: std.mem.Allocator,
-    _: *sig.sync.ThreadPool, // TODO: remove
+    thread_pool: *sig.sync.ThreadPool,
     account_reader: AccountReader,
     slot: Slot,
     parent_ancestors: *const Ancestors,
 ) !LtHash {
     assert(!parent_ancestors.containsSlot(slot));
 
-    const Task = struct {
-        fn run(
-            gpa: std.mem.Allocator,
-            slot_index: *sig.accounts_db.Two.Unrooted.SlotIndex,
-            db: *sig.accounts_db.Two,
-            ancestors: *const Ancestors,
-            hash: *LtHash,
-            start_index: usize,
-            end_index: usize,
-        ) !void {
-            const entries = slot_index.entries;
-            const accounts = entries.values()[start_index..end_index];
-            const keys = entries.keys()[start_index..end_index];
+    const Worker = struct {
+        task: sig.sync.ThreadPool.Task = .{ .callback = run },
+        wg: *std.Thread.WaitGroup,
+        range: struct { usize, usize },
+        hash: LtHash = .IDENTITY,
+        gpa: std.mem.Allocator,
+        slot_index: *sig.accounts_db.Two.Unrooted.SlotIndex,
+        db: *sig.accounts_db.Two,
+        ancestors: *const Ancestors,
 
-            var arena_state: std.heap.ArenaAllocator = .init(gpa);
-            defer arena_state.deinit();
-            const arena = arena_state.allocator();
+        fn run(task: *sig.sync.ThreadPool.Task) void {
+            const zone = tracy.Zone.init(@src(), .{ .name = "deltaLt worker" });
+            defer zone.deinit();
 
-            for (accounts, keys) |data, key| {
+            const self: *@This() = @alignCast(@fieldParentPtr("task", task));
+            defer self.wg.finish();
+
+            const start_index, const end_index = self.range;
+            const entries = self.slot_index.entries;
+
+            var arena: std.heap.ArenaAllocator = .init(self.gpa);
+            defer arena.deinit();
+
+            for (
+                entries.values()[start_index..end_index],
+                entries.keys()[start_index..end_index],
+            ) |data, key| {
+                defer _ = arena.reset(.retain_capacity);
+
                 const account = data.asAccount();
-                if (try db.get(arena, key, ancestors)) |old_account| {
-                    if (!old_account.equals(&account)) {
-                        hash.mixOut(old_account.ltHash(key));
-                        hash.mixIn(account.ltHash(key));
-                    }
-                } else hash.mixIn(account.ltHash(key));
+
+                const old_account = self.db.get(arena.allocator(), key, self.ancestors) catch @panic("account not found") orelse {
+                    self.hash.mixIn(account.ltHash(key));
+                    continue;
+                };
+                if (old_account.equals(&account)) continue;
+
+                self.hash.mixOut(old_account.ltHash(key));
+                self.hash.mixIn(account.ltHash(key));
             }
         }
     };
@@ -423,43 +435,44 @@ pub fn deltaLtHash(
     var iterator = account_reader.slotModifiedIterator(slot) orelse return .IDENTITY;
     defer iterator.unlock();
 
-    const NUM_THREADS = 8;
+    const num_workers = @max(1, @min(iterator.len(), thread_pool.max_threads));
+    const chunk_size = iterator.len() / num_workers;
 
-    // TODO: We want to improve how the delta lthashes are computed even further.
-    // We want to incrementally build up the lthash over the course of the runtime
-    // execution, simply queuing it as a task in the general txn-exec pool. We have
-    // large enough gaps in the transaction scheduling graph that we can trivially
-    // compute (and over-compute, by re-hashing the same account modifications several times)
-    // during the execution.
-    const Pool = sig.utils.thread.ScopedThreadPool(Task.run);
-    var tp: *Pool = try .init(allocator, NUM_THREADS);
-    defer tp.deinit(allocator);
+    var workers: std.ArrayListUnmanaged(Worker) = try .initCapacity(allocator, num_workers);
+    defer workers.deinit(allocator);
 
-    var hashes: [NUM_THREADS]LtHash = @splat(.IDENTITY);
-    var start_index: usize = 0;
-    for (0..NUM_THREADS) |i| {
-        const chunk_size = iterator.len() / NUM_THREADS;
-        const end_index = switch (i) {
-            NUM_THREADS - 1 => iterator.len(),
-            else => start_index + chunk_size,
-        };
-        defer start_index = end_index;
+    {
+        var wg = std.Thread.WaitGroup{};
+        wg.startMany(num_workers);
+        defer wg.wait();
 
-        try tp.schedule(allocator, .{
-            allocator,
-            iterator.accounts_db_two.slot,
-            account_reader.accounts_db_two,
-            parent_ancestors,
-            &hashes[i],
-            start_index,
-            end_index,
-        });
+        var batch = sig.sync.ThreadPool.Batch{};
+        defer thread_pool.schedule(batch);
+
+        var start_index: usize = 0;
+        for (0..num_workers) |i| {
+            const end_index = if (i == num_workers - 1)
+                iterator.len()
+            else
+                start_index + chunk_size;
+
+            defer start_index = end_index;
+
+            const worker = workers.addOneAssumeCapacity();
+            worker.* = .{
+                .wg = &wg,
+                .range = .{ start_index, end_index },
+                .gpa = allocator,
+                .slot_index = iterator.accounts_db_two.slot,
+                .db = account_reader.accounts_db_two,
+                .ancestors = parent_ancestors,
+            };
+            batch.push(.from(&worker.task));
+        }
     }
 
-    try tp.join();
-
     var final: LtHash = .IDENTITY;
-    for (hashes) |hash| final = final.add(hash);
+    for (workers.items) |*worker| final = final.add(worker.hash);
     return final;
 }
 
