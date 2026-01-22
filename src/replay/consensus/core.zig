@@ -109,7 +109,6 @@ pub const TowerConsensus = struct {
     // Core consensus state
     fork_choice: HeaviestSubtreeForkChoice,
     replay_tower: ReplayTower,
-    latest_validator_votes: LatestValidatorVotes,
     status_cache: sig.core.StatusCache,
     slot_data: SlotData,
 
@@ -122,9 +121,6 @@ pub const TowerConsensus = struct {
     pub fn deinit(self: TowerConsensus, allocator: Allocator) void {
         self.replay_tower.deinit(allocator);
         self.fork_choice.deinit(allocator);
-
-        var latest_validator_votes = self.latest_validator_votes;
-        latest_validator_votes.deinit(allocator);
 
         self.slot_data.deinit(allocator);
         self.arena_state.promote(allocator).deinit();
@@ -189,7 +185,6 @@ pub const TowerConsensus = struct {
 
             .fork_choice = fork_choice,
             .replay_tower = replay_tower,
-            .latest_validator_votes = .empty,
             .status_cache = .DEFAULT,
             .slot_data = .empty,
 
@@ -416,7 +411,7 @@ pub const TowerConsensus = struct {
                 .result_writer = params.ledger.resultWriter(),
                 .slot_tracker = params.slot_tracker,
                 .progress = params.progress_map,
-                .latest_validator_votes = &self.latest_validator_votes,
+                .latest_validator_votes = &self.slot_data.latest_validator_votes,
                 .slot_data = &self.slot_data,
                 .duplicate_confirmed_slots = params.duplicate_confirmed_slots.items,
                 .gossip_verified_vote_hashes = params.gossip_verified_vote_hashes.items,
@@ -536,7 +531,7 @@ pub const TowerConsensus = struct {
             progress_map,
             &self.fork_choice,
             &self.replay_tower,
-            &self.latest_validator_votes,
+            &self.slot_data.latest_validator_votes,
         );
         defer allocator.free(newly_computed_consensus_slots);
         // For each of the newly computed consensus slots,
@@ -610,7 +605,7 @@ pub const TowerConsensus = struct {
             ancestors,
             descendants,
             progress_map,
-            &self.latest_validator_votes,
+            &self.slot_data.latest_validator_votes,
             &self.fork_choice,
             epoch_tracker,
             account_store.reader(),
@@ -1226,15 +1221,14 @@ fn sendVoteToGossip(
 
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
-    switch (vote_op) {
-        .push_vote => |push_vote_data| {
+    const signed_vote_data: sig.gossip.SignedGossipData = switch (vote_op) {
+        .push_vote => |push_vote_data| blk: {
             const tower_last = push_vote_data.last_tower_slot orelse return;
             // Find the oldest crds vote by wallclock that has a lower slot than `tower`
             // and recycle its vote-index. If the crds buffer is not full we instead add a new vote-index.
             const vote_index: u8 =
                 findVoteIndexToEvict(gossip_table, my_pubkey, tower_last) orelse return;
-
-            const vote_data = sig.gossip.data.GossipData{
+            break :blk .initSigned(&my_keypair, .{
                 .Vote = .{
                     vote_index,
                     .{
@@ -1244,34 +1238,21 @@ fn sendVoteToGossip(
                         .slot = 0, // will be set from transaction
                     },
                 },
-            };
-
-            const signed_vote_data = sig.gossip.data.SignedGossipData.initSigned(
-                &my_keypair,
-                vote_data,
-            );
-            _ = try gossip_table.insert(signed_vote_data, now);
+            });
         },
-        .refresh_vote => |refresh_vote_data| {
-            const vote_data = sig.gossip.data.GossipData{
-                .Vote = .{
-                    0, // tag
-                    .{
-                        .from = my_pubkey,
-                        .transaction = refresh_vote_data.tx,
-                        .wallclock = now,
-                        .slot = refresh_vote_data.last_voted_slot,
-                    },
+        .refresh_vote => |refresh_vote_data| .initSigned(&my_keypair, .{
+            .Vote = .{
+                0, // tag
+                .{
+                    .from = my_pubkey,
+                    .transaction = refresh_vote_data.tx,
+                    .wallclock = now,
+                    .slot = refresh_vote_data.last_voted_slot,
                 },
-            };
-
-            const signed_vote_data = sig.gossip.data.SignedGossipData.initSigned(
-                &my_keypair,
-                vote_data,
-            );
-            _ = try gossip_table.insert(signed_vote_data, now);
-        },
-    }
+            },
+        }),
+    };
+    _ = try gossip_table.insert(signed_vote_data, now);
 }
 
 // This processing currently runs on the same thread. If it proves to be a bottleneck
@@ -5306,7 +5287,7 @@ test "edge cases - gossip verified vote hashes" {
     try std.testing.expectEqualSlices(
         Pubkey,
         &.{ pk1, pk2 },
-        tower_consensus.latest_validator_votes.max_gossip_frozen_votes.keys(),
+        tower_consensus.slot_data.latest_validator_votes.max_gossip_frozen_votes.keys(),
     );
 
     // Optimisic confirmation threshold not reached during this test.
@@ -7138,7 +7119,7 @@ test "successful fork switch (switch_proof)" {
     // Seed latest validator votes to support slot 4 (>38% of 500 = 190)
     for (vote_pubkeys[0..3]) |pk| {
         // Record the vote gotten via gossip.
-        _ = try consensus.latest_validator_votes.checkAddVote(
+        _ = try consensus.slot_data.latest_validator_votes.checkAddVote(
             gpa,
             pk,
             4,
@@ -7146,7 +7127,7 @@ test "successful fork switch (switch_proof)" {
             .gossip,
         );
         // Record the vote gotten via replay.
-        _ = try consensus.latest_validator_votes.checkAddVote(
+        _ = try consensus.slot_data.latest_validator_votes.checkAddVote(
             gpa,
             pk,
             4,
@@ -7197,7 +7178,7 @@ test "successful fork switch (switch_proof)" {
             &progress,
             total_stake,
             vote_accounts_map,
-            &consensus.latest_validator_votes,
+            &consensus.slot_data.latest_validator_votes,
             &consensus.fork_choice,
         );
         switch (decision2) {
@@ -7239,7 +7220,7 @@ test "successful fork switch (switch_proof)" {
         &progress,
         total_stake,
         vote_accounts_map,
-        &consensus.latest_validator_votes,
+        &consensus.slot_data.latest_validator_votes,
         &consensus.fork_choice,
     );
     switch (decision) {
@@ -7373,7 +7354,7 @@ test "successful fork switch (switch_proof)" {
         &progress,
         total_stake,
         vote_accounts_map,
-        &consensus.latest_validator_votes,
+        &consensus.slot_data.latest_validator_votes,
         &consensus.fork_choice,
     );
     switch (decision5) {
