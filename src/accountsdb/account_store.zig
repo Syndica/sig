@@ -828,7 +828,7 @@ test "insertion basic" {
     // this backtracking wouldn't/shouldn't really ever happen, but just
     // to demonstrate that the error is based on the rooted slot:
     simple_state.largest_rooted_slot = null;
-    real_state.rooted.largest_rooted_slot = null;
+    real_state.rooted.largest_rooted_slot = .init(0);
     try putAccountIntoStores({}, &stores, 1, .ZEROES, .EMPTY);
 }
 

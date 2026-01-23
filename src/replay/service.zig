@@ -88,6 +88,7 @@ pub fn advanceReplay(
         slot_leaders,
         &replay_state.hard_forks,
         &replay_state.progress_map,
+        replay_state.rpc_context,
     );
 
     // replay slots
@@ -160,6 +161,8 @@ pub const Dependencies = struct {
     },
     /// ownership transferred to replay
     hard_forks: sig.core.HardForks,
+    /// Optional context for RPC hooks
+    rpc_context: ?*sig.rpc.methods.HookContext,
     replay_threads: u32,
     stop_at_slot: ?Slot,
 };
@@ -186,6 +189,7 @@ pub const ReplayState = struct {
     execution_log_helper: replay.execution.LogHelper,
     replay_votes_channel: ?*Channel(ParsedVote),
     stop_at_slot: ?sig.core.Slot,
+    rpc_context: ?*sig.rpc.methods.HookContext,
 
     pub fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
@@ -253,6 +257,7 @@ pub const ReplayState = struct {
             .execution_log_helper = .init(.from(deps.logger)),
             .replay_votes_channel = replay_votes_channel,
             .stop_at_slot = deps.stop_at_slot,
+            .rpc_context = deps.rpc_context,
         };
     }
 };
@@ -320,6 +325,7 @@ pub fn trackNewSlots(
     hard_forks: *const sig.core.HardForks,
     /// needed for update_fork_propagated_threshold_from_votes
     _: *ProgressMap,
+    rpc_ctx: ?*sig.rpc.methods.HookContext,
 ) !void {
     var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
     defer zone.deinit();
@@ -409,6 +415,10 @@ pub fn trackNewSlots(
                 slot,
                 hard_forks,
             );
+
+            if (rpc_ctx) |ctx| {
+                ctx.setLatestConfirmedSlot(slot);
+            }
 
             try slot_tracker.put(allocator, slot, .{ .constants = constants, .state = state });
             try slot_tree.record(allocator, slot, constants.parent_slot);
@@ -569,6 +579,9 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     slot,
                     last_entry_hash,
                 ));
+                if (state.rpc_context) |ctx| {
+                    ctx.setLatestProcessedSlot(slot);
+                }
                 processed_a_slot = true;
             } else {
                 state.logger.info().logf("partially replayed slot: {}", .{slot});
@@ -721,6 +734,7 @@ test trackNewSlots {
         slot_leaders,
         &hard_forks,
         undefined,
+        null,
     );
     try expectSlotTracker(
         &slot_tracker,
@@ -741,6 +755,7 @@ test trackNewSlots {
         slot_leaders,
         &hard_forks,
         undefined,
+        null,
     );
     try expectSlotTracker(
         &slot_tracker,
@@ -763,6 +778,7 @@ test trackNewSlots {
         slot_leaders,
         &hard_forks,
         undefined,
+        null,
     );
     try expectSlotTracker(
         &slot_tracker,
@@ -786,6 +802,7 @@ test trackNewSlots {
         slot_leaders,
         &hard_forks,
         undefined,
+        null,
     );
     try expectSlotTracker(
         &slot_tracker,
@@ -1237,6 +1254,7 @@ pub const DependencyStubs = struct {
 
             .replay_threads = 1,
             .stop_at_slot = null,
+            .rpc_context = null,
         }, .enabled);
     }
 

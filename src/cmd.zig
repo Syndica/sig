@@ -1270,6 +1270,12 @@ fn validator(
     else
         null;
 
+    var rpc_ctx = sig.rpc.methods.HookContext{
+        .latest_processed_slot = .init(0),
+        .latest_confirmed_slot = .init(0),
+        .account_db_two = &new_db,
+    };
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db_two = &new_db },
@@ -1281,6 +1287,7 @@ fn validator(
         .voting_enabled = voting_enabled,
         .vote_account_address = maybe_vote_pubkey,
         .stop_at_slot = cfg.stop_at_slot,
+        .rpc_context = &rpc_ctx,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -1289,6 +1296,8 @@ fn validator(
         if (maybe_vote_sockets) |*vs| vs else null,
         &gossip_votes,
     );
+
+    try app_base.rpc_hooks.set(allocator, &rpc_ctx);
 
     const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
         try std.Thread.spawn(.{}, runRPCServer, .{
@@ -1413,6 +1422,12 @@ fn replayOffline(
     );
     defer magic_tracker.deinit(allocator);
 
+    var rpc_ctx = sig.rpc.methods.HookContext{
+        .latest_processed_slot = .init(0),
+        .latest_confirmed_slot = .init(0),
+        .account_db_two = &new_db,
+    };
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db_two = &new_db },
@@ -1424,6 +1439,7 @@ fn replayOffline(
         .voting_enabled = false,
         .vote_account_address = null,
         .stop_at_slot = cfg.stop_at_slot,
+        .rpc_context = &rpc_ctx,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -2118,6 +2134,7 @@ const ReplayAndConsensusServiceState = struct {
             voting_enabled: bool,
             vote_account_address: ?Pubkey,
             stop_at_slot: ?Slot,
+            rpc_context: ?*sig.rpc.methods.HookContext,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
@@ -2174,6 +2191,7 @@ const ReplayAndConsensusServiceState = struct {
                 .hard_forks = hard_forks,
                 .replay_threads = params.replay_threads,
                 .stop_at_slot = params.stop_at_slot,
+                .rpc_context = params.rpc_context,
             }, if (params.disable_consensus) .disabled else .enabled);
         };
         errdefer replay_state.deinit();

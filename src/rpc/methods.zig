@@ -686,3 +686,68 @@ pub const common = struct {
         shredVersion: ?u16 = null,
     };
 };
+
+pub const HookContext = struct {
+    latest_processed_slot: std.atomic.Value(Slot),
+    latest_confirmed_slot: std.atomic.Value(Slot),
+    account_db_two: *const sig.accounts_db.Two,
+
+    fn getLatestProcessedSlot(self: *@This()) !Slot {
+        const slot = self.latest_processed_slot.load(.monotonic);
+        if (slot == 0) {
+            return error.RpcNoProcessedSlot;
+        }
+        return slot;
+    }
+
+    fn getLatestConfirmedSlot(self: *@This()) !Slot {
+        const slot = self.latest_confirmed_slot.load(.monotonic);
+        if (slot == 0) {
+            return error.RpcNoConfirmedSlot;
+        }
+        return slot;
+    }
+
+    fn getLatestFinalizedSlot(self: *@This()) !Slot {
+        if (self.account_db_two.rooted.getLargestRootedSlot()) |slot| {
+            return slot;
+        } else {
+            return error.RpcNoFinalizedSlot;
+        }
+    }
+
+    pub fn setLatestProcessedSlot(self: *@This(), slot: Slot) void {
+        self.latest_processed_slot.store(slot, .monotonic);
+    }
+
+    pub fn setLatestConfirmedSlot(self: *@This(), slot: Slot) void {
+        self.latest_confirmed_slot.store(slot, .monotonic);
+    }
+
+    fn getSlotImpl(
+        self: *@This(),
+        config: common.CommitmentSlotConfig,
+    ) !Slot {
+        const commitment = config.commitment orelse .finalized;
+
+        const slot = switch (commitment) {
+            .processed => try self.getLatestProcessedSlot(),
+            .confirmed => try self.getLatestConfirmedSlot(),
+            .finalized => try self.getLatestFinalizedSlot(),
+        };
+
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) {
+                return error.RpcMinContextSlotNotMet;
+            }
+        }
+
+        return slot;
+    }
+
+    pub fn getSlot(self: *@This(), _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+
+        return self.getSlotImpl(config);
+    }
+};

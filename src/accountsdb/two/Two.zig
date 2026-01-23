@@ -63,7 +63,7 @@ pub fn deinit(self: *Db) void {
 
 /// Clones the account shared data.
 pub fn put(self: *Db, slot: Slot, address: Pubkey, data: AccountSharedData) !void {
-    if (self.rooted.largest_rooted_slot) |lrs|
+    if (self.rooted.getLargestRootedSlot()) |lrs|
         if (lrs >= slot) return error.CannotWriteRootedSlot;
 
     const cloned = try data.clone(self.allocator);
@@ -77,7 +77,7 @@ pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot, ancestors: *const Ancest
     self.rooted.beginTransaction();
     defer {
         self.rooted.commitTransaction();
-        self.rooted.largest_rooted_slot = newly_rooted_slot;
+        self.rooted.setLargestRootedSlot(newly_rooted_slot);
     }
 
     // Ancestors are kept in a way where the "head" slot is stored.
@@ -86,7 +86,7 @@ pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot, ancestors: *const Ancest
     // we want to show that we'll never need to iterate over more than MAX_SLOTs cases.
     std.debug.assert(ancestors.ancestors.count() < Unrooted.MAX_SLOTS);
 
-    const start_slot = if (self.rooted.largest_rooted_slot) |lrs| lrs + 1 else 0;
+    const start_slot = if (self.rooted.getLargestRootedSlot()) |lrs| lrs + 1 else 0;
     const range = newly_rooted_slot - start_slot + 1;
 
     for (0..range) |i| {

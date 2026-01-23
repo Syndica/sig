@@ -17,7 +17,7 @@ const ROW = sql.SQLITE_ROW;
 /// Handle to the underlying sqlite database.
 handle: *sql.sqlite3,
 /// Tracks the largest rooted slot.
-largest_rooted_slot: ?Slot,
+largest_rooted_slot: std.atomic.Value(Slot),
 
 /// These aren't thread safe, but we can have as many as we want. Clean up with deinitThreadLocals
 /// on any threads that use put or get.
@@ -61,7 +61,7 @@ pub fn init(file_path: [:0]const u8) !Rooted {
 
     return .{
         .handle = db,
-        .largest_rooted_slot = null,
+        .largest_rooted_slot = .init(0),
     };
 }
 
@@ -344,8 +344,13 @@ pub fn get(
 }
 
 pub fn getLargestRootedSlot(self: *const Rooted) ?Slot {
-    if (!builtin.is_test) @compileError("only used in tests");
-    return self.largest_rooted_slot;
+    const loaded = self.largest_rooted_slot.load(.monotonic);
+    if (loaded == 0) return null;
+    return loaded;
+}
+
+pub fn setLargestRootedSlot(self: *Rooted, slot: Slot) void {
+    self.largest_rooted_slot.store(slot, .monotonic);
 }
 
 fn err(self: *Rooted, code: c_int) void {
