@@ -1274,6 +1274,7 @@ fn validator(
         .latest_processed_slot = .init(0),
         .latest_confirmed_slot = .init(0),
         .account_db_two = &new_db,
+        .magic_tracker = &magic_tracker,
     };
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
@@ -1426,6 +1427,7 @@ fn replayOffline(
         .latest_processed_slot = .init(0),
         .latest_confirmed_slot = .init(0),
         .account_db_two = &new_db,
+        .magic_tracker = &magic_tracker,
     };
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{

@@ -74,7 +74,7 @@ pub const MethodAndParams = union(enum) {
     getSignaturesForAddress: noreturn,
     getSignatureStatuses: GetSignatureStatuses,
     getSlot: GetSlot,
-    getSlotLeader: noreturn,
+    getSlotLeader: GetSlotLeader,
     getSlotLeaders: noreturn,
     getStakeMinimumDelegation: noreturn,
     getSupply: noreturn,
@@ -491,7 +491,12 @@ pub const GetSlot = struct {
     pub const Response = Slot;
 };
 
-// TODO: getSlotLeader
+pub const GetSlotLeader = struct {
+    config: ?common.CommitmentSlotConfig = null,
+
+    pub const Response = Pubkey;
+};
+
 // TODO: getSlotLeaders
 // TODO: getStakeActivation
 // TODO: getStakeMinimumDelegation
@@ -691,6 +696,7 @@ pub const HookContext = struct {
     latest_processed_slot: std.atomic.Value(Slot),
     latest_confirmed_slot: std.atomic.Value(Slot),
     account_db_two: *const sig.accounts_db.Two,
+    magic_tracker: *const sig.core.magic_info.MagicTracker,
 
     fn getLatestProcessedSlot(self: *@This()) !Slot {
         const slot = self.latest_processed_slot.load(.monotonic);
@@ -749,5 +755,20 @@ pub const HookContext = struct {
         const config = params.config orelse common.CommitmentSlotConfig{};
 
         return self.getSlotImpl(config);
+    }
+
+    pub fn getSlotLeader(self: *@This(), _: std.mem.Allocator, params: GetSlotLeader) !GetSlotLeader.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+
+        const slot = try self.getSlotImpl(config);
+
+        const magic_tracker = self.magic_tracker;
+
+        const leader_schedules = magic_tracker.getLeaderSchedules() catch |err| {
+            // TODO: properly handle this or ensure this codepath is not possible
+            std.debug.panic("TODO: this should not be possible: {}", .{err});
+        };
+
+        return leader_schedules.getLeader(slot);
     }
 };
