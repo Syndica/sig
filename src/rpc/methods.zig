@@ -19,6 +19,8 @@ const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 
+const MAX_GET_SLOT_LEADERS: usize = 5_000;
+
 pub fn Result(comptime method: MethodAndParams.Tag) type {
     return union(enum) {
         ok: Request(method).Response,
@@ -75,7 +77,7 @@ pub const MethodAndParams = union(enum) {
     getSignatureStatuses: GetSignatureStatuses,
     getSlot: GetSlot,
     getSlotLeader: GetSlotLeader,
-    getSlotLeaders: noreturn,
+    getSlotLeaders: GetSlotLeaders,
     getStakeMinimumDelegation: noreturn,
     getSupply: noreturn,
     getTokenAccountBalance: noreturn,
@@ -497,7 +499,13 @@ pub const GetSlotLeader = struct {
     pub const Response = Pubkey;
 };
 
-// TODO: getSlotLeaders
+pub const GetSlotLeaders = struct {
+    start_slot: Slot,
+    limit: usize,
+
+    const Response = []const Pubkey;
+};
+
 // TODO: getStakeActivation
 // TODO: getStakeMinimumDelegation
 // TODO: getSupply
@@ -770,5 +778,53 @@ pub const HookContext = struct {
         };
 
         return leader_schedules.getLeader(slot);
+    }
+
+    pub fn getSlotLeaders(self: *@This(), allocator: std.mem.Allocator, params: GetSlotLeaders) !GetSlotLeaders.Response {
+        const limit = params.limit;
+        if (limit > MAX_GET_SLOT_LEADERS) {
+            return error.InvalidParams;
+        }
+
+        const start_slot = params.start_slot;
+        var epoch, var slot_index = self.magic_tracker.epoch_schedule.getEpochAndSlotIndex(start_slot);
+
+        var slot_leaders = try std.ArrayListUnmanaged(Pubkey).initCapacity(allocator, limit);
+        errdefer slot_leaders.deinit(allocator);
+
+        while (slot_leaders.items.len < limit) {
+            const leader_schedules = try self.magic_tracker.getLeaderSchedules();
+
+            // Find the leader schedule for the current epoch
+            const leader_schedule: sig.core.magic_leader_schedule.LeaderSchedule = blk: {
+                if (leader_schedules.curr.start <= self.magic_tracker.epoch_schedule.getFirstSlotInEpoch(epoch) and
+                    leader_schedules.curr.end >= self.magic_tracker.epoch_schedule.getLastSlotInEpoch(epoch))
+                {
+                    break :blk leader_schedules.curr;
+                }
+                if (leader_schedules.next) |next| {
+                    if (next.start <= self.magic_tracker.epoch_schedule.getFirstSlotInEpoch(epoch) and
+                        next.end >= self.magic_tracker.epoch_schedule.getLastSlotInEpoch(epoch))
+                    {
+                        break :blk next;
+                    }
+                }
+
+                // TODO: ensure proper error propagation for the response to the client
+                return error.LeaderScheduleUnavailable;
+            };
+
+            // Get leaders from slot_index to end of epoch (or until we have enough)
+            const remaining = limit - slot_leaders.items.len;
+            const available = leader_schedule.leaders.len - slot_index;
+            const to_take = @min(remaining, available);
+
+            slot_leaders.appendSliceAssumeCapacity(leader_schedule.leaders[slot_index..][0..to_take]);
+
+            epoch += 1;
+            slot_index = 0;
+        }
+
+        return slot_leaders.items;
     }
 };
