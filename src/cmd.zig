@@ -2251,7 +2251,7 @@ const ReplayAndConsensusServiceState = struct {
                     .set_exit_on_completion = true,
                 },
             },
-            replay.service.advanceReplay,
+            replay.service.ReplayState.advance,
             .{
                 &self.replay_state,
                 self.metrics,

@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 const tracy = @import("tracy");
+const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 
@@ -53,92 +54,6 @@ pub const AvanceReplayConsensusParams = struct {
     receivers: TowerConsensus.Receivers,
     vote_sockets: ?*const sig.replay.consensus.core.VoteSockets,
 };
-
-/// Run a single iteration of the entire replay process. Includes:
-/// - replay all active slots that have not been replayed yet
-/// - running consensus on the latest updates (if present)
-pub fn advanceReplay(
-    replay_state: *ReplayState,
-    metrics: Metrics,
-    consensus_params: ?AvanceReplayConsensusParams,
-) !void {
-    const zone = tracy.Zone.init(@src(), .{ .name = "advanceReplay" });
-    defer zone.deinit();
-
-    const allocator = replay_state.allocator;
-
-    var start_time = sig.time.Timer.start();
-    replay_state.logger.debug().log("advancing replay");
-
-    var leader_schedules = try replay_state.magic_tracker.getLeaderSchedules();
-    const slot_leaders = SlotLeaders.init(
-        &leader_schedules,
-        sig.core.magic_leader_schedule.LeaderSchedules.getLeaderOrNull,
-    );
-
-    // find slots in the ledger
-    try trackNewSlots(
-        allocator,
-        replay_state.logger,
-        replay_state.account_store,
-        replay_state.ledger,
-        &replay_state.slot_tracker,
-        replay_state.magic_tracker,
-        &replay_state.slot_tree,
-        slot_leaders,
-        &replay_state.hard_forks,
-        &replay_state.progress_map,
-        replay_state.rpc_context,
-    );
-
-    // replay slots
-    const slot_results = try replay.execution.replayActiveSlots(replay_state);
-    defer allocator.free(slot_results);
-
-    // freeze slots
-    const processed_a_slot: bool = try freezeCompletedSlots(replay_state, slot_results);
-
-    // run consensus
-    if (consensus_params) |consensus| {
-        var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
-        defer gossip_verified_vote_hashes.deinit(allocator);
-
-        var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
-        defer duplicate_confirmed_slots.deinit(allocator);
-
-        try consensus.tower.process(allocator, .{
-            .account_store = replay_state.account_store,
-            .gossip_votes = consensus.gossip_votes,
-            .ledger = replay_state.ledger,
-            .slot_tracker = &replay_state.slot_tracker,
-            .magic_tracker = replay_state.magic_tracker,
-            .progress_map = &replay_state.progress_map,
-            .status_cache = &replay_state.status_cache,
-            .senders = consensus.senders,
-            .receivers = consensus.receivers,
-            .vote_sockets = consensus.vote_sockets,
-            .slot_leaders = slot_leaders,
-            .duplicate_confirmed_slots = &duplicate_confirmed_slots,
-            .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
-            .results = slot_results,
-        });
-    } else try bypassConsensus(replay_state);
-
-    if (slot_results.len != 0) {
-        const elapsed = start_time.read().asNanos();
-        metrics.slot_execution_time.observe(elapsed);
-        replay_state.logger.info().logf("advanced in {}", .{std.fmt.fmtDuration(elapsed)});
-    }
-
-    if (replay_state.stop_at_slot) |stop_slot| {
-        for (slot_results) |result| if (result.slot >= stop_slot) {
-            replay_state.logger.info().logf("Reached end slot {}, exiting replay", .{stop_slot});
-            return error.ReachedEndSlot;
-        };
-    }
-
-    if (!processed_a_slot) try std.Thread.yield();
-}
 
 pub const Dependencies = struct {
     /// Used for all allocations within the replay stage
@@ -260,6 +175,298 @@ pub const ReplayState = struct {
             .rpc_context = deps.rpc_context,
         };
     }
+
+    pub fn initForTest(deps: struct {
+        allocator: std.mem.Allocator,
+        ledger: *Ledger,
+        slot_tracker: SlotTracker,
+        magic_tracker: *sig.core.magic_info.MagicTracker,
+        slot_tree: SlotTree,
+        hard_forks: sig.core.HardForks,
+    }) ReplayState {
+        if (!builtin.is_test) @compileError("initForTests should only be used in tests");
+        var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+        return .{
+            .allocator = deps.allocator,
+            .logger = .FOR_TESTS,
+            .identity = .{
+                .validator = Pubkey.initRandom(rng.random()),
+                .vote_account = null,
+            },
+            .signing = .{
+                .authorized_voters = &[_]std.crypto.sign.Ed25519.KeyPair{},
+                .node = null,
+            },
+            .thread_pool = ThreadPool.init(.{}),
+            .slot_tracker = deps.slot_tracker,
+            .magic_tracker = deps.magic_tracker,
+            .slot_tree = deps.slot_tree,
+            .hard_forks = deps.hard_forks,
+            .account_store = .noop,
+            .progress_map = ProgressMap.INIT,
+            .ledger = deps.ledger,
+            .status_cache = sig.core.StatusCache.DEFAULT,
+            .execution_log_helper = replay.execution.LogHelper.init(.FOR_TESTS),
+            .replay_votes_channel = null,
+            .stop_at_slot = null,
+            .rpc_context = null,
+        };
+    }
+
+    /// Run a single iteration of the entire replay process. Includes:
+    /// - replay all active slots that have not been replayed yet
+    /// - running consensus on the latest updates (if present)
+    pub fn advance(
+        self: *@This(),
+        metrics: Metrics,
+        consensus_params: ?AvanceReplayConsensusParams,
+    ) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "advanceReplay" });
+        defer zone.deinit();
+
+        const allocator = self.allocator;
+
+        var start_time = sig.time.Timer.start();
+        self.logger.debug().log("advancing replay");
+
+        var leader_schedules = try self.magic_tracker.getLeaderSchedules();
+        const slot_leaders = SlotLeaders.init(
+            &leader_schedules,
+            sig.core.magic_leader_schedule.LeaderSchedules.getLeaderOrNull,
+        );
+
+        // find slots in the ledger
+        try self.trackNewSlots(&slot_leaders);
+
+        // replay slots
+        const slot_results = try replay.execution.replayActiveSlots(self);
+        defer allocator.free(slot_results);
+
+        // freeze slots
+        const processed_a_slot: bool = try self.freezeCompletedSlots(slot_results);
+
+        // run consensus
+        if (consensus_params) |consensus| {
+            var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
+            defer gossip_verified_vote_hashes.deinit(allocator);
+
+            var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
+            defer duplicate_confirmed_slots.deinit(allocator);
+
+            try consensus.tower.process(allocator, .{
+                .account_store = self.account_store,
+                .gossip_votes = consensus.gossip_votes,
+                .ledger = self.ledger,
+                .slot_tracker = &self.slot_tracker,
+                .magic_tracker = self.magic_tracker,
+                .progress_map = &self.progress_map,
+                .status_cache = &self.status_cache,
+                .senders = consensus.senders,
+                .receivers = consensus.receivers,
+                .vote_sockets = consensus.vote_sockets,
+                .slot_leaders = slot_leaders,
+                .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+                .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+                .results = slot_results,
+            });
+        } else try self.bypassConsensus();
+
+        if (slot_results.len != 0) {
+            const elapsed = start_time.read().asNanos();
+            metrics.slot_execution_time.observe(elapsed);
+            self.logger.info().logf("advanced in {}", .{std.fmt.fmtDuration(elapsed)});
+        }
+
+        if (self.stop_at_slot) |stop_slot| {
+            for (slot_results) |result| if (result.slot >= stop_slot) {
+                self.logger.info().logf("Reached end slot {}, exiting replay", .{stop_slot});
+                return error.ReachedEndSlot;
+            };
+        }
+
+        if (!processed_a_slot) try std.Thread.yield();
+    }
+
+    /// Identifies new slots in the ledger and starts tracking them in the slot
+    /// tracker.
+    ///
+    /// Analogous to
+    /// [generate_new_bank_forks](https://github.com/anza-xyz/agave/blob/146ebd8be3857d530c0946003fcd58be220c3290/core/src/replay_stage.rs#L4149)
+    pub fn trackNewSlots(
+        self: *@This(),
+        slot_leaders: *const SlotLeaders,
+    ) !void {
+        var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
+        defer zone.deinit();
+
+        const root = self.slot_tracker.root;
+        var frozen_slots = try self.slot_tracker.frozenSlots(self.allocator);
+        defer frozen_slots.deinit(self.allocator);
+
+        var frozen_slots_since_root = try std.ArrayListUnmanaged(sig.core.Slot)
+            .initCapacity(self.allocator, frozen_slots.count());
+        defer frozen_slots_since_root.deinit(self.allocator);
+        for (frozen_slots.keys()) |slot| if (slot >= root) {
+            frozen_slots_since_root.appendAssumeCapacity(slot);
+        };
+
+        var next_slots = try self.ledger.reader().getSlotsSince(self.allocator, frozen_slots_since_root.items);
+        defer {
+            for (next_slots.values()) |*list| list.deinit(self.allocator);
+            next_slots.deinit(self.allocator);
+        }
+
+        for (next_slots.keys(), next_slots.values()) |parent_slot, children| {
+            const parent_info = frozen_slots.get(parent_slot) orelse return error.MissingParent;
+
+            for (children.items) |slot| {
+                if (self.slot_tracker.contains(slot)) continue;
+                self.logger.info().logf("tracking new slot: {}", .{slot});
+
+                // Constants are not constant at this point since processing new epochs
+                // may modify the feature set.
+                var constants, var state = try newSlotFromParent(
+                    self.allocator,
+                    self.account_store.reader(),
+                    self.magic_tracker.cluster.ticks_per_slot,
+                    parent_slot,
+                    parent_info.constants,
+                    parent_info.state,
+                    slot_leaders.get(slot) orelse return error.UnknownLeader,
+                    slot,
+                );
+                errdefer constants.deinit(self.allocator);
+                errdefer state.deinit(self.allocator);
+
+                const parent_epoch = self.magic_tracker.epoch_schedule.getEpoch(parent_slot);
+                const slot_epoch = self.magic_tracker.epoch_schedule.getEpoch(slot);
+                const store = self.account_store.forSlot(slot, &constants.ancestors);
+
+                if (parent_epoch < slot_epoch) {
+                    try replay.epoch_transitions.processNewEpoch(
+                        self.allocator,
+                        slot,
+                        &constants,
+                        &state,
+                        store,
+                        self.magic_tracker,
+                    );
+                } else {
+                    try replay.epoch_transitions.updateEpochStakes(
+                        self.allocator,
+                        slot,
+                        &constants.ancestors,
+                        &constants.feature_set,
+                        &state.stakes_cache,
+                        self.magic_tracker,
+                    );
+                }
+
+                try replay.rewards.distribution.distributePartitionedEpochRewards(
+                    self.allocator,
+                    slot,
+                    slot_epoch,
+                    constants.block_height,
+                    self.magic_tracker.epoch_schedule,
+                    &state.reward_status,
+                    &state.stakes_cache,
+                    &state.capitalization,
+                    &constants.rent_collector.rent,
+                    store,
+                );
+
+                try updateSysvarsForNewSlot(
+                    self.allocator,
+                    self.account_store,
+                    self.magic_tracker,
+                    &constants,
+                    &state,
+                    slot,
+                    &self.hard_forks,
+                );
+
+                if (self.rpc_context) |ctx| {
+                    ctx.setLatestConfirmedSlot(slot);
+                }
+
+                try self.slot_tracker.put(self.allocator, slot, .{ .constants = constants, .state = state });
+                try self.slot_tree.record(self.allocator, slot, constants.parent_slot);
+
+                // TODO: update_fork_propagated_threshold_from_votes
+            }
+        }
+    }
+
+    /// freezes any slots that were completed according to these replay results
+    fn freezeCompletedSlots(self: *@This(), results: []const ReplayResult) !bool {
+        const slot_tracker = &self.slot_tracker;
+
+        var processed_a_slot = false;
+        for (results) |result| switch (result.output) {
+            .err => |err| {
+                self.logger.logf(
+                    switch (err) {
+                        // invalid_block may be a non-issue and simply indicate that
+                        // the leader produced a malformed block that will be
+                        // skipped. To be safe/thorough, we're logging them all as
+                        // error, unless we observe it often and confirm it to
+                        // routinely not be a problem.
+                        .invalid_block => |e| switch (e) {
+                            // TooFewTicks is typical during forks and should not require intervention.
+                            .TooFewTicks => .warn,
+                            else => .@"error",
+                        },
+                        else => .@"error",
+                    },
+                    "replayed slot {} with error: {}",
+                    .{ result.slot, err },
+                );
+            },
+            .last_entry_hash => |last_entry_hash| {
+                const slot = result.slot;
+                const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+                if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+                    self.logger.info().logf("finished replaying slot: {}", .{slot});
+                    try replay.freeze.freezeSlot(self.allocator, .init(
+                        .from(self.logger),
+                        self.account_store,
+                        &self.thread_pool,
+                        slot_info.state,
+                        slot_info.constants,
+                        slot,
+                        last_entry_hash,
+                    ));
+                    if (self.rpc_context) |ctx| {
+                        ctx.setLatestProcessedSlot(slot);
+                    }
+                    processed_a_slot = true;
+                } else {
+                    self.logger.info().logf("partially replayed slot: {}", .{slot});
+                }
+            },
+        };
+
+        return processed_a_slot;
+    }
+
+    /// bypass the tower bft consensus protocol, simply rooting slots with SlotTree.reRoot
+    fn bypassConsensus(self: *@This()) !void {
+        if (self.slot_tree.reRoot(self.allocator)) |new_root| {
+            const slot_tracker = &self.slot_tracker;
+
+            self.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
+            slot_tracker.root = new_root;
+            slot_tracker.pruneNonRooted(self.allocator);
+
+            try self.status_cache.addRoot(self.allocator, new_root);
+
+            const slot_constants = slot_tracker.get(new_root).?;
+            try self.account_store.onSlotRooted(
+                new_root,
+                &slot_constants.constants.ancestors,
+            );
+        }
+    }
 };
 
 /// Analogous to [`initialize_progress_and_fork_choice_with_locked_bank_forks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L637)
@@ -307,126 +514,6 @@ pub const FrozenSlotsSortCtx = struct {
         return ctx.slots[a_index] < ctx.slots[b_index];
     }
 };
-
-/// Identifies new slots in the ledger and starts tracking them in the slot
-/// tracker.
-///
-/// Analogous to
-/// [generate_new_bank_forks](https://github.com/anza-xyz/agave/blob/146ebd8be3857d530c0946003fcd58be220c3290/core/src/replay_stage.rs#L4149)
-pub fn trackNewSlots(
-    allocator: Allocator,
-    logger: Logger,
-    account_store: AccountStore,
-    ledger: *Ledger,
-    slot_tracker: *SlotTracker,
-    magic_tracker: *sig.core.magic_info.MagicTracker,
-    slot_tree: *SlotTree,
-    slot_leaders: SlotLeaders,
-    hard_forks: *const sig.core.HardForks,
-    /// needed for update_fork_propagated_threshold_from_votes
-    _: *ProgressMap,
-    rpc_ctx: ?*sig.rpc.methods.HookContext,
-) !void {
-    var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
-    defer zone.deinit();
-
-    const root = slot_tracker.root;
-    var frozen_slots = try slot_tracker.frozenSlots(allocator);
-    defer frozen_slots.deinit(allocator);
-
-    var frozen_slots_since_root = try std.ArrayListUnmanaged(sig.core.Slot)
-        .initCapacity(allocator, frozen_slots.count());
-    defer frozen_slots_since_root.deinit(allocator);
-    for (frozen_slots.keys()) |slot| if (slot >= root) {
-        frozen_slots_since_root.appendAssumeCapacity(slot);
-    };
-
-    var next_slots = try ledger.reader().getSlotsSince(allocator, frozen_slots_since_root.items);
-    defer {
-        for (next_slots.values()) |*list| list.deinit(allocator);
-        next_slots.deinit(allocator);
-    }
-
-    for (next_slots.keys(), next_slots.values()) |parent_slot, children| {
-        const parent_info = frozen_slots.get(parent_slot) orelse return error.MissingParent;
-
-        for (children.items) |slot| {
-            if (slot_tracker.contains(slot)) continue;
-            logger.info().logf("tracking new slot: {}", .{slot});
-
-            // Constants are not constant at this point since processing new epochs
-            // may modify the feature set.
-            var constants, var state = try newSlotFromParent(
-                allocator,
-                account_store.reader(),
-                magic_tracker.cluster.ticks_per_slot,
-                parent_slot,
-                parent_info.constants,
-                parent_info.state,
-                slot_leaders.get(slot) orelse return error.UnknownLeader,
-                slot,
-            );
-            errdefer constants.deinit(allocator);
-            errdefer state.deinit(allocator);
-
-            const parent_epoch = magic_tracker.epoch_schedule.getEpoch(parent_slot);
-            const slot_epoch = magic_tracker.epoch_schedule.getEpoch(slot);
-            const store = account_store.forSlot(slot, &constants.ancestors);
-
-            if (parent_epoch < slot_epoch) {
-                try replay.epoch_transitions.processNewEpoch(
-                    allocator,
-                    slot,
-                    &constants,
-                    &state,
-                    store,
-                    magic_tracker,
-                );
-            } else {
-                try replay.epoch_transitions.updateEpochStakes(
-                    allocator,
-                    slot,
-                    &constants.ancestors,
-                    &constants.feature_set,
-                    &state.stakes_cache,
-                    magic_tracker,
-                );
-            }
-
-            try replay.rewards.distribution.distributePartitionedEpochRewards(
-                allocator,
-                slot,
-                slot_epoch,
-                constants.block_height,
-                magic_tracker.epoch_schedule,
-                &state.reward_status,
-                &state.stakes_cache,
-                &state.capitalization,
-                &constants.rent_collector.rent,
-                store,
-            );
-
-            try updateSysvarsForNewSlot(
-                allocator,
-                account_store,
-                magic_tracker,
-                &constants,
-                &state,
-                slot,
-                hard_forks,
-            );
-
-            if (rpc_ctx) |ctx| {
-                ctx.setLatestConfirmedSlot(slot);
-            }
-
-            try slot_tracker.put(allocator, slot, .{ .constants = constants, .state = state });
-            try slot_tree.record(allocator, slot, constants.parent_slot);
-
-            // TODO: update_fork_propagated_threshold_from_votes
-        }
-    }
-}
 
 /// Initializes the SlotConstants and SlotState from their parents and other
 /// dependencies.
@@ -540,77 +627,6 @@ pub fn getActiveFeatures(
     return features;
 }
 
-/// freezes any slots that were completed according to these replay results
-fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !bool {
-    const slot_tracker = &state.slot_tracker;
-
-    var processed_a_slot = false;
-    for (results) |result| switch (result.output) {
-        .err => |err| {
-            state.logger.logf(
-                switch (err) {
-                    // invalid_block may be a non-issue and simply indicate that
-                    // the leader produced a malformed block that will be
-                    // skipped. To be safe/thorough, we're logging them all as
-                    // error, unless we observe it often and confirm it to
-                    // routinely not be a problem.
-                    .invalid_block => |e| switch (e) {
-                        // TooFewTicks is typical during forks and should not require intervention.
-                        .TooFewTicks => .warn,
-                        else => .@"error",
-                    },
-                    else => .@"error",
-                },
-                "replayed slot {} with error: {}",
-                .{ result.slot, err },
-            );
-        },
-        .last_entry_hash => |last_entry_hash| {
-            const slot = result.slot;
-            const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
-            if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
-                state.logger.info().logf("finished replaying slot: {}", .{slot});
-                try replay.freeze.freezeSlot(state.allocator, .init(
-                    .from(state.logger),
-                    state.account_store,
-                    &state.thread_pool,
-                    slot_info.state,
-                    slot_info.constants,
-                    slot,
-                    last_entry_hash,
-                ));
-                if (state.rpc_context) |ctx| {
-                    ctx.setLatestProcessedSlot(slot);
-                }
-                processed_a_slot = true;
-            } else {
-                state.logger.info().logf("partially replayed slot: {}", .{slot});
-            }
-        },
-    };
-
-    return processed_a_slot;
-}
-
-/// bypass the tower bft consensus protocol, simply rooting slots with SlotTree.reRoot
-fn bypassConsensus(state: *ReplayState) !void {
-    if (state.slot_tree.reRoot(state.allocator)) |new_root| {
-        const slot_tracker = &state.slot_tracker;
-
-        state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
-        slot_tracker.root = new_root;
-        slot_tracker.pruneNonRooted(state.allocator);
-
-        try state.status_cache.addRoot(state.allocator, new_root);
-
-        const slot_constants = slot_tracker.get(new_root).?;
-        try state.account_store.onSlotRooted(
-            new_root,
-            &slot_constants.constants.ancestors,
-        );
-    }
-}
-
 test "getActiveFeatures rejects wrong ownership" {
     const allocator = std.testing.allocator;
     var accounts = sig.utils.collections.PubkeyMap(sig.core.Account).empty;
@@ -641,7 +657,7 @@ test "getActiveFeatures rejects wrong ownership" {
     try std.testing.expect(features2.active(.system_transfer_zero_check, 1));
 }
 
-test trackNewSlots {
+test "trackNewSlots" {
     const allocator = std.testing.allocator;
     var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -681,7 +697,6 @@ test trackNewSlots {
         .state = state,
         .constants = try .genesis(allocator, .DEFAULT),
     });
-    defer slot_tracker.deinit(allocator);
     slot_tracker.get(0).?.state.hash.set(.ZEROES);
 
     const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
@@ -714,98 +729,59 @@ test trackNewSlots {
     try lsc.put(0, leader_schedule);
     const slot_leaders = lsc.slotLeaders();
 
-    // slot tracker should start with only 0
-    try expectSlotTracker(&slot_tracker, leader_schedule, &.{.{ 0, 0 }}, &.{ 1, 2, 3, 4, 5, 6 });
+    const slot_tree = try SlotTree.init(allocator, 0);
 
     const hard_forks = sig.core.HardForks{};
 
-    var slot_tree = try SlotTree.init(allocator, 0);
-    defer slot_tree.deinit(allocator);
+    var replay_state = ReplayState.initForTest(.{
+        .allocator = allocator,
+        .ledger = &ledger,
+        .slot_tracker = slot_tracker,
+        .magic_tracker = &magic_tracker,
+        .slot_tree = slot_tree,
+        .hard_forks = hard_forks,
+    });
+    defer replay_state.deinit();
+
+    // slot tracker should start with only 0
+    try expectSlotTracker(&replay_state.slot_tracker, leader_schedule, &.{.{ 0, 0 }}, &.{ 1, 2, 3, 4, 5, 6 });
 
     // only the root (0) is considered frozen, so only 0 and 1 should be added at first.
-    try trackNewSlots(
-        allocator,
-        .FOR_TESTS,
-        .noop,
-        &ledger,
-        &slot_tracker,
-        &magic_tracker,
-        &slot_tree,
-        slot_leaders,
-        &hard_forks,
-        undefined,
-        null,
-    );
+    try replay_state.trackNewSlots(&slot_leaders);
     try expectSlotTracker(
-        &slot_tracker,
+        &replay_state.slot_tracker,
         leader_schedule,
         &.{ .{ 0, 0 }, .{ 1, 0 } },
         &.{ 2, 3, 4, 5, 6 },
     );
 
     // doing nothing should result in the same tracker state
-    try trackNewSlots(
-        allocator,
-        .FOR_TESTS,
-        .noop,
-        &ledger,
-        &slot_tracker,
-        &magic_tracker,
-        &slot_tree,
-        slot_leaders,
-        &hard_forks,
-        undefined,
-        null,
-    );
+    try replay_state.trackNewSlots(&slot_leaders);
     try expectSlotTracker(
-        &slot_tracker,
+        &replay_state.slot_tracker,
         leader_schedule,
         &.{ .{ 0, 0 }, .{ 1, 0 } },
         &.{ 2, 3, 4, 5, 6 },
     );
 
     // freezing 1 should result in 2 and 4 being added
-    slot_tracker.get(1).?.state.hash.set(.ZEROES);
+    replay_state.slot_tracker.get(1).?.state.hash.set(.ZEROES);
 
-    try trackNewSlots(
-        allocator,
-        .FOR_TESTS,
-        .noop,
-        &ledger,
-        &slot_tracker,
-        &magic_tracker,
-        &slot_tree,
-        slot_leaders,
-        &hard_forks,
-        undefined,
-        null,
-    );
+    try replay_state.trackNewSlots(&slot_leaders);
     try expectSlotTracker(
-        &slot_tracker,
+        &replay_state.slot_tracker,
         leader_schedule,
         &.{ .{ 0, 0 }, .{ 1, 0 }, .{ 2, 1 }, .{ 4, 1 } },
         &.{ 3, 5, 6 },
     );
 
     // freezing 2 and 4 should only result in 6 being added since 3's parent is unknown
-    slot_tracker.get(2).?.state.hash.set(.ZEROES);
-    slot_tracker.get(4).?.state.hash.set(.ZEROES);
+    replay_state.slot_tracker.get(2).?.state.hash.set(.ZEROES);
+    replay_state.slot_tracker.get(4).?.state.hash.set(.ZEROES);
 
-    try trackNewSlots(
-        allocator,
-        .FOR_TESTS,
-        .noop,
-        &ledger,
-        &slot_tracker,
-        &magic_tracker,
-        &slot_tree,
-        slot_leaders,
-        &hard_forks,
-        undefined,
-        null,
-    );
+    try replay_state.trackNewSlots(&slot_leaders);
     try expectSlotTracker(
-        &slot_tracker,
+        &replay_state.slot_tracker,
         leader_schedule,
         &.{ .{ 0, 0 }, .{ 1, 0 }, .{ 2, 1 }, .{ 4, 1 }, .{ 6, 4 } },
         &.{ 3, 5 },
@@ -930,7 +906,7 @@ test "advance calls consensus.process with empty replay results" {
         allocator.destroy(replay_state.magic_tracker);
     }
 
-    try advanceReplay(&replay_state, try registry.initStruct(Metrics), null);
+    try replay_state.advance(try registry.initStruct(Metrics), null);
 
     // No slots were replayed
     try std.testing.expectEqual(0, replay_state.slot_tracker.root);
@@ -974,7 +950,7 @@ test "freezeCompletedSlots handles errors correctly" {
         allocator.destroy(replay_state.magic_tracker);
     }
 
-    const processed_a_slot = try freezeCompletedSlots(&replay_state, &.{
+    const processed_a_slot = try replay_state.freezeCompletedSlots(&.{
         .{ .slot = 1, .output = .{ .err = .{ .invalid_block = .TooFewTicks } } },
         .{ .slot = 2, .output = .{ .err = .failed_to_load_meta } },
     });
@@ -1089,7 +1065,7 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     replay_state.stop_at_slot = execution_slot;
     try std.testing.expectError(
         error.ReachedEndSlot,
-        advanceReplay(&replay_state, try registry.initStruct(Metrics), null),
+        replay_state.advance(try registry.initStruct(Metrics), null),
     );
 
     // get slot hash
