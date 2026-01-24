@@ -114,12 +114,49 @@ pub fn verifyPoh(entries: []const Entry, seed: Hash) bool {
     return true;
 }
 
-/// Hash a group of transactions as a merkle tree and return the root node.
-///
-/// This is typically used to get an Entry's hash for PoH.
-///
-/// Optionally accepts a pointer to a list of hashes for reuse across calls to
-/// minimize the number of allocations when hashing large numbers of entries.
+const LEAF = sig.ledger.shred.MERKLE_HASH_PREFIX_LEAF[0..1];
+const NODE = sig.ledger.shred.MERKLE_HASH_PREFIX_NODE[0..1];
+
+const BinaryMerkleTree = struct {
+    leaves: u64,
+    nodes: [63]Hash,
+
+    /// Appends a hash to the binary merkle tree.
+    fn append(s: *BinaryMerkleTree, new: *const Hash) void {
+        var tmp = new.*;
+        var layer: std.math.Log2Int(u64) = 0;
+        var cursor = s.leaves + 1;
+        while (cursor & 1 == 0) {
+            tmp = Hash.initMany(&.{ NODE, &s.nodes[layer].data, &tmp.data });
+            layer += 1;
+            cursor >>= 1;
+        }
+        s.nodes[layer] = tmp;
+        s.leaves += 1;
+    }
+
+    /// `append` *MUST* have been invoked at least once before calling finish.
+    fn finish(s: *BinaryMerkleTree) Hash {
+        std.debug.assert(s.leaves > 0);
+        if (!std.math.isPowerOfTwo(s.leaves)) {
+            var layer: std.math.Log2Int(u64) = @intCast(@ctz(s.leaves));
+            var count = s.leaves >> layer;
+            var root = s.nodes[layer];
+            while (count > 1) {
+                const select = if (count & 1 != 0) &root else &s.nodes[layer];
+                root = Hash.initMany(&[_][]const u8{ NODE, &select.data, &root.data });
+                layer += 1;
+                count = (count + 1) / 2;
+            }
+            return root;
+        } else {
+            const depth = if (s.leaves <= 1) s.leaves else (63 - @clz(s.leaves - 1) + 2);
+            return s.nodes[depth - 1];
+        }
+    }
+};
+
+/// Computes the merkle root of a group of transactions.
 ///
 /// Based on these agave functions for conformance:
 /// - [hash_transactions](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/entry/src/entry.rs#L215)
@@ -127,52 +164,16 @@ pub fn verifyPoh(entries: []const Entry, seed: Hash) bool {
 ///
 /// [agave](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/entry/src/entry.rs#L215)
 pub fn hashTransactions(transactions: []const Transaction) Hash {
-    const LEAF_PREFIX = &sig.ledger.shred.MERKLE_HASH_PREFIX_LEAF[0];
-    const INTERMEDIATE_PREFIX = &sig.ledger.shred.MERKLE_HASH_PREFIX_NODE[0];
-
     var num_signatures: u64 = 0;
     for (transactions) |tx| num_signatures += tx.signatures.len;
     if (num_signatures == 0) return .ZEROES;
 
-    // NOTE: The Firedancer code is currently designed around never having more
-    // than 30 transactions in a microblock, and pretty much always puts one
-    // transaction per entry. The Agave code used to batch, however has also
-    // switched to one transaction per entry recently.
-    //
-    // 1_000 txns per entry is 32kb, which is a fine amount of stack space to use.
-    // TODO: we should investigate what the true limit here is, perhaps switching
-    // to a slower but less space intensive algorithm if we're hit with strange
-    // entries containing tons of transactions.
-    const MAX_TXNS_PER_ENTRY = 1_000;
-    var nodes: [MAX_TXNS_PER_ENTRY]Hash = undefined;
-    var nodes_len: usize = 0;
-
-    for (transactions) |tx| for (tx.signatures) |signature| {
-        nodes[nodes_len] = Hash.initMany(&.{ LEAF_PREFIX[0..1], &signature.toBytes() });
-        nodes_len += 1;
+    var state: BinaryMerkleTree = .{ .leaves = 0, .nodes = undefined };
+    for (transactions) |txn| for (txn.signatures) |signature| {
+        const node = Hash.initMany(&.{ LEAF, &signature.toBytes() });
+        state.append(&node);
     };
-
-    var level_start: u64 = 0;
-    var level_length = nodes_len;
-    while (level_length > 1) {
-        const next_length = (level_length + 1) / 2;
-        const next_start = nodes_len;
-
-        for (0..next_length) |i| {
-            const index = level_start + 2 * i;
-            const lhs = &nodes[index];
-            // duplicate last if odd
-            const rhs = if (2 * i + 1 < level_length) &nodes[index + 1] else lhs;
-
-            nodes[nodes_len] = Hash.initMany(&.{ INTERMEDIATE_PREFIX[0..1], &lhs.data, &rhs.data });
-            nodes_len += 1;
-        }
-
-        level_start = next_start;
-        level_length = next_length;
-    }
-
-    return nodes[nodes_len - 1];
+    return state.finish();
 }
 
 test "Entry serialization and deserialization" {
