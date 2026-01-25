@@ -3851,10 +3851,10 @@ test "load and validate BankFields from test snapshot" {
 
     // use the genesis to verify loading
     const genesis_path = sig.TEST_DATA_DIR ++ "genesis.bin";
-    const genesis_config = try sig.core.GenesisConfig.init(allocator, genesis_path);
-    defer genesis_config.deinit(allocator);
+    const genesis_result = try sig.core.GenesisConfig.init(allocator, genesis_path);
+    defer genesis_result.deinit(allocator);
 
-    try full_manifest.bank_fields.validate(&genesis_config);
+    try full_manifest.bank_fields.validate(&genesis_result.config);
 }
 
 test "load and validate from test snapshot - single threaded" {
@@ -3888,10 +3888,10 @@ test "load and validate from test snapshot - single threaded" {
 
     // use the genesis to verify loading
     const genesis_path = sig.TEST_DATA_DIR ++ "genesis.bin";
-    const genesis_config = try sig.core.GenesisConfig.init(allocator, genesis_path);
-    defer genesis_config.deinit(allocator);
+    const genesis_result = try sig.core.GenesisConfig.init(allocator, genesis_path);
+    defer genesis_result.deinit(allocator);
 
-    try full_inc_manifest.full.bank_fields.validate(&genesis_config);
+    try full_inc_manifest.full.bank_fields.validate(&genesis_result.config);
 }
 
 test "load and validate from test snapshot - disk index" {

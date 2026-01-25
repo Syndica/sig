@@ -19,6 +19,8 @@ const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 
+const MAX_GET_SLOT_LEADERS: usize = 5_000;
+
 pub fn Result(comptime method: MethodAndParams.Tag) type {
     return union(enum) {
         ok: Request(method).Response,
@@ -50,7 +52,7 @@ pub const MethodAndParams = union(enum) {
     getFirstAvailableBlock: noreturn,
 
     /// https://github.com/Syndica/sig/issues/557
-    getGenesisHash: noreturn,
+    getGenesisHash: GetGenesisHash,
     /// https://github.com/Syndica/sig/issues/558
     getHealth: GetHealth,
     /// Custom (not standardized) RPC method for "GET /*snapshot*.tar.bz2"
@@ -74,8 +76,8 @@ pub const MethodAndParams = union(enum) {
     getSignaturesForAddress: noreturn,
     getSignatureStatuses: GetSignatureStatuses,
     getSlot: GetSlot,
-    getSlotLeader: noreturn,
-    getSlotLeaders: noreturn,
+    getSlotLeader: GetSlotLeader,
+    getSlotLeaders: GetSlotLeaders,
     getStakeMinimumDelegation: noreturn,
     getSupply: noreturn,
     getTokenAccountBalance: noreturn,
@@ -373,7 +375,11 @@ pub const GetEpochSchedule = struct {
 
 // TODO: getFeeForMessage
 // TODO: getFirstAvailableBlock
-// TODO: getGenesisHash
+
+pub const GetGenesisHash = struct {
+    pub const Response = []const u8;
+};
+
 // TODO: getHealth
 // TODO: getHighestSnapshotSlot
 // TODO: getIdentity
@@ -491,8 +497,19 @@ pub const GetSlot = struct {
     pub const Response = Slot;
 };
 
-// TODO: getSlotLeader
-// TODO: getSlotLeaders
+pub const GetSlotLeader = struct {
+    config: ?common.CommitmentSlotConfig = null,
+
+    pub const Response = Pubkey;
+};
+
+pub const GetSlotLeaders = struct {
+    start_slot: Slot,
+    limit: usize,
+
+    const Response = []const Pubkey;
+};
+
 // TODO: getStakeActivation
 // TODO: getStakeMinimumDelegation
 // TODO: getSupply
@@ -685,4 +702,173 @@ pub const common = struct {
         /// Shred version
         shredVersion: ?u16 = null,
     };
+};
+
+pub const HookContext = struct {
+    latest_processed_slot: std.atomic.Value(Slot),
+    latest_confirmed_slot: std.atomic.Value(Slot),
+    account_db_two: *const sig.accounts_db.Two,
+    magic_tracker: *const sig.core.magic_info.MagicTracker,
+    genesis_hash: sig.core.Hash.Base58String,
+
+    fn getLatestProcessedSlot(self: *@This()) !Slot {
+        const slot = self.latest_processed_slot.load(.monotonic);
+        if (slot == 0) {
+            return error.RpcNoProcessedSlot;
+        }
+        return slot;
+    }
+
+    fn getLatestConfirmedSlot(self: *@This()) !Slot {
+        const slot = self.latest_confirmed_slot.load(.monotonic);
+        if (slot == 0) {
+            return error.RpcNoConfirmedSlot;
+        }
+        return slot;
+    }
+
+    fn getLatestFinalizedSlot(self: *@This()) !Slot {
+        if (self.account_db_two.rooted.getLargestRootedSlot()) |slot| {
+            return slot;
+        } else {
+            return error.RpcNoFinalizedSlot;
+        }
+    }
+
+    pub fn setLatestProcessedSlot(self: *@This(), slot: Slot) void {
+        self.latest_processed_slot.store(slot, .monotonic);
+    }
+
+    pub fn setLatestConfirmedSlot(self: *@This(), slot: Slot) void {
+        self.latest_confirmed_slot.store(slot, .monotonic);
+    }
+
+    pub fn getGenesisHash(
+        self: *@This(),
+        _: std.mem.Allocator,
+        _: GetGenesisHash,
+    ) !GetGenesisHash.Response {
+        return self.genesis_hash.constSlice();
+    }
+
+    pub fn getEpochSchedule(
+        self: *@This(),
+        _: std.mem.Allocator,
+        _: GetEpochSchedule,
+    ) !GetEpochSchedule.Response {
+        const es = self.magic_tracker.epoch_schedule;
+        return .{
+            .slotsPerEpoch = es.slots_per_epoch,
+            .leaderScheduleSlotOffset = es.leader_schedule_slot_offset,
+            .warmup = es.warmup,
+            .firstNormalEpoch = es.first_normal_epoch,
+            .firstNormalSlot = es.first_normal_slot,
+        };
+    }
+
+    fn getSlotImpl(
+        self: *@This(),
+        config: common.CommitmentSlotConfig,
+    ) !Slot {
+        const commitment = config.commitment orelse .finalized;
+
+        const slot = switch (commitment) {
+            .processed => try self.getLatestProcessedSlot(),
+            .confirmed => try self.getLatestConfirmedSlot(),
+            .finalized => try self.getLatestFinalizedSlot(),
+        };
+
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) {
+                return error.RpcMinContextSlotNotMet;
+            }
+        }
+
+        return slot;
+    }
+
+    pub fn getSlot(self: *@This(), _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+
+        return self.getSlotImpl(config);
+    }
+
+    pub fn getSlotLeader(
+        self: *@This(),
+        _: std.mem.Allocator,
+        params: GetSlotLeader,
+    ) !GetSlotLeader.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+
+        const slot = try self.getSlotImpl(config);
+
+        const magic_tracker = self.magic_tracker;
+
+        const leader_schedules = magic_tracker.getLeaderSchedules() catch |err| {
+            // TODO: properly handle this or ensure this codepath is not possible
+            std.debug.panic("TODO: this should not be possible: {}", .{err});
+        };
+
+        return leader_schedules.getLeader(slot);
+    }
+
+    pub fn getSlotLeaders(
+        self: *@This(),
+        allocator: std.mem.Allocator,
+        params: GetSlotLeaders,
+    ) !GetSlotLeaders.Response {
+        const limit = params.limit;
+        if (limit > MAX_GET_SLOT_LEADERS) {
+            return error.InvalidParams;
+        }
+
+        var magic_tracker = self.magic_tracker;
+
+        const start_slot = params.start_slot;
+        var epoch, var slot_index = magic_tracker.epoch_schedule.getEpochAndSlotIndex(start_slot);
+
+        var slot_leaders = try std.ArrayListUnmanaged(Pubkey).initCapacity(
+            allocator,
+            limit,
+        );
+        errdefer slot_leaders.deinit(allocator);
+
+        while (slot_leaders.items.len < limit) {
+            const leader_schedules = try magic_tracker.getLeaderSchedules();
+
+            // Find the leader schedule for the current epoch
+            const leader_schedule: sig.core.magic_leader_schedule.LeaderSchedule = blk: {
+                const first_epoch_slot = magic_tracker.epoch_schedule.getFirstSlotInEpoch(epoch);
+                const last_epoch_slot = magic_tracker.epoch_schedule.getLastSlotInEpoch(epoch);
+                if (leader_schedules.curr.start <= first_epoch_slot and
+                    leader_schedules.curr.end >= last_epoch_slot)
+                {
+                    break :blk leader_schedules.curr;
+                }
+                if (leader_schedules.next) |next| {
+                    if (next.start <= first_epoch_slot and
+                        next.end >= last_epoch_slot)
+                    {
+                        break :blk next;
+                    }
+                }
+
+                // TODO: ensure proper error propagation for the response to the client
+                return error.LeaderScheduleUnavailable;
+            };
+
+            // Get leaders from slot_index to end of epoch (or until we have enough)
+            const remaining = limit - slot_leaders.items.len;
+            const available = leader_schedule.leaders.len - slot_index;
+            const to_take = @min(remaining, available);
+
+            const leaders = leader_schedule.leaders[slot_index..][0..to_take];
+            slot_leaders.appendSliceAssumeCapacity(leaders);
+
+            epoch += 1;
+            slot_index = 0;
+        }
+
+        return slot_leaders.items;
+    }
 };
