@@ -738,6 +738,17 @@ pub const HookContext = struct {
         self.latest_confirmed_slot.store(slot, .monotonic);
     }
 
+    pub fn getEpochSchedule(self: *@This(), _: std.mem.Allocator, _: GetEpochSchedule) !GetEpochSchedule.Response {
+        const es = self.magic_tracker.epoch_schedule;
+        return .{
+            .slotsPerEpoch = es.slots_per_epoch,
+            .leaderScheduleSlotOffset = es.leader_schedule_slot_offset,
+            .warmup = es.warmup,
+            .firstNormalEpoch = es.first_normal_epoch,
+            .firstNormalSlot = es.first_normal_slot,
+        };
+    }
+
     fn getSlotImpl(
         self: *@This(),
         config: common.CommitmentSlotConfig,
