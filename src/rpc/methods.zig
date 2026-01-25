@@ -52,7 +52,7 @@ pub const MethodAndParams = union(enum) {
     getFirstAvailableBlock: noreturn,
 
     /// https://github.com/Syndica/sig/issues/557
-    getGenesisHash: noreturn,
+    getGenesisHash: GetGenesisHash,
     /// https://github.com/Syndica/sig/issues/558
     getHealth: GetHealth,
     /// Custom (not standardized) RPC method for "GET /*snapshot*.tar.bz2"
@@ -375,7 +375,11 @@ pub const GetEpochSchedule = struct {
 
 // TODO: getFeeForMessage
 // TODO: getFirstAvailableBlock
-// TODO: getGenesisHash
+
+pub const GetGenesisHash = struct {
+    pub const Response = []const u8;
+};
+
 // TODO: getHealth
 // TODO: getHighestSnapshotSlot
 // TODO: getIdentity
@@ -705,6 +709,7 @@ pub const HookContext = struct {
     latest_confirmed_slot: std.atomic.Value(Slot),
     account_db_two: *const sig.accounts_db.Two,
     magic_tracker: *const sig.core.magic_info.MagicTracker,
+    genesis_hash: sig.core.Hash.Base58String,
 
     fn getLatestProcessedSlot(self: *@This()) !Slot {
         const slot = self.latest_processed_slot.load(.monotonic);
@@ -736,6 +741,10 @@ pub const HookContext = struct {
 
     pub fn setLatestConfirmedSlot(self: *@This(), slot: Slot) void {
         self.latest_confirmed_slot.store(slot, .monotonic);
+    }
+
+    pub fn getGenesisHash(self: *@This(), _: std.mem.Allocator, _: GetGenesisHash) !GetGenesisHash.Response {
+        return self.genesis_hash.constSlice();
     }
 
     pub fn getEpochSchedule(self: *@This(), _: std.mem.Allocator, _: GetEpochSchedule) !GetEpochSchedule.Response {

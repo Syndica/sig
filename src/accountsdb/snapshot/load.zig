@@ -24,6 +24,7 @@ pub const LoadedSnapshot = struct {
     combined_manifest: snapshot.FullAndIncrementalManifest,
     collapsed_manifest: snapshot.Manifest,
     genesis_config: GenesisConfig,
+    genesis_hash: sig.core.Hash,
     status_cache: ?snapshot.StatusCache,
 
     pub fn deinit(self: *LoadedSnapshot) void {
@@ -152,7 +153,7 @@ pub fn loadSnapshot(
     // this should exist before we start to unpack
     logger.info().log("reading genesis...");
 
-    const genesis_config = GenesisConfig.init(allocator, genesis_file_path) catch |err| {
+    const genesis_result = GenesisConfig.init(allocator, genesis_file_path) catch |err| {
         if (err == error.FileNotFound) {
             logger.err().logf(
                 "genesis config not found - expecting {s} to exist",
@@ -161,11 +162,11 @@ pub fn loadSnapshot(
         }
         return err;
     };
-    errdefer genesis_config.deinit(allocator);
+    errdefer genesis_result.deinit(allocator);
 
     logger.info().log("validating bank...");
 
-    try collapsed_manifest.bank_fields.validate(&genesis_config);
+    try collapsed_manifest.bank_fields.validate(&genesis_result.config);
 
     if (load_options.metadata_only) {
         logger.info().log("accounts-db setup done...");
@@ -174,7 +175,8 @@ pub fn loadSnapshot(
             .accounts_db = accounts_db,
             .combined_manifest = combined_manifest,
             .collapsed_manifest = collapsed_manifest,
-            .genesis_config = genesis_config,
+            .genesis_config = genesis_result.config,
+            .genesis_hash = genesis_result.hash,
             .status_cache = null,
         };
     }
@@ -201,7 +203,8 @@ pub fn loadSnapshot(
         .accounts_db = accounts_db,
         .combined_manifest = combined_manifest,
         .collapsed_manifest = collapsed_manifest,
-        .genesis_config = genesis_config,
+        .genesis_config = genesis_result.config,
+        .genesis_hash = genesis_result.hash,
         .status_cache = status_cache,
     };
 }

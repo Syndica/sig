@@ -1275,6 +1275,7 @@ fn validator(
         .latest_confirmed_slot = .init(0),
         .account_db_two = &new_db,
         .magic_tracker = &magic_tracker,
+        .genesis_hash = loaded_snapshot.genesis_hash.base58String(),
     };
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
@@ -1428,6 +1429,7 @@ fn replayOffline(
         .latest_confirmed_slot = .init(0),
         .account_db_two = &new_db,
         .magic_tracker = &magic_tracker,
+        .genesis_hash = loaded_snapshot.genesis_hash.base58String(),
     };
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
@@ -1468,7 +1470,8 @@ fn shredNetwork(
 
     const genesis_path = try cfg.genesisFilePath() orelse
         return error.GenesisPathNotProvided;
-    const genesis_config = try GenesisConfig.init(allocator, genesis_path);
+    const genesis_result = try GenesisConfig.init(allocator, genesis_path);
+    const genesis_config = genesis_result.config;
 
     var rpc_client = try sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
     defer rpc_client.deinit();
@@ -1759,7 +1762,8 @@ fn testTransactionSenderService(
     // read genesis (used for leader schedule)
     const genesis_file_path = try cfg.genesisFilePath() orelse
         @panic("No genesis file path found: use -g or -n");
-    const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
+    const genesis_result = try GenesisConfig.init(allocator, genesis_file_path);
+    const genesis_config = genesis_result.config;
 
     // start gossip (used to get TPU ports of leaders)
     const gossip_service = try startGossip(

@@ -291,11 +291,37 @@ pub const GenesisConfig = struct {
     /// network runlevel
     cluster_type: ClusterType,
 
-    pub fn init(allocator: Allocator, genesis_path: []const u8) !GenesisConfig {
+    /// Result of loading a genesis config from a file.
+    /// Contains both the parsed config and the genesis hash (SHA256 of raw file bytes).
+    pub const InitResult = struct {
+        config: GenesisConfig,
+        hash: sig.core.Hash,
+
+        pub fn deinit(self: InitResult, allocator: Allocator) void {
+            self.config.deinit(allocator);
+        }
+    };
+
+    /// Loads a GenesisConfig from a file and computes its hash.
+    /// Returns both the config and the genesis hash (SHA256 of the raw file bytes).
+    /// This matches Agave's behavior where the genesis hash is the SHA256 of the bincode-serialized config.
+    pub fn init(allocator: Allocator, genesis_path: []const u8) !InitResult {
         var file = try std.fs.cwd().openFile(genesis_path, .{});
         defer file.close();
 
-        return try bincode.read(allocator, GenesisConfig, file.reader(), .{});
+        // Read the entire file to compute hash from raw bytes
+        const file_bytes = try file.readToEndAlloc(allocator, std.math.maxInt(usize));
+        defer allocator.free(file_bytes);
+
+        // Compute hash from original file bytes (this matches Agave's behavior)
+        var hash_bytes: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(file_bytes, &hash_bytes, .{});
+        const genesis_hash: sig.core.Hash = .{ .data = hash_bytes };
+
+        // Parse the genesis config from the bytes
+        var fbs = std.io.fixedBufferStream(file_bytes);
+        const config = try bincode.read(allocator, GenesisConfig, fbs.reader(), .{});
+        return .{ .config = config, .hash = genesis_hash };
     }
 
     pub fn default(allocator: Allocator) GenesisConfig {
@@ -349,40 +375,82 @@ test "genesis_config deserialize development config" {
     const allocator = std.testing.allocator;
 
     const genesis_path = sig.TEST_DATA_DIR ++ "genesis.bin";
-    const config = try GenesisConfig.init(allocator, genesis_path);
-    defer config.deinit(allocator);
+    const result = try GenesisConfig.init(allocator, genesis_path);
+    defer result.deinit(allocator);
 
-    try std.testing.expectEqual(ClusterType.Development, config.cluster_type);
+    try std.testing.expectEqual(ClusterType.Development, result.config.cluster_type);
 }
 
 test "genesis_config deserialize testnet config" {
     const allocator = std.testing.allocator;
 
     const genesis_path = sig.GENESIS_DIR ++ "testnet_genesis.bin";
-    const config = try GenesisConfig.init(allocator, genesis_path);
-    defer config.deinit(allocator);
+    const result = try GenesisConfig.init(allocator, genesis_path);
+    defer result.deinit(allocator);
 
-    try std.testing.expectEqual(ClusterType.Testnet, config.cluster_type);
+    try std.testing.expectEqual(ClusterType.Testnet, result.config.cluster_type);
 }
 
 test "genesis_config deserialize devnet config" {
     const allocator = std.testing.allocator;
 
     const genesis_path = sig.GENESIS_DIR ++ "devnet_genesis.bin";
-    const config = try GenesisConfig.init(allocator, genesis_path);
-    defer config.deinit(allocator);
+    const result = try GenesisConfig.init(allocator, genesis_path);
+    defer result.deinit(allocator);
 
-    try std.testing.expectEqual(ClusterType.Devnet, config.cluster_type);
+    try std.testing.expectEqual(ClusterType.Devnet, result.config.cluster_type);
 }
 
 test "genesis_config deserialize mainnet config" {
     const allocator = std.testing.allocator;
 
     const genesis_path = sig.GENESIS_DIR ++ "mainnet_genesis.bin";
-    const config = try GenesisConfig.init(allocator, genesis_path);
-    defer config.deinit(allocator);
+    const result = try GenesisConfig.init(allocator, genesis_path);
+    defer result.deinit(allocator);
 
-    try std.testing.expectEqual(ClusterType.MainnetBeta, config.cluster_type);
+    try std.testing.expectEqual(ClusterType.MainnetBeta, result.config.cluster_type);
+}
+
+test "genesis_config hash mainnet" {
+    const allocator = std.testing.allocator;
+
+    const genesis_path = sig.GENESIS_DIR ++ "mainnet_genesis.bin";
+    const result = try GenesisConfig.init(allocator, genesis_path);
+    defer result.deinit(allocator);
+
+    // Mainnet genesis hash: 5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d
+    try std.testing.expectEqualStrings(
+        "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+        result.hash.base58String().constSlice(),
+    );
+}
+
+test "genesis_config hash testnet" {
+    const allocator = std.testing.allocator;
+
+    const genesis_path = sig.GENESIS_DIR ++ "testnet_genesis.bin";
+    const result = try GenesisConfig.init(allocator, genesis_path);
+    defer result.deinit(allocator);
+
+    // Testnet genesis hash: 4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY
+    try std.testing.expectEqualStrings(
+        "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY",
+        result.hash.base58String().constSlice(),
+    );
+}
+
+test "genesis_config hash devnet" {
+    const allocator = std.testing.allocator;
+
+    const genesis_path = sig.GENESIS_DIR ++ "devnet_genesis.bin";
+    const result = try GenesisConfig.init(allocator, genesis_path);
+    defer result.deinit(allocator);
+
+    // Devnet genesis hash: EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG
+    try std.testing.expectEqualStrings(
+        "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+        result.hash.base58String().constSlice(),
+    );
 }
 
 test "inflation" {
