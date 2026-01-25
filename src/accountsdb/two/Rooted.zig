@@ -1,6 +1,5 @@
 //! Database for rooted accounts.
 const std = @import("std");
-const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 const sql = @import("sqlite");
 const tracy = @import("tracy");

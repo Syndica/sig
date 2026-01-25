@@ -310,7 +310,10 @@ pub const ReplayState = struct {
             frozen_slots_since_root.appendAssumeCapacity(slot);
         };
 
-        var next_slots = try self.ledger.reader().getSlotsSince(self.allocator, frozen_slots_since_root.items);
+        var next_slots = try self.ledger.reader().getSlotsSince(
+            self.allocator,
+            frozen_slots_since_root.items,
+        );
         defer {
             for (next_slots.values()) |*list| list.deinit(self.allocator);
             next_slots.deinit(self.allocator);
@@ -389,7 +392,10 @@ pub const ReplayState = struct {
                     ctx.setLatestConfirmedSlot(slot);
                 }
 
-                try self.slot_tracker.put(self.allocator, slot, .{ .constants = constants, .state = state });
+                try self.slot_tracker.put(self.allocator, slot, .{
+                    .constants = constants,
+                    .state = state
+                });
                 try self.slot_tree.record(self.allocator, slot, constants.parent_slot);
 
                 // TODO: update_fork_propagated_threshold_from_votes
@@ -744,7 +750,12 @@ test "trackNewSlots" {
     defer replay_state.deinit();
 
     // slot tracker should start with only 0
-    try expectSlotTracker(&replay_state.slot_tracker, leader_schedule, &.{.{ 0, 0 }}, &.{ 1, 2, 3, 4, 5, 6 });
+    try expectSlotTracker(
+        &replay_state.slot_tracker,
+        leader_schedule,
+        &.{.{ 0, 0 }},
+        &.{ 1, 2, 3, 4, 5, 6 }
+    );
 
     // only the root (0) is considered frozen, so only 0 and 1 should be added at first.
     try replay_state.trackNewSlots(&slot_leaders);

@@ -743,11 +743,19 @@ pub const HookContext = struct {
         self.latest_confirmed_slot.store(slot, .monotonic);
     }
 
-    pub fn getGenesisHash(self: *@This(), _: std.mem.Allocator, _: GetGenesisHash) !GetGenesisHash.Response {
+    pub fn getGenesisHash(
+        self: *@This(),
+        _: std.mem.Allocator,
+        _: GetGenesisHash
+    ) !GetGenesisHash.Response {
         return self.genesis_hash.constSlice();
     }
 
-    pub fn getEpochSchedule(self: *@This(), _: std.mem.Allocator, _: GetEpochSchedule) !GetEpochSchedule.Response {
+    pub fn getEpochSchedule(
+        self: *@This(),
+        _: std.mem.Allocator,
+        _: GetEpochSchedule
+    ) !GetEpochSchedule.Response {
         const es = self.magic_tracker.epoch_schedule;
         return .{
             .slotsPerEpoch = es.slots_per_epoch,
@@ -785,7 +793,11 @@ pub const HookContext = struct {
         return self.getSlotImpl(config);
     }
 
-    pub fn getSlotLeader(self: *@This(), _: std.mem.Allocator, params: GetSlotLeader) !GetSlotLeader.Response {
+    pub fn getSlotLeader(
+        self: *@This(),
+        _: std.mem.Allocator,
+        params: GetSlotLeader
+    ) !GetSlotLeader.Response {
         const config = params.config orelse common.CommitmentSlotConfig{};
 
         const slot = try self.getSlotImpl(config);
@@ -800,31 +812,42 @@ pub const HookContext = struct {
         return leader_schedules.getLeader(slot);
     }
 
-    pub fn getSlotLeaders(self: *@This(), allocator: std.mem.Allocator, params: GetSlotLeaders) !GetSlotLeaders.Response {
+    pub fn getSlotLeaders(
+        self: *@This(),
+        allocator: std.mem.Allocator,
+        params: GetSlotLeaders
+    ) !GetSlotLeaders.Response {
         const limit = params.limit;
         if (limit > MAX_GET_SLOT_LEADERS) {
             return error.InvalidParams;
         }
 
-        const start_slot = params.start_slot;
-        var epoch, var slot_index = self.magic_tracker.epoch_schedule.getEpochAndSlotIndex(start_slot);
+        var magic_tracker = self.magic_tracker;
 
-        var slot_leaders = try std.ArrayListUnmanaged(Pubkey).initCapacity(allocator, limit);
+        const start_slot = params.start_slot;
+        var epoch, var slot_index = magic_tracker.epoch_schedule.getEpochAndSlotIndex(start_slot);
+
+        var slot_leaders = try std.ArrayListUnmanaged(Pubkey).initCapacity(
+            allocator,
+            limit,
+        );
         errdefer slot_leaders.deinit(allocator);
 
         while (slot_leaders.items.len < limit) {
-            const leader_schedules = try self.magic_tracker.getLeaderSchedules();
+            const leader_schedules = try magic_tracker.getLeaderSchedules();
 
             // Find the leader schedule for the current epoch
             const leader_schedule: sig.core.magic_leader_schedule.LeaderSchedule = blk: {
-                if (leader_schedules.curr.start <= self.magic_tracker.epoch_schedule.getFirstSlotInEpoch(epoch) and
-                    leader_schedules.curr.end >= self.magic_tracker.epoch_schedule.getLastSlotInEpoch(epoch))
+                const first_epoch_slot = magic_tracker.epoch_schedule.getFirstSlotInEpoch(epoch);
+                const last_epoch_slot = magic_tracker.epoch_schedule.getLastSlotInEpoch(epoch);
+                if (leader_schedules.curr.start <= first_epoch_slot and
+                    leader_schedules.curr.end >= last_epoch_slot)
                 {
                     break :blk leader_schedules.curr;
                 }
                 if (leader_schedules.next) |next| {
-                    if (next.start <= self.magic_tracker.epoch_schedule.getFirstSlotInEpoch(epoch) and
-                        next.end >= self.magic_tracker.epoch_schedule.getLastSlotInEpoch(epoch))
+                    if (next.start <= first_epoch_slot and
+                        next.end >= last_epoch_slot)
                     {
                         break :blk next;
                     }
@@ -839,7 +862,8 @@ pub const HookContext = struct {
             const available = leader_schedule.leaders.len - slot_index;
             const to_take = @min(remaining, available);
 
-            slot_leaders.appendSliceAssumeCapacity(leader_schedule.leaders[slot_index..][0..to_take]);
+            const leaders = leader_schedule.leaders[slot_index..][0..to_take];
+            slot_leaders.appendSliceAssumeCapacity(leaders);
 
             epoch += 1;
             slot_index = 0;
