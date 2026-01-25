@@ -394,7 +394,7 @@ pub const ReplayState = struct {
 
                 try self.slot_tracker.put(self.allocator, slot, .{
                     .constants = constants,
-                    .state = state
+                    .state = state,
                 });
                 try self.slot_tree.record(self.allocator, slot, constants.parent_slot);
 
@@ -754,13 +754,13 @@ test "trackNewSlots" {
         &replay_state.slot_tracker,
         leader_schedule,
         &.{.{ 0, 0 }},
-        &.{ 1, 2, 3, 4, 5, 6 }
+        &.{ 1, 2, 3, 4, 5, 6 },
     );
 
     // only the root (0) is considered frozen, so only 0 and 1 should be added at first.
     try replay_state.trackNewSlots(&slot_leaders);
     try expectSlotTracker(
-        &replay_state.slot_tracker,
+        slot_tracker,
         leader_schedule,
         &.{ .{ 0, 0 }, .{ 1, 0 } },
         &.{ 2, 3, 4, 5, 6 },
@@ -769,7 +769,7 @@ test "trackNewSlots" {
     // doing nothing should result in the same tracker state
     try replay_state.trackNewSlots(&slot_leaders);
     try expectSlotTracker(
-        &replay_state.slot_tracker,
+        slot_tracker,
         leader_schedule,
         &.{ .{ 0, 0 }, .{ 1, 0 } },
         &.{ 2, 3, 4, 5, 6 },

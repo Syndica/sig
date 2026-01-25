@@ -746,7 +746,7 @@ pub const HookContext = struct {
     pub fn getGenesisHash(
         self: *@This(),
         _: std.mem.Allocator,
-        _: GetGenesisHash
+        _: GetGenesisHash,
     ) !GetGenesisHash.Response {
         return self.genesis_hash.constSlice();
     }
@@ -754,7 +754,7 @@ pub const HookContext = struct {
     pub fn getEpochSchedule(
         self: *@This(),
         _: std.mem.Allocator,
-        _: GetEpochSchedule
+        _: GetEpochSchedule,
     ) !GetEpochSchedule.Response {
         const es = self.magic_tracker.epoch_schedule;
         return .{
@@ -796,7 +796,7 @@ pub const HookContext = struct {
     pub fn getSlotLeader(
         self: *@This(),
         _: std.mem.Allocator,
-        params: GetSlotLeader
+        params: GetSlotLeader,
     ) !GetSlotLeader.Response {
         const config = params.config orelse common.CommitmentSlotConfig{};
 
@@ -815,7 +815,7 @@ pub const HookContext = struct {
     pub fn getSlotLeaders(
         self: *@This(),
         allocator: std.mem.Allocator,
-        params: GetSlotLeaders
+        params: GetSlotLeaders,
     ) !GetSlotLeaders.Response {
         const limit = params.limit;
         if (limit > MAX_GET_SLOT_LEADERS) {
