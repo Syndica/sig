@@ -23,6 +23,10 @@ pub const SocketAddr = union(enum(u8)) {
         };
     }
 
+    pub fn jsonStringify(self: SocketAddr, write_stream: anytype) !void {
+        try write_stream.print("\"{}\"", .{self.toAddress()});
+    }
+
     pub const ParseIpError = error{InvalidIp};
     pub fn parse(bytes: []const u8) ParseIpError!SocketAddr {
         return parseIpv4(bytes) catch parseIpv6(bytes) catch error.InvalidIp;

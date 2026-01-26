@@ -55,4 +55,8 @@ pub const ClientVersion = struct {
         .serializer = ClientId.serialize,
         .deserializer = ClientId.deserialize,
     };
+
+    pub fn jsonStringify(self: @This(), writer: anytype) !void {
+        try writer.print("\"{d}.{d}.{d}\"", .{ self.major, self.minor, self.patch });
+    }
 };

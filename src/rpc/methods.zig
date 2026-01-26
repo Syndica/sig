@@ -18,6 +18,7 @@ const ParseOptions = std.json.ParseOptions;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
+const SocketAddr = sig.net.SocketAddr;
 
 const MAX_GET_SLOT_LEADERS: usize = 5_000;
 
@@ -671,32 +672,31 @@ pub const common = struct {
         apiVersion: []const u8,
     };
 
-    // TODO field types
     pub const RpcContactInfo = struct {
         /// Pubkey of the node as a base-58 string
-        pubkey: []const u8,
+        pubkey: Pubkey,
         /// Gossip port
-        gossip: ?[]const u8 = null,
+        gossip: ?SocketAddr = null,
         /// Tvu UDP port
-        tvu: ?[]const u8 = null,
+        tvu: ?SocketAddr = null,
         /// Tpu UDP port
-        tpu: ?[]const u8 = null,
+        tpu: ?SocketAddr = null,
         /// Tpu QUIC port
-        tpuQuic: ?[]const u8 = null,
+        tpuQuic: ?SocketAddr = null,
         /// Tpu UDP forwards port
-        tpuForwards: ?[]const u8 = null,
+        tpuForwards: ?SocketAddr = null,
         /// Tpu QUIC forwards port
-        tpuForwardsQuic: ?[]const u8 = null,
+        tpuForwardsQuic: ?SocketAddr = null,
         /// Tpu UDP vote port
-        tpuVote: ?[]const u8 = null,
+        tpuVote: ?SocketAddr = null,
         /// Server repair UDP port
-        serveRepair: ?[]const u8 = null,
+        serveRepair: ?SocketAddr = null,
         /// JSON RPC port
-        rpc: ?[]const u8 = null,
+        rpc: ?SocketAddr = null,
         /// WebSocket PubSub port
-        pubsub: ?[]const u8 = null,
+        pubsub: ?SocketAddr = null,
         /// Software version
-        version: ?[]const u8 = null,
+        version: ?sig.version.ClientVersion = null,
         /// First 4 bytes of the FeatureSet identifier
         featureSet: ?u32 = null,
         /// Shred version
