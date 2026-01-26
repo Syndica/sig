@@ -872,3 +872,103 @@ pub const HookContext = struct {
         return slot_leaders.items;
     }
 };
+
+pub const GossipHookContext = struct {
+    info: sig.gossip.ContactInfo,
+    gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
+    my_shred_version: *std.atomic.Value(u16),
+
+    pub fn getHealth(
+        _: @This(),
+        _: std.mem.Allocator,
+        _: anytype,
+    ) !sig.rpc.methods.GetHealth.Response {
+        // TODO: more intricate
+        return .ok;
+    }
+
+    pub fn getIdentity(
+        self: @This(),
+        _: std.mem.Allocator,
+        _: anytype,
+    ) !sig.rpc.methods.GetIdentity.Response {
+        return .{ .identity = self.info.pubkey };
+    }
+
+    pub fn getVersion(
+        self: @This(),
+        allocator_: std.mem.Allocator,
+        _: anytype,
+    ) !sig.rpc.methods.GetVersion.Response {
+        const client_version = self.info.version;
+        const solana_version = try std.fmt.allocPrint(allocator_, "{}.{}.{}", .{
+            client_version.major,
+            client_version.minor,
+            client_version.patch,
+        });
+
+        return .{
+            .solana_core = solana_version,
+            .feature_set = client_version.feature_set,
+        };
+    }
+
+    pub fn getClusterNodes(
+        self: @This(),
+        alloc: std.mem.Allocator,
+        _: sig.rpc.methods.GetClusterNodes,
+    ) !sig.rpc.methods.GetClusterNodes.Response {
+        const my_shred_version = self.my_shred_version.load(.monotonic);
+
+        // Acquire read lock on gossip table
+        var gossip_table, var guard = self.gossip_table_rw.readWithLock();
+        defer guard.unlock();
+
+        // Allocate buffer for contact infos
+        const contact_count = gossip_table.contact_infos.count();
+        var result = try std.ArrayList(sig.rpc.methods.common.RpcContactInfo).initCapacity(
+            alloc,
+            contact_count,
+        );
+        errdefer result.deinit();
+
+        // iterate through contact infos
+        var iter = gossip_table.contactInfoIterator(0);
+        // NOTE: we can use next() instead of nextThreadSafe() here because
+        // we hold the gossip table read lock until the end of this function
+        while (iter.next()) |ci| {
+            // filter by shred version (like Agave does)
+            if (ci.shred_version != my_shred_version) continue;
+
+            // skip nodes without gossip address
+            const gossip_addr = ci.getSocket(.gossip) orelse continue;
+            if (gossip_addr.isUnspecified()) continue;
+
+            const rpc_contact_info = sig.rpc.methods.common.RpcContactInfo{
+                .pubkey = ci.pubkey,
+                .gossip = gossip_addr,
+                .tvu = filterUnspecified(ci.getSocket(.turbine_recv)),
+                .tpu = filterUnspecified(ci.getSocket(.tpu)),
+                .tpuQuic = filterUnspecified(ci.getSocket(.tpu_quic)),
+                .tpuForwards = filterUnspecified(ci.getSocket(.tpu_forwards)),
+                .tpuForwardsQuic = filterUnspecified(ci.getSocket(.tpu_forwards_quic)),
+                .tpuVote = filterUnspecified(ci.getSocket(.tpu_vote)),
+                .serveRepair = filterUnspecified(ci.getSocket(.serve_repair)),
+                .rpc = filterUnspecified(ci.getSocket(.rpc)),
+                .pubsub = filterUnspecified(ci.getSocket(.rpc_pubsub)),
+                .version = ci.version,
+                .featureSet = ci.version.feature_set,
+                .shredVersion = ci.shred_version,
+            };
+            result.appendAssumeCapacity(rpc_contact_info);
+        }
+
+        return result.toOwnedSlice();
+    }
+
+    fn filterUnspecified(addr: ?sig.net.SocketAddr) ?sig.net.SocketAddr {
+        const socket_addr = addr orelse return null;
+        if (socket_addr.isUnspecified()) return null;
+        return socket_addr;
+    }
+};
