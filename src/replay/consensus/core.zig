@@ -33,7 +33,7 @@ const SocketAddr = sig.net.SocketAddr;
 const Tower = sig.consensus.tower.Tower;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
 
-const SlotSet = SortedSet(Slot, .{ .empty_key = std.math.maxInt(Slot) });
+const SlotSet = SortedSet(Slot, .{});
 
 /// UDP sockets used to send vote transactions.
 pub const VoteSockets = struct {
@@ -7054,7 +7054,7 @@ test "successful fork switch (switch_proof)" {
     var ancestors_map = std.AutoArrayHashMapUnmanaged(Slot, sig.core.Ancestors).empty;
     var descendants_map: std.AutoArrayHashMapUnmanaged(
         Slot,
-        sig.utils.collections.SortedSet(Slot, .{ .empty_key = std.math.maxInt(Slot) }),
+        sig.utils.collections.SortedSet(Slot, .{}),
     ) = .empty;
     defer {
         var it = ancestors_map.iterator();

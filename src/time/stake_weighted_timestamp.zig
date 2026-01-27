@@ -41,7 +41,7 @@ pub fn calculateStakeWeightedTimestamp(
     var stakes_per_timestamp: SortedMap(
         i64,
         u128,
-        .{ .empty_key = std.math.maxInt(i64) },
+        .{},
     ) = .empty;
     defer stakes_per_timestamp.deinit(allocator);
     var total_stake: u128 = 0;

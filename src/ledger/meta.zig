@@ -40,7 +40,7 @@ pub const SlotMeta = struct {
     /// [`ShredFlags::DATA_COMPLETE_SHRED`][`crate::shred::ShredFlags::DATA_COMPLETE_SHRED`] set.
     completed_data_indexes: DataIndexes,
 
-    const DataIndexes = SortedSet(u32, .{ .empty_key = std.math.maxInt(u32) });
+    const DataIndexes = SortedSet(u32, .{});
 
     const Self = @This();
 
@@ -291,7 +291,7 @@ pub const Index = struct {
     }
 };
 
-pub const ShredIndex = SortedSet(u64, .{ .empty_key = std.math.maxInt(u64) });
+pub const ShredIndex = SortedSet(u64, .{});
 
 pub const TransactionStatusMeta = sig.ledger.transaction_status.TransactionStatusMeta;
 

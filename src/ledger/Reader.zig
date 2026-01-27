@@ -44,7 +44,7 @@ const schema = ledger_mod.schema.schema;
 const key_serializer = ledger_mod.database.key_serializer;
 const shredder = ledger_mod.shredder;
 
-const DataIndexes = SortedSet(u32, .{ .empty_key = std.math.maxInt(u32) });
+const DataIndexes = SortedSet(u32, .{});
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 

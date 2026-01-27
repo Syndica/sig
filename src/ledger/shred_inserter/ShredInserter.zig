@@ -44,7 +44,7 @@ const handleChaining = lib.slot_chaining.handleChaining;
 const recover = lib.recovery.recover;
 const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
-const DataIndexes = SortedSet(u32, .{ .empty_key = std.math.maxInt(u32) });
+const DataIndexes = SortedSet(u32, .{});
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 

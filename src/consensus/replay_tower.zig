@@ -593,7 +593,7 @@ pub const ReplayTower = struct {
         const switch_proof = Hash.ZEROES;
         var locked_out_stake: u64 = 0;
 
-        var locked_out_vote_accounts: SortedSet(Pubkey, .{ .empty_key = Pubkey.ZEROES }) = .empty;
+        var locked_out_vote_accounts: SortedSet(Pubkey, .{}) = .empty;
         defer locked_out_vote_accounts.deinit(allocator);
 
         for (descendants.keys(), descendants.values()) |candidate_slot, *candidate_descendants| {
@@ -5438,7 +5438,7 @@ fn fillProgressMapForkStats(
     }
 }
 
-const SlotSet = SortedSet(Slot, .{ .empty_key = std.math.maxInt(Slot) });
+const SlotSet = SortedSet(Slot, .{});
 
 pub const MAX_TEST_TREE_LEN = 100;
 const SlotTracker = sig.replay.trackers.SlotTracker;

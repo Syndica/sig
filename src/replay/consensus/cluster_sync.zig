@@ -18,7 +18,7 @@ const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHas
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 const LatestValidatorVotes = sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
-const SlotSet = collections.SortedSet(Slot, .{ .empty_key = std.math.maxInt(Slot) });
+const SlotSet = collections.SortedSet(Slot, .{});
 
 const ledger_tests = sig.ledger.tests;
 
@@ -159,7 +159,7 @@ pub const SlotData = struct {
     /// Analogous to [DuplicateSlotsTracker](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L18)
     pub const DuplicateSlots = collections.SortedSet(
         Slot,
-        .{ .empty_key = std.math.maxInt(Slot) },
+        .{},
     );
 
     /// Analogous to [DuplicateSlotsToRepair](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L19)
@@ -169,21 +169,21 @@ pub const SlotData = struct {
     pub const PurgeRepairSlotCounters = collections.SortedMap(
         Slot,
         usize,
-        .{ .empty_key = std.math.maxInt(Slot) },
+        .{},
     );
 
     /// Analogous to [EpochSlotsFrozenSlots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L22)
     pub const EpochSlotsFrozenSlots = collections.SortedMap(
         Slot,
         Hash,
-        .{ .empty_key = std.math.maxInt(Slot) },
+        .{},
     );
 
     /// Analogous to [DuplicateConfirmedSlots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L24)
     pub const DuplicateConfirmedSlots = collections.SortedMap(
         Slot,
         Hash,
-        .{ .empty_key = std.math.maxInt(Slot) },
+        .{},
     );
 
     pub const empty: SlotData = .{
@@ -214,7 +214,7 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
     votes_per_slot: sig.utils.collections.SortedMap(
         Slot,
         HashToVotesMap,
-        .{ .empty_key = std.math.maxInt(Slot) },
+        .{},
     ),
 
     const HashToVotesMap = std.AutoArrayHashMapUnmanaged(Hash, VoteList);
