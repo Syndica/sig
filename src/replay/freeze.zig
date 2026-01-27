@@ -420,7 +420,11 @@ pub fn deltaLtHash(
 
                 const account = data.asAccount();
 
-                const old_account = self.db.get(arena.allocator(), key, self.ancestors) catch @panic("account not found") orelse {
+                const old_account = self.db.get(
+                    arena.allocator(),
+                    key,
+                    self.ancestors,
+                ) catch @panic("Rooted account get failed") orelse {
                     self.hash.mixIn(account.ltHash(key));
                     continue;
                 };
