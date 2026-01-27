@@ -1451,7 +1451,7 @@ fn replayOffline(
 
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
     const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
@@ -1461,6 +1461,7 @@ fn replayOffline(
 
     var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
     defer rooted_db.deinit();
+    rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
 
     var snapshot_tracy: tracy.TracingAllocator = .{
         .name = "loadSnapshot",
@@ -1489,7 +1490,16 @@ fn replayOffline(
     );
     defer loaded_snapshot.deinit();
 
-    var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
+    var unrooted_tracy: tracy.TracingAllocator = .{
+        .name = "AccountsDB Unrooted",
+        .parent = allocator,
+    };
+    var unrooted_tracy_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_accountsdb_unrooted,
+        .parent = unrooted_tracy.allocator(),
+    };
+
+    var new_db: sig.accounts_db.Two = try .init(unrooted_tracy_metrics.allocator(), rooted_db);
     defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
