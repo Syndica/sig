@@ -140,6 +140,8 @@ fn getRewardDistributionNumBlocks(
         MAX_PARTITIONED_REWARDS_PER_BLOCK,
     );
 
+    // Ensure at least 1 block, but cap to a maximum number of blocks
+    // MINIMUM_SLOTS_PER_EPOCH > MAX_FACTOR_OF_REWARD_BLOCKS_IN_EPOCH
     const MAX_FACTOR_OF_REWARD_BLOCKS_IN_EPOCH: u64 = 10;
     const max_chunks = try std.math.divFloor(
         u64,
@@ -500,7 +502,7 @@ fn calculateStakeVoteRewards(
         }
 
         voters_reward_entry.value_ptr.rewards +|= redeemed.voters_reward;
-        total_stake_rewards += redeemed.stakers_reward;
+        total_stake_rewards +|= redeemed.stakers_reward;
 
         try partitioned_stake_rewards.append(allocator, .{
             .stake_pubkey = stake_pubkey,
@@ -516,15 +518,12 @@ fn calculateStakeVoteRewards(
     const stake_rewards_slice = try partitioned_stake_rewards.toOwnedSlice(allocator);
     errdefer allocator.free(stake_rewards_slice);
 
-    const stake_rewards = StakeRewards{
-        .stake_rewards = try .init(allocator, stake_rewards_slice),
-        .total_stake_rewards_lamports = total_stake_rewards,
-    };
-    errdefer stake_rewards.deinit(allocator);
-
     return .{
         .vote_rewards = vote_rewards,
-        .stake_rewards = stake_rewards,
+        .stake_rewards = .{
+            .stake_rewards = try .init(allocator, stake_rewards_slice),
+            .total_stake_rewards_lamports = total_stake_rewards,
+        },
         .point_value = point_value,
     };
 }
@@ -558,7 +557,7 @@ fn calculateVoteAccountsToStore(
             },
             .account = vote_reward.account,
         });
-        total_vote_rewards += vote_reward.rewards;
+        total_vote_rewards +|= vote_reward.rewards;
     }
 
     const vote_rewards_slice = try vote_rewards.toOwnedSlice(allocator);

@@ -63,15 +63,6 @@ pub const StakeStateV2 = union(enum) {
         delegation: Delegation,
         credits_observed: u64,
 
-        fn stake(
-            self: *const Stake,
-            epoch: Epoch,
-            history: *const sig.runtime.sysvar.StakeHistory,
-            new_rate_activation_epoch: ?Epoch,
-        ) void {
-            return self.delegation.getEffectiveStake(epoch, history, new_rate_activation_epoch);
-        }
-
         pub fn split(
             self: *Stake,
             ic: *sig.runtime.InstructionContext,

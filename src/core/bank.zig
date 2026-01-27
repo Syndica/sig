@@ -446,13 +446,16 @@ pub fn parseStakes(
         const db_account_data = try db_account.data.readAllAllocate(allocator);
         defer allocator.free(db_account_data);
 
-        const db_versioned_vote_state = try sig.bincode.readFromSlice(
+        var db_versioned_vote_state = try sig.bincode.readFromSlice(
             allocator,
             sig.runtime.program.vote.state.VoteStateVersions,
             db_account_data,
             .{},
         );
-        const db_vote_state = try db_versioned_vote_state.convertToCurrent(allocator);
+        defer db_versioned_vote_state.deinit(allocator);
+
+        var db_vote_state = try db_versioned_vote_state.convertToCurrent(allocator);
+        defer db_vote_state.deinit(allocator);
 
         if (!db_vote_state.equals(&cached_vote_state)) return error.InvalidVoteAccount;
     }

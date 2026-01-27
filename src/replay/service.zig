@@ -427,6 +427,9 @@ pub fn trackNewSlots(
                 &state.capitalization,
                 &epoch_info.rent_collector.rent,
                 store,
+                constants.feature_set.newWarmupCooldownRateEpoch(
+                    &epoch_tracker.schedule,
+                ),
             );
 
             try updateSysvarsForNewSlot(

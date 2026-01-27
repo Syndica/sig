@@ -214,7 +214,7 @@ fn getInflationStartSlot(slot: Slot, feature_set: *const FeatureSet) Slot {
     const devnet_and_testnet = feature_set.get(.full_inflation_devnet_and_testnet) orelse
         std.math.maxInt(Slot);
 
-    return if (slot >= mainnet_vote and slot >= mainnet_vote or slot >= devnet_and_testnet)
+    return if (slot >= mainnet and slot >= mainnet_vote or slot >= devnet_and_testnet)
         @min(mainnet, devnet_and_testnet)
     else if (feature_set.active(.pico_inflation, slot))
         feature_set.get(.pico_inflation).?

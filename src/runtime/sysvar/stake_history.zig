@@ -91,6 +91,10 @@ pub const StakeHistory = struct {
             _ = self.entries.orderedRemove(MAX_ENTRIES - 1);
         }
 
+        if (index < self.entries.len and self.entries.buffer[index].epoch == epoch) {
+            return error.DuplicateEpoch;
+        }
+
         try self.entries.insert(index, .{ .epoch = epoch, .stake = entry });
     }
 

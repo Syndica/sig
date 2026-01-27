@@ -575,17 +575,18 @@ fn putAndUpdateCapitalization(
 fn burnAndPurgeAccount(
     store: SlotAccountStore,
     address: Pubkey,
-    account: AccountSharedData,
+    account: *const Account,
     capitalization: *Atomic(u64),
 ) !void {
-    const account_data_len = account.data.len;
+    try store.put(address, .{
+        .lamports = 0,
+        .data = &.{},
+        .executable = false,
+        .owner = .ZEROES,
+        .rent_epoch = 0,
+    });
     _ = capitalization.fetchSub(account.lamports, .monotonic);
-    var acc = account;
-    acc.lamports = 0;
-    @memset(acc.data, 0);
-    try store.put(address, acc);
     // NOTE: update account size delta in slot state?
-    _ = account_data_len;
 }
 
 fn putPrecompile(
@@ -601,7 +602,7 @@ fn putPrecompile(
         try burnAndPurgeAccount(
             store,
             precompile.program_id,
-            try AccountSharedData.fromAccount(allocator, &account),
+            &account,
             capitalization,
         );
     } else return;
@@ -635,12 +636,10 @@ fn putBuiltinProgramAccount(
     if (try store.reader().get(allocator, builtin_program.program_id)) |account| {
         defer account.deinit(allocator);
         if (sig.runtime.ids.NATIVE_LOADER_ID.equals(&account.owner)) return;
-        const account_shared_data = try AccountSharedData.fromAccount(allocator, &account);
-        defer allocator.free(account_shared_data.data);
         try burnAndPurgeAccount(
             store,
             builtin_program.program_id,
-            account_shared_data,
+            &account,
             capitalization,
         );
     }

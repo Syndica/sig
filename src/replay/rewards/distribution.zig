@@ -36,6 +36,7 @@ pub fn distributePartitionedEpochRewards(
     capitalization: *AtomicU64,
     rent: *const Rent,
     slot_store: SlotAccountStore,
+    new_rate_activation_epoch: ?Epoch,
 ) !void {
     var stake_rewards = switch (epoch_reward_status.*) {
         .active => |active| active,
@@ -90,6 +91,7 @@ pub fn distributePartitionedEpochRewards(
             capitalization,
             stakes_cache,
             slot_store,
+            new_rate_activation_epoch,
         );
     }
 
@@ -126,6 +128,7 @@ fn distributeEpochRewardsInPartition(
     capitalization: *AtomicU64,
     stakes_cache: *StakesCache,
     slot_store: SlotAccountStore,
+    new_rate_activation_epoch: ?Epoch,
 ) !void {
     const lamports_distributed, const lamports_burnt, const updated_stake_rewards =
         try storeStakeAccountsInPartition(
@@ -135,7 +138,7 @@ fn distributeEpochRewardsInPartition(
             partition_index,
             stakes_cache,
             slot_store,
-            null, // TODO: pass in new_rate_activation_epoch
+            new_rate_activation_epoch,
         );
     defer {
         for (updated_stake_rewards) |reward| reward.deinit(allocator);
@@ -258,7 +261,7 @@ fn buildUpdatedStakeReward(
         else => return error.InvalidAccountData,
     }
 
-    account.lamports += partitioned_reward.stake_reward;
+    account.lamports +|= partitioned_reward.stake_reward;
     std.debug.assert(stake_state.stake.stake.delegation.stake +| partitioned_reward.stake_reward ==
         partitioned_reward.stake.delegation.stake);
     stake_state.stake.stake = partitioned_reward.stake;
@@ -427,6 +430,7 @@ test distributePartitionedEpochRewards {
         &capitalization,
         &rent,
         slot_store,
+        null,
     );
 }
 
@@ -560,6 +564,7 @@ test distributeEpochRewardsInPartition {
         &capitalization,
         &stakes_cache,
         slot_store,
+        null,
     );
 }
 
