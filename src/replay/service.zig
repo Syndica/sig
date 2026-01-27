@@ -760,7 +760,7 @@ test "trackNewSlots" {
     // only the root (0) is considered frozen, so only 0 and 1 should be added at first.
     try replay_state.trackNewSlots(&slot_leaders);
     try expectSlotTracker(
-        slot_tracker,
+        &replay_state.slot_tracker,
         leader_schedule,
         &.{ .{ 0, 0 }, .{ 1, 0 } },
         &.{ 2, 3, 4, 5, 6 },
@@ -769,7 +769,7 @@ test "trackNewSlots" {
     // doing nothing should result in the same tracker state
     try replay_state.trackNewSlots(&slot_leaders);
     try expectSlotTracker(
-        slot_tracker,
+        &replay_state.slot_tracker,
         leader_schedule,
         &.{ .{ 0, 0 }, .{ 1, 0 } },
         &.{ 2, 3, 4, 5, 6 },
