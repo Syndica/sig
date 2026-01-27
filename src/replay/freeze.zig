@@ -389,6 +389,9 @@ pub fn deltaLtHash(
 ) !LtHash {
     assert(!parent_ancestors.containsSlot(slot));
 
+    const zone = tracy.Zone.init(@src(), .{ .name = "deltaLtHash" });
+    defer zone.deinit();
+
     const Worker = struct {
         task: sig.sync.ThreadPool.Task = .{ .callback = run },
         wg: *std.Thread.WaitGroup,
@@ -400,8 +403,8 @@ pub fn deltaLtHash(
         ancestors: *const Ancestors,
 
         fn run(task: *sig.sync.ThreadPool.Task) void {
-            const zone = tracy.Zone.init(@src(), .{ .name = "deltaLt worker" });
-            defer zone.deinit();
+            const worker_zone = tracy.Zone.init(@src(), .{ .name = "deltaLt worker" });
+            defer worker_zone.deinit();
 
             const self: *@This() = @alignCast(@fieldParentPtr("task", task));
             defer self.wg.finish();
