@@ -44,15 +44,24 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         .largest_rooted_slot = null,
     };
 
-    if (self.count() == 0) {
-        const schema =
+    {
+        const pragmas =
             \\ PRAGMA journal_mode = OFF;
             \\ PRAGMA synchronous = 0;
             \\ PRAGMA cache_size = 1000000;
             \\ PRAGMA locking_mode = EXCLUSIVE;
             \\ PRAGMA temp_store = MEMORY;
             \\ PRAGMA page_size = 65536;
-            \\
+        ;
+
+        if (sql.sqlite3_exec(db, pragmas, null, null, null) != OK) {
+            std.debug.print("err  {s}\n", .{sql.sqlite3_errmsg(db)});
+            return error.FailedToSetPragmas;
+        }
+    }
+
+    if (self.count() == 0) {
+        const schema =
             \\CREATE TABLE IF NOT EXISTS entries (
             \\  address BLOB(32) NOT NULL UNIQUE,
             \\  lamports INTEGER NOT NULL,
