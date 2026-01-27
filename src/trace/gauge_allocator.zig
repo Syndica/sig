@@ -14,7 +14,7 @@ pub fn allocator(self: *GaugeAllocator) std.mem.Allocator {
         .vtable = &.{
             .alloc = alloc,
             .resize = resize,
-            .remap = std.mem.Allocator.noRemap,
+            .remap = remap,
             .free = free,
         },
     };
@@ -44,6 +44,23 @@ fn resize(
     self.counter.add(new_len);
 
     return true;
+}
+
+fn remap(
+    ctx: *anyopaque,
+    buf: []u8,
+    buf_align: std.mem.Alignment,
+    new_len: usize,
+    ret_addr: usize,
+) ?[*]u8 {
+    const self: *GaugeAllocator = @ptrCast(@alignCast(ctx));
+    const result = self.parent.rawRemap(buf, buf_align, new_len, ret_addr) orelse
+        return null;
+
+    self.counter.sub(buf.len);
+    self.counter.add(new_len);
+
+    return result;
 }
 
 fn free(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, ret_addr: usize) void {
