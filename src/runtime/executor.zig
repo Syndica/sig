@@ -264,7 +264,7 @@ pub fn prepareCpiInstructionInfo(
             prev.is_writable = prev.is_writable or account.is_writable;
 
             std.debug.assert(prev.index_in_transaction < InstructionInfo.MAX_ACCOUNT_METAS);
-            const new = prev.*; // this seems to dodge a miscompilation?
+            const new = prev.*; // this avoids a bug caused by Parameter Reference Optimisation (PRO)
             try deduped_account_metas.append(tc.allocator, new);
         } else {
             index_in_callee_ptr.* = @intCast(deduped_account_metas.items.len);

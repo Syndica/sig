@@ -257,7 +257,7 @@ pub const LookupTableAccounts = struct {
     readonly: []const Pubkey,
 };
 
-// [agave] https://github.com/anza-xyz/agave/blob/b7547496510defa0a5b7541d99386ce1526bed06/accounts-db/src/accounts.rs#L105
+// [agave] https://github.com/anza-xyz/agave/blob/6dcc39fcba90fbb5c924c71a1ef287c234f56c17/accounts-db/src/accounts.rs#L105
 fn resolveLookupTableAccounts(
     allocator: Allocator,
     account_reader: SlotAccountReader,
