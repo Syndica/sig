@@ -9,6 +9,7 @@ const Rooted = @This();
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const AccountSharedData = sig.runtime.AccountSharedData;
+const Gauge = sig.prometheus.Gauge(u64);
 const ThreadPool = sig.sync.ThreadPool;
 
 const OK = sql.SQLITE_OK;
@@ -19,6 +20,8 @@ const ROW = sql.SQLITE_ROW;
 handle: *sql.sqlite3,
 /// Tracks the largest rooted slot.
 largest_rooted_slot: ?Slot,
+/// Updates a prometheus counter for mem usage.
+sqlite_mem_used: ?*Gauge = null,
 
 /// These aren't thread safe, but we can have as many as we want. Clean up with deinitThreadLocals
 /// on any threads that use put or get.
@@ -114,6 +117,12 @@ pub fn get(
 ) error{OutOfMemory}!?AccountSharedData {
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.get" });
     defer zone.deinit();
+
+    {
+        const mem_used = sql.sqlite3_memory_used();
+        tracy.plot(u48, "sqlite3_memory_used", @intCast(mem_used));
+        if (self.sqlite_mem_used) |guage| guage.set(@intCast(mem_used));
+    }
 
     const stmt: *sql.sqlite3_stmt = if (get_stmt) |stmt| stmt else blk: {
         const query =
@@ -317,6 +326,12 @@ pub fn commitTransaction(self: *Rooted) void {
 pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedData) void {
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.put" });
     defer zone.deinit();
+
+    {
+        const mem_used = sql.sqlite3_memory_used();
+        tracy.plot(u48, "sqlite3_memory_used", @intCast(mem_used));
+        if (self.sqlite_mem_used) |guage| guage.set(@intCast(mem_used));
+    }
 
     const stmt: *sql.sqlite3_stmt = if (put_stmt) |stmt| stmt else blk: {
         // Insert or update only if last_modified_slot is greater (excluded = VALUES)
