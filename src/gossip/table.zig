@@ -1143,3 +1143,47 @@ test "insert and get contact_info" {
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].wallclock == v);
 }
+
+test "insert and replace updates cursor tracking for Vote, EpochSlots, DuplicateShred" {
+    const kp = try KeyPair.generateDeterministic(@splat(2));
+    const id = Pubkey.fromPublicKey(&kp.public_key);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    var test_data = [_]GossipData{
+        .{ .Vote = .{ 0, .initRandom(random) } },
+        .{ .EpochSlots = .{ 0, .initRandom(random) } },
+        .{ .DuplicateShred = .{ 0, .initRandom(random) } },
+    };
+    test_data[0].Vote[1].from = id;
+    test_data[1].EpochSlots[1].from = id;
+    test_data[2].DuplicateShred[1].from = id;
+
+    var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
+    defer table.deinit();
+
+    for (test_data, 0..) |initial_data, i| {
+        const initial_cursor = table.cursor;
+
+        // insert initial
+        const result = try table.insert(SignedGossipData.initSigned(&kp, initial_data), 0);
+        try std.testing.expectEqual(.new, result.success);
+
+        // replace with newer wallclock
+        var replacement = initial_data;
+        replacement.wallclockPtr().* += 100;
+        const result1 = try table.insert(SignedGossipData.initSigned(&kp, replacement), 0);
+        try std.testing.expectEqual(.replaced, result1.success);
+
+        // verify cursor was updated in the appropriate tracking map
+        const cursor_map = switch (initial_data) {
+            .Vote => &table.votes,
+            .EpochSlots => &table.epoch_slots,
+            .DuplicateShred => &table.duplicate_shreds,
+            else => unreachable,
+        };
+        try std.testing.expectEqual(1, cursor_map.count());
+        try std.testing.expectEqual(null, cursor_map.get(initial_cursor));
+        try std.testing.expectEqual(i, cursor_map.get(initial_cursor + 1));
+    }
+}
