@@ -1127,4 +1127,19 @@ test "insert and get contact_info" {
     nodes = table.getContactInfos(&buf, 0);
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].wallclock == v);
+
+    // test re-insertion with older wallclock (should fail with too_old)
+    var old_gossip_value = SignedGossipData.initSigned(&kp, .{ .ContactInfo = ci });
+    old_gossip_value.data.ContactInfo.wallclock = v - 1; // set to older than current
+    const result4 = try table.insert(old_gossip_value, 0);
+    try std.testing.expectEqual(.fail, std.meta.activeTag(result4));
+    try std.testing.expectEqual(.too_old, result4.fail);
+
+    // verify the old value was added to purged
+    try std.testing.expect(table.purged.len() > 0);
+
+    // verify the table still has the newer value
+    nodes = table.getContactInfos(&buf, 0);
+    try std.testing.expect(nodes.len == 1);
+    try std.testing.expect(nodes[0].wallclock == v);
 }
