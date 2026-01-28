@@ -20,7 +20,9 @@ const SlotState = sig.core.SlotState;
 /// will end as soon as the items are removed.
 pub const SlotTracker = struct {
     slots: std.AutoArrayHashMapUnmanaged(Slot, *Element),
-    root: Slot,
+    latest_processed_slot: std.atomic.Value(Slot) = .init(0),
+    latest_confirmed_slot: std.atomic.Value(Slot) = .init(0),
+    root: std.atomic.Value(Slot),
 
     pub const Element = struct {
         constants: SlotConstants,
@@ -46,7 +48,7 @@ pub const SlotTracker = struct {
         slot_init: Element,
     ) std.mem.Allocator.Error!SlotTracker {
         var self: SlotTracker = .{
-            .root = root_slot,
+            .root = .init(root_slot),
             .slots = .empty,
         };
         errdefer self.deinit(allocator);
@@ -114,7 +116,7 @@ pub const SlotTracker = struct {
     }
 
     pub fn getRoot(self: *const SlotTracker) Reference {
-        return self.get(self.root).?; // root slot's bank must exist
+        return self.get(self.root.load(.monotonic)).?; // root slot's bank must exist
     }
 
     pub fn contains(self: *const SlotTracker, slot: Slot) bool {
@@ -188,8 +190,9 @@ pub const SlotTracker = struct {
 
         var slice = self.slots.entries.slice();
         var index: usize = 0;
+        const root = self.root.load(.monotonic);
         while (index < slice.len) {
-            if (slice.items(.key)[index] < self.root) {
+            if (slice.items(.key)[index] < root) {
                 const element = slice.items(.value)[index];
                 element.state.deinit(allocator);
                 element.constants.deinit(allocator);

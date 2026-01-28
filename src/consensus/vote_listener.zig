@@ -28,7 +28,7 @@ pub const SlotDataProvider = struct {
     epoch_tracker: *const EpochTracker,
 
     pub fn rootSlot(self: *const SlotDataProvider) Slot {
-        return self.slot_tracker.root;
+        return self.slot_tracker.root.load(.monotonic);
     }
 
     fn getSlotHash(self: *const SlotDataProvider, slot: Slot) ?Hash {
@@ -317,6 +317,7 @@ pub const VoteCollector = struct {
     latest_vote_slot_per_validator: sig.utils.collections.PubkeyMap(Slot),
     last_process_root: sig.time.Instant,
     vote_processing_time: VoteProcessingTiming,
+    latest_confirmed_slot: *std.atomic.Value(Slot),
     metrics: VoteListenerMetrics,
 
     pub fn deinit(self: *VoteCollector, allocator: std.mem.Allocator) void {
@@ -331,6 +332,7 @@ pub const VoteCollector = struct {
         now: sig.time.Instant,
         root_slot: Slot,
         registry: *sig.prometheus.Registry(.{}),
+        latest_confirmed_slot: *std.atomic.Value(Slot),
     ) !VoteCollector {
         return .{
             .gossip_vote_receptor = .INIT,
@@ -339,6 +341,7 @@ pub const VoteCollector = struct {
             .latest_vote_slot_per_validator = .empty,
             .last_process_root = now,
             .vote_processing_time = .ZEROES,
+            .latest_confirmed_slot = latest_confirmed_slot,
             .metrics = try .init(registry),
         };
     }
@@ -397,6 +400,7 @@ pub const VoteCollector = struct {
             gossip_vote_txs,
             &self.vote_processing_time,
             &self.latest_vote_slot_per_validator,
+            self.latest_confirmed_slot,
             self.metrics,
         );
         defer allocator.free(confirmed_slots);
@@ -420,6 +424,7 @@ fn listenAndConfirmVotes(
     gossip_vote_txs: []const vote_parser.ParsedVote,
     vote_processing_time: ?*VoteProcessingTiming,
     latest_vote_slot_per_validator: *sig.utils.collections.PubkeyMap(Slot),
+    latest_confirmed_slot: *std.atomic.Value(Slot),
     metrics: VoteListenerMetrics,
 ) std.mem.Allocator.Error![]const ThresholdConfirmedSlot {
     var replay_votes_buffer: std.ArrayListUnmanaged(vote_parser.ParsedVote) = .empty;
@@ -454,6 +459,7 @@ fn listenAndConfirmVotes(
         latest_vote_slot_per_validator,
         gossip_vote_txs,
         replay_votes,
+        latest_confirmed_slot,
         metrics,
     );
 }
@@ -468,6 +474,7 @@ fn filterAndConfirmWithNewVotes(
     latest_vote_slot_per_validator: *sig.utils.collections.PubkeyMap(Slot),
     gossip_vote_txs: []const vote_parser.ParsedVote,
     replayed_votes: []const vote_parser.ParsedVote,
+    latest_confirmed_slot: *std.atomic.Value(Slot),
     metrics: VoteListenerMetrics,
 ) std.mem.Allocator.Error![]const ThresholdConfirmedSlot {
     const root_slot = slot_data_provider.rootSlot();
@@ -503,6 +510,7 @@ fn filterAndConfirmWithNewVotes(
                 &new_optimistic_confirmed_slots,
                 is_gossip,
                 latest_vote_slot_per_validator,
+                latest_confirmed_slot,
             );
             if (is_gossip)
                 metrics.gossip_votes_processed.inc()
@@ -767,6 +775,7 @@ fn trackNewVotesAndNotifyConfirmations(
     new_optimistic_confirmed_slots: *std.ArrayListUnmanaged(ThresholdConfirmedSlot),
     is_gossip_vote: bool,
     latest_vote_slot_per_validator: *sig.utils.collections.PubkeyMap(Slot),
+    latest_confirmed_slot: *std.atomic.Value(Slot),
 ) std.mem.Allocator.Error!void {
     if (vote.isEmpty()) return;
     const root = slot_data_provider.rootSlot();
@@ -867,6 +876,7 @@ fn trackNewVotesAndNotifyConfirmations(
                     .slot = slot,
                     .hash = hash,
                 });
+                _ = latest_confirmed_slot.fetchMax(slot, .monotonic);
                 // Notify subscribers about new optimistic confirmation
                 if (senders.bank_notification) |sender| {
                     sender.send(.{ .optimistically_confirmed = slot }) catch |err| {
@@ -999,6 +1009,8 @@ test "trackNewVotesAndNotifyConfirmations filter" {
     var new_optimistic_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
     errdefer new_optimistic_confirmed_slots.deinit(allocator);
 
+    var latest_confirmed_slot: std.atomic.Value(Slot) = .init(0);
+
     {
         const tower_sync_tx_parsed: vote_parser.ParsedVote = blk: {
             const tower_sync: vote_program.state.TowerSync = try .fromLockouts(allocator, &.{
@@ -1037,10 +1049,14 @@ test "trackNewVotesAndNotifyConfirmations filter" {
             &new_optimistic_confirmed_slots,
             is_gossip_vote,
             &latest_vote_slot_per_validator,
+            &latest_confirmed_slot,
         );
     }
     diff.sortAsc();
     try std.testing.expectEqualSlices(Slot, diff.map.keys(), &.{ 1, 2, 6 });
+
+    // const first_confirmed_slot_value = latest_confirmed_slot.load(.monotonic);
+    // std.debug.assert(first_confirmed_slot_value != 0);
 
     // Vote on a new slot, only those later than 6 should show up. 4 is skipped.
     diff.clearRetainingCapacity(allocator);
@@ -1086,10 +1102,14 @@ test "trackNewVotesAndNotifyConfirmations filter" {
             &new_optimistic_confirmed_slots,
             is_gossip_vote,
             &latest_vote_slot_per_validator,
+            &latest_confirmed_slot,
         );
     }
     diff.sortAsc();
     try std.testing.expectEqualSlices(Slot, diff.map.keys(), &.{ 7, 8 });
+
+    // const second_confirmed_slot_value = latest_confirmed_slot.load(.monotonic);
+    // std.debug.assert(second_confirmed_slot_value != 0);
 }
 
 const ThresholdReachedResults = std.bit_set.IntegerBitSet(THRESHOLDS_TO_CHECK.len);
@@ -1780,6 +1800,7 @@ test "simple usage" {
         .EPOCH_ZERO,
         slot_data_provider.rootSlot(),
         &registry,
+        &slot_tracker.latest_confirmed_slot,
     );
     defer vote_collector.deinit(allocator);
 
@@ -1880,8 +1901,12 @@ test "check trackers" {
     const replay_votes_channel = try sig.sync.Channel(vote_parser.ParsedVote).create(allocator);
     defer replay_votes_channel.destroy();
 
-    var vote_collector: VoteCollector =
-        try .init(.EPOCH_ZERO, slot_data_provider.rootSlot(), &registry);
+    var vote_collector: VoteCollector = try .init(
+        .EPOCH_ZERO,
+        slot_data_provider.rootSlot(),
+        &registry,
+        &slot_tracker.latest_confirmed_slot,
+    );
     defer vote_collector.deinit(allocator);
 
     var expected_trackers: std.ArrayListUnmanaged(struct { Slot, TestSlotVoteTracker }) = .empty;

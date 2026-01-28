@@ -2115,7 +2115,7 @@ const ReplayAndConsensusServiceState = struct {
     fn init(
         allocator: std.mem.Allocator,
         params: struct {
-            app_base: *const AppBase,
+            app_base: *AppBase,
             account_store: sig.accounts_db.AccountStore,
             loaded_snapshot: *sig.accounts_db.snapshot.LoadedSnapshot,
             ledger: *Ledger,
@@ -2214,6 +2214,12 @@ const ReplayAndConsensusServiceState = struct {
                 .receivers = receivers,
             };
         };
+
+        var rpc_ctx = sig.rpc.methods.SlotHookContext{
+            .slot_tracker = &replay_state.slot_tracker,
+        };
+
+        try params.app_base.rpc_hooks.set(allocator, &rpc_ctx);
 
         const metrics = try params.app_base.metrics_registry.initStruct(replay.service.Metrics);
 

@@ -324,7 +324,7 @@ pub fn trackNewSlots(
     var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
     defer zone.deinit();
 
-    const root = slot_tracker.root;
+    const root = slot_tracker.root.load(.monotonic);
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
 
@@ -572,6 +572,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     slot,
                     last_entry_hash,
                 ));
+                _ = slot_tracker.latest_processed_slot.fetchMax(slot, .monotonic);
                 processed_a_slot = true;
             } else {
                 state.logger.info().logf("partially replayed slot: {}", .{slot});
@@ -588,7 +589,7 @@ fn bypassConsensus(state: *ReplayState) !void {
         const slot_tracker = &state.slot_tracker;
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
-        slot_tracker.root = new_root;
+        _ = slot_tracker.root.fetchMax(new_root, .monotonic);
         slot_tracker.pruneNonRooted(state.allocator);
 
         try state.status_cache.addRoot(state.allocator, new_root);
@@ -916,7 +917,7 @@ test "advance calls consensus.process with empty replay results" {
     try advanceReplay(&replay_state, try registry.initStruct(Metrics), null);
 
     // No slots were replayed
-    try std.testing.expectEqual(0, replay_state.slot_tracker.root);
+    try std.testing.expectEqual(0, replay_state.slot_tracker.root.load(.monotonic));
 }
 
 test "Execute testnet block single threaded" {
