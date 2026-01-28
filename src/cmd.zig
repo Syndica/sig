@@ -1359,19 +1359,6 @@ fn validator(
     var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
     defer rpc_client.deinit();
 
-    var rpc_epoch_ctx_service = RpcLeaderScheduleService.init(
-        allocator,
-        .from(app_base.logger),
-        &magic_tracker,
-        rpc_client,
-    );
-
-    const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
-        .{},
-        RpcLeaderScheduleService.run,
-        .{ &rpc_epoch_ctx_service, app_base.exit },
-    );
-
     const turbine_config = cfg.turbine;
 
     // shred network
@@ -1460,7 +1447,6 @@ fn validator(
 
     if (rpc_server_thread) |thread| thread.join();
     replay_thread.join();
-    rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
     ledger_cleanup_service.join();
