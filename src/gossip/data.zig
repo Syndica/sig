@@ -50,7 +50,10 @@ pub const GossipVersionedData = struct {
     }
 
     /// Returns which value should overwrite the other, or if they're equal
-    pub fn overwrites(new_value: *const @This(), old_value: *const @This()) enum { new, old, eq } {
+    pub fn overwrites(
+        new_value: *const GossipVersionedData,
+        old_value: *const GossipVersionedData,
+    ) enum { new, old, eq } {
         // labels must match
         assert(@intFromEnum(new_value.data.label()) == @intFromEnum(old_value.data.label()));
 
