@@ -21,6 +21,8 @@ const Hash = sig.core.hash.Hash;
 const Pubkey = sig.core.Pubkey;
 const SocketAddr = sig.net.SocketAddr;
 
+const assert = std.debug.assert;
+
 const PACKET_DATA_SIZE = sig.net.Packet.DATA_SIZE;
 pub const UNIQUE_PUBKEY_CAPACITY: usize = 8_192;
 // TODO: cli arg for this
@@ -225,22 +227,15 @@ pub const GossipTable = struct {
                         old_info.?.value.deinit();
                     },
                     .Vote => {
-                        const did_remove = self.votes.swapRemove(old_entry.cursor_on_insertion);
-                        std.debug.assert(did_remove);
+                        assert(self.votes.swapRemove(old_entry.cursor_on_insertion));
                         try self.votes.put(self.cursor, entry_index);
                     },
                     .EpochSlots => {
-                        const did_remove = self.epoch_slots.swapRemove(
-                            old_entry.cursor_on_insertion,
-                        );
-                        std.debug.assert(did_remove);
+                        assert(self.epoch_slots.swapRemove(old_entry.cursor_on_insertion));
                         try self.epoch_slots.put(self.cursor, entry_index);
                     },
                     .DuplicateShred => {
-                        const did_remove = self.duplicate_shreds.swapRemove(
-                            old_entry.cursor_on_insertion,
-                        );
-                        std.debug.assert(did_remove);
+                        assert(self.duplicate_shreds.swapRemove(old_entry.cursor_on_insertion));
                         try self.duplicate_shreds.put(self.cursor, entry_index);
                     },
                     else => {},
@@ -252,12 +247,12 @@ pub const GossipTable = struct {
                 try self.shards.insert(entry_index, &metadata.value_hash);
 
                 const did_remove = self.entries.swapRemove(old_entry.cursor_on_insertion);
-                std.debug.assert(did_remove);
+                assert(did_remove);
                 try self.entries.put(self.cursor, entry_index);
 
                 // As long as the pubkey does not change, self.records
                 // does not need to be updated.
-                std.debug.assert(result.entry.getGossipData().id().equals(&origin));
+                assert(result.entry.getGossipData().id().equals(&origin));
 
                 try self.purged.insert(old_entry.value_hash, now);
 
@@ -394,7 +389,7 @@ pub const GossipTable = struct {
             const entry_index = cursor_hashmap.get(cursor).?;
             const entry = store.getByIndex(entry_index);
             // sanity check
-            std.debug.assert(entry.metadata.cursor_on_insertion == cursor);
+            assert(entry.metadata.cursor_on_insertion == cursor);
 
             buf[count] = try entry.clone(allocator);
             count += 1;
@@ -596,7 +591,7 @@ pub const GossipTable = struct {
         const entry_indexs = self.pubkey_to_values.getEntry(origin).?.value_ptr;
         {
             const did_remove = entry_indexs.swapRemove(entry_index);
-            std.debug.assert(did_remove);
+            assert(did_remove);
         }
 
         // no more values associated with the pubkey
@@ -604,12 +599,12 @@ pub const GossipTable = struct {
             {
                 entry_indexs.deinit();
                 const did_remove = self.pubkey_to_values.swapRemove(origin);
-                std.debug.assert(did_remove);
+                assert(did_remove);
             }
 
             if (self.shred_versions.contains(origin)) {
                 const did_remove = self.shred_versions.remove(origin);
-                std.debug.assert(did_remove);
+                assert(did_remove);
             }
         }
 
@@ -621,33 +616,33 @@ pub const GossipTable = struct {
         switch (entry.tag()) {
             .ContactInfo => {
                 const did_remove = self.contact_infos.swapRemove(entry_index);
-                std.debug.assert(did_remove);
+                assert(did_remove);
             },
             .LegacyContactInfo => {
                 const did_remove = self.contact_infos.swapRemove(entry_index);
-                std.debug.assert(did_remove);
+                assert(did_remove);
                 const lci = self.store.getTypedPtr(.LegacyContactInfo, entry_index);
                 var contact_info = self.converted_contact_infos.fetchSwapRemove(lci.id).?.value;
                 contact_info.deinit();
             },
             .Vote => {
                 const did_remove = self.votes.swapRemove(cursor_on_insertion);
-                std.debug.assert(did_remove);
+                assert(did_remove);
             },
             .EpochSlots => {
                 const did_remove = self.epoch_slots.swapRemove(cursor_on_insertion);
-                std.debug.assert(did_remove);
+                assert(did_remove);
             },
             .DuplicateShred => {
                 const did_remove = self.duplicate_shreds.swapRemove(cursor_on_insertion);
-                std.debug.assert(did_remove);
+                assert(did_remove);
             },
             else => {},
         }
 
         {
             const did_remove = self.entries.swapRemove(cursor_on_insertion);
-            std.debug.assert(did_remove);
+            assert(did_remove);
         }
 
         // free memory while gossip_data still points to the correct data
@@ -658,7 +653,7 @@ pub const GossipTable = struct {
         // either the last element of the store, or undefined if the store is empty
         {
             const did_remove = self.store.swapRemove(label);
-            std.debug.assert(did_remove);
+            assert(did_remove);
         }
 
         self.accountForSwapRemove(entry_index);
@@ -676,7 +671,7 @@ pub const GossipTable = struct {
         const table_len = self.len();
         // if (index == table_len) then it was already the last
         // element so we dont need to do anything
-        std.debug.assert(entry_index <= table_len);
+        assert(entry_index <= table_len);
         if (entry_index == table_len) return;
 
         // replace data with newly swapped value
@@ -693,12 +688,12 @@ pub const GossipTable = struct {
         switch (entry.tag()) {
             .ContactInfo => {
                 const did_remove = self.contact_infos.swapRemove(table_len);
-                std.debug.assert(did_remove);
+                assert(did_remove);
                 self.contact_infos.put(entry_index, {}) catch unreachable;
             },
             .LegacyContactInfo => {
                 const did_remove = self.contact_infos.swapRemove(table_len);
-                std.debug.assert(did_remove);
+                assert(did_remove);
                 self.contact_infos.put(entry_index, {}) catch unreachable;
             },
             .Vote => {
@@ -716,7 +711,7 @@ pub const GossipTable = struct {
 
         const new_entry_indexs = self.pubkey_to_values.getEntry(new_index_origin).?.value_ptr;
         const did_remove = new_entry_indexs.swapRemove(table_len);
-        std.debug.assert(did_remove);
+        assert(did_remove);
         new_entry_indexs.put(entry_index, {}) catch unreachable;
     }
 
