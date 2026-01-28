@@ -181,7 +181,7 @@ pub fn SortedMap(
             }
 
             self.nodes.items[new_idx] = .{
-                .key = undefined,
+                .key = key,
                 .value = undefined,
                 .prev = path[0],
                 .next = @splat(0),
@@ -264,7 +264,7 @@ pub fn SortedMap(
             // Update .next links of prev
             for (0..self.levels + 1) |i| {
                 const path_link = &self.nodes.items[path[i]].next[i];
-                if (path_link.* != idx) break;
+                if (path_link.* != idx) continue;
                 path_link.* = self.nodes.items[idx].next[i];
             }
 
@@ -319,22 +319,30 @@ pub fn SortedMap(
             maybe_end: ?Key,
             begin: enum { start, end },
         ) Iterator {
-            var path: [max_levels + 2]u32 = @splat(0);
-            const idx = switch (begin) {
-                .start => blk: {
-                    if (maybe_start) |key| {
-                        _ = self.search(key, &path);
-                        break :blk path[max_levels + 1];
+            const idx = blk: {
+                if (self.count() == 0) break :blk 0;
+                const key = switch (begin) {
+                    .start => maybe_start orelse break :blk 0, // min
+                    .end => maybe_end orelse break :blk self.tail, // max,
+                };
+
+                // scan to find the most suitable starting index:
+                // if begin == .start, then node[idx].key >= maybe_start
+                // if begin == .end, then node[idx].key <= maybe_end
+                var idx = self.nodes.items[0].next[0];
+                var level = self.levels;
+                while (level != std.math.maxInt(u32)) : (level -%= 1) {
+                    while (true) {
+                        const node = &self.nodes.items[idx];
+                        const next_idx = if (node.next[level] > 0) node.next[level] else break;
+                        const next = &self.nodes.items[next_idx];
+                        idx = switch (begin) {
+                            .start => if (orderFn(next.key, key) == .lt) next_idx else break,
+                            .end => if (orderFn(next.key, key) != .gt) next_idx else break,
+                        };
                     }
-                    break :blk if (self.count() == 0) 0 else self.nodes.items[0].next[0];
-                },
-                .end => blk: {
-                    if (maybe_end) |key| {
-                        _ = self.search(key, &path);
-                        break :blk path[max_levels + 1];
-                    }
-                    break :blk self.tail;
-                },
+                }
+                break :blk idx;
             };
 
             return .{
@@ -387,40 +395,54 @@ pub fn SortedMap(
                 direction: enum { forward, backward },
                 include: enum { inclusive, exclusive },
             ) ?Entry {
-                std.debug.assert(self.idx < self.map.nodes.items.len);
-                if (self.idx == 0) {
-                    if (self.map.count() == 0) return null;
-                    switch (direction) {
-                        .forward => {
-                            self.idx = self.map.nodes.items[0].next[0];
-                            if (self.idx == 0) return null;
-                        },
-                        .backward => return null,
+                if (self.map.count() == 0) return null;
+                while (true) {
+                    // start of range
+                    if (self.idx == 0) {
+                        self.idx = switch (direction) {
+                            .backward => return null,
+                            .forward => switch (self.map.nodes.items[0].next[0]) {
+                                0 => std.math.maxInt(u32),
+                                else => |idx| idx,
+                            },
+                        };
                     }
-                }
-
-                const node = &self.map.nodes.items[self.idx];
-                switch (direction) {
-                    .forward => {
-                        if (self.end) |end_key| {
-                            switch (include) {
-                                .inclusive => if (orderFn(node.key, end_key) == .gt) return null,
-                                .exclusive => if (orderFn(node.key, end_key) != .lt) return null,
-                            }
+                    // end of range
+                    if (self.idx == std.math.maxInt(u32)) {
+                        switch (direction) {
+                            .forward => return null,
+                            .backward => {
+                                self.idx = self.map.tail;
+                                std.debug.assert(self.idx != std.math.maxInt(u32));
+                                continue;
+                            },
                         }
-                        self.idx = node.next[0];
-                    },
-                    .backward => {
-                        if (self.start) |start_key| {
-                            switch (include) {
-                                .inclusive => if (orderFn(start_key, node.key) == .gt) return null,
-                                .exclusive => if (orderFn(start_key, node.key) != .lt) return null,
-                            }
+                    }
+                    // valid node
+                    const node = &self.map.nodes.items[self.idx];
+                    self.idx = switch (direction) {
+                        .backward => node.prev,
+                        .forward => switch (node.next[0]) {
+                            0 => std.math.maxInt(u32),
+                            else => |idx| idx,
+                        },
+                    };
+                    // skip nodes outside range
+                    if (self.start) |start_key| {
+                        switch (include) {
+                            .inclusive => if (orderFn(start_key, node.key) == .gt) continue,
+                            .exclusive => if (orderFn(start_key, node.key) != .lt) continue,
                         }
-                        self.idx = node.prev;
-                    },
+                    }
+                    if (self.end) |end_key| {
+                        switch (include) {
+                            .inclusive => if (orderFn(node.key, end_key) == .gt) continue,
+                            .exclusive => if (orderFn(node.key, end_key) != .lt) continue,
+                        }
+                    }
+                    // found node in range
+                    return .{ .key_ptr = &node.key, .value_ptr = &node.value };
                 }
-                return .{ .key_ptr = &node.key, .value_ptr = &node.value };
             }
         };
     };
