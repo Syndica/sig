@@ -191,7 +191,10 @@ pub const Config = struct {
         };
 
         if (self.ssh_host) |host| {
-            self.target = ssh.getHostTarget(b, host) catch |e| std.debug.panic("{}", .{e});
+            // Only use SSH to detect remote target if -Dtarget was not explicitly specified
+            if (!b.user_input_options.contains("target")) {
+                self.target = ssh.getHostTarget(b, host) catch |e| std.debug.panic("{}", .{e});
+            }
         }
 
         return self;
