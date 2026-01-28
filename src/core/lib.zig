@@ -21,7 +21,7 @@ pub const stakes = @import("stakes.zig");
 pub const status_cache = @import("status_cache.zig");
 pub const time = @import("time.zig");
 pub const transaction = @import("transaction.zig");
-pub const magic_info = @import("magic_info.zig");
+pub const epoch_tracker = @import("epoch_tracker.zig");
 pub const magic_leader_schedule = @import("magic_leader_schedule.zig");
 
 /// TODO: Change EpochStakes to use EpochStakes(.stake) everywhere except in the `epoch_stakes` field
@@ -52,6 +52,8 @@ pub const BlockhashQueue = blockhash_queue.BlockhashQueue;
 pub const ClusterType = genesis_config.ClusterType;
 pub const Entry = entry.Entry;
 pub const EpochSchedule = epoch_schedule.EpochSchedule;
+pub const EpochTracker = epoch_tracker.EpochTracker;
+pub const EpochInfo = epoch_tracker.EpochInfo;
 pub const FeeRateGovernor = genesis_config.FeeRateGovernor;
 pub const FeatureSet = features.Set;
 pub const GenesisConfig = genesis_config.GenesisConfig;

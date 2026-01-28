@@ -49,20 +49,20 @@ pub fn beginPartitionedRewards(
     slot_constants: *SlotConstants,
     slot_state: *SlotState,
     slot_store: SlotAccountStore,
-    magic_tracker: *sig.core.magic_info.MagicTracker,
+    epoch_tracker: *sig.core.EpochTracker,
 ) !void {
-    const epoch = magic_tracker.epoch_schedule.getEpoch(slot);
-    const parent_epoch = magic_tracker.epoch_schedule.getEpoch(slot_constants.parent_slot);
+    const epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
+    const parent_epoch = epoch_tracker.epoch_schedule.getEpoch(slot_constants.parent_slot);
 
-    const current_epoch_info = try magic_tracker.getEpochInfoNoOffset(
+    const current_epoch_info = try epoch_tracker.getEpochInfoNoOffset(
         slot,
         &slot_constants.ancestors,
     );
     const epoch_vote_accounts = current_epoch_info.stakes.stakes.vote_accounts;
 
-    const slots_per_year = magic_tracker.cluster.slotsPerYear();
+    const slots_per_year = epoch_tracker.cluster.slotsPerYear();
     const previous_epoch_capitalization = &slot_state.capitalization;
-    const epoch_schedule = &magic_tracker.epoch_schedule;
+    const epoch_schedule = &epoch_tracker.epoch_schedule;
     const feature_set = &slot_constants.feature_set;
     const inflation = &slot_constants.inflation;
     const stakes_cache = &slot_state.stakes_cache;

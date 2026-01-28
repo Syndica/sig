@@ -55,7 +55,7 @@ pub const ShredReceiver = struct {
 
         shred_version: *const Atomic(u16),
 
-        magic_tracker: *const sig.core.magic_info.MagicTracker,
+        epoch_tracker: *const sig.core.EpochTracker,
 
         /// shared with repair
         tracker: *BasicShredTracker,
@@ -155,7 +155,7 @@ pub const ShredReceiver = struct {
             self.shred_batch.clearRetainingCapacity();
         }
 
-        const leader_schedules = try self.params.magic_tracker.getLeaderSchedules();
+        const leader_schedules = try self.params.epoch_tracker.getLeaderSchedules();
 
         var packet_count: usize = 0;
         while (self.incoming_shreds.tryReceive()) |packet| {
@@ -213,7 +213,7 @@ pub const ShredReceiver = struct {
             const max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
             validateShred(
                 &packet,
-                self.params.magic_tracker.root_slot.load(.monotonic),
+                self.params.epoch_tracker.root_slot.load(.monotonic),
                 self.params.shred_version,
                 max_slot,
             ) catch |err| {
@@ -292,13 +292,13 @@ test "handleBatch/handlePacket" {
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
         allocator,
         random,
         root_slot,
         .INIT,
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
@@ -318,7 +318,7 @@ test "handleBatch/handlePacket" {
         .turbine_socket = invalid_socket,
         .shred_version = &shred_version,
         .maybe_retransmit_shred_sender = null,
-        .magic_tracker = &magic_tracker,
+        .epoch_tracker = &epoch_tracker,
         .tracker = shred_tracker,
         .inserter = ledger.shredInserter(),
     });

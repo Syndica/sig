@@ -77,7 +77,7 @@ pub const Cluster = struct {
 /// This is a WORK AROUND for our current lack of fork awareness outside of replay.
 /// It ATTEMPTS to satisfy immediate requirements to run on testnet.
 /// It MUST be replaced by a better implementation as soon as possible.
-pub const MagicTracker = struct {
+pub const EpochTracker = struct {
     /// Cluster constants
     cluster: Cluster,
 
@@ -118,7 +118,7 @@ pub const MagicTracker = struct {
         cluster: Cluster,
         root_slot: Slot,
         epoch_schedule: EpochSchedule,
-    ) MagicTracker {
+    ) EpochTracker {
         return .{
             .cluster = cluster,
             .root_slot = .init(root_slot),
@@ -132,16 +132,16 @@ pub const MagicTracker = struct {
         allocator: Allocator,
         manifest: *const sig.accounts_db.snapshot.Manifest,
         feature_set: *const FeatureSet,
-    ) !MagicTracker {
+    ) !EpochTracker {
         const slot = manifest.bank_fields.slot;
         const epoch_schedule = manifest.bank_fields.epoch_schedule;
 
-        var magic_tracker = sig.core.magic_info.MagicTracker.init(
+        var epoch_tracker = sig.core.EpochTracker.init(
             .initFromBankFields(manifest.bank_fields),
             slot,
             epoch_schedule,
         );
-        errdefer magic_tracker.deinit(allocator);
+        errdefer epoch_tracker.deinit(allocator);
 
         const epoch_stakes_map = manifest.bank_extra.versioned_epoch_stakes;
         const min_epoch = std.mem.min(Epoch, manifest.bank_extra.versioned_epoch_stakes.keys());
@@ -150,13 +150,13 @@ pub const MagicTracker = struct {
             const stakes = (epoch_stakes_map.get(epoch) orelse continue).current;
             const epoch_stakes = try stakes.convert(allocator, .delegation);
             errdefer epoch_stakes.deinit(allocator);
-            try magic_tracker.insertRootedEpochInfo(allocator, epoch_stakes, feature_set);
+            try epoch_tracker.insertRootedEpochInfo(allocator, epoch_stakes, feature_set);
         }
 
-        return magic_tracker;
+        return epoch_tracker;
     }
 
-    pub fn deinit(self: *MagicTracker, allocator: Allocator) void {
+    pub fn deinit(self: *EpochTracker, allocator: Allocator) void {
         self.rooted_epochs.deinit(allocator);
         self.unrooted_epochs.deinit(allocator);
     }
@@ -169,7 +169,7 @@ pub const MagicTracker = struct {
     /// at the beginning of Epoch 9, and contains stakes from the end of Epoch 8.
     /// IF the slot is in Epoch 10, then EpochInfo.stakes.stakes.epoch wil be 9
     pub fn getEpochInfo(
-        self: *const MagicTracker,
+        self: *const EpochTracker,
         slot: Slot,
     ) !*const EpochInfo {
         const epoch = self.epoch_schedule.getEpoch(
@@ -179,7 +179,7 @@ pub const MagicTracker = struct {
     }
 
     pub fn getEpochInfoNoOffset(
-        self: *const MagicTracker,
+        self: *const EpochTracker,
         slot: Slot,
         ancestors: *const Ancestors,
     ) !*const EpochInfo {
@@ -187,7 +187,7 @@ pub const MagicTracker = struct {
         return self.rooted_epochs.get(epoch) catch self.unrooted_epochs.get(ancestors);
     }
 
-    pub fn getLeaderSchedules(self: *const MagicTracker) !LeaderSchedules {
+    pub fn getLeaderSchedules(self: *const EpochTracker) !LeaderSchedules {
         const slot = self.root_slot.load(.monotonic);
         const epoch_info = try self.getEpochInfo(slot);
         const next_epoch_info = self.getEpochInfo(
@@ -200,7 +200,7 @@ pub const MagicTracker = struct {
     }
 
     pub fn onSlotRooted(
-        self: *MagicTracker,
+        self: *EpochTracker,
         allocator: Allocator,
         slot: Slot,
         ancestors: *const Ancestors,
@@ -211,7 +211,7 @@ pub const MagicTracker = struct {
     }
 
     fn onFirstSlotInEpochRooted(
-        self: *MagicTracker,
+        self: *EpochTracker,
         allocator: Allocator,
         ancestors: *const Ancestors,
     ) !void {
@@ -227,7 +227,7 @@ pub const MagicTracker = struct {
     }
 
     pub fn insertRootedEpochInfo(
-        self: *MagicTracker,
+        self: *EpochTracker,
         allocator: Allocator,
         epoch_stakes: EpochStakes,
         feature_set: *const FeatureSet,
@@ -256,7 +256,7 @@ pub const MagicTracker = struct {
     }
 
     pub fn insertUnrootedEpochInfo(
-        self: *MagicTracker,
+        self: *EpochTracker,
         allocator: Allocator,
         slot: Slot,
         ancestors: *const Ancestors,
@@ -293,9 +293,9 @@ pub const MagicTracker = struct {
         random: Random,
         root_slot: Slot,
         epoch_schedule: EpochSchedule,
-    ) !MagicTracker {
+    ) !EpochTracker {
         if (!builtin.is_test) @compileError("only for tests");
-        var self = MagicTracker.init(.default, root_slot, epoch_schedule);
+        var self = EpochTracker.init(.default, root_slot, epoch_schedule);
         errdefer self.deinit(allocator);
 
         const epoch = epoch_schedule.getEpoch(root_slot);
@@ -319,9 +319,9 @@ pub const MagicTracker = struct {
     pub fn initWithEpochStakesOnlyForTest(
         allocator: Allocator,
         epoch_stakes: []const EpochStakes,
-    ) !MagicTracker {
+    ) !EpochTracker {
         if (!builtin.is_test) @compileError("only for tests");
-        var self = MagicTracker.init(.default, 0, .INIT);
+        var self = EpochTracker.init(.default, 0, .INIT);
         errdefer self.deinit(allocator);
 
         for (epoch_stakes) |stakes| {
@@ -691,7 +691,7 @@ test "UnrootedEpochBuffer" {
     // TODO: Implement specific tests for UnrootedEpochBuffer
 }
 
-test MagicTracker {
+test EpochTracker {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -703,14 +703,14 @@ test MagicTracker {
     });
 
     // Begin test at last slot in epoch 0
-    var magic = MagicTracker.init(.default, 31, epoch_schedule);
-    defer magic.deinit(allocator);
+    var epoch_tracker = EpochTracker.init(.default, 31, epoch_schedule);
+    defer epoch_tracker.deinit(allocator);
 
     // Only the root slot is set
-    try std.testing.expectEqual(31, magic.root_slot.load(.monotonic));
-    try std.testing.expectError(error.EpochNotFound, magic.getEpochInfo(0));
-    try std.testing.expectError(error.EpochNotFound, magic.rooted_epochs.get(0));
-    try std.testing.expectError(error.ForkNotFound, magic.unrooted_epochs.get(&.EMPTY));
+    try std.testing.expectEqual(31, epoch_tracker.root_slot.load(.monotonic));
+    try std.testing.expectError(error.EpochNotFound, epoch_tracker.getEpochInfo(0));
+    try std.testing.expectError(error.EpochNotFound, epoch_tracker.rooted_epochs.get(0));
+    try std.testing.expectError(error.ForkNotFound, epoch_tracker.unrooted_epochs.get(&.EMPTY));
 
     // Fill the buffers with epochs by inserting and then rooting the first slot for 10 epochs
     for (0..10) |epoch| {
@@ -720,7 +720,7 @@ test MagicTracker {
         );
         defer branch.deinit(allocator);
 
-        _ = try magic.insertUnrootedEpochInfo(
+        _ = try epoch_tracker.insertUnrootedEpochInfo(
             allocator,
             branch.maxSlot(),
             &branch,
@@ -732,15 +732,15 @@ test MagicTracker {
             &.ALL_DISABLED,
         );
 
-        try magic.onSlotRooted(allocator, branch.maxSlot(), &branch);
+        try epoch_tracker.onSlotRooted(allocator, branch.maxSlot(), &branch);
     }
 
     // Check that the root slot is 9 * 32 and epochs 6, 7, 8, 9 are available
-    try std.testing.expectEqual(9 * 32, magic.root_slot.load(.monotonic));
-    try std.testing.expectEqual(6, (try magic.rooted_epochs.get(6)).stakes.stakes.epoch);
-    try std.testing.expectEqual(7, (try magic.rooted_epochs.get(7)).stakes.stakes.epoch);
-    try std.testing.expectEqual(8, (try magic.rooted_epochs.get(8)).stakes.stakes.epoch);
-    try std.testing.expectEqual(9, (try magic.rooted_epochs.get(9)).stakes.stakes.epoch);
+    try std.testing.expectEqual(9 * 32, epoch_tracker.root_slot.load(.monotonic));
+    try std.testing.expectEqual(6, (try epoch_tracker.rooted_epochs.get(6)).stakes.stakes.epoch);
+    try std.testing.expectEqual(7, (try epoch_tracker.rooted_epochs.get(7)).stakes.stakes.epoch);
+    try std.testing.expectEqual(8, (try epoch_tracker.rooted_epochs.get(8)).stakes.stakes.epoch);
+    try std.testing.expectEqual(9, (try epoch_tracker.rooted_epochs.get(9)).stakes.stakes.epoch);
 
     // Empty stakes for failing inserts
     var fail_stakes = try sig.core.stakes.randomEpochStakes(
@@ -754,7 +754,7 @@ test MagicTracker {
     const branch = try Ancestors.initWithSlots(allocator, &.{319});
     defer branch.deinit(allocator);
     fail_stakes.stakes.epoch = epoch_schedule.getEpoch(branch.maxSlot());
-    try std.testing.expectError(error.InvalidInsert, magic.insertUnrootedEpochInfo(
+    try std.testing.expectError(error.InvalidInsert, epoch_tracker.insertUnrootedEpochInfo(
         allocator,
         branch.maxSlot(),
         &branch,
@@ -781,7 +781,7 @@ test MagicTracker {
     // Insert four branches
     const insert_ptrs = try allocator.alloc(*const EpochInfo, 4);
     defer allocator.free(insert_ptrs);
-    for (0..4) |i| insert_ptrs[i] = try magic.insertUnrootedEpochInfo(
+    for (0..4) |i| insert_ptrs[i] = try epoch_tracker.insertUnrootedEpochInfo(
         allocator,
         branches[i].maxSlot(),
         &branches[i],
@@ -796,12 +796,12 @@ test MagicTracker {
     // Check that the pointers returned from insert match the pointers returned from get
     for (0..4) |i| try std.testing.expectEqual(
         insert_ptrs[i],
-        try magic.unrooted_epochs.get(&branches[i]),
+        try epoch_tracker.unrooted_epochs.get(&branches[i]),
     );
 
     // Check that another insert hits max forks
     fail_stakes.stakes.epoch = epoch_schedule.getEpoch(branches[4].maxSlot());
-    try std.testing.expectError(error.MaxForksExceeded, magic.insertUnrootedEpochInfo(
+    try std.testing.expectError(error.MaxForksExceeded, epoch_tracker.insertUnrootedEpochInfo(
         allocator,
         branches[4].maxSlot(),
         &branches[4],
@@ -810,19 +810,19 @@ test MagicTracker {
     ));
 
     // Root the first slot from branch 2
-    try magic.onSlotRooted(allocator, branches[2].maxSlot(), &branches[2]);
+    try epoch_tracker.onSlotRooted(allocator, branches[2].maxSlot(), &branches[2]);
 
     // Check that the pointers returned from insert match the pointers returned from get
     for (0..4) |i| try std.testing.expectEqual(
         insert_ptrs[i],
         if (i != 2)
-            try magic.unrooted_epochs.get(&branches[i])
+            try epoch_tracker.unrooted_epochs.get(&branches[i])
         else
-            try magic.rooted_epochs.get(epoch_schedule.getEpoch(branches[i].maxSlot())),
+            try epoch_tracker.rooted_epochs.get(epoch_schedule.getEpoch(branches[i].maxSlot())),
     );
 
     // Check we can't insert unrooted if the epoch is already rooted
-    try std.testing.expectError(error.InvalidInsert, magic.insertUnrootedEpochInfo(
+    try std.testing.expectError(error.InvalidInsert, epoch_tracker.insertUnrootedEpochInfo(
         allocator,
         branches[4].maxSlot(),
         &branches[4],

@@ -39,7 +39,7 @@ pub fn processNewEpoch(
     slot_constants: *SlotConstants,
     slot_state: *SlotState,
     slot_store: SlotAccountStore,
-    magic_tracker: *sig.core.magic_info.MagicTracker,
+    epoch_tracker: *sig.core.EpochTracker,
 ) !void {
     try applyFeatureActivations(
         allocator,
@@ -52,8 +52,8 @@ pub fn processNewEpoch(
 
     try slot_state.stakes_cache.activateEpoch(
         allocator,
-        magic_tracker.epoch_schedule.getEpoch(slot),
-        slot_constants.feature_set.newWarmupCooldownRateEpoch(&magic_tracker.epoch_schedule),
+        epoch_tracker.epoch_schedule.getEpoch(slot),
+        slot_constants.feature_set.newWarmupCooldownRateEpoch(&epoch_tracker.epoch_schedule),
     );
 
     try updateEpochStakes(
@@ -62,7 +62,7 @@ pub fn processNewEpoch(
         &slot_constants.ancestors,
         &slot_constants.feature_set,
         &slot_state.stakes_cache,
-        magic_tracker,
+        epoch_tracker,
     );
 
     try beginPartitionedRewards(
@@ -71,7 +71,7 @@ pub fn processNewEpoch(
         slot_constants,
         slot_state,
         slot_store,
-        magic_tracker,
+        epoch_tracker,
     );
 }
 
@@ -81,18 +81,18 @@ pub fn updateEpochStakes(
     ancestors: *const Ancestors,
     feature_set: *const FeatureSet,
     stakes_cache: *StakesCache,
-    magic_tracker: *sig.core.magic_info.MagicTracker,
+    epoch_tracker: *sig.core.EpochTracker,
 ) !void {
-    const epoch_info = magic_tracker.getEpochInfoNoOffset(slot, ancestors) catch null;
+    const epoch_info = epoch_tracker.getEpochInfoNoOffset(slot, ancestors) catch null;
     if (epoch_info == null) {
         const epoch_stakes = try getEpochStakes(
             allocator,
-            magic_tracker.epoch_schedule.getLeaderScheduleEpoch(slot),
+            epoch_tracker.epoch_schedule.getLeaderScheduleEpoch(slot),
             stakes_cache,
         );
         errdefer epoch_stakes.deinit(allocator);
 
-        _ = try magic_tracker.insertUnrootedEpochInfo(
+        _ = try epoch_tracker.insertUnrootedEpochInfo(
             allocator,
             slot,
             ancestors,
@@ -754,8 +754,8 @@ test updateEpochStakes {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    var magic_tracker = sig.core.magic_info.MagicTracker.init(.default, 0, .INIT);
-    defer magic_tracker.deinit(allocator);
+    var epoch_tracker = sig.core.EpochTracker.init(.default, 0, .INIT);
+    defer epoch_tracker.deinit(allocator);
 
     var stakes_cache = StakesCache.EMPTY;
     defer stakes_cache.deinit(allocator);
@@ -771,9 +771,9 @@ test updateEpochStakes {
             &ancestors,
             &.ALL_DISABLED,
             &stakes_cache,
-            &magic_tracker,
+            &epoch_tracker,
         );
-        const epoch_info = try magic_tracker.unrooted_epochs.get(&ancestors);
+        const epoch_info = try epoch_tracker.unrooted_epochs.get(&ancestors);
         try std.testing.expectEqual(
             stakes_cache.stakes.private.v.epoch,
             epoch_info.stakes.stakes.epoch,

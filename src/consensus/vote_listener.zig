@@ -19,13 +19,13 @@ const OptimisticConfirmationVerifier =
     sig.consensus.optimistic_vote_verifier.OptimisticConfirmationVerifier;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
-const MagicTracker = sig.core.magic_info.MagicTracker;
+const EpochTracker = sig.core.EpochTracker;
 
 const Logger = sig.trace.Logger("vote_listener");
 
 pub const SlotDataProvider = struct {
     slot_tracker: *const SlotTracker,
-    magic_tracker: *const MagicTracker,
+    epoch_tracker: *const EpochTracker,
 
     pub fn rootSlot(self: *const SlotDataProvider) Slot {
         return self.slot_tracker.root;
@@ -37,7 +37,7 @@ pub const SlotDataProvider = struct {
     }
 
     fn getSlotEpoch(self: *const SlotDataProvider, slot: Slot) sig.core.Epoch {
-        return self.magic_tracker.epoch_schedule.getEpoch(slot);
+        return self.epoch_tracker.epoch_schedule.getEpoch(slot);
     }
 
     fn getSlotAncestorsPtr(
@@ -51,12 +51,12 @@ pub const SlotDataProvider = struct {
     }
 
     fn getEpochTotalStake(self: *const SlotDataProvider, epoch: u64) ?u64 {
-        const epoch_info = self.magic_tracker.rooted_epochs.get(epoch) catch return null;
+        const epoch_info = self.epoch_tracker.rooted_epochs.get(epoch) catch return null;
         return epoch_info.stakes.total_stake;
     }
 
     fn getDelegatedStake(self: *const SlotDataProvider, slot: Slot, pubkey: Pubkey) ?u64 {
-        const epoch_info = self.magic_tracker.getEpochInfo(slot) catch return null;
+        const epoch_info = self.epoch_tracker.getEpochInfo(slot) catch return null;
         return epoch_info.stakes.stakes.vote_accounts.getDelegatedStake(pubkey);
     }
 
@@ -65,7 +65,7 @@ pub const SlotDataProvider = struct {
         slot: Slot,
         vote_account_key: Pubkey,
     ) ?Pubkey {
-        const epoch_consts = self.magic_tracker.getEpochInfo(slot) catch return null;
+        const epoch_consts = self.epoch_tracker.getEpochInfo(slot) catch return null;
         const epoch_authorized_voters = &epoch_consts.stakes.epoch_authorized_voters;
         return epoch_authorized_voters.get(vote_account_key);
     }
@@ -217,7 +217,7 @@ const GossipVoteReceptor = struct {
             if (parseAndVerifyVoteTransaction(
                 allocator,
                 gossip_vote.transaction,
-                slot_data_provider.magic_tracker,
+                slot_data_provider.epoch_tracker,
             )) |parsed_vote| {
                 vote_tx_buffer.appendAssumeCapacity(parsed_vote);
             } else |e| switch (e) {
@@ -243,7 +243,7 @@ fn parseAndVerifyVoteTransaction(
     allocator: std.mem.Allocator,
     vote_tx: Transaction,
     /// Should be associated with the root bank.
-    magic_tracker: *const MagicTracker,
+    epoch_tracker: *const EpochTracker,
 ) error{ OutOfMemory, Unverified }!vote_parser.ParsedVote {
     const zone = tracy.Zone.init(@src(), .{ .name = "verifyVoteTransaction" });
     defer zone.deinit();
@@ -258,7 +258,7 @@ fn parseAndVerifyVoteTransaction(
 
     const slot = vote.lastVotedSlot() orelse return error.Unverified;
     const authorized_voter: Pubkey = blk: {
-        const epoch_consts = magic_tracker.getEpochInfo(slot) catch return error.Unverified;
+        const epoch_consts = epoch_tracker.getEpochInfo(slot) catch return error.Unverified;
         const epoch_authorized_voters = &epoch_consts.stakes.epoch_authorized_voters;
         break :blk epoch_authorized_voters.get(vote_account_key) orelse return error.Unverified;
     };
@@ -966,17 +966,17 @@ test "trackNewVotesAndNotifyConfirmations filter" {
     );
     defer slot_tracker.deinit(allocator);
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
         allocator,
         prng,
         0,
         .INIT,
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     const slot_data_provider: SlotDataProvider = .{
         .slot_tracker = &slot_tracker,
-        .magic_tracker = &magic_tracker,
+        .epoch_tracker = &epoch_tracker,
     };
 
     const senders: Senders = try .createForTest(allocator, .{
@@ -1709,20 +1709,20 @@ test parseAndVerifyVoteTransaction {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
         allocator,
         prng.random(),
         0,
         .INIT,
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     try std.testing.expectError(
         error.Unverified,
         // TODO: consider making two separate APIs, one for the slot tracker, and one for the epoch tracker,
         // since it seems like there's little or no real data inter-dependency internally.
         // Argument against: whether the data is interdependent could change.
-        parseAndVerifyVoteTransaction(allocator, .EMPTY, &magic_tracker),
+        parseAndVerifyVoteTransaction(allocator, .EMPTY, &epoch_tracker),
     );
 }
 
@@ -1752,17 +1752,17 @@ test "simple usage" {
     defer slot_tracker.deinit(allocator);
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
         allocator,
         prng.random(),
         0,
         .INIT,
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     const slot_data_provider: SlotDataProvider = .{
         .slot_tracker = &slot_tracker,
-        .magic_tracker = &magic_tracker,
+        .epoch_tracker = &epoch_tracker,
     };
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
@@ -1837,12 +1837,12 @@ test "check trackers" {
     };
     defer slot_tracker.deinit(allocator);
 
-    var magic_tracker = sig.core.magic_info.MagicTracker.init(
+    var epoch_tracker = sig.core.EpochTracker.init(
         .default,
         0,
         .INIT,
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     {
         var stakes = try sig.core.EpochStakes.initRandom(
@@ -1858,12 +1858,12 @@ test "check trackers" {
             try stakes.epoch_authorized_voters.put(allocator, vote_key, vote_key);
         }
 
-        try magic_tracker.insertRootedEpochInfo(allocator, stakes, &.ALL_DISABLED);
+        try epoch_tracker.insertRootedEpochInfo(allocator, stakes, &.ALL_DISABLED);
     }
 
     const slot_data_provider: SlotDataProvider = .{
         .slot_tracker = &slot_tracker,
-        .magic_tracker = &magic_tracker,
+        .epoch_tracker = &epoch_tracker,
     };
 
     var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);

@@ -7,7 +7,6 @@ const config = @import("config.zig");
 const tracy = @import("tracy");
 
 const replay = sig.replay;
-const magic_info = sig.core.magic_info;
 
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
@@ -1202,12 +1201,12 @@ fn validator(
         sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
 
     const feature_set = try loaded_snapshot.featureSet(allocator, &new_db);
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initFromManifest(
+    var epoch_tracker = try sig.core.EpochTracker.initFromManifest(
         allocator,
         collapsed_manifest,
         &feature_set,
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     const rpc_cluster_type = loaded_snapshot.genesis_config.cluster_type;
     var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
@@ -1228,7 +1227,7 @@ fn validator(
             .exit = app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
-            .magic_tracker = &magic_tracker,
+            .epoch_tracker = &epoch_tracker,
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = turbine_config.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
@@ -1273,7 +1272,7 @@ fn validator(
         .account_store = .{ .accounts_db_two = &new_db },
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
-        .magic_tracker = &magic_tracker,
+        .epoch_tracker = &epoch_tracker,
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = voting_enabled,
@@ -1403,19 +1402,19 @@ fn replayOffline(
     });
 
     const feature_set = try loaded_snapshot.featureSet(allocator, &new_db);
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initFromManifest(
+    var epoch_tracker = try sig.core.EpochTracker.initFromManifest(
         allocator,
         collapsed_manifest,
         &feature_set,
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db_two = &new_db },
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
-        .magic_tracker = &magic_tracker,
+        .epoch_tracker = &epoch_tracker,
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = false,
@@ -1476,15 +1475,15 @@ fn shredNetwork(
         allocator.destroy(gossip_service);
     }
 
-    var magic_tracker = magic_info.MagicTracker.init(
+    var epoch_tracker = sig.core.EpochTracker.init(
         .initFromGenesisConfig(&genesis_config),
         shred_network_conf.root_slot,
         genesis_config.epoch_schedule,
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     var rpc_epoch_ctx_service = RpcLeaderScheduleService
-        .init(allocator, .from(app_base.logger), &magic_tracker, rpc_client);
+        .init(allocator, .from(app_base.logger), &epoch_tracker, rpc_client);
     const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
         .{},
         RpcLeaderScheduleService.run,
@@ -1493,7 +1492,7 @@ fn shredNetwork(
 
     var start = sig.time.Timer.start();
     while (start.read().asSecs() < 60) {
-        _ = magic_tracker.getLeaderSchedules() catch {
+        _ = epoch_tracker.getLeaderSchedules() catch {
             std.Thread.sleep(1_000_000_000);
             continue;
         };
@@ -1529,7 +1528,7 @@ fn shredNetwork(
         .exit = app_base.exit,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .my_shred_version = &gossip_service.my_shred_version,
-        .magic_tracker = &magic_tracker,
+        .epoch_tracker = &epoch_tracker,
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,
@@ -2128,7 +2127,7 @@ const ReplayAndConsensusServiceState = struct {
             account_store: sig.accounts_db.AccountStore,
             loaded_snapshot: *sig.accounts_db.snapshot.LoadedSnapshot,
             ledger: *Ledger,
-            magic_tracker: *sig.core.magic_info.MagicTracker,
+            epoch_tracker: *sig.core.EpochTracker,
             replay_threads: u32,
             disable_consensus: bool,
             voting_enabled: bool,
@@ -2181,7 +2180,7 @@ const ReplayAndConsensusServiceState = struct {
                 },
                 .account_store = account_store,
                 .ledger = params.ledger,
-                .magic_tracker = params.magic_tracker,
+                .epoch_tracker = params.epoch_tracker,
                 .root = .{
                     .slot = bank_fields.slot,
                     .constants = root_slot_constants,
@@ -2367,7 +2366,7 @@ pub const RpcLeaderScheduleService = struct {
     allocator: std.mem.Allocator,
     logger: RpcLeaderScheduleServiceLogger,
     rpc_client: sig.rpc.Client,
-    magic_tracker: *sig.core.magic_info.MagicTracker,
+    epoch_tracker: *sig.core.EpochTracker,
 
     const Self = @This();
     const RpcLeaderScheduleServiceLogger = sig.trace.Logger(@typeName(Self));
@@ -2375,14 +2374,14 @@ pub const RpcLeaderScheduleService = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         logger: RpcLeaderScheduleServiceLogger,
-        magic_tracker: *sig.core.magic_info.MagicTracker,
+        epoch_tracker: *sig.core.EpochTracker,
         rpc_client: sig.rpc.Client,
     ) Self {
         return .{
             .allocator = allocator,
             .logger = logger.withScope(@typeName(Self)),
             .rpc_client = rpc_client,
-            .magic_tracker = magic_tracker,
+            .epoch_tracker = epoch_tracker,
         };
     }
 
@@ -2410,26 +2409,26 @@ pub const RpcLeaderScheduleService = struct {
 
         // Get the current epoch, and the epoch whose stakes were used to compute the leader schedule
         // for the current epoch.
-        const epoch = self.magic_tracker.epoch_schedule.getEpoch(slot);
-        const leader_schedule_epoch = self.magic_tracker.epoch_schedule.getEpoch(
-            slot -| self.magic_tracker.epoch_schedule.leader_schedule_slot_offset,
+        const epoch = self.epoch_tracker.epoch_schedule.getEpoch(slot);
+        const leader_schedule_epoch = self.epoch_tracker.epoch_schedule.getEpoch(
+            slot -| self.epoch_tracker.epoch_schedule.leader_schedule_slot_offset,
         );
 
-        // Iterate from the leader schedule epoch to the current epoch, and populate any missing epochs in the magic tracker.
+        // Iterate from the leader schedule epoch to the current epoch, and populate any missing epochs in the epoch tracker.
         for (leader_schedule_epoch..epoch + 1) |e| {
-            if (self.magic_tracker.rooted_epochs.isNext(e)) {
-                const first_slot_in_epoch = self.magic_tracker.epoch_schedule.getFirstSlotInEpoch(e);
+            if (self.epoch_tracker.rooted_epochs.isNext(e)) {
+                const first_slot_in_epoch = self.epoch_tracker.epoch_schedule.getFirstSlotInEpoch(e);
                 const epoch_leaders = try self.getLeaderSchedule(
                     first_slot_in_epoch +|
-                        self.magic_tracker.epoch_schedule.leader_schedule_slot_offset,
+                        self.epoch_tracker.epoch_schedule.leader_schedule_slot_offset,
                 );
 
-                var entry = try self.allocator.create(sig.core.magic_info.EpochInfo);
+                var entry = try self.allocator.create(sig.core.EpochInfo);
                 entry.* = .{
                     .leaders = .{
                         .leaders = epoch_leaders,
-                        .start = self.magic_tracker.epoch_schedule.getFirstSlotInEpoch(e),
-                        .end = self.magic_tracker.epoch_schedule.getLastSlotInEpoch(e),
+                        .start = self.epoch_tracker.epoch_schedule.getFirstSlotInEpoch(e),
+                        .end = self.epoch_tracker.epoch_schedule.getLastSlotInEpoch(e),
                     },
                     .stakes = .EMPTY,
                 };
@@ -2439,7 +2438,7 @@ pub const RpcLeaderScheduleService = struct {
                     self.allocator.destroy(entry);
                 }
 
-                try self.magic_tracker.rooted_epochs.insert(self.allocator, entry);
+                try self.epoch_tracker.rooted_epochs.insert(self.allocator, entry);
             }
         }
     }

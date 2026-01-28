@@ -1399,7 +1399,7 @@ pub const ReplayTower = struct {
         progress: *const ProgressMap,
         latest_validator_votes: *const LatestValidatorVotes,
         fork_choice: *const HeaviestSubtreeForkChoice,
-        magic_tracker: *const sig.core.magic_info.MagicTracker,
+        epoch_tracker: *const sig.core.EpochTracker,
         /// For reading the slot history account
         account_reader: sig.accounts_db.AccountReader,
     ) !SelectVoteAndResetForkResult {
@@ -1407,7 +1407,7 @@ pub const ReplayTower = struct {
         var failure_reasons: std.ArrayListUnmanaged(HeaviestForkFailures) = .empty;
         errdefer failure_reasons.deinit(allocator);
 
-        const epoch_info = magic_tracker.getEpochInfo(heaviest_slot) catch
+        const epoch_info = epoch_tracker.getEpochInfo(heaviest_slot) catch
             return error.ForkStatsNotFound;
         // Check switch threshold conditions
         const initial_decision = try self.checkSwitchThreshold(
@@ -4930,11 +4930,11 @@ test "selectVoteAndResetForks stake not found" {
 
     const latest = LatestValidatorVotes.empty;
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
         allocator,
         &.{.EMPTY_WITH_GENESIS},
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     try std.testing.expectError(
         error.ForkStatsNotFound,
@@ -4947,7 +4947,7 @@ test "selectVoteAndResetForks stake not found" {
             &ProgressMap.INIT,
             &latest,
             &fork_choice,
-            &magic_tracker,
+            &epoch_tracker,
             .noop,
         ),
     );
@@ -5079,7 +5079,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &LatestValidatorVotes.empty,
         &fixture.fork_choice,
-        &fixture.magic_tracker,
+        &fixture.epoch_tracker,
         accountsdb.accountReader(),
     );
     try std.testing.expectEqual(4, result.reset_slot.?);
@@ -5099,7 +5099,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &LatestValidatorVotes.empty,
         &fixture.fork_choice,
-        &fixture.magic_tracker,
+        &fixture.epoch_tracker,
         accountsdb.accountReader(),
     );
 
@@ -5123,7 +5123,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &LatestValidatorVotes.empty,
         &fixture.fork_choice,
-        &fixture.magic_tracker,
+        &fixture.epoch_tracker,
         accountsdb.accountReader(),
     );
 
@@ -5187,7 +5187,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &LatestValidatorVotes.empty,
         &fixture.fork_choice,
-        &fixture.magic_tracker,
+        &fixture.epoch_tracker,
         accountsdb.accountReader(),
     );
 
@@ -5229,7 +5229,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &LatestValidatorVotes.empty,
         &fixture.fork_choice,
-        &fixture.magic_tracker,
+        &fixture.epoch_tracker,
         accountsdb.accountReader(),
     );
 
@@ -5430,7 +5430,7 @@ pub const TestFixture = struct {
     ancestors: AutoArrayHashMapUnmanaged(Slot, Ancestors) = .{},
     descendants: AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)) = .{},
     progress: ProgressMap = ProgressMap.INIT,
-    magic_tracker: sig.core.magic_info.MagicTracker,
+    epoch_tracker: sig.core.EpochTracker,
     node_pubkeys: std.ArrayListUnmanaged(Pubkey),
     vote_pubkeys: std.ArrayListUnmanaged(Pubkey),
     latest_validator_votes_for_frozen_banks: LatestValidatorVotes,
@@ -5455,8 +5455,8 @@ pub const TestFixture = struct {
         };
         errdefer slot_tracker.deinit(allocator);
 
-        var magic_tracker = sig.core.magic_info.MagicTracker.init(.default, 0, .INIT);
-        defer magic_tracker.deinit(allocator);
+        var epoch_tracker = sig.core.EpochTracker.init(.default, 0, .INIT);
+        defer epoch_tracker.deinit(allocator);
 
         return .{
             .slot_tracker = slot_tracker,
@@ -5468,7 +5468,7 @@ pub const TestFixture = struct {
             ),
             .node_pubkeys = .empty,
             .vote_pubkeys = .empty,
-            .magic_tracker = magic_tracker,
+            .epoch_tracker = epoch_tracker,
             .latest_validator_votes_for_frozen_banks = .empty,
         };
     }
@@ -5480,7 +5480,7 @@ pub const TestFixture = struct {
         self.node_pubkeys.deinit(allocator);
         self.vote_pubkeys.deinit(allocator);
         self.latest_validator_votes_for_frozen_banks.deinit(allocator);
-        self.magic_tracker.deinit(allocator);
+        self.epoch_tracker.deinit(allocator);
 
         for (self.descendants.values()) |set| set.deinit(allocator);
         self.descendants.deinit(allocator);
@@ -5630,8 +5630,8 @@ pub const TestFixture = struct {
         );
         epoch_stakes.stakes.epoch = 0;
 
-        self.magic_tracker.deinit(allocator);
-        self.magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+        self.epoch_tracker.deinit(allocator);
+        self.epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
             allocator,
             &.{epoch_stakes},
         );
