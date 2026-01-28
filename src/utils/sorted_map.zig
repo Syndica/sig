@@ -72,7 +72,7 @@ pub fn SortedMap(
 
         fn search(self: *const Self, key: Key, update: *[max_levels + 1]u32) ?u32 {
             if (self.count() == 0) return null;
-            
+
             var prev: u32 = 0;
             var i = self.levels;
             while (i != std.math.maxInt(u32)) : (i -%= 1) {
@@ -157,9 +157,9 @@ pub fn SortedMap(
 
             const lvl = self.prng.random().uintAtMost(u32, max_levels);
             if (lvl > self.levels) {
-                for (self.levels + 1 .. lvl + 1) |i| update[i] = 0;
+                for (self.levels + 1..lvl + 1) |i| update[i] = 0;
                 self.levels = lvl;
-            }           
+            }
 
             for (0..lvl + 1) |i| {
                 const update_node = &self.nodes.items[update[i]];
@@ -297,7 +297,7 @@ pub fn SortedMap(
                     .start => maybe_start orelse break :blk 0, // min
                     .end => maybe_end orelse break :blk self.tail, // max,
                 };
-                
+
                 var update: [max_levels + 1]u32 = undefined;
                 break :blk self.search(key, &update) orelse update[0];
             };
@@ -392,7 +392,7 @@ pub fn SortedMap(
                             .backward => if (orderFn(start_key, node.key) == .gt) {
                                 self.idx = node_idx; // stay on this one
                                 return null;
-                            }
+                            },
                         }
                     }
                     if (self.end) |end_key| {

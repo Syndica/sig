@@ -745,10 +745,10 @@ pub const ForkChoice = struct {
             );
             defer children_hash_keys.deinit(allocator);
 
-            var it = children_hash_keys.iterator(null, null, .end);
+            var it = children_hash_keys.iteratorRanged(null, null, .end);
             while (it.prev()) |entry| {
                 const child_hash_key = entry.key_ptr.*;
-                
+
                 self.markForkValid(&child_hash_key, valid_slot_hash_key.slot);
                 self.aggregateSlot(child_hash_key);
             }
@@ -784,7 +784,7 @@ pub const ForkChoice = struct {
             );
             defer children_hash_keys.deinit(allocator);
 
-            var it = children_hash_keys.iterator(null, null, .end);
+            var it = children_hash_keys.iteratorRanged(null, null, .end);
             while (it.prev()) |entry| {
                 const child_hash_key = entry.key_ptr.*;
 
@@ -1220,7 +1220,7 @@ pub const ForkChoice = struct {
         var deepest_child_slot_key: SlotAndHash = slot_hash_key;
 
         // Iterate over the children of the current fork
-        var it = fork_info.children.iterator(null, null, .start);
+        var it = fork_info.children.iterator();
         while (it.next()) |entry| {
             const child_key = entry.key_ptr.*;
             const child_fork_info = self.fork_infos.get(child_key) orelse {

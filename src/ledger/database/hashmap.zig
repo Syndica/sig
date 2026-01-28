@@ -46,27 +46,34 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             defer allocator.free(actual_path);
 
             const disk_allocator = try allocator.create(DiskMemoryAllocator);
+            errdefer allocator.destroy(disk_allocator);
             disk_allocator.* = DiskMemoryAllocator{
                 .dir = try std.fs.cwd().makeOpenPath(actual_path, .{}),
                 .logger = logger.withScope(@typeName(DiskMemoryAllocator)),
                 .mmap_ratio = 8,
             };
+
             const batch_allocator = try allocator.create(BatchAllocator);
+            errdefer allocator.destroy(batch_allocator);
             batch_allocator.* = BatchAllocator{
                 .backing_allocator = disk_allocator.allocator(),
                 .batch_size = 1 << 30,
             };
 
             var maps = try allocator.alloc(SharedHashMap, column_families.len);
-            const lock = try allocator.create(RwLock);
-            lock.* = .{};
             errdefer {
                 for (maps) |*m| m.deinit();
                 allocator.free(maps);
             }
+
             inline for (0..column_families.len) |i| {
                 maps[i] = SharedHashMap.init(batch_allocator.allocator());
             }
+
+            const lock = try allocator.create(RwLock);
+            errdefer allocator.destroy(lock);
+            lock.* = .{};
+
             return .{
                 .fast_allocator = allocator,
                 .storage_allocator = batch_allocator.allocator(),
