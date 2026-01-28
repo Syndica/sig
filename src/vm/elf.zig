@@ -262,7 +262,7 @@ pub const Elf = struct {
                 }
             }
 
-            // If neither PT_DYNAMIC nor SHT_DYNAMIC exist, this is a state file.
+            // If neither PT_DYNAMIC nor SHT_DYNAMIC exist, this is a static file.
             if (dynamic_table == null) return null;
             for (dynamic_table.?) |dyn| {
                 const d_tag: u64 = @bitCast(dyn.d_tag);
@@ -1014,11 +1014,10 @@ pub const Elf = struct {
                 text_section.sh_addr
             else
                 text_section.sh_addr +| memory.RODATA_START;
-        const text_section_vaddr_end =
-            if (version.rejectRodataStackOverlap())
-                text_section_vaddr +| text_section.sh_size
-            else
-                text_section_vaddr;
+        const text_section_vaddr_end = if (version.rejectRodataStackOverlap())
+            text_section_vaddr +| text_section.sh_size
+        else
+            text_section_vaddr;
         if (config.reject_broken_elfs and
             !version.enableElfVaddr() and
             text_section.sh_addr != text_section.sh_offset or

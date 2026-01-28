@@ -1,6 +1,141 @@
 const std = @import("std");
-const network = @import("zig-network");
 const builtin = @import("builtin");
+
+const posix = std.posix;
+
+pub const AddressFamily = enum(u32) {
+    ipv4 = posix.AF.INET,
+    ipv6 = posix.AF.INET6,
+
+    fn fromNativeAddressFamily(domain: u32) ?AddressFamily {
+        return std.meta.intToEnum(AddressFamily, domain) catch null;
+    }
+
+    fn toNativeAddressFamily(family: AddressFamily) u32 {
+        return @intFromEnum(family);
+    }
+};
+
+pub const UdpSocket = struct {
+    family: AddressFamily,
+    handle: posix.socket_t,
+
+    pub fn create(family: AddressFamily) !UdpSocket {
+        const socket_type = posix.SOCK.DGRAM | posix.SOCK.CLOEXEC;
+        return .{
+            .family = family,
+            .handle = try posix.socket(family.toNativeAddressFamily(), socket_type, 0),
+        };
+    }
+
+    pub fn close(self: *const UdpSocket) void {
+        posix.close(self.handle);
+    }
+
+    pub fn bind(self: *const UdpSocket, endpoint: std.net.Address) posix.BindError!void {
+        try posix.bind(
+            self.handle,
+            &endpoint.any,
+            endpoint.getOsSockLen(),
+        );
+    }
+
+    pub fn bindToPort(self: *const UdpSocket, port: u16) posix.BindError!void {
+        return switch (self.family) {
+            .ipv4 => try self.bind(.initIp4(@splat(0), port)),
+            .ipv6 => try self.bind(.initIp6(@splat(0), port, 0, 0)),
+        };
+    }
+
+    pub fn setReadTimeout(self: *const UdpSocket, read: ?u32) posix.SetSockOptError!void {
+        std.debug.assert(read == null or read.? != 0);
+        const micros = read orelse 0;
+        const opt: posix.timeval = .{
+            .sec = @intCast(@divTrunc(micros, std.time.us_per_s)),
+            .usec = @intCast(@mod(micros, std.time.us_per_s)),
+        };
+        try posix.setsockopt(
+            self.handle,
+            posix.SOL.SOCKET,
+            posix.SO.RCVTIMEO,
+            std.mem.asBytes(&opt),
+        );
+    }
+
+    pub fn receive(self: *const UdpSocket, data: []u8) posix.RecvFromError!usize {
+        return try posix.recvfrom(self.handle, data, 0, null, null);
+    }
+
+    pub fn receiveFrom(
+        self: *const UdpSocket,
+        data: []u8,
+    ) posix.RecvFromError!struct { usize, std.net.Address } {
+        // Use the ipv6 sockaddr to guarantee data will fit.
+        var addr: posix.sockaddr.in6 = undefined;
+        var size: posix.socklen_t = @sizeOf(posix.sockaddr.in6);
+        const addr_ptr: *posix.sockaddr = @ptrCast(&addr);
+        const len = try posix.recvfrom(self.handle, data, 0, addr_ptr, &size);
+        return .{ len, .{ .in6 = .{ .sa = addr } } };
+    }
+
+    pub fn sendTo(
+        self: *const UdpSocket,
+        receiver: std.net.Address,
+        data: []const u8,
+    ) posix.SendToError!usize {
+        const flags = switch (builtin.target.os.tag) {
+            .linux => posix.MSG.NOSIGNAL,
+            else => 0,
+        };
+        return try posix.sendto(
+            self.handle,
+            data,
+            flags,
+            &receiver.any,
+            receiver.getOsSockLen(),
+        );
+    }
+
+    pub fn enablePortReuse(sock: *const UdpSocket, enabled: bool) !void {
+        const opt: c_int = if (enabled) 1 else 0;
+        try posix.setsockopt(
+            sock.handle,
+            posix.SOL.SOCKET,
+            posix.SO.REUSEPORT,
+            std.mem.asBytes(&opt),
+        );
+    }
+
+    /// Retrieves the end point to which the socket is bound.
+    pub fn getLocalEndPoint(self: *const UdpSocket) !std.net.Address {
+        var addr: posix.sockaddr.in6 align(4) = undefined;
+        var size: posix.socklen_t = @sizeOf(posix.sockaddr.in6);
+
+        const src: *posix.sockaddr = @ptrCast(&addr);
+        try posix.getsockname(self.handle, src, &size);
+
+        const family = AddressFamily.fromNativeAddressFamily(src.family) orelse
+            return error.UnsupportedAddressFamily;
+        switch (family) {
+            .ipv4 => {
+                const value: *align(4) const posix.sockaddr.in = @ptrCast(@alignCast(src));
+                return .initIp4(
+                    @bitCast(value.addr),
+                    std.mem.bigToNative(u16, value.port),
+                );
+            },
+            .ipv6 => {
+                const value: *align(4) const posix.sockaddr.in6 = @ptrCast(@alignCast(src));
+                return .initIp6(
+                    value.addr,
+                    std.mem.bigToNative(u16, value.port),
+                    value.flowinfo,
+                    value.scope_id,
+                );
+            },
+        }
+    }
+};
 
 pub const SocketAddr = union(enum(u8)) {
     V4: SocketAddrV4,
@@ -21,6 +156,100 @@ pub const SocketAddr = union(enum(u8)) {
                 .scope_id = 0,
             } },
         };
+    }
+
+    pub fn initAddress(ip_addr: std.net.Address) SocketAddr {
+        return switch (ip_addr.any.family) {
+            posix.AF.INET => .{ .V4 = .{
+                .ip = .init(@bitCast(ip_addr.in.sa.addr)),
+                .port = ip_addr.getPort(),
+            } },
+            posix.AF.INET6 => .{ .V6 = .{
+                .ip = .init(ip_addr.in6.sa.addr),
+                .port = ip_addr.getPort(),
+                .flowinfo = ip_addr.in6.sa.flowinfo,
+                .scope_id = ip_addr.in6.sa.scope_id,
+            } },
+            else => unreachable,
+        };
+    }
+
+    pub fn toAddress(self: SocketAddr) std.net.Address {
+        return switch (self) {
+            .V4 => |a| .initIp4(a.ip.octets, a.port),
+            .V6 => |a| .initIp6(a.ip.octets, a.port, a.flowinfo, a.scope_id),
+        };
+    }
+
+    pub fn initIpv4(octets: [4]u8, portt: u16) SocketAddr {
+        return .{ .V4 = .{
+            .ip = .init(octets),
+            .port = portt,
+        } };
+    }
+
+    pub fn initIpv6(octets: [16]u8, portt: u16) SocketAddr {
+        return .{ .V6 = .{
+            .ip = .init(octets),
+            .port = portt,
+            .flowinfo = 0,
+            .scope_id = 0,
+        } };
+    }
+
+    pub fn getPort(self: *const SocketAddr) u16 {
+        return switch (self.*) {
+            .V4 => |v4| v4.port,
+            .V6 => |v6| v6.port,
+        };
+    }
+
+    pub fn ip(self: *const SocketAddr) IpAddr {
+        return switch (self.*) {
+            .V4 => |a| .initIpv4(a.ip.octets),
+            .V6 => |a| .initIpv6(a.ip.octets),
+        };
+    }
+
+    pub fn eql(self: *const SocketAddr, other: *const SocketAddr) bool {
+        if (self.* != std.meta.activeTag(other.*)) return false;
+        return switch (self.*) {
+            .V4 => |self_v4| self_v4.port == other.V4.port and self_v4.ip.eql(&other.V4.ip),
+            .V6 => |self_v6| self_v6.port == other.V6.port and self_v6.ip.eql(&other.V6.ip),
+        };
+    }
+
+    pub fn setPort(self: *SocketAddr, portt: u16) void {
+        switch (self.*) {
+            .V4 => |*v4| v4.port = portt,
+            .V6 => |*v6| v6.port = portt,
+        }
+    }
+
+    pub fn isUnspecified(self: *const SocketAddr) bool {
+        return switch (self.*) {
+            .V4 => |addr| std.mem.readInt(u32, &addr.ip.octets, .big) == 0,
+            .V6 => |addr| std.mem.readInt(u128, &addr.ip.octets, .big) == 0,
+        };
+    }
+
+    pub fn isMulticast(self: *const SocketAddr) bool {
+        return switch (self.*) {
+            .V4 => |addr| addr.ip.octets[0] >= 224 and addr.ip.octets[0] <= 239,
+            .V6 => |addr| addr.ip.isMulticast(),
+        };
+    }
+
+    pub fn sanitize(socket: *const SocketAddr) !void {
+        if (socket.getPort() == 0) {
+            return error.InvalidPort;
+        }
+        if (socket.isUnspecified()) {
+            return error.UnspecifiedAddress;
+        }
+        if (socket.isMulticast()) {
+            return error.MulticastAddress;
+        }
     }
 
     pub const ParseIpError = error{InvalidIp};
@@ -121,6 +350,24 @@ pub const SocketAddr = union(enum(u8)) {
         } };
     }
 
+    pub fn toStringBuf(self: SocketAddr, buf: *[53]u8) std.math.IntFittingRange(0, 53) {
+        var stream = std.io.fixedBufferStream(buf);
+        self.toAddress().format("", .{}, stream.writer()) catch unreachable;
+        return @intCast(stream.pos);
+    }
+
+    pub fn format(
+        self: SocketAddr,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        switch (self) {
+            .V4 => |sav4| try sav4.format(fmt, options, writer),
+            .V6 => |sav6| try sav6.format(fmt, options, writer),
+        }
+    }
+
     pub fn initRandom(random: std.Random) SocketAddr {
         const pport = random.int(u16);
 
@@ -141,185 +388,6 @@ pub const SocketAddr = union(enum(u8)) {
                 .flowinfo = 0,
                 .scope_id = 0,
             } };
-        }
-    }
-
-    pub fn initIpv4(octets: [4]u8, portt: u16) SocketAddr {
-        return .{ .V4 = .{
-            .ip = Ipv4Addr.init(octets),
-            .port = portt,
-        } };
-    }
-
-    pub fn initIpv6(octets: [16]u8, portt: u16) SocketAddr {
-        return .{ .V6 = .{
-            .ip = Ipv6Addr.init(octets),
-            .port = portt,
-            .flowinfo = 0,
-            .scope_id = 0,
-        } };
-    }
-
-    pub fn port(self: *const SocketAddr) u16 {
-        switch (self.*) {
-            .V4 => |v4| {
-                return v4.port;
-            },
-            .V6 => |v6| {
-                return v6.port;
-            },
-        }
-    }
-
-    pub fn ip(self: *const SocketAddr) IpAddr {
-        switch (self.*) {
-            .V4 => |v4| {
-                return IpAddr{ .ipv4 = v4.ip };
-            },
-            .V6 => |v6| {
-                return IpAddr{ .ipv6 = v6.ip };
-            },
-        }
-    }
-
-    pub fn eql(self: *const SocketAddr, other: *const SocketAddr) bool {
-        switch (self.*) {
-            .V4 => |self_v4| {
-                switch (other.*) {
-                    .V4 => |other_v4| {
-                        return self_v4.ip.eql(&other_v4.ip) and self_v4.port == other_v4.port;
-                    },
-                    .V6 => |_| {
-                        return false;
-                    },
-                }
-            },
-            .V6 => |self_v6| {
-                switch (other.*) {
-                    .V4 => |_| {
-                        return false;
-                    },
-                    .V6 => |other_v6| {
-                        return self_v6.ip.eql(&other_v6.ip) and
-                            self_v6.port == other_v6.port;
-                    },
-                }
-            },
-        }
-    }
-
-    pub fn toEndpoint(self: *const SocketAddr) network.EndPoint {
-        return switch (self.*) {
-            .V4 => |addr| .{
-                .port = self.port(),
-                .address = .{ .ipv4 = .{
-                    .value = addr.ip.octets,
-                } },
-            },
-            .V6 => |addr| .{
-                .port = self.port(),
-                .address = .{ .ipv6 = .{
-                    .value = addr.ip.octets,
-                    .scope_id = addr.scope_id,
-                } },
-            },
-        };
-    }
-
-    pub fn fromEndpoint(endpoint: *const network.EndPoint) SocketAddr {
-        return switch (endpoint.address) {
-            .ipv4 => |v4| .{ .V4 = .{
-                .ip = Ipv4Addr.init(v4.value),
-                .port = endpoint.port,
-            } },
-            .ipv6 => |v6| .{ .V6 = .{
-                .ip = Ipv6Addr.init(v6.value),
-                .port = endpoint.port,
-                .flowinfo = 0,
-                .scope_id = v6.scope_id,
-            } },
-        };
-    }
-
-    pub fn toAddress(self: SocketAddr) std.net.Address {
-        return switch (self) {
-            .V4 => |a| std.net.Address.initIp4(a.ip.octets, a.port),
-            .V6 => |a| std.net.Address.initIp6(a.ip.octets, a.port, a.flowinfo, a.scope_id),
-        };
-    }
-
-    pub fn fromIpV4Address(address: std.net.Address) SocketAddr {
-        return SocketAddr.initIpv4(.{
-            @intCast(address.in.sa.addr & 0xFF),
-            @intCast(address.in.sa.addr >> 8 & 0xFF),
-            @intCast(address.in.sa.addr >> 16 & 0xFF),
-            @intCast(address.in.sa.addr >> 24 & 0xFF),
-        }, address.getPort());
-    }
-
-    pub fn setPort(self: *SocketAddr, portt: u16) void {
-        switch (self.*) {
-            .V4 => |*v4| v4.port = portt,
-            .V6 => |*v6| v6.port = portt,
-        }
-    }
-
-    pub fn toString(self: SocketAddr) std.BoundedArray(u8, 53) {
-        var buf: [53]u8 = undefined;
-        const len = self.toStringBuf(&buf);
-        return std.BoundedArray(u8, 53).fromSlice(buf[0..len]) catch unreachable;
-    }
-
-    pub fn toStringBuf(self: SocketAddr, buf: *[53]u8) std.math.IntFittingRange(0, 53) {
-        var stream = std.io.fixedBufferStream(buf);
-        self.toAddress().format("", .{}, stream.writer()) catch unreachable;
-        return @intCast(stream.pos);
-    }
-
-    pub fn isUnspecified(self: *const SocketAddr) bool {
-        switch (self.*) {
-            .V4 => |addr| {
-                return std.mem.readInt(u32, &addr.ip.octets, .big) == 0;
-            },
-            .V6 => |addr| {
-                return std.mem.readInt(u128, &addr.ip.octets, .big) == 0;
-            },
-        }
-    }
-
-    pub fn isMulticast(self: *const SocketAddr) bool {
-        switch (self.*) {
-            .V4 => |addr| {
-                const octets = addr.ip.octets;
-                return octets[0] >= 224 and octets[0] <= 239;
-            },
-            .V6 => |addr| {
-                return addr.ip.isMulticast();
-            },
-        }
-    }
-
-    pub fn sanitize(socket: *const SocketAddr) !void {
-        if (socket.port() == 0) {
-            return error.InvalidPort;
-        }
-        if (socket.isUnspecified()) {
-            return error.UnspecifiedAddress;
-        }
-        if (socket.isMulticast()) {
-            return error.MulticastAddress;
-        }
-    }
-
-    pub fn format(
-        self: SocketAddr,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        switch (self) {
-            .V4 => |sav4| try sav4.format(fmt, options, writer),
-            .V6 => |sav6| try sav6.format(fmt, options, writer),
         }
     }
 };
@@ -396,7 +464,7 @@ pub const Ipv6Addr = struct {
     octets: [16]u8,
 
     pub fn init(octets: [16]u8) Ipv6Addr {
-        return Ipv6Addr{
+        return .{
             .octets = octets,
         };
     }
@@ -466,11 +534,17 @@ pub const IpAddr = union(enum(u32)) {
     ipv4: Ipv4Addr,
     ipv6: Ipv6Addr,
 
-    const Self = @This();
+    pub fn initIpv4(octets: [4]u8) IpAddr {
+        return .{ .ipv4 = .init(octets) };
+    }
+
+    pub fn initIpv6(octets: [16]u8) IpAddr {
+        return .{ .ipv6 = .init(octets) };
+    }
 
     pub const ParseIpError = ParseIpv4Error || ParseIpv6Error;
 
-    pub fn parse(bytes: []const u8) ParseIpError!Self {
+    pub fn parse(bytes: []const u8) ParseIpError!IpAddr {
         if (std.mem.indexOfScalar(u8, bytes, '.')) |_| {
             // Probably IPv4.
             return parseIpv4(bytes);
@@ -482,37 +556,25 @@ pub const IpAddr = union(enum(u32)) {
 
     pub const ParseIpv4Error = std.net.IPv4ParseError || error{UnexpectedPort};
 
-    pub fn parseIpv4(bytes: []const u8) ParseIpv4Error!Self {
+    pub fn parseIpv4(bytes: []const u8) ParseIpv4Error!IpAddr {
         if (std.mem.indexOfScalar(u8, bytes, ':')) |_| {
             return error.UnexpectedPort;
         }
         const address = try std.net.Ip4Address.parse(bytes, 0);
-        return Self{ .ipv4 = Ipv4Addr.init(@bitCast(address.sa.addr)) };
+        return IpAddr{ .ipv4 = Ipv4Addr.init(@bitCast(address.sa.addr)) };
     }
 
     pub const ParseIpv6Error = std.net.IPv6ParseError || error{UnexpectedPort};
 
-    pub fn parseIpv6(bytes: []const u8) ParseIpv6Error!Self {
+    pub fn parseIpv6(bytes: []const u8) ParseIpv6Error!IpAddr {
         if (std.mem.indexOfScalar(u8, bytes, ']')) |_| {
             return error.UnexpectedPort;
         }
         const address = try std.net.Ip6Address.parse(bytes, 0);
-        return Self{ .ipv6 = Ipv6Addr.init(address.sa.addr) };
+        return IpAddr{ .ipv6 = Ipv6Addr.init(address.sa.addr) };
     }
 
-    pub fn newIpv4(a: u8, b: u8, c: u8, d: u8) IpAddr {
-        return .{ .ipv4 = Ipv4Addr.init(.{ a, b, c, d }) };
-    }
-
-    pub fn asV4(self: *const Self) [4]u8 {
-        return self.ipv4.octets;
-    }
-
-    pub fn asV6(self: *const Self) [16]u8 {
-        return self.ipv6.octets;
-    }
-
-    pub fn eql(self: *const Self, other: *const IpAddr) bool {
+    pub fn eql(self: *const IpAddr, other: *const IpAddr) bool {
         return switch (self.*) {
             .ipv4 => |ip| switch (other.*) {
                 .ipv4 => |other_ip| std.mem.eql(u8, ip.octets[0..], other_ip.octets[0..]),
@@ -526,7 +588,7 @@ pub const IpAddr = union(enum(u32)) {
     }
 
     pub fn format(
-        self: Self,
+        self: IpAddr,
         comptime fmt: []const u8,
         options: std.fmt.FormatOptions,
         writer: anytype,
@@ -537,31 +599,6 @@ pub const IpAddr = union(enum(u32)) {
         }
     }
 };
-
-pub fn endpointToString(
-    allocator: std.mem.Allocator,
-    endpoint: *const network.EndPoint,
-) error{OutOfMemory}!std.ArrayList(u8) {
-    var endpoint_buf = try std.ArrayList(u8).initCapacity(allocator, 14);
-    try endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
-    return endpoint_buf;
-}
-
-/// Socket.enablePortReuse does not actually enable SO_REUSEPORT. It sets SO_REUSEADDR.
-/// This is the correct implementation to enable SO_REUSEPORT.
-pub fn enablePortReuse(self: *network.Socket, enabled: bool) !void {
-    const setsockopt_fn = if (builtin.os.tag == .windows)
-        @panic("windows not supported")
-    else
-        std.posix.setsockopt;
-    var opt: c_int = if (enabled) 1 else 0;
-    try setsockopt_fn(
-        self.internal,
-        std.posix.SOL.SOCKET,
-        std.posix.SO.REUSEPORT,
-        std.mem.asBytes(&opt),
-    );
-}
 
 pub fn resolveSocketAddr(allocator: std.mem.Allocator, host_and_port: []const u8) !SocketAddr {
     const domain_port_sep = std.mem.indexOfScalar(u8, host_and_port, ':') orelse {
@@ -587,8 +624,8 @@ pub fn resolveSocketAddr(allocator: std.mem.Allocator, host_and_port: []const u8
     // use first A record address
     const ipv4_addr = addr_list.addrs[0];
 
-    const socket_addr = SocketAddr.fromIpV4Address(ipv4_addr);
-    std.debug.assert(socket_addr.port() == port);
+    const socket_addr: SocketAddr = .initAddress(ipv4_addr);
+    std.debug.assert(socket_addr.getPort() == port);
     return socket_addr;
 }
 
@@ -624,7 +661,7 @@ test "SocketAddr.initRandom" {
 test "set port works" {
     var sa1 = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1000);
     sa1.setPort(1001);
-    try std.testing.expectEqual(@as(u16, 1001), sa1.port());
+    try std.testing.expectEqual(@as(u16, 1001), sa1.getPort());
 }
 
 test "parse IPv6 if IPv4 fails" {
@@ -774,13 +811,14 @@ test "parse IPv6 addreess if IPv4 address fails" {
     }
 
     {
-        const addr = try IpAddr.parse("2001:0df8:00f2::06ee:0:0f11");
-        const expected: IpAddr = .{ .ipv6 = Ipv6Addr.init(.{
-            '\x20', '\x01', '\x0D', '\xF8',
-            0,      '\xF2', 0,      0,
-            0,      0,      '\x06', '\xEE',
-            0,      0,      '\x0F', '\x11',
-        }) };
-        try std.testing.expectEqual(addr.ipv6, expected.ipv6);
+        try std.testing.expectEqual(
+            IpAddr.initIpv6(.{
+                '\x20', '\x01', '\x0D', '\xF8',
+                0,      '\xF2', 0,      0,
+                0,      0,      '\x06', '\xEE',
+                0,      0,      '\x0F', '\x11',
+            }),
+            IpAddr.parse("2001:0df8:00f2::06ee:0:0f11"),
+        );
     }
 }

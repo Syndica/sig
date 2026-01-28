@@ -5,7 +5,6 @@ const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
 
-const EndPoint = @import("zig-network").EndPoint;
 const GossipService = sig.gossip.service.GossipService;
 const ChunkType = sig.gossip.service.ChunkType;
 const ContactInfo = sig.gossip.data.ContactInfo;
@@ -122,7 +121,7 @@ pub fn fuzz(
     std.debug.assert(fuzz_client.entrypoints.len > 0);
 
     const keypair = &fuzz_client.my_keypair;
-    const to_endpoint = fuzz_client.entrypoints[0].addr.toEndpoint();
+    const to_endpoint = fuzz_client.entrypoints[0].addr;
     const contact_info = fuzz_client.my_contact_info;
     const outgoing_channel = fuzz_client.packet_outgoing_channel;
 
@@ -273,10 +272,10 @@ pub fn newGossipClient(
     entrypoints: ?[]const SocketAddr,
     logger: Logger,
 ) !*GossipService {
-    const address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, port);
-    var keypair = KeyPair.generate();
+    const address: SocketAddr = .initIpv4(.{ 127, 0, 0, 1 }, port);
+    const keypair: KeyPair = .generate();
 
-    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+    const pubkey: Pubkey = .fromPublicKey(&keypair.public_key);
     const now = getWallclockMs();
     var contact_info = ContactInfo.init(allocator, pubkey, now, shred_version);
     try contact_info.setSocket(.gossip, address);
@@ -292,10 +291,10 @@ pub fn newGossipClient(
     );
 }
 
-pub fn serializeToPacket(d: anytype, to_addr: EndPoint) !Packet {
+pub fn serializeToPacket(d: anytype, to_addr: sig.net.SocketAddr) !Packet {
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-    const msg_slice = try bincode.writeToSlice(&packet_buf, d, bincode.Params{});
-    return Packet.init(to_addr, packet_buf, msg_slice.len);
+    const msg_slice = try bincode.writeToSlice(&packet_buf, d, .{});
+    return .init(to_addr, packet_buf, msg_slice.len);
 }
 
 pub fn randomPing(random: std.Random, keypair: *const KeyPair) !GossipMessage {
@@ -305,7 +304,7 @@ pub fn randomPing(random: std.Random, keypair: *const KeyPair) !GossipMessage {
 pub fn randomPingPacket(
     random: std.Random,
     keypair: *const KeyPair,
-    to_addr: EndPoint,
+    to_addr: sig.net.SocketAddr,
 ) !Packet {
     const ping = try randomPing(random, keypair);
     return try serializeToPacket(ping, to_addr);
@@ -318,7 +317,7 @@ pub fn randomPong(random: std.Random, keypair: *const KeyPair) !GossipMessage {
 pub fn randomPongPacket(
     random: std.Random,
     keypair: *const KeyPair,
-    to_addr: EndPoint,
+    to_addr: sig.net.SocketAddr,
 ) !Packet {
     const pong = try randomPong(random, keypair);
     return try serializeToPacket(pong, to_addr);
@@ -343,7 +342,7 @@ pub fn randomPushMessage(
     allocator: std.mem.Allocator,
     random: std.Random,
     keypair: *const KeyPair,
-    to_addr: EndPoint,
+    to_addr: sig.net.SocketAddr,
 ) !std.ArrayList(Packet) {
     const size: comptime_int = 5;
     var values: [size]SignedGossipData = undefined;
@@ -361,7 +360,7 @@ pub fn randomPushMessage(
         allocator,
         &Pubkey.fromPublicKey(&keypair.public_key),
         &values,
-        &to_addr,
+        to_addr,
         ChunkType.PushMessage,
     );
 }
@@ -370,7 +369,7 @@ pub fn randomPullResponse(
     allocator: std.mem.Allocator,
     random: std.Random,
     keypair: *const KeyPair,
-    to_addr: EndPoint,
+    to_addr: sig.net.SocketAddr,
 ) !std.ArrayList(Packet) {
     const size: comptime_int = 5;
     var values: [size]SignedGossipData = undefined;
@@ -388,7 +387,7 @@ pub fn randomPullResponse(
         allocator,
         &Pubkey.fromPublicKey(&keypair.public_key),
         &values,
-        &to_addr,
+        to_addr,
         ChunkType.PullResponse,
     );
 }
@@ -400,7 +399,7 @@ pub fn randomPullRequest(
     contact_info: ContactInfo,
     random: std.Random,
     keypair: *const KeyPair,
-    to_addr: EndPoint,
+    to_addr: sig.net.SocketAddr,
 ) !Packet {
     const value = SignedGossipData.initSigned(
         keypair,
@@ -417,7 +416,7 @@ pub fn randomPullRequest(
 pub fn randomPullRequestWithContactInfo(
     allocator: std.mem.Allocator,
     random: std.Random,
-    to_addr: EndPoint,
+    to_addr: sig.net.SocketAddr,
     contact_info: SignedGossipData,
 ) !Packet {
     const N_FILTER_BITS = random.intRangeAtMost(u6, 1, 10);
@@ -442,7 +441,7 @@ pub fn randomPullRequestWithContactInfo(
         for (0..5) |_| {
             const rand_value = try randomSignedGossipData(allocator, random, true);
             var buffer: [PACKET_DATA_SIZE]u8 = undefined;
-            const bytes = try bincode.writeToSlice(&buffer, rand_value, bincode.Params.standard);
+            const bytes = try bincode.writeToSlice(&buffer, rand_value, .standard);
             const value_hash = Hash.init(bytes);
             filter.filter.add(&value_hash.data);
         }
@@ -453,7 +452,7 @@ pub fn randomPullRequestWithContactInfo(
         for (0..5) |_| {
             const rand_value = try randomSignedGossipData(allocator, random, true);
             var buffer: [PACKET_DATA_SIZE]u8 = undefined;
-            const bytes = try bincode.writeToSlice(&buffer, rand_value, bincode.Params.standard);
+            const bytes = try bincode.writeToSlice(&buffer, rand_value, .standard);
             const value_hash = Hash.init(bytes);
             filter_set.add(&value_hash);
         }

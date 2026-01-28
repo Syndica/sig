@@ -30,7 +30,7 @@ const downloadSnapshotsFromGossip = sig.accounts_db.snapshot.downloadSnapshotsFr
 const getShredAndIPFromEchoServer = sig.net.echo.getShredAndIPFromEchoServer;
 const getWallclockMs = sig.time.getWallclockMs;
 const globalRegistry = sig.prometheus.globalRegistry;
-const loadSnapshot = sig.accounts_db.snapshot.loadSnapshot;
+const loadSnapshot = sig.accounts_db.snapshot.load.loadSnapshot;
 const servePrometheus = sig.prometheus.servePrometheus;
 
 const Logger = sig.trace.Logger("cmd");
@@ -1098,7 +1098,9 @@ fn validator(
     const turbine_recv_port: u16 = cfg.shred_network.turbine_recv_port;
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{
+        .iterate = true,
+    });
     defer snapshot_dir.close();
 
     var gossip_votes = try sig.sync.Channel(sig.gossip.data.Vote).init(allocator);
@@ -1135,33 +1137,42 @@ fn validator(
         allocator.destroy(geyser);
     };
 
-    // snapshot
-    var loaded_snapshot = try loadSnapshot(
+    const snapshot_files = try sig.accounts_db.snapshot.download.getOrDownloadSnapshotFiles(
         allocator,
-        cfg.accounts_db,
-        try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
         .from(app_base.logger),
+        snapshot_dir,
         .{
             .gossip_service = gossip_service,
-            .geyser_writer = geyser_writer,
-            .validate_snapshot = !cfg.accounts_db.skip_snapshot_validation,
-            .metadata_only = true,
+            .force_new_snapshot_download = cfg.accounts_db.force_new_snapshot_download,
+            .min_snapshot_download_speed_mbs = cfg.accounts_db.min_snapshot_download_speed_mbs,
+            .max_number_of_download_attempts = //
+            cfg.accounts_db.max_number_of_snapshot_download_attempts,
         },
     );
-    defer loaded_snapshot.deinit();
 
     const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
     defer allocator.free(rooted_file);
 
-    var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
-    defer accounts_dir.close();
-
-    var rooted_db: sig.accounts_db.Two.Rooted = try .initSnapshot(
-        allocator,
-        rooted_file,
-        accounts_dir,
-    );
+    var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
     defer rooted_db.deinit();
+
+    // snapshot
+    var loaded_snapshot = try loadSnapshot(
+        allocator,
+        .from(app_base.logger),
+        snapshot_dir,
+        snapshot_files,
+        .{
+            .genesis_file_path = try cfg.genesisFilePath() orelse {
+                return error.GenesisPathNotProvided;
+            },
+            .extract = if (cfg.accounts_db.skip_snapshot_validation)
+                .{ .entire_snapshot = &rooted_db }
+            else
+                .{ .entire_snapshot_and_validate = &rooted_db },
+        },
+    );
+    defer loaded_snapshot.deinit();
 
     var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
     defer new_db.deinit();
@@ -1387,36 +1398,36 @@ fn replayOffline(
 
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{
+        .iterate = true,
+    });
     defer snapshot_dir.close();
 
-    // snapshot
-    var loaded_snapshot = try loadSnapshot(
-        allocator,
-        cfg.accounts_db,
-        try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
-        .from(app_base.logger),
-        .{
-            .gossip_service = null,
-            .geyser_writer = null,
-            .validate_snapshot = !cfg.accounts_db.skip_snapshot_validation,
-            .metadata_only = true,
-        },
-    );
-    defer loaded_snapshot.deinit();
+    const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
 
     const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
     defer allocator.free(rooted_file);
 
-    var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
-    defer accounts_dir.close();
-
-    var rooted_db: sig.accounts_db.Two.Rooted = try .initSnapshot(
-        allocator,
-        rooted_file,
-        accounts_dir,
-    );
+    var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
     defer rooted_db.deinit();
+
+    // snapshot
+    var loaded_snapshot = try loadSnapshot(
+        allocator,
+        .from(app_base.logger),
+        snapshot_dir,
+        snapshot_files,
+        .{
+            .genesis_file_path = try cfg.genesisFilePath() orelse {
+                return error.GenesisPathNotProvided;
+            },
+            .extract = if (cfg.accounts_db.skip_snapshot_validation)
+                .{ .entire_snapshot = &rooted_db }
+            else
+                .{ .entire_snapshot_and_validate = &rooted_db },
+        },
+    );
+    defer loaded_snapshot.deinit();
 
     var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
     defer new_db.deinit();
@@ -1612,7 +1623,9 @@ fn printManifest(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     }
 
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{
+        .iterate = true,
+    });
     defer snapshot_dir.close();
 
     const snapshot_file_info = try SnapshotFiles.find(allocator, snapshot_dir);
@@ -1694,7 +1707,7 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     }
 
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
     const geyser_writer: ?*GeyserWriter = if (!cfg.geyser.enable)
@@ -1710,16 +1723,25 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         allocator.destroy(geyser.exit);
         allocator.destroy(geyser);
     };
+
+    const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
+
+    const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
+    defer allocator.free(rooted_file);
+
+    var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
+    defer rooted_db.deinit();
+
     var loaded_snapshot = try loadSnapshot(
         allocator,
-        cfg.accounts_db,
-        try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
         .from(app_base.logger),
+        snapshot_dir,
+        snapshot_files,
         .{
-            .gossip_service = null,
-            .geyser_writer = geyser_writer,
-            .validate_snapshot = true,
-            .metadata_only = false,
+            .genesis_file_path = try cfg.genesisFilePath() orelse {
+                return error.GenesisPathNotProvided;
+            },
+            .extract = .{ .entire_snapshot_and_validate = &rooted_db },
         },
     );
     defer loaded_snapshot.deinit();
@@ -1738,26 +1760,34 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     = try getLeaderScheduleFromCli(allocator, cfg) orelse b: {
         app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
 
-        var loaded_snapshot = loadSnapshot(
+        const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
+        var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
+        defer snapshot_dir.close();
+
+        const snapshot_files =
+            SnapshotFiles.find(allocator, snapshot_dir) catch |err| switch (err) {
+                error.NoFullSnapshotFileInfoFound => {
+                    app_base.logger.err().log(
+                        \\\ No snapshot found and no gossip service to download a snapshot from.
+                        \\\ Download using the `snapshot-download` command.
+                    );
+                    return err;
+                },
+                else => return err,
+            };
+
+        var loaded_snapshot = try loadSnapshot(
             allocator,
-            cfg.accounts_db,
-            try cfg.genesisFilePath() orelse return error.GenesisPathNotProvided,
             .from(app_base.logger),
+            snapshot_dir,
+            snapshot_files,
             .{
-                .gossip_service = null,
-                .geyser_writer = null,
-                .validate_snapshot = true,
-                .metadata_only = false,
+                .genesis_file_path = try cfg.genesisFilePath() orelse {
+                    return error.GenesisPathNotProvided;
+                },
+                .extract = .metadata_only,
             },
-        ) catch |err| {
-            if (err == error.SnapshotsNotFoundAndNoGossipService) {
-                app_base.logger.err().log(
-                    \\\ No snapshot found and no gossip service to download a snapshot from.
-                    \\\ Download using the `snapshot-download` command.
-                );
-            }
-            return err;
-        };
+        );
         defer loaded_snapshot.deinit();
 
         const bank_fields = &loaded_snapshot.collapsed_manifest.bank_fields;
@@ -1994,7 +2024,7 @@ const AppBase = struct {
             0;
 
         const config_host = cfg.gossip.getHost() catch null;
-        const my_ip = config_host orelse echo_data.ip orelse IpAddr.newIpv4(127, 0, 0, 1);
+        const my_ip: IpAddr = config_host orelse echo_data.ip orelse .initIpv4(.{ 127, 0, 0, 1 });
 
         const my_port = cfg.gossip.port;
 

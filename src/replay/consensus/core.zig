@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 const replay = @import("../lib.zig");
 const tracy = @import("tracy");
-const network = @import("zig-network");
 
 const cluster_sync = replay.consensus.cluster_sync;
 const Allocator = std.mem.Allocator;
@@ -37,13 +36,14 @@ const SlotSet = SortedSet(Slot, .{});
 
 /// UDP sockets used to send vote transactions.
 pub const VoteSockets = struct {
-    ipv4: network.Socket,
-    ipv6: network.Socket,
+    ipv4: sig.net.UdpSocket,
+    ipv6: sig.net.UdpSocket,
 
     pub fn init() !VoteSockets {
-        const s4 = try network.Socket.create(.ipv4, .udp);
+        const s4: sig.net.UdpSocket = try .create(.ipv4);
         errdefer s4.close();
-        const s6 = try network.Socket.create(.ipv6, .udp);
+        const s6: sig.net.UdpSocket = try .create(.ipv6);
+        errdefer s6.close();
         return .{ .ipv4 = s4, .ipv6 = s6 };
     }
 
@@ -1088,7 +1088,7 @@ fn sendVoteTransaction(
         .V6 => sockets.ipv6,
     };
 
-    _ = socket.sendTo(tpu_address.toEndpoint(), serialized) catch |err| {
+    _ = socket.sendTo(tpu_address.toAddress(), serialized) catch |err| {
         logger.err().logf("Failed to send vote transaction: {}", .{err});
         return err;
     };
@@ -1869,7 +1869,6 @@ test "processResult and handleDuplicateConfirmedFork" {
     };
 
     try consensus.fork_choice.fork_infos.put(allocator, slot_hash, .{
-        .logger = .FOR_TESTS,
         .stake_for_slot = 0,
         .stake_for_subtree = 0,
         .height = 0,
@@ -3877,8 +3876,8 @@ test "sendVote - sends to both gossip and upcoming leaders" {
         );
     }
 
-    const my_keypair = sig.identity.KeyPair.generate();
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_keypair: sig.identity.KeyPair = .generate();
+    const my_pubkey: Pubkey = .fromPublicKey(&my_keypair.public_key);
 
     {
         const gossip_table_read, var lock = gossip_table_rw.readWithLock();
@@ -3982,8 +3981,8 @@ test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
         );
     }
 
-    const my_keypair = sig.identity.KeyPair.generate();
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_keypair: sig.identity.KeyPair = .generate();
+    const my_pubkey: Pubkey = .fromPublicKey(&my_keypair.public_key);
 
     {
         const gossip_table_read, var lock = gossip_table_rw.readWithLock();
@@ -4140,20 +4139,20 @@ test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
 
     const vote_slot: Slot = 100;
 
-    const vote_op = VoteOp{
+    const vote_op: VoteOp = .{
         .push_vote = .{
-            .tx = Transaction.EMPTY,
+            .tx = .EMPTY,
             .last_tower_slot = vote_slot,
         },
     };
 
     // Prepare a leader schedule with a single repeating leader
-    const leader_pubkey = Pubkey.initRandom(std.crypto.random);
+    const leader_pubkey: Pubkey = .initRandom(std.crypto.random);
 
     const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
     for (leader_schedule_slots) |*slot| slot.* = leader_pubkey;
 
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
+    var leader_schedule_cache: sig.core.leader_schedule.LeaderScheduleCache = .init(
         allocator,
         .INIT,
     );
@@ -4164,14 +4163,14 @@ test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
         leader_schedules.deinit();
     }
 
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+    const leader_schedule: sig.core.leader_schedule.LeaderSchedule = .{
         .allocator = allocator,
         .slot_leaders = leader_schedule_slots,
     };
     try leader_schedule_cache.put(0, leader_schedule);
 
     // Gossip table with leader ContactInfo having tpu_vote socket
-    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    const gossip_table: sig.gossip.GossipTable = try .init(allocator, allocator);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
     defer sig.sync.mux.deinitMux(&gossip_table_rw);
 
@@ -4195,11 +4194,11 @@ test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
         _ = try gossip_table_write.insert(leader_ci, sig.time.getWallclockMs());
     }
 
-    const my_keypair = sig.identity.KeyPair.generate();
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_keypair: sig.identity.KeyPair = .generate();
+    const my_pubkey: Pubkey = .fromPublicKey(&my_keypair.public_key);
 
     // Provide sockets so sendVoteToLeaders is executed
-    var sockets = try VoteSockets.init();
+    const sockets: VoteSockets = try .init();
     defer sockets.deinit();
 
     try sendVote(
@@ -4288,7 +4287,7 @@ test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
     }
 
     // Provide sockets so sendVoteToLeaders is called and triggers fallback to self TPU
-    var sockets = try VoteSockets.init();
+    const sockets: VoteSockets = try .init();
     defer sockets.deinit();
 
     try sendVote(
@@ -4315,13 +4314,16 @@ test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
 test "sendVoteToLeaders - sends to multiple upcoming leaders" {
     const allocator = testing.allocator;
 
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
     const vote_slot: Slot = 100;
     const vote_tx = Transaction.EMPTY;
 
     // Create three different leaders for consecutive slots
-    const leader1_pubkey = Pubkey.initRandom(std.crypto.random);
-    const leader2_pubkey = Pubkey.initRandom(std.crypto.random);
-    const leader3_pubkey = Pubkey.initRandom(std.crypto.random);
+    const leader1_pubkey: Pubkey = .initRandom(prng);
+    const leader2_pubkey: Pubkey = .initRandom(prng);
+    const leader3_pubkey: Pubkey = .initRandom(prng);
 
     const leader_schedule_slots = try allocator.alloc(Pubkey, 150);
     for (leader_schedule_slots, 0..) |*slot, i| {
@@ -4359,7 +4361,7 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
     defer sig.sync.mux.deinitMux(&gossip_table_rw);
 
     {
-        var leader1_contact = sig.gossip.data.ContactInfo.init(
+        var leader1_contact: sig.gossip.data.ContactInfo = .init(
             allocator,
             leader1_pubkey,
             sig.time.getWallclockMs(),
@@ -4367,7 +4369,7 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
         );
         try leader1_contact.setSocket(
             .tpu_vote,
-            sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8001),
+            .initIpv4(.{ 127, 0, 0, 1 }, 8001),
         );
 
         const leader1_keypair = sig.identity.KeyPair.generate();
@@ -4382,7 +4384,7 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
     }
 
     {
-        var leader2_contact = sig.gossip.data.ContactInfo.init(
+        var leader2_contact: sig.gossip.data.ContactInfo = .init(
             allocator,
             leader2_pubkey,
             sig.time.getWallclockMs(),
@@ -4390,7 +4392,7 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
         );
         try leader2_contact.setSocket(
             .tpu_vote,
-            sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 2 }, 8002),
+            .initIpv4(.{ 127, 0, 0, 2 }, 8002),
         );
 
         const leader2_keypair = sig.identity.KeyPair.generate();
@@ -4405,7 +4407,7 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
     }
 
     {
-        var leader3_contact = sig.gossip.data.ContactInfo.init(
+        var leader3_contact: sig.gossip.data.ContactInfo = .init(
             allocator,
             leader3_pubkey,
             sig.time.getWallclockMs(),
@@ -4413,7 +4415,7 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
         );
         try leader3_contact.setSocket(
             .tpu_vote,
-            sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 3 }, 8003),
+            .initIpv4(.{ 127, 0, 0, 3 }, 8003),
         );
 
         const leader3_keypair = sig.identity.KeyPair.generate();
@@ -4429,7 +4431,7 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
 
     const my_pubkey = Pubkey.initRandom(std.crypto.random);
 
-    var sockets = try VoteSockets.init();
+    const sockets: VoteSockets = try .init();
     defer sockets.deinit();
 
     try sendVoteToLeaders(
@@ -4577,21 +4579,16 @@ test "sendVoteToLeaders - fallback handles missing self TPU data" {
         try testing.expectEqual(0, gossip_table_read.len());
     }
 
-    // Insert self contact that lacks a TPU address.
-    const my_contact: sig.gossip.data.ContactInfo = .init(
-        allocator,
-        my_pubkey,
-        sig.time.getWallclockMs(),
-        0,
-    );
-    const signed_my_ci: sig.gossip.data.SignedGossipData = .initSigned(
-        &my_keypair,
-        sig.gossip.data.GossipData{ .ContactInfo = my_contact },
-    );
-    {
+    { // Insert self contact that lacks a TPU address.
         const gossip_table_write, var lock = gossip_table_rw.writeWithLock();
         defer lock.unlock();
-        _ = try gossip_table_write.insert(signed_my_ci, sig.time.getWallclockMs());
+        _ = try gossip_table_write.insert(
+            .initSigned(
+                &my_keypair,
+                .{ .ContactInfo = .init(allocator, my_pubkey, sig.time.getWallclockMs(), 0) },
+            ),
+            sig.time.getWallclockMs(),
+        );
     }
 
     try sendVoteToLeaders(

@@ -1,12 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../sig.zig");
-const network = @import("zig-network");
 const tracy = @import("tracy");
 const xev = @import("xev");
 
-const Allocator = std.mem.Allocator;
-const UdpSocket = network.Socket;
+const UdpSocket = sig.net.UdpSocket;
 
 const Packet = sig.net.Packet;
 const PACKET_DATA_SIZE = Packet.DATA_SIZE;
@@ -22,7 +20,7 @@ const XevThread = struct {
     pub const Handle = std.Thread.ResetEvent;
 
     const List = std.DoublyLinkedList(struct {
-        allocator: Allocator,
+        allocator: std.mem.Allocator,
         st: ?*SocketThread,
         packet: Packet = undefined,
         udp: xev.UDP,
@@ -45,9 +43,9 @@ const XevThread = struct {
 
     pub fn spawn(st: *SocketThread) !void {
         // Make the socket non-blocking (required by xev).
-        var flags = try std.posix.fcntl(st.socket.internal, std.posix.F.GETFL, 0);
+        var flags = try std.posix.fcntl(st.socket.handle, std.posix.F.GETFL, 0);
         flags |= @as(c_int, @bitCast(std.posix.O{ .NONBLOCK = true }));
-        _ = try std.posix.fcntl(st.socket.internal, std.posix.F.SETFL, flags);
+        _ = try std.posix.fcntl(st.socket.handle, std.posix.F.SETFL, flags);
 
         const rc: RefCount = @bitCast(ref_count.fetchAdd(
             @bitCast(RefCount{ .active = 1 }),
@@ -82,7 +80,7 @@ const XevThread = struct {
             .data = .{
                 .allocator = st.allocator,
                 .st = st,
-                .udp = xev.UDP.initFd(st.socket.internal),
+                .udp = xev.UDP.initFd(st.socket.handle),
             },
         };
 
@@ -338,11 +336,7 @@ const XevThread = struct {
             return err;
         };
 
-        node.data.packet.addr = blk: {
-            var buf = std.BoundedArray(u8, 256){};
-            try buf.writer().print("{}", .{peer_addr});
-            break :blk try network.EndPoint.parse(buf.slice());
-        };
+        node.data.packet.addr = .initAddress(peer_addr);
 
         try st.channel.send(node.data.packet);
         try pollNode(node, loop);
@@ -379,18 +373,19 @@ const PerThread = struct {
 
         while (st.exit.shouldRun()) {
             var packet: Packet = Packet.ANY_EMPTY;
-            const recv_meta = st.socket.receiveFrom(&packet.buffer) catch |err| switch (err) {
+            const packet_size, //
+            const socket_addr //
+            = st.socket.receiveFrom(&packet.buffer) catch |err| switch (err) {
                 error.WouldBlock => continue,
                 else => |e| {
                     st.logger.err().logf("readSocket error: {s}", .{@errorName(e)});
                     return e;
                 },
             };
-            const bytes_read = recv_meta.numberOfBytes;
-            if (bytes_read == 0) return error.SocketClosed;
-            packet.addr = recv_meta.sender;
-            packet.size = bytes_read;
+            packet.size = packet_size;
+            packet.addr = .initAddress(socket_addr);
             packet.flags = st.flags;
+            if (packet.size == 0) return error.SocketClosed;
             try st.channel.send(packet);
         }
     }
@@ -412,12 +407,12 @@ const PerThread = struct {
             next_packet: while (st.channel.tryReceive()) |p| {
                 const bytes_sent = while (true) { // loop on error.SystemResources below.
                     if (st.exit.shouldExit()) return; // drop packets if exit prematurely.
-                    break st.socket.sendTo(p.addr, p.data()) catch |e| switch (e) {
+                    break st.socket.sendTo(p.addr.toAddress(), p.data()) catch |e| switch (e) {
                         // on macOS, sendto() returns ENOBUFS on full buffer instead of blocking.
                         // Wait for the socket to be writable (buffer has room) and retry.
                         error.SystemResources => {
                             var fds = [_]std.posix.pollfd{.{
-                                .fd = st.socket.internal,
+                                .fd = st.socket.handle,
                                 .events = std.posix.POLL.OUT,
                                 .revents = 0,
                             }};
@@ -455,7 +450,7 @@ const PerThread = struct {
         // temp data needed for sending packets
         const Msg = struct {
             hdr: std.os.linux.mmsghdr_const,
-            sock_addr: network.EndPoint.SockAddr,
+            sock_addr: std.net.Address,
             iovec: std.posix.iovec_const,
         };
 
@@ -478,7 +473,7 @@ const PerThread = struct {
                 std.debug.assert(msgs.len == 0);
 
                 // setup for sending packet batch
-                for (packets.items) |packet| {
+                for (packets.items) |*packet| {
                     // we're just filling buffers here, let's not error
                     errdefer comptime unreachable;
 
@@ -489,14 +484,12 @@ const PerThread = struct {
                         &msgs_slice.items(.iovec)[new_msg_idx];
                     new_io_vec.* = .{ .base = packet.data().ptr, .len = packet.size };
 
-                    const new_sock_addr: *network.EndPoint.SockAddr =
+                    const new_sock_addr: *std.net.Address =
                         &msgs_slice.items(.sock_addr)[new_msg_idx];
-                    new_sock_addr.* = toSocketAddress(packet.addr);
+                    new_sock_addr.* = packet.addr.toAddress();
 
-                    const sock_addr: *std.posix.sockaddr, const sock_size: u32 = //
-                        switch (new_sock_addr.*) {
-                            inline else => |*sock| .{ @ptrCast(sock), @sizeOf(@TypeOf(sock.*)) },
-                        };
+                    const sock_addr: *std.posix.sockaddr = &new_sock_addr.any;
+                    const sock_size: u32 = new_sock_addr.getOsSockLen();
 
                     const new_hdr: *std.os.linux.mmsghdr_const =
                         &msgs_slice.items(.hdr)[new_msg_idx];
@@ -519,7 +512,7 @@ const PerThread = struct {
 
                 // send off packet batch
                 const messages_sent = sendmmsg(
-                    st.socket.internal,
+                    st.socket.handle,
                     msgs.items(.hdr),
                     0,
                 ) catch |e| blk: {
@@ -538,13 +531,64 @@ const PerThread = struct {
     }
 };
 
+test "batched sends multiple messages to different addresses" {
+    const allocator = std.testing.allocator;
+
+    var send_sock = try UdpSocket.create(.ipv4);
+    try send_sock.bindToPort(48278);
+    defer send_sock.close();
+
+    var recv1_sock = try UdpSocket.create(.ipv4);
+    try recv1_sock.bindToPort(48279);
+    defer recv1_sock.close();
+
+    var recv2_sock = try UdpSocket.create(.ipv4);
+    try recv2_sock.bindToPort(48280);
+    defer recv2_sock.close();
+
+    var chan = try Channel(Packet).init(std.testing.allocator);
+    defer chan.deinit();
+    var exit = std.atomic.Value(bool).init(false);
+
+    const sender = try SocketThread.spawnSender(
+        allocator,
+        .FOR_TESTS,
+        send_sock,
+        &chan,
+        .{ .unordered = &exit },
+        .{},
+    );
+    defer sender.join();
+    defer exit.store(true, .release);
+
+    try chan.send(.{
+        .buffer = @splat(1),
+        .size = 1,
+        .addr = try .parse("127.0.0.1:48279"),
+        .flags = .{},
+    });
+
+    try chan.send(.{
+        .buffer = @splat(2),
+        .size = 1,
+        .addr = try .parse("127.0.0.1:48280"),
+        .flags = .{},
+    });
+
+    var byte: [1]u8 = .{0};
+    _ = try recv1_sock.receive(&byte);
+    try std.testing.expectEqual(1, byte[0]);
+    _ = try recv2_sock.receive(&byte);
+    try std.testing.expectEqual(2, byte[0]);
+}
+
 // TODO: Evaluate when XevThread socket backend is beneficial.
 const SocketBackend = PerThread;
 
 pub const SocketThread = struct {
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
     logger: Logger,
-    socket: UdpSocket,
+    socket: sig.net.UdpSocket,
     channel: *Channel(Packet),
     exit: ExitCondition,
     direction: Direction,
@@ -554,9 +598,9 @@ pub const SocketThread = struct {
     const Direction = enum { sender, receiver };
 
     pub fn spawnSender(
-        allocator: Allocator,
+        allocator: std.mem.Allocator,
         logger: Logger,
-        socket: UdpSocket,
+        socket: sig.net.UdpSocket,
         outgoing_channel: *Channel(Packet),
         exit: ExitCondition,
         flags: Packet.Flags,
@@ -565,9 +609,9 @@ pub const SocketThread = struct {
     }
 
     pub fn spawnReceiver(
-        allocator: Allocator,
+        allocator: std.mem.Allocator,
         logger: Logger,
-        socket: UdpSocket,
+        socket: sig.net.UdpSocket,
         incoming_channel: *Channel(Packet),
         exit: ExitCondition,
         flags: Packet.Flags,
@@ -576,9 +620,9 @@ pub const SocketThread = struct {
     }
 
     fn spawn(
-        allocator: Allocator,
+        allocator: std.mem.Allocator,
         logger: Logger,
-        socket: UdpSocket,
+        socket: sig.net.UdpSocket,
         channel: *Channel(Packet),
         exit: ExitCondition,
         direction: Direction,
@@ -607,28 +651,6 @@ pub const SocketThread = struct {
         self.allocator.destroy(self);
     }
 };
-
-fn toSocketAddress(self: network.EndPoint) network.EndPoint.SockAddr {
-    return switch (self.address) {
-        .ipv4 => |addr| network.EndPoint.SockAddr{
-            .ipv4 = .{
-                .family = std.posix.AF.INET,
-                .port = std.mem.nativeToBig(u16, self.port),
-                .addr = @bitCast(addr.value),
-                .zero = [_]u8{0} ** 8,
-            },
-        },
-        .ipv6 => |addr| network.EndPoint.SockAddr{
-            .ipv6 = .{
-                .family = std.posix.AF.INET6,
-                .port = std.mem.nativeToBig(u16, self.port),
-                .flowinfo = 0,
-                .addr = addr.value,
-                .scope_id = addr.scope_id,
-            },
-        },
-    };
-}
 
 /// std.posix.sendmsg ported over to use linux's sendmmsg instead
 fn sendmmsg(
@@ -679,7 +701,7 @@ test "SocketThread: overload sendto" {
     var send_channel = try Channel(Packet).init(allocator);
     defer send_channel.deinit();
 
-    var socket = try UdpSocket.create(.ipv4, .udp);
+    const socket: sig.net.UdpSocket = try .create(.ipv4);
     try socket.bindToPort(0);
 
     var exit = std.atomic.Value(bool).init(false);
@@ -695,7 +717,7 @@ test "SocketThread: overload sendto" {
     defer exit.store(true, .release);
 
     // send a bunch of packets to overload the SocketThread's internal sendto().
-    const addr = try network.EndPoint.parse("127.0.0.1:12345");
+    const addr: sig.net.SocketAddr = .initIpv4(.{ 127, 0, 0, 1 }, 12345);
     for (0..10_000) |_| {
         try send_channel.send(Packet.init(addr, undefined, PACKET_DATA_SIZE));
     }
@@ -723,14 +745,14 @@ pub const BenchmarkPacketProcessing = struct {
         const n_packets = bench_args.n_packets;
         const allocator = if (builtin.is_test) std.testing.allocator else std.heap.c_allocator;
 
-        var socket = try UdpSocket.create(.ipv4, .udp);
+        const socket: sig.net.UdpSocket = try .create(.ipv4);
         try socket.bindToPort(0);
         try socket.setReadTimeout(std.time.us_per_s); // 1 second
 
-        const to_endpoint = try socket.getLocalEndPoint();
+        const to_endpoint: sig.net.SocketAddr = .initAddress(try socket.getLocalEndPoint());
 
-        var exit_flag = std.atomic.Value(bool).init(false);
-        const exit_condition = ExitCondition{ .unordered = &exit_flag };
+        var exit_flag: std.atomic.Value(bool) = .init(false);
+        const exit_condition: ExitCondition = .{ .unordered = &exit_flag };
 
         // Setup incoming
 
@@ -750,10 +772,10 @@ pub const BenchmarkPacketProcessing = struct {
         // Start outgoing
 
         const S = struct {
-            fn sender(channel: *Channel(Packet), addr: network.EndPoint, e: ExitCondition) !void {
+            fn sender(channel: *Channel(Packet), addr: sig.net.SocketAddr, e: ExitCondition) !void {
                 var i: usize = 0;
                 var packet: Packet = undefined;
-                var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+                var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
                 var timer = try std.time.Timer.start();
 
                 while (e.shouldRun()) {

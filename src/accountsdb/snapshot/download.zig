@@ -524,6 +524,56 @@ fn downloadFile(
     return output_file;
 }
 
+pub fn getOrDownloadSnapshotFiles(
+    allocator: std.mem.Allocator,
+    logger: Logger,
+    snapshot_dir: std.fs.Dir,
+    options: struct {
+        gossip_service: ?*GossipService = null,
+        force_new_snapshot_download: bool = false,
+        min_snapshot_download_speed_mbs: usize = 20,
+        trusted_validators: ?[]const Pubkey = null,
+        max_number_of_download_attempts: u64,
+        download_timeout: ?sig.time.Duration = null,
+    },
+) !SnapshotFiles {
+    var maybe_snapshot_files =
+        SnapshotFiles.find(allocator, snapshot_dir) catch |err| switch (err) {
+            error.NoFullSnapshotFileInfoFound => null,
+            else => |e| return e,
+        };
+
+    if (maybe_snapshot_files == null or options.force_new_snapshot_download) {
+        var timer = try std.time.Timer.start();
+        logger.info().log("downloading snapshot");
+        defer logger.info().logf(
+            "  downloaded snapshot in {}",
+            .{std.fmt.fmtDuration(timer.read())},
+        );
+
+        const gossip_service = options.gossip_service orelse {
+            return error.SnapshotsNotFoundAndNoGossipService;
+        };
+
+        const full, const maybe_inc = try downloadSnapshotsFromGossip(
+            allocator,
+            logger,
+            options.trusted_validators,
+            gossip_service,
+            snapshot_dir,
+            @intCast(options.min_snapshot_download_speed_mbs),
+            options.max_number_of_download_attempts,
+            options.download_timeout,
+        );
+        defer full.close();
+        defer if (maybe_inc) |inc| inc.close();
+
+        maybe_snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
+    }
+
+    return maybe_snapshot_files.?;
+}
+
 pub fn getOrDownloadAndUnpackSnapshot(
     allocator: std.mem.Allocator,
     logger: Logger,

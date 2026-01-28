@@ -1,5 +1,4 @@
 const std = @import("std");
-const zig_network = @import("zig-network");
 const sig = @import("../../sig.zig");
 const shred_network = @import("../lib.zig");
 const tracy = @import("tracy");
@@ -11,7 +10,6 @@ const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.Random;
-const Socket = zig_network.Socket;
 
 const ContactInfo = sig.gossip.ContactInfo;
 const Counter = sig.prometheus.Counter;
@@ -26,7 +24,6 @@ const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
 const Registry = sig.prometheus.Registry;
 const RwMux = sig.sync.RwMux;
-const SignedGossipData = sig.gossip.SignedGossipData;
 const SocketAddr = sig.net.SocketAddr;
 const SocketThread = sig.net.SocketThread;
 const Channel = sig.sync.Channel;
@@ -113,7 +110,7 @@ pub const RepairService = struct {
             .report = MultiSlotReport.init(allocator),
             .thread_pool = thread_pool,
             .metrics = try registry.initStruct(Metrics),
-            .prng = std.Random.DefaultPrng.init(std.testing.random_seed),
+            .prng = std.Random.DefaultPrng.init(0),
         };
     }
 
@@ -359,7 +356,7 @@ pub const RepairRequester = struct {
         random: Random,
         registry: *Registry(.{}),
         keypair: *const KeyPair,
-        udp_send_socket: Socket,
+        udp_send_socket: sig.net.UdpSocket,
         exit: *Atomic(bool),
     ) !Self {
         const channel = try Channel(Packet).create(allocator);
@@ -405,7 +402,7 @@ pub const RepairRequester = struct {
         const timestamp = std.time.milliTimestamp();
         for (requests) |request| {
             var packet: Packet = .{
-                .addr = request.recipient_addr.toEndpoint(),
+                .addr = request.recipient_addr,
                 .buffer = undefined,
                 .size = undefined,
                 .flags = .{},
@@ -604,51 +601,55 @@ pub const RepairPeerProvider = struct {
 
 test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
-    var registry = sig.prometheus.Registry(.{}).init(allocator);
-    defer registry.deinit();
+    const logger: sig.trace.Logger("test") = .FOR_TESTS;
+
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
+
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     // my details
     const keypair = KeyPair.generate();
     const my_shred_version = Atomic(u16).init(random.int(u16));
     const wallclock = 100;
-    var gossip = try GossipTable.init(allocator, allocator);
+    var gossip: GossipTable = try .init(allocator, allocator);
     defer gossip.deinit();
-    const logger = sig.trace.Logger("test").FOR_TESTS;
 
     // connectivity
     const repair_port = random.intRangeAtMost(u16, 1000, std.math.maxInt(u16));
-    var repair_socket = try Socket.create(.ipv4, .udp);
-    try repair_socket.bind(.{
-        .port = repair_port,
-        .address = .{ .ipv4 = .{ .value = .{ 0, 0, 0, 0 } } },
-    });
+    const repair_socket: sig.net.UdpSocket = try .create(.ipv4);
+    defer repair_socket.close();
+    try repair_socket.bind(.initIp4(.{ 0, 0, 0, 0 }, repair_port));
 
     // peer
     const peer_port = random.intRangeAtMost(u16, 1000, std.math.maxInt(u16));
-    const peer_keypair = KeyPair.generate();
-    var peer_socket = try Socket.create(.ipv4, .udp);
-    const peer_endpoint: zig_network.EndPoint = .{
-        .address = .{ .ipv4 = .{ .value = .{ 127, 0, 0, 1 } } },
-        .port = peer_port,
-    };
+    const peer_keypair: KeyPair = .generate();
+    var peer_socket: sig.net.UdpSocket = try .create(.ipv4);
+    const peer_endpoint: std.net.Address = .initIp4(.{ 127, 0, 0, 1 }, peer_port);
     try peer_socket.bind(peer_endpoint);
     try peer_socket.setReadTimeout(100_000);
-    var peer_contact_info = ContactInfo.init(
-        allocator,
-        Pubkey.fromPublicKey(&peer_keypair.public_key),
-        wallclock,
-        my_shred_version.load(.acquire),
-    );
-    try peer_contact_info.setSocket(.serve_repair, SocketAddr.fromEndpoint(&peer_endpoint));
-    try peer_contact_info.setSocket(.turbine_recv, SocketAddr.fromEndpoint(&peer_endpoint));
-    _ = try gossip.insert(SignedGossipData.initSigned(&peer_keypair, .{ .ContactInfo = peer_contact_info }), wallclock);
+
+    {
+        var peer_contact_info: ContactInfo = .init(
+            allocator,
+            .fromPublicKey(&peer_keypair.public_key),
+            wallclock,
+            my_shred_version.load(.acquire),
+        );
+        errdefer peer_contact_info.deinit();
+        try peer_contact_info.setSocket(.serve_repair, .initAddress(peer_endpoint));
+        try peer_contact_info.setSocket(.turbine_recv, .initAddress(peer_endpoint));
+        _ = try gossip.insert(
+            .initSigned(&peer_keypair, .{ .ContactInfo = peer_contact_info }),
+            wallclock,
+        );
+    }
 
     // init service
-    var exit = Atomic(bool).init(false);
-    var gossip_mux = RwMux(GossipTable).init(gossip);
-    const peers = try RepairPeerProvider.init(
+    var exit: Atomic(bool) = .init(false);
+    var gossip_mux: RwMux(GossipTable) = .init(gossip);
+    const peers: RepairPeerProvider = try .init(
         allocator,
         random,
         &registry,
@@ -657,34 +658,57 @@ test "RepairService sends repair request to gossip peer" {
         &my_shred_version,
     );
 
-    const tracker = try allocator.create(BasicShredTracker);
-    defer allocator.destroy(tracker);
+    var tracker: BasicShredTracker = undefined;
     try tracker.init(std.testing.allocator, 13579, .noop, &registry);
     defer tracker.deinit();
 
-    var service = try RepairService.init(
-        allocator,
-        .from(logger),
-        &exit,
-        &registry,
-        try RepairRequester
-            .init(allocator, .from(logger), random, &registry, &keypair, repair_socket, &exit),
-        peers,
-        tracker,
-    );
+    var service: RepairService = blk: {
+        const repair_requester: RepairRequester = try .init(
+            allocator,
+            .from(logger),
+            random,
+            &registry,
+            &keypair,
+            repair_socket,
+            &exit,
+        );
+        errdefer repair_requester.deinit();
+
+        break :blk try .init(
+            allocator,
+            .from(logger),
+            &exit,
+            &registry,
+            repair_requester,
+            peers,
+            &tracker,
+        );
+    };
     defer service.deinit();
 
     // run test
     _ = try service.sendNecessaryRepairs();
-    var buf: [200]u8 = undefined;
-    const size = peer_socket.receive(&buf) catch 0;
 
-    // assertions
-    try std.testing.expect(160 == size);
-    const msg = try bincode.readFromSlice(allocator, RepairMessage, buf[0..160], .{});
-    try msg.verify(buf[0..160], Pubkey.fromPublicKey(&peer_keypair.public_key), @intCast(std.time.milliTimestamp()));
-    try std.testing.expect(msg.highest_window_index.slot == 13579);
-    try std.testing.expect(msg.highest_window_index.shred_index == 0);
+    var buf: [200]u8 = undefined;
+    var slots: [3]Slot = undefined;
+    var num_recv: usize = 0;
+    while (peer_socket.receive(&buf) catch null) |size| {
+        try std.testing.expectEqual(160, size);
+        const msg = try bincode.readFromSlice(allocator, RepairMessage, buf[0..160], .{});
+        try msg.verify(buf[0..160], Pubkey.fromPublicKey(&peer_keypair.public_key), @intCast(std.time.milliTimestamp()));
+        try std.testing.expect(msg.highest_window_index.slot >= 13579);
+        try std.testing.expectEqual(0, msg.highest_window_index.shred_index);
+        slots[num_recv] = msg.highest_window_index.slot;
+        num_recv += 1;
+    }
+
+    try std.testing.expectEqual(3, num_recv);
+
+    outer: for ([_]Slot{ 13579, 13580 }) |expected_slot| {
+        for (slots[0..num_recv]) |slot| if (slot == expected_slot) continue :outer;
+        std.debug.print("missing expected repair request for slot: {}\n", .{expected_slot});
+        return error.TestFailed;
+    }
 }
 
 test "RepairPeerProvider selects correct peers" {
@@ -783,18 +807,25 @@ const TestPeerGenerator = struct {
         defer zone.deinit();
 
         const wallclock = 1;
-        const keypair = KeyPair.generate();
-        const serve_repair_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8003);
-        const shred_version = if (peer_type == .WrongShredVersion) self.shred_version + 1 else self.shred_version;
-        const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
-        var contact_info = ContactInfo.init(self.allocator, pubkey, wallclock, shred_version);
+        const keypair: KeyPair = .generate();
+        const pubkey: Pubkey = .fromPublicKey(&keypair.public_key);
+        const serve_repair_addr: SocketAddr = .initIpv4(.{ 127, 0, 0, 1 }, 8003);
+        const shred_version = switch (peer_type) {
+            .WrongShredVersion => self.shred_version + 1,
+            else => self.shred_version,
+        };
+
+        var contact_info: ContactInfo = .init(self.allocator, pubkey, wallclock, shred_version);
         if (peer_type != .MissingServeRepairPort) {
             try contact_info.setSocket(.serve_repair, serve_repair_addr);
         }
         if (peer_type != .MissingTvuPort) {
             try contact_info.setSocket(.turbine_recv, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8004));
         }
-        _ = try self.gossip.insert(SignedGossipData.initSigned(&keypair, .{ .ContactInfo = contact_info }), wallclock);
+        _ = try self.gossip.insert(
+            .initSigned(&keypair, .{ .ContactInfo = contact_info }),
+            wallclock,
+        );
         switch (peer_type) {
             inline .HasSlot, .MissingSlot => {
                 var lowest_slot = sig.gossip.LowestSlot.initRandom(self.random);
@@ -803,7 +834,10 @@ const TestPeerGenerator = struct {
                     .MissingSlot => self.slot + 1,
                     else => self.slot,
                 };
-                _ = try self.gossip.insert(SignedGossipData.initSigned(&keypair, .{ .LowestSlot = .{ 0, lowest_slot } }), wallclock);
+                _ = try self.gossip.insert(
+                    .initSigned(&keypair, .{ .LowestSlot = .{ 0, lowest_slot } }),
+                    wallclock,
+                );
             },
             else => {},
         }

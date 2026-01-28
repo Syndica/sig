@@ -1,5 +1,4 @@
 const std = @import("std");
-const network = @import("zig-network");
 const tracy = @import("tracy");
 const sig = @import("../../sig.zig");
 const shred_network = @import("../lib.zig");
@@ -11,7 +10,6 @@ const shred_verifier = shred_network.shred_verifier;
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 const KeyPair = sig.identity.KeyPair;
-const Socket = network.Socket;
 
 const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
 const Channel = sig.sync.Channel;
@@ -50,8 +48,8 @@ pub const ShredReceiver = struct {
         keypair: *const KeyPair,
         exit: *Atomic(bool),
 
-        repair_socket: Socket,
-        turbine_socket: Socket,
+        repair_socket: sig.net.UdpSocket,
+        turbine_socket: sig.net.UdpSocket,
 
         /// me --> retransmit service
         maybe_retransmit_shred_sender: ?*Channel(Packet),
@@ -269,12 +267,8 @@ pub const ShredReceiver = struct {
         };
         metrics.valid_ping_count.inc();
 
-        const reply: RepairMessage = .{ .pong = try Pong.init(&ping, keypair) };
-
-        return try Packet.initFromBincode(
-            sig.net.SocketAddr.fromEndpoint(&packet.addr),
-            reply,
-        );
+        const reply: RepairMessage = .{ .pong = try .init(&ping, keypair) };
+        return try .initFromBincode(packet.addr, reply);
     }
 };
 
@@ -282,10 +276,9 @@ test "handleBatch/handlePacket" {
     const allocator = std.testing.allocator;
     const keypair = try sig.identity.KeyPair.generateDeterministic(.{1} ** 32);
     const root_slot = 0;
-    const invalid_socket = Socket{
+    const invalid_socket: sig.net.UdpSocket = .{
         .family = .ipv4,
-        .internal = -1,
-        .endpoint = null,
+        .handle = -1,
     };
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
@@ -340,7 +333,7 @@ test "handleBatch/handlePacket" {
         var packet: Packet = undefined;
         @memcpy(packet.buffer[0..shred_data.len], shred_data);
         packet.size = @intCast(shred_data.len);
-        packet.addr = .{ .address = .{ .ipv4 = .init(0, 0, 0, 0) }, .port = 0 };
+        packet.addr = .initIpv4(.{ 0, 0, 0, 0 }, 0);
         packet.flags = .{};
 
         try shred_receiver.incoming_shreds.send(packet);

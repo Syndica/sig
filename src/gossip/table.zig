@@ -21,6 +21,8 @@ const Hash = sig.core.hash.Hash;
 const Pubkey = sig.core.Pubkey;
 const SocketAddr = sig.net.SocketAddr;
 
+const assert = std.debug.assert;
+
 const PACKET_DATA_SIZE = sig.net.Packet.DATA_SIZE;
 pub const UNIQUE_PUBKEY_CAPACITY: usize = 8_192;
 // TODO: cli arg for this
@@ -207,79 +209,73 @@ pub const GossipTable = struct {
             return .{ .success = .new };
 
             // should overwrite existing entry
-        } else if (versioned_value.overwrites(&result.entry.getVersionedData())) {
-            const old_entry = result.entry.metadata_ptr.*;
+        } else switch (versioned_value.overwrites(&result.entry.getVersionedData())) {
+            .new => {
+                const old_entry = result.entry.metadata_ptr.*;
 
-            switch (value.data) {
-                .ContactInfo => |*info| {
-                    try self.shred_versions.put(info.pubkey, info.shred_version);
-                },
-                .LegacyContactInfo => |*info| {
-                    try self.shred_versions.put(info.id, info.shred_version);
-                    const contact_info = try info.toContactInfo(self.allocator);
-                    var old_info = try self.converted_contact_infos.fetchPut(
-                        info.id,
-                        contact_info,
-                    );
-                    old_info.?.value.deinit();
-                },
-                .Vote => {
-                    const did_remove = self.votes.swapRemove(old_entry.cursor_on_insertion);
-                    std.debug.assert(did_remove);
-                    try self.votes.put(self.cursor, entry_index);
-                },
-                .EpochSlots => {
-                    const did_remove = self.epoch_slots.swapRemove(
-                        old_entry.cursor_on_insertion,
-                    );
-                    std.debug.assert(did_remove);
-                    try self.epoch_slots.put(self.cursor, entry_index);
-                },
-                .DuplicateShred => {
-                    const did_remove = self.duplicate_shreds.swapRemove(
-                        old_entry.cursor_on_insertion,
-                    );
-                    std.debug.assert(did_remove);
-                    try self.duplicate_shreds.put(self.cursor, entry_index);
-                },
-                else => {},
-            }
+                switch (value.data) {
+                    .ContactInfo => |*info| {
+                        try self.shred_versions.put(info.pubkey, info.shred_version);
+                    },
+                    .LegacyContactInfo => |*info| {
+                        try self.shred_versions.put(info.id, info.shred_version);
+                        const contact_info = try info.toContactInfo(self.allocator);
+                        var old_info = try self.converted_contact_infos.fetchPut(
+                            info.id,
+                            contact_info,
+                        );
+                        old_info.?.value.deinit();
+                    },
+                    .Vote => {
+                        assert(self.votes.swapRemove(old_entry.cursor_on_insertion));
+                        try self.votes.put(self.cursor, entry_index);
+                    },
+                    .EpochSlots => {
+                        assert(self.epoch_slots.swapRemove(old_entry.cursor_on_insertion));
+                        try self.epoch_slots.put(self.cursor, entry_index);
+                    },
+                    .DuplicateShred => {
+                        assert(self.duplicate_shreds.swapRemove(old_entry.cursor_on_insertion));
+                        try self.duplicate_shreds.put(self.cursor, entry_index);
+                    },
+                    else => {},
+                }
 
-            // remove and insert to make sure the shard ordering is oldest-to-newest
-            // NOTE: do we need the ordering to be oldest-to-newest?
-            self.shards.remove(entry_index, &old_entry.value_hash);
-            try self.shards.insert(entry_index, &metadata.value_hash);
+                // remove and insert to make sure the shard ordering is oldest-to-newest
+                // NOTE: do we need the ordering to be oldest-to-newest?
+                self.shards.remove(entry_index, &old_entry.value_hash);
+                try self.shards.insert(entry_index, &metadata.value_hash);
 
-            const did_remove = self.entries.swapRemove(old_entry.cursor_on_insertion);
-            std.debug.assert(did_remove);
-            try self.entries.put(self.cursor, entry_index);
+                const did_remove = self.entries.swapRemove(old_entry.cursor_on_insertion);
+                assert(did_remove);
+                try self.entries.put(self.cursor, entry_index);
 
-            // As long as the pubkey does not change, self.records
-            // does not need to be updated.
-            std.debug.assert(result.entry.getGossipData().id().equals(&origin));
+                // As long as the pubkey does not change, self.records
+                // does not need to be updated.
+                assert(result.entry.getGossipData().id().equals(&origin));
 
-            try self.purged.insert(old_entry.value_hash, now);
+                try self.purged.insert(old_entry.value_hash, now);
 
-            const overwritten_data = result.entry.getGossipData();
-            overwritten_data.deinit(self.gossip_data_allocator);
-            result.entry.setVersionedData(versioned_value);
-            self.cursor += 1;
+                const overwritten_data = result.entry.getGossipData();
+                overwritten_data.deinit(self.gossip_data_allocator);
+                result.entry.setVersionedData(versioned_value);
+                self.cursor += 1;
 
-            // overwrite existing entry
-            return .{ .success = .replaced };
+                // overwrite existing entry
+                return .{ .success = .replaced };
 
-            // do nothing
-        } else {
-            const current_entry = result.entry.metadata_ptr.*;
+                // do nothing
+            },
+            .old => {
 
-            if (current_entry.value_hash.order(&metadata.value_hash) != .eq) {
                 // if hash isnt the same and override() is false then msg is old
                 try self.purged.insert(metadata.value_hash, now);
                 return .{ .fail = .too_old };
-            } else {
+            },
+            .eq => {
                 // hash is the same then its a duplicate value which isnt stored
                 return .{ .fail = .duplicate };
-            }
+            },
         }
     }
 
@@ -393,7 +389,7 @@ pub const GossipTable = struct {
             const entry_index = cursor_hashmap.get(cursor).?;
             const entry = store.getByIndex(entry_index);
             // sanity check
-            std.debug.assert(entry.metadata.cursor_on_insertion == cursor);
+            assert(entry.metadata.cursor_on_insertion == cursor);
 
             buf[count] = try entry.clone(allocator);
             count += 1;
@@ -595,7 +591,7 @@ pub const GossipTable = struct {
         const entry_indexs = self.pubkey_to_values.getEntry(origin).?.value_ptr;
         {
             const did_remove = entry_indexs.swapRemove(entry_index);
-            std.debug.assert(did_remove);
+            assert(did_remove);
         }
 
         // no more values associated with the pubkey
@@ -603,12 +599,12 @@ pub const GossipTable = struct {
             {
                 entry_indexs.deinit();
                 const did_remove = self.pubkey_to_values.swapRemove(origin);
-                std.debug.assert(did_remove);
+                assert(did_remove);
             }
 
             if (self.shred_versions.contains(origin)) {
                 const did_remove = self.shred_versions.remove(origin);
-                std.debug.assert(did_remove);
+                assert(did_remove);
             }
         }
 
@@ -620,33 +616,33 @@ pub const GossipTable = struct {
         switch (entry.tag()) {
             .ContactInfo => {
                 const did_remove = self.contact_infos.swapRemove(entry_index);
-                std.debug.assert(did_remove);
+                assert(did_remove);
             },
             .LegacyContactInfo => {
                 const did_remove = self.contact_infos.swapRemove(entry_index);
-                std.debug.assert(did_remove);
+                assert(did_remove);
                 const lci = self.store.getTypedPtr(.LegacyContactInfo, entry_index);
                 var contact_info = self.converted_contact_infos.fetchSwapRemove(lci.id).?.value;
                 contact_info.deinit();
             },
             .Vote => {
                 const did_remove = self.votes.swapRemove(cursor_on_insertion);
-                std.debug.assert(did_remove);
+                assert(did_remove);
             },
             .EpochSlots => {
                 const did_remove = self.epoch_slots.swapRemove(cursor_on_insertion);
-                std.debug.assert(did_remove);
+                assert(did_remove);
             },
             .DuplicateShred => {
                 const did_remove = self.duplicate_shreds.swapRemove(cursor_on_insertion);
-                std.debug.assert(did_remove);
+                assert(did_remove);
             },
             else => {},
         }
 
         {
             const did_remove = self.entries.swapRemove(cursor_on_insertion);
-            std.debug.assert(did_remove);
+            assert(did_remove);
         }
 
         // free memory while gossip_data still points to the correct data
@@ -657,7 +653,7 @@ pub const GossipTable = struct {
         // either the last element of the store, or undefined if the store is empty
         {
             const did_remove = self.store.swapRemove(label);
-            std.debug.assert(did_remove);
+            assert(did_remove);
         }
 
         self.accountForSwapRemove(entry_index);
@@ -675,7 +671,7 @@ pub const GossipTable = struct {
         const table_len = self.len();
         // if (index == table_len) then it was already the last
         // element so we dont need to do anything
-        std.debug.assert(entry_index <= table_len);
+        assert(entry_index <= table_len);
         if (entry_index == table_len) return;
 
         // replace data with newly swapped value
@@ -692,12 +688,12 @@ pub const GossipTable = struct {
         switch (entry.tag()) {
             .ContactInfo => {
                 const did_remove = self.contact_infos.swapRemove(table_len);
-                std.debug.assert(did_remove);
+                assert(did_remove);
                 self.contact_infos.put(entry_index, {}) catch unreachable;
             },
             .LegacyContactInfo => {
                 const did_remove = self.contact_infos.swapRemove(table_len);
-                std.debug.assert(did_remove);
+                assert(did_remove);
                 self.contact_infos.put(entry_index, {}) catch unreachable;
             },
             .Vote => {
@@ -715,7 +711,7 @@ pub const GossipTable = struct {
 
         const new_entry_indexs = self.pubkey_to_values.getEntry(new_index_origin).?.value_ptr;
         const did_remove = new_entry_indexs.swapRemove(table_len);
-        std.debug.assert(did_remove);
+        assert(did_remove);
         new_entry_indexs.put(entry_index, {}) catch unreachable;
     }
 
@@ -1131,4 +1127,63 @@ test "insert and get contact_info" {
     nodes = table.getContactInfos(&buf, 0);
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].wallclock == v);
+
+    // test re-insertion with older wallclock (should fail with too_old)
+    var old_gossip_value = SignedGossipData.initSigned(&kp, .{ .ContactInfo = ci });
+    old_gossip_value.data.ContactInfo.wallclock = v - 1; // set to older than current
+    const result4 = try table.insert(old_gossip_value, 0);
+    try std.testing.expectEqual(.fail, std.meta.activeTag(result4));
+    try std.testing.expectEqual(.too_old, result4.fail);
+
+    // verify the old value was added to purged
+    try std.testing.expect(table.purged.len() > 0);
+
+    // verify the table still has the newer value
+    nodes = table.getContactInfos(&buf, 0);
+    try std.testing.expect(nodes.len == 1);
+    try std.testing.expect(nodes[0].wallclock == v);
+}
+
+test "insert and replace updates cursor tracking for Vote, EpochSlots, DuplicateShred" {
+    const kp = try KeyPair.generateDeterministic(@splat(2));
+    const id = Pubkey.fromPublicKey(&kp.public_key);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    var test_data = [_]GossipData{
+        .{ .Vote = .{ 0, .initRandom(random) } },
+        .{ .EpochSlots = .{ 0, .initRandom(random) } },
+        .{ .DuplicateShred = .{ 0, .initRandom(random) } },
+    };
+    test_data[0].Vote[1].from = id;
+    test_data[1].EpochSlots[1].from = id;
+    test_data[2].DuplicateShred[1].from = id;
+
+    var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
+    defer table.deinit();
+
+    for (test_data, 0..) |initial_data, i| {
+        const initial_cursor = table.cursor;
+
+        // insert initial
+        const result = try table.insert(SignedGossipData.initSigned(&kp, initial_data), 0);
+        try std.testing.expectEqual(.new, result.success);
+
+        // replace with newer wallclock
+        var replacement = initial_data;
+        replacement.wallclockPtr().* += 100;
+        const result1 = try table.insert(SignedGossipData.initSigned(&kp, replacement), 0);
+        try std.testing.expectEqual(.replaced, result1.success);
+
+        // verify cursor was updated in the appropriate tracking map
+        const cursor_map = switch (initial_data) {
+            .Vote => &table.votes,
+            .EpochSlots => &table.epoch_slots,
+            .DuplicateShred => &table.duplicate_shreds,
+            else => unreachable,
+        };
+        try std.testing.expectEqual(1, cursor_map.count());
+        try std.testing.expectEqual(null, cursor_map.get(initial_cursor));
+        try std.testing.expectEqual(i, cursor_map.get(initial_cursor + 1));
+    }
 }
