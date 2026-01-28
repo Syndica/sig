@@ -348,7 +348,7 @@ pub const TowerConsensus = struct {
             /// Scanned by the vote collector if provided.
             gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
             slot_tracker: *SlotTracker,
-            magic_tracker: *sig.core.magic_info.MagicTracker,
+            epoch_tracker: *sig.core.EpochTracker,
             progress_map: *ProgressMap,
             status_cache: ?*sig.core.StatusCache,
             senders: Senders,
@@ -376,7 +376,7 @@ pub const TowerConsensus = struct {
         try self.vote_collector.collectAndProcessVotes(allocator, .from(self.logger), .{
             .slot_data_provider = .{
                 .slot_tracker = params.slot_tracker,
-                .magic_tracker = params.magic_tracker,
+                .epoch_tracker = params.epoch_tracker,
             },
             .senders = .{
                 .verified_vote = params.senders.verified_vote,
@@ -458,7 +458,7 @@ pub const TowerConsensus = struct {
             &ancestors,
             &descendants,
             params.slot_tracker,
-            params.magic_tracker,
+            params.epoch_tracker,
             params.progress_map,
             params.status_cache,
             params.account_store,
@@ -509,7 +509,7 @@ pub const TowerConsensus = struct {
         ancestors: *const std.AutoArrayHashMapUnmanaged(Slot, Ancestors),
         descendants: *const std.AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
         slot_tracker: *SlotTracker,
-        magic_tracker: *sig.core.magic_info.MagicTracker,
+        epoch_tracker: *sig.core.EpochTracker,
         progress_map: *ProgressMap,
         status_cache: ?*sig.core.StatusCache,
         /// For reading the slot history account
@@ -525,7 +525,7 @@ pub const TowerConsensus = struct {
             vote_account,
             ancestors,
             slot_tracker,
-            magic_tracker,
+            epoch_tracker,
             progress_map,
             &self.fork_choice,
             &self.replay_tower,
@@ -605,7 +605,7 @@ pub const TowerConsensus = struct {
             progress_map,
             &self.latest_validator_votes,
             &self.fork_choice,
-            magic_tracker,
+            epoch_tracker,
             account_store.reader(),
         );
         defer vote_and_reset_forks.deinit(allocator);
@@ -642,8 +642,8 @@ pub const TowerConsensus = struct {
                 voted.slot,
                 voted_hash,
                 slot_tracker,
-                &magic_tracker.epoch_schedule,
-                magic_tracker,
+                &epoch_tracker.epoch_schedule,
+                epoch_tracker,
                 &self.replay_tower,
                 progress_map,
                 &self.fork_choice,
@@ -927,7 +927,7 @@ fn handleVotableBank(
     vote_hash: Hash,
     slot_tracker: *SlotTracker,
     epoch_schedule: *const EpochSchedule,
-    magic_tracker: *sig.core.magic_info.MagicTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     replay_tower: *ReplayTower,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
@@ -956,7 +956,7 @@ fn handleVotableBank(
             slot_tracker,
             progress,
             fork_choice,
-            magic_tracker,
+            epoch_tracker,
             account_store,
             status_cache,
             new_root,
@@ -1570,7 +1570,7 @@ fn checkAndHandleNewRoot(
     slot_tracker: *SlotTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
-    magic_tracker: *sig.core.magic_info.MagicTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     account_store: AccountStore,
     status_cache: ?*sig.core.StatusCache,
     new_root: Slot,
@@ -1589,7 +1589,7 @@ fn checkAndHandleNewRoot(
 
     try ledger.setRoots(rooted_slots);
 
-    try magic_tracker.onSlotRooted(
+    try epoch_tracker.onSlotRooted(
         allocator,
         new_root,
         &root_tracker.constants.ancestors,
@@ -1682,7 +1682,7 @@ fn computeConsensusInputs(
     my_vote_pubkey: ?Pubkey,
     ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
     slot_tracker: *const SlotTracker,
-    magic_tracker: *const sig.core.magic_info.MagicTracker,
+    epoch_tracker: *const sig.core.EpochTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
     replay_tower: *const ReplayTower,
@@ -1726,7 +1726,7 @@ fn computeConsensusInputs(
             // This updates the internal state of fork_choice with the determined heaviest (best) fork to build on.
             try fork_choice.processLatestVotes(
                 allocator,
-                magic_tracker,
+                epoch_tracker,
                 latest_validator_votes,
             );
             const fork_stats = progress.getForkStats(slot) orelse return error.MissingForkStats;
@@ -1822,8 +1822,8 @@ test "processResult and handleDuplicateConfirmedFork" {
     var replay_state = try stubs.stubbedState(allocator, .FOR_TESTS);
     defer {
         replay_state.deinit();
-        replay_state.magic_tracker.deinit(allocator);
-        allocator.destroy(replay_state.magic_tracker);
+        replay_state.epoch_tracker.deinit(allocator);
+        allocator.destroy(replay_state.epoch_tracker);
     }
     replay_state.slot_tracker.get(0).?.state.hash.set(.{ .data = @splat(1) });
 
@@ -2527,13 +2527,13 @@ test "checkAndHandleNewRoot - missing slot" {
     var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer test_state.deinit();
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
         allocator,
         random,
         0,
         .INIT,
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     // Try to check a slot that doesn't exist in the tracker
     const result = checkAndHandleNewRoot(
@@ -2542,7 +2542,7 @@ test "checkAndHandleNewRoot - missing slot" {
         &slot_tracker,
         &fixture.progress,
         &fixture.fork_choice,
-        &magic_tracker,
+        &epoch_tracker,
         .noop,
         null, // no need to update a StatusCache,
         123, // Non-existent slot
@@ -2591,13 +2591,13 @@ test "checkAndHandleNewRoot - missing hash" {
     var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer test_state.deinit();
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
         allocator,
         random,
         0,
         .INIT,
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     // Try to check a slot that doesn't exist in the tracker
     const slot_tracker2_ptr, var slot_tracker2_lg = slot_tracker2.writeWithLock();
@@ -2608,7 +2608,7 @@ test "checkAndHandleNewRoot - missing hash" {
         slot_tracker2_ptr,
         &fixture.progress,
         &fixture.fork_choice,
-        &magic_tracker,
+        &epoch_tracker,
         .noop,
         null, // no need to update a StatusCache,
         root.slot, // Non-existent hash
@@ -2644,13 +2644,13 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     var test_state = try sig.ledger.tests.initTestLedger(testing.allocator, @src(), .noop);
     defer test_state.deinit();
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
         allocator,
         random,
         0,
         .INIT,
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     // Try to check a slot that doesn't exist in the tracker
     const slot_tracker3_ptr, var slot_tracker3_lg = slot_tracker3.writeWithLock();
@@ -2661,7 +2661,7 @@ test "checkAndHandleNewRoot - empty slot tracker" {
         slot_tracker3_ptr,
         &fixture.progress,
         &fixture.fork_choice,
-        &magic_tracker,
+        &epoch_tracker,
         .noop,
         null, // no need to update a StatusCache,
         root.slot,
@@ -2752,13 +2752,13 @@ test "checkAndHandleNewRoot - success" {
     var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer test_state.deinit();
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
         allocator,
         random,
         0,
         .INIT,
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     try testing.expectEqual(4, fixture.progress.map.count());
     try testing.expect(fixture.progress.map.contains(hash1.slot));
@@ -2771,7 +2771,7 @@ test "checkAndHandleNewRoot - success" {
             slot_tracker4_ptr,
             &fixture.progress,
             &fixture.fork_choice,
-            &magic_tracker,
+            &epoch_tracker,
             .noop,
             null, // no need to update a StatusCache,
             hash3.slot,
@@ -2851,11 +2851,11 @@ test "computeBankStats - child bank heavier" {
         });
     }
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
         allocator,
         &.{versioned_stakes},
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     var replay_tower = try createTestReplayTower(
         1,
@@ -2870,7 +2870,7 @@ test "computeBankStats - child bank heavier" {
         my_node_pubkey,
         &fixture.ancestors,
         slot_tracker_rw1_ptr,
-        &magic_tracker,
+        &epoch_tracker,
         &fixture.progress,
         &fixture.fork_choice,
         &replay_tower,
@@ -2947,11 +2947,11 @@ test "computeBankStats - same weight selects lower slot" {
     var versioned_stakes_1 = try versioned_stakes_0.clone(testing.allocator);
     versioned_stakes_1.stakes.epoch = 1;
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
         testing.allocator,
         &.{ versioned_stakes_0, versioned_stakes_1 },
     );
-    defer magic_tracker.deinit(testing.allocator);
+    defer epoch_tracker.deinit(testing.allocator);
 
     var replay_tower = try createTestReplayTower(
         1,
@@ -2967,7 +2967,7 @@ test "computeBankStats - same weight selects lower slot" {
         my_vote_pubkey,
         &fixture.ancestors,
         slot_tracker_rw2_ptr,
-        &magic_tracker,
+        &epoch_tracker,
         &fixture.progress,
         &fixture.fork_choice,
         &replay_tower,
@@ -4784,8 +4784,8 @@ test "edge cases - duplicate slot" {
     var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
     defer {
         replay_state.deinit();
-        replay_state.magic_tracker.deinit(gpa);
-        gpa.destroy(replay_state.magic_tracker);
+        replay_state.epoch_tracker.deinit(gpa);
+        gpa.destroy(replay_state.epoch_tracker);
     }
 
     const slot_tracker = &replay_state.slot_tracker;
@@ -4900,20 +4900,20 @@ test "edge cases - duplicate slot" {
 
     // run consensus
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
         std.testing.allocator,
         prng_state.random(),
         0,
         .INIT,
     );
-    defer magic_tracker.deinit(std.testing.allocator);
+    defer epoch_tracker.deinit(std.testing.allocator);
 
     try tower_consensus.process(gpa, .{
         .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_votes = null,
         .slot_tracker = &replay_state.slot_tracker,
-        .magic_tracker = &magic_tracker,
+        .epoch_tracker = &epoch_tracker,
         .progress_map = &replay_state.progress_map,
         .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
@@ -4955,8 +4955,8 @@ test "edge cases - duplicate confirmed slot" {
     var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
     defer {
         replay_state.deinit();
-        replay_state.magic_tracker.deinit(gpa);
-        gpa.destroy(replay_state.magic_tracker);
+        replay_state.epoch_tracker.deinit(gpa);
+        gpa.destroy(replay_state.epoch_tracker);
     }
 
     const slot_tracker = &replay_state.slot_tracker;
@@ -5072,20 +5072,20 @@ test "edge cases - duplicate confirmed slot" {
 
     // run consensus
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
         std.testing.allocator,
         prng_state.random(),
         0,
         .INIT,
     );
-    defer magic_tracker.deinit(std.testing.allocator);
+    defer epoch_tracker.deinit(std.testing.allocator);
 
     try tower_consensus.process(gpa, .{
         .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_votes = null,
         .slot_tracker = &replay_state.slot_tracker,
-        .magic_tracker = &magic_tracker,
+        .epoch_tracker = &epoch_tracker,
         .progress_map = &replay_state.progress_map,
         .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
@@ -5127,8 +5127,8 @@ test "edge cases - gossip verified vote hashes" {
     var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
     defer {
         replay_state.deinit();
-        replay_state.magic_tracker.deinit(gpa);
-        gpa.destroy(replay_state.magic_tracker);
+        replay_state.epoch_tracker.deinit(gpa);
+        gpa.destroy(replay_state.epoch_tracker);
     }
 
     const slot_tracker = &replay_state.slot_tracker;
@@ -5256,20 +5256,20 @@ test "edge cases - gossip verified vote hashes" {
 
     // run consensus
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
         std.testing.allocator,
         prng_state.random(),
         0,
         .INIT,
     );
-    defer magic_tracker.deinit(std.testing.allocator);
+    defer epoch_tracker.deinit(std.testing.allocator);
 
     try tower_consensus.process(gpa, .{
         .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_votes = null,
         .slot_tracker = &replay_state.slot_tracker,
-        .magic_tracker = &magic_tracker,
+        .epoch_tracker = &epoch_tracker,
         .progress_map = &replay_state.progress_map,
         .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
@@ -5384,11 +5384,11 @@ test "vote on heaviest frozen descendant with no switch" {
         );
     }
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
         allocator,
         &.{.EMPTY_WITH_GENESIS},
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     // Add root and slot 1 entries into progress map.
     var progress = sig.consensus.ProgressMap.INIT;
@@ -5446,7 +5446,7 @@ test "vote on heaviest frozen descendant with no switch" {
         .ledger = &stubs.ledger,
         .gossip_votes = null,
         .slot_tracker = &slot_tracker,
-        .magic_tracker = &magic_tracker,
+        .epoch_tracker = &epoch_tracker,
         .progress_map = &progress,
         .status_cache = null,
         .senders = stubs.senders,
@@ -5598,14 +5598,14 @@ test "vote accounts with landed votes populate bank stats" {
     };
     errdefer epoch_stakes.deinit(allocator);
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
         allocator,
         &.{epoch_stakes},
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     {
-        const epoch_info = try magic_tracker.getEpochInfo(0);
+        const epoch_info = try epoch_tracker.getEpochInfo(0);
         const slot1_ref = slot_tracker.get(1).?;
         const stakes_ptr, var stakes_guard = slot1_ref.state.stakes_cache.stakes.writeWithLock();
         defer stakes_guard.unlock();
@@ -5667,7 +5667,7 @@ test "vote accounts with landed votes populate bank stats" {
         .ledger = &stubs.ledger,
         .gossip_votes = null,
         .slot_tracker = &slot_tracker,
-        .magic_tracker = &magic_tracker,
+        .epoch_tracker = &epoch_tracker,
         .progress_map = &progress,
         .status_cache = null,
         .senders = stubs.senders,
@@ -5726,7 +5726,7 @@ test "vote accounts with landed votes populate bank stats" {
 // - SlotTracker: initialized with root slot 0 (constants, state with hash=Hash.ZEROES, blockhash_queue)
 // - SlotTracker: slots 1-31 added with constants (parent_slot, parent_hash, block_height, ancestors)
 //   and state (hash) before consensus init
-// - MagicTracker: initialized with epochs 0 and 1, each with validator stake=1000
+// - EpochTracker: initialized with epochs 0 and 1, each with validator stake=1000
 // - ProgressMap: initialized with root slot entry (fork_stats: computed=true)
 // - ProgressMap: slots 1-31 added with ForkProgress (fork_stats: computed=true, total_stake=1000)
 // - TowerConsensus: initialized with dependencies (builds fork_choice from frozen slots 1-31)
@@ -5855,11 +5855,11 @@ test "root advances after vote satisfies lockouts" {
         break :blk epoch_stakes;
     };
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
         allocator,
         &.{ epoch_stakes_0, epoch_stakes_1 },
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     var progress = sig.consensus.ProgressMap.INIT;
     defer progress.deinit(allocator);
@@ -5970,7 +5970,7 @@ test "root advances after vote satisfies lockouts" {
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
-            .magic_tracker = &magic_tracker,
+            .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
             .status_cache = null,
             .senders = stubs.senders,
@@ -6032,7 +6032,7 @@ test "root advances after vote satisfies lockouts" {
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
-            .magic_tracker = &magic_tracker,
+            .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
             .status_cache = null,
             .senders = stubs.senders,
@@ -6115,7 +6115,7 @@ test "root advances after vote satisfies lockouts" {
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
-            .magic_tracker = &magic_tracker,
+            .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
             .status_cache = null,
             .senders = stubs.senders,
@@ -6166,7 +6166,7 @@ test "root advances after vote satisfies lockouts" {
 //
 // States updated (setup):
 // - SlotTracker: root slot 0 and slot 1 (both frozen)
-// - MagicTracker: epoch 0 with validator stake
+// - EpochTracker: epoch 0 with validator stake
 // - ProgressMap: entries for slots 0 and 1 (both computed)
 // - TowerConsensus: initialized and has voted on slot 1
 // - last_vote_tx_blockhash: set to non_voting initially
@@ -6239,11 +6239,11 @@ test "vote refresh when no new vote available" {
         try slot_tracker.put(allocator, 1, .{ .constants = slot_constants, .state = slot_state });
     }
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
         allocator,
         &.{.EMPTY_WITH_GENESIS},
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     var progress = sig.consensus.ProgressMap.INIT;
     defer progress.deinit(allocator);
@@ -6293,7 +6293,7 @@ test "vote refresh when no new vote available" {
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
-            .magic_tracker = &magic_tracker,
+            .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
             .status_cache = null,
             .senders = stubs.senders,
@@ -6320,7 +6320,7 @@ test "vote refresh when no new vote available" {
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
-            .magic_tracker = &magic_tracker,
+            .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
             .status_cache = null,
             .senders = stubs.senders,
@@ -6365,7 +6365,7 @@ test "vote refresh when no new vote available" {
 //
 // States updated (setup):
 // - SlotTracker: root slot 0 and slot 1 (both frozen)
-// - MagicTracker: epoch 0 with multiple validators (total stake = 600)
+// - EpochTracker: epoch 0 with multiple validators (total stake = 600)
 // - ProgressMap: entries for slots 0, 1, and 2
 // - Vote accounts: seeded with votes on slots 0 and 1 (simulating what block replay would update)
 //
@@ -6501,11 +6501,11 @@ test "detect and mark duplicate confirmed fork" {
         break :blk epoch_stakes;
     };
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
         allocator,
         &.{epoch_stakes},
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     {
         {
@@ -6589,7 +6589,7 @@ test "detect and mark duplicate confirmed fork" {
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
-            .magic_tracker = &magic_tracker,
+            .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
             .status_cache = null,
             .senders = stubs.senders,
@@ -6630,7 +6630,7 @@ test "detect and mark duplicate confirmed fork" {
 //
 // States updated (setup):
 // - SlotTracker: root slot 0 and slot 1 (both frozen)
-// - MagicTracker: epoch 0 with validators
+// - EpochTracker: epoch 0 with validators
 // - ProgressMap: entries for slots 0 and 1
 // - duplicate_slots channel: slot 1 is sent to the channel (simulating duplicate detection)
 //
@@ -6702,11 +6702,11 @@ test "detect and mark duplicate slot" {
         try slot_tracker.put(allocator, 1, .{ .constants = slot_constants, .state = slot_state });
     }
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
         allocator,
         &.{.EMPTY_WITH_GENESIS},
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     var progress = sig.consensus.ProgressMap.INIT;
     defer progress.deinit(allocator);
@@ -6764,7 +6764,7 @@ test "detect and mark duplicate slot" {
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
-            .magic_tracker = &magic_tracker,
+            .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
             .status_cache = null,
             .senders = stubs.senders,
@@ -6980,11 +6980,11 @@ test "successful fork switch (switch_proof)" {
         break :blk epoch_stakes;
     };
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initWithEpochStakesOnlyForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
         allocator,
         &.{epoch_stakes},
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     {
         {
@@ -7111,7 +7111,7 @@ test "successful fork switch (switch_proof)" {
         }
     }
 
-    const epoch_info = try magic_tracker.getEpochInfo(0);
+    const epoch_info = try epoch_tracker.getEpochInfo(0);
     const vote_accounts_map = &epoch_info.stakes.stakes.vote_accounts.vote_accounts;
     const total_stake: u64 = 500;
 
@@ -7145,7 +7145,7 @@ test "successful fork switch (switch_proof)" {
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
-            .magic_tracker = &magic_tracker,
+            .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
             .status_cache = null,
             .senders = stubs.senders,
@@ -7187,7 +7187,7 @@ test "successful fork switch (switch_proof)" {
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
-            .magic_tracker = &magic_tracker,
+            .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
             .status_cache = null,
             .senders = stubs.senders,
@@ -7249,7 +7249,7 @@ test "successful fork switch (switch_proof)" {
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
-            .magic_tracker = &magic_tracker,
+            .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
             .status_cache = null,
             .senders = stubs.senders,
@@ -7323,7 +7323,7 @@ test "successful fork switch (switch_proof)" {
             .ledger = &stubs.ledger,
             .gossip_votes = null,
             .slot_tracker = &slot_tracker,
-            .magic_tracker = &magic_tracker,
+            .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
             .status_cache = null,
             .senders = stubs.senders,

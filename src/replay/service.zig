@@ -70,7 +70,7 @@ pub fn advanceReplay(
     var start_time = sig.time.Timer.start();
     replay_state.logger.debug().log("advancing replay");
 
-    var leader_schedules = try replay_state.magic_tracker.getLeaderSchedules();
+    var leader_schedules = try replay_state.epoch_tracker.getLeaderSchedules();
     const slot_leaders = SlotLeaders.init(
         &leader_schedules,
         sig.core.magic_leader_schedule.LeaderSchedules.getLeaderOrNull,
@@ -83,7 +83,7 @@ pub fn advanceReplay(
         replay_state.account_store,
         replay_state.ledger,
         &replay_state.slot_tracker,
-        replay_state.magic_tracker,
+        replay_state.epoch_tracker,
         &replay_state.slot_tree,
         slot_leaders,
         &replay_state.hard_forks,
@@ -110,7 +110,7 @@ pub fn advanceReplay(
             .gossip_votes = consensus.gossip_votes,
             .ledger = replay_state.ledger,
             .slot_tracker = &replay_state.slot_tracker,
-            .magic_tracker = replay_state.magic_tracker,
+            .epoch_tracker = replay_state.epoch_tracker,
             .progress_map = &replay_state.progress_map,
             .status_cache = &replay_state.status_cache,
             .senders = consensus.senders,
@@ -149,7 +149,7 @@ pub const Dependencies = struct {
     /// Reader used to get the entries to validate them and execute the transactions
     /// Writer used to update the ledger with consensus results
     ledger: *Ledger,
-    magic_tracker: *sig.core.magic_info.MagicTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     /// The slot info to start replaying from.
     root: struct {
         slot: Slot,
@@ -176,7 +176,7 @@ pub const ReplayState = struct {
     signing: sig.identity.SigningKeys,
     thread_pool: ThreadPool,
     slot_tracker: SlotTracker,
-    magic_tracker: *sig.core.magic_info.MagicTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     slot_tree: SlotTree,
     hard_forks: sig.core.HardForks,
     account_store: AccountStore,
@@ -227,7 +227,7 @@ pub const ReplayState = struct {
         const progress_map = try initProgressMap(
             deps.allocator,
             &slot_tracker,
-            deps.magic_tracker,
+            deps.epoch_tracker,
             deps.identity.validator,
             deps.identity.vote_account,
         );
@@ -243,7 +243,7 @@ pub const ReplayState = struct {
             .signing = deps.signing,
             .thread_pool = .init(.{ .max_threads = deps.replay_threads }),
             .slot_tracker = slot_tracker,
-            .magic_tracker = deps.magic_tracker,
+            .epoch_tracker = deps.epoch_tracker,
             .slot_tree = slot_tree,
             .hard_forks = deps.hard_forks,
             .account_store = deps.account_store,
@@ -261,7 +261,7 @@ pub const ReplayState = struct {
 pub fn initProgressMap(
     allocator: std.mem.Allocator,
     slot_tracker: *const SlotTracker,
-    magic_tracker: *const sig.core.magic_info.MagicTracker,
+    epoch_tracker: *const sig.core.EpochTracker,
     my_pubkey: Pubkey,
     vote_account: ?Pubkey,
 ) !ProgressMap {
@@ -275,7 +275,7 @@ pub fn initProgressMap(
 
     // Initialize progress map with any root slots
     for (frozen_slots.keys(), frozen_slots.values()) |slot, ref| {
-        const epoch_info = try magic_tracker.getEpochInfo(slot);
+        const epoch_info = try epoch_tracker.getEpochInfo(slot);
         const prev_leader_slot = progress.getSlotPrevLeaderSlot(ref.constants.parent_slot);
         try progress.map.ensureUnusedCapacity(allocator, 1);
         progress.map.putAssumeCapacity(slot, try .initFromInfo(allocator, .{
@@ -314,7 +314,7 @@ pub fn trackNewSlots(
     account_store: AccountStore,
     ledger: *Ledger,
     slot_tracker: *SlotTracker,
-    magic_tracker: *sig.core.magic_info.MagicTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     slot_tree: *SlotTree,
     slot_leaders: SlotLeaders,
     hard_forks: *const sig.core.HardForks,
@@ -353,7 +353,7 @@ pub fn trackNewSlots(
             var constants, var state = try newSlotFromParent(
                 allocator,
                 account_store.reader(),
-                magic_tracker.cluster.ticks_per_slot,
+                epoch_tracker.cluster.ticks_per_slot,
                 parent_slot,
                 parent_info.constants,
                 parent_info.state,
@@ -363,8 +363,8 @@ pub fn trackNewSlots(
             errdefer constants.deinit(allocator);
             errdefer state.deinit(allocator);
 
-            const parent_epoch = magic_tracker.epoch_schedule.getEpoch(parent_slot);
-            const slot_epoch = magic_tracker.epoch_schedule.getEpoch(slot);
+            const parent_epoch = epoch_tracker.epoch_schedule.getEpoch(parent_slot);
+            const slot_epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
             const store = account_store.forSlot(slot, &constants.ancestors);
 
             if (parent_epoch < slot_epoch) {
@@ -374,7 +374,7 @@ pub fn trackNewSlots(
                     &constants,
                     &state,
                     store,
-                    magic_tracker,
+                    epoch_tracker,
                 );
             } else {
                 try replay.epoch_transitions.updateEpochStakes(
@@ -383,7 +383,7 @@ pub fn trackNewSlots(
                     &constants.ancestors,
                     &constants.feature_set,
                     &state.stakes_cache,
-                    magic_tracker,
+                    epoch_tracker,
                 );
             }
 
@@ -392,21 +392,21 @@ pub fn trackNewSlots(
                 slot,
                 slot_epoch,
                 constants.block_height,
-                magic_tracker.epoch_schedule,
+                epoch_tracker.epoch_schedule,
                 &state.reward_status,
                 &state.stakes_cache,
                 &state.capitalization,
                 &constants.rent_collector.rent,
                 store,
                 constants.feature_set.newWarmupCooldownRateEpoch(
-                    &magic_tracker.epoch_schedule,
+                    &epoch_tracker.epoch_schedule,
                 ),
             );
 
             try updateSysvarsForNewSlot(
                 allocator,
                 account_store,
-                magic_tracker,
+                epoch_tracker,
                 &constants,
                 &state,
                 slot,
@@ -687,13 +687,13 @@ test trackNewSlots {
         },
     };
 
-    var magic_tracker = try sig.core.magic_info.MagicTracker.initForTest(
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
         allocator,
         rng.random(),
         0,
         .INIT,
     );
-    defer magic_tracker.deinit(allocator);
+    defer epoch_tracker.deinit(allocator);
 
     var lsc = sig.core.leader_schedule.LeaderScheduleCache.init(allocator, .INIT);
     defer {
@@ -719,7 +719,7 @@ test trackNewSlots {
         .noop,
         &ledger,
         &slot_tracker,
-        &magic_tracker,
+        &epoch_tracker,
         &slot_tree,
         slot_leaders,
         &hard_forks,
@@ -739,7 +739,7 @@ test trackNewSlots {
         .noop,
         &ledger,
         &slot_tracker,
-        &magic_tracker,
+        &epoch_tracker,
         &slot_tree,
         slot_leaders,
         &hard_forks,
@@ -761,7 +761,7 @@ test trackNewSlots {
         .noop,
         &ledger,
         &slot_tracker,
-        &magic_tracker,
+        &epoch_tracker,
         &slot_tree,
         slot_leaders,
         &hard_forks,
@@ -784,7 +784,7 @@ test trackNewSlots {
         .noop,
         &ledger,
         &slot_tracker,
-        &magic_tracker,
+        &epoch_tracker,
         &slot_tree,
         slot_leaders,
         &hard_forks,
@@ -827,8 +827,8 @@ test "Service clean init and deinit" {
             var service = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
             defer {
                 service.deinit();
-                service.magic_tracker.deinit(allocator);
-                allocator.destroy(service.magic_tracker);
+                service.epoch_tracker.deinit(allocator);
+                allocator.destroy(service.epoch_tracker);
             }
         }
     };
@@ -848,8 +848,8 @@ test "process runs without error with no replay results" {
     var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
     defer {
         replay_state.deinit();
-        replay_state.magic_tracker.deinit(allocator);
-        allocator.destroy(replay_state.magic_tracker);
+        replay_state.epoch_tracker.deinit(allocator);
+        allocator.destroy(replay_state.epoch_tracker);
     }
 
     var consensus: TowerConsensus = try .init(allocator, .{
@@ -887,7 +887,7 @@ test "process runs without error with no replay results" {
         .ledger = &dep_stubs.ledger,
         .gossip_votes = null,
         .slot_tracker = &replay_state.slot_tracker,
-        .magic_tracker = replay_state.magic_tracker,
+        .epoch_tracker = replay_state.epoch_tracker,
         .progress_map = &replay_state.progress_map,
         .status_cache = &replay_state.status_cache,
         .senders = consensus_senders,
@@ -912,8 +912,8 @@ test "advance calls consensus.process with empty replay results" {
     var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
     defer {
         replay_state.deinit();
-        replay_state.magic_tracker.deinit(allocator);
-        allocator.destroy(replay_state.magic_tracker);
+        replay_state.epoch_tracker.deinit(allocator);
+        allocator.destroy(replay_state.epoch_tracker);
     }
 
     try advanceReplay(&replay_state, try registry.initStruct(Metrics), null);
@@ -956,8 +956,8 @@ test "freezeCompletedSlots handles errors correctly" {
     var replay_state = try dep_stubs.stubbedState(allocator, .from(logger.logger("", .warn)));
     defer {
         replay_state.deinit();
-        replay_state.magic_tracker.deinit(allocator);
-        allocator.destroy(replay_state.magic_tracker);
+        replay_state.epoch_tracker.deinit(allocator);
+        allocator.destroy(replay_state.epoch_tracker);
     }
 
     const processed_a_slot = try freezeCompletedSlots(&replay_state, &.{
@@ -1052,7 +1052,7 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     //
     // To get around this for the existing manifests, we copy the current epoch stakes into an entry
     // for the next epoch in `bank_extra.versioned_epoch_stakes`. This is loaded into `EpochInfo`
-    // in the MagicTracker when initialised from the snapshot, thus preventing `updateEpochStakes`
+    // in the EpochTracker when initialised from the snapshot, thus preventing `updateEpochStakes`
     // from attempting to compute an `EpochInfo` entry with empty `stakes`.
     var epoch_stakes = manifest.bank_extra.versioned_epoch_stakes.get(
         manifest.bank_fields.epoch,
@@ -1072,8 +1072,8 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     );
     defer {
         replay_state.deinit();
-        replay_state.magic_tracker.deinit(allocator);
-        allocator.destroy(replay_state.magic_tracker);
+        replay_state.epoch_tracker.deinit(allocator);
+        allocator.destroy(replay_state.epoch_tracker);
     }
 
     // replay the block
@@ -1211,16 +1211,16 @@ pub const DependencyStubs = struct {
         var prng_state = std.Random.DefaultPrng.init(24659);
         const prng = prng_state.random();
 
-        var magic_tracker = try allocator.create(sig.core.magic_info.MagicTracker);
-        errdefer allocator.destroy(magic_tracker);
+        var epoch_tracker = try allocator.create(sig.core.EpochTracker);
+        errdefer allocator.destroy(epoch_tracker);
 
-        magic_tracker.* = try sig.core.magic_info.MagicTracker.initForTest(
+        epoch_tracker.* = try sig.core.EpochTracker.initForTest(
             allocator,
             prng,
             0,
             .INIT,
         );
-        errdefer magic_tracker.deinit(allocator);
+        errdefer epoch_tracker.deinit(allocator);
 
         return try .init(.{
             .allocator = allocator,
@@ -1235,7 +1235,7 @@ pub const DependencyStubs = struct {
             },
             .account_store = self.accountStore(),
             .ledger = &self.ledger,
-            .magic_tracker = magic_tracker,
+            .epoch_tracker = epoch_tracker,
             .root = .{
                 .slot = 0,
                 .constants = root_slot_constants,
@@ -1264,15 +1264,15 @@ pub const DependencyStubs = struct {
             bank_fields.slot,
         );
 
-        var magic_tracker = try allocator.create(sig.core.magic_info.MagicTracker);
-        errdefer allocator.destroy(magic_tracker);
+        var epoch_tracker = try allocator.create(sig.core.EpochTracker);
+        errdefer allocator.destroy(epoch_tracker);
 
-        magic_tracker.* = try sig.core.magic_info.MagicTracker.initFromManifest(
+        epoch_tracker.* = try sig.core.EpochTracker.initFromManifest(
             allocator,
             collapsed_manifest,
             &feature_set,
         );
-        errdefer magic_tracker.deinit(allocator);
+        errdefer epoch_tracker.deinit(allocator);
 
         const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
             allocator,
@@ -1307,7 +1307,7 @@ pub const DependencyStubs = struct {
             },
             .account_store = self.accountStore(),
             .ledger = &self.ledger,
-            .magic_tracker = magic_tracker,
+            .epoch_tracker = epoch_tracker,
             .root = .{
                 .slot = bank_fields.slot,
                 .constants = root_slot_constants,

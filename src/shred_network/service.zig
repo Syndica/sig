@@ -50,7 +50,7 @@ pub const ShredNetworkDependencies = struct {
     /// Shared state that is read from gossip
     my_shred_version: *const Atomic(u16),
     my_contact_info: ThreadSafeContactInfo,
-    magic_tracker: *sig.core.magic_info.MagicTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     n_retransmit_threads: ?usize,
     overwrite_turbine_stake_for_testing: bool,
     /// RPC Observability
@@ -103,7 +103,7 @@ pub fn start(
         .turbine_socket = turbine_socket,
         .shred_version = deps.my_shred_version,
         .maybe_retransmit_shred_sender = if (conf.retransmit) retransmit_channel else null,
-        .magic_tracker = deps.magic_tracker,
+        .epoch_tracker = deps.epoch_tracker,
         .tracker = shred_tracker,
         .inserter = deps.ledger.shredInserter(),
     });
@@ -122,7 +122,7 @@ pub fn start(
             .{shred_network.shred_retransmitter.ShredRetransmitterParams{
                 .allocator = deps.allocator,
                 .my_contact_info = deps.my_contact_info,
-                .magic_tracker = deps.magic_tracker,
+                .epoch_tracker = deps.epoch_tracker,
                 .gossip_table_rw = deps.gossip_table_rw,
                 .receiver = retransmit_channel,
                 .maybe_num_retransmit_threads = deps.n_retransmit_threads,
@@ -223,8 +223,8 @@ test "start and stop gracefully" {
     var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer state.deinit();
 
-    var magic_tracker = sig.core.magic_info.MagicTracker.init(.default, 0, .INIT);
-    defer magic_tracker.deinit(allocator);
+    var epoch_tracker = sig.core.EpochTracker.init(.default, 0, .INIT);
+    defer epoch_tracker.deinit(allocator);
 
     const deps: ShredNetworkDependencies = .{
         .allocator = allocator,
@@ -239,7 +239,7 @@ test "start and stop gracefully" {
         .my_contact_info = contact_info,
         .n_retransmit_threads = 1,
         .overwrite_turbine_stake_for_testing = true,
-        .magic_tracker = &magic_tracker,
+        .epoch_tracker = &epoch_tracker,
     };
 
     var timer = sig.time.Timer.start();
