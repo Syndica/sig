@@ -1045,19 +1045,24 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
         try dep_stubs.accounts_db_state.db.put(snapshot_slot, address, account);
     }
 
+    // NOTE: The manifests used to run this unit have empty `stakes` and a single epoch stakes for
+    // the current epoch. As a result, when we call `updateEpochStakes` in `trackNewSlots` we will
+    // attempt to create a new `EpochInfo` for the next epoch. This involves a leader schedule
+    // calculation which will fail if `stakes` is empty.
+    //
+    // To get around this for the existing manifests, we copy the current epoch stakes into an entry
+    // for the next epoch in `bank_extra.versioned_epoch_stakes`. This is loaded into `EpochInfo`
+    // in the MagicTracker when initialised from the snapshot, thus preventing `updateEpochStakes`
+    // from attempting to compute an `EpochInfo` entry with empty `stakes`.
     var epoch_stakes = manifest.bank_extra.versioned_epoch_stakes.get(
         manifest.bank_fields.epoch,
     ).?.current;
-
     epoch_stakes.stakes.epoch += 1;
     try manifest.bank_extra.versioned_epoch_stakes.put(
         fba.allocator(),
         manifest.bank_fields.epoch + 1,
         .{ .current = try epoch_stakes.clone(fba.allocator()) },
     );
-
-    manifest.bank_fields.stakes.deinit(fba.allocator());
-    manifest.bank_fields.stakes = try epoch_stakes.stakes.convert(fba.allocator(), .delegation);
 
     // init replay
     var replay_state = try dep_stubs.mockedState(
