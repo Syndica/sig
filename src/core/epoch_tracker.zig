@@ -458,7 +458,6 @@ pub const RootedEpochBuffer = struct {
 };
 
 pub const UnrootedEpochBuffer = struct {
-    // name fields
     buf: [MAX_FORKS]?struct { slot: Slot, info: *const EpochInfo } = @splat(null),
 
     pub const MAX_FORKS = 4;
@@ -533,7 +532,7 @@ pub const UnrootedEpochBuffer = struct {
     }
 };
 
-test "RootedEpochBuffer" {
+test RootedEpochBuffer {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -687,8 +686,68 @@ test "RootedEpochBuffer" {
     }
 }
 
-test "UnrootedEpochBuffer" {
-    // TODO: Implement specific tests for UnrootedEpochBuffer
+test UnrootedEpochBuffer {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const epoch_schedule = EpochSchedule.custom(.{
+        .slots_per_epoch = 32,
+        .leader_schedule_slot_offset = 32,
+        .warmup = false,
+    });
+
+    var buffer = UnrootedEpochBuffer{};
+    defer buffer.deinit(allocator);
+
+    var branch = try Ancestors.initWithSlots(allocator, &.{ 10, 11, 12 });
+    defer branch.deinit(allocator);
+
+    // Get and take on empty buffer fails
+    try std.testing.expectError(
+        error.ForkNotFound,
+        buffer.get(&branch),
+    );
+    try std.testing.expectError(
+        error.ForkNotFound,
+        buffer.take(&branch),
+    );
+
+    // Insert epoch info for slot 9
+    const epoch_info = try EpochInfo.initRandom(
+        allocator,
+        random,
+        .{ .epoch = 1, .schedule = epoch_schedule },
+    );
+    defer epoch_info.deinit(allocator);
+    const epoch_info_ptr = try buffer.insert(
+        allocator,
+        9,
+        &branch,
+        epoch_info,
+    );
+    defer allocator.destroy(epoch_info_ptr);
+
+    // Get and take without matching fork fails
+    try std.testing.expectError(
+        error.ForkNotFound,
+        buffer.get(&branch),
+    );
+    try std.testing.expectError(
+        error.ForkNotFound,
+        buffer.take(&branch),
+    );
+
+    // Add slot 9 to ancestors and check get and take succeed
+    try branch.addSlot(allocator, 9);
+    const fetched_info = try buffer.get(&branch);
+    const taken_info = try buffer.take(&branch);
+    try std.testing.expectEqual(epoch_info_ptr, fetched_info);
+    try std.testing.expectEqual(epoch_info_ptr, taken_info);
+    try std.testing.expectError(
+        error.ForkNotFound,
+        buffer.get(&branch),
+    );
 }
 
 test EpochTracker {
