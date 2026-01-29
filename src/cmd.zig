@@ -16,7 +16,7 @@ const GenesisConfig = sig.core.GenesisConfig;
 const GeyserWriter = sig.geyser.GeyserWriter;
 const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
-const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
+const LeaderSchedule = sig.core.magic_leader_schedule.LeaderSchedule;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SnapshotFiles = sig.accounts_db.snapshot.SnapshotFiles;
@@ -1681,58 +1681,50 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         app_base.deinit();
     }
 
-    const root_slot, //
     const leader_schedule //
     = try getLeaderScheduleFromCli(allocator, cfg) orelse b: {
-        app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
+        const cluster = try cfg.gossip.getCluster() orelse
+            return error.ClusterNotProvided;
 
-        const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
-        var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
-        defer snapshot_dir.close();
-
-        const snapshot_files =
-            SnapshotFiles.find(allocator, snapshot_dir) catch |err| switch (err) {
-                error.NoFullSnapshotFileInfoFound => {
-                    app_base.logger.err().log(
-                        \\\ No snapshot found and no gossip service to download a snapshot from.
-                        \\\ Download using the `snapshot-download` command.
-                    );
-                    return err;
-                },
-                else => return err,
-            };
-
-        var loaded_snapshot = try loadSnapshot(
-            allocator,
-            .from(app_base.logger),
-            snapshot_dir,
-            snapshot_files,
-            .{
-                .genesis_file_path = try cfg.genesisFilePath() orelse {
-                    return error.GenesisPathNotProvided;
-                },
-                .extract = .metadata_only,
-            },
-        );
-        defer loaded_snapshot.deinit();
-
-        const bank_fields = &loaded_snapshot.collapsed_manifest.bank_fields;
-        _, const slot_index = bank_fields.epoch_schedule.getEpochAndSlotIndex(bank_fields.slot);
-        break :b .{
-            bank_fields.slot - slot_index,
-            try loaded_snapshot.collapsed_manifest.leaderSchedule(allocator, null),
+        const cluster_type: ClusterType = switch (cluster) {
+            .mainnet => .MainnetBeta,
+            .devnet => .Devnet,
+            .testnet => .Testnet,
+            .localnet => .LocalHost,
         };
+
+        var rpc_client = try sig.rpc.Client.init(allocator, cluster_type, .{});
+        defer rpc_client.deinit();
+
+        const slot = blk: {
+            const response = try rpc_client.getSlot(.{});
+            defer response.deinit();
+            break :blk try response.result();
+        };
+
+        const leader_schedule = blk: {
+            const response = try rpc_client.getLeaderSchedule(.{ .slot = slot });
+            defer response.deinit();
+
+            const rpc_schedule = (try response.result()).value;
+            break :blk try sig.core.magic_leader_schedule.computeFromMap(
+                allocator,
+                &rpc_schedule,
+            );
+        };
+        break :b leader_schedule;
     };
+    defer leader_schedule.deinit(allocator);
 
     var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
-    try leader_schedule.write(stdout.writer(), root_slot);
+    try leader_schedule.write(stdout.writer());
     try stdout.flush();
 }
 
 fn getLeaderScheduleFromCli(
     allocator: std.mem.Allocator,
     cfg: config.Cmd,
-) !?struct { Slot, LeaderSchedule } {
+) !?LeaderSchedule {
     return if (cfg.leader_schedule_path) |path|
         if (std.mem.eql(u8, "--", path))
             try LeaderSchedule.read(allocator, std.io.getStdIn().reader())
@@ -2418,18 +2410,14 @@ pub const RpcLeaderScheduleService = struct {
         for (leader_schedule_epoch..epoch + 1) |e| {
             if (self.epoch_tracker.rooted_epochs.isNext(e)) {
                 const first_slot_in_epoch = self.epoch_tracker.epoch_schedule.getFirstSlotInEpoch(e);
-                const epoch_leaders = try self.getLeaderSchedule(
+                const leaders = try self.getLeaderSchedule(
                     first_slot_in_epoch +|
                         self.epoch_tracker.epoch_schedule.leader_schedule_slot_offset,
                 );
 
                 var entry = try self.allocator.create(sig.core.EpochInfo);
                 entry.* = .{
-                    .leaders = .{
-                        .leaders = epoch_leaders,
-                        .start = self.epoch_tracker.epoch_schedule.getFirstSlotInEpoch(e),
-                        .end = self.epoch_tracker.epoch_schedule.getLastSlotInEpoch(e),
-                    },
+                    .leaders = leaders,
                     .stakes = .EMPTY,
                 };
                 entry.stakes.stakes.epoch = e;
@@ -2443,14 +2431,13 @@ pub const RpcLeaderScheduleService = struct {
         }
     }
 
-    fn getLeaderSchedule(self: *Self, slot: sig.core.Slot) ![]const sig.core.Pubkey {
+    fn getLeaderSchedule(self: *Self, slot: sig.core.Slot) !LeaderSchedule {
         const response = try self.rpc_client.getLeaderSchedule(.{ .slot = slot });
         defer response.deinit();
         const rpc_schedule = (try response.result()).value;
-        const schedule = try sig.core.leader_schedule.LeaderSchedule.fromMap(
+        return try sig.core.magic_leader_schedule.computeFromMap(
             self.allocator,
-            rpc_schedule,
+            &rpc_schedule,
         );
-        return schedule.slot_leaders;
     }
 };

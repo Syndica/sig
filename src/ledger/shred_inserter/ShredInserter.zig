@@ -19,7 +19,6 @@ const CodeShred = ledger_mod.shred.CodeShred;
 const DataShred = ledger_mod.shred.DataShred;
 const ReedSolomonCache = lib.recovery.ReedSolomonCache;
 const ShredId = ledger_mod.shred.ShredId;
-const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SortedSet = sig.utils.collections.SortedSet;
 const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
@@ -1603,18 +1602,6 @@ test "recovery" {
 
     // TODO: verify index integrity
 }
-
-const OneSlotLeaders = struct {
-    leader: Pubkey,
-
-    fn getLeader(self: *OneSlotLeaders, _: Slot) ?Pubkey {
-        return self.leader;
-    }
-
-    fn provider(self: *OneSlotLeaders) SlotLeaders {
-        return SlotLeaders.init(self, OneSlotLeaders.getLeader);
-    }
-};
 
 const loadShredsFromFile = ledger_mod.tests.loadShredsFromFile;
 const deinitShreds = ledger_mod.tests.deinitShreds;
