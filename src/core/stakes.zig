@@ -1147,7 +1147,7 @@ test "randomEpochStakes produces valid leader schedule" {
     );
     defer epoch_stakes.deinit(allocator);
 
-    const leaders = try sig.core.magic_leader_schedule.LeaderSchedule.init(
+    const leaders = try sig.core.leader_schedule.LeaderSchedule.init(
         allocator,
         epoch_stakes.stakes.epoch,
         epoch_stakes.stakes.vote_accounts,
