@@ -14,7 +14,7 @@ pub const Logger = sig.trace.Logger("consensus");
 
 const Channel = sig.sync.Channel;
 const RwMux = sig.sync.RwMux;
-const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
+const SortedSet = sig.utils.collections.SortedSet;
 
 const Ancestors = sig.core.Ancestors;
 const Epoch = sig.core.Epoch;
@@ -31,6 +31,8 @@ const SocketAddr = sig.net.SocketAddr;
 
 const Tower = sig.consensus.tower.Tower;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
+
+const SlotSet = SortedSet(Slot, .{});
 
 /// UDP sockets used to send vote transactions.
 pub const VoteSockets = struct {
@@ -119,7 +121,7 @@ pub const TowerConsensus = struct {
     /// functions; ie, it isn't used for any persistent data
     arena_state: std.heap.ArenaAllocator.State,
 
-    pub fn deinit(self: TowerConsensus, allocator: Allocator) void {
+    pub fn deinit(self: *TowerConsensus, allocator: Allocator) void {
         self.replay_tower.deinit(allocator);
         self.fork_choice.deinit(allocator);
 
@@ -423,8 +425,6 @@ pub const TowerConsensus = struct {
             params.duplicate_confirmed_slots.clearRetainingCapacity();
             params.gossip_verified_vote_hashes.clearRetainingCapacity();
 
-            const SlotSet = SortedSetUnmanaged(Slot);
-
             const asc_desc_zone = tracy.Zone.init(
                 @src(),
                 .{ .name = "TowerConsensus.process: ancestors/descendants" },
@@ -447,7 +447,7 @@ pub const TowerConsensus = struct {
                     try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
                     const descendants_gop =
                         try descendants.getOrPutValue(arena, ancestor_slot, .empty);
-                    try descendants_gop.value_ptr.put(arena, slot);
+                    try descendants_gop.value_ptr.put(arena, slot, {});
                 }
             }
             break :cluster_sync_and_ancestors_descendants .{ ancestors, descendants };
@@ -509,7 +509,7 @@ pub const TowerConsensus = struct {
         ledger: *Ledger,
         gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
         ancestors: *const std.AutoArrayHashMapUnmanaged(Slot, Ancestors),
-        descendants: *const std.AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
+        descendants: *const std.AutoArrayHashMapUnmanaged(Slot, SlotSet),
         slot_tracker: *SlotTracker,
         epoch_tracker: *const EpochTracker,
         progress_map: *ProgressMap,
@@ -7049,8 +7049,10 @@ test "successful fork switch (switch_proof)" {
     }
 
     var ancestors_map = std.AutoArrayHashMapUnmanaged(Slot, sig.core.Ancestors).empty;
-    var descendants_map =
-        std.AutoArrayHashMapUnmanaged(Slot, sig.utils.collections.SortedSetUnmanaged(Slot)).empty;
+    var descendants_map: std.AutoArrayHashMapUnmanaged(
+        Slot,
+        sig.utils.collections.SortedSet(Slot, .{}),
+    ) = .empty;
     defer {
         var it = ancestors_map.iterator();
         while (it.next()) |entry| entry.value_ptr.deinit(allocator);
@@ -7071,7 +7073,7 @@ test "successful fork switch (switch_proof)" {
         for (slot_ancestors.keys()) |a| {
             try gop.value_ptr.addSlot(allocator, a);
             const dg = try descendants_map.getOrPutValue(allocator, a, .empty);
-            try dg.value_ptr.put(allocator, slot);
+            try dg.value_ptr.put(allocator, slot, {});
         }
     }
 
@@ -7226,7 +7228,7 @@ test "successful fork switch (switch_proof)" {
     var ancestors_map2 =
         std.AutoArrayHashMapUnmanaged(Slot, sig.core.Ancestors).empty;
     var descendants_map2 =
-        std.AutoArrayHashMapUnmanaged(Slot, sig.utils.collections.SortedSetUnmanaged(Slot)).empty;
+        std.AutoArrayHashMapUnmanaged(Slot, SlotSet).empty;
     defer {
         var it = ancestors_map2.iterator();
         while (it.next()) |entry| entry.value_ptr.deinit(allocator);
@@ -7247,7 +7249,7 @@ test "successful fork switch (switch_proof)" {
         for (slot_ancestors.keys()) |a| {
             try gop.value_ptr.addSlot(allocator, a);
             const dg = try descendants_map2.getOrPutValue(allocator, a, .empty);
-            try dg.value_ptr.put(allocator, slot);
+            try dg.value_ptr.put(allocator, slot, {});
         }
     }
 

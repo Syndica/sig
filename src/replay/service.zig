@@ -634,9 +634,9 @@ test trackNewSlots {
         .{ 6, 4, &.{} },
     }) |item| {
         const slot, const parent, const children = item;
-        var meta = sig.ledger.meta.SlotMeta.init(allocator, slot, parent);
-        defer meta.deinit();
-        try meta.child_slots.appendSlice(children);
+        var meta: sig.ledger.meta.SlotMeta = .init(slot, parent);
+        defer meta.deinit(allocator);
+        try meta.child_slots.appendSlice(allocator, children);
         try ledger.db.put(sig.ledger.schema.schema.slot_meta, slot, meta);
     }
 

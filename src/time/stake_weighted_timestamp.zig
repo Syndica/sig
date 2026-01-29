@@ -7,7 +7,7 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const StakeAndVoteAccountsMap = sig.core.vote_accounts.StakeAndVoteAccountsMap;
 
-const SortedMap = sig.utils.collections.SortedMapUnmanaged;
+const SortedMap = sig.utils.collections.SortedMap;
 
 /// Analogous to [MaxAllowableDrift](https://github.com/anza-xyz/agave/blob/e0bd9224fe60d8caa35bcca8daf6c8103ce424ec/runtime/src/stake_weighted_timestamp.rs#L21)
 pub const MaxAllowableDrift = struct {
@@ -38,18 +38,26 @@ pub fn calculateStakeWeightedTimestamp(
     max_allowable_drift: MaxAllowableDrift,
     fix_estimate_into_u64: bool,
 ) Allocator.Error!?i64 {
-    var stakes_per_timestamp = SortedMap(i64, u128).empty;
+    var stakes_per_timestamp: SortedMap(
+        i64,
+        u128,
+        .{},
+    ) = .empty;
     defer stakes_per_timestamp.deinit(allocator);
     var total_stake: u128 = 0;
 
     for (recent_timestamps) |timestamp_entry| {
         const vote_pubkey, const timestamp_slot, const timestamp = timestamp_entry;
+
         const offset_s = (ns_per_slot *| (slot -| timestamp_slot)) / 1_000_000_000;
         const estimate_s = timestamp +| @as(i64, @intCast(offset_s));
         const stake = if (vote_accounts.getPtr(vote_pubkey)) |vote_account_entry|
             vote_account_entry.stake
         else
             0;
+
+        if (estimate_s == std.math.maxInt(i64)) unreachable;
+
         const entry = try stakes_per_timestamp.getOrPut(allocator, estimate_s);
         if (entry.found_existing)
             entry.value_ptr.* +|= stake
@@ -63,11 +71,12 @@ pub fn calculateStakeWeightedTimestamp(
     var stake_accumulator: u128 = 0;
     var estimate_s: i64 = 0;
 
-    for (stakes_per_timestamp.keys()) |timestamp_s| {
-        const stake = stakes_per_timestamp.get(timestamp_s).?;
+    var iter = stakes_per_timestamp.iterator();
+    while (iter.next()) |entry| {
+        const stake = entry.value_ptr.*;
         stake_accumulator +|= stake;
         if (stake_accumulator > total_stake / 2) {
-            estimate_s = timestamp_s;
+            estimate_s = entry.key_ptr.*;
             break;
         }
     }
@@ -194,7 +203,7 @@ test "uses median: low-staked outliers" {
     {
         const recent_timestamps = [_]struct { Pubkey, Slot, i64 }{
             .{ pubkey_0, slot, recent_timestamp },
-            .{ pubkey_1, slot, std.math.maxInt(i64) },
+            .{ pubkey_1, slot, std.math.maxInt(i64) - 1 },
             .{ pubkey_2, slot, recent_timestamp },
             .{ pubkey_3, slot, recent_timestamp },
             .{ pubkey_4, slot, recent_timestamp },
@@ -217,7 +226,7 @@ test "uses median: low-staked outliers" {
     {
         const recent_timestamps = [_]struct { Pubkey, Slot, i64 }{
             .{ pubkey_0, slot, 0 },
-            .{ pubkey_1, slot, std.math.maxInt(i64) },
+            .{ pubkey_1, slot, std.math.maxInt(i64) - 1 },
             .{ pubkey_2, slot, recent_timestamp },
             .{ pubkey_3, slot, recent_timestamp },
             .{ pubkey_4, slot, recent_timestamp },
@@ -274,7 +283,7 @@ test "uses median: high-staked outliers" {
 
         const recent_timestamps = [_]struct { Pubkey, Slot, i64 }{
             .{ pubkey_0, slot, 0 },
-            .{ pubkey_1, slot, std.math.maxInt(i64) },
+            .{ pubkey_1, slot, std.math.maxInt(i64) - 1 },
             .{ pubkey_2, slot, recent_timestamp },
         };
 
