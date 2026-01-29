@@ -12,7 +12,7 @@ const VerifiedMerkleRoots = sig.utils.lru.LruCache(.non_locking, sig.core.Hash, 
 /// Analogous to [verify_shred_cpu](https://github.com/anza-xyz/agave/blob/83e7d84bcc4cf438905d07279bc07e012a49afd9/ledger/src/sigverify_shreds.rs#L35)
 pub fn verifyShred(
     packet: *const Packet,
-    leader_schedule: *const sig.core.magic_leader_schedule.LeaderSchedules,
+    leader_schedule: *const sig.core.leader_schedule.LeaderSchedules,
     verified_merkle_roots: *VerifiedMerkleRoots,
     metrics: Metrics,
 ) ShredVerificationFailure!void {

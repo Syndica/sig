@@ -195,7 +195,7 @@ pub const ShredReceiver = struct {
     fn handlePacket(
         self: *ShredReceiver,
         allocator: Allocator,
-        leader_schedule: *const sig.core.magic_leader_schedule.LeaderSchedules,
+        leader_schedule: *const sig.core.leader_schedule.LeaderSchedules,
         packet: Packet,
     ) !?Shred {
         if (packet.size == REPAIR_RESPONSE_SERIALIZED_PING_BYTES) {

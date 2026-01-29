@@ -73,7 +73,7 @@ pub fn advanceReplay(
     var leader_schedules = try replay_state.epoch_tracker.getLeaderSchedules();
     const slot_leaders = SlotLeaders.init(
         &leader_schedules,
-        sig.core.magic_leader_schedule.LeaderSchedules.getLeaderOrNull,
+        sig.core.leader_schedule.LeaderSchedules.getLeaderOrNull,
     );
 
     // find slots in the ledger
@@ -674,7 +674,7 @@ test trackNewSlots {
     defer slot_tracker.deinit(allocator);
     slot_tracker.get(0).?.state.hash.set(.ZEROES);
 
-    var leader_schedule = sig.core.magic_leader_schedule.LeaderSchedule{
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
         .start = 0,
         .end = 6,
         .leaders = &.{
@@ -698,7 +698,7 @@ test trackNewSlots {
 
     const slot_leaders = SlotLeaders.init(
         &leader_schedule,
-        sig.core.magic_leader_schedule.LeaderSchedule.getLeaderOrNull,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
     );
 
     // slot tracker should start with only 0
@@ -797,7 +797,7 @@ test trackNewSlots {
 
 fn expectSlotTracker(
     slot_tracker: *const SlotTracker,
-    leader_schedule: sig.core.magic_leader_schedule.LeaderSchedule,
+    leader_schedule: sig.core.leader_schedule.LeaderSchedule,
     included_slots: []const [2]Slot,
     excluded_slots: []const Slot,
 ) !void {

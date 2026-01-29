@@ -3726,18 +3726,15 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
 test "sendVote - without gossip table does not send and does not throw" {
     const allocator = testing.allocator;
 
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = &[_]Pubkey{},
+        .start = 0,
+        .end = 0,
+    };
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
     );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| {
-            schedule.deinit();
-        }
-        leader_schedules.deinit();
-    }
 
     const vote_op = VoteOp{
         .push_vote = .{
@@ -3752,7 +3749,7 @@ test "sendVote - without gossip table does not send and does not throw" {
         0,
         vote_op,
         null,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         sig.identity.KeyPair.generate(),
         100,
         null,
@@ -3762,18 +3759,15 @@ test "sendVote - without gossip table does not send and does not throw" {
 test "sendVote - without keypair does not send and does not throw" {
     const allocator = testing.allocator;
 
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = &[_]Pubkey{},
+        .start = 0,
+        .end = 0,
+    };
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
     );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| {
-            schedule.deinit();
-        }
-        leader_schedules.deinit();
-    }
 
     var gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
     defer gossip_table.deinit();
@@ -3792,7 +3786,7 @@ test "sendVote - without keypair does not send and does not throw" {
         0,
         vote_op,
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         null,
         200,
         null,
@@ -3840,29 +3834,18 @@ test "sendVote - sends to both gossip and upcoming leaders" {
 
     const leader_pubkey = Pubkey.initRandom(std.crypto.random);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
-    for (leader_schedule_slots) |*slot| {
-        slot.* = leader_pubkey;
-    }
-
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| {
-            schedule.deinit();
-        }
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    const leaders = try allocator.alloc(Pubkey, 5);
+    for (leaders) |*leader| leader.* = leader_pubkey;
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(allocator);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
@@ -3907,7 +3890,7 @@ test "sendVote - sends to both gossip and upcoming leaders" {
         vote_slot,
         vote_op,
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         my_keypair,
         400,
         null,
@@ -3945,29 +3928,18 @@ test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
 
     const leader_pubkey = Pubkey.initRandom(std.crypto.random);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
-    for (leader_schedule_slots) |*slot| {
-        slot.* = leader_pubkey;
-    }
-
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| {
-            schedule.deinit();
-        }
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    const leaders = try allocator.alloc(Pubkey, 5);
+    for (leaders) |*leader| leader.* = leader_pubkey;
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(allocator);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
@@ -4012,7 +3984,7 @@ test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
         vote_slot,
         vote_op,
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         my_keypair,
         500,
         null,
@@ -4052,29 +4024,18 @@ test "sendVote - falls back to self TPU when no leader sockets found" {
 
     const unknown_leader = Pubkey.initRandom(std.crypto.random);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
-    for (leader_schedule_slots) |*slot| {
-        slot.* = unknown_leader;
-    }
-
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| {
-            schedule.deinit();
-        }
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    const leaders = try allocator.alloc(Pubkey, 5);
+    for (leaders) |*leader| leader.* = unknown_leader;
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(allocator);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     const my_keypair = sig.identity.KeyPair.generate();
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
@@ -4123,7 +4084,7 @@ test "sendVote - falls back to self TPU when no leader sockets found" {
         vote_slot,
         vote_op,
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         my_keypair,
         600,
         null,
@@ -4164,25 +4125,18 @@ test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
     // Prepare a leader schedule with a single repeating leader
     const leader_pubkey: Pubkey = .initRandom(std.crypto.random);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
-    for (leader_schedule_slots) |*slot| slot.* = leader_pubkey;
-
-    var leader_schedule_cache: sig.core.leader_schedule.LeaderScheduleCache = .init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| schedule.deinit();
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule: sig.core.leader_schedule.LeaderSchedule = .{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    const leaders = try allocator.alloc(Pubkey, 5);
+    for (leaders) |*leader| leader.* = leader_pubkey;
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(allocator);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     // Gossip table with leader ContactInfo having tpu_vote socket
     const gossip_table: sig.gossip.GossipTable = try .init(allocator, allocator);
@@ -4222,7 +4176,7 @@ test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
         vote_slot,
         vote_op,
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         my_keypair,
         700,
         &sockets,
@@ -4255,25 +4209,18 @@ test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
     // Leader schedule points to an unknown leader; no leader ContactInfo in gossip
     const unknown_leader = Pubkey.initRandom(std.crypto.random);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
-    for (leader_schedule_slots) |*slot| slot.* = unknown_leader;
-
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| schedule.deinit();
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    const leaders = try allocator.alloc(Pubkey, 5);
+    for (leaders) |*leader| leader.* = unknown_leader;
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(allocator);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     // Gossip table with our own ContactInfo having a TPU address
     const my_keypair = sig.identity.KeyPair.generate();
@@ -4311,7 +4258,7 @@ test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
         vote_slot,
         vote_op,
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         my_keypair,
         800,
         &sockets,
@@ -4340,36 +4287,29 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
     const leader2_pubkey: Pubkey = .initRandom(prng);
     const leader3_pubkey: Pubkey = .initRandom(prng);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 150);
-    for (leader_schedule_slots, 0..) |*slot, i| {
+    const leaders = try allocator.alloc(Pubkey, 150);
+    for (leaders, 0..) |*leader, i| {
         if (i >= vote_slot and i < vote_slot + 3) {
-            slot.* = switch (i - vote_slot) {
+            leader.* = switch (i - vote_slot) {
                 0 => leader1_pubkey,
                 1 => leader2_pubkey,
                 2 => leader3_pubkey,
                 else => unreachable,
             };
         } else {
-            slot.* = Pubkey.initRandom(std.crypto.random);
+            leader.* = Pubkey.initRandom(std.crypto.random);
         }
     }
-
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| schedule.deinit();
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(allocator);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
@@ -4454,7 +4394,7 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
         allocator,
         vote_slot,
         vote_tx,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         &gossip_table_rw,
         my_pubkey,
         &sockets,
@@ -4476,25 +4416,18 @@ test "sendVoteToLeaders - continues when sendVoteTransaction fails" {
     var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
     const leader_pubkey: Pubkey = .initRandom(prng.random());
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 10);
-    for (leader_schedule_slots) |*slot| slot.* = leader_pubkey;
-
-    var leader_schedule_cache: sig.core.leader_schedule.LeaderScheduleCache = .init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| schedule.deinit();
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    const leaders = try allocator.alloc(Pubkey, 10);
+    for (leaders) |*leader| leader.* = leader_pubkey;
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(allocator);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     const gossip_table: sig.gossip.GossipTable = try .init(allocator, allocator);
     var gossip_table_rw: sig.sync.RwMux(sig.gossip.GossipTable) = .init(gossip_table);
@@ -4532,7 +4465,7 @@ test "sendVoteToLeaders - continues when sendVoteTransaction fails" {
         allocator,
         vote_slot,
         vote_tx,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         &gossip_table_rw,
         null,
         &sockets,
