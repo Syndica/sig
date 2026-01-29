@@ -1116,7 +1116,9 @@ fn validator(
     const turbine_recv_port: u16 = cfg.shred_network.turbine_recv_port;
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{
+        .iterate = true,
+    });
     defer snapshot_dir.close();
 
     var gossip_votes = try sig.sync.Channel(sig.gossip.data.Vote).init(allocator);
@@ -1702,7 +1704,9 @@ fn printManifest(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     }
 
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{
+        .iterate = true,
+    });
     defer snapshot_dir.close();
 
     const snapshot_file_info = try SnapshotFiles.find(allocator, snapshot_dir);

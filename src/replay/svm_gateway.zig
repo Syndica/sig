@@ -24,8 +24,6 @@ const TransactionExecutionEnvironment =
     sig.runtime.transaction_execution.TransactionExecutionEnvironment;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 
-const initDurableNonceFromHash = sig.runtime.nonce.initDurableNonceFromHash;
-
 pub fn executeTransaction(
     programs_allocator: Allocator,
     tmp_allocator: Allocator,
@@ -159,7 +157,7 @@ pub const SvmGateway = struct {
             .slot = self.params.slot,
             .max_age = self.params.max_age,
             .last_blockhash = last_blockhash,
-            .next_durable_nonce = initDurableNonceFromHash(last_blockhash),
+            .next_durable_nonce = sig.runtime.nonce.initDurableNonceFromHash(last_blockhash),
 
             // this seems wrong/redundant but it's exactly how agave does it.
             // it's actually not even possible to figure out what the next
