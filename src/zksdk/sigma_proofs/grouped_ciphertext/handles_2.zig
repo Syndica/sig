@@ -6,7 +6,7 @@ const builtin = @import("builtin");
 const sig = @import("../../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
-const el_gamal = sig.zksdk.el_gamal;
+const elgamal = sig.zksdk.elgamal;
 const pedersen = sig.zksdk.pedersen;
 const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
 const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
@@ -14,7 +14,7 @@ const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
 const ed25519 = sig.crypto.ed25519;
-const GroupedElGamalCiphertext = el_gamal.GroupedElGamalCiphertext;
+const GroupedElGamalCiphertext = elgamal.GroupedElGamalCiphertext;
 const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const Proof = struct {
@@ -432,7 +432,7 @@ pub const Data = struct {
 
         const amount: u64 = 55;
         const opening = pedersen.Opening.random();
-        const grouped_ciphertext = el_gamal.GroupedElGamalCiphertext(2).encryptWithOpening(
+        const grouped_ciphertext = elgamal.GroupedElGamalCiphertext(2).encryptWithOpening(
             .{ first_pubkey, second_pubkey },
             amount,
             &opening,
@@ -574,12 +574,12 @@ pub const BatchedData = struct {
         const opening_lo = pedersen.Opening.random();
         const opening_hi = pedersen.Opening.random();
 
-        const grouped_ciphertext_lo = el_gamal.GroupedElGamalCiphertext(2).encryptWithOpening(
+        const grouped_ciphertext_lo = elgamal.GroupedElGamalCiphertext(2).encryptWithOpening(
             .{ first_pubkey, second_pubkey },
             amount_lo,
             &opening_lo,
         );
-        const grouped_ciphertext_hi = el_gamal.GroupedElGamalCiphertext(2).encryptWithOpening(
+        const grouped_ciphertext_hi = elgamal.GroupedElGamalCiphertext(2).encryptWithOpening(
             .{ first_pubkey, second_pubkey },
             amount_hi,
             &opening_hi,

@@ -17,27 +17,12 @@ pub const FeatureSet = struct {
     pub usingnamespace protobuf.MessageMixins(@This());
 };
 
-pub const SeedAddress = struct {
-    base: ManagedString = .Empty,
-    seed: ManagedString = .Empty,
-    owner: ManagedString = .Empty,
-
-    pub const _desc_table = .{
-        .base = fd(1, .Bytes),
-        .seed = fd(2, .Bytes),
-        .owner = fd(3, .Bytes),
-    };
-
-    pub usingnamespace protobuf.MessageMixins(@This());
-};
-
 pub const AcctState = struct {
     address: ManagedString = .Empty,
     lamports: u64 = 0,
     data: ManagedString = .Empty,
     executable: bool = false,
     owner: ManagedString = .Empty,
-    seed_addr: ?SeedAddress = null,
 
     pub const _desc_table = .{
         .address = fd(1, .Bytes),
@@ -45,7 +30,6 @@ pub const AcctState = struct {
         .data = fd(3, .Bytes),
         .executable = fd(4, .{ .Varint = .Simple }),
         .owner = fd(6, .Bytes),
-        .seed_addr = fd(7, .{ .SubMessage = {} }),
     };
 
     pub usingnamespace protobuf.MessageMixins(@This());
@@ -103,7 +87,6 @@ pub const EpochContext = struct {
     features: ?FeatureSet = null,
     hashes_per_tick: u64 = 0,
     ticks_per_slot: u64 = 0,
-    slots_per_year: f64 = 0,
     inflation: ?Inflation = null,
     genesis_creation_time: u64 = 0,
     vote_accounts_t_1: ArrayList(VoteAccount),
@@ -113,7 +96,6 @@ pub const EpochContext = struct {
         .features = fd(1, .{ .SubMessage = {} }),
         .hashes_per_tick = fd(2, .{ .Varint = .Simple }),
         .ticks_per_slot = fd(3, .{ .Varint = .Simple }),
-        .slots_per_year = fd(4, .{ .FixedInt = .I64 }),
         .inflation = fd(5, .{ .SubMessage = {} }),
         .genesis_creation_time = fd(6, .{ .Varint = .Simple }),
         .vote_accounts_t_1 = fd(11, .{ .List = .{ .SubMessage = {} } }),
@@ -128,6 +110,7 @@ pub const SlotContext = struct {
     block_height: u64 = 0,
     poh: ManagedString = .Empty,
     parent_bank_hash: ManagedString = .Empty,
+    parent_lthash: ManagedString = .Empty,
     prev_slot: u64 = 0,
     prev_lps: u64 = 0,
     prev_epoch_capitalization: u64 = 0,
@@ -139,6 +122,7 @@ pub const SlotContext = struct {
         .block_height = fd(2, .{ .FixedInt = .I64 }),
         .poh = fd(3, .Bytes),
         .parent_bank_hash = fd(4, .Bytes),
+        .parent_lthash = fd(5, .Bytes),
         .prev_slot = fd(6, .{ .FixedInt = .I64 }),
         .prev_lps = fd(7, .{ .Varint = .Simple }),
         .prev_epoch_capitalization = fd(8, .{ .Varint = .Simple }),
@@ -190,6 +174,7 @@ pub const ELFLoaderEffects = struct {
     text_off: u64 = 0,
     entry_pc: u64 = 0,
     calldests: ArrayList(u64),
+    @"error": i32 = 0,
 
     pub const _desc_table = .{
         .rodata = fd(1, .Bytes),
@@ -198,6 +183,7 @@ pub const ELFLoaderEffects = struct {
         .text_off = fd(5, .{ .Varint = .Simple }),
         .entry_pc = fd(6, .{ .Varint = .Simple }),
         .calldests = fd(7, .{ .PackedList = .{ .Varint = .Simple } }),
+        .@"error" = fd(8, .{ .Varint = .Simple }),
     };
 
     pub usingnamespace protobuf.MessageMixins(@This());
@@ -310,8 +296,6 @@ pub const InputDataRegion = struct {
 pub const VmContext = struct {
     heap_max: u64 = 0,
     rodata: ManagedString = .Empty,
-    rodata_text_section_offset: u64 = 0,
-    rodata_text_section_length: u64 = 0,
     r0: u64 = 0,
     r1: u64 = 0,
     r2: u64 = 0,
@@ -326,15 +310,12 @@ pub const VmContext = struct {
     r11: u64 = 0,
     entry_pc: u64 = 0,
     call_whitelist: ManagedString = .Empty,
-    tracing_enabled: bool = false,
     return_data: ?ReturnData = null,
     sbpf_version: u32 = 0,
 
     pub const _desc_table = .{
         .heap_max = fd(1, .{ .Varint = .Simple }),
         .rodata = fd(2, .Bytes),
-        .rodata_text_section_offset = fd(3, .{ .Varint = .Simple }),
-        .rodata_text_section_length = fd(4, .{ .Varint = .Simple }),
         .r0 = fd(6, .{ .Varint = .Simple }),
         .r1 = fd(7, .{ .Varint = .Simple }),
         .r2 = fd(8, .{ .Varint = .Simple }),
@@ -349,7 +330,6 @@ pub const VmContext = struct {
         .r11 = fd(17, .{ .Varint = .Simple }),
         .entry_pc = fd(20, .{ .Varint = .Simple }),
         .call_whitelist = fd(21, .Bytes),
-        .tracing_enabled = fd(22, .{ .Varint = .Simple }),
         .return_data = fd(23, .{ .SubMessage = {} }),
         .sbpf_version = fd(24, .{ .Varint = .Simple }),
     };
@@ -392,7 +372,6 @@ pub const SyscallEffects = struct {
     cu_avail: u64 = 0,
     heap: ManagedString = .Empty,
     stack: ManagedString = .Empty,
-    inputdata: ManagedString = .Empty,
     input_data_regions: ArrayList(InputDataRegion),
     frame_count: u64 = 0,
     log: ManagedString = .Empty,
@@ -416,7 +395,6 @@ pub const SyscallEffects = struct {
         .cu_avail = fd(3, .{ .Varint = .Simple }),
         .heap = fd(4, .Bytes),
         .stack = fd(5, .Bytes),
-        .inputdata = fd(6, .Bytes),
         .input_data_regions = fd(11, .{ .List = .{ .SubMessage = {} } }),
         .frame_count = fd(7, .{ .Varint = .Simple }),
         .log = fd(8, .Bytes),
@@ -664,15 +642,15 @@ pub const TxnContext = struct {
     tx: ?SanitizedTransaction = null,
     account_shared_data: ArrayList(AcctState),
     blockhash_queue: ArrayList(ManagedString),
-    epoch_ctx: ?EpochContext = null,
-    slot_ctx: ?SlotContext = null,
+    epoch_context: ?EpochContext = null,
+    slot_context: ?SlotContext = null,
 
     pub const _desc_table = .{
         .tx = fd(1, .{ .SubMessage = {} }),
         .account_shared_data = fd(2, .{ .List = .{ .SubMessage = {} } }),
         .blockhash_queue = fd(3, .{ .List = .Bytes }),
-        .epoch_ctx = fd(4, .{ .SubMessage = {} }),
-        .slot_ctx = fd(5, .{ .SubMessage = {} }),
+        .epoch_context = fd(4, .{ .SubMessage = {} }),
+        .slot_context = fd(5, .{ .SubMessage = {} }),
     };
 
     pub usingnamespace protobuf.MessageMixins(@This());

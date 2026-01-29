@@ -460,22 +460,21 @@ fn altBn128Operation(
             return out;
         },
         .pairing => {
-            // Agave does not check that the input length is a multiple of the
-            // pair size (192 bytes). That *would* make sense, however it turns out Agave
-            // performs a useless check,
-            // https://github.com/anza-xyz/solana-sdk/blob/8eef25b054c4e5ca6d8b879744456297a187db92/bn254/src/lib.rs#L321-L327
+            // Originally Agave did not check that the input length is a multiple
+            // of the pair size (192 bytes). They used `input.len().check_rem(192).is_none()`,
+            // which made little sense, as `check_rem` only returns `None` if the RHS is zero.
             //
-            // To the untrained eye this may seem like a check that `input.len()` is a multiple of
-            // the pairing size. You would be wrong! `check_rem` only returns `None`
-            // if the RHS is zero. The only way this condition will be true is if the
-            // `PAIRING_ELEMENT_LENGTH` constant were zero, which is impossible.
+            // This ended up sort of working, since we perform a truncating integer division
+            // in `pairingSyscall`, which ensures that the number of pairs read will always fit
+            // the input size and ignores the remaining bytes.
             //
-            // The "correct" behaviour ends up being to *not* check the length, instead we perform
-            // a truncating integer division in the pairing syscall implementation (ensuring that
-            // the number of pairs read will always fit input size), and simply ignore the remaining
-            // bytes.
+            // This is all fixed by the feature gate which enables us to perform the correct check.
             //
-            // if (input.len % 192 != 0) return error.InvalidLength;
+            // [fd] https://github.com/firedancer-io/firedancer/blob/d848e9b27a80cc344772521689671ef05de28653/src/ballet/bn254/fd_bn254.c#L227-L236
+            // [agave] https://github.com/anza-xyz/solana-sdk/blob/master/bn254/src/pairing.rs#L66-L83
+            if (feature_set.active(.fix_alt_bn128_pairing_length_check, slot)) {
+                if (input.len % 192 != 0) return error.InvalidLength;
+            }
 
             try bn254.pairingSyscall(out[0..32], input);
 
@@ -689,7 +688,7 @@ test "edwards curve group operations" {
     }
 
     var registers = sig.vm.interpreter.RegisterMap.initFill(0);
-    var memory_map = try MemoryMap.init(allocator, regions, .v3, .{});
+    var memory_map = try MemoryMap.init(allocator, regions, .v2, .{});
     defer memory_map.deinit(allocator);
 
     {
@@ -823,7 +822,7 @@ test "ristretto curve group operations" {
     }
 
     var registers = sig.vm.interpreter.RegisterMap.initFill(0);
-    var memory_map = try MemoryMap.init(allocator, regions, .v3, .{});
+    var memory_map = try MemoryMap.init(allocator, regions, .v2, .{});
     defer memory_map.deinit(allocator);
 
     {
@@ -933,7 +932,7 @@ test "multiscalar multiplication" {
             ristretto_points_addr,
         ),
         memory.Region.init(.mutable, &result_point, result_point_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     const compute_budget = sig.runtime.ComputeBudget.DEFAULT;
@@ -1034,7 +1033,7 @@ test "multiscalar multiplication large" {
             ristretto_points_addr,
         ),
         memory.Region.init(.mutable, &result_point, result_point_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -1163,7 +1162,7 @@ test "alt_bn128 add" {
     var memory_map = try MemoryMap.init(allocator, &.{
         memory.Region.init(.constant, input, input_addr),
         memory.Region.init(.mutable, &result_point, result_point_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     registers.set(.r1, 0); // ADD
@@ -1228,7 +1227,7 @@ test "alt_bn128 mul" {
     var memory_map = try MemoryMap.init(allocator, &.{
         memory.Region.init(.constant, input, input_addr),
         memory.Region.init(.mutable, &result_point, result_point_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     registers.set(.r1, 2); // MUL
@@ -1317,7 +1316,7 @@ test "alt_bn128 pairing" {
     var memory_map = try MemoryMap.init(allocator, &.{
         memory.Region.init(.constant, input, input_addr),
         memory.Region.init(.mutable, &result_point, result_point_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     registers.set(.r1, 3); // PAIRING
@@ -1381,7 +1380,7 @@ test "alt_bn128 g1 compress/decompress" {
         var memory_map = try MemoryMap.init(allocator, &.{
             memory.Region.init(.constant, entry, input_addr),
             memory.Region.init(.mutable, &buffer, result_point_addr),
-        }, .v3, .{});
+        }, .v2, .{});
         defer memory_map.deinit(allocator);
 
         {
@@ -1452,7 +1451,7 @@ test "alt_bn128 g2 compress/decompress" {
         var memory_map = try MemoryMap.init(allocator, &.{
             memory.Region.init(.constant, entry, input_addr),
             memory.Region.init(.mutable, &buffer, result_point_addr),
-        }, .v3, .{});
+        }, .v2, .{});
         defer memory_map.deinit(allocator);
 
         {
@@ -1522,7 +1521,7 @@ test "alt_bn128 compression failure cases" {
     var memory_map = try MemoryMap.init(allocator, &.{
         memory.Region.init(.constant, &entry, input_addr),
         memory.Region.init(.mutable, &buffer, result_point_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     // failure case: invalid data passed to decompress
@@ -1607,7 +1606,7 @@ test "alt_bn128 group op failure cases" {
     var memory_map = try MemoryMap.init(allocator, &.{
         memory.Region.init(.constant, &entry, input_addr),
         memory.Region.init(.mutable, &buffer, result_point_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     {
@@ -1669,7 +1668,7 @@ test "secp256k1_recover" {
         .init(.constant, &signature, signature_addr),
         .init(.constant, &invalid_signature, invalid_signature_addr),
         .init(.mutable, &result_point, result_point_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     var registers: sig.vm.interpreter.RegisterMap = .initFill(0);

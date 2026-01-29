@@ -10,7 +10,6 @@ const SyscallContext = pb.SyscallContext;
 const Pubkey = sig.core.Pubkey;
 const svm = sig.vm;
 const Executable = svm.Executable;
-const Config = svm.Config;
 const Vm = svm.Vm;
 const Registry = svm.Registry;
 const Instruction = svm.sbpf.Instruction;
@@ -64,17 +63,16 @@ fn executeVmTest(
     } else {
         try instr_context.accounts.append(.{
             .address = try instr_context.program_id.dupe(allocator),
-            .owner = protobuf.ManagedString.static(&(.{0} ** 32)),
+            .owner = protobuf.ManagedString.static(comptime &(.{0} ** 32)),
         });
     }
 
-    var feature_set = try allocator.create(sig.core.FeatureSet);
-    feature_set.* = try utils.createFeatureSet(instr_context);
+    var feature_set = try utils.loadFeatureSet(instr_context);
     var tc: sig.runtime.TransactionContext = undefined;
     try utils.createTransactionContext(
         allocator,
         instr_context,
-        .{ .feature_set = feature_set },
+        .{ .feature_set = &feature_set },
         &tc,
     );
     defer utils.deinitTransactionContext(allocator, tc);
@@ -82,10 +80,19 @@ fn executeVmTest(
     const sbpf_version: Version = switch (vm_context.sbpf_version) {
         1 => .v1,
         2 => .v2,
-        3 => .v3,
+        3 => @panic("there should be no sbpf v3 harnesses"),
         else => .v0,
     };
-    const direct_mapping = feature_set.active(.bpf_account_data_direct_mapping, slot);
+
+    var env = sig.vm.Environment.initV1(
+        tc.feature_set,
+        &tc.compute_budget,
+        tc.slot,
+        false,
+    );
+    env.config.maximum_version = sbpf_version;
+    env.loader.is_stubbed = true;
+    const config = env.config;
 
     if (instr_context.program_id.getSlice().len != Pubkey.SIZE) return error.OutOfBounds;
     const instr_info = try utils.createInstructionInfo(
@@ -101,13 +108,10 @@ fn executeVmTest(
 
     var ic = tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
 
-    const config: Config = .{
-        .minimum_version = .v0,
-        .maximum_version = sbpf_version,
-        .enable_stack_frame_gaps = !direct_mapping,
-        .aligned_memory_mapping = !direct_mapping,
-    };
-
+    const direct_mapping = tc.feature_set.active(
+        .account_data_direct_mapping,
+        slot,
+    );
     const stricter_abi_and_runtime_constraints = tc.feature_set.active(
         .stricter_abi_and_runtime_constraints,
         slot,
@@ -116,28 +120,18 @@ fn executeVmTest(
         .mask_out_rent_epoch_in_vm_serialization,
         slot,
     );
-    var parameter_bytes, var regions, const accounts_metadata = try serialize.serializeParameters(
+    var serialized = try serialize.serializeParameters(
         allocator,
         &ic,
         direct_mapping,
         stricter_abi_and_runtime_constraints,
         mask_out_rent_epoch_in_vm_serialization,
     );
-    defer {
-        parameter_bytes.deinit(allocator);
-        regions.deinit(allocator);
-    }
-    tc.serialized_accounts = accounts_metadata;
+    defer serialized.deinit(allocator);
+    tc.serialized_accounts = serialized.account_metas;
 
     const rodata = try allocator.dupe(u8, vm_context.rodata.getSlice());
     defer allocator.free(rodata);
-
-    var syscall_registry = sig.vm.Environment.initV1Loader(
-        feature_set,
-        slot,
-        false,
-    );
-    syscall_registry.is_stubbed = true;
 
     var function_registry: Registry = .{};
 
@@ -172,7 +166,7 @@ fn executeVmTest(
         .instructions = std.mem.bytesAsSlice(Instruction, rodata),
         .bytes = rodata,
         .version = sbpf_version,
-        .config = config,
+        .config = env.config,
         .function_registry = function_registry,
         .entry_pc = entry_pc,
         .ro_section = .{ .borrowed = .{
@@ -187,7 +181,7 @@ fn executeVmTest(
             memory.RODATA_START,
     };
 
-    const verify_result = executable.verify(&syscall_registry);
+    const verify_result = executable.verify(&env.loader);
     if (std.meta.isError(verify_result)) {
         return .{
             .@"error" = -2,
@@ -222,7 +216,7 @@ fn executeVmTest(
         ),
         memory.Region.init(.mutable, heap, memory.HEAP_START),
     });
-    try input_memory_regions.appendSlice(allocator, regions.items);
+    try input_memory_regions.appendSlice(allocator, serialized.regions.items);
 
     const map = try memory.MemoryMap.init(
         allocator,
@@ -236,19 +230,20 @@ fn executeVmTest(
         allocator,
         &executable,
         map,
-        &syscall_registry,
+        &env.loader,
         STACK_SIZE,
+        0,
         &tc,
     );
     defer vm.deinit();
 
-    // r1, r10, pc are initialized by Vm.init, modifying them will most like break execution.
+    // r1, r2, r10, pc are initialized by Vm.init, modifying them will most like break execution.
     // In vm_syscalls we allow override them (especially r1) because that simulates the fact
     // that a program partially executed before reaching the syscall.
     // Here we want to test what happens when the program starts from the beginning.
-    // [agave] https://github.com/firedancer-io/solfuzz-agave/blob/0b8a7971055d822df3f602c287c368400a784c15/src/vm_interp.rs#L357-L362
+    // [agave] https://github.com/firedancer-io/solfuzz-agave/blob/agave-v3.1.0-beta.0/src/vm_interp.rs#L354-L365
     vm.registers.set(.r0, vm_context.r0);
-    // vm.registers.set(.r1, vm_context.r1);
+    vm.registers.set(.r1, sig.vm.memory.INPUT_START);
     vm.registers.set(.r2, vm_context.r2);
     vm.registers.set(.r3, vm_context.r3);
     vm.registers.set(.r4, vm_context.r4);

@@ -22,12 +22,14 @@ pub fn poseidon(
 ) Error!void {
     const parameters = std.meta.intToEnum(Parameters, registers.get(.r1)) catch
         return error.InvalidParameters;
-    std.debug.assert(parameters == .Bn254X5);
     const endianness = std.meta.intToEnum(std.builtin.Endian, registers.get(.r2)) catch
         return error.InvalidEndianness;
     const addr = registers.get(.r3);
     const len = registers.get(.r4);
     const result_addr = registers.get(.r5);
+
+    // TODO: BLS12-381 based poseidon construction, whenever that will be a SIMD
+    std.debug.assert(parameters == .Bn254X5);
 
     if (len > 12) {
         try tc.log("Poseidon hashing {d} sequences is not supported", .{len});
@@ -73,12 +75,22 @@ pub fn poseidon(
     // Agave handles poseidon errors in an annoying way.
     // The feature SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES simplifies this handling.
     // It is acitvated on all clusters, we still check for activation here and panic if it is not active.
+    const simplified = tc.feature_set.active(.simplify_alt_bn128_syscall_error_codes, tc.slot);
+    const enforce_padding = tc.feature_set.active(.poseidon_enforce_padding, tc.slot);
+
     // [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/mod.rs#L1815-L1825
     var hasher = phash.Hasher.init(endianness);
     for (slices.constSlice()) |slice| {
         // Makes sure the input is a valid size, soft-error if it isn't.
-        // [fd] https://github.com/firedancer-io/firedancer/blob/211dfccc1d84a50191a487a6abffd962f7954179/src/ballet/bn254/fd_poseidon.c#L101-L104
+        // [fd] https://github.com/firedancer-io/firedancer/blob/d848e9b27a80cc344772521689671ef05de28653/src/ballet/bn254/fd_poseidon.c#L105-L108
         if (slice.len == 0 or slice.len > 32) {
+            registers.set(.r0, 1);
+            return;
+        }
+        // [fd] https://github.com/firedancer-io/firedancer/blob/d848e9b27a80cc344772521689671ef05de28653/src/ballet/bn254/fd_poseidon.c#L102-L104
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/syscalls/src/lib.rs#L1789
+        // SIMD-367 enforces the input length to be 32 bytes.
+        if (enforce_padding and slice.len != 32) {
             registers.set(.r0, 1);
             return;
         }
@@ -91,7 +103,7 @@ pub fn poseidon(
         }
 
         hasher.append(&buffer) catch {
-            if (tc.feature_set.active(.simplify_alt_bn128_syscall_error_codes, tc.slot)) {
+            if (simplified) {
                 registers.set(.r0, 1);
                 return;
             } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
@@ -189,7 +201,7 @@ test poseidon {
             .sol_log_,
             .sol_panic_,
         },
-        .{ 0, 48526 },
+        .{ 0, 48583 },
     );
 }
 
@@ -209,6 +221,47 @@ test "poseidon len 0" {
         },
         null,
         .{ .compute_meter = total_compute },
+    );
+}
+
+test "poseidon element with padding" {
+    const budget = sig.runtime.ComputeBudget.DEFAULT;
+    const total_compute = budget.poseidonCost(1);
+
+    var buffer: [32]u8 = undefined;
+    const output_addr = 0x100000000;
+
+    // SIMD-367 enforces the input length to be 32 bytes.
+    // Make sure we error if that isn't the case.
+    const element: [20]u8 = @splat(0);
+    const element_addr = 0x200000000;
+
+    const slice: memory.VmSlice = .{
+        .ptr = element_addr,
+        .len = element.len,
+    };
+
+    const input_addr = 0x300000000;
+
+    try sig.vm.tests.testSyscall(
+        poseidon,
+        &.{
+            memory.Region.init(.mutable, &buffer, output_addr),
+            memory.Region.init(.constant, &element, element_addr),
+            memory.Region.init(.constant, std.mem.asBytes(&slice), input_addr),
+        },
+        &.{
+            .{ .{ 0, 0, input_addr, 1, output_addr }, 1 }, // fails because `input` isn't 32 bytes
+            .{ .{ 0, 0, 0, 0, 0 }, error.ComputationalBudgetExceeded },
+        },
+        null,
+        .{
+            .compute_meter = total_compute,
+            .feature_set = &.{
+                .{ .feature = .poseidon_enforce_padding },
+                .{ .feature = .simplify_alt_bn128_syscall_error_codes },
+            },
+        },
     );
 }
 

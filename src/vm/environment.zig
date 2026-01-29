@@ -1,3 +1,4 @@
+const std = @import("std");
 const sig = @import("../sig.zig");
 const tracy = @import("tracy");
 
@@ -22,7 +23,6 @@ pub const Environment = struct {
         feature_set: *const FeatureSet,
         compute_budget: *const ComputeBudget,
         slot: sig.core.Slot,
-        debugging_features: bool,
         reject_deployment_of_broken_elfs: bool,
     ) Environment {
         const zone = tracy.Zone.init(@src(), .{ .name = "Environment.initV1" });
@@ -38,7 +38,6 @@ pub const Environment = struct {
                 feature_set,
                 compute_budget,
                 slot,
-                debugging_features,
                 reject_deployment_of_broken_elfs,
             ),
         };
@@ -48,38 +47,36 @@ pub const Environment = struct {
         feature_set: *const FeatureSet,
         compute_budget: *const ComputeBudget,
         slot: sig.core.Slot,
-        debugging_features: bool,
         reject_deployment_of_broken_elfs: bool,
     ) Config {
-        const min_sbpf_version: SbpfVersion = if (!feature_set.active(
-            .disable_sbpf_v0_execution,
-            slot,
-        ) or feature_set.active(.reenable_sbpf_v0_execution, slot)) .v0 else .v3;
+        const min_sbpf_version: SbpfVersion =
+            if (!feature_set.active(.disable_sbpf_v0_execution, slot) or
+            feature_set.active(.reenable_sbpf_v0_execution, slot))
+                .v0
+            else
+                .v3;
 
-        const max_sbpf_version: SbpfVersion = if (feature_set.active(
-            .enable_sbpf_v3_deployment_and_execution,
-            slot,
-        )) .v3 else if (feature_set.active(
-            .enable_sbpf_v2_deployment_and_execution,
-            slot,
-        )) .v2 else if (feature_set.active(
-            .enable_sbpf_v1_deployment_and_execution,
-            slot,
-        )) .v1 else .v0;
+        const max_sbpf_version: SbpfVersion =
+            if (feature_set.active(.enable_sbpf_v3_deployment_and_execution, slot))
+                .v3
+            else if (feature_set.active(.enable_sbpf_v2_deployment_and_execution, slot))
+                .v2
+            else if (feature_set.active(.enable_sbpf_v1_deployment_and_execution, slot))
+                .v1
+            else
+                .v0;
+        std.debug.assert(@intFromEnum(min_sbpf_version) <= @intFromEnum(max_sbpf_version));
 
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/syscalls/src/lib.rs#L319
         return .{
             .max_call_depth = compute_budget.max_call_depth,
             .stack_frame_size = compute_budget.stack_frame_size,
-            .enable_stack_frame_gaps = !feature_set.active(
-                .bpf_account_data_direct_mapping,
-                slot,
-            ),
+            .enable_stack_frame_gaps = true,
             .enable_instruction_meter = true,
-            .enable_symbol_and_section_labels = debugging_features,
             .reject_broken_elfs = reject_deployment_of_broken_elfs,
             .optimize_rodata = false,
             .aligned_memory_mapping = !feature_set.active(
-                .bpf_account_data_direct_mapping,
+                .stricter_abi_and_runtime_constraints,
                 slot,
             ),
             .minimum_version = min_sbpf_version,

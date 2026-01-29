@@ -157,7 +157,7 @@ fn processVerifyProof(
     };
 
     // create context state if additional accounts are provided with the instruction
-    if (ic.ixn_info.account_metas.items.len > accessed_accounts) {
+    if (ic.ixn_info.account_metas.items.len >= accessed_accounts + 2) {
         const context_authority_key = blk: {
             const context_state_authority = try ic.borrowInstructionAccount(accessed_accounts + 1);
             defer context_state_authority.release();
@@ -232,6 +232,10 @@ fn processCloseContextState(
 
     const proof_context_account = try ic.borrowInstructionAccount(0);
     defer proof_context_account.release();
+    if (!proof_context_account.account.owner.equals(&zk_elgamal.ID)) {
+        return InstructionError.InvalidAccountOwner;
+    }
+
     const proof_context_data = proof_context_account.constAccountData();
     const proof_context_meta = sig.bincode.readFromSlice(
         allocator,
@@ -240,6 +244,9 @@ fn processCloseContextState(
         .{},
     ) catch return InstructionError.InvalidAccountData;
     defer sig.bincode.free(allocator, proof_context_meta);
+    if (proof_context_meta.proof_type == .uninitialized) {
+        return InstructionError.UninitializedAccount;
+    }
 
     const expected_owner_pubkey = proof_context_meta.context_state_authority;
     if (!expected_owner_pubkey.equals(&owner_pubkey)) {

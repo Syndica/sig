@@ -88,7 +88,7 @@ pub const InstructionInfo = struct {
         index: u16,
     ) InstructionError!bool {
         const account_meta = self.getAccountMetaAtIndex(index) orelse
-            return InstructionError.NotEnoughAccountKeys;
+            return InstructionError.MissingAccount;
         return account_meta.is_signer;
     }
 
@@ -156,6 +156,6 @@ pub const InstructionInfo = struct {
         minimum_accounts: u16,
     ) InstructionError!void {
         if (self.account_metas.items.len < minimum_accounts)
-            return InstructionError.NotEnoughAccountKeys;
+            return InstructionError.MissingAccount;
     }
 };

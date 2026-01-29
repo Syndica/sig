@@ -28,10 +28,11 @@ pub const SigVerifyOption = enum {
 ///     4. Ensure that the compute budget program is executed succesfully
 /// Returns the message hash and the compute budget instruction details on success.
 ///
-/// [agave] https://github.com/firedancer-io/agave/blob/52daf1a021b716bf3ac4f20f9f301f20077f4d54/runtime/src/bank.rs#L4777
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/runtime/src/bank.rs#L4694
 pub fn preprocessTransaction(
     txn: Transaction,
     sig_verify: SigVerifyOption,
+    static_instruction_limit: bool,
 ) PreprocessTransactionResult {
     var zone = tracy.Zone.init(@src(), .{ .name = "preprocessTransaction" });
     defer zone.deinit();
@@ -43,6 +44,11 @@ pub fn preprocessTransaction(
     };
 
     if (sig_verify == .run_sig_verify) {
+        if (static_instruction_limit and
+            txn.msg.instructions.len > sig.runtime.transaction_context.MAX_INSTRUCTION_TRACE_LENGTH)
+        {
+            return .{ .err = .SanitizeFailure };
+        }
         txn.verifySignatures(msg_bytes.constSlice()) catch |err| {
             return switch (err) {
                 error.SignatureVerificationFailed => .{ .err = .SignatureFailure },
@@ -75,8 +81,15 @@ test preprocessTransaction {
     { // Verify succeeds
         const txn = try Transaction.initRandom(allocator, random, null);
         defer txn.deinit(allocator);
-        _ = preprocessTransaction(txn, .run_sig_verify).ok;
-        _ = preprocessTransaction(txn, .skip_sig_verify).ok;
+
+        try std.testing.expectEqual(
+            .ok,
+            std.meta.activeTag(preprocessTransaction(txn, .run_sig_verify, false)),
+        );
+        try std.testing.expectEqual(
+            .ok,
+            std.meta.activeTag(preprocessTransaction(txn, .skip_sig_verify, false)),
+        );
     }
 
     { // Transaction serialize fails
@@ -102,7 +115,7 @@ test preprocessTransaction {
             },
         };
 
-        const err = preprocessTransaction(txn, .skip_sig_verify).err;
+        const err = preprocessTransaction(txn, .skip_sig_verify, false).err;
         try std.testing.expectEqual(TransactionError.SanitizeFailure, err);
     }
 
@@ -121,7 +134,7 @@ test preprocessTransaction {
             },
         };
 
-        const err = preprocessTransaction(txn, .skip_sig_verify).err;
+        const err = preprocessTransaction(txn, .skip_sig_verify, false).err;
         try std.testing.expectEqual(TransactionError.SanitizeFailure, err);
     }
 
@@ -147,7 +160,7 @@ test preprocessTransaction {
         };
         defer for (txn.msg.instructions) |instr| allocator.free(instr.data);
 
-        _, const details = preprocessTransaction(txn, .skip_sig_verify).ok;
+        _, const details = preprocessTransaction(txn, .skip_sig_verify, false).ok;
         const compute_limits = compute_budget.sanitize(details, &.ALL_DISABLED, 0).ok;
         try std.testing.expectEqual(1_000_000, compute_limits.compute_unit_limit);
     }
@@ -179,7 +192,36 @@ test preprocessTransaction {
         };
         defer for (txn.msg.instructions) |instr| allocator.free(instr.data);
 
-        const err = preprocessTransaction(txn, .skip_sig_verify).err;
+        const err = preprocessTransaction(txn, .skip_sig_verify, false).err;
         try std.testing.expectEqual(TransactionError{ .DuplicateInstruction = 1 }, err);
+    }
+
+    { // SIMD-160, message with more instructions than the limit.
+
+        const inst = try compute_budget.testCreateComputeBudgetInstruction(
+            allocator,
+            1,
+            .{ .set_compute_unit_limit = 1_000_000 },
+        );
+        defer allocator.free(inst.data);
+
+        const instructions: [100]sig.core.transaction.Instruction = @splat(inst);
+
+        const txn = Transaction{
+            .signatures = &.{Signature.ZEROES},
+            .version = .legacy,
+            .msg = .{
+                .signature_count = 1,
+                .readonly_signed_count = 0,
+                .readonly_unsigned_count = 1,
+                .account_keys = &.{ Pubkey.ZEROES, compute_budget.ID },
+                .recent_blockhash = Hash.ZEROES,
+                .instructions = &instructions,
+                .address_lookups = &.{},
+            },
+        };
+
+        const err = preprocessTransaction(txn, .run_sig_verify, true).err;
+        try std.testing.expectEqual(.SanitizeFailure, err);
     }
 }

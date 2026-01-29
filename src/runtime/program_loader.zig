@@ -12,8 +12,6 @@ const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 const Pubkey = sig.core.Pubkey;
 const AccountSharedData = sig.runtime.AccountSharedData;
 
-const Executable = sig.vm.Executable;
-
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 const assert = std.debug.assert;
 
@@ -61,7 +59,7 @@ pub const ProgramMap = struct {
 pub const LoadedProgram = union(enum(u8)) {
     failed,
     loaded: struct {
-        executable: Executable,
+        executable: sig.vm.Executable,
         source: []const u8,
     },
 
@@ -126,7 +124,7 @@ fn loadProgram(
 
     if (maybe_deployment_slot) |ds| if (ds >= slot) return .failed;
 
-    var executable = Executable.fromBytes(
+    const executable = sig.vm.elf.load(
         allocator,
         executable_bytes,
         &environment.loader,
@@ -137,13 +135,11 @@ fn loadProgram(
         executable.deinit(allocator);
         return .failed;
     };
-
-    const ret = LoadedProgram{ .loaded = .{
+    defer executable_bytes = &.{}; // to avoid freeing
+    return .{ .loaded = .{
         .executable = executable,
         .source = executable_bytes,
     } };
-    executable_bytes = &.{}; // to avoid freeing
-    return ret;
 }
 
 /// returned bytes are allocated with the passed allocator and owned by the caller
