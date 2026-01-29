@@ -674,9 +674,10 @@ test trackNewSlots {
     defer slot_tracker.deinit(allocator);
     slot_tracker.get(0).?.state.hash.set(.ZEROES);
 
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = undefined,
-        .slot_leaders = &.{
+    var leader_schedule = sig.core.magic_leader_schedule.LeaderSchedule{
+        .start = 0,
+        .end = 6,
+        .leaders = &.{
             Pubkey.initRandom(rng.random()),
             Pubkey.initRandom(rng.random()),
             Pubkey.initRandom(rng.random()),
@@ -695,14 +696,10 @@ test trackNewSlots {
     );
     defer epoch_tracker.deinit(allocator);
 
-    var lsc = sig.core.leader_schedule.LeaderScheduleCache.init(allocator, .INIT);
-    defer {
-        var map = lsc.leader_schedules.write();
-        map.mut().deinit();
-        map.unlock();
-    }
-    try lsc.put(0, leader_schedule);
-    const slot_leaders = lsc.slotLeaders();
+    const slot_leaders = SlotLeaders.init(
+        &leader_schedule,
+        sig.core.magic_leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     // slot tracker should start with only 0
     try expectSlotTracker(&slot_tracker, leader_schedule, &.{.{ 0, 0 }}, &.{ 1, 2, 3, 4, 5, 6 });
@@ -800,7 +797,7 @@ test trackNewSlots {
 
 fn expectSlotTracker(
     slot_tracker: *const SlotTracker,
-    leader_schedule: sig.core.leader_schedule.LeaderSchedule,
+    leader_schedule: sig.core.magic_leader_schedule.LeaderSchedule,
     included_slots: []const [2]Slot,
     excluded_slots: []const Slot,
 ) !void {
@@ -809,7 +806,7 @@ fn expectSlotTracker(
         const slot_info = slot_tracker.get(slot) orelse return error.Fail;
         try std.testing.expectEqual(parent, slot_info.constants.parent_slot);
         if (slot != 0) try std.testing.expectEqual(
-            leader_schedule.slot_leaders[slot],
+            leader_schedule.leaders[slot],
             slot_info.constants.collector_id,
         );
     }
