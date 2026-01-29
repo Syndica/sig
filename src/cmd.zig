@@ -226,7 +226,7 @@ pub fn main() !void {
         },
         .agave_migration_tool => |params| {
             var app_base = try AppBase.init(gpa, current_config);
-            errdefer {
+            defer {
                 app_base.shutdown();
                 app_base.deinit();
             }
