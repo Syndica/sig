@@ -58,7 +58,7 @@ pub const Options = struct {
     is_trusted: bool = false,
     /// Necessary for shred recovery.
     // slot_leaders: ?SlotLeaders = null,
-    leader_schedules: ?*const sig.core.magic_leader_schedule.LeaderSchedules = null,
+    leader_schedules: ?*const sig.core.leader_schedule.LeaderSchedules = null,
     /// Send recovered shreds here if provided.
     retransmit_sender: ?RetransmitSender = null,
     /// Records all shreds.
@@ -638,7 +638,7 @@ fn checkInsertDataShred(
     merkle_root_validator: MerkleRootValidator,
     write_batch: *WriteBatch,
     is_trusted: bool,
-    leader_schedule: ?*const sig.core.magic_leader_schedule.LeaderSchedules,
+    leader_schedule: ?*const sig.core.leader_schedule.LeaderSchedules,
     shred_source: ShredSource,
 ) !ArrayList(CompletedDataSetInfo) {
     const slot = shred.common.slot;
@@ -761,7 +761,7 @@ fn shouldInsertDataShred(
     slot_meta: *const SlotMeta,
     shred_store: ShredWorkingStore,
     max_root: Slot,
-    leader_schedule: ?*const sig.core.magic_leader_schedule.LeaderSchedules,
+    leader_schedule: ?*const sig.core.leader_schedule.LeaderSchedules,
     shred_source: ShredSource,
     duplicate_shreds: *ArrayList(PossibleDuplicateShred),
 ) !bool {
@@ -1570,7 +1570,7 @@ test "recovery" {
     const leaders = try allocator.alloc(Pubkey, max_slot - min_slot + 1);
     defer allocator.free(leaders);
     for (leaders) |*leader| leader.* = .parse("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn");
-    const leader_schedule = sig.core.magic_leader_schedule.LeaderSchedules{
+    const leader_schedule = sig.core.leader_schedule.LeaderSchedules{
         .curr = .{
             .leaders = leaders,
             .start = min_slot,

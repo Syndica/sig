@@ -16,7 +16,7 @@ const GenesisConfig = sig.core.GenesisConfig;
 const GeyserWriter = sig.geyser.GeyserWriter;
 const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
-const LeaderSchedule = sig.core.magic_leader_schedule.LeaderSchedule;
+const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SnapshotFiles = sig.accounts_db.snapshot.SnapshotFiles;
@@ -1707,7 +1707,7 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
             defer response.deinit();
 
             const rpc_schedule = (try response.result()).value;
-            break :blk try sig.core.magic_leader_schedule.computeFromMap(
+            break :blk try sig.core.leader_schedule.computeFromMap(
                 allocator,
                 &rpc_schedule,
             );
@@ -2435,7 +2435,7 @@ pub const RpcLeaderScheduleService = struct {
         const response = try self.rpc_client.getLeaderSchedule(.{ .slot = slot });
         defer response.deinit();
         const rpc_schedule = (try response.result()).value;
-        return try sig.core.magic_leader_schedule.computeFromMap(
+        return try sig.core.leader_schedule.computeFromMap(
             self.allocator,
             &rpc_schedule,
         );

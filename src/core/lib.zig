@@ -22,7 +22,6 @@ pub const status_cache = @import("status_cache.zig");
 pub const time = @import("time.zig");
 pub const transaction = @import("transaction.zig");
 pub const epoch_tracker = @import("epoch_tracker.zig");
-pub const magic_leader_schedule = @import("magic_leader_schedule.zig");
 
 /// TODO: Change EpochStakes to use EpochStakes(.stake) everywhere except in the `epoch_stakes` field
 /// of `BankFields` for serialization purposes. When initialising an epoch stakes for production we

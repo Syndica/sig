@@ -13,8 +13,8 @@ const EpochStakes = sig.core.EpochStakes;
 const FeatureSet = sig.core.features.Set;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
-const LeaderSchedules = sig.core.magic_leader_schedule.LeaderSchedules;
-const LeaderSchedule = sig.core.magic_leader_schedule.LeaderSchedule;
+const LeaderSchedules = sig.core.leader_schedule.LeaderSchedules;
+const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 
 pub const Cluster = struct {
     /// genesis time, used for computed clock.
