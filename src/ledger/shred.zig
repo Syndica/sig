@@ -676,8 +676,8 @@ fn calculateMerkleRoot(start_index: usize, start_node: Hash, proof: MerkleProofE
     return node;
 }
 
-const MERKLE_HASH_PREFIX_LEAF: *const [26]u8 = "\x00SOLANA_MERKLE_SHREDS_LEAF";
-const MERKLE_HASH_PREFIX_NODE: *const [26]u8 = "\x01SOLANA_MERKLE_SHREDS_NODE";
+pub const MERKLE_HASH_PREFIX_LEAF: *const [26]u8 = "\x00SOLANA_MERKLE_SHREDS_LEAF";
+pub const MERKLE_HASH_PREFIX_NODE: *const [26]u8 = "\x01SOLANA_MERKLE_SHREDS_NODE";
 
 /// agave: make_merkle_tree
 pub fn makeMerkleTree(nodes: *std.ArrayList(Hash)) !void {

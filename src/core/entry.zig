@@ -69,9 +69,7 @@ pub fn verifyTickHashCount(
     hashes_per_tick: u64,
 ) bool {
     // When hashes_per_tick is 0, hashing is disabled.
-    if (hashes_per_tick == 0) {
-        return true;
-    }
+    if (hashes_per_tick == 0) return true;
 
     for (entries) |entry| {
         tick_hash_count.* = tick_hash_count.* +| entry.num_hashes;
@@ -92,18 +90,7 @@ pub fn verifyTickHashCount(
 }
 
 /// Simple PoH validation that validates the hash of every entry in sequence.
-pub fn verifyPoh(
-    entries: []const Entry,
-    allocator: Allocator,
-    initial_hash: Hash,
-    /// Items you may include to optimize this function.
-    optional: struct {
-        /// Recycle a list from a prior execution to avoid unnecessary allocations.
-        preallocated_nodes: ?*std.ArrayListUnmanaged(Hash) = null,
-        /// return error.Exit when set to true by another thread.
-        exit: ?*const std.atomic.Value(bool) = null,
-    },
-) (Allocator.Error || error{Exit})!bool {
+pub fn verifyPoh(entries: []const Entry, seed: Hash) bool {
     const zone = tracy.Zone.init(@src(), .{ .name = "verifyPoh" });
     defer zone.deinit();
 
@@ -111,93 +98,82 @@ pub fn verifyPoh(
     for (entries) |entry| total_entry_hashes += entry.num_hashes;
     zone.value(total_entry_hashes);
 
-    var current_hash = initial_hash;
-
+    var current_hash = seed;
     for (entries) |entry| {
-        if (optional.exit) |exit| if (exit.load(.monotonic)) return error.Exit;
         if (entry.num_hashes == 0) continue;
 
-        for (1..entry.num_hashes) |_| {
-            current_hash = Hash.init(&current_hash.data);
-        }
-
+        const count = (entry.num_hashes - 1) + @intFromBool(entry.transactions.len == 0);
+        if (count != 0) Hash.hashRepeated(&current_hash, &current_hash, count);
         if (entry.transactions.len > 0) {
-            const mixin = try hashTransactions(
-                allocator,
-                optional.preallocated_nodes,
-                entry.transactions,
-            );
+            const mixin = hashTransactions(entry.transactions);
             current_hash = current_hash.extend(&mixin.data);
-        } else current_hash = Hash.init(&current_hash.data);
-
+        }
         if (!current_hash.eql(entry.hash)) return false;
     }
 
     return true;
 }
 
-/// Hash a group of transactions as a merkle tree and return the root node.
-///
-/// This is typically used to get an Entry's hash for PoH.
-///
-/// Optionally accepts a pointer to a list of hashes for reuse across calls to
-/// minimize the number of allocations when hashing large numbers of entries.
+const LEAF = sig.ledger.shred.MERKLE_HASH_PREFIX_LEAF[0..1];
+const NODE = sig.ledger.shred.MERKLE_HASH_PREFIX_NODE[0..1];
+
+const BinaryMerkleTree = struct {
+    leaves: u64,
+    nodes: [63]Hash,
+
+    /// Appends a hash to the binary merkle tree.
+    fn append(s: *BinaryMerkleTree, new: *const Hash) void {
+        var tmp = new.*;
+        var layer: std.math.Log2Int(u64) = 0;
+        var cursor = s.leaves + 1;
+        while (cursor & 1 == 0) {
+            tmp = Hash.initMany(&.{ NODE, &s.nodes[layer].data, &tmp.data });
+            layer += 1;
+            cursor >>= 1;
+        }
+        s.nodes[layer] = tmp;
+        s.leaves += 1;
+    }
+
+    /// `append` *MUST* have been invoked at least once before calling finish.
+    fn finish(s: *BinaryMerkleTree) Hash {
+        std.debug.assert(s.leaves > 0);
+        if (!std.math.isPowerOfTwo(s.leaves)) {
+            var layer: std.math.Log2Int(u64) = @intCast(@ctz(s.leaves));
+            var count = s.leaves >> layer;
+            var root = s.nodes[layer];
+            while (count > 1) {
+                const select = if (count & 1 != 0) &root else &s.nodes[layer];
+                root = Hash.initMany(&[_][]const u8{ NODE, &select.data, &root.data });
+                layer += 1;
+                count = (count + 1) / 2;
+            }
+            return root;
+        } else {
+            const depth = if (s.leaves <= 1) s.leaves else (63 - @clz(s.leaves - 1) + 2);
+            return s.nodes[depth - 1];
+        }
+    }
+};
+
+/// Computes the merkle root of a group of transactions.
 ///
 /// Based on these agave functions for conformance:
 /// - [hash_transactions](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/entry/src/entry.rs#L215)
 /// - [MerkleTree::new](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/merkle-tree/src/merkle_tree.rs#L98)
-pub fn hashTransactions(
-    allocator: std.mem.Allocator,
-    preallocated_nodes: ?*std.ArrayListUnmanaged(Hash),
-    transactions: []const Transaction,
-) Allocator.Error!Hash {
-    const LEAF_PREFIX: []const u8 = &.{0};
-    const INTERMEDIATE_PREFIX: []const u8 = &.{1};
-
-    var num_signatures: usize = 0;
+///
+/// [agave](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/entry/src/entry.rs#L215)
+pub fn hashTransactions(transactions: []const Transaction) Hash {
+    var num_signatures: u64 = 0;
     for (transactions) |tx| num_signatures += tx.signatures.len;
-    if (num_signatures == 0) return Hash.ZEROES;
+    if (num_signatures == 0) return .ZEROES;
 
-    var owned_nodes = std.ArrayListUnmanaged(Hash){};
-    defer owned_nodes.deinit(allocator);
-    const nodes = if (preallocated_nodes) |pn| pn else &owned_nodes;
-    const capacity = std.math.log2(num_signatures) + 2 * num_signatures + 1;
-    nodes.clearRetainingCapacity();
-    try nodes.ensureTotalCapacity(allocator, capacity);
-
-    for (transactions) |tx| for (tx.signatures) |signature| {
-        const hash = Hash.initMany(&.{ LEAF_PREFIX, &signature.toBytes() });
-        nodes.appendAssumeCapacity(hash);
+    var state: BinaryMerkleTree = .{ .leaves = 0, .nodes = undefined };
+    for (transactions) |txn| for (txn.signatures) |signature| {
+        const node = Hash.initMany(&.{ LEAF, &signature.toBytes() });
+        state.append(&node);
     };
-
-    var level_len = nextLevelLen(num_signatures);
-    var level_start = num_signatures;
-    var prev_level_len = num_signatures;
-    var prev_level_start: usize = 0;
-    while (level_len > 0) {
-        for (0..level_len) |i| {
-            const prev_level_idx = 2 * i;
-            const lsib = &nodes.items[prev_level_start + prev_level_idx];
-            const rsib = if (prev_level_idx + 1 < prev_level_len)
-                &nodes.items[prev_level_start + prev_level_idx + 1]
-            else
-                // Duplicate last entry if the level length is odd
-                &nodes.items[prev_level_start + prev_level_idx];
-
-            const hash = Hash.initMany(&.{ INTERMEDIATE_PREFIX, &lsib.data, &rsib.data });
-            nodes.appendAssumeCapacity(hash);
-        }
-        prev_level_start = level_start;
-        prev_level_len = level_len;
-        level_start += level_len;
-        level_len = nextLevelLen(level_len);
-    }
-
-    return nodes.getLast();
-}
-
-fn nextLevelLen(level_len: usize) usize {
-    return if (level_len == 1) 0 else (level_len + 1) / 2;
+    return state.finish();
 }
 
 test "Entry serialization and deserialization" {
@@ -314,13 +290,13 @@ test hashTransactions {
 
     try std.testing.expectEqual(
         Hash.parse("2Gd4Mp8gCqSNCbmZXZVhrEo5A9qLM9BrmiWwzvvsLH4A"),
-        hashTransactions(std.testing.allocator, null, &transactions),
+        hashTransactions(&transactions),
     );
 
     std.mem.swap(Transaction, &transactions[0], &transactions[1]);
 
     try std.testing.expectEqual(
         Hash.parse("4yK3bxwdLmPQjDiLRH1XYZeYjXhuTmf8HUTYXMwwTcrJ"),
-        hashTransactions(std.testing.allocator, null, &transactions),
+        hashTransactions(&transactions),
     );
 }
