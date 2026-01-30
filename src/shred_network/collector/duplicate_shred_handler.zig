@@ -13,7 +13,7 @@ const Slot = sig.core.Slot;
 
 const Logger = sig.trace.Logger("duplicate_shred_handler");
 
-pub const DUPLICATE_SHRED_HEADER_SIZE: u64 = 63;
+pub const DUPLICATE_SHRED_HEADER_SIZE: usize = 63;
 pub const DUPLICATE_SHRED_MAX_PAYLOAD_SIZE: u16 = 512;
 
 const GossipData = sig.gossip.data.GossipData;
