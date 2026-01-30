@@ -355,7 +355,7 @@ fn insertFromSnapshotArchive(
     defer account_data_buf.deinit(allocator);
 
     while (try tar_iter.next()) |tar_file| {
-        if (tar_file.kind != .file) continue;
+        if (tar_file.kind != .file and tar_file.kind != .sym_link) continue;
 
         // Read /version
         if (std.mem.eql(u8, tar_file.name, "version")) {
