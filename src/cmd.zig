@@ -180,6 +180,7 @@ pub fn main() !void {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
+            current_config.genesis_file_path = params.genesis_file_path;
             current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
             current_config.shred_network.log_finished_slots = params.repair.log_finished_slots;
             current_config.turbine.overwrite_stake_for_testing =
@@ -976,6 +977,7 @@ const Cmd = struct {
         gossip_base: GossipArgumentsCommon,
         gossip_node: GossipArgumentsNode,
         repair: RepairArgumentsBase,
+        genesis_file_path: ?[]const u8,
         /// TODO: Remove when no longer needed
         overwrite_stake_for_testing: bool,
         no_retransmit: bool,
@@ -1003,6 +1005,7 @@ const Cmd = struct {
                 .gossip_base = GossipArgumentsCommon.cmd_info,
                 .gossip_node = GossipArgumentsNode.cmd_info,
                 .repair = RepairArgumentsBase.cmd_info,
+                .genesis_file_path = genesis_file_path_arg,
                 .overwrite_stake_for_testing = .{
                     .kind = .named,
                     .name_override = null,
