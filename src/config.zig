@@ -15,6 +15,7 @@ pub const Cmd = struct {
 
     test_transaction_sender: TestTransactionSender = .{},
 
+    validator_dir: []const u8 = sig.VALIDATOR_DIR,
     max_shreds: u64 = 5_000_000,
     leader_schedule_path: ?[]const u8 = null,
     genesis_file_path: ?[]const u8 = null,
