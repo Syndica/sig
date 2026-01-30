@@ -102,6 +102,7 @@ pub fn main() !void {
     current_config.metrics_port = cmd.metrics_port;
     current_config.log_file = cmd.log_file;
     current_config.tee_logs = cmd.tee_logs;
+    current_config.validator_dir = cmd.validator_dir;
 
     // If no subcommand was provided, print a friendly header and help information.
     const subcmd = cmd.subcmd orelse {
@@ -126,11 +127,20 @@ pub fn main() !void {
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
             current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            // Derive snapshot_dir from validator_dir if using default
+            if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
+                current_config.accounts_db.snapshot_dir = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "accounts_db" });
+            } else {
+                current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            }
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
             params.geyser.apply(&current_config);
+            // Derive geyser.pipe_path from validator_dir if using default
+            if (std.mem.eql(u8, current_config.geyser.pipe_path, sig.VALIDATOR_DIR ++ "geyser.pipe")) {
+                current_config.geyser.pipe_path = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "geyser.pipe" });
+            }
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.stop_at_slot = params.stop_at_slot;
@@ -144,11 +154,20 @@ pub fn main() !void {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            // Derive snapshot_dir from validator_dir if using default
+            if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
+                current_config.accounts_db.snapshot_dir = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "accounts_db" });
+            } else {
+                current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            }
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
             params.geyser.apply(&current_config);
+            // Derive geyser.pipe_path from validator_dir if using default
+            if (std.mem.eql(u8, current_config.geyser.pipe_path, sig.VALIDATOR_DIR ++ "geyser.pipe")) {
+                current_config.geyser.pipe_path = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "geyser.pipe" });
+            }
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.stop_at_slot = params.stop_at_slot;
@@ -169,17 +188,31 @@ pub fn main() !void {
         },
         .snapshot_download => |params| {
             current_config.shred_version = params.shred_version;
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            // Derive snapshot_dir from validator_dir if using default
+            if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
+                current_config.accounts_db.snapshot_dir = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "accounts_db" });
+            } else {
+                current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            }
             params.accountsdb_download.apply(&current_config);
             params.gossip_base.apply(&current_config);
             try downloadSnapshot(gpa, gossip_gpa, current_config);
         },
         .snapshot_validate => |params| {
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            // Derive snapshot_dir from validator_dir if using default
+            if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
+                current_config.accounts_db.snapshot_dir = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "accounts_db" });
+            } else {
+                current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            }
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             current_config.gossip.cluster = params.gossip_cluster;
             params.geyser.apply(&current_config);
+            // Derive geyser.pipe_path from validator_dir if using default
+            if (std.mem.eql(u8, current_config.geyser.pipe_path, sig.VALIDATOR_DIR ++ "geyser.pipe")) {
+                current_config.geyser.pipe_path = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "geyser.pipe" });
+            }
             try validateSnapshot(gpa, current_config);
         },
         .snapshot_create => |params| {
@@ -190,7 +223,12 @@ pub fn main() !void {
             @panic("TODO: support snapshot creation");
         },
         .print_manifest => |params| {
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            // Derive snapshot_dir from validator_dir if using default
+            if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
+                current_config.accounts_db.snapshot_dir = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "accounts_db" });
+            } else {
+                current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            }
             try printManifest(gpa, current_config);
         },
         .leader_schedule => |params| {
@@ -198,7 +236,12 @@ pub fn main() !void {
             current_config.leader_schedule_path = params.leader_schedule;
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            // Derive snapshot_dir from validator_dir if using default
+            if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
+                current_config.accounts_db.snapshot_dir = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "accounts_db" });
+            } else {
+                current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            }
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
@@ -217,7 +260,12 @@ pub fn main() !void {
         .mock_rpc_server => |params| {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            // Derive snapshot_dir from validator_dir if using default
+            if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
+                current_config.accounts_db.snapshot_dir = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "accounts_db" });
+            } else {
+                current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            }
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
@@ -231,6 +279,7 @@ const Cmd = struct {
     metrics_port: u16,
     log_file: ?[]const u8,
     tee_logs: bool,
+    validator_dir: []const u8,
     subcmd: ?union(enum) {
         identity,
         gossip: Gossip,
@@ -306,6 +355,15 @@ const Cmd = struct {
                 \\Enable this flag to reactivate stderr logging when using --log-file.
                 ,
             },
+            .validator_dir = .{
+                .kind = .named,
+                .name_override = "validator-dir",
+                .alias = .d,
+                .default_value = sig.VALIDATOR_DIR,
+                .config = .string,
+                .help = "base directory for all validator data (ledger, accounts_db, geyser pipe). " ++
+                    "Subdirectory paths are derived from this base unless explicitly overridden.",
+            },
         },
     };
 
@@ -342,9 +400,8 @@ const Cmd = struct {
         .alias = .s,
         .default_value = sig.VALIDATOR_DIR ++ "accounts_db",
         .config = .string,
-        .help = "path to snapshot directory" ++
-            " (where snapshots are downloaded and/or unpacked to/from)" ++
-            " - default: {VALIDATOR_DIR}/accounts_db",
+        .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked). " ++
+            "Defaults to <validator-dir>/accounts_db. Overrides --validator-dir for this path.",
     };
 
     const genesis_file_path_arg: cli.ArgumentInfo(?[]const u8) = .{
@@ -696,7 +753,8 @@ const Cmd = struct {
                 .alias = .none,
                 .default_value = sig.VALIDATOR_DIR ++ "geyser.pipe",
                 .config = .string,
-                .help = "path to the geyser pipe",
+                .help = "path to the geyser pipe. " ++
+                    "Defaults to <validator-dir>/geyser.pipe. Overrides --validator-dir for this path.",
             },
             .writer_fba_bytes = .{
                 .kind = .named,
@@ -1031,6 +1089,18 @@ const Cmd = struct {
     };
 };
 
+/// Ensures the validator directory exists, creating it (and parent directories) if needed.
+/// Returns an error if the directory cannot be created or accessed.
+fn ensureValidatorDir(logger: Logger, validator_dir: []const u8) !void {
+    _ = std.fs.cwd().makeOpenPath(validator_dir, .{}) catch |err| {
+        logger.err().logf(
+            "Cannot create or access validator directory '{s}': {}",
+            .{ validator_dir, err },
+        );
+        return err;
+    };
+}
+
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     const maybe_file, const logger = try spawnLogger(allocator, cfg);
@@ -1093,9 +1163,14 @@ fn validator(
 
     app_base.logger.info().logf("starting validator with cfg: {}", .{cfg});
 
+    try ensureValidatorDir(app_base.logger, cfg.validator_dir);
+
     const repair_port: u16 = cfg.shred_network.repair_port;
     const turbine_recv_port: u16 = cfg.shred_network.turbine_recv_port;
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
+
+    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    defer allocator.free(ledger_dir);
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{
         .iterate = true,
@@ -1182,7 +1257,7 @@ fn validator(
     var ledger = try Ledger.init(
         allocator,
         .from(app_base.logger),
-        sig.VALIDATOR_DIR ++ "ledger",
+        ledger_dir,
         app_base.metrics_registry,
     );
     defer ledger.deinit();
@@ -1348,7 +1423,12 @@ fn replayOffline(
 
     app_base.logger.info().logf("starting replay-offline with cfg: {}", .{cfg});
 
+    try ensureValidatorDir(app_base.logger, cfg.validator_dir);
+
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
+
+    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    defer allocator.free(ledger_dir);
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{
         .iterate = true,
@@ -1390,7 +1470,7 @@ fn replayOffline(
     var ledger = try Ledger.init(
         allocator,
         .from(app_base.logger),
-        sig.VALIDATOR_DIR ++ "ledger",
+        ledger_dir,
         app_base.metrics_registry,
     );
     defer ledger.deinit();
@@ -1443,6 +1523,11 @@ fn shredNetwork(
         if (!app_base.closed) app_base.shutdown();
         app_base.deinit();
     }
+
+    try ensureValidatorDir(app_base.logger, cfg.validator_dir);
+
+    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    defer allocator.free(ledger_dir);
 
     const genesis_path = try cfg.genesisFilePath() orelse
         return error.GenesisPathNotProvided;
@@ -1501,7 +1586,7 @@ fn shredNetwork(
     var ledger = try Ledger.init(
         allocator,
         .from(app_base.logger),
-        sig.VALIDATOR_DIR ++ "ledger",
+        ledger_dir,
         app_base.metrics_registry,
     );
     defer ledger.deinit();
