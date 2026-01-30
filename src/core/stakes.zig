@@ -1073,12 +1073,15 @@ pub fn randomStakes(
             ),
             options.epoch + 1,
         );
-        errdefer vote_state.deinit(allocator);
-        var vote_account = try VoteAccount.init(allocator, .{
+        var vote_account = VoteAccount.init(allocator, .{
             .lamports = 1_000_000_000,
             .owner = vote_program.ID,
-        }, vote_state);
+        }, vote_state) catch |err| {
+            vote_state.deinit(allocator);
+            return err;
+        };
         errdefer vote_account.deinit(allocator);
+
         try self.upsertVoteAccount(
             allocator,
             voters[i],
