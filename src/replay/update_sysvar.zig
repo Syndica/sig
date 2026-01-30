@@ -55,23 +55,20 @@ const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 pub fn updateSysvarsForNewSlot(
     allocator: Allocator,
     account_store: AccountStore,
-    epoch_info: *const sig.core.EpochConstants,
-    epoch_schedule: sig.core.EpochSchedule,
+    epoch_tracker: *const sig.core.EpochTracker,
     constants: *const sig.core.SlotConstants,
     state: *sig.core.SlotState,
     slot: Slot,
     hard_forks: *const sig.core.HardForks,
 ) !void {
-    const zone = tracy.Zone.init(@src(), .{ .name = "updateSysvarsForNewSlot" });
-    defer zone.deinit();
-
-    const epoch = epoch_schedule.getEpoch(slot);
-    const parent_slots_epoch = epoch_schedule.getEpoch(constants.parent_slot);
+    const epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
+    const parent_slots_epoch = epoch_tracker.epoch_schedule.getEpoch(constants.parent_slot);
+    const epoch_info = try epoch_tracker.getEpochInfo(slot);
 
     const sysvar_deps = UpdateSysvarAccountDeps{
         .slot = slot,
         .slot_store = account_store.forSlot(slot, &constants.ancestors),
-        .rent = &epoch_info.rent_collector.rent,
+        .rent = &constants.rent_collector.rent,
         .capitalization = &state.capitalization,
     };
 
@@ -87,13 +84,13 @@ pub fn updateSysvarsForNewSlot(
         allocator,
         .{
             .feature_set = &constants.feature_set,
-            .epoch_schedule = &epoch_schedule,
+            .epoch_schedule = &epoch_tracker.epoch_schedule,
             .epoch_stakes = &epoch_info.stakes,
             .stakes_cache = &state.stakes_cache,
             .epoch = epoch,
             .parent_slots_epoch = parent_slots_epoch,
-            .genesis_creation_time = epoch_info.genesis_creation_time,
-            .ns_per_slot = @intCast(epoch_info.ns_per_slot),
+            .genesis_creation_time = epoch_tracker.cluster.genesis_creation_time,
+            .ns_per_slot = epoch_tracker.cluster.nanosPerSlot(),
             .update_sysvar_deps = sysvar_deps,
         },
     );

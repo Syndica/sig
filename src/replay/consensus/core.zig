@@ -19,7 +19,6 @@ const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
 const Ancestors = sig.core.Ancestors;
 const Epoch = sig.core.Epoch;
 const EpochSchedule = sig.core.EpochSchedule;
-const EpochStakesMap = sig.core.EpochStakesMap;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
@@ -70,7 +69,6 @@ const SwitchForkDecision = sig.consensus.replay_tower.SwitchForkDecision;
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
-const EpochTracker = sig.replay.trackers.EpochTracker;
 
 const AncestorDuplicateSlotToRepair = replay.consensus.cluster_sync.AncestorDuplicateSlotToRepair;
 const DuplicateConfirmedState = sig.replay.consensus.cluster_sync.DuplicateConfirmedState;
@@ -350,7 +348,7 @@ pub const TowerConsensus = struct {
             /// Scanned by the vote collector if provided.
             gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
             slot_tracker: *SlotTracker,
-            epoch_tracker: *EpochTracker,
+            epoch_tracker: *sig.core.EpochTracker,
             progress_map: *ProgressMap,
             status_cache: ?*sig.core.StatusCache,
             senders: Senders,
@@ -511,7 +509,7 @@ pub const TowerConsensus = struct {
         ancestors: *const std.AutoArrayHashMapUnmanaged(Slot, Ancestors),
         descendants: *const std.AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
         slot_tracker: *SlotTracker,
-        epoch_tracker: *const EpochTracker,
+        epoch_tracker: *sig.core.EpochTracker,
         progress_map: *ProgressMap,
         status_cache: ?*sig.core.StatusCache,
         /// For reading the slot history account
@@ -521,26 +519,13 @@ pub const TowerConsensus = struct {
         vote_account: ?Pubkey,
         senders: Senders,
     ) !void {
-        var zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.executeProtocol" });
-        defer zone.deinit();
-
-        var epoch_stakes_map: EpochStakesMap = .empty;
-        defer epoch_stakes_map.deinit(allocator);
-
-        try epoch_stakes_map.ensureTotalCapacity(allocator, epoch_tracker.epochs.count());
-
-        for (epoch_tracker.epochs.keys(), epoch_tracker.epochs.values()) |key, constants| {
-            epoch_stakes_map.putAssumeCapacity(key, constants.stakes);
-        }
-
         const newly_computed_consensus_slots = try computeConsensusInputs(
             allocator,
             self.logger,
             vote_account,
             ancestors,
             slot_tracker,
-            &epoch_tracker.schedule,
-            &epoch_stakes_map,
+            epoch_tracker,
             progress_map,
             &self.fork_choice,
             &self.replay_tower,
@@ -605,8 +590,6 @@ pub const TowerConsensus = struct {
         const heaviest_slot_on_same_voted_fork =
             (try self.fork_choice.heaviestSlotOnSameVotedFork(&self.replay_tower)) orelse null;
 
-        const heaviest_epoch: Epoch = epoch_tracker.schedule.getEpoch(heaviest_slot);
-
         const now = sig.time.Instant.now();
         var last_vote_refresh_time: LastVoteRefreshTime = .{
             .last_refresh_time = now,
@@ -617,13 +600,12 @@ pub const TowerConsensus = struct {
             allocator,
             heaviest_slot,
             if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
-            heaviest_epoch,
             ancestors,
             descendants,
             progress_map,
             &self.latest_validator_votes,
             &self.fork_choice,
-            &epoch_stakes_map,
+            epoch_tracker,
             account_store.reader(),
         );
         defer vote_and_reset_forks.deinit(allocator);
@@ -660,6 +642,7 @@ pub const TowerConsensus = struct {
                 voted.slot,
                 voted_hash,
                 slot_tracker,
+                &epoch_tracker.epoch_schedule,
                 epoch_tracker,
                 &self.replay_tower,
                 progress_map,
@@ -943,7 +926,8 @@ fn handleVotableBank(
     vote_slot: Slot,
     vote_hash: Hash,
     slot_tracker: *SlotTracker,
-    epoch_tracker: *const EpochTracker,
+    epoch_schedule: *const EpochSchedule,
+    epoch_tracker: *sig.core.EpochTracker,
     replay_tower: *ReplayTower,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
@@ -972,6 +956,7 @@ fn handleVotableBank(
             slot_tracker,
             progress,
             fork_choice,
+            epoch_tracker,
             account_store,
             status_cache,
             new_root,
@@ -1001,7 +986,7 @@ fn handleVotableBank(
         replay_tower,
         account_store.reader(),
         slot_tracker,
-        epoch_tracker,
+        epoch_schedule,
     );
 
     switch (vote_tx_result) {
@@ -1339,7 +1324,7 @@ fn generateVoteTx(
     replay_tower: *ReplayTower,
     account_reader: AccountReader,
     slot_tracker: *const SlotTracker,
-    epoch_tracker: *const EpochTracker,
+    epoch_schedule: *const EpochSchedule,
 ) !GenerateVoteTxResult {
     const logger = replay_tower.logger;
     if (authorized_voter_keypairs.len == 0) {
@@ -1410,7 +1395,7 @@ fn generateVoteTx(
         return .hot_spare;
     }
 
-    const current_epoch = epoch_tracker.schedule.getEpoch(last_voted_slot);
+    const current_epoch = epoch_schedule.getEpoch(last_voted_slot);
 
     const authorized_voter_pubkey = vote_state.voters.getAuthorizedVoter(current_epoch) orelse {
         logger.err().logf("No authorized voter for epoch {}", .{current_epoch});
@@ -1585,6 +1570,7 @@ fn checkAndHandleNewRoot(
     slot_tracker: *SlotTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
+    epoch_tracker: *sig.core.EpochTracker,
     account_store: AccountStore,
     status_cache: ?*sig.core.StatusCache,
     new_root: Slot,
@@ -1602,6 +1588,12 @@ fn checkAndHandleNewRoot(
     defer allocator.free(rooted_slots);
 
     try ledger.setRoots(rooted_slots);
+
+    try epoch_tracker.onSlotRooted(
+        allocator,
+        new_root,
+        &root_tracker.constants.ancestors,
+    );
 
     // Audit: The rest of the code maps to Self::handle_new_root in Agave.
     // Update the slot tracker.
@@ -1690,8 +1682,7 @@ fn computeConsensusInputs(
     my_vote_pubkey: ?Pubkey,
     ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
     slot_tracker: *const SlotTracker,
-    epoch_schedule: *const EpochSchedule,
-    epoch_stakes_map: *const EpochStakesMap,
+    epoch_tracker: *const sig.core.EpochTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
     replay_tower: *const ReplayTower,
@@ -1735,8 +1726,7 @@ fn computeConsensusInputs(
             // This updates the internal state of fork_choice with the determined heaviest (best) fork to build on.
             try fork_choice.processLatestVotes(
                 allocator,
-                epoch_stakes_map,
-                epoch_schedule,
+                epoch_tracker,
                 latest_validator_votes,
             );
             const fork_stats = progress.getForkStats(slot) orelse return error.MissingForkStats;
@@ -1830,7 +1820,11 @@ test "processResult and handleDuplicateConfirmedFork" {
     defer stubs.deinit();
 
     var replay_state = try stubs.stubbedState(allocator, .FOR_TESTS);
-    defer replay_state.deinit();
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit(allocator);
+        allocator.destroy(replay_state.epoch_tracker);
+    }
     replay_state.slot_tracker.get(0).?.state.hash.set(.{ .data = @splat(1) });
 
     var consensus: TowerConsensus = try .init(allocator, .{
@@ -2533,6 +2527,14 @@ test "checkAndHandleNewRoot - missing slot" {
     var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer test_state.deinit();
 
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        random,
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit(allocator);
+
     // Try to check a slot that doesn't exist in the tracker
     const result = checkAndHandleNewRoot(
         allocator,
@@ -2540,6 +2542,7 @@ test "checkAndHandleNewRoot - missing slot" {
         &slot_tracker,
         &fixture.progress,
         &fixture.fork_choice,
+        &epoch_tracker,
         .noop,
         null, // no need to update a StatusCache,
         123, // Non-existent slot
@@ -2588,6 +2591,14 @@ test "checkAndHandleNewRoot - missing hash" {
     var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer test_state.deinit();
 
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        random,
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit(allocator);
+
     // Try to check a slot that doesn't exist in the tracker
     const slot_tracker2_ptr, var slot_tracker2_lg = slot_tracker2.writeWithLock();
     defer slot_tracker2_lg.unlock();
@@ -2597,6 +2608,7 @@ test "checkAndHandleNewRoot - missing hash" {
         slot_tracker2_ptr,
         &fixture.progress,
         &fixture.fork_choice,
+        &epoch_tracker,
         .noop,
         null, // no need to update a StatusCache,
         root.slot, // Non-existent hash
@@ -2606,6 +2618,8 @@ test "checkAndHandleNewRoot - missing hash" {
 }
 
 test "checkAndHandleNewRoot - empty slot tracker" {
+    const allocator = std.testing.allocator;
+
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
@@ -2630,6 +2644,14 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     var test_state = try sig.ledger.tests.initTestLedger(testing.allocator, @src(), .noop);
     defer test_state.deinit();
 
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        random,
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit(allocator);
+
     // Try to check a slot that doesn't exist in the tracker
     const slot_tracker3_ptr, var slot_tracker3_lg = slot_tracker3.writeWithLock();
     defer slot_tracker3_lg.unlock();
@@ -2639,6 +2661,7 @@ test "checkAndHandleNewRoot - empty slot tracker" {
         slot_tracker3_ptr,
         &fixture.progress,
         &fixture.fork_choice,
+        &epoch_tracker,
         .noop,
         null, // no need to update a StatusCache,
         root.slot,
@@ -2729,6 +2752,14 @@ test "checkAndHandleNewRoot - success" {
     var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer test_state.deinit();
 
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        random,
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit(allocator);
+
     try testing.expectEqual(4, fixture.progress.map.count());
     try testing.expect(fixture.progress.map.contains(hash1.slot));
     {
@@ -2740,6 +2771,7 @@ test "checkAndHandleNewRoot - success" {
             slot_tracker4_ptr,
             &fixture.progress,
             &fixture.fork_choice,
+            &epoch_tracker,
             .noop,
             null, // no need to update a StatusCache,
             hash3.slot,
@@ -2806,7 +2838,6 @@ test "computeBankStats - child bank heavier" {
         10000,
         random,
     );
-    defer versioned_stakes.deinit(allocator);
 
     const keys = versioned_stakes.stakes.vote_accounts.vote_accounts.keys();
     for (keys) |key| {
@@ -2820,15 +2851,16 @@ test "computeBankStats - child bank heavier" {
         });
     }
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(allocator);
-    try epoch_stakes.put(allocator, 0, versioned_stakes);
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        allocator,
+        &.{versioned_stakes},
+    );
+    defer epoch_tracker.deinit(allocator);
 
     var replay_tower = try createTestReplayTower(
         1,
         0.67,
     );
-    const epoch_schedule = EpochSchedule.INIT;
     var slot_tracker_rw1 = RwMux(SlotTracker).init(fixture.slot_tracker);
     const slot_tracker_rw1_ptr, var slot_tracker_rw1_lg = slot_tracker_rw1.writeWithLock();
     defer slot_tracker_rw1_lg.unlock();
@@ -2838,8 +2870,7 @@ test "computeBankStats - child bank heavier" {
         my_node_pubkey,
         &fixture.ancestors,
         slot_tracker_rw1_ptr,
-        &epoch_schedule,
-        &epoch_stakes,
+        &epoch_tracker,
         &fixture.progress,
         &fixture.fork_choice,
         &replay_tower,
@@ -2907,25 +2938,26 @@ test "computeBankStats - same weight selects lower slot" {
         .active,
     );
 
-    const versioned_stakes = try testEpochStakes(
+    const versioned_stakes_0 = try testEpochStakes(
         testing.allocator,
         fixture.vote_pubkeys.items,
         10000,
         random,
     );
-    defer versioned_stakes.deinit(testing.allocator);
+    var versioned_stakes_1 = try versioned_stakes_0.clone(testing.allocator);
+    versioned_stakes_1.stakes.epoch = 1;
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(testing.allocator);
-    try epoch_stakes.put(testing.allocator, 0, versioned_stakes);
-    try epoch_stakes.put(testing.allocator, 1, versioned_stakes);
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        testing.allocator,
+        &.{ versioned_stakes_0, versioned_stakes_1 },
+    );
+    defer epoch_tracker.deinit(testing.allocator);
 
     var replay_tower = try createTestReplayTower(
         1,
         0.67,
     );
 
-    const epoch_schedule = EpochSchedule.INIT;
     var slot_tracker_rw2 = RwMux(SlotTracker).init(fixture.slot_tracker);
     const slot_tracker_rw2_ptr, var slot_tracker_rw2_lg = slot_tracker_rw2.writeWithLock();
     defer slot_tracker_rw2_lg.unlock();
@@ -2935,8 +2967,7 @@ test "computeBankStats - same weight selects lower slot" {
         my_vote_pubkey,
         &fixture.ancestors,
         slot_tracker_rw2_ptr,
-        &epoch_schedule,
-        &epoch_stakes,
+        &epoch_tracker,
         &fixture.progress,
         &fixture.fork_choice,
         &replay_tower,
@@ -2981,7 +3012,6 @@ test "generateVoteTx - empty authorized voter keypairs returns non_voting" {
 
     const empty_keypairs = &[_]sig.identity.KeyPair{};
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
     const account_reader: AccountReader = .noop;
 
     const result = try generateVoteTx(
@@ -2993,7 +3023,7 @@ test "generateVoteTx - empty authorized voter keypairs returns non_voting" {
         &replay_tower,
         account_reader,
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3020,7 +3050,6 @@ test "generateVoteTx - no node keypair returns non_voting" {
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
     const account_reader: AccountReader = .noop;
 
     const result = try generateVoteTx(
@@ -3032,7 +3061,7 @@ test "generateVoteTx - no node keypair returns non_voting" {
         &replay_tower,
         account_reader,
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3061,7 +3090,6 @@ test "generateVoteTx - no last voted slot returns failed" {
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
     const account_reader: AccountReader = .noop;
 
     const result = try generateVoteTx(
@@ -3073,7 +3101,7 @@ test "generateVoteTx - no last voted slot returns failed" {
         &replay_tower,
         account_reader,
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3113,7 +3141,6 @@ test "generateVoteTx - slot not in tracker returns failed" {
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
     const account_reader: AccountReader = .noop;
 
     const result = try generateVoteTx(
@@ -3125,7 +3152,7 @@ test "generateVoteTx - slot not in tracker returns failed" {
         &replay_tower,
         account_reader,
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3165,7 +3192,6 @@ test "generateVoteTx - vote account not found returns failed" {
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
     const account_reader: AccountReader = .noop;
 
     const result = try generateVoteTx(
@@ -3177,7 +3203,7 @@ test "generateVoteTx - vote account not found returns failed" {
         &replay_tower,
         account_reader,
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3217,7 +3243,6 @@ test "generateVoteTx - invalid switch fork decision returns failed" {
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
     const account_reader: AccountReader = .noop;
 
     const result = try generateVoteTx(
@@ -3229,7 +3254,7 @@ test "generateVoteTx - invalid switch fork decision returns failed" {
         &replay_tower,
         account_reader,
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3268,8 +3293,6 @@ test "generateVoteTx - success with tower_sync vote" {
     const node_kp = sig.identity.KeyPair.generate();
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
-
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
 
     var test_state = try sig.accounts_db.Two.initTest(allocator);
     defer test_state.deinit();
@@ -3317,7 +3340,7 @@ test "generateVoteTx - success with tower_sync vote" {
         &replay_tower,
         .{ .accounts_db_two = db },
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3365,8 +3388,6 @@ test "generateVoteTx - success with vote_state_update compacted" {
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
-
     var test_state = try sig.accounts_db.Two.initTest(allocator);
     defer test_state.deinit();
     const db = &test_state.db;
@@ -3414,7 +3435,7 @@ test "generateVoteTx - success with vote_state_update compacted" {
         &replay_tower,
         .{ .accounts_db_two = db },
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3460,8 +3481,6 @@ test "generateVoteTx - success with switch proof" {
     const node_kp = sig.identity.KeyPair.generate();
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
-
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
 
     var test_state = try sig.accounts_db.Two.initTest(allocator);
     defer test_state.deinit();
@@ -3511,7 +3530,7 @@ test "generateVoteTx - success with switch proof" {
         &replay_tower,
         .{ .accounts_db_two = db },
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3558,8 +3577,6 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
     const different_node_kp = sig.identity.KeyPair.generate();
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
-
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
 
     var test_state = try sig.accounts_db.Two.initTest(allocator);
     defer test_state.deinit();
@@ -3608,7 +3625,7 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
         &replay_tower,
         .{ .accounts_db_two = db },
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3648,8 +3665,6 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
     const wrong_auth_voter_kp = sig.identity.KeyPair.generate();
     const actual_auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
-
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
 
     var test_state = try sig.accounts_db.Two.initTest(allocator);
     defer test_state.deinit();
@@ -3698,7 +3713,7 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
         &replay_tower,
         .{ .accounts_db_two = db },
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3711,18 +3726,15 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
 test "sendVote - without gossip table does not send and does not throw" {
     const allocator = testing.allocator;
 
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = &[_]Pubkey{},
+        .start = 0,
+        .end = 0,
+    };
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
     );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| {
-            schedule.deinit();
-        }
-        leader_schedules.deinit();
-    }
 
     const vote_op = VoteOp{
         .push_vote = .{
@@ -3737,7 +3749,7 @@ test "sendVote - without gossip table does not send and does not throw" {
         0,
         vote_op,
         null,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         sig.identity.KeyPair.generate(),
         100,
         null,
@@ -3747,18 +3759,15 @@ test "sendVote - without gossip table does not send and does not throw" {
 test "sendVote - without keypair does not send and does not throw" {
     const allocator = testing.allocator;
 
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = &[_]Pubkey{},
+        .start = 0,
+        .end = 0,
+    };
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
     );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| {
-            schedule.deinit();
-        }
-        leader_schedules.deinit();
-    }
 
     var gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
     defer gossip_table.deinit();
@@ -3777,7 +3786,7 @@ test "sendVote - without keypair does not send and does not throw" {
         0,
         vote_op,
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         null,
         200,
         null,
@@ -3825,29 +3834,18 @@ test "sendVote - sends to both gossip and upcoming leaders" {
 
     const leader_pubkey = Pubkey.initRandom(std.crypto.random);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
-    for (leader_schedule_slots) |*slot| {
-        slot.* = leader_pubkey;
-    }
-
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| {
-            schedule.deinit();
-        }
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    const leaders = try allocator.alloc(Pubkey, 5);
+    for (leaders) |*leader| leader.* = leader_pubkey;
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(allocator);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
@@ -3892,7 +3890,7 @@ test "sendVote - sends to both gossip and upcoming leaders" {
         vote_slot,
         vote_op,
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         my_keypair,
         400,
         null,
@@ -3930,29 +3928,18 @@ test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
 
     const leader_pubkey = Pubkey.initRandom(std.crypto.random);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
-    for (leader_schedule_slots) |*slot| {
-        slot.* = leader_pubkey;
-    }
-
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| {
-            schedule.deinit();
-        }
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    const leaders = try allocator.alloc(Pubkey, 5);
+    for (leaders) |*leader| leader.* = leader_pubkey;
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(allocator);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
@@ -3997,7 +3984,7 @@ test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
         vote_slot,
         vote_op,
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         my_keypair,
         500,
         null,
@@ -4037,29 +4024,18 @@ test "sendVote - falls back to self TPU when no leader sockets found" {
 
     const unknown_leader = Pubkey.initRandom(std.crypto.random);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
-    for (leader_schedule_slots) |*slot| {
-        slot.* = unknown_leader;
-    }
-
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| {
-            schedule.deinit();
-        }
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    const leaders = try allocator.alloc(Pubkey, 5);
+    for (leaders) |*leader| leader.* = unknown_leader;
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(allocator);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     const my_keypair = sig.identity.KeyPair.generate();
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
@@ -4108,7 +4084,7 @@ test "sendVote - falls back to self TPU when no leader sockets found" {
         vote_slot,
         vote_op,
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         my_keypair,
         600,
         null,
@@ -4149,25 +4125,18 @@ test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
     // Prepare a leader schedule with a single repeating leader
     const leader_pubkey: Pubkey = .initRandom(std.crypto.random);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
-    for (leader_schedule_slots) |*slot| slot.* = leader_pubkey;
-
-    var leader_schedule_cache: sig.core.leader_schedule.LeaderScheduleCache = .init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| schedule.deinit();
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule: sig.core.leader_schedule.LeaderSchedule = .{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    const leaders = try allocator.alloc(Pubkey, 5);
+    for (leaders) |*leader| leader.* = leader_pubkey;
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(allocator);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     // Gossip table with leader ContactInfo having tpu_vote socket
     const gossip_table: sig.gossip.GossipTable = try .init(allocator, allocator);
@@ -4207,7 +4176,7 @@ test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
         vote_slot,
         vote_op,
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         my_keypair,
         700,
         &sockets,
@@ -4240,25 +4209,18 @@ test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
     // Leader schedule points to an unknown leader; no leader ContactInfo in gossip
     const unknown_leader = Pubkey.initRandom(std.crypto.random);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
-    for (leader_schedule_slots) |*slot| slot.* = unknown_leader;
-
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| schedule.deinit();
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    const leaders = try allocator.alloc(Pubkey, 5);
+    for (leaders) |*leader| leader.* = unknown_leader;
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(allocator);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     // Gossip table with our own ContactInfo having a TPU address
     const my_keypair = sig.identity.KeyPair.generate();
@@ -4296,7 +4258,7 @@ test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
         vote_slot,
         vote_op,
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         my_keypair,
         800,
         &sockets,
@@ -4325,36 +4287,29 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
     const leader2_pubkey: Pubkey = .initRandom(prng);
     const leader3_pubkey: Pubkey = .initRandom(prng);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 150);
-    for (leader_schedule_slots, 0..) |*slot, i| {
+    const leaders = try allocator.alloc(Pubkey, 150);
+    for (leaders, 0..) |*leader, i| {
         if (i >= vote_slot and i < vote_slot + 3) {
-            slot.* = switch (i - vote_slot) {
+            leader.* = switch (i - vote_slot) {
                 0 => leader1_pubkey,
                 1 => leader2_pubkey,
                 2 => leader3_pubkey,
                 else => unreachable,
             };
         } else {
-            slot.* = Pubkey.initRandom(std.crypto.random);
+            leader.* = Pubkey.initRandom(std.crypto.random);
         }
     }
-
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| schedule.deinit();
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(allocator);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
@@ -4439,7 +4394,7 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
         allocator,
         vote_slot,
         vote_tx,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         &gossip_table_rw,
         my_pubkey,
         &sockets,
@@ -4461,25 +4416,18 @@ test "sendVoteToLeaders - continues when sendVoteTransaction fails" {
     var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
     const leader_pubkey: Pubkey = .initRandom(prng.random());
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 10);
-    for (leader_schedule_slots) |*slot| slot.* = leader_pubkey;
-
-    var leader_schedule_cache: sig.core.leader_schedule.LeaderScheduleCache = .init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| schedule.deinit();
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    const leaders = try allocator.alloc(Pubkey, 10);
+    for (leaders) |*leader| leader.* = leader_pubkey;
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(allocator);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     const gossip_table: sig.gossip.GossipTable = try .init(allocator, allocator);
     var gossip_table_rw: sig.sync.RwMux(sig.gossip.GossipTable) = .init(gossip_table);
@@ -4517,7 +4465,7 @@ test "sendVoteToLeaders - continues when sendVoteTransaction fails" {
         allocator,
         vote_slot,
         vote_tx,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         &gossip_table_rw,
         null,
         &sockets,
@@ -4767,7 +4715,11 @@ test "edge cases - duplicate slot" {
     defer dep_stubs.deinit();
 
     var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
-    defer replay_state.deinit();
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit(gpa);
+        gpa.destroy(replay_state.epoch_tracker);
+    }
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
@@ -4881,12 +4833,20 @@ test "edge cases - duplicate slot" {
 
     // run consensus
 
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        std.testing.allocator,
+        prng_state.random(),
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit(std.testing.allocator);
+
     try tower_consensus.process(gpa, .{
         .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_votes = null,
         .slot_tracker = &replay_state.slot_tracker,
-        .epoch_tracker = &replay_state.epoch_tracker,
+        .epoch_tracker = &epoch_tracker,
         .progress_map = &replay_state.progress_map,
         .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
@@ -4926,7 +4886,11 @@ test "edge cases - duplicate confirmed slot" {
     defer dep_stubs.deinit();
 
     var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
-    defer replay_state.deinit();
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit(gpa);
+        gpa.destroy(replay_state.epoch_tracker);
+    }
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
@@ -5041,12 +5005,20 @@ test "edge cases - duplicate confirmed slot" {
 
     // run consensus
 
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        std.testing.allocator,
+        prng_state.random(),
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit(std.testing.allocator);
+
     try tower_consensus.process(gpa, .{
         .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_votes = null,
         .slot_tracker = &replay_state.slot_tracker,
-        .epoch_tracker = &replay_state.epoch_tracker,
+        .epoch_tracker = &epoch_tracker,
         .progress_map = &replay_state.progress_map,
         .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
@@ -5086,7 +5058,11 @@ test "edge cases - gossip verified vote hashes" {
     defer dep_stubs.deinit();
 
     var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
-    defer replay_state.deinit();
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit(gpa);
+        gpa.destroy(replay_state.epoch_tracker);
+    }
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
@@ -5213,12 +5189,20 @@ test "edge cases - gossip verified vote hashes" {
 
     // run consensus
 
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        std.testing.allocator,
+        prng_state.random(),
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit(std.testing.allocator);
+
     try tower_consensus.process(gpa, .{
         .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_votes = null,
         .slot_tracker = &replay_state.slot_tracker,
-        .epoch_tracker = &replay_state.epoch_tracker,
+        .epoch_tracker = &epoch_tracker,
         .progress_map = &replay_state.progress_map,
         .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
@@ -5333,15 +5317,10 @@ test "vote on heaviest frozen descendant with no switch" {
         );
     }
 
-    var epoch_tracker: EpochTracker = .{
-        .epochs = .empty,
-        .schedule = .INIT,
-    };
-    {
-        const epoch_consts = sig.core.EpochConstants.genesis(.default(allocator));
-        errdefer epoch_consts.deinit(allocator);
-        try epoch_tracker.epochs.put(allocator, root_slot, epoch_consts);
-    }
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        allocator,
+        &.{.EMPTY_WITH_GENESIS},
+    );
     defer epoch_tracker.deinit(allocator);
 
     // Add root and slot 1 entries into progress map.
@@ -5509,14 +5488,9 @@ test "vote accounts with landed votes populate bank stats" {
         );
     }
 
-    var epoch_tracker: EpochTracker = .{
-        .epochs = .empty,
-        .schedule = .INIT,
-    };
-
     // NOTE: The core setup for this test
     // Seed epoch 0 constants with 6 vote accounts and landed votes
-    {
+    const epoch_stakes = blk: {
         var prng = std.Random.DefaultPrng.init(12345);
         const random = prng.random();
         const stake_per_account = 1000;
@@ -5553,24 +5527,25 @@ test "vote accounts with landed votes populate bank stats" {
             }
         }
 
-        var epoch_consts = sig.core.EpochConstants.genesis(.default(allocator));
-        errdefer epoch_consts.deinit(allocator);
-        epoch_consts.stakes.deinit(allocator);
+        break :blk epoch_stakes;
+    };
+    errdefer epoch_stakes.deinit(allocator);
 
-        epoch_consts.stakes = epoch_stakes;
-        try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
-    }
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        allocator,
+        &.{epoch_stakes},
+    );
     defer epoch_tracker.deinit(allocator);
 
     {
-        const epoch_consts_ptr = epoch_tracker.epochs.getPtr(0).?;
+        const epoch_info = try epoch_tracker.getEpochInfo(0);
         const slot1_ref = slot_tracker.get(1).?;
         const stakes_ptr, var stakes_guard = slot1_ref.state.stakes_cache.stakes.writeWithLock();
         defer stakes_guard.unlock();
         stakes_ptr.deinit(allocator);
         stakes_ptr.* = try sig.core.bank.parseStakesForTest(
             allocator,
-            &epoch_consts_ptr.stakes.stakes,
+            &epoch_info.stakes.stakes,
         );
     }
 
@@ -5780,12 +5755,23 @@ test "root advances after vote satisfies lockouts" {
     const random = prng.random();
     const validator_vote_pubkey = Pubkey.initRandom(random);
 
-    var epoch_tracker: EpochTracker = .{
-        .epochs = .empty,
-        .schedule = .INIT,
+    const epoch_stakes_0 = blk: {
+        const vote_pubkeys = try allocator.alloc(Pubkey, 1);
+        defer allocator.free(vote_pubkeys);
+        vote_pubkeys[0] = validator_vote_pubkey; // Use our validator's vote pubkey
+
+        var epoch_stakes = try sig.consensus.fork_choice.testEpochStakes(
+            allocator,
+            vote_pubkeys,
+            1000,
+            random,
+        );
+        errdefer epoch_stakes.deinit(allocator);
+
+        break :blk epoch_stakes;
     };
 
-    {
+    const epoch_stakes_1 = blk: {
         const vote_pubkeys = try allocator.alloc(Pubkey, 1);
         defer allocator.free(vote_pubkeys);
         vote_pubkeys[0] = validator_vote_pubkey; // Use our validator's vote pubkey
@@ -5796,35 +5782,16 @@ test "root advances after vote satisfies lockouts" {
             1000,
             random,
         );
+        epoch_stakes.stakes.epoch = 1;
         errdefer epoch_stakes.deinit(allocator);
 
-        var epoch_consts = sig.core.EpochConstants.genesis(.default(allocator));
-        errdefer epoch_consts.deinit(allocator);
-        epoch_consts.stakes.deinit(allocator);
-        epoch_consts.stakes = epoch_stakes;
+        break :blk epoch_stakes;
+    };
 
-        try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
-    }
-    {
-        const vote_pubkeys = try allocator.alloc(Pubkey, 1);
-        defer allocator.free(vote_pubkeys);
-        vote_pubkeys[0] = validator_vote_pubkey; // Use our validator's vote pubkey
-
-        var epoch_stakes = try sig.consensus.fork_choice.testEpochStakes(
-            allocator,
-            vote_pubkeys,
-            1000,
-            random,
-        );
-        errdefer epoch_stakes.deinit(allocator);
-
-        var epoch_consts = sig.core.EpochConstants.genesis(.default(allocator));
-        errdefer epoch_consts.deinit(allocator);
-        epoch_consts.stakes.deinit(allocator);
-        epoch_consts.stakes = epoch_stakes;
-
-        try epoch_tracker.epochs.put(allocator, 1, epoch_consts);
-    }
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        allocator,
+        &.{ epoch_stakes_0, epoch_stakes_1 },
+    );
     defer epoch_tracker.deinit(allocator);
 
     var progress = sig.consensus.ProgressMap.INIT;
@@ -6205,15 +6172,10 @@ test "vote refresh when no new vote available" {
         try slot_tracker.put(allocator, 1, .{ .constants = slot_constants, .state = slot_state });
     }
 
-    var epoch_tracker: EpochTracker = .{
-        .epochs = .empty,
-        .schedule = .INIT,
-    };
-    {
-        const epoch_consts = sig.core.EpochConstants.genesis(.default(allocator));
-        errdefer epoch_consts.deinit(allocator);
-        try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
-    }
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        allocator,
+        &.{.EMPTY_WITH_GENESIS},
+    );
     defer epoch_tracker.deinit(allocator);
 
     var progress = sig.consensus.ProgressMap.INIT;
@@ -6258,6 +6220,7 @@ test "vote refresh when no new vote available" {
         const results = [_]ReplayResult{
             .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
         };
+
         try consensus.process(allocator, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -6284,6 +6247,7 @@ test "vote refresh when no new vote available" {
     // The Test
     {
         const empty_results: []const ReplayResult = &.{};
+
         try consensus.process(allocator, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -6430,12 +6394,7 @@ test "detect and mark duplicate confirmed fork" {
         try slot_tracker.put(allocator, 2, .{ .constants = slot_constants, .state = slot_state });
     }
 
-    var epoch_tracker: EpochTracker = .{
-        .epochs = .empty,
-        .schedule = .INIT,
-    };
-
-    {
+    const epoch_stakes = blk: {
         var prng = std.Random.DefaultPrng.init(12345);
         const random = prng.random();
 
@@ -6472,18 +6431,16 @@ test "detect and mark duplicate confirmed fork" {
             }
         }
 
-        var epoch_consts = sig.core.EpochConstants.genesis(.default(allocator));
-        errdefer epoch_consts.deinit(allocator);
-        epoch_consts.stakes.deinit(allocator);
-        epoch_consts.stakes = epoch_stakes;
+        break :blk epoch_stakes;
+    };
 
-        try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
-    }
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        allocator,
+        &.{epoch_stakes},
+    );
     defer epoch_tracker.deinit(allocator);
 
     {
-        const epoch_consts_ptr = epoch_tracker.epochs.getPtr(0).?;
-
         {
             const slot1_ref = slot_tracker.get(1).?;
             const stakes_ptr, var stakes_guard = slot1_ref.state.stakes_cache.stakes.writeWithLock();
@@ -6491,7 +6448,7 @@ test "detect and mark duplicate confirmed fork" {
             stakes_ptr.deinit(allocator);
             stakes_ptr.* = try sig.core.bank.parseStakesForTest(
                 allocator,
-                &epoch_consts_ptr.stakes.stakes,
+                &epoch_stakes.stakes,
             );
         }
 
@@ -6502,7 +6459,7 @@ test "detect and mark duplicate confirmed fork" {
             stakes_ptr.deinit(allocator);
             stakes_ptr.* = try sig.core.bank.parseStakesForTest(
                 allocator,
-                &epoch_consts_ptr.stakes.stakes,
+                &epoch_stakes.stakes,
             );
         }
     }
@@ -6559,6 +6516,7 @@ test "detect and mark duplicate confirmed fork" {
         const results = [_]ReplayResult{
             .{ .slot = 2, .output = .{ .last_entry_hash = slot2_hash } },
         };
+
         try consensus.process(allocator, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -6677,15 +6635,10 @@ test "detect and mark duplicate slot" {
         try slot_tracker.put(allocator, 1, .{ .constants = slot_constants, .state = slot_state });
     }
 
-    var epoch_tracker: EpochTracker = .{
-        .epochs = .empty,
-        .schedule = .INIT,
-    };
-    {
-        const epoch_consts = sig.core.EpochConstants.genesis(.default(allocator));
-        errdefer epoch_consts.deinit(allocator);
-        try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
-    }
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        allocator,
+        &.{.EMPTY_WITH_GENESIS},
+    );
     defer epoch_tracker.deinit(allocator);
 
     var progress = sig.consensus.ProgressMap.INIT;
@@ -6738,6 +6691,7 @@ test "detect and mark duplicate slot" {
         const results = [_]ReplayResult{
             .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
         };
+
         try consensus.process(allocator, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -6941,13 +6895,9 @@ test "successful fork switch (switch_proof)" {
         try slot_tracker.put(allocator, 4, .{ .constants = slot_constants, .state = slot_state });
     }
 
-    var epoch_tracker: EpochTracker = .{
-        .epochs = .empty,
-        .schedule = .INIT,
-    };
     var vote_pubkeys = try allocator.alloc(Pubkey, 5);
     defer allocator.free(vote_pubkeys);
-    {
+    const epoch_stakes = blk: {
         var prng = std.Random.DefaultPrng.init(98765);
         const random = prng.random();
         for (vote_pubkeys) |*k| k.* = Pubkey.initRandom(random);
@@ -6960,14 +6910,16 @@ test "successful fork switch (switch_proof)" {
         );
         errdefer epoch_stakes.deinit(allocator);
 
-        var epoch_consts = sig.core.EpochConstants.genesis(.default(allocator));
-        errdefer epoch_consts.deinit(allocator);
-        epoch_consts.stakes.deinit(allocator);
-        epoch_consts.stakes = epoch_stakes;
-        try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
+        break :blk epoch_stakes;
+    };
 
-        const epoch_consts_ptr = epoch_tracker.epochs.getPtr(0).?;
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        allocator,
+        &.{epoch_stakes},
+    );
+    defer epoch_tracker.deinit(allocator);
 
+    {
         {
             const s1 = slot_tracker.get(1).?;
             const stakes_ptr1, var g1 = s1.state.stakes_cache.stakes.writeWithLock();
@@ -6975,7 +6927,7 @@ test "successful fork switch (switch_proof)" {
             stakes_ptr1.deinit(allocator);
             stakes_ptr1.* = try sig.core.bank.parseStakesForTest(
                 allocator,
-                &epoch_consts_ptr.stakes.stakes,
+                &epoch_stakes.stakes,
             );
         }
         {
@@ -6985,7 +6937,7 @@ test "successful fork switch (switch_proof)" {
             stakes_ptr2.deinit(allocator);
             stakes_ptr2.* = try sig.core.bank.parseStakesForTest(
                 allocator,
-                &epoch_consts_ptr.stakes.stakes,
+                &epoch_stakes.stakes,
             );
         }
         {
@@ -6995,11 +6947,10 @@ test "successful fork switch (switch_proof)" {
             stakes_ptr4.deinit(allocator);
             stakes_ptr4.* = try sig.core.bank.parseStakesForTest(
                 allocator,
-                &epoch_consts_ptr.stakes.stakes,
+                &epoch_stakes.stakes,
             );
         }
     }
-    defer epoch_tracker.deinit(allocator);
 
     var progress = sig.consensus.ProgressMap.INIT;
     defer progress.deinit(allocator);
@@ -7093,8 +7044,8 @@ test "successful fork switch (switch_proof)" {
         }
     }
 
-    const epoch_consts_ptr = epoch_tracker.epochs.getPtr(0).?;
-    const vote_accounts_map = &epoch_consts_ptr.stakes.stakes.vote_accounts.vote_accounts;
+    const epoch_info = try epoch_tracker.getEpochInfo(0);
+    const vote_accounts_map = &epoch_info.stakes.stakes.vote_accounts.vote_accounts;
     const total_stake: u64 = 500;
 
     // First, verify that we cannot switch to sibling slot 2 due to lockout
@@ -7121,6 +7072,7 @@ test "successful fork switch (switch_proof)" {
         const results2 = [_]ReplayResult{
             .{ .slot = 2, .output = .{ .last_entry_hash = slot2_hash } },
         };
+
         try consensus.process(allocator, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -7162,6 +7114,7 @@ test "successful fork switch (switch_proof)" {
         const results = [_]ReplayResult{
             .{ .slot = 4, .output = .{ .last_entry_hash = slot4_hash } },
         };
+
         try consensus.process(allocator, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -7223,6 +7176,7 @@ test "successful fork switch (switch_proof)" {
     // Recompute bank stats for new frozen slot 5
     {
         const empty_results: []const ReplayResult = &.{};
+
         try consensus.process(allocator, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -7296,6 +7250,7 @@ test "successful fork switch (switch_proof)" {
                 .output = .{ .last_entry_hash = slot5_hash },
             },
         };
+
         try consensus.process(allocator, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
