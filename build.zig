@@ -250,6 +250,8 @@ pub fn build(b: *Build) !void {
     const rocksdb_dep = b.dependency("rocksdb", .{
         .target = config.target,
         .optimize = config.optimize,
+        // ledgers from other clients sometimes use Snappy compression
+        .enable_snappy = true,
     });
     const rocksdb_mod = rocksdb_dep.module("bindings");
     // TODO: UB might be fixed by future RocksDB version upgrade.
