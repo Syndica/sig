@@ -11,12 +11,11 @@ pub const EpochRewards = extern struct {
     /// epoch
     distribution_starting_block_height: u64,
 
-    /// Number of partitions in the rewards distribution in the current epoch,
-    /// used to generate an EpochRewardsHasher
+    /// Number of partitions in the rewards distribution in the current epoch
     num_partitions: u64,
 
-    /// The blockhash of the parent block of the first block in the epoch, used
-    /// to seed an EpochRewardsHasher
+    /// The blockhash of the parent block of the first block in the epoch,
+    /// used as a seed for partitioning
     parent_blockhash: Hash,
 
     /// The total rewards points calculated for the current epoch, where points

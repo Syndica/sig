@@ -3,7 +3,7 @@ const std = @import("std");
 const tracy = @import("tracy");
 const sig = @import("../../../sig.zig");
 
-const builtin_costs = sig.runtime.program.builtin_costs;
+const builtin_program_costs = sig.runtime.program.builtin_program_costs;
 
 const Message = sig.core.transaction.Message;
 const Pubkey = sig.core.Pubkey;
@@ -13,7 +13,7 @@ const InstructionContext = sig.runtime.InstructionContext;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 
-const MIGRATING_BUILTIN_COSTS = builtin_costs.MIGRATING_BUILTIN_COSTS;
+const MIGRATING_BUILTIN_COSTS = builtin_program_costs.MIGRATING_BUILTIN_COSTS;
 const MAX_TRANSACTION_ACCOUNTS = sig.core.Transaction.MAX_ACCOUNTS;
 const DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT: u32 = 200_000;
 const MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT: u32 = 3_000;
@@ -397,7 +397,7 @@ fn defaultComputeUnitLimit(
 
     for (details.migrating_builtin_feature_counters, 0..) |count, index| {
         if (count > 0 and feature_set.active(
-            builtin_costs.getMigrationFeatureId(index),
+            builtin_program_costs.getMigrationFeatureId(index),
             slot,
         )) num_migrated += count else num_not_migrated += count;
     }
@@ -423,10 +423,10 @@ fn getProgramKind(
     program_id: Pubkey,
 ) ProgramKind {
     if (cache[index] == null) {
-        if (!builtin_costs.MAYBE_BUILTIN_KEY[program_id.data[0]])
+        if (!builtin_program_costs.MAYBE_BUILTIN_KEY[program_id.data[0]])
             return .not_builtin;
 
-        if (builtin_costs.BUILTIN_COSTS.get(&program_id.data)) |builtin_cost| {
+        if (builtin_program_costs.BUILTIN_COSTS.get(&program_id.data)) |builtin_cost| {
             cache[index] = if (builtin_cost.position()) |pos| .{
                 .migrating_builtin = pos,
             } else .builtin;

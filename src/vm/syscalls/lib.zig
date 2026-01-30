@@ -378,7 +378,7 @@ pub fn getEpochStake(
         tc.getCheckAligned(),
     );
 
-    if (tc.epoch_stakes.stakes.stake_delegations.getPtr(vote_address.*)) |delegation| {
+    if (tc.epoch_stakes.stakes.stake_accounts.getPtr(vote_address.*)) |delegation| {
         registers.set(.r0, delegation.stake);
     } else {
         registers.set(.r0, 0);
