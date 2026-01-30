@@ -66,7 +66,7 @@ const GossipMessageWithEndpoint = struct {
 
 pub const PULL_REQUEST_RATE: Duration = .fromSecs(1);
 pub const PULL_RESPONSE_TIMEOUT: Duration = .fromSecs(5);
-pub const ACTIVE_SET_REFRESH_RATE: Duration = .fromSecs(15);
+pub const ACTIVE_SET_REFRESH_RATE: Duration = .fromMillis(500);
 pub const DATA_TIMEOUT: Duration = .fromSecs(15);
 pub const TABLE_TRIM_RATE: Duration = .fromSecs(10);
 pub const BUILD_MESSAGE_LOOP_MIN: Duration = .fromSecs(1);
@@ -926,7 +926,8 @@ pub const GossipService = struct {
                 defer pull_req_timer.reset();
                 // this also includes sending ping messages to other peers
                 const now = getWallclockMs();
-                const pull_req_packets = self.buildPullRequests(
+                var pull_req_packets = self.buildPullRequests(
+                    self.allocator,
                     random,
                     pull_request.MAX_BLOOM_SIZE,
                     now,
@@ -934,7 +935,7 @@ pub const GossipService = struct {
                     self.logger.err().logf("failed to generate pull requests: {any}", .{e});
                     break :pull_blk;
                 };
-                defer pull_req_packets.deinit();
+                defer pull_req_packets.deinit(self.allocator);
                 for (pull_req_packets.items) |packet| {
                     try self.packet_outgoing_channel.send(packet);
                 }
@@ -1211,11 +1212,12 @@ pub const GossipService = struct {
     /// to be sent to a random set of gossip nodes.
     fn buildPullRequests(
         self: *GossipService,
+        gpa: std.mem.Allocator,
         random: std.Random,
         /// the bloomsize of the pull request's filters
         bloom_size: usize,
         now: u64,
-    ) !ArrayList(Packet) {
+    ) !std.ArrayListUnmanaged(Packet) {
         const zone = tracy.Zone.init(@src(), .{ .name = "gossip buildPullRequests" });
         defer zone.deinit();
 
@@ -1278,13 +1280,13 @@ pub const GossipService = struct {
         if (num_peers != 0) n_packets += filters.items.len;
         if (entrypoint_index != null) n_packets += filters.items.len;
 
-        var packet_batch = try ArrayList(Packet).initCapacity(self.allocator, n_packets);
-        packet_batch.appendNTimesAssumeCapacity(Packet.ANY_EMPTY, n_packets);
-        var packet_index: usize = 0;
+        var packet_batch: std.ArrayListUnmanaged(Packet) = .empty;
+        errdefer packet_batch.deinit(gpa);
+        try packet_batch.ensureTotalCapacityPrecise(gpa, n_packets);
 
         // update wallclock and sign
         self.my_contact_info.wallclock = now;
-        const my_contact_info_value = SignedGossipData.initSigned(
+        const my_contact_info_value: SignedGossipData = .initSigned(
             &self.my_keypair,
             // safe to copy contact info since it is immediately serialized
             .{ .ContactInfo = self.my_contact_info },
@@ -1302,12 +1304,10 @@ pub const GossipService = struct {
                 }
                 if (peer_contact_info.gossip_addr) |gossip_addr| {
                     const message: GossipMessage = .{ .PullRequest = .{ filter_i, my_contact_info_value } };
-                    var packet = &packet_batch.items[packet_index];
-
-                    const bytes = try bincode.writeToSlice(&packet.buffer, message, bincode.Params{});
+                    const packet = try packet_batch.addOne(gpa);
+                    const bytes = try bincode.writeToSlice(&packet.buffer, message, .standard);
                     packet.size = bytes.len;
                     packet.addr = gossip_addr;
-                    packet_index += 1;
                 }
             }
         }
@@ -1316,10 +1316,9 @@ pub const GossipService = struct {
         if (entrypoint_index) |entrypoint_idx| {
             const entrypoint = self.entrypoints[entrypoint_idx];
             for (filters.items) |filter| {
-                const packet = &packet_batch.items[packet_index];
+                const packet = try packet_batch.addOne(gpa);
                 const message: GossipMessage = .{ .PullRequest = .{ filter, my_contact_info_value } };
                 try packet.populateFromBincode(entrypoint.addr, message);
-                packet_index += 1;
             }
         }
 
@@ -2941,11 +2940,11 @@ fn testBuildPullRequests(
         }
     }
 
-    var packets = gossip_service.buildPullRequests(random, 2, now) catch |err| {
+    var packets = gossip_service.buildPullRequests(allocator, random, 2, now) catch |err| {
         std.log.err("\nThe failing now time is: '{d}'\n", .{now});
         return err;
     };
-    defer packets.deinit();
+    defer packets.deinit(allocator);
 
     try std.testing.expect(packets.items.len > 1);
     try std.testing.expect(!std.mem.eql(u8, packets.items[0].data(), packets.items[1].data()));
