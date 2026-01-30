@@ -302,27 +302,25 @@ pub fn computeFromMap(
     allocator: Allocator,
     slot_leaders_map: *const sig.utils.collections.PubkeyMap([]const u64),
 ) !LeaderSchedule {
-    var slot_leaders = std.ArrayListUnmanaged(struct { Slot, Pubkey }).empty;
-
-    for (slot_leaders_map.keys(), slot_leaders_map.values()) |leader, slots| {
-        for (slots) |slot| try slot_leaders.append(allocator, .{ slot, leader });
+    var start: u64 = std.math.maxInt(u64);
+    var end: u64 = 0;
+    for (slot_leaders_map.values()) |slots| {
+        for (slots) |i| {
+            start = @min(i, start);
+            end = @max(i, end);
+        }
     }
 
-    std.mem.sortUnstable(struct { Slot, Pubkey }, slot_leaders.items, {}, struct {
-        fn lt(_: void, lhs: struct { Slot, Pubkey }, rhs: struct { Slot, Pubkey }) bool {
-            return lhs[0] < rhs[0];
-        }
-    }.lt);
-
-    var leaders = try allocator.alloc(Pubkey, slot_leaders.items.len);
-    for (slot_leaders.items, 0..) |entry, i| {
-        leaders[i] = entry[1];
+    if (start > end) return error.NoSlotLeaders;
+    const leaders = try allocator.alloc(Pubkey, 1 + end - start);
+    for (slot_leaders_map.keys(), slot_leaders_map.values()) |leader, slots| {
+        for (slots) |slot| leaders[slot - start] = leader;
     }
 
     return .{
         .leaders = leaders,
-        .start = slot_leaders.items[0][0],
-        .end = slot_leaders.items[slot_leaders.items.len -| 1][0],
+        .start = start,
+        .end = end,
     };
 }
 
