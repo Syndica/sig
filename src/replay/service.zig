@@ -213,6 +213,11 @@ pub const ReplayState = struct {
             .state = deps.root.state,
         });
         errdefer slot_tracker.deinit(deps.allocator);
+
+        // Initialize the slot tracking atomics to the root slot, since the root
+        // slot from the snapshot has already been processed/confirmed/finalized.
+        _ = slot_tracker.latest_processed_slot.fetchMax(deps.root.slot, .monotonic);
+        _ = slot_tracker.latest_confirmed_slot.fetchMax(deps.root.slot, .monotonic);
         errdefer {
             // do not free the root slot data parameter, we don't own it unless the function returns successfully
             deps.allocator.destroy(slot_tracker.slots.fetchSwapRemove(deps.root.slot).?.value);

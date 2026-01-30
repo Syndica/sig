@@ -690,7 +690,7 @@ pub const common = struct {
 pub const SlotHookContext = struct {
     slot_tracker: *const sig.replay.trackers.SlotTracker,
 
-    fn getLatestProcessedSlot(self: *@This()) !Slot {
+    fn getLatestProcessedSlot(self: @This()) !Slot {
         const slot = self.slot_tracker.latest_processed_slot.load(.monotonic);
         if (slot == 0) {
             return error.RpcNoProcessedSlot;
@@ -698,7 +698,7 @@ pub const SlotHookContext = struct {
         return slot;
     }
 
-    fn getLatestConfirmedSlot(self: *@This()) !Slot {
+    fn getLatestConfirmedSlot(self: @This()) !Slot {
         const slot = self.slot_tracker.latest_confirmed_slot.load(.monotonic);
         if (slot == 0) {
             return error.RpcNoConfirmedSlot;
@@ -706,7 +706,7 @@ pub const SlotHookContext = struct {
         return slot;
     }
 
-    fn getLatestFinalizedSlot(self: *@This()) !Slot {
+    fn getLatestFinalizedSlot(self: @This()) !Slot {
         const slot = self.slot_tracker.root.load(.monotonic);
         if (slot == 0) {
             return error.RpcNoFinalizedSlot;
@@ -715,7 +715,7 @@ pub const SlotHookContext = struct {
     }
 
     fn getSlotImpl(
-        self: *@This(),
+        self: @This(),
         config: common.CommitmentSlotConfig,
     ) !Slot {
         const commitment = config.commitment orelse .finalized;
@@ -735,7 +735,7 @@ pub const SlotHookContext = struct {
         return slot;
     }
 
-    pub fn getSlot(self: *@This(), _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
+    pub fn getSlot(self: @This(), _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
         const config = params.config orelse common.CommitmentSlotConfig{};
 
         return self.getSlotImpl(config);

@@ -2215,11 +2215,9 @@ const ReplayAndConsensusServiceState = struct {
             };
         };
 
-        var rpc_ctx = sig.rpc.methods.SlotHookContext{
+        try params.app_base.rpc_hooks.set(allocator, sig.rpc.methods.SlotHookContext{
             .slot_tracker = &replay_state.slot_tracker,
-        };
-
-        try params.app_base.rpc_hooks.set(allocator, &rpc_ctx);
+        });
 
         const metrics = try params.app_base.metrics_registry.initStruct(replay.service.Metrics);
 
