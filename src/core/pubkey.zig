@@ -26,11 +26,37 @@ pub const Pubkey = extern struct {
         return .{ .data = bytes };
     }
 
+    pub fn hash(self: Pubkey) u64 {
+        // From Wyhash/RapidHash:
+        // https://github.com/hoxxep/rapidhash/blob/ec78aed2815e76dfaa4bf700f474138c88e9453e/rapidhash-c/cpp/rapidhash_v3.hpp#L128-L136
+        const sk = [_]u64{
+            0x2d358dccaa6c78a5,
+            0x8bb84b93962eacc9,
+            0x4b33a62ed433d4a3,
+            0x4d5a2da51de1aa47,
+            0xa0761d6478bd642f,
+            0xe7037ed1a0b428db,
+        };
+
+        const in: [4]u64 = @bitCast(self.data);
+        const m1: [2]u64 = @bitCast(@as(u128, in[0] ^ sk[0]) * (in[1] ^ sk[1]));
+        const m2: [2]u64 = @bitCast(@as(u128, in[2] ^ sk[2]) * (in[3] ^ sk[3]));
+        const m3: [2]u64 = @bitCast(@as(u128, m1[0] ^ m1[1] ^ sk[3]) * (m2[0] ^ m2[1] ^ sk[4]));
+        return m3[0] ^ m3[1];
+    }
+
     pub fn order(self: Pubkey, other: Pubkey) std.math.Order {
-        return for (self.data, other.data) |a_byte, b_byte| {
-            if (a_byte > b_byte) break .gt;
-            if (a_byte < b_byte) break .lt;
-        } else .eq;
+        const xx: @Vector(SIZE, u8) = self.data;
+        const yy: @Vector(SIZE, u8) = other.data;
+
+        const diff_mask: std.meta.Int(.unsigned, SIZE) = @bitCast(xx != yy);
+        const all_eq = diff_mask == 0;
+
+        const first_diff = if (all_eq) 0 else @ctz(diff_mask);
+        const lt_or_gt: std.math.Order =
+            if (self.data[first_diff] < other.data[first_diff]) .lt else .gt;
+
+        return if (all_eq) .eq else lt_or_gt;
     }
 
     pub fn equals(self: *const Pubkey, other: *const Pubkey) bool {
