@@ -628,7 +628,7 @@ test storeStakeAccountsInPartition {
         var stakes_cache = sig.core.StakesCache.EMPTY;
         defer stakes_cache.deinit(allocator);
 
-        const result = try storeStakeAccountsInPartition(
+        _ = try storeStakeAccountsInPartition(
             allocator,
             partitioned_rewards,
             partitioned_indices,
@@ -637,7 +637,6 @@ test storeStakeAccountsInPartition {
             slot_store,
             null,
         );
-        std.debug.print("result: {any}\n", .{result});
     }
 
     {
