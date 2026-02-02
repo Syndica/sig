@@ -686,3 +686,58 @@ pub const common = struct {
         shredVersion: ?u16 = null,
     };
 };
+
+pub const SlotHookContext = struct {
+    slot_tracker: *const sig.replay.trackers.SlotTracker,
+
+    fn getLatestProcessedSlot(self: @This()) !Slot {
+        const slot = self.slot_tracker.latest_processed_slot.get();
+        if (slot == 0) {
+            return error.RpcNoProcessedSlot;
+        }
+        return slot;
+    }
+
+    fn getLatestConfirmedSlot(self: @This()) !Slot {
+        const slot = self.slot_tracker.latest_confirmed_slot.get();
+        if (slot == 0) {
+            return error.RpcNoConfirmedSlot;
+        }
+        return slot;
+    }
+
+    fn getLatestFinalizedSlot(self: @This()) !Slot {
+        const slot = self.slot_tracker.root.load(.monotonic);
+        if (slot == 0) {
+            return error.RpcNoFinalizedSlot;
+        }
+        return slot;
+    }
+
+    fn getSlotImpl(
+        self: @This(),
+        config: common.CommitmentSlotConfig,
+    ) !Slot {
+        const commitment = config.commitment orelse .finalized;
+
+        const slot = switch (commitment) {
+            .processed => try self.getLatestProcessedSlot(),
+            .confirmed => try self.getLatestConfirmedSlot(),
+            .finalized => try self.getLatestFinalizedSlot(),
+        };
+
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) {
+                return error.RpcMinContextSlotNotMet;
+            }
+        }
+
+        return slot;
+    }
+
+    pub fn getSlot(self: @This(), _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+
+        return self.getSlotImpl(config);
+    }
+};

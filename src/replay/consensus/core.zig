@@ -153,7 +153,8 @@ pub const TowerConsensus = struct {
         );
         errdefer fork_choice.deinit(allocator);
 
-        const root_ref = deps.slot_tracker.get(deps.slot_tracker.root).?;
+        const root = deps.slot_tracker.root.load(.monotonic);
+        const root_ref = deps.slot_tracker.get(root).?;
         const root_ancestors = &root_ref.constants.ancestors;
 
         var tower: Tower = if (deps.identity.vote_account) |vote_account_address|
@@ -164,8 +165,8 @@ pub const TowerConsensus = struct {
                 vote_account_address,
             )
         else
-            .{ .root = deps.slot_tracker.root };
-        tower.setRoot(deps.slot_tracker.root);
+            .{ .root = root };
+        tower.setRoot(root);
 
         const replay_tower: ReplayTower = try .init(
             .from(deps.logger),
@@ -176,7 +177,7 @@ pub const TowerConsensus = struct {
         errdefer replay_tower.deinit(allocator);
 
         var vote_collector: sig.consensus.VoteCollector =
-            try .init(deps.now, deps.slot_tracker.root, deps.registry);
+            try .init(deps.now, root, deps.registry, deps.slot_tracker.latest_confirmed_slot);
         errdefer vote_collector.deinit(allocator);
 
         return .{
@@ -205,7 +206,7 @@ pub const TowerConsensus = struct {
     ) !HeaviestSubtreeForkChoice {
         const root_slot, const root_hash = blk: {
             const root = slot_tracker.getRoot();
-            const root_slot = slot_tracker.root;
+            const root_slot = slot_tracker.root.load(.monotonic);
             const root_hash = root.state.hash.readCopy();
             break :blk .{ root_slot, root_hash.? };
         };
@@ -571,7 +572,7 @@ pub const TowerConsensus = struct {
             }
             // Update cluster with the duplicate confirmation status.
             // Analogous to [ReplayStage::mark_slots_duplicate_confirmed](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3876)
-            const root_slot = slot_tracker.root;
+            const root_slot = slot_tracker.root.load(.monotonic);
             for (duplicate_confirmed_forks.items) |duplicate_confirmed_fork| {
                 const slot, const frozen_hash = duplicate_confirmed_fork.tuple();
                 try self.handleDuplicateConfirmedFork(
@@ -1598,7 +1599,7 @@ fn checkAndHandleNewRoot(
     // Audit: The rest of the code maps to Self::handle_new_root in Agave.
     // Update the slot tracker.
     // Set new root.
-    slot_tracker.root = new_root;
+    slot_tracker.root.store(new_root, .monotonic);
     // Prune non rooted slots
     slot_tracker.pruneNonRooted(allocator);
 
@@ -4723,12 +4724,10 @@ test "edge cases - duplicate slot" {
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
-    std.debug.assert(slot_tracker.root == 0);
+    const root_slot0 = slot_tracker.root.load(.monotonic);
+    std.debug.assert(root_slot0 == 0);
 
-    const root_slot0 = slot_tracker.root;
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
-
-    std.debug.assert(root_slot0 == 0); // assert initial root value
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
@@ -4894,12 +4893,11 @@ test "edge cases - duplicate confirmed slot" {
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
-    std.debug.assert(slot_tracker.root == 0);
+    const root_slot0 = slot_tracker.root.load(.monotonic);
+    std.debug.assert(root_slot0 == 0);
 
-    const root_slot0 = slot_tracker.root;
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
-
-    std.debug.assert(root_slot0 == 0); // assert initial root value
+    std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
@@ -5066,16 +5064,14 @@ test "edge cases - gossip verified vote hashes" {
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
-    std.debug.assert(slot_tracker.root == 0);
+    const root_slot0 = slot_tracker.root.load(.monotonic);
+    std.debug.assert(root_slot0 == 0); // assert initial root value
 
     var vote_collector: sig.consensus.vote_listener.VoteCollector =
-        try .init(.EPOCH_ZERO, slot_tracker.root, &registry);
+        try .init(.EPOCH_ZERO, root_slot0, &registry);
     defer vote_collector.deinit(gpa);
 
-    const root_slot0 = slot_tracker.root;
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
-
-    std.debug.assert(root_slot0 == 0); // assert initial root value
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
@@ -5986,7 +5982,7 @@ test "root advances after vote satisfies lockouts" {
             consensus.replay_tower.tower.votes.len,
         );
 
-        try std.testing.expectEqual(1, slot_tracker.root);
+        try std.testing.expectEqual(1, slot_tracker.root.load(.monotonic));
         // No longer tracking slot 0
         try std.testing.expect(!slot_tracker.contains(0));
         // Still tracking slot 1
@@ -6073,7 +6069,7 @@ test "root advances after vote satisfies lockouts" {
         const last_voted = consensus.replay_tower.tower.lastVotedSlot();
         try std.testing.expectEqual(33, last_voted);
 
-        try std.testing.expectEqual(2, slot_tracker.root);
+        try std.testing.expectEqual(2, slot_tracker.root.load(.monotonic));
         // No longer tracking slot 0
         try std.testing.expect(!slot_tracker.contains(0));
         // No longer tracking slot 1
