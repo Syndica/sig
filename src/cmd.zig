@@ -297,6 +297,13 @@ pub fn main() !void {
                 ),
             }
         },
+        .ledger => |params| {
+            const action = params.action orelse {
+                _ = try parser.parse(gpa, "sig", tty_config, stdout, &.{ "ledger", "--help" });
+                return;
+            };
+            try ledgerTool(gpa, current_config, action);
+        },
     }
 }
 
@@ -320,6 +327,7 @@ const Cmd = struct {
         test_transaction_sender: TestTransactionSender,
         mock_rpc_server: MockRpcServer,
         agave_migration_tool: AgaveMigrationTool,
+        ledger: LedgerSubCmd,
     },
 
     const cmd_info: cli.CommandInfo(@This()) = .{
@@ -347,6 +355,7 @@ const Cmd = struct {
                 .test_transaction_sender = TestTransactionSender.cmd_info,
                 .mock_rpc_server = MockRpcServer.cmd_info,
                 .agave_migration_tool = AgaveMigrationTool.cmd_info,
+                .ledger = LedgerSubCmd.cmd_info,
             },
             .log_filters = .{
                 .kind = .named,
@@ -1186,6 +1195,72 @@ const Cmd = struct {
                 .accountsdb_base = AccountsDbArgumentsBase.cmd_info,
                 .accountsdb_download = AccountsDbArgumentsDownload.cmd_info,
                 .force_new_snapshot_download = force_new_snapshot_download_arg,
+            },
+        };
+    };
+
+    const LedgerSubCmd = struct {
+        action: ?union(enum) {
+            bounds,
+            retain: Retain,
+        },
+
+        const Retain = struct {
+            start_slot: ?Slot,
+            end_slot: ?Slot,
+        };
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Ledger utilities for inspecting and modifying the ledger database.",
+                .long =
+                \\Provides utilities for working with the ledger database:
+                \\
+                \\  bounds  - Print the min and max slot in the ledger
+                \\  retain  - Remove all slots from the ledger outside the specified range
+                \\
+                \\Use --validator-dir to specify the validator directory containing the ledger.
+                ,
+            },
+            .sub = .{
+                .action = .{
+                    .bounds = .{
+                        .help = .{
+                            .short = "Print the min and max slot in the ledger.",
+                            .long = null,
+                        },
+                        .sub = .{},
+                    },
+                    .retain = .{
+                        .help = .{
+                            .short = "Remove all slots from the ledger outside the specified range.",
+                            .long =
+                            \\Removes all slots from the ledger that are outside the range
+                            \\[start-slot, end-slot]. If start-slot is not specified, it defaults
+                            \\to the minimum slot in the ledger. If end-slot is not specified,
+                            \\it defaults to the maximum slot in the ledger.
+                            ,
+                        },
+                        .sub = .{
+                            .start_slot = .{
+                                .kind = .named,
+                                .name_override = "start-slot",
+                                .alias = .none,
+                                .default_value = null,
+                                .config = {},
+                                .help = "The first slot to retain (inclusive). Defaults to min slot in ledger.",
+                            },
+                            .end_slot = .{
+                                .kind = .named,
+                                .name_override = "end-slot",
+                                .alias = .none,
+                                .default_value = null,
+                                .config = {},
+                                .help = "The last slot to retain (inclusive). Defaults to max slot in ledger.",
+                            },
+                        },
+                    },
+                },
             },
         };
     };
@@ -2207,6 +2282,81 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         &server_ctx,
         .basic, // if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else .basic,
     );
+}
+
+/// Entrypoint for ledger utilities
+fn ledgerTool(
+    allocator: std.mem.Allocator,
+    cfg: config.Cmd,
+    action: std.meta.Child(@TypeOf(@as(Cmd.LedgerSubCmd, undefined).action)),
+) !void {
+    const maybe_file, const logger = try spawnLogger(allocator, cfg);
+    defer if (maybe_file) |file| file.close();
+    defer logger.deinit();
+
+    const stdout = std.io.getStdOut().writer();
+
+    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    defer allocator.free(ledger_dir);
+
+    var ledger_state = Ledger.init(allocator, .from(logger), ledger_dir, null) catch |err| {
+        logger.err().logf("Failed to open ledger at '{s}': {}", .{ ledger_dir, err });
+        return err;
+    };
+    defer ledger_state.deinit();
+
+    const reader = ledger_state.reader();
+
+    switch (action) {
+        .bounds => {
+            const lowest_slot = try reader.lowestSlot();
+            const highest_slot = try reader.highestSlot() orelse lowest_slot;
+            try stdout.print("Ledger bounds: {d} to {d}\n", .{ lowest_slot, highest_slot });
+        },
+        .retain => |retain_params| {
+            const lowest_slot = try reader.lowestSlot();
+            const highest_slot = try reader.highestSlot() orelse lowest_slot;
+
+            const start_slot = retain_params.start_slot orelse lowest_slot;
+            const end_slot = retain_params.end_slot orelse highest_slot;
+
+            if (start_slot > end_slot) {
+                logger.err().logf("Invalid range: start-slot ({d}) > end-slot ({d})", .{ start_slot, end_slot });
+                return error.InvalidSlotRange;
+            }
+
+            try stdout.print("Current ledger bounds: [{d}, {d}]\n", .{ lowest_slot, highest_slot });
+            try stdout.print("Retaining slots in range: [{d}, {d}]\n", .{ start_slot, end_slot });
+
+            // Purge slots before start_slot
+            if (start_slot > lowest_slot) {
+                try stdout.print("Purging slots [{d}, {d})...\n", .{ lowest_slot, start_slot });
+                const did_purge = try sig.ledger.cleanup_service.purgeSlots(
+                    &ledger_state.db,
+                    lowest_slot,
+                    start_slot - 1,
+                );
+                if (did_purge) {
+                    try stdout.print("  Purged slots before {d}\n", .{start_slot});
+                }
+            }
+
+            // Purge slots after end_slot
+            if (end_slot < highest_slot) {
+                try stdout.print("Purging slots ({d}, {d}]...\n", .{ end_slot, highest_slot });
+                const did_purge = try sig.ledger.cleanup_service.purgeSlots(
+                    &ledger_state.db,
+                    end_slot + 1,
+                    highest_slot,
+                );
+                if (did_purge) {
+                    try stdout.print("  Purged slots after {d}\n", .{end_slot});
+                }
+            }
+
+            try stdout.print("Done. Retained slots in range [{d}, {d}]\n", .{ start_slot, end_slot });
+        },
+    }
 }
 
 /// State that typically needs to be initialized at the start of the app,
