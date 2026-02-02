@@ -23,7 +23,9 @@ pub const Client = struct {
         cluster_type: ClusterType,
         options: HttpPostFetcher.Options,
     ) Allocator.Error!Client {
-        return .{ .fetcher = try HttpPostFetcher.init(allocator, rpcUrl(cluster_type), options) };
+        return .{
+            .fetcher = try .init(allocator, rpcUrl(cluster_type), options),
+        };
     }
 
     pub fn deinit(self: *Client) void {

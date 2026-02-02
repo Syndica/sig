@@ -1247,17 +1247,17 @@ fn validator(
     var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
     defer rpc_client.deinit();
 
-    var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService.init(
-        allocator,
+    var rpc_epoch_ctx_service: sig.adapter.RpcEpochContextService = .init(
         .from(app_base.logger),
         &epoch_context_manager,
         rpc_client,
     );
+    defer rpc_epoch_ctx_service.deinit();
 
     const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
         .{},
         sig.adapter.RpcEpochContextService.run,
-        .{ &rpc_epoch_ctx_service, app_base.exit },
+        .{ &rpc_epoch_ctx_service, allocator, app_base.exit },
     );
 
     const turbine_config = cfg.turbine;
@@ -1602,11 +1602,11 @@ fn shredNetwork(
     var epoch_context_manager = try sig.adapter.EpochContextManager
         .init(allocator, genesis_config.epoch_schedule);
     var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService
-        .init(allocator, .from(app_base.logger), &epoch_context_manager, rpc_client);
+        .init(.from(app_base.logger), &epoch_context_manager, rpc_client);
     const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
         .{},
         sig.adapter.RpcEpochContextService.run,
-        .{ &rpc_epoch_ctx_service, app_base.exit },
+        .{ &rpc_epoch_ctx_service, allocator, app_base.exit },
     );
 
     var ledger = try Ledger.init(
