@@ -33,14 +33,19 @@ pub const Cmd = struct {
     stop_at_slot: ?sig.core.Slot = null,
 
     pub fn genesisFilePath(self: Cmd) error{UnknownCluster}!?[]const u8 {
-        return if (self.genesis_file_path) |provided_path|
-            provided_path
-        else if (try self.gossip.getCluster()) |n| switch (n) {
+        if (self.genesis_file_path) |provided_path|
+            return provided_path;
+
+        const local_path = if (try self.gossip.getCluster()) |n| switch (n) {
             .mainnet => "data/genesis-files/mainnet_genesis.bin",
             .devnet => "data/genesis-files/devnet_genesis.bin",
             .testnet => "data/genesis-files/testnet_genesis.bin",
-            .localnet => null, // no default genesis file for localhost
-        } else null;
+            .localnet => return error.MustProvideGenesisFileForLocalHost,
+        } else return null;
+
+        std.fs.cwd().access(local_path, .{ .read = true }) catch {
+            return null;
+        };
     }
 };
 

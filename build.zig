@@ -242,6 +242,12 @@ pub fn build(b: *Build) !void {
         .optimize = config.optimize,
     }).module("zstd");
 
+    const bzip2_dep = b.dependency("bzip2", .{
+        .target = config.target,
+        .optimize = config.optimize,
+    });
+    const bzip2_lib = bzip2_dep.artifact("bz");
+
     const ssl_mod = lsquic_dep.builder.dependency("boringssl", .{
         .target = config.target,
         .optimize = config.optimize,
@@ -317,6 +323,7 @@ pub fn build(b: *Build) !void {
         .optimize = config.optimize,
         .imports = imports,
     });
+    sig_mod.linkLibrary(bzip2_lib);
 
     switch (config.ledger_db) {
         .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
@@ -338,6 +345,7 @@ pub fn build(b: *Build) !void {
     });
     sig_exe.root_module.addObject(memcpy);
     sig_exe.root_module.addImport("cli", cli_mod);
+    sig_exe.linkLibrary(bzip2_lib);
 
     // make sure pyroscope's got enough info to profile
     sig_exe.build_id = .fast;
@@ -362,6 +370,7 @@ pub fn build(b: *Build) !void {
     });
     unit_tests_exe.root_module.addObject(memcpy);
     unit_tests_exe.root_module.addImport("cli", cli_mod);
+    unit_tests_exe.linkLibrary(bzip2_lib);
     switch (config.ledger_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},

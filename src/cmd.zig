@@ -32,6 +32,7 @@ const getWallclockMs = sig.time.getWallclockMs;
 const globalRegistry = sig.prometheus.globalRegistry;
 const loadSnapshot = sig.accounts_db.snapshot.load.loadSnapshot;
 const servePrometheus = sig.prometheus.servePrometheus;
+const downloadAndExtractGenesis = sig.core.genesis_download.downloadAndExtractGenesis;
 
 const Logger = sig.trace.Logger("cmd");
 
@@ -1197,16 +1198,63 @@ const AllocationMetrics = struct {
     allocated_bytes_ledger: *Gauge(u64),
     allocated_bytes_sqlite: *Gauge(u64),
 };
-/// Ensures the validator directory exists, creating it (and parent directories) if needed.
-/// Returns an error if the directory cannot be created or accessed.
+
+/// Ensures the validator directory exists.
+/// Returns an error if the directory cannot be accessed.
 fn ensureValidatorDir(logger: Logger, validator_dir: []const u8) !void {
-    _ = std.fs.cwd().makeOpenPath(validator_dir, .{}) catch |err| {
+    _ = std.fs.cwd().openDir(validator_dir, .{}) catch |err| {
         logger.err().logf(
             "Cannot create or access validator directory '{s}': {}",
             .{ validator_dir, err },
         );
         return err;
     };
+}
+
+/// Ensures a genesis file is available by either using the provided path
+/// or downloading it from the network for the specified cluster.
+///
+/// Returns the path to the genesis file. If downloaded, the file is stored
+/// in `<validator_dir>/genesis.bin`.
+///
+/// TODO: The hash is NOT verified against the cluster's expected genesis hash.
+fn ensureGenesis(
+    allocator: std.mem.Allocator,
+    cfg: config.Cmd,
+    logger: Logger,
+) ![]const u8 {
+    // If explicit path provided, use it directly
+    if (cfg.genesis_file_path) |provided_path| {
+        logger.info().logf("Using provided genesis file: {s}", .{provided_path});
+        return try allocator.dupe(u8, provided_path);
+    }
+
+    // Determine cluster for genesis
+    const cluster = try cfg.gossip.getCluster() orelse {
+        logger.err().log("No genesis file path provided and no cluster specified. Use --genesis-file-path or --cluster");
+        return error.GenesisPathNotProvided;
+    };
+
+    // Otherwise, download genesis from network
+    logger.info().logf("Downloading genesis from {s} cluster...", .{@tagName(cluster)});
+    const cluster_url = switch (cluster) {
+        .mainnet => "https://api.mainnet-beta.solana.com",
+        .testnet => "https://api.testnet.solana.com",
+        .devnet => "https://api.devnet.solana.com",
+        .localnet => unreachable,
+    };
+    const genesis_path = downloadAndExtractGenesis(
+        allocator,
+        cluster_url,
+        cfg.validator_dir,
+        .from(logger),
+    ) catch |err| {
+        logger.err().logf("Failed to download genesis: {}", .{err});
+        return error.GenesisDownloadFailed;
+    };
+
+    logger.info().logf("Genesis downloaded to: {s}", .{genesis_path});
+    return genesis_path;
 }
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
@@ -1281,6 +1329,8 @@ fn validator(
     const allocator = gpa_metrics.allocator();
 
     try ensureValidatorDir(app_base.logger, cfg.validator_dir);
+    const genesis_file_path = try ensureGenesis(allocator, cfg, app_base.logger);
+    defer allocator.free(genesis_file_path);
 
     const repair_port: u16 = cfg.shred_network.repair_port;
     const turbine_recv_port: u16 = cfg.shred_network.turbine_recv_port;
@@ -1364,9 +1414,7 @@ fn validator(
         snapshot_dir,
         snapshot_files,
         .{
-            .genesis_file_path = try cfg.genesisFilePath() orelse {
-                return error.GenesisPathNotProvided;
-            },
+            .genesis_file_path = genesis_file_path,
             .extract = if (cfg.accounts_db.skip_snapshot_validation)
                 .{ .entire_snapshot = &rooted_db }
             else
@@ -1578,6 +1626,8 @@ fn replayOffline(
     const allocator = gpa_metrics.allocator();
 
     try ensureValidatorDir(app_base.logger, cfg.validator_dir);
+    const genesis_file_path = try ensureGenesis(allocator, cfg, app_base.logger);
+    defer allocator.free(genesis_file_path);
 
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
@@ -1611,9 +1661,7 @@ fn replayOffline(
         snapshot_dir,
         snapshot_files,
         .{
-            .genesis_file_path = try cfg.genesisFilePath() orelse {
-                return error.GenesisPathNotProvided;
-            },
+            .genesis_file_path = genesis_file_path,
             .extract = if (cfg.accounts_db.skip_snapshot_validation)
                 .{ .entire_snapshot = &rooted_db }
             else
@@ -1704,13 +1752,12 @@ fn shredNetwork(
     }
 
     try ensureValidatorDir(app_base.logger, cfg.validator_dir);
+    const genesis_file_path = try ensureGenesis(allocator, cfg, app_base.logger);
+    defer allocator.free(genesis_file_path);
+    const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
 
     const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
     defer allocator.free(ledger_dir);
-
-    const genesis_path = try cfg.genesisFilePath() orelse
-        return error.GenesisPathNotProvided;
-    const genesis_config = try GenesisConfig.init(allocator, genesis_path);
 
     var rpc_client = try sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
     defer rpc_client.deinit();
@@ -1897,6 +1944,10 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         app_base.deinit();
     }
 
+    try ensureValidatorDir(.noop, cfg.validator_dir);
+    const genesis_file_path = try ensureGenesis(allocator, cfg, .from(app_base.logger));
+    defer allocator.free(genesis_file_path);
+
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
@@ -1929,9 +1980,7 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         snapshot_dir,
         snapshot_files,
         .{
-            .genesis_file_path = try cfg.genesisFilePath() orelse {
-                return error.GenesisPathNotProvided;
-            },
+            .genesis_file_path = genesis_file_path,
             .extract = .{ .entire_snapshot_and_validate = &rooted_db },
         },
     );
@@ -2011,8 +2060,9 @@ fn testTransactionSenderService(
     }
 
     // read genesis (used for leader schedule)
-    const genesis_file_path = try cfg.genesisFilePath() orelse
-        @panic("No genesis file path found: use -g or -n");
+    const genesis_file_path = try ensureGenesis(allocator, cfg, .from(app_base.logger));
+    defer allocator.free(genesis_file_path);
+
     const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
 
     // start gossip (used to get TPU ports of leaders)
