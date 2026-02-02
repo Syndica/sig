@@ -67,18 +67,16 @@ pub fn main() !void {
     var gpa_state: GpaOrCAllocator(.{}) = .{};
     // defer _ = gpa_state.deinit();
 
-    var tracing_gpa = tracy.TracingAllocator{
+    var tracing_gpa: tracy.TracingAllocator = .{
         .name = "gpa",
         .parent = gpa_state.allocator(),
     };
     const gpa = tracing_gpa.allocator();
 
-    var gossip_gpa_state: GpaOrCAllocator(.{ .stack_trace_frames = 100 }) = .{};
-    var tracing_gossip_gpa = tracy.TracingAllocator{
+    var tracing_gossip_gpa: tracy.TracingAllocator = .{
         .name = "gossip gpa",
-        .parent = gossip_gpa_state.allocator(),
+        .parent = tracing_gpa.allocator(),
     };
-    // defer _ = gossip_gpa_state.deinit();
     const gossip_gpa = tracing_gossip_gpa.allocator();
 
     const argv = try std.process.argsAlloc(gpa);
