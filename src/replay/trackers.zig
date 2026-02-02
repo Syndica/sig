@@ -8,6 +8,30 @@ const Slot = sig.core.Slot;
 const SlotConstants = sig.core.SlotConstants;
 const SlotState = sig.core.SlotState;
 
+pub const ForkChoiceProcessedSlot = struct {
+    slot: std.atomic.Value(Slot) = .init(0),
+
+    pub fn update(self: *@This(), new_slot: Slot) void {
+        _ = self.slot.fetchMax(new_slot, .monotonic);
+    }
+
+    pub fn get(self: *const @This()) Slot {
+        return self.slot.load(.monotonic);
+    }
+};
+
+pub const OptimisticallyConfirmedSlot = struct {
+    slot: std.atomic.Value(Slot) = .init(0),
+
+    pub fn update(self: *@This(), new_slot: Slot) void {
+        _ = self.slot.fetchMax(new_slot, .monotonic);
+    }
+
+    pub fn get(self: *const @This()) Slot {
+        return self.slot.load(.monotonic);
+    }
+};
+
 /// Central registry that tracks high-level info about slots and how they fork.
 ///
 /// This is a lean version of `BankForks` from agave, focused on storing the
@@ -20,7 +44,9 @@ const SlotState = sig.core.SlotState;
 /// will end as soon as the items are removed.
 pub const SlotTracker = struct {
     slots: std.AutoArrayHashMapUnmanaged(Slot, *Element),
-    root: Slot,
+    latest_processed_slot: *ForkChoiceProcessedSlot,
+    latest_confirmed_slot: *OptimisticallyConfirmedSlot,
+    root: std.atomic.Value(Slot),
 
     pub const Element = struct {
         constants: SlotConstants,
@@ -41,13 +67,17 @@ pub const SlotTracker = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
+        latest_processed_slot: *ForkChoiceProcessedSlot,
+        latest_confirmed_slot: *OptimisticallyConfirmedSlot,
         root_slot: Slot,
         /// ownership is transferred to this function, except in the case of an error return
         slot_init: Element,
     ) std.mem.Allocator.Error!SlotTracker {
         var self: SlotTracker = .{
-            .root = root_slot,
+            .root = .init(root_slot),
             .slots = .empty,
+            .latest_processed_slot = latest_processed_slot,
+            .latest_confirmed_slot = latest_confirmed_slot,
         };
         errdefer self.deinit(allocator);
 
@@ -114,7 +144,7 @@ pub const SlotTracker = struct {
     }
 
     pub fn getRoot(self: *const SlotTracker) Reference {
-        return self.get(self.root).?; // root slot's bank must exist
+        return self.get(self.root.load(.monotonic)).?; // root slot's bank must exist
     }
 
     pub fn contains(self: *const SlotTracker, slot: Slot) bool {
@@ -188,8 +218,9 @@ pub const SlotTracker = struct {
 
         var slice = self.slots.entries.slice();
         var index: usize = 0;
+        const root = self.root.load(.monotonic);
         while (index < slice.len) {
-            if (slice.items(.key)[index] < self.root) {
+            if (slice.items(.key)[index] < root) {
                 const element = slice.items(.value)[index];
                 element.state.deinit(allocator);
                 element.constants.deinit(allocator);

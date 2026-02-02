@@ -492,7 +492,7 @@ fn processAncestorHashesDuplicateSlots(
     slot_tracker: *const SlotTracker,
     duplicate_slots_to_repair: *SlotData.DuplicateSlotsToRepair,
 ) !void {
-    const root = slot_tracker.root;
+    const root = slot_tracker.root.load(.monotonic);
 
     while (ancestor_duplicate_slots_receiver.tryReceive()) |ancestor_dupe_slot_to_repair| {
         const request_type = ancestor_dupe_slot_to_repair.request_type;
@@ -560,7 +560,7 @@ fn processDuplicateConfirmedSlots(
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
     purge_repair_slot_counter: *SlotData.PurgeRepairSlotCounters,
 ) !void {
-    const root = slot_tracker.root;
+    const root = slot_tracker.root.load(.monotonic);
     for (duplicate_confirmed_slots_received) |new_duplicate_confirmed_slot| {
         const confirmed_slot, const duplicate_confirmed_hash = new_duplicate_confirmed_slot.tuple();
         if (confirmed_slot <= root) {
@@ -642,7 +642,7 @@ fn processPrunedButPopularForks(
     slot_tracker: *const SlotTracker,
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
 ) !void {
-    const root = slot_tracker.root;
+    const root = slot_tracker.root.load(.monotonic);
     while (pruned_but_popular_forks_receiver.tryReceive()) |new_popular_pruned_slot| {
         if (new_popular_pruned_slot <= root) {
             continue;
@@ -700,7 +700,7 @@ fn processDuplicateSlots(
             });
         }
 
-        break :blk .{ slot_tracker.root, slots_hashes };
+        break :blk .{ slot_tracker.root.load(.monotonic), slots_hashes };
     };
     for (new_duplicate_slots.constSlice(), slots_hashes.constSlice()) |duplicate_slot, slot_hash| {
         // WindowService should only send the signal once per slot
@@ -1564,7 +1564,7 @@ test "apply state changes" {
 
     // MarkSlotDuplicate should mark progress map and remove
     // the slot from fork choice
-    const duplicate_slot = slot_tracker.root + 1;
+    const duplicate_slot = slot_tracker.root.load(.monotonic) + 1;
     const duplicate_slot_hash = slot_tracker.get(duplicate_slot).?.state.hash.readCopy().?;
     // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
     try heaviest_subtree_fork_choice.markForkInvalidCandidate(allocator, &.{
@@ -1624,7 +1624,7 @@ test "apply state changes slot frozen" {
     var ledger = try ledger_tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
 
-    const duplicate_slot = slot_tracker.root + 1;
+    const duplicate_slot = slot_tracker.root.load(.monotonic) + 1;
     const duplicate_slot_hash = slot_tracker.get(duplicate_slot).?.state.hash.readCopy().?;
 
     // Simulate ReplayStage freezing a Slot with the given hash.
@@ -1660,9 +1660,10 @@ test "apply state changes slot frozen" {
     // version in blockstore.
     const new_slot_hash: Hash = .initRandom(random);
     const root_slot_hash: sig.core.hash.SlotAndHash = rsh: {
-        const root_slot_info = slot_tracker.get(slot_tracker.root).?;
+        const root_slot = slot_tracker.root.load(.monotonic);
+        const root_slot_info = slot_tracker.get(root_slot).?;
         break :rsh .{
-            .slot = slot_tracker.root,
+            .slot = root_slot,
             .hash = root_slot_info.state.hash.readCopy().?,
         };
     };
@@ -1712,7 +1713,7 @@ test "apply state changes duplicate confirmed matches frozen" {
     var ledger = try ledger_tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
 
-    const duplicate_slot = slot_tracker.root + 1;
+    const duplicate_slot = slot_tracker.root.load(.monotonic) + 1;
     const our_duplicate_slot_hash = slot_tracker.get(duplicate_slot).?.state.hash.readCopy().?;
 
     var duplicate_slots_to_repair: SlotData.DuplicateSlotsToRepair = .empty;
@@ -1808,7 +1809,7 @@ test "apply state changes slot frozen and duplicate confirmed matches frozen" {
     var purge_repair_slot_counter: SlotData.PurgeRepairSlotCounters = .empty;
     defer purge_repair_slot_counter.deinit(allocator);
 
-    const duplicate_slot = slot_tracker.root + 1;
+    const duplicate_slot = slot_tracker.root.load(.monotonic) + 1;
     const our_duplicate_slot_hash = slot_tracker.get(duplicate_slot).?.state.hash.readCopy().?;
 
     // Setup and check the state that is about to change.
