@@ -50,7 +50,7 @@ pub const MethodAndParams = union(enum) {
     getFirstAvailableBlock: noreturn,
 
     /// https://github.com/Syndica/sig/issues/557
-    getGenesisHash: noreturn,
+    getGenesisHash: GetGenesisHash,
     /// https://github.com/Syndica/sig/issues/558
     getHealth: GetHealth,
     /// Custom (not standardized) RPC method for "GET /*snapshot*.tar.bz2"
@@ -373,7 +373,15 @@ pub const GetEpochSchedule = struct {
 
 // TODO: getFeeForMessage
 // TODO: getFirstAvailableBlock
-// TODO: getGenesisHash
+
+/// https://solana.com/docs/rpc/http/getgenesishash
+/// Returns the genesis hash as a base-58 encoded string.
+pub const GetGenesisHash = struct {
+    /// Response is a base-58 encoded hash string representing the genesis hash.
+    pub const Response = sig.core.Hash;
+};
+
+// TODO: getGenesisHash - implemented below as GetGenesisHash
 // TODO: getHealth
 // TODO: getHighestSnapshotSlot
 // TODO: getIdentity
