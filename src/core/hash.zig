@@ -111,6 +111,17 @@ pub const Hash = extern struct {
         return writer.writeAll(str.constSlice());
     }
 
+    pub fn jsonParse(
+        _: std.mem.Allocator,
+        source: anytype,
+        _: std.json.ParseOptions,
+    ) std.json.ParseError(@TypeOf(source.*))!Hash {
+        return switch (try source.next()) {
+            .string => |str| parseRuntime(str) catch error.UnexpectedToken,
+            else => error.UnexpectedToken,
+        };
+    }
+
     /// Intended to be used in tests.
     pub fn initRandom(random: std.Random) Hash {
         var data: [SIZE]u8 = undefined;
