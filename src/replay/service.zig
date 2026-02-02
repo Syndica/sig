@@ -162,6 +162,8 @@ pub const Dependencies = struct {
     hard_forks: sig.core.HardForks,
     replay_threads: u32,
     stop_at_slot: ?Slot,
+    latest_processed_slot: *replay.trackers.ForkChoiceProcessedSlot,
+    latest_confirmed_slot: *replay.trackers.OptimisticallyConfirmedSlot,
 };
 
 pub const ConsensusStatus = enum {
@@ -573,6 +575,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     slot,
                     last_entry_hash,
                 ));
+                state.slot_tracker.latest_confirmed_slot.update(slot);
                 processed_a_slot = true;
             } else {
                 state.logger.info().logf("partially replayed slot: {}", .{slot});

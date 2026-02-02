@@ -177,7 +177,7 @@ pub const TowerConsensus = struct {
         errdefer replay_tower.deinit(allocator);
 
         var vote_collector: sig.consensus.VoteCollector =
-            try .init(deps.now, root, deps.registry);
+            try .init(deps.now, root, deps.registry, deps.slot_tracker.latest_confirmed_slot);
         errdefer vote_collector.deinit(allocator);
 
         return .{
@@ -4933,6 +4933,7 @@ test "edge cases - duplicate confirmed slot" {
     std.debug.assert(root_slot0 == 0);
 
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
+    std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
