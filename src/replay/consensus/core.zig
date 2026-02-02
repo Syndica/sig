@@ -1273,6 +1273,10 @@ fn sendVoteToGossip(
 
 // This processing currently runs on the same thread. If it proves to be a bottleneck
 // in practice, we can offload it to a dedicated thread.
+// If `maybe_my_keypair != null`, then `vote_op` will be inserted into `gossip_table_rw`,
+// taking ownership of the allocated resources (assumes it was allocated using the same
+// allocator as is used for the gossip table).
+// If an error is returned, then `vote_op` will not have had its ownership transferred.
 fn sendVote(
     logger: Logger,
     allocator: Allocator,
@@ -1293,6 +1297,14 @@ fn sendVote(
         .push_vote => |push_vote_data| push_vote_data.tx,
         .refresh_vote => |refresh_vote_data| refresh_vote_data.tx,
     };
+    vote_tx.validate() catch |err| std.debug.panic(
+        "({s}) sending invalid vote tx",
+        .{@errorName(err)},
+    );
+    vote_tx.verify() catch |err| std.debug.panic(
+        "({s}) sending vote tx with invalid signatures.",
+        .{@errorName(err)},
+    );
 
     // Send to upcoming leaders
     if (maybe_slot_leaders) |slot_leaders| {
@@ -1819,6 +1831,18 @@ const Lockout = sig.runtime.program.vote.state.Lockout;
 const MAX_LOCKOUT_HISTORY = sig.consensus.tower.MAX_LOCKOUT_HISTORY;
 
 const createTestReplayTower = sig.consensus.replay_tower.createTestReplayTower;
+
+fn generateValidEmptyTx(gpa: std.mem.Allocator, prng: std.Random) !Transaction {
+    const kp: sig.identity.KeyPair = try .generateDeterministic(seed: {
+        var seed: [sig.identity.KeyPair.seed_length]u8 = undefined;
+        prng.bytes(&seed);
+        break :seed seed;
+    });
+    const message: sig.core.transaction.Message =
+        try .initCompile(gpa, &.{}, .fromPublicKey(&kp.public_key), .initRandom(prng), null);
+    errdefer message.deinit(gpa);
+    return try .initOwnedMessageWithSigningKeypairs(gpa, .legacy, message, &.{kp});
+}
 
 test "processResult and handleDuplicateConfirmedFork" {
     // TODO add assertions to this test
@@ -3710,10 +3734,13 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
 }
 
 test "sendVote - without gossip table does not send and does not throw" {
-    const allocator = testing.allocator;
+    const gpa = testing.allocator;
+
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
     var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
+        gpa,
         .INIT,
     );
     defer {
@@ -3725,33 +3752,38 @@ test "sendVote - without gossip table does not send and does not throw" {
         leader_schedules.deinit();
     }
 
-    const vote_op = VoteOp{
+    const vote_op: VoteOp = .{
         .push_vote = .{
-            .tx = Transaction.EMPTY,
+            .tx = .EMPTY,
             .last_tower_slot = 200,
         },
     };
 
-    sendVote(
+    // sendVote does not throw
+    try std.testing.expectEqual({}, sendVote(
         .noop,
-        allocator,
+        gpa,
         0,
         vote_op,
         null,
         leader_schedule_cache.slotLeaders(),
-        sig.identity.KeyPair.generate(),
+        try .generateDeterministic(seed: {
+            var seed: [sig.identity.KeyPair.seed_length]u8 = undefined;
+            prng.bytes(&seed);
+            break :seed seed;
+        }),
         100,
         null,
-    ) catch unreachable; // sendVote does not throw
+    ));
 }
 
 test "sendVote - without keypair does not send and does not throw" {
-    const allocator = testing.allocator;
+    const gpa = testing.allocator;
 
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
-    );
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var leader_schedule_cache: sig.core.leader_schedule.LeaderScheduleCache = .init(gpa, .INIT);
     defer {
         const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
         defer lg.unlock();
@@ -3761,20 +3793,24 @@ test "sendVote - without keypair does not send and does not throw" {
         leader_schedules.deinit();
     }
 
-    var gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    var gossip_table = try sig.gossip.GossipTable.init(gpa, gpa);
     defer gossip_table.deinit();
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
 
-    const vote_op = VoteOp{
+    const tx = try generateValidEmptyTx(gpa, prng);
+    defer tx.deinit(gpa);
+
+    const vote_op: VoteOp = .{
         .push_vote = .{
-            .tx = Transaction.EMPTY,
+            .tx = tx,
             .last_tower_slot = 200,
         },
     };
 
-    sendVote(
+    // sendVote does not throw
+    try std.testing.expectEqual({}, sendVote(
         .noop,
-        allocator,
+        gpa,
         0,
         vote_op,
         &gossip_table_rw,
@@ -3782,26 +3818,33 @@ test "sendVote - without keypair does not send and does not throw" {
         null,
         200,
         null,
-    ) catch unreachable; // sendVote does not throw
+    ));
 }
 
 test "sendVote - without leader schedule does not send and does not throw" {
-    const allocator = testing.allocator;
+    const gpa = testing.allocator;
 
-    var gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var gossip_table = try sig.gossip.GossipTable.init(gpa, gpa);
     defer gossip_table.deinit();
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
 
-    const vote_op = VoteOp{
+    const tx = try generateValidEmptyTx(gpa, prng);
+    defer tx.deinit(gpa);
+
+    const vote_op: VoteOp = .{
         .push_vote = .{
-            .tx = Transaction.EMPTY,
+            .tx = tx,
             .last_tower_slot = 200,
         },
     };
 
-    sendVote(
+    // sendVote does not throw
+    try std.testing.expectEqual({}, sendVote(
         .noop,
-        allocator,
+        gpa,
         0,
         vote_op,
         &gossip_table_rw,
@@ -3809,30 +3852,25 @@ test "sendVote - without leader schedule does not send and does not throw" {
         null,
         300,
         null,
-    ) catch unreachable; // sendVote does not throw
+    ));
 }
 
 test "sendVote - sends to both gossip and upcoming leaders" {
-    const allocator = testing.allocator;
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
     const vote_slot: Slot = 100;
 
-    const vote_op = VoteOp{
-        .push_vote = .{
-            .tx = Transaction.EMPTY,
-            .last_tower_slot = vote_slot,
-        },
-    };
-
     const leader_pubkey = Pubkey.initRandom(std.crypto.random);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
+    const leader_schedule_slots = try gpa.alloc(Pubkey, 5);
     for (leader_schedule_slots) |*slot| {
         slot.* = leader_pubkey;
     }
 
     var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
+        gpa,
         .INIT,
     );
     defer {
@@ -3845,17 +3883,17 @@ test "sendVote - sends to both gossip and upcoming leaders" {
     }
 
     const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
+        .allocator = gpa,
         .slot_leaders = leader_schedule_slots,
     };
     try leader_schedule_cache.put(0, leader_schedule);
 
-    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    const gossip_table = try sig.gossip.GossipTable.init(gpa, gpa);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
     defer sig.sync.mux.deinitMux(&gossip_table_rw);
 
     var contact_info = sig.gossip.data.ContactInfo.init(
-        allocator,
+        gpa,
         leader_pubkey,
         sig.time.getWallclockMs(),
         0,
@@ -3887,17 +3925,26 @@ test "sendVote - sends to both gossip and upcoming leaders" {
         try testing.expectEqual(1, gossip_table_read.len());
     }
 
-    try sendVote(
+    const tx = try generateValidEmptyTx(gpa, prng);
+    sendVote(
         .noop,
-        allocator,
+        gpa,
         vote_slot,
-        vote_op,
+        .{
+            .push_vote = .{
+                .tx = tx,
+                .last_tower_slot = vote_slot,
+            },
+        },
         &gossip_table_rw,
         leader_schedule_cache.slotLeaders(),
         my_keypair,
         400,
         null,
-    );
+    ) catch |err| {
+        tx.deinit(gpa);
+        return err;
+    };
 
     {
         const gossip_table_read, var lock = gossip_table_rw.readWithLock();
@@ -3913,31 +3960,26 @@ test "sendVote - sends to both gossip and upcoming leaders" {
 
         const vote_data = gossip_data.Vote[1];
         try testing.expectEqual(my_pubkey, vote_data.from);
-        try testing.expectEqual(Transaction.EMPTY, vote_data.transaction);
+        try testing.expectEqual(tx, vote_data.transaction);
     }
 }
 
 test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
-    const allocator = testing.allocator;
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
     const vote_slot: Slot = 100;
 
-    const vote_op = VoteOp{
-        .refresh_vote = .{
-            .tx = Transaction.EMPTY,
-            .last_voted_slot = vote_slot,
-        },
-    };
-
     const leader_pubkey = Pubkey.initRandom(std.crypto.random);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
+    const leader_schedule_slots = try gpa.alloc(Pubkey, 5);
     for (leader_schedule_slots) |*slot| {
         slot.* = leader_pubkey;
     }
 
     var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
+        gpa,
         .INIT,
     );
     defer {
@@ -3950,17 +3992,17 @@ test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
     }
 
     const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
+        .allocator = gpa,
         .slot_leaders = leader_schedule_slots,
     };
     try leader_schedule_cache.put(0, leader_schedule);
 
-    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    const gossip_table = try sig.gossip.GossipTable.init(gpa, gpa);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
     defer sig.sync.mux.deinitMux(&gossip_table_rw);
 
     var contact_info = sig.gossip.data.ContactInfo.init(
-        allocator,
+        gpa,
         leader_pubkey,
         sig.time.getWallclockMs(),
         0,
@@ -3992,17 +4034,26 @@ test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
         try testing.expectEqual(1, gossip_table_read.len());
     }
 
-    try sendVote(
+    const tx = try generateValidEmptyTx(gpa, prng);
+    sendVote(
         .noop,
-        allocator,
+        gpa,
         vote_slot,
-        vote_op,
+        .{
+            .refresh_vote = .{
+                .tx = tx,
+                .last_voted_slot = vote_slot,
+            },
+        },
         &gossip_table_rw,
         leader_schedule_cache.slotLeaders(),
         my_keypair,
         500,
         null,
-    );
+    ) catch |err| {
+        tx.deinit(gpa);
+        return err;
+    };
 
     {
         const gossip_table_read, var lock = gossip_table_rw.readWithLock();
@@ -4020,31 +4071,26 @@ test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
 
         const vote_data = gossip_data.Vote[1];
         try testing.expectEqual(my_pubkey, vote_data.from);
-        try testing.expectEqual(Transaction.EMPTY, vote_data.transaction);
+        try testing.expectEqual(tx, vote_data.transaction);
     }
 }
 
 test "sendVote - falls back to self TPU when no leader sockets found" {
-    const allocator = testing.allocator;
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
     const vote_slot: Slot = 42;
 
-    const vote_op = VoteOp{
-        .push_vote = .{
-            .tx = Transaction.EMPTY,
-            .last_tower_slot = vote_slot,
-        },
-    };
-
     const unknown_leader = Pubkey.initRandom(std.crypto.random);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
+    const leader_schedule_slots = try gpa.alloc(Pubkey, 5);
     for (leader_schedule_slots) |*slot| {
         slot.* = unknown_leader;
     }
 
     var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
+        gpa,
         .INIT,
     );
     defer {
@@ -4057,7 +4103,7 @@ test "sendVote - falls back to self TPU when no leader sockets found" {
     }
 
     const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
+        .allocator = gpa,
         .slot_leaders = leader_schedule_slots,
     };
     try leader_schedule_cache.put(0, leader_schedule);
@@ -4065,12 +4111,12 @@ test "sendVote - falls back to self TPU when no leader sockets found" {
     const my_keypair = sig.identity.KeyPair.generate();
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
-    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    const gossip_table = try sig.gossip.GossipTable.init(gpa, gpa);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
     defer sig.sync.mux.deinitMux(&gossip_table_rw);
 
     var my_contact_info = sig.gossip.data.ContactInfo.init(
-        allocator,
+        gpa,
         my_pubkey,
         sig.time.getWallclockMs(),
         0,
@@ -4103,17 +4149,26 @@ test "sendVote - falls back to self TPU when no leader sockets found" {
     // NOTE: This test does not assert that a UDP packet was sent to the self TPU address;
     // it only validates the control flow indirectly by checking that the vote was inserted
     // into gossip. A socket capture or injection hook would be needed to assert the send.
-    try sendVote(
+    const tx = try generateValidEmptyTx(gpa, prng);
+    sendVote(
         .noop,
-        allocator,
+        gpa,
         vote_slot,
-        vote_op,
+        .{
+            .push_vote = .{
+                .tx = tx,
+                .last_tower_slot = vote_slot,
+            },
+        },
         &gossip_table_rw,
         leader_schedule_cache.slotLeaders(),
         my_keypair,
         600,
         null,
-    );
+    ) catch |err| {
+        tx.deinit(gpa);
+        return err;
+    };
 
     {
         const gossip_table_read, var lock = gossip_table_rw.readWithLock();
@@ -4131,30 +4186,25 @@ test "sendVote - falls back to self TPU when no leader sockets found" {
 
         const vote_data = gossip_data.Vote[1];
         try testing.expectEqual(my_pubkey, vote_data.from);
-        try testing.expectEqual(Transaction.EMPTY, vote_data.transaction);
+        try testing.expectEqual(tx, vote_data.transaction);
     }
 }
 
 test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
-    const allocator = testing.allocator;
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
     const vote_slot: Slot = 100;
-
-    const vote_op: VoteOp = .{
-        .push_vote = .{
-            .tx = .EMPTY,
-            .last_tower_slot = vote_slot,
-        },
-    };
 
     // Prepare a leader schedule with a single repeating leader
     const leader_pubkey: Pubkey = .initRandom(std.crypto.random);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
+    const leader_schedule_slots = try gpa.alloc(Pubkey, 5);
     for (leader_schedule_slots) |*slot| slot.* = leader_pubkey;
 
     var leader_schedule_cache: sig.core.leader_schedule.LeaderScheduleCache = .init(
-        allocator,
+        gpa,
         .INIT,
     );
     defer {
@@ -4165,18 +4215,18 @@ test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
     }
 
     const leader_schedule: sig.core.leader_schedule.LeaderSchedule = .{
-        .allocator = allocator,
+        .allocator = gpa,
         .slot_leaders = leader_schedule_slots,
     };
     try leader_schedule_cache.put(0, leader_schedule);
 
     // Gossip table with leader ContactInfo having tpu_vote socket
-    const gossip_table: sig.gossip.GossipTable = try .init(allocator, allocator);
+    const gossip_table: sig.gossip.GossipTable = try .init(gpa, gpa);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
     defer sig.sync.mux.deinitMux(&gossip_table_rw);
 
     var leader_contact = sig.gossip.data.ContactInfo.init(
-        allocator,
+        gpa,
         leader_pubkey,
         sig.time.getWallclockMs(),
         0,
@@ -4202,17 +4252,26 @@ test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
     const sockets: VoteSockets = try .init();
     defer sockets.deinit();
 
-    try sendVote(
+    const tx = try generateValidEmptyTx(gpa, prng);
+    sendVote(
         .noop,
-        allocator,
+        gpa,
         vote_slot,
-        vote_op,
+        .{
+            .push_vote = .{
+                .tx = tx,
+                .last_tower_slot = vote_slot,
+            },
+        },
         &gossip_table_rw,
         leader_schedule_cache.slotLeaders(),
         my_keypair,
         700,
         &sockets,
-    );
+    ) catch |err| {
+        tx.deinit(gpa);
+        return err;
+    };
 
     // Validate gossip received the vote
     {
@@ -4227,25 +4286,20 @@ test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
 }
 
 test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
-    const allocator = testing.allocator;
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
     const vote_slot: Slot = 55;
-
-    const vote_op = VoteOp{
-        .push_vote = .{
-            .tx = Transaction.EMPTY,
-            .last_tower_slot = vote_slot,
-        },
-    };
 
     // Leader schedule points to an unknown leader; no leader ContactInfo in gossip
     const unknown_leader = Pubkey.initRandom(std.crypto.random);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
+    const leader_schedule_slots = try gpa.alloc(Pubkey, 5);
     for (leader_schedule_slots) |*slot| slot.* = unknown_leader;
 
     var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
+        gpa,
         .INIT,
     );
     defer {
@@ -4256,7 +4310,7 @@ test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
     }
 
     const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
+        .allocator = gpa,
         .slot_leaders = leader_schedule_slots,
     };
     try leader_schedule_cache.put(0, leader_schedule);
@@ -4265,12 +4319,12 @@ test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
     const my_keypair = sig.identity.KeyPair.generate();
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
-    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    const gossip_table = try sig.gossip.GossipTable.init(gpa, gpa);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
     defer sig.sync.mux.deinitMux(&gossip_table_rw);
 
     var my_contact = sig.gossip.data.ContactInfo.init(
-        allocator,
+        gpa,
         my_pubkey,
         sig.time.getWallclockMs(),
         0,
@@ -4291,17 +4345,26 @@ test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
     const sockets: VoteSockets = try .init();
     defer sockets.deinit();
 
-    try sendVote(
+    const tx = try generateValidEmptyTx(gpa, prng);
+    sendVote(
         .noop,
-        allocator,
+        gpa,
         vote_slot,
-        vote_op,
+        .{
+            .push_vote = .{
+                .tx = tx,
+                .last_tower_slot = vote_slot,
+            },
+        },
         &gossip_table_rw,
         leader_schedule_cache.slotLeaders(),
         my_keypair,
         800,
         &sockets,
-    );
+    ) catch |err| {
+        tx.deinit(gpa);
+        return err;
+    };
 
     {
         const gossip_table_read, var lock = gossip_table_rw.readWithLock();
@@ -4538,15 +4601,11 @@ test "sendVoteToLeaders - fallback handles missing self TPU data" {
     const vote_tx: Transaction = .EMPTY;
 
     const EmptySlotLeaders = struct {
-        const Self = @This();
-
-        fn get(_: *Self, _: Slot) ?Pubkey {
+        fn get(_: *@This(), _: Slot) ?Pubkey {
             return null;
         }
-
-        pub const empty: Self = .{};
     };
-    var slot_state = EmptySlotLeaders.empty;
+    var slot_state: EmptySlotLeaders = .{};
     const slot_leaders: sig.core.leader_schedule.SlotLeaders = .init(
         &slot_state,
         EmptySlotLeaders.get,
