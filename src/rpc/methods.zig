@@ -50,7 +50,7 @@ pub const MethodAndParams = union(enum) {
     getFirstAvailableBlock: noreturn,
 
     /// https://github.com/Syndica/sig/issues/557
-    getGenesisHash: noreturn,
+    getGenesisHash: GetGenesisHash,
     /// https://github.com/Syndica/sig/issues/558
     getHealth: GetHealth,
     /// Custom (not standardized) RPC method for "GET /*snapshot*.tar.bz2"
@@ -373,7 +373,11 @@ pub const GetEpochSchedule = struct {
 
 // TODO: getFeeForMessage
 // TODO: getFirstAvailableBlock
-// TODO: getGenesisHash
+
+pub const GetGenesisHash = struct {
+    pub const Response = []const u8;
+};
+
 // TODO: getHealth
 // TODO: getHighestSnapshotSlot
 // TODO: getIdentity
@@ -685,4 +689,16 @@ pub const common = struct {
         /// Shred version
         shredVersion: ?u16 = null,
     };
+};
+
+pub const StaticHookContext = struct {
+    genesis_hash: sig.core.Hash.Base58String,
+
+    pub fn getGenesisHash(
+        self: *const @This(),
+        _: std.mem.Allocator,
+        _: GetGenesisHash,
+    ) !GetGenesisHash.Response {
+        return self.genesis_hash.constSlice();
+    }
 };
