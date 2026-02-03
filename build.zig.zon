@@ -58,8 +58,8 @@
             .hash = "blst-0.3.16-fvxk1c82MABYUm65ch0-wpo2CSs1x5TCuBLvgQng0uRC",
         },
         .bzip2 = .{
-            .url = "git+https://github.com/allyourcodebase/bzip2?ref=1.0.8#d7668d5ee5eb55489c35632ecf0b0107c7a77569",
-            .hash = "bzip2-1.0.8-m7CPz2QGAADdAt97rbHaz6ekIt864HgHs9rZ3fsYF5Fy",
+            .url = "https://github.com/libarchive/bzip2/archive/refs/tags/bzip2-1.0.8.zip",
+            .hash = "N-V-__8AANChDwAITDmkzIqB-9m_iaOXSquhghM2-AqDFcX8",
         },
     },
 }

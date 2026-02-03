@@ -104,7 +104,7 @@ pub fn main() !void {
     current_config.metrics_port = cmd.metrics_port;
     current_config.log_file = cmd.log_file;
     current_config.tee_logs = cmd.tee_logs;
-    current_config.validator_dir = cmd.validator_dir;
+    current_config.validator_dir = try std.fs.realpathAlloc(gpa, cmd.validator_dir);
 
     // If no subcommand was provided, print a friendly header and help information.
     const subcmd = cmd.subcmd orelse {
@@ -1328,7 +1328,7 @@ fn ensureGenesis(
         &.{ cfg.validator_dir, "genesis.bin" },
     );
     errdefer allocator.free(existing_path);
-    if (!std.meta.isError(std.fs.accessAbsolute(existing_path, .{}))) {
+    if (!std.meta.isError(std.fs.cwd().access(existing_path, .{}))) {
         logger.info().logf("Using existing genesis file: {s}", .{existing_path});
         return existing_path;
     }
