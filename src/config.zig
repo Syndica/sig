@@ -47,6 +47,22 @@ pub const Cmd = struct {
             return null;
         };
     }
+
+    /// Derives a path relative to validator_dir if the param equals the default value.
+    /// This is used to allow paths like snapshot_dir and geyser.pipe_path to be relative
+    /// to validator_dir when using their default values, while still allowing explicit
+    /// overrides.
+    pub fn derivePathFromValidatorDir(
+        self: Cmd,
+        allocator: std.mem.Allocator,
+        param_value: []const u8,
+        comptime default_suffix: []const u8,
+    ) ![]const u8 {
+        if (std.mem.eql(u8, param_value, sig.VALIDATOR_DIR ++ default_suffix)) {
+            return try std.fs.path.join(allocator, &.{ self.validator_dir, default_suffix });
+        }
+        return param_value;
+    }
 };
 
 pub const TestTransactionSender = struct {
