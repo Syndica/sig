@@ -11,8 +11,11 @@ const SlotState = sig.core.SlotState;
 pub const ForkChoiceProcessedSlot = struct {
     slot: std.atomic.Value(Slot) = .init(0),
 
-    pub fn update(self: *@This(), new_slot: Slot) void {
-        _ = self.slot.fetchMax(new_slot, .monotonic);
+    /// Set the current processed slot (heaviest fork tip).
+    /// Uses store() because this can decrease when the fork choice
+    /// switches to a different fork with a lower slot.
+    pub fn set(self: *@This(), new_slot: Slot) void {
+        self.slot.store(new_slot, .monotonic);
     }
 
     pub fn get(self: *const @This()) Slot {
@@ -242,6 +245,16 @@ pub const SlotTree = struct {
 
     const List = std.ArrayListUnmanaged;
     const min_age = 32;
+
+    /// Returns the highest slot among all fork tips (leaves).
+    /// In bypass mode (without ForkChoice), this represents the "processed" slot.
+    pub fn tip(self: *const SlotTree) Slot {
+        var max_slot: Slot = self.root.slot;
+        for (self.leaves.items) |leaf| {
+            max_slot = @max(max_slot, leaf.slot);
+        }
+        return max_slot;
+    }
 
     pub fn deinit(const_self: SlotTree, allocator: Allocator) void {
         var self = const_self;
