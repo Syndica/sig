@@ -2256,34 +2256,6 @@ pub fn chunkValuesIntoPacketIndexes(
     return packet_indexs;
 }
 
-pub fn getClusterEntrypoints(cluster: sig.core.Cluster) []const []const u8 {
-    return switch (cluster) {
-        .mainnet => &.{
-            "entrypoint.mainnet-beta.solana.com:8001",
-            "entrypoint2.mainnet-beta.solana.com:8001",
-            "entrypoint3.mainnet-beta.solana.com:8001",
-            "entrypoint4.mainnet-beta.solana.com:8001",
-            "entrypoint5.mainnet-beta.solana.com:8001",
-        },
-        .testnet => &.{
-            "entrypoint.testnet.solana.com:8001",
-            "entrypoint2.testnet.solana.com:8001",
-            "entrypoint3.testnet.solana.com:8001",
-        },
-        .devnet => &.{
-            "entrypoint.devnet.solana.com:8001",
-            "entrypoint2.devnet.solana.com:8001",
-            "entrypoint3.devnet.solana.com:8001",
-            "entrypoint4.devnet.solana.com:8001",
-            "entrypoint5.devnet.solana.com:8001",
-        },
-        .localnet => &.{
-            "127.0.0.1:1024", // agave test-validator default
-            "127.0.0.1:8001", // sig validator default
-        },
-    };
-}
-
 test "general coverage" {
     const allocator = std.testing.allocator;
 
