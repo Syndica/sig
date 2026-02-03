@@ -1672,11 +1672,12 @@ fn shredNetwork(
     );
 
     var start = sig.time.Timer.start();
-    while (start.read().asSecs() < 60) {
-        _ = epoch_tracker.getLeaderSchedules() catch {
+    while (start.read().asSecs() < 30) {
+        const leader_schedules = epoch_tracker.getLeaderSchedules() catch {
             std.Thread.sleep(1_000_000_000);
             continue;
         };
+        if (leader_schedules.next != null) break;
     }
 
     var ledger = try Ledger.init(
@@ -2591,9 +2592,15 @@ pub const RpcLeaderScheduleService = struct {
         for (leader_schedule_epoch..epoch + 1) |e| {
             if (self.epoch_tracker.rooted_epochs.isNext(e)) {
                 const first_slot_in_epoch = self.epoch_tracker.epoch_schedule.getFirstSlotInEpoch(e);
+
+                // The leaders saved in epoch E, are the leaders which will be active in epoch E + 1.
+                // Therefore, we need to fetch the leader schedule for epoch E + 1.
+                // We store the leaders for epoch E + 1 in the epoch info for epoch E since they are
+                // computed using the stakes from epoch E.
                 const leaders = try self.getLeaderSchedule(
                     first_slot_in_epoch +|
                         self.epoch_tracker.epoch_schedule.leader_schedule_slot_offset,
+                    &self.epoch_tracker.epoch_schedule,
                 );
 
                 var entry = try self.allocator.create(sig.core.EpochInfo);
@@ -2612,13 +2619,21 @@ pub const RpcLeaderScheduleService = struct {
         }
     }
 
-    fn getLeaderSchedule(self: *Self, slot: sig.core.Slot) !LeaderSchedule {
+    fn getLeaderSchedule(
+        self: *Self,
+        slot: sig.core.Slot,
+        epoch_schedule: *const sig.core.EpochSchedule,
+    ) !LeaderSchedule {
         const response = try self.rpc_client.getLeaderSchedule(.{ .slot = slot });
         defer response.deinit();
         const rpc_schedule = (try response.result()).value;
-        return try sig.core.leader_schedule.computeFromMap(
+        var leaders = try sig.core.leader_schedule.computeFromMap(
             self.allocator,
             &rpc_schedule,
         );
+        const epoch = epoch_schedule.getEpoch(slot);
+        leaders.start = epoch_schedule.getFirstSlotInEpoch(epoch);
+        leaders.end = epoch_schedule.getLastSlotInEpoch(epoch);
+        return leaders;
     }
 };
