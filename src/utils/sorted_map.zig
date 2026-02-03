@@ -94,7 +94,7 @@ pub fn SortedMap(
         }
 
         pub fn contains(self: *const Self, key: Key) bool {
-            return if (self.getPtr(key)) |_| true else false;
+            return self.getEntry(key) != null;
         }
 
         pub fn get(self: *const Self, key: Key) ?Value {
@@ -115,6 +115,7 @@ pub fn SortedMap(
         pub fn getEntry(self: *const Self, key: Key) ?Entry {
             var update: [max_levels + 1]u32 = undefined;
             const idx = self.search(key, &update) orelse return null;
+
             const node = &self.nodes.items[idx];
             return .{ .key_ptr = &node.key, .value_ptr = &node.value };
         }

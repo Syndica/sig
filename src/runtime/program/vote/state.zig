@@ -443,21 +443,13 @@ pub const AuthorizedVoters = struct {
     }
 
     pub fn first(self: *AuthorizedVoters) ?struct { Epoch, Pubkey } {
-        var voter_iter = self.voters.iterator();
-        if (voter_iter.next()) |entry| {
-            return .{ entry.key_ptr.*, entry.value_ptr.* };
-        } else {
-            return null;
-        }
+        const first_voter = self.voters.minEntry() orelse return null;
+        return .{ first_voter.key_ptr.*, first_voter.value_ptr.* };
     }
 
     pub fn last(self: *const AuthorizedVoters) ?struct { Epoch, Pubkey } {
-        const last_epoch = (self.voters.maxEntry() orelse return null).key_ptr.*;
-        if (self.voters.get(last_epoch)) |last_pubkey| {
-            return .{ last_epoch, last_pubkey };
-        } else {
-            return null;
-        }
+        const last_voter = self.voters.maxEntry() orelse return null;
+        return .{ last_voter.key_ptr.*, last_voter.value_ptr.* };
     }
 
     pub fn len(self: *const AuthorizedVoters) usize {
@@ -480,7 +472,8 @@ pub const AuthorizedVoters = struct {
         if (self.voters.get(epoch)) |pubkey| {
             return .{ pubkey, true };
         } else {
-            const last_voter = self.voters.maxEntry() orelse return null;
+            var it = self.voters.iteratorRanged(null, epoch, .end);
+            const last_voter = it.prev() orelse return null;
             return .{ last_voter.value_ptr.*, false };
         }
     }
