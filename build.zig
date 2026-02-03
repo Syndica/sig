@@ -242,12 +242,6 @@ pub fn build(b: *Build) !void {
         .optimize = config.optimize,
     }).module("zstd");
 
-    const bzip2_dep = b.dependency("bzip2", .{
-        .target = config.target,
-        .optimize = config.optimize,
-    });
-    const bzip2_lib = bzip2_dep.artifact("bz");
-
     const ssl_mod = lsquic_dep.builder.dependency("boringssl", .{
         .target = config.target,
         .optimize = config.optimize,
@@ -288,11 +282,13 @@ pub fn build(b: *Build) !void {
     const gh_table = b.createModule(.{ .root_source_file = generateTable(b) });
 
     const sqlite_mod = genSqlite(b, config.target, config.optimize);
+    const bzip2_mod = genBzip2(b, config.target, config.optimize);
 
     // zig fmt: off
     const imports: []const Build.Module.Import = &.{
         .{ .name = "base58",        .module = base58_mod },
         .{ .name = "build-options", .module = build_options.createModule() },
+        .{ .name = "bzip2",         .module = bzip2_mod },
         .{ .name = "httpz",         .module = httpz_mod },
         .{ .name = "lsquic",        .module = lsquic_mod },
         .{ .name = "poseidon",      .module = poseidon_mod },
@@ -323,7 +319,6 @@ pub fn build(b: *Build) !void {
         .optimize = config.optimize,
         .imports = imports,
     });
-    sig_mod.linkLibrary(bzip2_lib);
 
     switch (config.ledger_db) {
         .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
@@ -345,7 +340,6 @@ pub fn build(b: *Build) !void {
     });
     sig_exe.root_module.addObject(memcpy);
     sig_exe.root_module.addImport("cli", cli_mod);
-    sig_exe.linkLibrary(bzip2_lib);
 
     // make sure pyroscope's got enough info to profile
     sig_exe.build_id = .fast;
@@ -370,7 +364,6 @@ pub fn build(b: *Build) !void {
     });
     unit_tests_exe.root_module.addObject(memcpy);
     unit_tests_exe.root_module.addImport("cli", cli_mod);
-    unit_tests_exe.linkLibrary(bzip2_lib);
     switch (config.ledger_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
@@ -540,6 +533,47 @@ fn genSqlite(
 
     const translate_c = b.addTranslateC(.{
         .root_source_file = dep.path("sqlite3.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const mod = translate_c.createModule();
+    mod.linkLibrary(lib);
+
+    return mod;
+}
+
+fn genBzip2(
+    b: *Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *Build.Module {
+    const dep = b.dependency("bzip2", .{});
+
+    const lib = b.addLibrary(.{
+        .name = "bz",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    lib.addCSourceFiles(.{
+        .root = dep.path("."),
+        .files = &.{
+            "bzlib.c",
+            "blocksort.c",
+            "compress.c",
+            "crctable.c",
+            "decompress.c",
+            "huffman.c",
+            "randtable.c",
+        },
+    });
+    lib.linkLibC();
+
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = dep.path("bzlib.h"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
