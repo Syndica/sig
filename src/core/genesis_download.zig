@@ -6,9 +6,7 @@
 
 const std = @import("std");
 const sig = @import("../sig.zig");
-const bzlib_c = @cImport({
-    @cInclude("bzlib.h");
-});
+const bzip2 = @import("bzip2");
 
 const Allocator = std.mem.Allocator;
 
@@ -93,12 +91,12 @@ fn downloadGenesisArchive(
 /// Decompresses bz2 data using libbz2
 fn decompressBz2(allocator: Allocator, compressed_data: []const u8) DownloadError![]u8 {
     // Start with an estimate of 10x compression ratio
-    var dest_len: c_uint = @intCast(@min(compressed_data.len * 10, 500 * 1024 * 1024));
+    var dest_len: u32 = @intCast(@min(compressed_data.len * 10, 500 * 1024 * 1024));
     var decompressed = allocator.alloc(u8, dest_len) catch return error.OutOfMemory;
     errdefer allocator.free(decompressed);
 
     while (true) {
-        const result = bzlib_c.BZ2_bzBuffToBuffDecompress(
+        const result = bzip2.BZ2_bzBuffToBuffDecompress(
             decompressed.ptr,
             &dest_len,
             @constCast(@ptrCast(compressed_data.ptr)),
@@ -108,21 +106,22 @@ fn decompressBz2(allocator: Allocator, compressed_data: []const u8) DownloadErro
         );
 
         switch (result) {
-            bzlib_c.BZ_OK => {
+            bzip2.BZ_OK => {
                 // Shrink to actual size
                 if (dest_len < decompressed.len) {
-                    decompressed = allocator.realloc(decompressed, dest_len) catch decompressed;
+                    decompressed = allocator.realloc(decompressed, dest_len) catch
+                        return error.OutOfMemory;
                 }
-                return decompressed[0..dest_len];
+                return decompressed;
             },
-            bzlib_c.BZ_OUTBUFF_FULL => {
-                // Need more space, double the buffer
-                allocator.free(decompressed);
+            bzip2.BZ_OUTBUFF_FULL => {
                 dest_len = dest_len * 2;
                 if (dest_len > 1024 * 1024 * 1024) { // 1GB limit
                     return error.Bz2DecompressError;
                 }
-                decompressed = allocator.alloc(u8, dest_len) catch return error.OutOfMemory;
+                decompressed = allocator.realloc(decompressed, dest_len) catch {
+                    return error.OutOfMemory;
+                };
             },
             else => return error.Bz2DecompressError,
         }

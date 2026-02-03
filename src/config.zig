@@ -61,7 +61,7 @@ pub const Cmd = struct {
         if (std.mem.eql(u8, param_value, sig.VALIDATOR_DIR ++ default_suffix)) {
             return try std.fs.path.join(allocator, &.{ self.validator_dir, default_suffix });
         }
-        return param_value;
+        return try allocator.dupe(u8, param_value);
     }
 };
 
