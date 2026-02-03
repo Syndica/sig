@@ -11,8 +11,6 @@ const bzlib_c = @cImport({
 });
 
 const Allocator = std.mem.Allocator;
-const Cluster = sig.core.Cluster;
-const Hash = sig.core.Hash;
 
 const Logger = sig.trace.Logger("core.genesis_download");
 
