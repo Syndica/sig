@@ -47,6 +47,8 @@ pub const BasicShredTracker = struct {
     /// ring buffer
     slots: [num_slots]MonitoredSlot = @splat(.{}),
     metrics: Metrics,
+    /// Whether to log when finished_slots_through is updated
+    log_finished_slots: bool,
 
     const num_slots: usize = 1024;
 
@@ -65,6 +67,7 @@ pub const BasicShredTracker = struct {
         slot: Slot,
         logger: Logger,
         registry: *Registry(.{}),
+        log_finished_slots: bool,
     ) !void {
         const metrics = try registry.initStruct(Metrics);
         metrics.finished_slots_through.set(slot);
@@ -77,6 +80,7 @@ pub const BasicShredTracker = struct {
             .max_slot_seen = slot,
             .logger = logger,
             .metrics = metrics,
+            .log_finished_slots = log_finished_slots,
         };
     }
 
@@ -282,6 +286,9 @@ pub const BasicShredTracker = struct {
         }
         self.current_bottom_slot = @max(self.current_bottom_slot, slot);
         self.metrics.finished_slots_through.max(slot -| 1);
+        if (self.log_finished_slots) {
+            self.logger.info().logf("tracked to slot: {}", .{slot -| 1});
+        }
     }
 
     /// - Record that a slot has been observed.
@@ -518,7 +525,7 @@ test "trivial happy path" {
 
     const tracker = try allocator.create(BasicShredTracker);
     defer allocator.destroy(tracker);
-    try tracker.init(allocator, 13579, .noop, &registry);
+    try tracker.init(allocator, 13579, .noop, &registry, false);
     defer tracker.deinit();
 
     _ = try tracker.identifyMissing(&msr, Instant.EPOCH_ZERO.plus(Duration.fromSecs(1)));
@@ -542,7 +549,7 @@ test "1 registered shred is identified" {
 
     const tracker = try allocator.create(BasicShredTracker);
     defer allocator.destroy(tracker);
-    try tracker.init(allocator, 13579, .noop, &registry);
+    try tracker.init(allocator, 13579, .noop, &registry, false);
     defer tracker.deinit();
 
     try tracker.registerShred(13579, 123, 13578, false, .EPOCH_ZERO);
@@ -573,7 +580,7 @@ test "slots are only skipped after a competing fork has developed sufficiently" 
 
     const tracker = try allocator.create(BasicShredTracker);
     defer allocator.destroy(tracker);
-    try tracker.init(allocator, 1, .noop, &registry);
+    try tracker.init(allocator, 1, .noop, &registry, false);
     defer tracker.deinit();
 
     const start = Instant.EPOCH_ZERO;
@@ -625,7 +632,7 @@ test "slots are not skipped when the current fork is developed" {
 
     const tracker = try allocator.create(BasicShredTracker);
     defer allocator.destroy(tracker);
-    try tracker.init(allocator, 1, .noop, &registry);
+    try tracker.init(allocator, 1, .noop, &registry, false);
     defer tracker.deinit();
 
     const start = Instant.EPOCH_ZERO;
