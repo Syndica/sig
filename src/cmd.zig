@@ -209,7 +209,7 @@ pub fn main() !void {
             );
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
-            current_config.gossip.cluster = params.gossip_cluster;
+            current_config.cluster = params.gossip_cluster;
             params.geyser.apply(&current_config);
             current_config.geyser.pipe_path = try current_config.derivePathFromValidatorDir(
                 gpa,
@@ -556,7 +556,7 @@ const Cmd = struct {
             cfg.gossip.host = args.host;
             cfg.gossip.port = args.port;
             cfg.gossip.entrypoints = args.entrypoints;
-            cfg.gossip.cluster = args.network;
+            cfg.cluster = args.network;
         }
     };
     const GossipArgumentsNode = struct {
@@ -1356,7 +1356,7 @@ fn ensureGenesis(
     allocator.free(existing_path);
 
     // Determine cluster for genesis
-    const cluster = try cfg.gossip.getCluster() orelse {
+    const cluster = try cfg.getCluster() orelse {
         logger.err().log(
             \\No genesis file path provided and no cluster specified. 
             \\Use --genesis-file-path or --cluster"
@@ -1366,12 +1366,7 @@ fn ensureGenesis(
 
     // Otherwise, download genesis from network
     logger.info().logf("Downloading genesis from {s} cluster...", .{@tagName(cluster)});
-    const cluster_url = switch (cluster) {
-        .mainnet => "https://api.mainnet-beta.solana.com",
-        .testnet => "https://api.testnet.solana.com",
-        .devnet => "https://api.devnet.solana.com",
-        .localnet => unreachable,
-    };
+    const cluster_url = cluster.getRpcUrl();
     const genesis_path = downloadAndExtractGenesis(
         allocator,
         cluster_url,
@@ -2153,15 +2148,8 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
 
     const leader_schedule //
     = try getLeaderScheduleFromCli(allocator, cfg) orelse b: {
-        const cluster = try cfg.gossip.getCluster() orelse
+        const cluster_type = try cfg.getCluster() orelse
             return error.ClusterNotProvided;
-
-        const cluster_type: ClusterType = switch (cluster) {
-            .mainnet => .MainnetBeta,
-            .devnet => .Devnet,
-            .testnet => .Testnet,
-            .localnet => .LocalHost,
-        };
 
         var rpc_client = try sig.rpc.Client.init(allocator, cluster_type, .{});
         defer rpc_client.deinit();
@@ -2236,12 +2224,7 @@ fn testTransactionSenderService(
     }
 
     // define cluster of where to land transactions
-    const rpc_cluster: ClusterType = if (try cfg.gossip.getCluster()) |n| switch (n) {
-        .mainnet => .MainnetBeta,
-        .devnet => .Devnet,
-        .testnet => .Testnet,
-        .localnet => .LocalHost,
-    } else {
+    const rpc_cluster: ClusterType = try cfg.getCluster() orelse {
         @panic("cluster option (-c) not provided");
     };
     app_base.logger.warn().logf(
@@ -2490,7 +2473,8 @@ const AppBase = struct {
         const my_keypair = try sig.identity.getOrInit(allocator, .from(logger));
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
-        const entrypoints = try cfg.gossip.getEntrypointAddrs(allocator);
+        const entrypoints = try cfg.gossip.getEntrypointAddrs(try cfg.getCluster(), allocator);
+        if (entrypoints.len == 0) logger.warn().log("no gossip entrypoints provided");
 
         const echo_data = try getShredAndIPFromEchoServer(.from(logger), entrypoints);
 

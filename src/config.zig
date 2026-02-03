@@ -19,6 +19,7 @@ pub const Cmd = struct {
     max_shreds: u64 = 5_000_000,
     leader_schedule_path: ?[]const u8 = null,
     genesis_file_path: ?[]const u8 = null,
+    cluster: ?[]const u8 = null,
     // general config
     log_filters: sig.trace.Filters = .debug,
     log_file: ?[]const u8 = null,
@@ -32,15 +33,22 @@ pub const Cmd = struct {
     vote_account: ?[]const u8 = null,
     stop_at_slot: ?sig.core.Slot = null,
 
-    pub fn genesisFilePath(self: Cmd) error{UnknownCluster}!?[]const u8 {
+    pub fn getCluster(self: Cmd) error{UnknownCluster}!?sig.core.ClusterType {
+        return if (self.cluster) |cluster_str|
+            std.meta.stringToEnum(sig.core.ClusterType, cluster_str) orelse error.UnknownCluster
+        else
+            null;
+    }
+
+    pub fn genesisFilePath(self: Cmd) !?[]const u8 {
         if (self.genesis_file_path) |provided_path|
             return provided_path;
 
-        const local_path = if (try self.gossip.getCluster()) |n| switch (n) {
+        const local_path = if (try self.getCluster()) |cluster| switch (cluster) {
             .mainnet => "data/genesis-files/mainnet_genesis.bin",
             .devnet => "data/genesis-files/devnet_genesis.bin",
             .testnet => "data/genesis-files/testnet_genesis.bin",
-            .localnet => return error.MustProvideGenesisFileForLocalHost,
+            .development => return null,
         } else return null;
 
         const genesis_file = std.fs.cwd().openFile(local_path, .{}) catch {
@@ -146,7 +154,6 @@ pub const Gossip = struct {
     host: ?[]const u8 = null,
     port: u16 = 8001,
     entrypoints: []const []const u8 = &.{},
-    cluster: ?[]const u8 = null,
     spy_node: bool = false,
     dump: bool = false,
     trusted_validators: []const []const u8 = &.{},
@@ -169,30 +176,23 @@ pub const Gossip = struct {
         };
     }
 
-    pub fn getCluster(self: Gossip) error{UnknownCluster}!?sig.core.Cluster {
-        return if (self.cluster) |cluster_str|
-            std.meta.stringToEnum(sig.core.Cluster, cluster_str) orelse
-                error.UnknownCluster
-        else
-            null;
-    }
-
     pub fn getEntrypointAddrs(
         self: Gossip,
+        cluster: ?sig.core.ClusterType,
         allocator: std.mem.Allocator,
     ) ![]sig.net.SocketAddr {
         var entrypoint_set = std.AutoArrayHashMap(sig.net.SocketAddr, void).init(allocator);
         defer entrypoint_set.deinit();
 
-        // add cluster entrypoints
-        if (try self.getCluster()) |cluster| {
-            for (sig.gossip.getClusterEntrypoints(cluster)) |entrypoint| {
+        // add cluster entrypoints (only for public clusters)
+        if (cluster) |c| {
+            for (c.getEntrypoints()) |entrypoint| {
                 const socket_addr = try resolveSocketAddr(allocator, entrypoint);
                 try entrypoint_set.put(socket_addr, {});
             }
         }
 
-        // add config entrypoints
+        // add user-provided entrypoints
         for (self.entrypoints) |entrypoint| {
             const socket_addr = sig.net.SocketAddr.parse(entrypoint) catch brk: {
                 break :brk try resolveSocketAddr(allocator, entrypoint);

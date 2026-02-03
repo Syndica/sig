@@ -23,7 +23,11 @@ pub const Client = struct {
         cluster_type: ClusterType,
         options: HttpPostFetcher.Options,
     ) Allocator.Error!Client {
-        return .{ .fetcher = try HttpPostFetcher.init(allocator, rpcUrl(cluster_type), options) };
+        return .{ .fetcher = try HttpPostFetcher.init(
+            allocator,
+            cluster_type.getRpcUrl(),
+            options,
+        ) };
     }
 
     pub fn deinit(self: *Client) void {
@@ -198,11 +202,5 @@ pub const Client = struct {
 };
 
 pub fn rpcUrl(cluster_type: ClusterType) []const u8 {
-    return switch (cluster_type) {
-        .MainnetBeta => "https://api.mainnet-beta.solana.com",
-        .Testnet => "https://api.testnet.solana.com",
-        .Devnet => "https://api.devnet.solana.com",
-        .Custom => |cluster| cluster.url,
-        else => "http://localhost:8899",
-    };
+    return cluster_type.getRpcUrl();
 }
