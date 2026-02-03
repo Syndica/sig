@@ -290,12 +290,28 @@ pub const GenesisConfig = struct {
     epoch_schedule: EpochSchedule,
     /// network runlevel
     cluster_type: ClusterType,
+    /// hash of the serialized genesis config, computed after deserialization
+    hash: sig.core.Hash = sig.core.Hash.ZEROES,
+
+    pub const @"!bincode-config:hash" = bincode.FieldConfig(sig.core.Hash){ .skip = true };
 
     pub fn init(allocator: Allocator, genesis_path: []const u8) !GenesisConfig {
         var file = try std.fs.cwd().openFile(genesis_path, .{});
         defer file.close();
 
-        return try bincode.read(allocator, GenesisConfig, file.reader(), .{});
+        // Read the entire file to compute hash from raw bytes
+        const file_bytes = try file.readToEndAlloc(allocator, std.math.maxInt(usize));
+        defer allocator.free(file_bytes);
+
+        // Compute hash from original file bytes (this matches Agave's behavior)
+        var hash_bytes: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(file_bytes, &hash_bytes, .{});
+
+        // Parse the genesis config from the bytes
+        var fbs = std.io.fixedBufferStream(file_bytes);
+        var config = try bincode.read(allocator, GenesisConfig, fbs.reader(), .{});
+        config.hash = .{ .data = hash_bytes };
+        return config;
     }
 
     pub fn default(allocator: Allocator) GenesisConfig {
@@ -363,6 +379,10 @@ test "genesis_config deserialize testnet config" {
     defer config.deinit(allocator);
 
     try std.testing.expectEqual(ClusterType.Testnet, config.cluster_type);
+    try std.testing.expectEqualStrings(
+        "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY",
+        config.hash.base58String().constSlice(),
+    );
 }
 
 test "genesis_config deserialize devnet config" {
@@ -373,6 +393,10 @@ test "genesis_config deserialize devnet config" {
     defer config.deinit(allocator);
 
     try std.testing.expectEqual(ClusterType.Devnet, config.cluster_type);
+    try std.testing.expectEqualStrings(
+        "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+        config.hash.base58String().constSlice(),
+    );
 }
 
 test "genesis_config deserialize mainnet config" {
@@ -383,6 +407,10 @@ test "genesis_config deserialize mainnet config" {
     defer config.deinit(allocator);
 
     try std.testing.expectEqual(ClusterType.MainnetBeta, config.cluster_type);
+    try std.testing.expectEqualStrings(
+        "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+        config.hash.base58String().constSlice(),
+    );
 }
 
 test "inflation" {

@@ -1557,6 +1557,12 @@ fn validator(
     );
     defer loaded_snapshot.deinit();
 
+    const static_rpc_ctx: sig.rpc.methods.StaticHookContext = .{
+        .genesis_hash = loaded_snapshot.genesis_config.hash.base58String(),
+    };
+
+    try app_base.rpc_hooks.set(allocator, &static_rpc_ctx);
+
     var unrooted_tracy: tracy.TracingAllocator = .{
         .name = "AccountsDB Unrooted",
         .parent = allocator,
