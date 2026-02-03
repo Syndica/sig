@@ -179,7 +179,10 @@ fn startService(svc: ServiceDefinition) !i32 {
     // install a basic seccomp filter that bans syscalls except write+sleep
     {
         const bpf_filters = common.linux.bpf.printSleepExit(svc.params.stderr);
-        const program: common.linux.bpf.sock_fprog = .{ .len = bpf_filters.len, .sock_filter = &bpf_filters };
+        const program: common.linux.bpf.sock_fprog = .{
+            .len = bpf_filters.len,
+            .sock_filter = &bpf_filters,
+        };
 
         const ret = linux.seccomp(linux.SECCOMP.SET_MODE_FILTER, 0, &program);
         const err = e(ret);

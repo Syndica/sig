@@ -2,7 +2,6 @@ const std = @import("std");
 
 pub const linux = @import("common/linux.zig");
 
-const posix = std.posix;
 const page_size_min = std.heap.page_size_min;
 
 pub const ResolvedArgs = extern struct {

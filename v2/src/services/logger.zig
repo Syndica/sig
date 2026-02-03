@@ -1,5 +1,4 @@
 const std = @import("std");
-const common = @import("common");
 const start = @import("start");
 
 comptime {
