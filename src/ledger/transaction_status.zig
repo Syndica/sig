@@ -3,6 +3,7 @@ const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
+const RewardType = sig.replay.rewards.RewardType;
 
 pub const TransactionStatusMeta = struct {
     /// Indicates whether the transaction succeeded, or exactly what error caused it to fail
@@ -143,13 +144,6 @@ pub const Reward = struct {
     pub fn deinit(self: @This(), allocator: Allocator) void {
         allocator.free(self.pubkey);
     }
-};
-
-pub const RewardType = enum {
-    Fee,
-    Rent,
-    Staking,
-    Voting,
 };
 
 pub const LoadedAddresses = struct {

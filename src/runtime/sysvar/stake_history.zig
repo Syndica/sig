@@ -45,6 +45,18 @@ pub const StakeHistory = struct {
         activating: u64 = 0,
         /// Requested to be cooled down, not fully deactivated yet
         deactivating: u64 = 0,
+
+        pub const DEFAULT: StakeState = .{
+            .effective = 0,
+            .activating = 0,
+            .deactivating = 0,
+        };
+
+        pub fn add(self: *StakeState, other: StakeState) void {
+            self.effective += other.effective;
+            self.activating += other.activating;
+            self.deactivating += other.deactivating;
+        }
     };
 
     pub const ID: Pubkey = .parse("SysvarStakeHistory1111111111111111111111111");
@@ -64,6 +76,26 @@ pub const StakeHistory = struct {
             epoch,
             Entry.searchCmp,
         )) |index| self.entries.buffer[index] else null;
+    }
+
+    pub fn insertEntry(self: *StakeHistory, epoch: Epoch, entry: StakeState) !void {
+        const index = std.sort.lowerBound(
+            Entry,
+            self.entries.constSlice(),
+            epoch,
+            Entry.searchCmp,
+        );
+
+        if (self.entries.len == MAX_ENTRIES) {
+            if (epoch < self.entries.buffer[MAX_ENTRIES - 1].epoch) return;
+            _ = self.entries.orderedRemove(MAX_ENTRIES - 1);
+        }
+
+        if (index < self.entries.len and self.entries.buffer[index].epoch == epoch) {
+            return error.DuplicateEpoch;
+        }
+
+        try self.entries.insert(index, .{ .epoch = epoch, .stake = entry });
     }
 
     pub fn initWithEntries(entries: []const Entry) StakeHistory {
@@ -136,4 +168,29 @@ test "serialize and deserialize" {
             deserialized.entries.constSlice(),
         );
     }
+}
+
+test "insert and add" {
+    var stake_history: StakeHistory = .INIT;
+
+    try stake_history.insertEntry(1, .{ .effective = 10, .activating = 5, .deactivating = 2 });
+    try stake_history.insertEntry(3, .{ .effective = 20, .activating = 10, .deactivating = 4 });
+    try stake_history.insertEntry(2, .{ .effective = 15, .activating = 7, .deactivating = 3 });
+
+    try std.testing.expectEqual(3, stake_history.entries.len);
+
+    const entry_2 = stake_history.getEntry(2) orelse unreachable;
+    try std.testing.expectEqual(15, entry_2.stake.effective);
+    try std.testing.expectEqual(7, entry_2.stake.activating);
+    try std.testing.expectEqual(3, entry_2.stake.deactivating);
+
+    var stake_2 = entry_2.stake;
+    stake_2.add(.{
+        .effective = 10,
+        .activating = 5,
+        .deactivating = 1,
+    });
+    try std.testing.expectEqual(25, stake_2.effective);
+    try std.testing.expectEqual(12, stake_2.activating);
+    try std.testing.expectEqual(4, stake_2.deactivating);
 }

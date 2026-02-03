@@ -18,6 +18,9 @@ pub const testing = @import("testing.zig");
 pub const transaction_context = @import("transaction_context.zig");
 pub const transaction_execution = @import("transaction_execution.zig");
 
+pub const builtin_programs = program.builtin_programs;
+pub const builtin_program_costs = program.builtin_program_costs;
+
 pub const BorrowedAccount = borrowed_account.BorrowedAccount;
 pub const BorrowedAccountContext = borrowed_account.BorrowedAccountContext;
 pub const InstructionContext = instruction_context.InstructionContext;

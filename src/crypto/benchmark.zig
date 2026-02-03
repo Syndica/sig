@@ -2,11 +2,13 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Ed25519 = std.crypto.sign.Ed25519;
+const Hash = sig.core.Hash;
+const Sha256 = std.crypto.hash.sha2.Sha256;
 
-pub const Benchmark = struct {
+pub const BenchmarkSigVerify = struct {
     pub const min_iterations = 5;
     pub const max_iterations = 1_000;
-    pub const name = "crypto";
+    pub const name = "crypto.sigverify";
 
     pub const BenchmarkInputs = struct {
         num_signatures: u64,
@@ -90,5 +92,31 @@ pub const Benchmark = struct {
             },
             else => unreachable,
         }
+    }
+};
+
+pub const BenchmarkPohHash = struct {
+    pub const min_iterations = 5;
+    pub const max_iterations = 1_000;
+    pub const name = "crypto.poh(25m hashes)";
+
+    const num_hashes = 25_000_000;
+
+    pub fn repeat() !sig.time.Duration {
+        var input_hash: Hash = .ZEROES;
+        var start = sig.time.Timer.start();
+        Hash.hashRepeated(&input_hash, &input_hash, num_hashes);
+        std.mem.doNotOptimizeAway(&input_hash);
+        return start.read().div(num_hashes);
+    }
+
+    pub fn normal() !sig.time.Duration {
+        var input_hash: Hash = .ZEROES;
+        var start = sig.time.Timer.start();
+        for (0..num_hashes) |_| {
+            Sha256.hash(&input_hash.data, &input_hash.data, .{});
+        }
+        std.mem.doNotOptimizeAway(&input_hash);
+        return start.read().div(num_hashes);
     }
 };

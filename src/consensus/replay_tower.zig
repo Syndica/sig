@@ -18,7 +18,7 @@ const SortedSet = sig.utils.collections.SortedSet;
 const TowerSync = sig.runtime.program.vote.state.TowerSync;
 const Vote = sig.runtime.program.vote.state.Vote;
 const VoteStateUpdate = sig.runtime.program.vote.state.VoteStateUpdate;
-const StakeAndVoteAccountsMap = sig.core.vote_accounts.StakeAndVoteAccountsMap;
+const StakeAndVoteAccountsMap = sig.core.stakes.StakeAndVoteAccountsMap;
 const UnixTimestamp = sig.core.UnixTimestamp;
 
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
@@ -5884,7 +5884,7 @@ fn genStakes(
             .{
                 .stake = lamports,
                 .account = .{
-                    .account = .{ .lamports = lamports },
+                    .account = .{ .lamports = lamports, .owner = Pubkey.initRandom(random) },
                     .state = vote_state,
                     .rc = rc,
                 },

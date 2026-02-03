@@ -166,7 +166,7 @@ pub const LeaderSchedule = struct {
         allocator: std.mem.Allocator,
         epoch: Epoch,
         slots_in_epoch: Slot,
-        vote_accounts: *const sig.core.vote_accounts.StakeAndVoteAccountsMap,
+        vote_accounts: *const sig.core.stakes.StakeAndVoteAccountsMap,
     ) ![]const Pubkey {
         // this implementation is naive and performs unnecessay allocations to construct and
         // input compatable with fromStakedNodes and re-key results.
