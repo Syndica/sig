@@ -156,7 +156,7 @@ pub const EpochTracker = struct {
         return epoch_tracker;
     }
 
-    pub fn deinit(self: *EpochTracker, allocator: Allocator) void {
+    pub fn deinit(self: *const EpochTracker, allocator: Allocator) void {
         self.rooted_epochs.deinit(allocator);
         self.unrooted_epochs.deinit(allocator);
     }
@@ -354,14 +354,14 @@ pub const EpochInfo = struct {
         self.stakes.deinit(allocator);
     }
 
-    pub fn init(leaders: LeaderSchedule, stakes: EpochStakes) !EpochInfo {
+    fn init(leaders: LeaderSchedule, stakes: EpochStakes) !EpochInfo {
         return .{
             .leaders = leaders,
             .stakes = stakes,
         };
     }
 
-    pub fn initRandom(allocator: Allocator, random: Random, options: struct {
+    fn initRandom(allocator: Allocator, random: Random, options: struct {
         epoch: ?Epoch = null,
         schedule: EpochSchedule = .INIT,
         max_stakes_list_entries: usize = 5,
@@ -391,19 +391,19 @@ pub const EpochInfo = struct {
 ///
 /// No process should ever need to access E-3 or older EpochInfos and it is thus safe to
 /// deinitialize the corresponding data when overwriting entries with new epoch data.
-pub const RootedEpochBuffer = struct {
+const RootedEpochBuffer = struct {
     buf: [4]?*const EpochInfo = @splat(null),
     root: Atomic(Epoch) = .init(0),
 
-    pub fn deinit(self: *RootedEpochBuffer, allocator: Allocator) void {
-        for (&self.buf) |*maybe_entry| {
+    fn deinit(self: *const RootedEpochBuffer, allocator: Allocator) void {
+        var buf = self.buf;
+        for (&buf) |*maybe_entry| {
             if (maybe_entry.*) |entry| {
                 entry.deinit(allocator);
                 allocator.destroy(entry);
             }
             maybe_entry.* = null;
         }
-        self.* = undefined;
     }
 
     pub fn insert(
@@ -457,23 +457,23 @@ pub const RootedEpochBuffer = struct {
     }
 };
 
-pub const UnrootedEpochBuffer = struct {
+const UnrootedEpochBuffer = struct {
     buf: [MAX_FORKS]?struct { slot: Slot, info: *const EpochInfo } = @splat(null),
 
     pub const MAX_FORKS = 4;
 
-    pub fn deinit(self: *UnrootedEpochBuffer, allocator: Allocator) void {
-        for (&self.buf) |*maybe_entry| {
+    fn deinit(self: *const UnrootedEpochBuffer, allocator: Allocator) void {
+        var buf = self.buf;
+        for (&buf) |*maybe_entry| {
             if (maybe_entry.*) |entry| {
                 entry.info.deinit(allocator);
                 allocator.destroy(entry.info);
             }
             maybe_entry.* = null;
         }
-        self.* = undefined;
     }
 
-    pub fn insert(
+    fn insert(
         self: *UnrootedEpochBuffer,
         allocator: Allocator,
         slot: Slot,
@@ -517,7 +517,7 @@ pub const UnrootedEpochBuffer = struct {
         return error.ForkNotFound;
     }
 
-    pub fn take(
+    fn take(
         self: *UnrootedEpochBuffer,
         ancestors: *const Ancestors,
     ) !*const EpochInfo {
