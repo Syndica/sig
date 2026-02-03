@@ -362,7 +362,7 @@ pub const AuthorizedVoters = struct {
     };
 
     pub fn init(allocator: Allocator, epoch: Epoch, pubkey: Pubkey) !AuthorizedVoters {
-        var authorized_voters: SortedMap(Epoch, Pubkey) = .empty;
+        var authorized_voters: Map = .empty;
         try authorized_voters.put(allocator, epoch, pubkey);
         return .{ .voters = authorized_voters };
     }
@@ -516,7 +516,10 @@ pub const AuthorizedVoters = struct {
         if (self.count() != other.count()) return false;
         var self_voters = self.voters;
         var other_voters = other.voters;
-        for (self_voters.keys()) |key| {
+
+        var it = self_voters.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
             const self_value = self_voters.get(key).?;
             const other_value = other_voters.get(key) orelse return false;
             if (!self_value.equals(&other_value)) return false;
