@@ -103,7 +103,7 @@ pub fn main() !void {
     current_config.metrics_port = cmd.metrics_port;
     current_config.log_file = cmd.log_file;
     current_config.tee_logs = cmd.tee_logs;
-    current_config.validator_dir = try std.fs.realpathAlloc(gpa, cmd.validator_dir);
+    current_config.validator_dir = try ensureValidatorDir(gpa, cmd.validator_dir);
 
     // If no subcommand was provided, print a friendly header and help information.
     const subcmd = cmd.subcmd orelse {
@@ -1183,16 +1183,29 @@ const Cmd = struct {
     };
 };
 
-/// Ensures the validator directory exists.
-/// Returns an error if the directory cannot be accessed.
-fn ensureValidatorDir(logger: Logger, validator_dir: []const u8) !void {
-    _ = std.fs.cwd().openDir(validator_dir, .{}) catch |err| {
-        logger.err().logf(
-            "Cannot create or access validator directory '{s}': {}",
-            .{ validator_dir, err },
-        );
-        return err;
+/// Ensures the validator directory exists. Create it if it does not.
+fn ensureValidatorDir(allocator: std.mem.Allocator, validator_dir: []const u8) ![]const u8 {
+    std.fs.cwd().access(validator_dir, .{}) catch |access_err| {
+        switch (access_err) {
+            error.FileNotFound => {
+                std.fs.cwd().makePath(validator_dir) catch |create_err| {
+                    std.debug.print(
+                        "Cannot create validator directory '{s}': {}",
+                        .{ validator_dir, create_err },
+                    );
+                    return create_err;
+                };
+            },
+            else => {
+                std.debug.print(
+                    "Cannot access validator directory '{s}': {}",
+                    .{ validator_dir, access_err },
+                );
+                return access_err;
+            },
+        }
     };
+    return std.fs.realpathAlloc(allocator, validator_dir);
 }
 
 /// Ensures a genesis file is available by either using the provided path
@@ -1317,7 +1330,6 @@ fn validator(
 
     app_base.logger.info().logf("starting validator with cfg: {}", .{cfg});
 
-    try ensureValidatorDir(app_base.logger, cfg.validator_dir);
     const genesis_file_path = try ensureGenesis(allocator, cfg, app_base.logger);
     defer allocator.free(genesis_file_path);
 
@@ -1577,7 +1589,6 @@ fn replayOffline(
 
     app_base.logger.info().logf("starting replay-offline with cfg: {}", .{cfg});
 
-    try ensureValidatorDir(app_base.logger, cfg.validator_dir);
     const genesis_file_path = try ensureGenesis(allocator, cfg, app_base.logger);
     defer allocator.free(genesis_file_path);
 
@@ -1678,7 +1689,6 @@ fn shredNetwork(
         app_base.deinit();
     }
 
-    try ensureValidatorDir(app_base.logger, cfg.validator_dir);
     const genesis_file_path = try ensureGenesis(allocator, cfg, app_base.logger);
     defer allocator.free(genesis_file_path);
     const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
@@ -1871,7 +1881,6 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         app_base.deinit();
     }
 
-    try ensureValidatorDir(.noop, cfg.validator_dir);
     const genesis_file_path = try ensureGenesis(allocator, cfg, .from(app_base.logger));
     defer allocator.free(genesis_file_path);
 
