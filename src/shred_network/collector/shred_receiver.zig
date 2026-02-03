@@ -305,7 +305,7 @@ test "handleBatch/handlePacket" {
 
     const shred_tracker = try allocator.create(BasicShredTracker);
     defer allocator.destroy(shred_tracker);
-    try shred_tracker.init(allocator, root_slot + 1, .noop, &registry);
+    try shred_tracker.init(allocator, root_slot + 1, .noop, &registry, false);
     defer shred_tracker.deinit();
 
     var exit = Atomic(bool).init(false);

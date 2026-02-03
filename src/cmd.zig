@@ -129,6 +129,7 @@ pub fn main() !void {
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
             current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
+            current_config.shred_network.log_finished_slots = params.repair.log_finished_slots;
             // Derive snapshot_dir from validator_dir if using default
             if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
                 current_config.accounts_db.snapshot_dir = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "accounts_db" });
@@ -182,6 +183,7 @@ pub fn main() !void {
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
             current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
+            current_config.shred_network.log_finished_slots = params.repair.log_finished_slots;
             current_config.turbine.overwrite_stake_for_testing =
                 params.overwrite_stake_for_testing;
             current_config.shred_network.no_retransmit = params.no_retransmit;
@@ -704,6 +706,7 @@ const Cmd = struct {
         max_shreds: u64,
         num_retransmit_threads: ?usize,
         dump_shred_tracker: bool,
+        log_finished_slots: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .turbine_port = .{
@@ -759,6 +762,14 @@ const Cmd = struct {
                 .config = {},
                 .help = "Create shred-tracker.txt" ++
                     " to visually represent the currently tracked slots.",
+            },
+            .log_finished_slots = .{
+                .kind = .named,
+                .name_override = "log-finished-slots",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "Log the highest finished slot when it updates.",
             },
         };
 

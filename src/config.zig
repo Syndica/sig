@@ -76,6 +76,7 @@ pub const ShredNetwork = struct {
     turbine_recv_port: u16 = 8002,
     no_retransmit: bool = true,
     dump_shred_tracker: bool = false,
+    log_finished_slots: bool = false,
 
     /// Converts from the CLI args into the `shred_network.start` parameters
     pub fn toConfig(self: ShredNetwork, fallback_slot: sig.core.Slot) ShredNetworkConfig {
@@ -85,6 +86,7 @@ pub const ShredNetwork = struct {
             .turbine_recv_port = self.turbine_recv_port,
             .retransmit = !self.no_retransmit,
             .dump_shred_tracker = self.dump_shred_tracker,
+            .log_finished_slots = self.log_finished_slots,
         };
     }
 };
