@@ -130,20 +130,20 @@ pub fn main() !void {
             params.repair.apply(&current_config);
             current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
             current_config.shred_network.log_finished_slots = params.repair.log_finished_slots;
-            // Derive snapshot_dir from validator_dir if using default
-            if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
-                current_config.accounts_db.snapshot_dir = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "accounts_db" });
-            } else {
-                current_config.accounts_db.snapshot_dir = params.snapshot_dir;
-            }
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
             params.geyser.apply(&current_config);
-            // Derive geyser.pipe_path from validator_dir if using default
-            if (std.mem.eql(u8, current_config.geyser.pipe_path, sig.VALIDATOR_DIR ++ "geyser.pipe")) {
-                current_config.geyser.pipe_path = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "geyser.pipe" });
-            }
+            current_config.geyser.pipe_path = try current_config.derivePathFromValidatorDir(
+                gpa,
+                current_config.geyser.pipe_path,
+                "geyser.pipe",
+            );
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.stop_at_slot = params.stop_at_slot;
@@ -157,20 +157,20 @@ pub fn main() !void {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
-            // Derive snapshot_dir from validator_dir if using default
-            if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
-                current_config.accounts_db.snapshot_dir = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "accounts_db" });
-            } else {
-                current_config.accounts_db.snapshot_dir = params.snapshot_dir;
-            }
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
             params.geyser.apply(&current_config);
-            // Derive geyser.pipe_path from validator_dir if using default
-            if (std.mem.eql(u8, current_config.geyser.pipe_path, sig.VALIDATOR_DIR ++ "geyser.pipe")) {
-                current_config.geyser.pipe_path = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "geyser.pipe" });
-            }
+            current_config.geyser.pipe_path = try current_config.derivePathFromValidatorDir(
+                gpa,
+                current_config.geyser.pipe_path,
+                "geyser.pipe",
+            );
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.stop_at_slot = params.stop_at_slot;
@@ -192,31 +192,30 @@ pub fn main() !void {
         },
         .snapshot_download => |params| {
             current_config.shred_version = params.shred_version;
-            // Derive snapshot_dir from validator_dir if using default
-            if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
-                current_config.accounts_db.snapshot_dir = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "accounts_db" });
-            } else {
-                current_config.accounts_db.snapshot_dir = params.snapshot_dir;
-            }
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
             params.accountsdb_download.apply(&current_config);
             params.gossip_base.apply(&current_config);
             try downloadSnapshot(gpa, gossip_gpa, current_config);
         },
         .snapshot_validate => |params| {
-            // Derive snapshot_dir from validator_dir if using default
-            if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
-                current_config.accounts_db.snapshot_dir = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "accounts_db" });
-            } else {
-                current_config.accounts_db.snapshot_dir = params.snapshot_dir;
-            }
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             current_config.gossip.cluster = params.gossip_cluster;
             params.geyser.apply(&current_config);
-            // Derive geyser.pipe_path from validator_dir if using default
-            if (std.mem.eql(u8, current_config.geyser.pipe_path, sig.VALIDATOR_DIR ++ "geyser.pipe")) {
-                current_config.geyser.pipe_path = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "geyser.pipe" });
-            }
+            current_config.geyser.pipe_path = try current_config.derivePathFromValidatorDir(
+                gpa,
+                current_config.geyser.pipe_path,
+                "geyser.pipe",
+            );
             try validateSnapshot(gpa, current_config);
         },
         .snapshot_create => |params| {
@@ -227,12 +226,11 @@ pub fn main() !void {
             @panic("TODO: support snapshot creation");
         },
         .print_manifest => |params| {
-            // Derive snapshot_dir from validator_dir if using default
-            if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
-                current_config.accounts_db.snapshot_dir = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "accounts_db" });
-            } else {
-                current_config.accounts_db.snapshot_dir = params.snapshot_dir;
-            }
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
             try printManifest(gpa, current_config);
         },
         .leader_schedule => |params| {
@@ -240,12 +238,11 @@ pub fn main() !void {
             current_config.leader_schedule_path = params.leader_schedule;
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
-            // Derive snapshot_dir from validator_dir if using default
-            if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
-                current_config.accounts_db.snapshot_dir = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "accounts_db" });
-            } else {
-                current_config.accounts_db.snapshot_dir = params.snapshot_dir;
-            }
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
@@ -264,12 +261,12 @@ pub fn main() !void {
         .mock_rpc_server => |params| {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
-            // Derive snapshot_dir from validator_dir if using default
-            if (std.mem.eql(u8, params.snapshot_dir, sig.VALIDATOR_DIR ++ "accounts_db")) {
-                current_config.accounts_db.snapshot_dir = try std.fs.path.join(gpa, &.{ current_config.validator_dir, "accounts_db" });
-            } else {
-                current_config.accounts_db.snapshot_dir = params.snapshot_dir;
-            }
+
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
@@ -400,8 +397,10 @@ const Cmd = struct {
                 .alias = .d,
                 .default_value = sig.VALIDATOR_DIR,
                 .config = .string,
-                .help = "base directory for all validator data (ledger, accounts_db, geyser pipe). " ++
-                    "Subdirectory paths are derived from this base unless explicitly overridden.",
+                .help =
+                \\base directory for all validator data (ledger, accounts_db, geyser pipe).
+                \\Subdirectory paths are derived from this base unless explicitly overridden.
+                ,
             },
         },
     };
@@ -801,8 +800,10 @@ const Cmd = struct {
                 .alias = .none,
                 .default_value = sig.VALIDATOR_DIR ++ "geyser.pipe",
                 .config = .string,
-                .help = "path to the geyser pipe. " ++
-                    "Defaults to <validator-dir>/geyser.pipe. Overrides --validator-dir for this path.",
+                .help =
+                \\path to the geyser pipe.
+                \\Defaults to <validator-dir>/geyser.pipe. Overrides --validator-dir for this path.
+                ,
             },
             .writer_fba_bytes = .{
                 .kind = .named,
@@ -1259,7 +1260,10 @@ const Cmd = struct {
                                 .alias = .none,
                                 .default_value = null,
                                 .config = {},
-                                .help = "The first slot to retain (inclusive). Defaults to min slot in ledger.",
+                                .help =
+                                \\The first slot to retain (inclusive). 
+                                \\Defaults to min slot in ledger.
+                                ,
                             },
                             .end_slot = .{
                                 .kind = .named,
@@ -1267,7 +1271,10 @@ const Cmd = struct {
                                 .alias = .none,
                                 .default_value = null,
                                 .config = {},
-                                .help = "The last slot to retain (inclusive). Defaults to max slot in ledger.",
+                                .help =
+                                \\The last slot to retain (inclusive). 
+                                \\Defaults to max slot in ledger.
+                                ,
                             },
                         },
                     },
@@ -1315,9 +1322,23 @@ fn ensureGenesis(
         return try allocator.dupe(u8, provided_path);
     }
 
+    // If genesis already exists in validator dir, use it
+    const existing_path = try std.fs.path.join(
+        allocator,
+        &.{ cfg.validator_dir, "genesis.bin" },
+    );
+    errdefer allocator.free(existing_path);
+    if (!std.meta.isError(std.fs.accessAbsolute(existing_path, .{}))) {
+        logger.info().logf("Using existing genesis file: {s}", .{existing_path});
+        return existing_path;
+    }
+
     // Determine cluster for genesis
     const cluster = try cfg.gossip.getCluster() orelse {
-        logger.err().log("No genesis file path provided and no cluster specified. Use --genesis-file-path or --cluster");
+        logger.err().log(
+            \\No genesis file path provided and no cluster specified. 
+            \\Use --genesis-file-path or --cluster"
+        );
         return error.GenesisPathNotProvided;
     };
 
@@ -2332,12 +2353,21 @@ fn ledgerTool(
             const end_slot = retain_params.end_slot orelse highest_slot;
 
             if (start_slot > end_slot) {
-                logger.err().logf("Invalid range: start-slot ({d}) > end-slot ({d})", .{ start_slot, end_slot });
+                logger.err().logf("Invalid range: start-slot ({d}) > end-slot ({d})", .{
+                    start_slot,
+                    end_slot,
+                });
                 return error.InvalidSlotRange;
             }
 
-            try stdout.print("Current ledger bounds: [{d}, {d}]\n", .{ lowest_slot, highest_slot });
-            try stdout.print("Retaining slots in range: [{d}, {d}]\n", .{ start_slot, end_slot });
+            try stdout.print("Current ledger bounds: [{d}, {d}]\n", .{
+                lowest_slot,
+                highest_slot,
+            });
+            try stdout.print("Retaining slots in range: [{d}, {d}]\n", .{
+                start_slot,
+                end_slot,
+            });
 
             // Purge slots before start_slot
             if (start_slot > lowest_slot) {
@@ -2365,7 +2395,10 @@ fn ledgerTool(
                 }
             }
 
-            try stdout.print("Done. Retained slots in range [{d}, {d}]\n", .{ start_slot, end_slot });
+            try stdout.print("Done. Retained slots in range [{d}, {d}]\n", .{
+                start_slot,
+                end_slot,
+            });
         },
     }
 }
