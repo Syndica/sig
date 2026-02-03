@@ -77,5 +77,3 @@ pub const Transaction = transaction.Transaction;
 pub const Epoch = time.Epoch;
 pub const Slot = time.Slot;
 pub const UnixTimestamp = time.UnixTimestamp;
-
-pub const Cluster = enum { mainnet, testnet, devnet, localnet };
