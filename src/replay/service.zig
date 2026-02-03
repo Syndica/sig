@@ -577,7 +577,6 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     slot,
                     last_entry_hash,
                 ));
-                state.slot_tracker.latest_confirmed_slot.update(slot);
                 processed_a_slot = true;
             } else {
                 state.logger.info().logf("partially replayed slot: {}", .{slot});
@@ -590,6 +589,20 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
 
 /// bypass the tower bft consensus protocol, simply rooting slots with SlotTree.reRoot
 fn bypassConsensus(state: *ReplayState) !void {
+    // NOTE: Processed slot semantics differ from Agave when Sig is in bypass-consensus mode.
+    // In bypass mode, `latest_processed_slot` is set to the highest slot among all fork
+    // leaves (SlotTree.tip()).
+    //
+    // This differs from Agave's behavior: the processed slot is only updated
+    // when `vote_bank.is_some()` (i.e., when the validator has selected a bank
+    // to vote on after passing all consensus checks like lockout, threshold, and
+    // switch proof). If the validator is locked out or fails
+    // threshold checks, the processed slot is NOT updated and can go stale.
+    // See: https://github.com/anza-xyz/agave/blob/5e900421520a10933642d5e9a21e191a70f9b125/core/src/replay_stage.rs#L2683
+    //
+    // TowerConsensus implements Agave's processed slot semantics when consensus is enabled.
+    state.slot_tracker.latest_processed_slot.set(state.slot_tree.tip());
+
     if (state.slot_tree.reRoot(state.allocator)) |new_root| {
         const slot_tracker = &state.slot_tracker;
 

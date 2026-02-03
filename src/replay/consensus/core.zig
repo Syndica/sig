@@ -658,6 +658,12 @@ pub const TowerConsensus = struct {
                 slot_leaders,
                 vote_sockets,
             );
+
+            // Update the latest processed slot to the bank being voted on.
+            // This matches Agave's behavior: the processed slot is updated inside
+            // handle_votable_bank(), which is only called when vote_bank.is_some().
+            // See: https://github.com/anza-xyz/agave/blob/5e900421520a10933642d5e9a21e191a70f9b125/core/src/replay_stage.rs#L2683
+            slot_tracker.latest_processed_slot.set(voted.slot);
         }
 
         // Reset onto a fork
