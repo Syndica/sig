@@ -43,7 +43,7 @@ pub const panic_state = struct {
     var faulted: bool = false;
 };
 
-fn serviceMain(params: common.ResolvedArgs) callconv(.c) void {
+fn serviceMain(params: common.ResolvedArgs) callconv(.c) noreturn {
     const exit: *common.Exit = @ptrCast(params.exit);
     exit.* = .{};
 
@@ -98,7 +98,7 @@ fn serviceMain(params: common.ResolvedArgs) callconv(.c) void {
         }
 
         writer.interface.flush() catch {};
-        return;
+        abort();
     };
 
     unreachable;
@@ -225,7 +225,7 @@ fn handleSegfault(
 }
 
 fn abort() noreturn {
-    std.os.linux.exit(254);
+    std.os.linux.exit(255);
 }
 
 /// Assumes x86-64, and built with frame pointers

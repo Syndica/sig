@@ -33,27 +33,17 @@ pub const RW = extern struct {
         };
 
         // Set file to correct size
-        if (linux.ftruncate(fd_rw, @bitCast(args.size)) != 0) {
-            std.debug.panic("ftruncate failed\n", .{});
-        }
-
-        const F_LINUX_SPECIFIC_BASE = 1024;
+        try std.posix.ftruncate(fd_rw, args.size);
 
         // Make sure the file cannot be later resized.
         {
             // include/uapi/linux/fcntl.h
+            const F_LINUX_SPECIFIC_BASE = 1024;
             const F_ADD_SEALS = F_LINUX_SPECIFIC_BASE + 9;
             const F_SEAL_SHRINK = 0x0002; // prevent file shrink
             const F_SEAL_GROW = 0x0004; // prevent file grow
 
-            const ret = linux.fcntl(
-                fd_rw,
-                F_ADD_SEALS,
-                F_SEAL_SHRINK | F_SEAL_GROW,
-            );
-            if (ret != 0) {
-                std.debug.panic("fcntl failed with: {}\n", .{e(ret)});
-            }
+            _ = try std.posix.fcntl(fd_rw, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW);
         }
 
         return .{
