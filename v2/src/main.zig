@@ -48,50 +48,54 @@ const ServiceDefinition = struct {
     name: []const u8,
     params: ServiceArgs,
     svc_main: common.ServiceFn,
+    svc_fault_handler: linux.Sigaction.sigaction_fn,
 };
 
 pub fn main() !void {
     const stderr = std.fs.File.stderr().handle;
 
     // set up shared mem regions
-    // const rw = .{
-    //     .prng = try memfd.RW.init(.{ .name = "prng-state", .size = 16 }),
-    // };
-    // const ro = .{
-    //     .prng = try memfd.RO.fromRW(rw.prng),
-    // };
+    const rw = .{
+        .prng = try memfd.RW.init(.{ .name = "prng-state", .size = 16 }),
+    };
+    const ro = .{
+        .prng = try memfd.RO.fromRW(rw.prng),
+    };
 
     const net = .{
         .ping = try memfd.RW.init(.{ .name = "net-ping", .size = @sizeOf(common.net.Pair) }),
     };
 
     const service_defs: []const ServiceDefinition = &.{
-        // .{
-        //     .name = "Logger",
-        //     .svc_main = services.logger,
-        //     .params = .{
-        //         .stderr = stderr,
-        //         .exit = try memfd.RW.init(.{ .name = "logger-exit", .size = @sizeOf(common.Exit) }),
-        //         .ro = &.{ro.prng},
-        //         .ro_load = &.{null},
-        //         .rw = &.{},
-        //         .rw_load = &.{},
-        //     },
-        // },
-        // .{
-        //     .name = "Prng",
-        //     .svc_main = services.prng,
-        //     .params = .{
-        //         .exit = try memfd.RW.init(.{ .name = "prng-exit", .size = @sizeOf(common.Exit) }),
-        //         .rw = &.{rw.prng},
-        //         .rw_load = &.{null},
-        //         .ro = &.{},
-        //         .ro_load = &.{},
-        //     },
-        // },
+        .{
+            .name = "Logger",
+            .svc_main = services.logger,
+            .svc_fault_handler = services.fault_handler.logger,
+            .params = .{
+                .stderr = stderr,
+                .exit = try memfd.RW.init(.{ .name = "logger-exit", .size = @sizeOf(common.Exit) }),
+                .ro = &.{ro.prng},
+                .ro_load = &.{null},
+                .rw = &.{},
+                .rw_load = &.{},
+            },
+        },
+        .{
+            .name = "Prng",
+            .svc_main = services.prng,
+            .svc_fault_handler = services.fault_handler.prng,
+            .params = .{
+                .exit = try memfd.RW.init(.{ .name = "prng-exit", .size = @sizeOf(common.Exit) }),
+                .rw = &.{rw.prng},
+                .rw_load = &.{null},
+                .ro = &.{},
+                .ro_load = &.{},
+            },
+        },
         .{
             .name = "Net",
             .svc_main = services.net,
+            .svc_fault_handler = services.fault_handler.net,
             .params = .{
                 .exit = try memfd.RW.init(.{ .name = "net-exit", .size = @sizeOf(common.Exit) }),
                 .rw = &.{net.ping},
@@ -103,6 +107,7 @@ pub fn main() !void {
         .{
             .name = "Ping",
             .svc_main = services.ping,
+            .svc_fault_handler = services.fault_handler.ping,
             .params = .{
                 .stderr = stderr,
                 .exit = try memfd.RW.init(.{ .name = "ping-exit", .size = @sizeOf(common.Exit) }),
@@ -171,6 +176,24 @@ fn startService(svc: ServiceDefinition) !i32 {
         return child_pid;
     }
 
+    // register fault handlers
+    {
+        const act: *const std.os.linux.Sigaction = &.{
+            .handler = .{ .sigaction = svc.svc_fault_handler },
+            .mask = std.posix.sigemptyset(),
+            .flags = (std.posix.SA.SIGINFO | std.posix.SA.RESTART | std.posix.SA.RESETHAND),
+        };
+
+        // standard signals in std.debug.updateSegfaultHandler
+        std.posix.sigaction(std.posix.SIG.SEGV, act, null);
+        std.posix.sigaction(std.posix.SIG.ILL, act, null);
+        std.posix.sigaction(std.posix.SIG.BUS, act, null);
+        std.posix.sigaction(std.posix.SIG.FPE, act, null);
+
+        // catch seccomp too
+        std.posix.sigaction(std.posix.SIG.SYS, act, null);
+    }
+
     // Make sure that the services die when the parent exits
     {
         const ret = linux.prctl(@intFromEnum(linux.PR.SET_PDEATHSIG), linux.SIG.KILL, 0, 0, 0);
@@ -236,6 +259,13 @@ fn dumpOnExit(meta: *common.Exit, service: ServiceDefinition, pid: i32, status: 
             .{ service.name, pid, error_string },
         );
     }
+    if (meta.faultMsg()) |fault_msg| {
+        std.debug.print(
+            "Service `{s}` (pid: {}) faulted with message: {s}\n",
+            .{ service.name, pid, fault_msg },
+        );
+    }
+
     if (linux.W.TERMSIG(status) != 0) {
         std.debug.print(
             "Service `{s}` (pid: {}) exited from signal {}\n",
@@ -243,14 +273,19 @@ fn dumpOnExit(meta: *common.Exit, service: ServiceDefinition, pid: i32, status: 
         );
     }
 
-    if (meta.errorReturnStackTrace()) |error_trace| {
+    if (meta.errorReturnStackTrace()) |trace| {
         std.debug.print("Error trace:\n", .{});
-        std.debug.dumpStackTrace(error_trace);
+        std.debug.dumpStackTrace(trace);
     }
 
-    if (meta.stackTrace()) |stack_trace| {
+    if (meta.stackTrace()) |trace| {
         std.debug.print("Stack trace:\n", .{});
-        std.debug.dumpStackTrace(stack_trace);
+        std.debug.dumpStackTrace(trace);
+    }
+
+    if (meta.faultStackTrace()) |trace| {
+        std.debug.print("Fault trace:\n", .{});
+        std.debug.dumpStackTrace(trace);
     }
 }
 
