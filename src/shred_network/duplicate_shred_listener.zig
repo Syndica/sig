@@ -110,12 +110,12 @@ const GossipDuplicateShredHandler = struct {
     }
 
     pub fn handle(self: *GossipDuplicateShredHandler, dup_shred_data: DuplicateShred) !void {
-        self.cacheRootInfo();
+        try self.cacheRootInfo();
         try self.maybePruneBuffer();
         try self.handleShredData(dup_shred_data);
     }
 
-    fn cacheRootInfo(self: *GossipDuplicateShredHandler) void {
+    fn cacheRootInfo(self: *GossipDuplicateShredHandler) !void {
         const last_root = self.params.ledger_reader.maxRoot();
         // Early return if last_root unchanged and we have cached staked nodes
         if (last_root == self.last_root and self.cached_staked_nodes.count() > 0) return;
@@ -134,9 +134,7 @@ const GossipDuplicateShredHandler = struct {
                     epoch_info.stakes.stakes.vote_accounts.staked_nodes.keys(),
                     epoch_info.stakes.stakes.vote_accounts.staked_nodes.values(),
                 ) |pubkey, stake| {
-                    self.cached_staked_nodes.put(self.allocator, pubkey, stake) catch {
-                        break;
-                    };
+                    try self.cached_staked_nodes.put(self.allocator, pubkey, stake);
                 }
             } else |_| {}
 
@@ -187,27 +185,21 @@ const GossipDuplicateShredHandler = struct {
                 key.slot < self.last_root +| self.cached_slots_in_epoch;
             if (keep) {
                 // Not already consumed
-                const gop = self.consumed.getOrPut(self.allocator, key.slot) catch {
-                    keep = false;
-                    continue;
-                };
+                const gop = try self.consumed.getOrPut(self.allocator, key.slot);
                 if (!gop.found_existing) {
-                    gop.value_ptr.* = self.params.ledger_reader.isDuplicateSlot(key.slot) catch true;
+                    gop.value_ptr.* = try self.params.ledger_reader.isDuplicateSlot(key.slot);
                 }
                 keep = !gop.value_ptr.*;
             }
             if (keep) {
-                const g = counts.getOrPut(self.allocator, key.from) catch {
-                    keys_to_remove.append(self.allocator, key) catch {};
-                    continue;
-                };
-                if (!g.found_existing) g.value_ptr.* = 0;
-                g.value_ptr.* +%= 1;
-                if (g.value_ptr.* > MAX_NUM_ENTRIES_PER_PUBKEY) {
-                    keys_to_remove.append(self.allocator, key) catch {};
+                const gop = try counts.getOrPut(self.allocator, key.from);
+                if (!gop.found_existing) gop.value_ptr.* = 0;
+                gop.value_ptr.* +%= 1;
+                if (gop.value_ptr.* > MAX_NUM_ENTRIES_PER_PUBKEY) {
+                    try keys_to_remove.append(self.allocator, key);
                 }
             } else {
-                keys_to_remove.append(self.allocator, key) catch {};
+                try keys_to_remove.append(self.allocator, key);
             }
         }
         for (keys_to_remove.items) |k| {
@@ -636,7 +628,7 @@ test "GossipDuplicateShredHandler: cacheRootInfo updates cached slots in epoch" 
         try setter.addRoot(1);
         try setter.commit();
 
-        handler.cacheRootInfo();
+        try handler.cacheRootInfo();
         const expected_epoch = epoch_tracker.epoch_schedule.getEpoch(1);
         const expected_slots_in_epoch =
             epoch_tracker.epoch_schedule.getSlotsInEpoch(expected_epoch);
@@ -652,7 +644,7 @@ test "GossipDuplicateShredHandler: cacheRootInfo updates cached slots in epoch" 
         try setter2.addRoot(update_slot);
         try setter2.commit();
 
-        handler.cacheRootInfo();
+        try handler.cacheRootInfo();
         try std.testing.expectEqual(update_slot, handler.last_root);
         const expected_slots_in_epoch2 = epoch_tracker.epoch_schedule.getSlotsInEpoch(update_epoch);
         try std.testing.expectEqual(expected_slots_in_epoch2, handler.cached_slots_in_epoch);
@@ -779,7 +771,7 @@ test "GossipDuplicateShredHandler: cacheRootInfo populates and uses cached stake
     }
 
     // Call cacheRootInfo - should populate cached_staked_nodes
-    handler.cacheRootInfo();
+    try handler.cacheRootInfo();
 
     try std.testing.expectEqual(10, handler.last_root);
     try std.testing.expectEqual(0, handler.cached_on_epoch);
@@ -790,7 +782,7 @@ test "GossipDuplicateShredHandler: cacheRootInfo populates and uses cached stake
 
     // Call cacheRootInfo again with same root - should return early without refetching
     const initial_count = handler.cached_staked_nodes.count();
-    handler.cacheRootInfo();
+    try handler.cacheRootInfo();
     try std.testing.expectEqual(initial_count, handler.cached_staked_nodes.count());
 
     // Now test that pruning uses the cached stakes
