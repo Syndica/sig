@@ -1257,7 +1257,7 @@ fn validator(
     try epoch_context_manager.contexts.realign(epoch);
     {
         var staked_nodes_cloned = try staked_nodes.clone(gpa);
-        errdefer staked_nodes_cloned.deinit(allocator);
+        errdefer staked_nodes_cloned.deinit(gpa);
 
         const leader_schedule = if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule|
             leader_schedule[1].slot_leaders
@@ -1549,8 +1549,8 @@ fn replayOffline(
     defer epoch_context_manager.deinit();
     try epoch_context_manager.contexts.realign(epoch);
     {
-        var staked_nodes_cloned = try staked_nodes.clone(allocator);
-        errdefer staked_nodes_cloned.deinit(allocator);
+        var staked_nodes_cloned = try staked_nodes.clone(gpa);
+        errdefer staked_nodes_cloned.deinit(gpa);
 
         // TODO: Implement feature gating for vote keyed leader schedule.
         // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
