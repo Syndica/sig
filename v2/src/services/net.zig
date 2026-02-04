@@ -1,7 +1,6 @@
 const std = @import("std");
 const start = @import("start");
 const common = @import("common");
-const Ring = common.Ring;
 const Pair = common.net.Pair;
 
 comptime {
@@ -33,7 +32,11 @@ fn tile(pairs: []const *Pair) !noreturn {
 
     for (pairs, 0..) |pair, i| {
         errdefer for (sockets[0..i]) |socket| std.posix.close(socket);
-        const socket = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.DGRAM | std.posix.SOCK.NONBLOCK, 0);
+        const socket = try std.posix.socket(
+            std.posix.AF.INET,
+            std.posix.SOCK.DGRAM | std.posix.SOCK.NONBLOCK,
+            0,
+        );
         errdefer std.posix.close(socket);
 
         const local: std.net.Address = .initIp4(.{ 0, 0, 0, 0 }, pair.port);
@@ -51,7 +54,13 @@ fn tile(pairs: []const *Pair) !noreturn {
             var counter: u32 = 0;
             inline for (.{ slice.first(), slice.second() }) |packets| {
                 for (packets) |p| {
-                    const bytes = try std.posix.sendto(sock, p.data[0..p.size], flags, &p.addr.any, p.addr.getOsSockLen());
+                    const bytes = try std.posix.sendto(
+                        sock,
+                        p.data[0..p.size],
+                        flags,
+                        &p.addr.any,
+                        p.addr.getOsSockLen(),
+                    );
                     std.debug.assert(bytes == p.size);
                     counter += 1;
                 }
@@ -64,7 +73,13 @@ fn tile(pairs: []const *Pair) !noreturn {
             var slice = pair.recv.getWritable() catch continue;
             const ptr = slice.one();
             var dummy: u32 = 0;
-            ptr.size = @intCast(std.posix.recvfrom(sock, &ptr.data, 0, &ptr.addr.any, &dummy) catch |err| switch (err) {
+            ptr.size = @intCast(std.posix.recvfrom(
+                sock,
+                &ptr.data,
+                0,
+                &ptr.addr.any,
+                &dummy,
+            ) catch |err| switch (err) {
                 error.WouldBlock => continue,
                 else => |e| return e,
             });
