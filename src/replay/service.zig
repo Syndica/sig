@@ -162,8 +162,6 @@ pub const Dependencies = struct {
     hard_forks: sig.core.HardForks,
     replay_threads: u32,
     stop_at_slot: ?Slot,
-    latest_processed_slot: *replay.trackers.ForkChoiceProcessedSlot,
-    latest_confirmed_slot: *replay.trackers.OptimisticallyConfirmedSlot,
 };
 
 pub const ConsensusStatus = enum {
@@ -1312,6 +1310,9 @@ pub const DependencyStubs = struct {
         const hard_forks = try bank_fields.hard_forks.clone(allocator);
         errdefer hard_forks.deinit(allocator);
 
+        var latest_processed_slot: replay.trackers.ForkChoiceProcessedSlot = .{};
+        var latest_confirmed_slot: replay.trackers.OptimisticallyConfirmedSlot = .{};
+
         return try .init(.{
             .allocator = allocator,
             .logger = .FOR_TESTS,
@@ -1335,6 +1336,8 @@ pub const DependencyStubs = struct {
 
             .replay_threads = num_threads,
             .stop_at_slot = null,
+            .latest_processed_slot = &latest_processed_slot,
+            .latest_confirmed_slot = &latest_confirmed_slot,
         }, .enabled);
     }
 };
