@@ -36,30 +36,6 @@ pub const OptimisticallyConfirmedSlot = struct {
     }
 };
 
-pub const ForkChoiceProcessedSlot = struct {
-    slot: std.atomic.Value(Slot) = .init(0),
-
-    pub fn update(self: *@This(), new_slot: Slot) void {
-        _ = self.slot.fetchMax(new_slot, .monotonic);
-    }
-
-    pub fn get(self: *const @This()) Slot {
-        return self.slot.load(.monotonic);
-    }
-};
-
-pub const OptimisticallyConfirmedSlot = struct {
-    slot: std.atomic.Value(Slot) = .init(0),
-
-    pub fn update(self: *@This(), new_slot: Slot) void {
-        _ = self.slot.fetchMax(new_slot, .monotonic);
-    }
-
-    pub fn get(self: *const @This()) Slot {
-        return self.slot.load(.monotonic);
-    }
-};
-
 /// Central registry that tracks high-level info about slots and how they fork.
 ///
 /// This is a lean version of `BankForks` from agave, focused on storing the
@@ -95,8 +71,6 @@ pub const SlotTracker = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        latest_processed_slot: *ForkChoiceProcessedSlot,
-        latest_confirmed_slot: *OptimisticallyConfirmedSlot,
         root_slot: Slot,
         /// ownership is transferred to this function, except in the case of an error return
         slot_init: Element,

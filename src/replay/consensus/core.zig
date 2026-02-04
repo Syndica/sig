@@ -2757,13 +2757,11 @@ test "checkAndHandleNewRoot - success" {
         state2.hash = .init(hash2.hash);
         state3.hash = .init(hash3.hash);
 
-        const ptr, var lg = slot_tracker4.writeWithLock();
-        defer lg.unlock();
-        try ptr.put(allocator, hash2.slot, .{
+        try slot_tracker4.put(allocator, hash2.slot, .{
             .constants = constants2,
             .state = state2,
         });
-        try ptr.put(allocator, hash3.slot, .{
+        try slot_tracker4.put(allocator, hash3.slot, .{
             .constants = constants3,
             .state = state3,
         });
@@ -2816,13 +2814,8 @@ test "checkAndHandleNewRoot - success" {
     }
 
     try testing.expectEqual(1, fixture.progress.map.count());
-    // Now the write lock is released, we can acquire a read lock
-    {
-        const ptr, var lg = slot_tracker4.readWithLock();
-        defer lg.unlock();
-        for (ptr.slots.keys()) |remaining_slots| {
-            try testing.expect(remaining_slots >= hash3.slot);
-        }
+    for (slot_tracker4.slots.keys()) |remaining_slots| {
+        try testing.expect(remaining_slots >= hash3.slot);
     }
     try testing.expect(!fixture.progress.map.contains(hash1.slot));
 }
@@ -5103,8 +5096,10 @@ test "edge cases - gossip verified vote hashes" {
     const root_slot0 = slot_tracker.root.load(.monotonic);
     std.debug.assert(root_slot0 == 0); // assert initial root value
 
+    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+
     var vote_collector: sig.consensus.vote_listener.VoteCollector =
-        try .init(.EPOCH_ZERO, root_slot0, &registry);
+        try .init(.EPOCH_ZERO, root_slot0, &registry, &confirmed_slot);
     defer vote_collector.deinit(gpa);
 
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
@@ -5318,8 +5313,13 @@ test "vote on heaviest frozen descendant with no switch" {
         try bhq.mut().insertGenesisHash(allocator, root_state.hash.readCopy().?, 0);
     }
 
+    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
+    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+
     var slot_tracker = try SlotTracker.init(
         allocator,
+        &processed_slot,
+        &confirmed_slot,
         root_slot,
         .{
             .constants = root_consts,
@@ -5498,8 +5498,13 @@ test "vote accounts with landed votes populate bank stats" {
         try bhq.mut().insertGenesisHash(allocator, root_state.hash.readCopy().?, 0);
     }
 
+    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
+    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+
     var slot_tracker = try SlotTracker.init(
         allocator,
+        &processed_slot,
+        &confirmed_slot,
         root_slot,
         .{
             .constants = root_consts,
@@ -6871,8 +6876,13 @@ test "successful fork switch (switch_proof)" {
         try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
     }
 
+    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
+    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+
     var slot_tracker = try SlotTracker.init(
         allocator,
+        &processed_slot,
+        &confirmed_slot,
         root_slot,
         .{ .constants = root_consts, .state = root_state },
     );
