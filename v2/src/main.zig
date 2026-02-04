@@ -54,32 +54,59 @@ pub fn main() !void {
     const stderr = std.fs.File.stderr().handle;
 
     // set up shared mem regions
-    const rw = .{
-        .prng = try memfd.RW.init(.{ .name = "prng-state", .size = 16 }),
-    };
-    const ro = .{
-        .prng = try memfd.RO.fromRW(rw.prng),
+    // const rw = .{
+    //     .prng = try memfd.RW.init(.{ .name = "prng-state", .size = 16 }),
+    // };
+    // const ro = .{
+    //     .prng = try memfd.RO.fromRW(rw.prng),
+    // };
+
+    const net = .{
+        .ping = try memfd.RW.init(.{ .name = "net-ping", .size = @sizeOf(common.net.Pair) }),
     };
 
     const service_defs: []const ServiceDefinition = &.{
+        // .{
+        //     .name = "Logger",
+        //     .svc_main = services.logger,
+        //     .params = .{
+        //         .stderr = stderr,
+        //         .exit = try memfd.RW.init(.{ .name = "logger-exit", .size = @sizeOf(common.Exit) }),
+        //         .ro = &.{ro.prng},
+        //         .ro_load = &.{null},
+        //         .rw = &.{},
+        //         .rw_load = &.{},
+        //     },
+        // },
+        // .{
+        //     .name = "Prng",
+        //     .svc_main = services.prng,
+        //     .params = .{
+        //         .exit = try memfd.RW.init(.{ .name = "prng-exit", .size = @sizeOf(common.Exit) }),
+        //         .rw = &.{rw.prng},
+        //         .rw_load = &.{null},
+        //         .ro = &.{},
+        //         .ro_load = &.{},
+        //     },
+        // },
         .{
-            .name = "Logger",
-            .svc_main = services.logger,
+            .name = "Net",
+            .svc_main = services.net,
             .params = .{
-                .stderr = stderr,
-                .exit = try memfd.RW.init(.{ .name = "logger-exit", .size = @sizeOf(common.Exit) }),
-                .ro = &.{ro.prng},
-                .ro_load = &.{null},
-                .rw = &.{},
-                .rw_load = &.{},
+                .exit = try memfd.RW.init(.{ .name = "net-exit", .size = @sizeOf(common.Exit) }),
+                .rw = &.{net.ping},
+                .rw_load = &.{null},
+                .ro = &.{},
+                .ro_load = &.{},
             },
         },
         .{
-            .name = "Prng",
-            .svc_main = services.prng,
+            .name = "Ping",
+            .svc_main = services.ping,
             .params = .{
-                .exit = try memfd.RW.init(.{ .name = "prng-exit", .size = @sizeOf(common.Exit) }),
-                .rw = &.{rw.prng},
+                .stderr = stderr,
+                .exit = try memfd.RW.init(.{ .name = "ping-exit", .size = @sizeOf(common.Exit) }),
+                .rw = &.{net.ping},
                 .rw_load = &.{null},
                 .ro = &.{},
                 .ro_load = &.{},

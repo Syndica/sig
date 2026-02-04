@@ -43,7 +43,7 @@ pub fn allowSyscallOnFd(syscall: u32, fd: u32) [5]sock_filter {
 }
 
 /// Only allows writing to stderr, sleeping, and exiting.
-pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [23]sock_filter {
+pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [33]sock_filter {
     // load syscall number
     const preamble = .{stmt(LD + W + ABS, @offsetOf(SECCOMP.data, "nr"))};
 
@@ -64,6 +64,13 @@ pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [23]sock_filter {
         allowSyscall(@intFromEnum(syscalls.clock_nanosleep)) ++
         allowSyscall(@intFromEnum(syscalls.exit)) ++
         allowSyscall(@intFromEnum(syscalls.exit_group)) ++
+        // net tile
+        allowSyscall(@intFromEnum(syscalls.sendto)) ++
+        allowSyscall(@intFromEnum(syscalls.recvfrom)) ++
+        allowSyscall(@intFromEnum(syscalls.close)) ++
+        allowSyscall(@intFromEnum(syscalls.bind)) ++
+        allowSyscall(@intFromEnum(syscalls.socket)) ++
+        //
         syscall_fd_filters ++
         fall_through;
 }

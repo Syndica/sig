@@ -1,6 +1,8 @@
 const std = @import("std");
 
 pub const linux = @import("common/linux.zig");
+pub const Ring = @import("common/ring.zig").Ring;
+pub const net = @import("common/net.zig");
 
 const page_size_min = std.heap.page_size_min;
 
@@ -41,7 +43,7 @@ pub const Exit = extern struct {
 
     pub fn errorReturnStackTrace(self: *Exit) ?std.builtin.StackTrace {
         const instruction_addresses: []usize = std.mem.span(@as(
-            [*:std.math.maxInt(usize)]usize,
+            [*:empty_entry]usize,
             &self.error_return,
         ));
         if (instruction_addresses.len == 0) return null;
@@ -53,7 +55,7 @@ pub const Exit = extern struct {
 
     pub fn stackTrace(self: *Exit) ?std.builtin.StackTrace {
         const instruction_addresses: []usize = std.mem.span(@as(
-            [*:std.math.maxInt(usize)]usize,
+            [*:empty_entry]usize,
             &self.trace,
         ));
         if (instruction_addresses.len == 0) return null;

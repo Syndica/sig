@@ -48,7 +48,7 @@ fn serviceMain(params: common.ResolvedArgs) callconv(.c) void {
     panic_state.exit = exit;
 
     const stderr: std.fs.File = .{ .handle = params.stderr };
-    var writer_buf: [4096]u8 = undefined;
+    var writer_buf: [0]u8 = undefined;
     var writer = stderr.writer(&writer_buf);
 
     const ret_val =

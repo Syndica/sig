@@ -13,7 +13,7 @@ pub fn build(b: *std.Build) void {
     const start_service = b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/start-service.zig" } },
+        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/start_service.zig" } },
     });
     start_service.addImport("common", common);
 
@@ -39,9 +39,13 @@ pub fn build(b: *std.Build) void {
     inline for (&.{
         "svc_logger",
         "svc_prng",
+        "svc_net",
+        "svc_ping",
     }, &.{
         "src/services/logger.zig",
         "src/services/prng.zig",
+        "src/services/net.zig",
+        "src/services/ping.zig",
     }) |name, path| {
         const service_mod = b.createModule(.{
             .target = target,
