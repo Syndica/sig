@@ -215,7 +215,7 @@ test "start and stop gracefully" {
 
     const keypair = KeyPair.generate();
     const shred_version = Atomic(u16).init(0);
-    const contact_info = try ThreadSafeContactInfo
+    const contact_info: ThreadSafeContactInfo =
         .initRandom(rng.random(), Pubkey.initRandom(rng.random()), 0);
 
     var gossip_table = try GossipTable.init(allocator, allocator);

@@ -66,18 +66,16 @@ pub fn main() !void {
     var gpa_state: GpaOrCAllocator(.{}) = .{};
     // defer _ = gpa_state.deinit();
 
-    var tracing_gpa = tracy.TracingAllocator{
+    var tracing_gpa: tracy.TracingAllocator = .{
         .name = "gpa",
         .parent = gpa_state.allocator(),
     };
     const gpa = tracing_gpa.allocator();
 
-    var gossip_gpa_state: GpaOrCAllocator(.{ .stack_trace_frames = 100 }) = .{};
-    var tracing_gossip_gpa = tracy.TracingAllocator{
+    var tracing_gossip_gpa: tracy.TracingAllocator = .{
         .name = "gossip gpa",
-        .parent = gossip_gpa_state.allocator(),
+        .parent = tracing_gpa.allocator(),
     };
-    // defer _ = gossip_gpa_state.deinit();
     const gossip_gpa = tracing_gossip_gpa.allocator();
 
     const argv = try std.process.argsAlloc(gpa);
@@ -161,6 +159,7 @@ pub fn main() !void {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
+            current_config.genesis_file_path = params.genesis_file_path;
             current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
             current_config.turbine.overwrite_stake_for_testing =
                 params.overwrite_stake_for_testing;
@@ -798,6 +797,7 @@ const Cmd = struct {
         gossip_base: GossipArgumentsCommon,
         gossip_node: GossipArgumentsNode,
         repair: RepairArgumentsBase,
+        genesis_file_path: ?[]const u8,
         /// TODO: Remove when no longer needed
         overwrite_stake_for_testing: bool,
         no_retransmit: bool,
@@ -825,6 +825,7 @@ const Cmd = struct {
                 .gossip_base = GossipArgumentsCommon.cmd_info,
                 .gossip_node = GossipArgumentsNode.cmd_info,
                 .repair = RepairArgumentsBase.cmd_info,
+                .genesis_file_path = genesis_file_path_arg,
                 .overwrite_stake_for_testing = .{
                     .kind = .named,
                     .name_override = null,
@@ -1246,17 +1247,17 @@ fn validator(
     var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
     defer rpc_client.deinit();
 
-    var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService.init(
-        allocator,
+    var rpc_epoch_ctx_service: sig.adapter.RpcEpochContextService = .init(
         .from(app_base.logger),
         &epoch_context_manager,
         rpc_client,
     );
+    defer rpc_epoch_ctx_service.deinit();
 
     const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
         .{},
         sig.adapter.RpcEpochContextService.run,
-        .{ &rpc_epoch_ctx_service, app_base.exit },
+        .{ &rpc_epoch_ctx_service, allocator, app_base.exit },
     );
 
     const turbine_config = cfg.turbine;
@@ -1332,6 +1333,7 @@ fn validator(
         &app_base,
         if (maybe_vote_sockets) |*vs| vs else null,
         &gossip_votes,
+        &gossip_service.gossip_table_rw,
     );
 
     const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
@@ -1547,6 +1549,7 @@ fn replayOffline(
         &app_base,
         null,
         null,
+        null,
     );
 
     replay_thread.join();
@@ -1565,6 +1568,7 @@ fn shredNetwork(
     }
 
     const genesis_path = try cfg.genesisFilePath() orelse
+        cfg.genesis_file_path orelse
         return error.GenesisPathNotProvided;
     const genesis_config = try GenesisConfig.init(allocator, genesis_path);
 
@@ -1598,11 +1602,11 @@ fn shredNetwork(
     var epoch_context_manager = try sig.adapter.EpochContextManager
         .init(allocator, genesis_config.epoch_schedule);
     var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService
-        .init(allocator, .from(app_base.logger), &epoch_context_manager, rpc_client);
+        .init(.from(app_base.logger), &epoch_context_manager, rpc_client);
     const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
         .{},
         sig.adapter.RpcEpochContextService.run,
-        .{ &rpc_epoch_ctx_service, app_base.exit },
+        .{ &rpc_epoch_ctx_service, allocator, app_base.exit },
     );
 
     var ledger = try Ledger.init(
@@ -2359,6 +2363,7 @@ const ReplayAndConsensusServiceState = struct {
         app_base: *const AppBase,
         vote_sockets: ?*const replay.consensus.core.VoteSockets,
         gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
+        gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     ) !std.Thread {
         return try app_base.spawnService(
             "replay",
@@ -2379,6 +2384,7 @@ const ReplayAndConsensusServiceState = struct {
                     .senders = c.senders,
                     .receivers = c.receivers,
                     .vote_sockets = vote_sockets,
+                    .gossip_table = gossip_table,
                 } else null,
             },
         );
