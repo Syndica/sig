@@ -176,11 +176,23 @@ fn startService(svc: ServiceDefinition) !i32 {
         return child_pid;
     }
 
-    std.debug.updateSegfaultHandler(&.{
-        .handler = .{ .sigaction = svc.svc_fault_handler },
-        .mask = std.posix.sigemptyset(),
-        .flags = (std.posix.SA.SIGINFO | std.posix.SA.RESTART | std.posix.SA.RESETHAND),
-    });
+    // register fault handlers
+    {
+        const act: *const std.os.linux.Sigaction = &.{
+            .handler = .{ .sigaction = svc.svc_fault_handler },
+            .mask = std.posix.sigemptyset(),
+            .flags = (std.posix.SA.SIGINFO | std.posix.SA.RESTART | std.posix.SA.RESETHAND),
+        };
+
+        // standard signals in std.debug.updateSegfaultHandler
+        std.posix.sigaction(std.posix.SIG.SEGV, act, null);
+        std.posix.sigaction(std.posix.SIG.ILL, act, null);
+        std.posix.sigaction(std.posix.SIG.BUS, act, null);
+        std.posix.sigaction(std.posix.SIG.FPE, act, null);
+
+        // catch seccomp too
+        std.posix.sigaction(std.posix.SIG.SYS, act, null);
+    }
 
     // Make sure that the services die when the parent exits
     {

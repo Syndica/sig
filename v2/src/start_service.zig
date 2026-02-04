@@ -169,6 +169,12 @@ fn handleSegfault(
             "Arithmetic exception at address 0x{x}\n",
             .{address},
         ) catch {},
+        SIG.SYS => _ = bufPrint(
+            &exit.fault_msg,
+            "Seccomp violation at address 0x{x}\n",
+            .{address},
+        ) catch {},
+
         else => unreachable,
     }
 

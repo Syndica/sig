@@ -29,7 +29,7 @@ pub fn allowSyscall(syscall: u32) [2]sock_filter {
     };
 }
 
-const default_deny_action = SECCOMP.RET.KILL_PROCESS;
+const default_deny_action = SECCOMP.RET.TRAP;
 
 pub fn allowSyscallOnFd(syscall: u32, fd: u32) [5]sock_filter {
     const off_args0 = @offsetOf(SECCOMP.data, "arg0");
