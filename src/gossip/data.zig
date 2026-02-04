@@ -1040,28 +1040,7 @@ pub const NodeInstance = struct {
     }
 };
 
-fn ShredTypeConfig() bincode.FieldConfig(ShredType) {
-    const S = struct {
-        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
-            try bincode.write(writer, @intFromEnum(data), params);
-            return;
-        }
-    };
-
-    return bincode.FieldConfig(ShredType){
-        .serializer = S.serialize,
-    };
-}
-
-pub const ShredType = enum(u8) {
-    Data = 0b1010_0101,
-    Code = 0b0101_1010,
-
-    pub const BincodeSize = u8;
-
-    /// Enables bincode serializer to serialize this data into a single byte instead of 4.
-    pub const @"!bincode-config" = ShredTypeConfig();
-};
+pub const ShredType = sig.ledger.shred.ShredType;
 
 pub const DuplicateShred = struct {
     from: Pubkey,
@@ -1097,12 +1076,12 @@ pub const DuplicateShred = struct {
         const num_chunks = random.intRangeAtMost(u8, 5, 100);
         const chunk_index = random.intRangeAtMost(u8, 0, num_chunks - 1);
 
-        return DuplicateShred{
-            .from = Pubkey.initRandom(random),
+        return .{
+            .from = .initRandom(random),
             .wallclock = getWallclockMs(),
             .slot = random.int(u64),
             .shred_index = random.int(u32),
-            .shred_type = ShredType.Data,
+            .shred_type = .data,
             .num_chunks = num_chunks,
             .chunk_index = chunk_index,
             .chunk = &slice,

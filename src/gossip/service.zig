@@ -3190,7 +3190,7 @@ test "test packet verification" {
         dshred.wallclock = 1714155765121;
         dshred.slot = 16592333628234015598;
         dshred.shred_index = 3853562894;
-        dshred.shred_type = .Data;
+        dshred.shred_type = .data;
         dshred.num_chunks = 99;
         dshred.chunk_index = 69;
         dshred.from = rand_pubkey;
