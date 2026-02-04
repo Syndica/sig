@@ -541,7 +541,7 @@ test "handleDuplicateSlots: multiple duplicates same slot" {
         const duplicate_shred1: Shred = try .fromPayload(allocator, modified_payload1);
         errdefer duplicate_shred1.deinit();
         const duplicate_shred2: Shred = try .fromPayload(allocator, modified_payload2);
-        errdefer duplicate_shred1.deinit();
+        errdefer duplicate_shred2.deinit();
 
         var duplicate_shreds = std.ArrayList(PossibleDuplicateShred).init(allocator);
         try duplicate_shreds.appendSlice(&.{
