@@ -18,7 +18,7 @@ pub const ResolvedArgs = extern struct {
     pub const max_regions = 4; // chosen arbitrarily
 };
 
-pub const ServiceFn = *const fn (ResolvedArgs) callconv(.c) void;
+pub const ServiceFn = *const fn (ResolvedArgs) callconv(.c) noreturn;
 
 /// This value should be written to before a service exits. Both fields may be active at once.
 /// Each one is equivalent to an std.builtin.StackTrace.

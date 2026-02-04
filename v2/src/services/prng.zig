@@ -17,5 +17,7 @@ pub fn main(writer: *std.io.Writer, rw: ReadWrite) !noreturn {
     _ = writer;
 
     rw.prng_state.seed(123);
-    while (true) rw.prng_state.seed(rw.prng_state.next());
+    while (true) {
+        rw.prng_state.seed(rw.prng_state.next());
+    }
 }

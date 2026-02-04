@@ -2,17 +2,29 @@ const std = @import("std");
 
 const common = @import("common");
 const ServiceEntrypoint = common.ServiceFn;
+const sigaction_fn = std.os.linux.Sigaction.sigaction_fn;
 
-pub const prng = @extern(ServiceEntrypoint, .{ .name = "svc_main_prng" });
-pub const logger = @extern(ServiceEntrypoint, .{ .name = "svc_main_logger" });
-pub const net = @extern(ServiceEntrypoint, .{ .name = "svc_main_net" });
-pub const ping = @extern(ServiceEntrypoint, .{ .name = "svc_main_ping" });
+pub const Service = enum {
+    prng,
+    logger,
+    net,
+    ping,
 
-pub const fault_handler = struct {
-    const sigaction_fn = std.os.linux.Sigaction.sigaction_fn;
+    pub fn entrypoint(self: Service) ServiceEntrypoint {
+        return switch (self) {
+            inline else => |s| @extern(
+                ServiceEntrypoint,
+                .{ .name = "svc_main_" ++ @tagName(s) },
+            ),
+        };
+    }
 
-    pub const prng = @extern(sigaction_fn, .{ .name = "svc_fault_handler_prng" });
-    pub const logger = @extern(sigaction_fn, .{ .name = "svc_fault_handler_logger" });
-    pub const net = @extern(sigaction_fn, .{ .name = "svc_fault_handler_net" });
-    pub const ping = @extern(sigaction_fn, .{ .name = "svc_fault_handler_ping" });
+    pub fn faultHandler(self: Service) sigaction_fn {
+        return switch (self) {
+            inline else => |s| @extern(
+                sigaction_fn,
+                .{ .name = "svc_fault_handler_" ++ @tagName(s) },
+            ),
+        };
+    }
 };

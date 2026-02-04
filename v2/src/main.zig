@@ -45,10 +45,8 @@ const ServiceArgs = struct {
 };
 
 const ServiceDefinition = struct {
-    name: []const u8,
+    service: services.Service,
     params: ServiceArgs,
-    svc_main: common.ServiceFn,
-    svc_fault_handler: linux.Sigaction.sigaction_fn,
 };
 
 pub fn main() !void {
@@ -68,9 +66,7 @@ pub fn main() !void {
 
     const service_defs: []const ServiceDefinition = &.{
         .{
-            .name = "Logger",
-            .svc_main = services.logger,
-            .svc_fault_handler = services.fault_handler.logger,
+            .service = .logger,
             .params = .{
                 .stderr = stderr,
                 .exit = try memfd.RW.init(.{ .name = "logger-exit", .size = @sizeOf(common.Exit) }),
@@ -81,9 +77,7 @@ pub fn main() !void {
             },
         },
         .{
-            .name = "Prng",
-            .svc_main = services.prng,
-            .svc_fault_handler = services.fault_handler.prng,
+            .service = .prng,
             .params = .{
                 .exit = try memfd.RW.init(.{ .name = "prng-exit", .size = @sizeOf(common.Exit) }),
                 .rw = &.{rw.prng},
@@ -93,9 +87,7 @@ pub fn main() !void {
             },
         },
         .{
-            .name = "Net",
-            .svc_main = services.net,
-            .svc_fault_handler = services.fault_handler.net,
+            .service = .net,
             .params = .{
                 .exit = try memfd.RW.init(.{ .name = "net-exit", .size = @sizeOf(common.Exit) }),
                 .rw = &.{net.ping},
@@ -105,9 +97,7 @@ pub fn main() !void {
             },
         },
         .{
-            .name = "Ping",
-            .svc_main = services.ping,
-            .svc_fault_handler = services.fault_handler.ping,
+            .service = .ping,
             .params = .{
                 .stderr = stderr,
                 .exit = try memfd.RW.init(.{ .name = "ping-exit", .size = @sizeOf(common.Exit) }),
@@ -172,14 +162,14 @@ fn startService(svc: ServiceDefinition) !i32 {
 
     if (maybe_child_pid) |child_pid| {
         // parent code
-        std.debug.print("Starting Service `{s}`, pid: {}\n", .{ svc.name, child_pid });
+        std.debug.print("Starting Service `{s}`, pid: {}\n", .{ @tagName(svc.service), child_pid });
         return child_pid;
     }
 
     // register fault handlers
     {
         const act: *const std.os.linux.Sigaction = &.{
-            .handler = .{ .sigaction = svc.svc_fault_handler },
+            .handler = .{ .sigaction = svc.service.faultHandler() },
             .mask = std.posix.sigemptyset(),
             .flags = (std.posix.SA.SIGINFO | std.posix.SA.RESTART | std.posix.SA.RESETHAND),
         };
@@ -197,7 +187,7 @@ fn startService(svc: ServiceDefinition) !i32 {
     // Make sure that the services die when the parent exits
     {
         const ret = linux.prctl(@intFromEnum(linux.PR.SET_PDEATHSIG), linux.SIG.KILL, 0, 0, 0);
-        if (ret != 0) std.debug.panic("prctl failed with: {}\n", .{e(ret)});
+        if (e(ret) != .SUCCESS) std.debug.panic("prctl failed with: {}\n", .{e(ret)});
 
         // NOTE: this check does not work if we spawn each service into a new pid namespace, as
         // getppid will return 0 (including when the parent is dead).
@@ -242,34 +232,33 @@ fn startService(svc: ServiceDefinition) !i32 {
         }
     }
 
-    svc.svc_main(resolved_params);
-    std.process.exit(255); // service exit implies an error / exit code not used
+    svc.service.entrypoint()(resolved_params);
 }
 
 fn dumpOnExit(meta: *common.Exit, service: ServiceDefinition, pid: i32, status: u32) void {
     if (meta.panicMsg()) |panic_msg| {
         std.debug.print(
             "Service `{s}` (pid: {}) panicked with message: {s}\n",
-            .{ service.name, pid, panic_msg },
+            .{ @tagName(service.service), pid, panic_msg },
         );
     }
     if (meta.errorName()) |error_string| {
         std.debug.print(
             "Service `{s}` (pid: {}) exited with error: {s}\n",
-            .{ service.name, pid, error_string },
+            .{ @tagName(service.service), pid, error_string },
         );
     }
     if (meta.faultMsg()) |fault_msg| {
         std.debug.print(
             "Service `{s}` (pid: {}) faulted with message: {s}\n",
-            .{ service.name, pid, fault_msg },
+            .{ @tagName(service.service), pid, fault_msg },
         );
     }
 
     if (linux.W.TERMSIG(status) != 0) {
         std.debug.print(
             "Service `{s}` (pid: {}) exited from signal {}\n",
-            .{ service.name, pid, linux.W.TERMSIG(status) },
+            .{ @tagName(service.service), pid, linux.W.TERMSIG(status) },
         );
     }
 
@@ -306,9 +295,11 @@ fn closeAllFdsExceptStderr(maybe_stderr: ?linux.fd_t) void {
 }
 
 fn mseal(address: [*]align(std.heap.page_size_min) const u8, len: usize) void {
-    switch (std.os.linux.mseal(address, len, 0)) {
-        0 => {},
-        @intFromEnum(std.os.linux.E.NOSYS) => {}, // syscall unsupported (6.12+)
-        else => |x| std.debug.panic("mseal failed: {}\n", .{x}),
+    switch (e(std.os.linux.mseal(address, len, 0))) {
+        .SUCCESS => {},
+        // syscall unsupported (6.12+),
+        // TODO: consider making this required
+        .NOSYS => {},
+        else => |err| std.debug.panic("mseal failed: {}\n", .{err}),
     }
 }
