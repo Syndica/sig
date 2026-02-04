@@ -1455,9 +1455,13 @@ fn generateVoteTx(
     );
     defer vote_ix.deinit(allocator);
 
-    const blockhash = slot_info.state.hash.readCopy() orelse {
-        logger.warn().logf("Blockhash is null for slot {}", .{last_voted_slot});
-        return .failed;
+    const blockhash = blk: {
+        const bhq, var bhq_lg = slot_info.state.blockhash_queue.readWithLock();
+        defer bhq_lg.unlock();
+        break :blk bhq.last_hash orelse {
+            logger.warn().logf("Blockhash is null for slot {}", .{last_voted_slot});
+            return .failed;
+        };
     };
 
     const vote_tx_msg = try sig.core.transaction.Message.initCompile(
@@ -3296,22 +3300,44 @@ test "generateVoteTx - invalid switch fork decision returns failed" {
 }
 
 test "generateVoteTx - success with tower_sync vote" {
-    const allocator = testing.allocator;
-    var prng = std.Random.DefaultPrng.init(100);
-    const random = prng.random();
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
-    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
-    var fixture = try TestFixture.init(allocator, root);
-    defer fixture.deinit(allocator);
+    const root: SlotAndHash = .{
+        .slot = 0,
+        .hash = .initRandom(prng),
+    };
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    var slot_tracker: SlotTracker = blk: {
+        var constants: sig.core.SlotConstants = try .genesis(gpa, .DEFAULT);
+        errdefer constants.deinit(gpa);
+        constants.parent_slot = root.slot -| 1;
+
+        var state: sig.core.SlotState = .GENESIS;
+        errdefer state.deinit(gpa);
+        state.hash = .init(root.hash);
+
+        break :blk try .init(gpa, root.slot, .{
+            .constants = constants,
+            .state = state,
+        });
+    };
+    defer slot_tracker.deinit(gpa);
+
+    const blockhash: Hash = .initRandom(prng);
+    {
+        const bhq, var bhq_lg = slot_tracker.getRoot().state.blockhash_queue.writeWithLock();
+        defer bhq_lg.unlock();
+        try bhq.insertHash(gpa, blockhash, 6);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
-    defer replay_tower.deinit(allocator);
+    defer replay_tower.deinit(gpa);
 
     replay_tower.last_vote = .{
         .tower_sync = .{
-            .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
+            .lockouts = .fromOwnedSlice(try gpa.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
             })),
             .root = null,
@@ -3323,26 +3349,26 @@ test "generateVoteTx - success with tower_sync vote" {
 
     const node_kp = sig.identity.KeyPair.generate();
     const auth_voter_kp = sig.identity.KeyPair.generate();
-    const vote_account_pubkey = Pubkey.initRandom(random);
+    const vote_account_pubkey = Pubkey.initRandom(prng);
 
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Two.initTest(gpa);
     defer test_state.deinit();
     const db = &test_state.db;
 
     var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
-        allocator,
-        Pubkey.fromPublicKey(&node_kp.public_key),
-        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
-        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
+        gpa,
+        .fromPublicKey(&node_kp.public_key),
+        .fromPublicKey(&auth_voter_kp.public_key),
+        .fromPublicKey(&auth_voter_kp.public_key),
         0,
     );
-    defer vote_state.deinit(allocator);
+    defer vote_state.deinit(gpa);
 
-    const vote_account_data_buf = try allocator.alloc(
+    const vote_account_data_buf = try gpa.alloc(
         u8,
         sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
-    defer allocator.free(vote_account_data_buf);
+    defer gpa.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
         VoteStateVersions{ .v3 = vote_state },
@@ -3356,54 +3382,72 @@ test "generateVoteTx - success with tower_sync vote" {
         .rent_epoch = 0,
     };
 
-    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
-    defer ancestors.deinit(allocator);
+    var ancestors: Ancestors = try .initWithSlots(gpa, &.{0});
+    defer ancestors.deinit(gpa);
 
     try db.put(0, vote_account_pubkey, vote_account);
     db.onSlotRooted(0, &ancestors);
 
     const result = try generateVoteTx(
-        allocator,
+        gpa,
         vote_account_pubkey,
         &.{auth_voter_kp},
         node_kp,
         .same_fork,
         &replay_tower,
         .{ .accounts_db_two = db },
-        &fixture.slot_tracker,
+        &slot_tracker,
         &.INIT,
     );
-    errdefer switch (result) {
-        .tx => |tx| tx.deinit(allocator),
+    defer switch (result) {
+        .tx => |tx| tx.deinit(gpa),
         else => {},
     };
 
-    switch (result) {
-        .tx => |tx| {
-            defer tx.deinit(allocator);
-            try testing.expect(tx.signatures.len > 0);
-            try testing.expect(tx.msg.instructions.len > 0);
-            try testing.expectEqual(2, tx.signatures.len);
-        },
-        else => try testing.expect(false),
-    }
+    try std.testing.expectEqual(.tx, std.meta.activeTag(result));
+    const tx = result.tx;
+    try testing.expect(tx.signatures.len > 0);
+    try testing.expect(tx.msg.instructions.len > 0);
+    try testing.expectEqual(2, tx.signatures.len);
 }
 
 test "generateVoteTx - success with vote_state_update compacted" {
-    const allocator = testing.allocator;
-    var prng = std.Random.DefaultPrng.init(101);
-    const random = prng.random();
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
-    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
-    var fixture = try TestFixture.init(allocator, root);
-    defer fixture.deinit(allocator);
+    const root: SlotAndHash = .{
+        .slot = 0,
+        .hash = .initRandom(prng),
+    };
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    var slot_tracker: SlotTracker = blk: {
+        var constants: sig.core.SlotConstants = try .genesis(gpa, .DEFAULT);
+        errdefer constants.deinit(gpa);
+        constants.parent_slot = root.slot -| 1;
+
+        var state: sig.core.SlotState = .GENESIS;
+        errdefer state.deinit(gpa);
+        state.hash = .init(root.hash);
+
+        break :blk try .init(gpa, root.slot, .{
+            .constants = constants,
+            .state = state,
+        });
+    };
+    defer slot_tracker.deinit(gpa);
+
+    const blockhash: Hash = .initRandom(prng);
+    {
+        const bhq, var bhq_lg = slot_tracker.getRoot().state.blockhash_queue.writeWithLock();
+        defer bhq_lg.unlock();
+        try bhq.insertHash(gpa, blockhash, 6);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
-    defer replay_tower.deinit(allocator);
+    defer replay_tower.deinit(gpa);
 
-    const lockouts = try allocator.dupe(Lockout, &.{
+    const lockouts = try gpa.dupe(Lockout, &.{
         .{ .slot = 0, .confirmation_count = 1 },
     });
     replay_tower.last_vote = .{
@@ -3417,33 +3461,33 @@ test "generateVoteTx - success with vote_state_update compacted" {
 
     const node_kp = sig.identity.KeyPair.generate();
     const auth_voter_kp = sig.identity.KeyPair.generate();
-    const vote_account_pubkey = Pubkey.initRandom(random);
+    const vote_account_pubkey = Pubkey.initRandom(prng);
 
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Two.initTest(gpa);
     defer test_state.deinit();
     const db = &test_state.db;
 
     var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
-        allocator,
-        Pubkey.fromPublicKey(&node_kp.public_key),
-        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
-        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
+        gpa,
+        .fromPublicKey(&node_kp.public_key),
+        .fromPublicKey(&auth_voter_kp.public_key),
+        .fromPublicKey(&auth_voter_kp.public_key),
         0,
     );
-    defer vote_state.deinit(allocator);
+    defer vote_state.deinit(gpa);
 
-    const vote_account_data_buf = try allocator.alloc(
+    const vote_account_data_buf = try gpa.alloc(
         u8,
         sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
-    defer allocator.free(vote_account_data_buf);
+    defer gpa.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
         VoteStateVersions{ .v3 = vote_state },
-        .{},
+        .standard,
     );
 
-    const vote_account = sig.runtime.AccountSharedData{
+    const vote_account: sig.runtime.AccountSharedData = .{
         .lamports = 1000000,
         .data = vote_account_data,
         .owner = sig.runtime.program.vote.ID,
@@ -3451,55 +3495,73 @@ test "generateVoteTx - success with vote_state_update compacted" {
         .rent_epoch = 0,
     };
 
-    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
-    defer ancestors.deinit(allocator);
+    var ancestors: Ancestors = try .initWithSlots(gpa, &.{0});
+    defer ancestors.deinit(gpa);
 
     try db.put(0, vote_account_pubkey, vote_account);
     db.onSlotRooted(0, &ancestors);
 
     const result = try generateVoteTx(
-        allocator,
+        gpa,
         vote_account_pubkey,
         &.{auth_voter_kp},
         node_kp,
         .same_fork,
         &replay_tower,
         .{ .accounts_db_two = db },
-        &fixture.slot_tracker,
+        &slot_tracker,
         &.INIT,
     );
-    errdefer switch (result) {
-        .tx => |tx| tx.deinit(allocator),
+    defer switch (result) {
+        .tx => |tx| tx.deinit(gpa),
         else => {},
     };
 
-    switch (result) {
-        .tx => |tx| {
-            defer tx.deinit(allocator);
-            try testing.expect(tx.signatures.len > 0);
-            try testing.expect(tx.msg.instructions.len > 0);
-        },
-        else => try testing.expect(false),
-    }
+    try std.testing.expectEqual(.tx, std.meta.activeTag(result));
+    const tx = result.tx;
+    try testing.expect(tx.signatures.len > 0);
+    try testing.expect(tx.msg.instructions.len > 0);
 }
 
 test "generateVoteTx - success with switch proof" {
-    const allocator = testing.allocator;
-    var prng = std.Random.DefaultPrng.init(102);
-    const random = prng.random();
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
-    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
-    var fixture = try TestFixture.init(allocator, root);
-    defer fixture.deinit(allocator);
+    const root: SlotAndHash = .{
+        .slot = 0,
+        .hash = .initRandom(prng),
+    };
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    var slot_tracker: SlotTracker = blk: {
+        var constants: sig.core.SlotConstants = try .genesis(gpa, .DEFAULT);
+        errdefer constants.deinit(gpa);
+        constants.parent_slot = root.slot -| 1;
+
+        var state: sig.core.SlotState = .GENESIS;
+        errdefer state.deinit(gpa);
+        state.hash = .init(root.hash);
+
+        break :blk try .init(gpa, root.slot, .{
+            .constants = constants,
+            .state = state,
+        });
+    };
+    defer slot_tracker.deinit(gpa);
+
+    const blockhash: Hash = .initRandom(prng);
+    {
+        const bhq, var bhq_lg = slot_tracker.getRoot().state.blockhash_queue.writeWithLock();
+        defer bhq_lg.unlock();
+        try bhq.insertHash(gpa, blockhash, 7);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
-    defer replay_tower.deinit(allocator);
+    defer replay_tower.deinit(gpa);
 
     replay_tower.last_vote = .{
         .tower_sync = .{
-            .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
+            .lockouts = .fromOwnedSlice(try gpa.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
             })),
             .root = null,
@@ -3511,26 +3573,26 @@ test "generateVoteTx - success with switch proof" {
 
     const node_kp = sig.identity.KeyPair.generate();
     const auth_voter_kp = sig.identity.KeyPair.generate();
-    const vote_account_pubkey = Pubkey.initRandom(random);
+    const vote_account_pubkey = Pubkey.initRandom(prng);
 
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Two.initTest(gpa);
     defer test_state.deinit();
     const db = &test_state.db;
 
     var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
-        allocator,
-        Pubkey.fromPublicKey(&node_kp.public_key),
-        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
-        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
+        gpa,
+        .fromPublicKey(&node_kp.public_key),
+        .fromPublicKey(&auth_voter_kp.public_key),
+        .fromPublicKey(&auth_voter_kp.public_key),
         0,
     );
-    defer vote_state.deinit(allocator);
+    defer vote_state.deinit(gpa);
 
-    const vote_account_data_buf = try allocator.alloc(
+    const vote_account_data_buf = try gpa.alloc(
         u8,
         sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
-    defer allocator.free(vote_account_data_buf);
+    defer gpa.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
         VoteStateVersions{ .v3 = vote_state },
@@ -3545,56 +3607,52 @@ test "generateVoteTx - success with switch proof" {
         .rent_epoch = 0,
     };
 
-    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
-    defer ancestors.deinit(allocator);
+    var ancestors: Ancestors = try .initWithSlots(gpa, &.{0});
+    defer ancestors.deinit(gpa);
 
     try db.put(0, vote_account_pubkey, vote_account);
     db.onSlotRooted(0, &ancestors);
 
-    const switch_proof_hash = Hash.initRandom(random);
+    const switch_proof_hash: Hash = .initRandom(prng);
     const result = try generateVoteTx(
-        allocator,
+        gpa,
         vote_account_pubkey,
         &.{auth_voter_kp},
         node_kp,
         .{ .switch_proof = switch_proof_hash },
         &replay_tower,
         .{ .accounts_db_two = db },
-        &fixture.slot_tracker,
+        &slot_tracker,
         &.INIT,
     );
-    errdefer switch (result) {
-        .tx => |tx| tx.deinit(allocator),
+    defer switch (result) {
+        .tx => |tx| tx.deinit(gpa),
         else => {},
     };
 
-    switch (result) {
-        .tx => |tx| {
-            defer tx.deinit(allocator);
-            try testing.expect(tx.signatures.len > 0);
-            try testing.expect(tx.msg.instructions.len > 0);
-        },
-        else => try testing.expect(false),
-    }
+    try std.testing.expectEqual(.tx, std.meta.activeTag(result));
+    const tx = result.tx;
+    try std.testing.expect(tx.signatures.len > 0);
+    try std.testing.expect(tx.msg.instructions.len > 0);
 }
 
 test "generateVoteTx - hot spare validator returns hot_spare" {
-    const allocator = testing.allocator;
-    var prng = std.Random.DefaultPrng.init(103);
-    const random = prng.random();
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
-    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
-    var fixture = try TestFixture.init(allocator, root);
-    defer fixture.deinit(allocator);
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(prng) };
+    var fixture = try TestFixture.init(gpa, root);
+    defer fixture.deinit(gpa);
 
     fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
 
     var replay_tower = try createTestReplayTower(1, 0.67);
-    defer replay_tower.deinit(allocator);
+    defer replay_tower.deinit(gpa);
 
     replay_tower.last_vote = .{
         .tower_sync = .{
-            .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
+            .lockouts = .fromOwnedSlice(try gpa.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
             })),
             .root = null,
@@ -3607,26 +3665,26 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
     const node_kp = sig.identity.KeyPair.generate();
     const different_node_kp = sig.identity.KeyPair.generate();
     const auth_voter_kp = sig.identity.KeyPair.generate();
-    const vote_account_pubkey = Pubkey.initRandom(random);
+    const vote_account_pubkey = Pubkey.initRandom(prng);
 
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Two.initTest(gpa);
     defer test_state.deinit();
     const db = &test_state.db;
 
     var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
-        allocator,
-        Pubkey.fromPublicKey(&different_node_kp.public_key),
-        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
-        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
+        gpa,
+        .fromPublicKey(&different_node_kp.public_key),
+        .fromPublicKey(&auth_voter_kp.public_key),
+        .fromPublicKey(&auth_voter_kp.public_key),
         0,
     );
-    defer vote_state.deinit(allocator);
+    defer vote_state.deinit(gpa);
 
-    const vote_account_data_buf = try allocator.alloc(
+    const vote_account_data_buf = try gpa.alloc(
         u8,
         sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
-    defer allocator.free(vote_account_data_buf);
+    defer gpa.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
         VoteStateVersions{ .v3 = vote_state },
@@ -3641,14 +3699,14 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
         .rent_epoch = 0,
     };
 
-    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
-    defer ancestors.deinit(allocator);
+    var ancestors: Ancestors = try .initWithSlots(gpa, &.{0});
+    defer ancestors.deinit(gpa);
 
     try db.put(0, vote_account_pubkey, vote_account);
     db.onSlotRooted(0, &ancestors);
 
     const result = try generateVoteTx(
-        allocator,
+        gpa,
         vote_account_pubkey,
         &.{auth_voter_kp},
         node_kp,
@@ -3658,8 +3716,8 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
         &fixture.slot_tracker,
         &.INIT,
     );
-    errdefer switch (result) {
-        .tx => |tx| tx.deinit(allocator),
+    defer switch (result) {
+        .tx => |tx| tx.deinit(gpa),
         else => {},
     };
 
