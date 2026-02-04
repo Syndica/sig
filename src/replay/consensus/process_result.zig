@@ -305,9 +305,15 @@ const TestReplayStateResources = struct {
         self.duplicate_slots_to_repair = DuplicateSlotsToRepair.empty;
         self.purge_repair_slot_counter = PurgeRepairSlotCounters.empty;
 
+        var latest_processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
+        var latest_confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+        const root: std.atomic.Value(Slot) = .init(0);
+
         self.slot_tracker = SlotTracker{
             .slots = .empty,
-            .root = 0,
+            .latest_processed_slot = &latest_processed_slot,
+            .latest_confirmed_slot = &latest_confirmed_slot,
+            .root = root,
         };
 
         self.ancestor_hashes_replay_update_channel = try sig

@@ -969,8 +969,13 @@ test "trackNewVotesAndNotifyConfirmations filter" {
     var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
     const prng = prng_state.random();
 
+    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
+    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+
     var slot_tracker: SlotTracker = try .init(
         allocator,
+        &processed_slot,
+        &confirmed_slot,
         0,
         try slotTrackerElementGenesis(allocator, .DEFAULT),
     );
@@ -1047,6 +1052,7 @@ test "trackNewVotesAndNotifyConfirmations filter" {
             &new_optimistic_confirmed_slots,
             is_gossip_vote,
             &latest_vote_slot_per_validator,
+            &confirmed_slot,
         );
     }
     diff.sortAsc();
@@ -1096,10 +1102,14 @@ test "trackNewVotesAndNotifyConfirmations filter" {
             &new_optimistic_confirmed_slots,
             is_gossip_vote,
             &latest_vote_slot_per_validator,
+            &confirmed_slot,
         );
     }
     diff.sortAsc();
     try std.testing.expectEqualSlices(Slot, diff.map.keys(), &.{ 7, 8 });
+
+    // No stake delegated, so optimistic confirmation should not be reached.
+    try std.testing.expectEqual(0, confirmed_slot.get());
 }
 
 const ThresholdReachedResults = std.bit_set.IntegerBitSet(THRESHOLDS_TO_CHECK.len);
@@ -1735,7 +1745,10 @@ test "simple usage" {
     var registry: sig.prometheus.Registry(.{}) = .init(allocator);
     defer registry.deinit();
 
-    var slot_tracker: SlotTracker = try .init(allocator, 0, .{
+    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
+    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+
+    var slot_tracker: SlotTracker = try .init(allocator, &processed_slot, &confirmed_slot, 0, .{
         .constants = .{
             .parent_slot = 0,
             .parent_hash = .ZEROES,
@@ -1789,6 +1802,7 @@ test "simple usage" {
         .EPOCH_ZERO,
         slot_data_provider.rootSlot(),
         &registry,
+        &confirmed_slot,
     );
     defer vote_collector.deinit(allocator);
 
@@ -1799,6 +1813,11 @@ test "simple usage" {
         .ledger = &ledger,
         .gossip_votes = null,
     });
+
+    // Since no votes were sent, slot trackers should remain at their initialized state.
+    // NOTE: processed slot is not used here, but required to construct SlotTracker.
+    try std.testing.expectEqual(0, processed_slot.get());
+    try std.testing.expectEqual(0, confirmed_slot.get());
 }
 
 test "check trackers" {
@@ -1822,11 +1841,14 @@ test "check trackers" {
 
     const root_slot: Slot = 0;
 
+    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
+    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+
     var slot_tracker: SlotTracker = blk: {
         var state: sig.core.SlotState = .GENESIS;
         errdefer state.deinit(allocator);
 
-        break :blk try .init(allocator, root_slot, .{
+        break :blk try .init(allocator, &processed_slot, &confirmed_slot, root_slot, .{
             .constants = .{
                 .parent_slot = root_slot -| 1,
                 .parent_hash = .ZEROES,
@@ -1889,7 +1911,7 @@ test "check trackers" {
     defer replay_votes_channel.destroy();
 
     var vote_collector: VoteCollector =
-        try .init(.EPOCH_ZERO, slot_data_provider.rootSlot(), &registry);
+        try .init(.EPOCH_ZERO, slot_data_provider.rootSlot(), &registry, &confirmed_slot);
     defer vote_collector.deinit(allocator);
 
     var expected_trackers: std.ArrayListUnmanaged(struct { Slot, TestSlotVoteTracker }) = .empty;
@@ -2005,6 +2027,11 @@ test "check trackers" {
         expected_trackers.items,
         actual_trackers.items,
     );
+
+    // Votes were processed but no stake was delegated to validators, so
+    // optimisitic confirmation was not reached.
+    try std.testing.expectEqual(0, confirmed_slot.get());
+    try std.testing.expectEqual(0, confirmed_slot.get());
 }
 
 // tests for OptimisticConfirmationVerifier moved to optimistic_vote_verifier.zig
