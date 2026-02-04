@@ -50,7 +50,7 @@ pub const MethodAndParams = union(enum) {
     getFirstAvailableBlock: noreturn,
 
     /// https://github.com/Syndica/sig/issues/557
-    getGenesisHash: noreturn,
+    getGenesisHash: GetGenesisHash,
     /// https://github.com/Syndica/sig/issues/558
     getHealth: GetHealth,
     /// Custom (not standardized) RPC method for "GET /*snapshot*.tar.bz2"
@@ -373,7 +373,40 @@ pub const GetEpochSchedule = struct {
 
 // TODO: getFeeForMessage
 // TODO: getFirstAvailableBlock
-// TODO: getGenesisHash
+
+pub const GetGenesisHash = struct {
+    pub const Response = struct {
+        hash: sig.core.Hash,
+
+        pub fn jsonStringify(
+            self: Response,
+            /// `*std.json.WriteStream(...)`
+            jw: anytype,
+        ) !void {
+            try jw.write(self.hash.base58String().slice());
+        }
+
+        test "jsonStringify outputs base58 string" {
+            const allocator = std.testing.allocator;
+
+            const slice = "4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZAMdL4VZHirAn";
+            const expected_slice = try std.fmt.allocPrint(allocator, "\"{s}\"", .{slice});
+            defer allocator.free(expected_slice);
+
+            // Use a known hash value for testing
+            const hash = sig.core.Hash.parse(slice);
+            const response: GetGenesisHash.Response = .{ .hash = hash };
+
+            // Serialize the response to JSON
+            const json = try std.json.stringifyAlloc(allocator, response, .{});
+            defer allocator.free(json);
+
+            // The jsonStringify should output the hash as a base58 string (without wrapping object)
+            try std.testing.expectEqualStrings(expected_slice, json);
+        }
+    };
+};
+
 // TODO: getHealth
 // TODO: getHighestSnapshotSlot
 // TODO: getIdentity
@@ -685,4 +718,16 @@ pub const common = struct {
         /// Shred version
         shredVersion: ?u16 = null,
     };
+};
+
+pub const StaticHookContext = struct {
+    genesis_hash: sig.core.Hash,
+
+    pub fn getGenesisHash(
+        self: *const @This(),
+        _: std.mem.Allocator,
+        _: GetGenesisHash,
+    ) !GetGenesisHash.Response {
+        return .{ .hash = self.genesis_hash };
+    }
 };

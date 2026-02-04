@@ -1174,6 +1174,12 @@ fn validator(
     );
     defer loaded_snapshot.deinit();
 
+    const static_rpc_ctx: sig.rpc.methods.StaticHookContext = .{
+        .genesis_hash = loaded_snapshot.genesis_config.hash,
+    };
+
+    try app_base.rpc_hooks.set(allocator, &static_rpc_ctx);
+
     var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
     defer new_db.deinit();
 
