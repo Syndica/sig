@@ -790,9 +790,34 @@ const Cmd = struct {
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
-                .short = "Convert a between Sig and Agave ledger formats",
+                .short = "Convert between Sig and Agave ledger formats",
                 .long =
                 \\Migrates to and from Sig's and Agave's RocksDb ledger formats.
+                \\
+                \\This tool is to be used when you have a ledger made by Agave which you want to run
+                \\with Sig, or vice versa.
+                \\
+                \\Usage:
+                \\1. Make a new directory to output the newly formatted ledger.
+                \\2. Build Sig (release build recommended).
+                \\3. Run
+                \\   a) sig agave-migration-tool -i sig-ledger-dir -o agave-ledger-dir
+                \\   b) sig agave-migration-tool -i agave-ledger-dir -o sig-ledger-dir
+                \\4. Copy over the snapshot files as needed for the outputted ledger directory.
+                \\5. If converting a Sig ledger to Agave, run agave with e.g.
+                \\
+                \\   $bin/agave-validator
+                \\      --identity $identity
+                \\      --ledger $ledger
+                \\      --entrypoint entrypoint.testnet.solana.com:8001
+                \\      --rpc-port 8899
+                \\      --no-voting
+                \\      --no-snapshots
+                \\      --no-snapshot-fetch
+                \\      --use-snapshot-archives-at-startup always
+                \\      --limit-ledger-size 50000000000000 
+                \\
+                \\   After this has processed the ledger, it will be usable from other agave tools.
                 ,
             },
             .sub = .{
