@@ -25,9 +25,9 @@ pub const RW = extern struct {
             const NOEXEC_SEAL = 0x8; // create it with exec disabled *permanently*
 
             const fd = linux.memfd_create(args.name, CLOEXEC | ALLOW_SEALING | NOEXEC_SEAL);
-
-            if (@as(isize, @bitCast(fd)) == -1) {
-                std.debug.panic("memfd_create failed with: {}\n", .{e(fd)});
+            switch (e(fd)) {
+                .SUCCESS => {},
+                else => |err| std.debug.panic("memfd_create failed with: {t}\n", .{err}),
             }
             break :blk @intCast(fd);
         };

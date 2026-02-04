@@ -14,8 +14,8 @@ pub const ReadOnly = struct {
 };
 
 pub fn main(writer: *std.io.Writer, ro: ReadOnly) !noreturn {
-    var i: u8 = 0;
-    while (i < 10) : (i += 1) {
+    var i: u32 = 0;
+    while (i < 1000) : (i += 1) {
         defer writer.flush() catch {};
 
         try writer.print("logger: {x}\n", .{ro.prng_state});
