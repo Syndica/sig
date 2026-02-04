@@ -229,7 +229,8 @@ pub const DuplicateShredHandler = struct {
 
         const shred_index = layout.getIndex(shred_payload) orelse return error.InvalidShred;
 
-        const shred_type: sig.gossip.data.ShredType = .Code;
+        const shred_variant = layout.getShredVariant(shred_payload) orelse return error.InvalidShred;
+        const shred_type = shred_variant.shred_type;
 
         var chunks: std.ArrayListUnmanaged(sig.gossip.data.DuplicateShred) = .empty;
         errdefer {
