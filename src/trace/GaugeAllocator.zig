@@ -22,7 +22,8 @@ pub fn allocator(self: *GaugeAllocator) std.mem.Allocator {
 
 fn alloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
     const self: *GaugeAllocator = @ptrCast(@alignCast(ctx));
-    const result = self.parent.rawAlloc(len, ptr_align, ret_addr);
+    const result = self.parent.rawAlloc(len, ptr_align, ret_addr) orelse
+        return null;
 
     self.counter.add(len);
 
