@@ -812,6 +812,9 @@ test trackNewSlots {
         &.{ .{ 0, 0 }, .{ 1, 0 }, .{ 2, 1 }, .{ 4, 1 }, .{ 6, 4 } },
         &.{ 3, 5 },
     );
+
+    try std.testing.expectEqual(0, processed_slot.get());
+    try std.testing.expectEqual(0, confirmed_slot.get());
 }
 
 fn expectSlotTracker(
@@ -1261,6 +1264,8 @@ pub const DependencyStubs = struct {
 
             .replay_threads = 1,
             .stop_at_slot = null,
+            .latest_processed_slot = &latest_processed_slot,
+            .latest_confirmed_slot = &latest_confirmed_slot,
         }, .enabled);
     }
 
@@ -1310,6 +1315,9 @@ pub const DependencyStubs = struct {
         const hard_forks = try bank_fields.hard_forks.clone(allocator);
         errdefer hard_forks.deinit(allocator);
 
+        var latest_processed_slot: replay.trackers.ForkChoiceProcessedSlot = .{};
+        var latest_confirmed_slot: replay.trackers.OptimisticallyConfirmedSlot = .{};
+
         return try .init(.{
             .allocator = allocator,
             .logger = .FOR_TESTS,
@@ -1333,6 +1341,8 @@ pub const DependencyStubs = struct {
 
             .replay_threads = num_threads,
             .stop_at_slot = null,
+            .latest_processed_slot = &latest_processed_slot,
+            .latest_confirmed_slot = &latest_confirmed_slot,
         }, .enabled);
     }
 };

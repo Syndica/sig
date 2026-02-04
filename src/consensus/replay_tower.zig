@@ -5448,10 +5448,16 @@ pub const TestFixture = struct {
             errdefer state.deinit(allocator);
             state.hash = .init(root.hash);
 
-            break :blk try .init(allocator, root.slot, .{
-                .constants = constants,
-                .state = state,
-            });
+            var latest_processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
+            var latest_confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+
+            break :blk try .init(
+                allocator,
+                &latest_processed_slot,
+                &latest_confirmed_slot,
+                root.slot,
+                .{ .constants = constants, .state = state },
+            );
         };
         errdefer slot_tracker.deinit(allocator);
 
