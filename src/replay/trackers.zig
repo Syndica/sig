@@ -530,10 +530,18 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
 test "SlotTracker.prune removes all slots less than root" {
     const allocator = std.testing.allocator;
     const root_slot: Slot = 4;
-    var tracker: SlotTracker = try .init(allocator, root_slot, .{
-        .constants = testDummySlotConstants(root_slot),
-        .state = .GENESIS,
-    });
+    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
+    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+    var tracker: SlotTracker = try .init(
+        allocator,
+        &processed_slot,
+        &confirmed_slot,
+        root_slot,
+        .{
+            .constants = testDummySlotConstants(root_slot),
+            .state = .GENESIS,
+        },
+    );
     defer tracker.deinit(allocator);
 
     // Add slots 1, 2, 3, 4, 5
@@ -554,6 +562,9 @@ test "SlotTracker.prune removes all slots less than root" {
     try std.testing.expect(!tracker.contains(1));
     try std.testing.expect(!tracker.contains(2));
     try std.testing.expect(!tracker.contains(3));
+
+    try std.testing.expectEqual(0, processed_slot.get());
+    try std.testing.expectEqual(0, confirmed_slot.get());
 }
 
 test "SlotTree: if no forks, root follows 32 behind latest" {
