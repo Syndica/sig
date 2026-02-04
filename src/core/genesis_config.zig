@@ -300,7 +300,7 @@ pub const GenesisConfig = struct {
         defer file.close();
 
         // Read the entire file to compute hash from raw bytes
-        const file_bytes = try file.readToEndAlloc(allocator, std.math.maxInt(usize));
+        const file_bytes = try file.readToEndAlloc(allocator, 1024 * 1024 * 100); // 100 MB max
         defer allocator.free(file_bytes);
 
         // Compute hash from original file bytes (this matches Agave's behavior)
@@ -308,9 +308,8 @@ pub const GenesisConfig = struct {
         std.crypto.hash.sha2.Sha256.hash(file_bytes, &hash_bytes, .{});
 
         // Parse the genesis config from the bytes
-        var fbs = std.io.fixedBufferStream(file_bytes);
-        var config = try bincode.read(allocator, GenesisConfig, fbs.reader(), .{});
-        config.hash = .{ .data = hash_bytes };
+        var config = try bincode.readFromSlice(allocator, GenesisConfig, file_bytes, .{});
+        config.hash.data = hash_bytes;
         return config;
     }
 
