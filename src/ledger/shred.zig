@@ -22,7 +22,24 @@ const SIZE_OF_MERKLE_ROOT: usize = sig.core.Hash.SIZE;
 pub const ShredType = enum(u8) {
     code = 0b0101_1010,
     data = 0b1010_0101,
+
+    pub const BincodeSize = u8;
+
+    /// Enables bincode serializer to serialize this data into a single byte instead of 4.
+    pub const @"!bincode-config" = ShredTypeConfig();
 };
+
+fn ShredTypeConfig() bincode.FieldConfig(ShredType) {
+    const S = struct {
+        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
+            try bincode.write(writer, @intFromEnum(data), params);
+        }
+    };
+
+    return .{
+        .serializer = S.serialize,
+    };
+}
 
 /// Analogous to [Shred](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/ledger/src/shred.rs#L245)
 pub const Shred = union(ShredType) {
