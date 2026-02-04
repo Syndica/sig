@@ -13,7 +13,6 @@ const ResultWriter = sig.ledger.ResultWriter;
 const LedgerReader = sig.ledger.Reader;
 const DuplicateSlotProof = sig.ledger.meta.DuplicateSlotProof;
 
-const GOSSIP_SLEEP_MILLIS: u64 = 100;
 const MAX_NUM_CHUNKS: usize = 3;
 const MAX_NUM_ENTRIES_PER_PUBKEY: usize = 128;
 const BUFFER_CAPACITY: usize = 512 * MAX_NUM_ENTRIES_PER_PUBKEY;
