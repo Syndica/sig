@@ -1,5 +1,4 @@
 const std = @import("std");
-const common = @import("common");
 const services = @import("services.zig");
 
 pub fn main() !void {

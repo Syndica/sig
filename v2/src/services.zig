@@ -159,7 +159,10 @@ fn serviceMap(
     // check all service instances request regions which are shared with them
     inline for (services) |instance| {
         for (instance.service.requiredRegions()) |region_instance| {
-            const found_region: LookupResult = blk: for (regions, region_memfds) |shared_region, region_memfd| {
+            const found_region: LookupResult = blk: for (
+                regions,
+                region_memfds,
+            ) |shared_region, region_memfd| {
                 if (shared_region.region != region_instance.region) continue;
 
                 for (shared_region.shares) |share| {
