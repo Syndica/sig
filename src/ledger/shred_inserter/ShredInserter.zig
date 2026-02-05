@@ -1576,6 +1576,7 @@ test "recovery" {
             .start = min_slot,
             .end = max_slot,
         },
+        .prev = null,
         .next = null,
     };
 

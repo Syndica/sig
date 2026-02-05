@@ -45,14 +45,16 @@ pub const SlotLeaders = struct {
 
 pub const LeaderSchedules = struct {
     curr: LeaderSchedule,
+    prev: ?LeaderSchedule,
     next: ?LeaderSchedule,
 
     pub fn getLeader(self: *const LeaderSchedules, slot: Slot) !Pubkey {
-        return self.curr.getLeader(slot) catch
-            if (self.next) |next_schedule|
-                next_schedule.getLeader(slot)
-            else
-                error.SlotOutOfRange;
+        return if (slot < self.curr.start)
+            if (self.prev) |prev| prev.getLeader(slot) else error.SlotOutOfRange
+        else if (slot > self.curr.end)
+            if (self.next) |next| next.getLeader(slot) else error.SlotOutOfRange
+        else
+            self.curr.leaders[slot - self.curr.start];
     }
 
     // Required to conform with SlotLeaders interface

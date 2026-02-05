@@ -36,7 +36,7 @@ pub const Cluster = struct {
         .hashes_per_tick = null,
     };
 
-    pub fn initFromBankFields(fields: sig.core.BankFields) Cluster {
+    fn initFromBankFields(fields: sig.core.BankFields) Cluster {
         const seconds_per_year: f64 = (365.242_199 * 24.0 * 60.0 * 60.0);
         const slots_per_second = fields.slots_per_year / seconds_per_year;
         const ticks_per_second: u8 = @intFromFloat(
@@ -190,11 +190,15 @@ pub const EpochTracker = struct {
     pub fn getLeaderSchedules(self: *const EpochTracker) !LeaderSchedules {
         const slot = self.root_slot.load(.monotonic);
         const epoch_info = try self.getEpochInfo(slot);
+        const prev_epoch_info = self.getEpochInfo(
+            slot -| self.epoch_schedule.leader_schedule_slot_offset,
+        ) catch null;
         const next_epoch_info = self.getEpochInfo(
             slot +| self.epoch_schedule.leader_schedule_slot_offset,
         ) catch null;
         return .{
             .curr = epoch_info.leaders,
+            .prev = if (prev_epoch_info) |info| info.leaders else null,
             .next = if (next_epoch_info) |info| info.leaders else null,
         };
     }
