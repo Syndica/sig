@@ -69,13 +69,6 @@ pub const Region = enum {
     prng_state,
     net_pair,
 
-    pub fn dataType(self: Region) type {
-        return switch (self) {
-            .prng_state => std.Random.Xoroshiro128,
-            .net_pair => common.net.Pair,
-        };
-    }
-
     pub fn size(self: Region) usize {
         return switch (self) {
             .prng_state => @sizeOf(std.Random.Xoroshiro128),
