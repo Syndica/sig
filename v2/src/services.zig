@@ -403,8 +403,8 @@ fn resolveArgs(
             i_rw += 1;
         } else {
             const ro_memfd = try memfd.RO.fromRW(region.memfd);
-            args.ro[i_rw] = (try ro_memfd.mmap(region.shared.requested_location)).ptr;
-            args.ro_len[i_rw] = region.shared.region.size();
+            args.ro[i_ro] = (try ro_memfd.mmap(region.shared.requested_location)).ptr;
+            args.ro_len[i_ro] = region.shared.region.size();
             i_ro += 1;
         }
     }
