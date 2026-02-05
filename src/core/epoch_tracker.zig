@@ -16,7 +16,7 @@ const Slot = sig.core.Slot;
 const LeaderSchedules = sig.core.leader_schedule.LeaderSchedules;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 
-pub const Cluster = struct {
+pub const ClusterConfig = struct {
     /// genesis time, used for computed clock.
     genesis_creation_time: i64,
 
@@ -29,14 +29,14 @@ pub const Cluster = struct {
     /// The number of hashes in each tick. Null means hashing is disabled.
     hashes_per_tick: ?u64,
 
-    pub const default: Cluster = .{
+    pub const default: ClusterConfig = .{
         .genesis_creation_time = 0,
         .ticks_per_slot = 64,
         .ticks_per_second = 160,
         .hashes_per_tick = null,
     };
 
-    fn initFromBankFields(fields: sig.core.BankFields) Cluster {
+    fn initFromBankFields(fields: sig.core.BankFields) ClusterConfig {
         const seconds_per_year: f64 = (365.242_199 * 24.0 * 60.0 * 60.0);
         const slots_per_second = fields.slots_per_year / seconds_per_year;
         const ticks_per_second: u8 = @intFromFloat(
@@ -50,7 +50,7 @@ pub const Cluster = struct {
         };
     }
 
-    pub fn initFromGenesisConfig(config: *const sig.core.GenesisConfig) Cluster {
+    pub fn initFromGenesisConfig(config: *const sig.core.GenesisConfig) ClusterConfig {
         const ticks_per_nano = config.poh_config.target_tick_duration.asNanos();
         return .{
             .genesis_creation_time = config.creation_time,
@@ -60,14 +60,14 @@ pub const Cluster = struct {
         };
     }
 
-    pub fn slotsPerYear(self: *const Cluster) f64 {
+    pub fn slotsPerYear(self: *const ClusterConfig) f64 {
         const seconds_per_year = (365.242_199 * 24.0 * 60.0 * 60.0);
         return seconds_per_year *
             @as(f64, @floatFromInt(self.ticks_per_second)) /
             @as(f64, @floatFromInt(self.ticks_per_slot));
     }
 
-    pub fn nanosPerSlot(self: *const Cluster) u64 {
+    pub fn nanosPerSlot(self: *const ClusterConfig) u64 {
         const seconds_per_slot = @as(f64, @floatFromInt(self.ticks_per_slot)) /
             @as(f64, @floatFromInt(self.ticks_per_second));
         return @as(u64, @intFromFloat(std.time.ns_per_s * seconds_per_slot));
@@ -78,8 +78,7 @@ pub const Cluster = struct {
 /// It ATTEMPTS to satisfy immediate requirements to run on testnet.
 /// It MUST be replaced by a better implementation as soon as possible.
 pub const EpochTracker = struct {
-    /// Cluster constants
-    cluster: Cluster,
+    cluster: ClusterConfig,
 
     /// The most recently rooted slot, set by consensus.
     root_slot: Atomic(Slot),
@@ -115,7 +114,7 @@ pub const EpochTracker = struct {
     unrooted_epochs: UnrootedEpochBuffer,
 
     pub fn init(
-        cluster: Cluster,
+        cluster: ClusterConfig,
         root_slot: Slot,
         epoch_schedule: EpochSchedule,
     ) EpochTracker {
