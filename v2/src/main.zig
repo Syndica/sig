@@ -2,8 +2,12 @@ const std = @import("std");
 const services = @import("services.zig");
 
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
     try services.spawnAndWait(
-        std.heap.page_allocator,
+        allocator,
         &.{
             .{ .service = .prng },
             .{ .service = .logger },
