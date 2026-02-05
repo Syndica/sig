@@ -53,5 +53,9 @@
             .url = "https://www.sqlite.org/2025/sqlite-amalgamation-3490200.zip",
             .hash = "N-V-__8AAH-mpwB7g3MnqYU-ooUBF1t99RP27dZ9addtMVXD",
         },
+        .bzip2 = .{
+            .url = "https://github.com/libarchive/bzip2/archive/refs/tags/bzip2-1.0.8.zip",
+            .hash = "N-V-__8AANChDwAITDmkzIqB-9m_iaOXSquhghM2-AqDFcX8",
+        },
     },
 }

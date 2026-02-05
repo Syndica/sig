@@ -1114,7 +1114,7 @@ pub const SnapshotFiles = struct {
 
         var dir_iter = search_dir.iterate();
         while (try dir_iter.next()) |dir_entry| {
-            if (dir_entry.kind != .file) continue;
+            if (dir_entry.kind != .file and dir_entry.kind != .sym_link) continue;
             const filename = dir_entry.name;
 
             if (IncrementalSnapshotFileInfo.parseFileNameTarZst(filename)) |_incremental| {

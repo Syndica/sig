@@ -280,11 +280,13 @@ pub fn build(b: *Build) !void {
     const gh_table = b.createModule(.{ .root_source_file = generateTable(b) });
 
     const sqlite_mod = genSqlite(b, config.target, config.optimize);
+    const bzip2_mod = genBzip2(b, config.target, config.optimize);
 
     // zig fmt: off
     const imports: []const Build.Module.Import = &.{
         .{ .name = "base58",        .module = base58_mod },
         .{ .name = "build-options", .module = build_options.createModule() },
+        .{ .name = "bzip2",         .module = bzip2_mod },
         .{ .name = "httpz",         .module = httpz_mod },
         .{ .name = "lsquic",        .module = lsquic_mod },
         .{ .name = "poseidon",      .module = poseidon_mod },
@@ -529,6 +531,47 @@ fn genSqlite(
 
     const translate_c = b.addTranslateC(.{
         .root_source_file = dep.path("sqlite3.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const mod = translate_c.createModule();
+    mod.linkLibrary(lib);
+
+    return mod;
+}
+
+fn genBzip2(
+    b: *Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *Build.Module {
+    const dep = b.dependency("bzip2", .{});
+
+    const lib = b.addLibrary(.{
+        .name = "bz",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    lib.addCSourceFiles(.{
+        .root = dep.path("."),
+        .files = &.{
+            "bzlib.c",
+            "blocksort.c",
+            "compress.c",
+            "crctable.c",
+            "decompress.c",
+            "huffman.c",
+            "randtable.c",
+        },
+    });
+    lib.linkLibC();
+
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = dep.path("bzlib.h"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,

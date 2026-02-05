@@ -32,6 +32,7 @@ pub const ShredNetworkConfig = struct {
     turbine_recv_port: u16,
     retransmit: bool,
     dump_shred_tracker: bool,
+    log_finished_slots: bool,
 };
 
 /// Resources that are required for the Shred Network to operate.
@@ -85,7 +86,13 @@ pub fn start(
 
     // tracker (shared state, internal to Shred Network)
     const shred_tracker = try arena.create(BasicShredTracker);
-    try shred_tracker.init(deps.allocator, conf.root_slot + 1, .from(deps.logger), deps.registry);
+    try shred_tracker.init(
+        deps.allocator,
+        conf.root_slot + 1,
+        .from(deps.logger),
+        deps.registry,
+        conf.log_finished_slots,
+    );
     try defers.deferCall(BasicShredTracker.deinit, .{shred_tracker});
 
     // channels (cant use arena as they need to alloc/free frequently &
@@ -202,6 +209,7 @@ test "start and stop gracefully" {
         .turbine_recv_port = 50305,
         .retransmit = true,
         .dump_shred_tracker = false,
+        .log_finished_slots = false,
     };
 
     var exit = Atomic(bool).init(false);
