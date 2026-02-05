@@ -281,6 +281,9 @@ pub fn build(b: *Build) !void {
     // G/H table for Bulletproofs
     const gh_table = b.createModule(.{ .root_source_file = generateTable(b) });
 
+    // Feature set ID for version compatibility
+    const feature_set_id = b.createModule(.{ .root_source_file = generateFeatureSetId(b, base58_mod) });
+
     const sqlite_mod = genSqlite(b, config.target, config.optimize);
     const blst_mod = b.dependency("blst", .{
         .target = config.target,
@@ -293,6 +296,7 @@ pub fn build(b: *Build) !void {
         .{ .name = "base58",        .module = base58_mod },
         .{ .name = "blst",          .module = blst_mod },
         .{ .name = "build-options", .module = build_options.createModule() },
+        .{ .name = "feature-set-id", .module = feature_set_id },
         .{ .name = "bzip2",         .module = bzip2_mod },
         .{ .name = "httpz",         .module = httpz_mod },
         .{ .name = "lsquic",        .module = lsquic_mod },
@@ -513,6 +517,24 @@ fn generateTable(b: *Build) Build.LazyPath {
             // Overall it takes less time to compile in debug mode than the perf gain from a release mode at runtime
             .optimize = .Debug,
             .root_source_file = b.path("scripts/generator_chain.zig"),
+        }),
+    });
+    return b.addRunArtifact(gen).captureStdOut();
+}
+
+fn generateFeatureSetId(b: *Build, base58_mod: *Build.Module) Build.LazyPath {
+    const gen = b.addExecutable(.{
+        .name = "gen_feature_set_id",
+        .root_module = b.createModule(.{
+            .target = b.graph.host,
+            .optimize = .Debug,
+            .root_source_file = b.path("scripts/gen_feature_set_id.zig"),
+            .imports = &.{
+                .{ .name = "base58", .module = base58_mod },
+                .{ .name = "features", .module = b.createModule(.{
+                    .root_source_file = b.path("src/core/features.zon"),
+                }) },
+            },
         }),
     });
     return b.addRunArtifact(gen).captureStdOut();
