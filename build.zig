@@ -282,10 +282,15 @@ pub fn build(b: *Build) !void {
     const gh_table = b.createModule(.{ .root_source_file = generateTable(b) });
 
     const sqlite_mod = genSqlite(b, config.target, config.optimize);
+    const blst_mod = b.dependency("blst", .{
+        .target = config.target,
+        .optimize = config.optimize,
+    }).module("blst");
 
     // zig fmt: off
     const imports: []const Build.Module.Import = &.{
         .{ .name = "base58",        .module = base58_mod },
+        .{ .name = "blst",          .module = blst_mod },
         .{ .name = "build-options", .module = build_options.createModule() },
         .{ .name = "httpz",         .module = httpz_mod },
         .{ .name = "lsquic",        .module = lsquic_mod },
@@ -294,10 +299,10 @@ pub fn build(b: *Build) !void {
         .{ .name = "secp256k1",     .module = secp256k1_mod },
         .{ .name = "sqlite",        .module = sqlite_mod },
         .{ .name = "ssl",           .module = ssl_mod },
+        .{ .name = "table",         .module = gh_table },
         .{ .name = "tracy",         .module = tracy_mod },
         .{ .name = "xev",           .module = xev_mod },
         .{ .name = "zstd",          .module = zstd_mod },
-        .{ .name = "table",         .module = gh_table },
     };
     // zig fmt: on
 
