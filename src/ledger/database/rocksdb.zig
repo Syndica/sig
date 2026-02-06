@@ -327,7 +327,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 pub fn nextValue(self: *@This()) anyerror!?cf.Value {
                     const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
                     return if (entry) |kv|
-                        try key_serializer.deserialize(cf.Value, self.allocator, kv[1].data)
+                        try value_serializer.deserialize(cf.Value, self.allocator, kv[1].data)
                     else
                         null;
                 }
