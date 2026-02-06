@@ -11,6 +11,7 @@ const replay = sig.replay;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
 const ContactInfo = sig.gossip.ContactInfo;
+const Gauge = sig.prometheus.gauge.Gauge;
 const FullAndIncrementalManifest = sig.accounts_db.snapshot.FullAndIncrementalManifest;
 const GenesisConfig = sig.core.GenesisConfig;
 const GeyserWriter = sig.geyser.GeyserWriter;
@@ -1032,6 +1033,14 @@ const Cmd = struct {
     };
 };
 
+const AllocationMetrics = struct {
+    allocated_bytes_gpa: *Gauge(u64),
+    allocated_bytes_load_snapshot: *Gauge(u64),
+    allocated_bytes_accountsdb_unrooted: *Gauge(u64),
+    allocated_bytes_ledger: *Gauge(u64),
+    allocated_bytes_sqlite: *Gauge(u64),
+};
+
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     const maybe_file, const logger = try spawnLogger(allocator, cfg);
@@ -1079,20 +1088,29 @@ fn gossip(
 
 /// entrypoint to run a full solana validator
 fn validator(
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     gossip_value_allocator: std.mem.Allocator,
     cfg: config.Cmd,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "validator" });
     defer zone.deinit();
 
-    var app_base = try AppBase.init(allocator, cfg);
+    var app_base = try AppBase.init(gpa, cfg);
     defer {
         app_base.shutdown();
         app_base.deinit();
     }
 
     app_base.logger.info().logf("starting validator with cfg: {}", .{cfg});
+
+    const allocation_metrics = try app_base.metrics_registry.initStruct(AllocationMetrics);
+
+    var gpa_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_gpa,
+        .parent = gpa,
+    };
+
+    const allocator = gpa_metrics.allocator();
 
     const repair_port: u16 = cfg.shred_network.repair_port;
     const turbine_recv_port: u16 = cfg.shred_network.turbine_recv_port;
@@ -1137,8 +1155,17 @@ fn validator(
         allocator.destroy(geyser);
     };
 
+    var snapshot_tracy: tracy.TracingAllocator = .{
+        .name = "loadSnapshot",
+        .parent = allocator,
+    };
+    var snapshot_tracy_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_load_snapshot,
+        .parent = snapshot_tracy.allocator(),
+    };
+
     const snapshot_files = try sig.accounts_db.snapshot.download.getOrDownloadSnapshotFiles(
-        allocator,
+        snapshot_tracy_metrics.allocator(),
         .from(app_base.logger),
         snapshot_dir,
         .{
@@ -1155,6 +1182,7 @@ fn validator(
 
     var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
     defer rooted_db.deinit();
+    rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
 
     // snapshot
     var loaded_snapshot = try loadSnapshot(
@@ -1174,15 +1202,33 @@ fn validator(
     );
     defer loaded_snapshot.deinit();
 
-    var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
+    var unrooted_tracy: tracy.TracingAllocator = .{
+        .name = "AccountsDB Unrooted",
+        .parent = allocator,
+    };
+    var unrooted_tracy_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_accountsdb_unrooted,
+        .parent = unrooted_tracy.allocator(),
+    };
+
+    var new_db: sig.accounts_db.Two = try .init(unrooted_tracy_metrics.allocator(), rooted_db);
     defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
     const bank_fields = &collapsed_manifest.bank_fields;
 
+    var ledger_tracy: tracy.TracingAllocator = .{
+        .name = "Ledger",
+        .parent = allocator,
+    };
+    var ledger_tracy_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_ledger,
+        .parent = ledger_tracy.allocator(),
+    };
+
     // ledger
     var ledger = try Ledger.init(
-        allocator,
+        ledger_tracy_metrics.allocator(),
         .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
         app_base.metrics_registry,
@@ -1210,8 +1256,8 @@ fn validator(
     defer epoch_context_manager.deinit();
     try epoch_context_manager.contexts.realign(epoch);
     {
-        var staked_nodes_cloned = try staked_nodes.clone(allocator);
-        errdefer staked_nodes_cloned.deinit(allocator);
+        var staked_nodes_cloned = try staked_nodes.clone(gpa);
+        errdefer staked_nodes_cloned.deinit(gpa);
 
         const leader_schedule = if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule|
             leader_schedule[1].slot_leaders
@@ -1382,13 +1428,13 @@ fn runRPCServer(
 
 /// entrypoint to run a minimal replay node
 fn replayOffline(
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     cfg: config.Cmd,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "cmd.replay" });
     defer zone.deinit();
 
-    var app_base = try AppBase.init(allocator, cfg);
+    var app_base = try AppBase.init(gpa, cfg);
     defer {
         app_base.shutdown();
         app_base.deinit();
@@ -1396,11 +1442,18 @@ fn replayOffline(
 
     app_base.logger.info().logf("starting replay-offline with cfg: {}", .{cfg});
 
+    const allocation_metrics = try app_base.metrics_registry.initStruct(AllocationMetrics);
+
+    var gpa_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_gpa,
+        .parent = gpa,
+    };
+
+    const allocator = gpa_metrics.allocator();
+
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{
-        .iterate = true,
-    });
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
     const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
@@ -1410,10 +1463,20 @@ fn replayOffline(
 
     var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
     defer rooted_db.deinit();
+    rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
+
+    var snapshot_tracy: tracy.TracingAllocator = .{
+        .name = "loadSnapshot",
+        .parent = allocator,
+    };
+    var snapshot_tracy_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_load_snapshot,
+        .parent = snapshot_tracy.allocator(),
+    };
 
     // snapshot
     var loaded_snapshot = try loadSnapshot(
-        allocator,
+        snapshot_tracy_metrics.allocator(),
         .from(app_base.logger),
         snapshot_dir,
         snapshot_files,
@@ -1429,7 +1492,16 @@ fn replayOffline(
     );
     defer loaded_snapshot.deinit();
 
-    var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
+    var unrooted_tracy: tracy.TracingAllocator = .{
+        .name = "AccountsDB Unrooted",
+        .parent = allocator,
+    };
+    var unrooted_tracy_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_accountsdb_unrooted,
+        .parent = unrooted_tracy.allocator(),
+    };
+
+    var new_db: sig.accounts_db.Two = try .init(unrooted_tracy_metrics.allocator(), rooted_db);
     defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
@@ -1448,9 +1520,18 @@ fn replayOffline(
         try leader_schedule_cache.put(bank_fields.epoch + 1, schedule_2);
     }
 
+    var ledger_tracy: tracy.TracingAllocator = .{
+        .name = "Ledger",
+        .parent = allocator,
+    };
+    var ledger_tracy_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_ledger,
+        .parent = ledger_tracy.allocator(),
+    };
+
     // ledger
     var ledger = try Ledger.init(
-        allocator,
+        ledger_tracy_metrics.allocator(),
         .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
         app_base.metrics_registry,
@@ -1471,8 +1552,8 @@ fn replayOffline(
     defer epoch_context_manager.deinit();
     try epoch_context_manager.contexts.realign(epoch);
     {
-        var staked_nodes_cloned = try staked_nodes.clone(allocator);
-        errdefer staked_nodes_cloned.deinit(allocator);
+        var staked_nodes_cloned = try staked_nodes.clone(gpa);
+        errdefer staked_nodes_cloned.deinit(gpa);
 
         // TODO: Implement feature gating for vote keyed leader schedule.
         // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12

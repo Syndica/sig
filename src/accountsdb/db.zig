@@ -181,8 +181,8 @@ pub const AccountsDB = struct {
         index_allocation: Index,
         number_of_index_shards: usize,
         on_root_config: sig.accounts_db.manager.Config = .{},
-        /// Amount of BufferPool frames, used for cached reads. Default = 1GiB (32MiB for tests)
-        buffer_pool_frames: u32 = if (builtin.is_test) 64 * 1024 else 2 * 1024 * 1024,
+        /// Amount of BufferPool frames, used for cached reads. Deprecated - defaulted to 20MiB.
+        buffer_pool_frames: u32 = 40 * 1024,
 
         pub const Index = union(AccountIndex.AllocatorConfig.Tag) {
             ram,

@@ -9,6 +9,7 @@ const Rooted = @This();
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const AccountSharedData = sig.runtime.AccountSharedData;
+const Gauge = sig.prometheus.Gauge(u64);
 const ThreadPool = sig.sync.ThreadPool;
 
 const OK = sql.SQLITE_OK;
@@ -19,6 +20,8 @@ const ROW = sql.SQLITE_ROW;
 handle: *sql.sqlite3,
 /// Tracks the largest rooted slot.
 largest_rooted_slot: ?Slot,
+/// Updates a prometheus counter for mem usage.
+sqlite_mem_used: ?*Gauge = null,
 
 /// These aren't thread safe, but we can have as many as we want. Clean up with deinitThreadLocals
 /// on any threads that use put or get.
@@ -41,15 +44,25 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         .largest_rooted_slot = null,
     };
 
-    if (self.count() == 0) {
-        const schema =
+    {
+        const pragmas =
             \\ PRAGMA journal_mode = OFF;
             \\ PRAGMA synchronous = 0;
-            \\ PRAGMA cache_size = 1000000;
+            \\ PRAGMA cache_size = -8290304;
             \\ PRAGMA locking_mode = EXCLUSIVE;
             \\ PRAGMA temp_store = MEMORY;
             \\ PRAGMA page_size = 65536;
-            \\
+            \\ PRAGMA cache_spill = OFF;
+        ;
+
+        if (sql.sqlite3_exec(db, pragmas, null, null, null) != OK) {
+            std.debug.print("err  {s}\n", .{sql.sqlite3_errmsg(db)});
+            return error.FailedToSetPragmas;
+        }
+    }
+
+    if (self.count() == 0) {
+        const schema =
             \\CREATE TABLE IF NOT EXISTS entries (
             \\  address BLOB(32) NOT NULL UNIQUE,
             \\  lamports INTEGER NOT NULL,
@@ -114,6 +127,12 @@ pub fn get(
 ) error{OutOfMemory}!?AccountSharedData {
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.get" });
     defer zone.deinit();
+
+    {
+        const mem_used = sql.sqlite3_memory_used();
+        tracy.plot(u48, "sqlite3_memory_used", @intCast(mem_used));
+        if (self.sqlite_mem_used) |guage| guage.set(@intCast(mem_used));
+    }
 
     const stmt: *sql.sqlite3_stmt = if (get_stmt) |stmt| stmt else blk: {
         const query =
@@ -317,6 +336,12 @@ pub fn commitTransaction(self: *Rooted) void {
 pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedData) void {
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.put" });
     defer zone.deinit();
+
+    {
+        const mem_used = sql.sqlite3_memory_used();
+        tracy.plot(u48, "sqlite3_memory_used", @intCast(mem_used));
+        if (self.sqlite_mem_used) |guage| guage.set(@intCast(mem_used));
+    }
 
     const stmt: *sql.sqlite3_stmt = if (put_stmt) |stmt| stmt else blk: {
         // Insert or update only if last_modified_slot is greater (excluded = VALUES)

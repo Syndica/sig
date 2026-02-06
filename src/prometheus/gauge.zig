@@ -33,7 +33,7 @@ pub fn Gauge(comptime T: type) type {
         }
 
         pub fn sub(self: *Self, v: T) void {
-            _ = self.value.fetchAdd(v, .monotonic);
+            _ = self.value.fetchSub(v, .monotonic);
         }
 
         pub fn set(self: *Self, v: T) void {
