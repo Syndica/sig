@@ -2034,6 +2034,7 @@ pub const GossipService = struct {
 pub const LocalMessageBroker = struct {
     /// Pushes votes to VoteCollector in consensus.
     vote_collector: ?*Channel(sig.gossip.data.Vote) = null,
+    duplicate_shred_listener: ?*Channel(sig.gossip.data.DuplicateShred) = null,
 
     /// Publishes new gossip data that was just received over the network to the
     /// appropriate channels.
@@ -2041,10 +2042,17 @@ pub const LocalMessageBroker = struct {
     /// Any allocated data is cloned using the channel's allocator before sending.
     fn publish(self: *const LocalMessageBroker, data: *const GossipData) !void {
         switch (data.*) {
-            .Vote => |vote| if (self.vote_collector) |channel| {
-                const cloned_vote = try vote[1].clone(channel.allocator);
+            .Vote => |idx_vote| if (self.vote_collector) |channel| {
+                _, const vote = idx_vote;
+                const cloned_vote = try vote.clone(channel.allocator);
                 errdefer cloned_vote.deinit(channel.allocator);
                 try channel.send(cloned_vote);
+            },
+            .DuplicateShred => |idx_dupe_shred| if (self.duplicate_shred_listener) |channel| {
+                _, const dupe_shred = idx_dupe_shred;
+                const dupe_shred_cloned = try dupe_shred.clone(channel.allocator);
+                errdefer dupe_shred_cloned.deinit(channel.allocator);
+                try channel.send(dupe_shred_cloned);
             },
             else => {},
         }
@@ -3182,7 +3190,7 @@ test "test packet verification" {
         dshred.wallclock = 1714155765121;
         dshred.slot = 16592333628234015598;
         dshred.shred_index = 3853562894;
-        dshred.shred_type = .Data;
+        dshred.shred_type = .data;
         dshred.num_chunks = 99;
         dshred.chunk_index = 69;
         dshred.from = rand_pubkey;
