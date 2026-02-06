@@ -11,6 +11,7 @@ const replay = sig.replay;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
 const ContactInfo = sig.gossip.ContactInfo;
+const Gauge = sig.prometheus.gauge.Gauge;
 const FullAndIncrementalManifest = sig.accounts_db.snapshot.FullAndIncrementalManifest;
 const GenesisConfig = sig.core.GenesisConfig;
 const GeyserWriter = sig.geyser.GeyserWriter;
@@ -224,6 +225,30 @@ pub fn main() !void {
             params.accountsdb_download.apply(&current_config);
             try mockRpcServer(gpa, current_config);
         },
+        .agave_migration_tool => |params| {
+            var app_base = try AppBase.init(gpa, current_config);
+            defer {
+                app_base.shutdown();
+                app_base.deinit();
+            }
+
+            const out_dir = params.out_dir orelse return error.NoOutDirSpecified;
+
+            switch (params.direction) {
+                .sig_to_agave => try sig.ledger.database.agave_migration.migrateLedgerToAgave(
+                    gpa,
+                    .from(app_base.logger),
+                    params.in_dir,
+                    out_dir,
+                ),
+                .agave_to_sig => try sig.ledger.database.agave_migration.migrateLedgerFromAgave(
+                    gpa,
+                    .from(app_base.logger),
+                    params.in_dir,
+                    out_dir,
+                ),
+            }
+        },
     }
 }
 
@@ -245,6 +270,7 @@ const Cmd = struct {
         leader_schedule: LeaderScheduleSubCmd,
         test_transaction_sender: TestTransactionSender,
         mock_rpc_server: MockRpcServer,
+        agave_migration_tool: AgaveMigrationTool,
     },
 
     const cmd_info: cli.CommandInfo(@This()) = .{
@@ -271,6 +297,7 @@ const Cmd = struct {
                 .leader_schedule = LeaderScheduleSubCmd.cmd_info,
                 .test_transaction_sender = TestTransactionSender.cmd_info,
                 .mock_rpc_server = MockRpcServer.cmd_info,
+                .agave_migration_tool = AgaveMigrationTool.cmd_info,
             },
             .log_filters = .{
                 .kind = .named,
@@ -728,6 +755,80 @@ const Cmd = struct {
         .sub = .{},
     };
 
+    const in_dir_arg: cli.ArgumentInfo([]const u8) = .{
+        .kind = .named,
+        .name_override = "in-dir",
+        .alias = .i,
+        .default_value = sig.VALIDATOR_DIR ++ "ledger",
+        .config = .string,
+        .help = "path to Sig ledger directory",
+    };
+
+    const out_dir_arg: cli.ArgumentInfo(?[]const u8) = .{
+        .kind = .named,
+        .name_override = "out-dir",
+        .alias = .o,
+        .default_value = null,
+        .config = .string,
+        .help = "path to Agave ledger directory",
+    };
+
+    const MigrationDirection = enum { agave_to_sig, sig_to_agave };
+
+    const direction_arg: cli.ArgumentInfo(MigrationDirection) = .{
+        .kind = .named,
+        .name_override = "direction",
+        .alias = .d,
+        .config = {},
+        .default_value = .agave_to_sig,
+        .help = "format migration direction",
+    };
+
+    const AgaveMigrationTool = struct {
+        in_dir: []const u8,
+        out_dir: ?[]const u8,
+        direction: MigrationDirection,
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Convert between Sig and Agave ledger formats",
+                .long =
+                \\Migrates to and from Sig's and Agave's RocksDb ledger formats.
+                \\
+                \\This tool is to be used when you have a ledger made by Agave which you want to run
+                \\with Sig, or vice versa.
+                \\
+                \\Usage:
+                \\1. Make a new directory to output the newly formatted ledger.
+                \\2. Build Sig (release build recommended).
+                \\3. Run
+                \\   a) sig agave-migration-tool -i sig-ledger-dir -o agave-ledger-dir
+                \\   b) sig agave-migration-tool -i agave-ledger-dir -o sig-ledger-dir
+                \\4. Copy over the snapshot files as needed for the outputted ledger directory.
+                \\5. If converting a Sig ledger to Agave, run agave with e.g.
+                \\
+                \\   $bin/agave-validator
+                \\      --identity $identity
+                \\      --ledger $ledger
+                \\      --entrypoint entrypoint.testnet.solana.com:8001
+                \\      --rpc-port 8899
+                \\      --no-voting
+                \\      --no-snapshots
+                \\      --no-snapshot-fetch
+                \\      --use-snapshot-archives-at-startup always
+                \\      --limit-ledger-size 50000000000000 
+                \\
+                \\   After this has processed the ledger, it will be usable from other agave tools.
+                ,
+            },
+            .sub = .{
+                .in_dir = in_dir_arg,
+                .out_dir = out_dir_arg,
+                .direction = direction_arg,
+            },
+        };
+    };
+
     const Gossip = struct {
         shred_version: ?u16,
         gossip_base: GossipArgumentsCommon,
@@ -1032,6 +1133,14 @@ const Cmd = struct {
     };
 };
 
+const AllocationMetrics = struct {
+    allocated_bytes_gpa: *Gauge(u64),
+    allocated_bytes_load_snapshot: *Gauge(u64),
+    allocated_bytes_accountsdb_unrooted: *Gauge(u64),
+    allocated_bytes_ledger: *Gauge(u64),
+    allocated_bytes_sqlite: *Gauge(u64),
+};
+
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     const maybe_file, const logger = try spawnLogger(allocator, cfg);
@@ -1079,20 +1188,29 @@ fn gossip(
 
 /// entrypoint to run a full solana validator
 fn validator(
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     gossip_value_allocator: std.mem.Allocator,
     cfg: config.Cmd,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "validator" });
     defer zone.deinit();
 
-    var app_base = try AppBase.init(allocator, cfg);
+    var app_base = try AppBase.init(gpa, cfg);
     defer {
         app_base.shutdown();
         app_base.deinit();
     }
 
     app_base.logger.info().logf("starting validator with cfg: {}", .{cfg});
+
+    const allocation_metrics = try app_base.metrics_registry.initStruct(AllocationMetrics);
+
+    var gpa_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_gpa,
+        .parent = gpa,
+    };
+
+    const allocator = gpa_metrics.allocator();
 
     const repair_port: u16 = cfg.shred_network.repair_port;
     const turbine_recv_port: u16 = cfg.shred_network.turbine_recv_port;
@@ -1137,8 +1255,17 @@ fn validator(
         allocator.destroy(geyser);
     };
 
+    var snapshot_tracy: tracy.TracingAllocator = .{
+        .name = "loadSnapshot",
+        .parent = allocator,
+    };
+    var snapshot_tracy_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_load_snapshot,
+        .parent = snapshot_tracy.allocator(),
+    };
+
     const snapshot_files = try sig.accounts_db.snapshot.download.getOrDownloadSnapshotFiles(
-        allocator,
+        snapshot_tracy_metrics.allocator(),
         .from(app_base.logger),
         snapshot_dir,
         .{
@@ -1155,6 +1282,7 @@ fn validator(
 
     var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
     defer rooted_db.deinit();
+    rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
 
     // snapshot
     var loaded_snapshot = try loadSnapshot(
@@ -1174,15 +1302,33 @@ fn validator(
     );
     defer loaded_snapshot.deinit();
 
-    var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
+    var unrooted_tracy: tracy.TracingAllocator = .{
+        .name = "AccountsDB Unrooted",
+        .parent = allocator,
+    };
+    var unrooted_tracy_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_accountsdb_unrooted,
+        .parent = unrooted_tracy.allocator(),
+    };
+
+    var new_db: sig.accounts_db.Two = try .init(unrooted_tracy_metrics.allocator(), rooted_db);
     defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
     const bank_fields = &collapsed_manifest.bank_fields;
 
+    var ledger_tracy: tracy.TracingAllocator = .{
+        .name = "Ledger",
+        .parent = allocator,
+    };
+    var ledger_tracy_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_ledger,
+        .parent = ledger_tracy.allocator(),
+    };
+
     // ledger
     var ledger = try Ledger.init(
-        allocator,
+        ledger_tracy_metrics.allocator(),
         .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
         app_base.metrics_registry,
@@ -1210,8 +1356,8 @@ fn validator(
     defer epoch_context_manager.deinit();
     try epoch_context_manager.contexts.realign(epoch);
     {
-        var staked_nodes_cloned = try staked_nodes.clone(allocator);
-        errdefer staked_nodes_cloned.deinit(allocator);
+        var staked_nodes_cloned = try staked_nodes.clone(gpa);
+        errdefer staked_nodes_cloned.deinit(gpa);
 
         const leader_schedule = if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule|
             leader_schedule[1].slot_leaders
@@ -1391,13 +1537,13 @@ fn runRPCServer(
 
 /// entrypoint to run a minimal replay node
 fn replayOffline(
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     cfg: config.Cmd,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "cmd.replay" });
     defer zone.deinit();
 
-    var app_base = try AppBase.init(allocator, cfg);
+    var app_base = try AppBase.init(gpa, cfg);
     defer {
         app_base.shutdown();
         app_base.deinit();
@@ -1405,11 +1551,18 @@ fn replayOffline(
 
     app_base.logger.info().logf("starting replay-offline with cfg: {}", .{cfg});
 
+    const allocation_metrics = try app_base.metrics_registry.initStruct(AllocationMetrics);
+
+    var gpa_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_gpa,
+        .parent = gpa,
+    };
+
+    const allocator = gpa_metrics.allocator();
+
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{
-        .iterate = true,
-    });
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
     const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
@@ -1419,10 +1572,20 @@ fn replayOffline(
 
     var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
     defer rooted_db.deinit();
+    rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
+
+    var snapshot_tracy: tracy.TracingAllocator = .{
+        .name = "loadSnapshot",
+        .parent = allocator,
+    };
+    var snapshot_tracy_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_load_snapshot,
+        .parent = snapshot_tracy.allocator(),
+    };
 
     // snapshot
     var loaded_snapshot = try loadSnapshot(
-        allocator,
+        snapshot_tracy_metrics.allocator(),
         .from(app_base.logger),
         snapshot_dir,
         snapshot_files,
@@ -1438,7 +1601,16 @@ fn replayOffline(
     );
     defer loaded_snapshot.deinit();
 
-    var new_db: sig.accounts_db.Two = try .init(allocator, rooted_db);
+    var unrooted_tracy: tracy.TracingAllocator = .{
+        .name = "AccountsDB Unrooted",
+        .parent = allocator,
+    };
+    var unrooted_tracy_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_accountsdb_unrooted,
+        .parent = unrooted_tracy.allocator(),
+    };
+
+    var new_db: sig.accounts_db.Two = try .init(unrooted_tracy_metrics.allocator(), rooted_db);
     defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
@@ -1457,9 +1629,18 @@ fn replayOffline(
         try leader_schedule_cache.put(bank_fields.epoch + 1, schedule_2);
     }
 
+    var ledger_tracy: tracy.TracingAllocator = .{
+        .name = "Ledger",
+        .parent = allocator,
+    };
+    var ledger_tracy_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_ledger,
+        .parent = ledger_tracy.allocator(),
+    };
+
     // ledger
     var ledger = try Ledger.init(
-        allocator,
+        ledger_tracy_metrics.allocator(),
         .from(app_base.logger),
         sig.VALIDATOR_DIR ++ "ledger",
         app_base.metrics_registry,
@@ -1480,8 +1661,8 @@ fn replayOffline(
     defer epoch_context_manager.deinit();
     try epoch_context_manager.contexts.realign(epoch);
     {
-        var staked_nodes_cloned = try staked_nodes.clone(allocator);
-        errdefer staked_nodes_cloned.deinit(allocator);
+        var staked_nodes_cloned = try staked_nodes.clone(gpa);
+        errdefer staked_nodes_cloned.deinit(gpa);
 
         // TODO: Implement feature gating for vote keyed leader schedule.
         // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12

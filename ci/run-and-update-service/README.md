@@ -6,6 +6,8 @@ Dependencies:
 - docker
 - docker-compose
 - zig 0.14.1
+- zstd
+- aws-cli
 
 ```bash
 git clone https://github.com/Syndica/sig.git
@@ -29,6 +31,7 @@ These options may be configured in /etc/sig.conf
 - `CLI_ARGS`: The command line options that will be passed to sig. Default: '--log-file /home/sig/sig/logs/sig.log'
 - `BRANCH`: The branch that will be checked periodically and rebuilt when it changes. Default: 'main'
 - `SLACK_WEBHOOK_URL` (optional): Enable slack web hooks. Only used if non-empty. Default: ''
+- `S3_BUCKET`: Bucket to upload validator state for debugging crashes.
 
 ## Design
 
