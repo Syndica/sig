@@ -52,17 +52,19 @@ pub fn Proof(comptime bit_size: u64) type {
         const Self = @This();
         pub const BYTE_LEN = (2 * logn * 32) + 64;
 
-        pub const contract: Transcript.Contract = c: {
-            const triple: [3]Transcript.Input = .{
-                .{ .label = "L", .type = .validate_point },
-                .{ .label = "R", .type = .validate_point },
-                .{ .label = "u", .type = .challenge },
-            };
-            break :c (&triple) ** logn;
+        const triple: [3]Transcript.Input = .{
+            .{ .label = "L", .type = .validate_point },
+            .{ .label = "R", .type = .validate_point },
+            .{ .label = "u", .type = .challenge },
         };
 
-        /// Modifies the mutable array pointers in undefined ways, so don't rely on the value
-        /// of them after `init`.
+        // The contract is the domain seperator followed by logn "L, R, u" inputs.
+        pub const contract: Transcript.Contract = &[_]Transcript.Input{
+            .domain(.@"inner-product"),
+            .{ .label = "n", .type = .u64 },
+        } ++ (&triple) ** logn;
+
+        /// Modifies the mutable array pointers in undefined ways, so do not rely on the value of them after `init`.
         pub fn init(
             Q: Ristretto255,
             G_factors: *const [bit_size]Scalar,
@@ -78,10 +80,10 @@ pub fn Proof(comptime bit_size: u64) type {
             var a: []Scalar = a_vec;
             var b: []Scalar = b_vec;
 
-            transcript.appendRangeProof(.inner, bit_size);
-
             comptime var session = Transcript.getSession(contract);
             defer session.finish();
+
+            transcript.appendRangeProof(&session, .inner, bit_size);
 
             var L_vec: std.BoundedArray(Ristretto255, logn) = .{};
             var R_vec: std.BoundedArray(Ristretto255, logn) = .{};
@@ -165,17 +167,18 @@ pub fn Proof(comptime bit_size: u64) type {
                 L_vec.appendAssumeCapacity(L);
                 R_vec.appendAssumeCapacity(R);
 
-                transcript.appendNoValidate(&session, "L", L);
-                transcript.appendNoValidate(&session, "R", R);
+                transcript.appendNoValidate(&session, .point, "L", L);
+                transcript.appendNoValidate(&session, .point, "R", R);
 
                 const u = transcript.challengeScalar(&session, "u");
                 const u_inv = u.invert();
 
                 for (0..n) |j| {
+                    // L_j = L_j * u + u^-1 * R_j
                     a_L[j] = a_L[j].mul(u).add(u_inv.mul(a_R[j]));
                     b_L[j] = b_L[j].mul(u_inv).add(u.mul(b_R[j]));
 
-                    // For the first round, unroll the Hprime = H * y_inv scalar multiplications
+                    // For the first round, unroll the H' = H * y_inv scalar multiplications
                     // into multiscalar multiplications, for performance.
                     // zig fmt: off
                     const first =  if (first_round) u_inv.mul(G_factors[j])     else u_inv;
@@ -213,7 +216,7 @@ pub fn Proof(comptime bit_size: u64) type {
             };
         }
 
-        pub fn verify(
+        fn verify(
             self: Self,
             G_factors: *const [bit_size]Scalar,
             H_factors: *const [bit_size]Scalar,
@@ -272,10 +275,10 @@ pub fn Proof(comptime bit_size: u64) type {
             [logn]Scalar, // u_inv_sq
             [bit_size]Scalar, // s
         } {
-            transcript.appendRangeProof(.inner, bit_size);
-
             comptime var session = Transcript.getSession(contract);
             defer session.finish();
+
+            transcript.appendRangeProof(&session, .inner, bit_size);
 
             // 1. Recompute x_k,...,x_1 based on the proof transcript
             var challenges: [logn]Scalar = undefined;
@@ -420,7 +423,6 @@ test "basic correctness" {
         &b,
         &prover_transcript,
     );
-
     try proof.verify(
         &(.{bp.ONE} ** n),
         &H_factors,

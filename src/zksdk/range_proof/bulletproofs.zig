@@ -30,6 +30,9 @@ pub fn Proof(bit_size: comptime_int) type {
     const max = (2 * bit_size) + (2 * logn) + 5 + 8;
 
     const contract: Transcript.Contract = &[_]Transcript.Input{
+        .domain(.@"range-proof"),
+        .{ .label = "n", .type = .u64 },
+
         .{ .label = "A", .type = .validate_point },
         .{ .label = "S", .type = .validate_point },
         .{ .label = "y", .type = .challenge },
@@ -147,7 +150,10 @@ pub fn Proof(bit_size: comptime_int) type {
             }
             std.debug.assert(nm == bit_size);
 
-            transcript.appendRangeProof(.range, bit_size);
+            comptime var session = Transcript.getSession(contract);
+            defer session.finish();
+
+            transcript.appendRangeProof(&session, .range, bit_size);
 
             // bit-decompose values and generate their Pedersen vector commitment
             const a_blinding: Scalar = .random();
@@ -182,11 +188,8 @@ pub fn Proof(bit_size: comptime_int) type {
                 .{s_blinding.toBytes()} ++ s_L ++ s_R,
             );
 
-            comptime var session = Transcript.getSession(contract);
-            defer session.finish();
-
-            transcript.appendNoValidate(&session, "A", A);
-            transcript.appendNoValidate(&session, "S", S);
+            transcript.appendNoValidate(&session, .point, "A", A);
+            transcript.appendNoValidate(&session, .point, "S", S);
 
             // y and z are used to merge multiple inner product relations into one inner product
             const y = transcript.challengeScalar(&session, "y");
@@ -226,8 +229,8 @@ pub fn Proof(bit_size: comptime_int) type {
             const T_1, const t_1_blinding = pedersen.initScalar(t_poly.b);
             const T_2, const t_2_blinding = pedersen.initScalar(t_poly.c);
 
-            transcript.appendNoValidate(&session, "T_1", T_1.point);
-            transcript.appendNoValidate(&session, "T_2", T_2.point);
+            transcript.appendNoValidate(&session, .point, "T_1", T_1.point);
+            transcript.appendNoValidate(&session, .point, "T_2", T_2.point);
 
             // evaluate t(x) on challenge x and homomorphically compute the openings for
             // z^2 * V_1 + z^3 * V_2 + ... + z^{m+1} * V_m + delta(y, z)*G + x*T_1 + x^2*T_2
@@ -297,18 +300,25 @@ pub fn Proof(bit_size: comptime_int) type {
 
         /// Uses the optimized verification described in section 6.2 of
         /// the [Bulletproofs](https://eprint.iacr.org/2017/1066.pdf) paper.
+        ///
+        /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/range_proof/mod.rs#L324
         pub fn verify(
             self: Self,
             commitments: []const pedersen.Commitment,
             bit_lengths: []const u64,
             transcript: *Transcript,
         ) !void {
+            // Validate inputs.
             std.debug.assert(commitments.len == bit_lengths.len);
 
-            transcript.appendRangeProof(.range, bit_size);
+            // Explicitly reject identity commitments.
+            // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/range_proof/mod.rs#L335-L338
+            for (commitments) |c| try c.rejectIdentity();
 
             comptime var session = Transcript.getSession(contract);
             defer session.finish();
+
+            transcript.appendRangeProof(&session, .range, bit_size);
 
             try transcript.append(&session, .validate_point, "A", self.A);
             try transcript.append(&session, .validate_point, "S", self.S);
@@ -580,11 +590,7 @@ pub fn Data(bit_size: comptime_int) type {
         ) !Self {
             var batched_bit_length: u64 = 0;
             for (bit_lengths) |length| {
-                batched_bit_length = try std.math.add(
-                    u64,
-                    batched_bit_length,
-                    length,
-                );
+                batched_bit_length = try std.math.add(u64, batched_bit_length, length);
             }
             if (batched_bit_length != bit_size) return error.IllegalAmountBitLength;
 
@@ -595,7 +601,7 @@ pub fn Data(bit_size: comptime_int) type {
                 openings,
             );
 
-            var transcript = context.newTranscript();
+            var transcript = Transcript.init(.@"batched-range-proof-instruction");
             const proof = try P.init(
                 amounts,
                 bit_lengths,
@@ -628,13 +634,13 @@ pub fn Data(bit_size: comptime_int) type {
 
             for (context.commitments, context.bit_lengths) |commitment, length| {
                 if (std.mem.allEqual(u8, &commitment, 0)) break; // we've hit the terminator
-                commitments.appendAssumeCapacity(.{
-                    .point = try Ristretto255.fromBytes(commitment),
-                });
+                commitments.appendAssumeCapacity(
+                    .{ .point = try Ristretto255.fromBytes(commitment) },
+                );
                 bit_lengths.appendAssumeCapacity(length);
             }
 
-            var transcript = context.newTranscript();
+            var transcript = Transcript.init(.@"batched-range-proof-instruction");
             try self.proof.verify(
                 commitments.constSlice(),
                 bit_lengths.constSlice(),
@@ -695,15 +701,6 @@ pub fn Data(bit_size: comptime_int) type {
             pub fn toBytes(self: Context) [Context.BYTE_LEN]u8 {
                 return @bitCast(self);
             }
-
-            // sig fmt: off
-            fn newTranscript(self: Context) Transcript {
-                return .init(.@"batched-range-proof-instruction", &.{
-                    .{ .label = "commitments", .message = .{ .bytes = std.mem.sliceAsBytes(&self.commitments) } },
-                    .{ .label = "bit-lengths", .message = .{ .bytes = std.mem.sliceAsBytes(&self.bit_lengths) } },
-                });
-            }
-            // sig fmt: on
         };
     };
 }
@@ -730,6 +727,7 @@ pub fn genPowers(comptime n: usize, x: Scalar) [n]Scalar {
     return out;
 }
 
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/range_proof/mod.rs#L534
 test "single rangeproof" {
     const commitment, const opening = pedersen.initValue(u64, 55);
 
@@ -750,6 +748,7 @@ test "single rangeproof" {
     );
 }
 
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/range_proof/mod.rs#L554
 test "aggregated rangeproof" {
     const comm1, const opening1 = pedersen.initValue(u64, 55);
     const comm2, const opening2 = pedersen.initValue(u64, 77);
@@ -772,18 +771,19 @@ test "aggregated rangeproof" {
     );
 }
 
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/range_proof/mod.rs#L609
 test "proof string" {
-    const commitment_1_string = "dDaa/MTEDlyI0Nxx+iu1tOteZsTWmPXAfn9QI0W9mSc=";
+    const commitment_1_string = "qtkYT/O6bSJ9y7mtqxjZ7dOqloJwLGTcTaeG+5GlBWo=";
     const commitment_1 = try pedersen.Commitment.fromBase64(commitment_1_string);
 
-    const commitment_2_string = "tnRILjKpogi2sXxLgZzMqlqPMLnCJmrSjZ5SPQYhtgg=";
+    const commitment_2_string = "pCdHYFSN7yMEK9Li01M1w1OeRzbaVgQ8xYHlxPTUtF0=";
     const commitment_2 = try pedersen.Commitment.fromBase64(commitment_2_string);
 
-    const commitment_3_string = "ZAC5ZLXotsMOVExtrr56D/EZNeyo9iWepNbeH22EuRo=";
+    const commitment_3_string = "gqs3gA6CqT3Uvpb2eCW/lo6m/A2RxHSSopObQkv3DCU=";
     const commitment_3 = try pedersen.Commitment.fromBase64(commitment_3_string);
 
     // zig fmt: off
-    const proof_string = "AvvBQL63pXMXsmuvuNbs/CqXdzeyrMpEIO2O/cI6/SyqU4N+7HUU3LmXai9st+DxqTnuKsm0SgnADfpLpQCEbDDupMb09NY8oHT8Bx8WQhv9eyoBlrPRd7DVhOUsio02gBshe3p2Wj7+yDCpFaZ7/PMypFBX6+E+EqCiPI6yUk4ztslWY0Ksac41eJgcPzXyIx2kvmSTsVBKLb7U01PWBC+AUyUmK3/IdvmJ4DnlS3xFrdg/mxSsYJFd3OZA3cwDb0jePQf/P43/2VVqPRixMVO7+VGoMKPoRTEEVbClsAlW6stGTFPcrimu3c+geASgvwElkIKNGtYcjoj3SS+/VeqIG9Ei1j+TJtPhOE9SG4KNw9xBGwecpliDbQhKjO950EVcnOts+a525/frZV1jHJmOOrZtKRV4pvk37dtQkx4sv+pxRmfVrjwOcKQeg+BzcuF0vaQbqa4SUbzbO9z3RwIMlYIBaz0bqZgJmtPOFuFmNyCJaeB29vlcEAfYbn5gdlgtWP50tKmhoskndulziKZjz4qHSA9rbG2ZtoMHoCsAobHKu2H9OxcaK4Scj1QGwst+zXBEY8uePNbxvU5DMJLVFORtLUXkVdPCmCSsm1Bz4TRbnls8LOVW6wqTgShQMhjNM3RtwdHXENPn5uDnhyvfduAcL+DtI8AIJyRneROefk7i7gjal8dLdMM/QnXT7ctpMQU6uNlpsNzq65xlOQKXO71vQ3c2mE/DmxVJi6BTS5WCzavvhiqdhQyRL61ESCALQpaP0/d0DLwLikVH3ypuDLEnVXe9Pmkxdd0xCzO6QcfyK50CPnV/dVgHeLg8EVag2O83+/7Ys5oLxrDad9TJTDcrT2xsRqECFnSA+z9uZtDPujhQL0ogS5RH4agnQN4mVGTwOLV8OKpn+AvWq6+j1/9EXFkLPBTU5wT0FQuT2VZ8xp5GeqdI13Zey1uPrxc6CZZ407y9OINED4IdBQ==";
+    const proof_string = "lLDpeo97bHU8A34ruX/wKUY4SJgCKLZf7HiBy6Tz5R8EGdLQuqleOmGWWt+tWO9XMqww1vBNDSADFTMONLWsNLrsArLR2ALxpqUSo/Kw9LG3gH+YApSZksWrYuk7RG1K0JtVnt6j9hYSoLiuinkIm3iWTyfrVZooiX1FMoRAnD5SyPYNJxV4e4POb6WpJvkgXVZuNUC5DF0SK2yVihGmBu05fpG8eHhMcekSPUfIVjNfSQImJ09YvVUgVJvGAcAKBIbB/L2bOfUcmRcrun/F8cOnV5MuSJ0IzYcl9SkEPgEKiC5qv4oep2fWg4Ch0RUM9uWBxI+FXbM/xesdvTzfC3bIhntvws8f5BON6hm/6reWR/7J+z+8rSM0pbpFDalaWLXYxM7uSm4sHzvZtU+Z6/eDvpmNJyVCfFbkcETQsQ/OMzavDAbhpbsvcOPHIgTiesOtgDFBYWarJSrWSmckcaqQ1bEftaSkB+Kbs6zvfc0Pl0LfOy5zt3a3Nqh0a5BwgFEerolBgu/ZX5sptjTnu2psvgBPDzOsUYtRKhY1sXPyg2t9KhFVJ/Riw1+AlnQuAL0GJYCFPUVSkJX2dRVzHQ41kdti6pMsTh/ifBLLlSf5AYk9jiYeHk1HCokBITcwXL36nI3B1HQl6g3/nsx//Jd7w17hJuuIYkOhNuz7iTtisvnCNZdiDkFcTky8ya8oJBM1kJrdakdesStWTXzJOvKfs5jUrl5yVksq+E/jM/oU09cYSoesUQMxAgHqJmkvipRlx71+/YgL1349W4wJ3oPd6kkYx0YVwEHjqiZTvnJEVyUvQxc6X0ddUpNBrjfRxKJ5OV+axOaz76S22PokJh6LNbwa7EUVEwVW0BIABytN9fOe7y+2w4+k73Q8LuFE5QIaqcWX/9IRHey5wEbKtF4ARD6pot92nqXZLxUP1whvrMYNlbFeYLGBX6T6J5+7j3c3fHgCZAhMWSU+MNuGBQ==";
     const proof = try Proof(128).fromBase64(proof_string);
     // zig fmt: on
 

@@ -22,16 +22,16 @@ pub const PercentageWithCapData = percentage.Data;
 pub const PubkeyProofData = pubkey_validity.Data;
 pub const ZeroCiphertextData = zero_ciphertext.Data;
 
-// grouped ciphertext validity
-const grouped_cipher_handles_2 = @import("sigma_proofs/grouped_ciphertext/handles_2.zig");
-const grouped_cipher_handles_3 = @import("sigma_proofs/grouped_ciphertext/handles_3.zig");
+// // grouped ciphertext validity
+const grouped_cipher_2_handles = @import("sigma_proofs/grouped_ciphertext/2_handles.zig");
+const grouped_cipher_3_handles = @import("sigma_proofs/grouped_ciphertext/3_handles.zig");
 
-pub const GroupedCiphertext2HandlesData = grouped_cipher_handles_2.Data;
-pub const BatchedGroupedCiphertext2HandlesData = grouped_cipher_handles_2.BatchedData;
-pub const GroupedCiphertext3HandlesData = grouped_cipher_handles_3.Data;
-pub const BatchedGroupedCiphertext3HandlesData = grouped_cipher_handles_3.BatchedData;
+pub const GroupedCiphertext2HandlesData = grouped_cipher_2_handles.Data;
+pub const BatchedGroupedCiphertext2HandlesData = grouped_cipher_2_handles.BatchedData;
+pub const GroupedCiphertext3HandlesData = grouped_cipher_3_handles.Data;
+pub const BatchedGroupedCiphertext3HandlesData = grouped_cipher_3_handles.BatchedData;
 
-// range proof
+// // range proof
 pub const bulletproofs = @import("range_proof/bulletproofs.zig");
 
 pub const RangeProofU64Data = bulletproofs.Data(64);

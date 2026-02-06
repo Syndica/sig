@@ -1,21 +1,21 @@
 //! [fd](https://github.com/firedancer-io/firedancer/blob/33538d35a623675e66f38f77d7dc86c1ba43c935/src/flamenco/runtime/program/zksdk/instructions/fd_zksdk_ciphertext_ciphertext_equality.c)
-//! [agave](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs)
+//! [agave](https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs)
 
 const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 
+const ed25519 = sig.crypto.ed25519;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const elgamal = sig.zksdk.elgamal;
-const pedersen = sig.zksdk.pedersen;
 const ElGamalCiphertext = sig.zksdk.ElGamalCiphertext;
 const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
 const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
+const pedersen = sig.zksdk.pedersen;
+const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
-const ed25519 = sig.crypto.ed25519;
-const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const Proof = struct {
     Y_0: Ristretto255,
@@ -27,6 +27,13 @@ pub const Proof = struct {
     z_r: Scalar,
 
     const contract: Transcript.Contract = &.{
+        .{ .label = "first-pubkey", .type = .validate_pubkey },
+        .{ .label = "second-pubkey", .type = .validate_pubkey },
+        .{ .label = "first-ciphertext", .type = .validate_ciphertext },
+        // The second ciphertext is allowed to be the identity point, as this is a common state in Token-2022.
+        .{ .label = "second-ciphertext", .type = .ciphertext },
+        .domain(.@"ciphertext-ciphertext-equality-proof"),
+
         .{ .label = "Y_0", .type = .validate_point },
         .{ .label = "Y_1", .type = .validate_point },
         .{ .label = "Y_2", .type = .validate_point },
@@ -39,22 +46,31 @@ pub const Proof = struct {
         .{ .label = "w", .type = .challenge }, // w used for batch verification
     };
 
+    /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs#L67
     pub fn init(
-        first_kp: *const ElGamalKeypair,
+        first_keypair: *const ElGamalKeypair,
         second_pubkey: *const ElGamalPubkey,
         first_ciphertext: *const ElGamalCiphertext,
+        second_ciphertext: *const ElGamalCiphertext,
         second_opening: *const pedersen.Opening,
         amount: u64,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendDomSep(.@"ciphertext-ciphertext-equality-proof");
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
 
-        const P_first = first_kp.public.point;
+        transcript.appendNoValidate(&session, .pubkey, "first-pubkey", first_keypair.public);
+        transcript.appendNoValidate(&session, .pubkey, "second-pubkey", second_pubkey.*);
+        transcript.appendNoValidate(&session, .ciphertext, "first-ciphertext", first_ciphertext.*);
+        transcript.append(&session, .ciphertext, "second-ciphertext", second_ciphertext.*);
+        transcript.appendDomSep(&session, .@"ciphertext-ciphertext-equality-proof");
+
+        const P_first = first_keypair.public.point;
         const D_first = first_ciphertext.handle.point;
         const P_second = second_pubkey.point;
 
         const r = second_opening.scalar;
-        const s = first_kp.secret.scalar;
+        const s = first_keypair.secret.scalar;
         var x = pedersen.scalarFromInt(u64, amount);
 
         var y_s = Scalar.random();
@@ -83,13 +99,10 @@ pub const Proof = struct {
         );
         const Y_3 = ed25519.mul(true, P_second, y_r.toBytes());
 
-        comptime var session = Transcript.getSession(contract);
-        defer session.finish();
-
-        transcript.appendNoValidate(&session, "Y_0", Y_0);
-        transcript.appendNoValidate(&session, "Y_1", Y_1);
-        transcript.appendNoValidate(&session, "Y_2", Y_2);
-        transcript.appendNoValidate(&session, "Y_3", Y_3);
+        transcript.appendNoValidate(&session, .point, "Y_0", Y_0);
+        transcript.appendNoValidate(&session, .point, "Y_1", Y_1);
+        transcript.appendNoValidate(&session, .point, "Y_2", Y_2);
+        transcript.appendNoValidate(&session, .point, "Y_3", Y_3);
 
         const c = transcript.challengeScalar(&session, "c");
 
@@ -115,6 +128,7 @@ pub const Proof = struct {
         };
     }
 
+    /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs#L147
     pub fn verify(
         self: Proof,
         first_pubkey: *const ElGamalPubkey,
@@ -123,7 +137,14 @@ pub const Proof = struct {
         second_ciphertext: *const ElGamalCiphertext,
         transcript: *Transcript,
     ) !void {
-        transcript.appendDomSep(.@"ciphertext-ciphertext-equality-proof");
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
+
+        try transcript.append(&session, .validate_pubkey, "first-pubkey", first_pubkey.*);
+        try transcript.append(&session, .validate_pubkey, "second-pubkey", second_pubkey.*);
+        try transcript.append(&session, .validate_ciphertext, "first-ciphertext", first_ciphertext.*);
+        transcript.append(&session, .ciphertext, "second-ciphertext", second_ciphertext.*);
+        transcript.appendDomSep(&session, .@"ciphertext-ciphertext-equality-proof");
 
         const P_first = first_pubkey.point;
         const C_first = first_ciphertext.commitment.point;
@@ -132,9 +153,6 @@ pub const Proof = struct {
         const P_second = second_pubkey.point;
         const C_second = second_ciphertext.commitment.point;
         const D_second = second_ciphertext.handle.point;
-
-        comptime var session = Transcript.getSession(contract);
-        defer session.finish();
 
         try transcript.append(&session, .validate_point, "Y_0", self.Y_0);
         try transcript.append(&session, .validate_point, "Y_1", self.Y_1);
@@ -284,18 +302,6 @@ pub const Data = struct {
             return self.first_pubkey.toBytes() ++ self.second_pubkey.toBytes() ++
                 self.first_ciphertext.toBytes() ++ self.second_ciphertext.toBytes();
         }
-
-        // zig fmt: off
-        fn newTranscript(self: Context) Transcript {
-            return .init(.@"ciphertext-ciphertext-equality-instruction", &.{
-                .{ .label = "first-pubkey",      .message = .{ .pubkey = self.first_pubkey } },
-                .{ .label = "second-pubkey",     .message = .{ .pubkey = self.second_pubkey } },
-
-                .{ .label = "first-ciphertext",  .message = .{ .ciphertext = self.first_ciphertext } },
-                .{ .label = "second-ciphertext", .message = .{ .ciphertext = self.second_ciphertext } },
-            });
-        }
-        // zig fmt: on
     };
 
     pub fn init(
@@ -312,11 +318,12 @@ pub const Data = struct {
             .first_ciphertext = first_ciphertext.*,
             .second_ciphertext = second_ciphertext.*,
         };
-        var transcript = context.newTranscript();
+        var transcript = Transcript.init(.@"ciphertext-ciphertext-equality-instruction");
         const proof = Proof.init(
             first_keypair,
             second_pubkey,
             first_ciphertext,
+            second_ciphertext,
             second_opening,
             amount,
             &transcript,
@@ -337,7 +344,7 @@ pub const Data = struct {
     }
 
     pub fn verify(self: Data) !void {
-        var transcript = self.context.newTranscript();
+        var transcript = Transcript.init(.@"ciphertext-ciphertext-equality-instruction");
         try self.proof.verify(
             &self.context.first_pubkey,
             &self.context.second_pubkey,
@@ -422,6 +429,7 @@ pub const Data = struct {
     }
 };
 
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs#L327-L360
 test "correctness" {
     const first_kp = ElGamalKeypair.random();
     const second_kp = ElGamalKeypair.random();
@@ -443,6 +451,7 @@ test "correctness" {
         &first_kp,
         &second_kp.public,
         &first_ciphertext,
+        &second_ciphertext,
         &second_opening,
         message,
         &prover_transcript,
@@ -456,6 +465,7 @@ test "correctness" {
     );
 }
 
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs#L362-L399
 test "different messages" {
     const first_kp = ElGamalKeypair.random();
     const second_kp = ElGamalKeypair.random();
@@ -479,6 +489,7 @@ test "different messages" {
         &first_kp,
         &second_kp.public,
         &first_ciphertext,
+        &second_ciphertext,
         &second_opening,
         first_message,
         &prover_transcript,
@@ -495,23 +506,24 @@ test "different messages" {
     );
 }
 
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs#L403
 test "proof string" {
-    const first_pubkey_string = "VOPKaqo4nsX4XnbgGjCKHkLkR6JG1jX9D5G/e0EuYmM=";
+    const first_pubkey_string = "GIKnIiKI6A6BbzxToDRqzotS8CyzKZbQzvYMkk1WQjs=";
     const first_pubkey = try ElGamalPubkey.fromBase64(first_pubkey_string);
 
-    const second_pubkey_string = "JnVhtKo9B7g9c8Obo/5/EqvA59i3TvtuOcQWf17T7SU=";
+    const second_pubkey_string = "Iph2rhdueZ+zu80qqol50HpCDSZUi8Dsnj5HgG1SLxo=";
     const second_pubkey = try ElGamalPubkey.fromBase64(second_pubkey_string);
 
-    // zig fmt: off
-    const first_ciphertext_string = "oKv6zxN051MXdk2cISD+CUsH2+FINoH1iB4WZyuy6nNkE7Q+eLiY9JB8itJhgKHJEA/1sAzDvpnRlLL06OXvIg==";
+    // sig fmt: off
+    const first_ciphertext_string = "JN53y4eNNDlLVT9/K1RaEmduNZGes/8tJYN9IxI6519cyvae5bOZEEGWeHmxaTRwV/84/yw54AdezYWIl1KDeg==";
     const first_ciphertext = try ElGamalCiphertext.fromBase64(first_ciphertext_string);
 
-    const second_ciphertext_string = "ooSA2cQDqutgyCBoMiQktM1Cu4NDNEbphF010gjG4iF0iMK1N+u/Qxqk0wwO/+w+5S6RiicwPs4mEKRJpFiHEw==";
+    const second_ciphertext_string = "Vl51YOwSgLntr5MKMV9pTeRYzfnaCinVc/P7MSzggGRO7kkmtm3mmwG+aRrb2jSrCrW/570S/5euiEVV7Lg0dQ==";
     const second_ciphertext = try ElGamalCiphertext.fromBase64(second_ciphertext_string);
 
-    const proof_string = "MlfRDO4sBPbpciEXci3QfVSLVABAJ0s8wMZ/Uz3AyETmGJ1BUE961fHIiNQXPD0j1uu1Josj//E8loPD1w+4E3bfDBJ3Mp2YqeOv41Bdec02YXlAotTGjq/UfncGdUhyampkuXUmSvnmkf5BIp4nr3X18cR9KHTAzBrKv6erjAxIckyRnACaZGEx+ZboEb3FBEXqTklytT1nrebbwkjvDUWbcpZrE+xxBWYek3qeq1x1debzxVhtS2yx44cvR5UIGLzGYa2ec/xh7wvyNEbnX80rZju2dztr4bN5f2vrTgk=";
+    const proof_string = "ij/fhClZeoguA0RvwPqbzU0Df3lqWwZgQdOLCiRmq2KA79t4/EOaHeWlXNugCRDC/SMdbVLt1k32Ko3P3BjNA7zXoI19g4ex61/UGL4+ScL9xpcsJRVheqFENxhbZjZ7CLRWXkYAl+UvVcvHjSuO2bVHPpuHBoBONlUt5rP5K2cxrg1sgH7wXvrV2cMEtZOqA9MQ0WYemEb2N9c77BycArJgGc/wlRu58VygHmbEuwbmWsrfc1xdpjb5LFSBuaoEeCvywXJmR7iL9JgfkIhvv//jvDCeK6BkqsfStocFrQQ=";
     const proof = try Proof.fromBase64(proof_string);
-    // zig fmt: on
+    // sig fmt: on
 
     var verifier_transcript = Transcript.initTest("Test");
 

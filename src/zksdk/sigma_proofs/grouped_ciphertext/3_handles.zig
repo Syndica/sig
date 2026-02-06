@@ -5,17 +5,17 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../../../sig.zig");
 
+const ed25519 = sig.crypto.ed25519;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const elgamal = sig.zksdk.elgamal;
-const pedersen = sig.zksdk.pedersen;
 const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
 const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
+const GroupedElGamalCiphertext = sig.zksdk.GroupedElGamalCiphertext(3);
+const pedersen = sig.zksdk.pedersen;
+const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
-const ed25519 = sig.crypto.ed25519;
-const GroupedElGamalCiphertext = sig.zksdk.GroupedElGamalCiphertext;
-const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const Proof = struct {
     Y_0: Ristretto255,
@@ -25,12 +25,33 @@ pub const Proof = struct {
     z_r: Scalar,
     z_x: Scalar,
 
-    // the extra contract on top of the base `contract` used in `init`.
+    // The contract that batched proofs perform before the base contract.
     const batched_contract: Transcript.Contract = &.{
+        .{ .label = "first-pubkey", .type = .validate_pubkey },
+        .{ .label = "second-pubkey", .type = .validate_pubkey },
+        .{ .label = "third-pubkey", .type = .pubkey },
+        .{ .label = "grouped-ciphertext-lo", .type = .validate_grouped_3 },
+        .{ .label = "grouped-ciphertext-hi", .type = .validate_grouped_3 },
+        .domain(.@"batched-validity-proof"),
+        .{ .label = "handles", .type = .u64 },
         .{ .label = "t", .type = .challenge },
     };
 
-    const contract: Transcript.Contract = &.{
+    /// This is the contract that un-batched proofs perform at the start.
+    /// It's seperate as it differs from the one that batched does.
+    const init_contract: Transcript.Contract = &.{
+        .{ .label = "first-pubkey", .type = .validate_pubkey },
+        .{ .label = "second-pubkey", .type = .validate_pubkey },
+        .{ .label = "third-pubkey", .type = .pubkey },
+        .{ .label = "grouped-ciphertext", .type = .validate_grouped_3 },
+    };
+
+    /// This is the contract both batched and unbatched proofs need to execute.
+    /// It's always performed after either the `init_contract` or `batched_contract`.
+    const base_contract: Transcript.Contract = &.{
+        .domain(.@"validity-proof"),
+        .{ .label = "handles", .type = .u64 },
+
         .{ .label = "Y_0", .type = .validate_point },
         .{ .label = "Y_1", .type = .validate_point },
         .{ .label = "Y_2", .type = .validate_point },
@@ -42,20 +63,50 @@ pub const Proof = struct {
         .{ .label = "w", .type = .challenge },
     };
 
+    pub fn init(
+        first_pubkey: *const ElGamalPubkey,
+        second_pubkey: *const ElGamalPubkey,
+        third_pubkey: *const ElGamalPubkey,
+        grouped_ciphertext: *const GroupedElGamalCiphertext,
+        amount: anytype,
+        opening: *const pedersen.Opening,
+        transcript: *Transcript,
+    ) Proof {
+        comptime var session = Transcript.getInitSession(init_contract);
+        defer session.finish();
+
+        transcript.appendNoValidate(&session, .pubkey, "first-pubkey", first_pubkey.*);
+        transcript.appendNoValidate(&session, .pubkey, "second-pubkey", second_pubkey.*);
+        transcript.append(&session, .pubkey, "third-pubkey", third_pubkey.*);
+        transcript.appendNoValidate(&session, .grouped_3, "grouped-ciphertext", grouped_ciphertext.*);
+
+        return initDirect(first_pubkey, second_pubkey, third_pubkey, amount, opening, transcript);
+    }
+
     pub fn initBatched(
         first_pubkey: *const ElGamalPubkey,
         second_pubkey: *const ElGamalPubkey,
         third_pubkey: *const ElGamalPubkey,
+        grouped_ciphertext_lo: *const GroupedElGamalCiphertext,
+        grouped_ciphertext_hi: *const GroupedElGamalCiphertext,
         amount_lo: u64,
         amount_hi: u64,
         opening_lo: *const pedersen.Opening,
         opening_hi: *const pedersen.Opening,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendHandleDomSep(.batched, .three);
-
         comptime var session = Transcript.getSession(batched_contract);
         defer session.finish();
+
+        transcript.appendNoValidate(&session, .pubkey, "first-pubkey", first_pubkey.*);
+        transcript.appendNoValidate(&session, .pubkey, "second-pubkey", second_pubkey.*);
+        transcript.append(&session, .pubkey, "third-pubkey", third_pubkey.*);
+        transcript.appendNoValidate(&session, .grouped_3, "grouped-ciphertext-lo", grouped_ciphertext_lo.*);
+        transcript.appendNoValidate(&session, .grouped_3, "grouped-ciphertext-hi", grouped_ciphertext_hi.*);
+
+        transcript.appendDomSep(&session, .@"batched-validity-proof");
+        transcript.append(&session, .u64, "handles", 3);
+
         const t = transcript.challengeScalar(&session, "t");
 
         const scalar_lo = pedersen.scalarFromInt(u64, amount_lo);
@@ -66,7 +117,7 @@ pub const Proof = struct {
             .scalar = opening_hi.scalar.mul(t).add(opening_lo.scalar),
         };
 
-        return init(
+        return initDirect(
             first_pubkey,
             second_pubkey,
             third_pubkey,
@@ -76,7 +127,7 @@ pub const Proof = struct {
         );
     }
 
-    pub fn init(
+    pub fn initDirect(
         first_pubkey: *const ElGamalPubkey,
         second_pubkey: *const ElGamalPubkey,
         third_pubkey: *const ElGamalPubkey,
@@ -84,10 +135,11 @@ pub const Proof = struct {
         opening: *const pedersen.Opening,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendHandleDomSep(.unbatched, .three);
-
-        comptime var session = Transcript.getSession(contract);
+        comptime var session = Transcript.getSession(base_contract);
         defer session.finish();
+
+        transcript.appendDomSep(&session, .@"validity-proof");
+        transcript.append(&session, .u64, "handles", 3);
 
         const P_first = first_pubkey.point;
         const P_second = second_pubkey.point;
@@ -117,9 +169,9 @@ pub const Proof = struct {
         const Y_2: Ristretto255 = ed25519.mul(true, P_second, y_r.toBytes());
         const Y_3: Ristretto255 = ed25519.mul(true, P_third, y_r.toBytes());
 
-        transcript.appendNoValidate(&session, "Y_0", Y_0);
-        transcript.appendNoValidate(&session, "Y_1", Y_1);
-        transcript.appendNoValidate(&session, "Y_2", Y_2);
+        transcript.appendNoValidate(&session, .point, "Y_0", Y_0);
+        transcript.appendNoValidate(&session, .point, "Y_1", Y_1);
+        transcript.appendNoValidate(&session, .point, "Y_2", Y_2);
         transcript.append(&session, .point, "Y_3", Y_3);
 
         const c = transcript.challengeScalar(&session, "c");
@@ -141,6 +193,72 @@ pub const Proof = struct {
             .z_r = z_r,
             .z_x = z_x,
         };
+    }
+
+    /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L163
+    pub fn verify(
+        self: Proof,
+        first_pubkey: *const ElGamalPubkey,
+        second_pubkey: *const ElGamalPubkey,
+        third_pubkey: *const ElGamalPubkey,
+        grouped_ciphertext: *const GroupedElGamalCiphertext,
+        transcript: *Transcript,
+    ) !void {
+        comptime var session = Transcript.getInitSession(init_contract);
+        defer session.finish();
+
+        try transcript.append(&session, .validate_pubkey, "first-pubkey", first_pubkey.*);
+        try transcript.append(&session, .validate_pubkey, "second-pubkey", second_pubkey.*);
+        transcript.append(&session, .pubkey, "third-pubkey", third_pubkey.*);
+        try transcript.append(&session, .validate_grouped_3, "grouped-ciphertext", grouped_ciphertext.*);
+
+        try self.verifyDirect(false, .{
+            .first_pubkey = first_pubkey,
+            .second_pubkey = second_pubkey,
+            .third_pubkey = third_pubkey,
+            .commitment = &grouped_ciphertext.commitment,
+            .first_handle = &grouped_ciphertext.handles[0],
+            .second_handle = &grouped_ciphertext.handles[1],
+            .third_handle = &grouped_ciphertext.handles[2],
+        }, {}, transcript);
+    }
+
+    /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/batched_grouped_ciphertext_validity/handles_3.rs#L111
+    pub fn verifyBatched(
+        self: Proof,
+        first_pubkey: *const ElGamalPubkey,
+        second_pubkey: *const ElGamalPubkey,
+        third_pubkey: *const ElGamalPubkey,
+        grouped_ciphertext_lo: *const GroupedElGamalCiphertext,
+        grouped_ciphertext_hi: *const GroupedElGamalCiphertext,
+        transcript: *Transcript,
+    ) !void {
+        comptime var session = Transcript.getInitSession(batched_contract);
+        defer session.finish();
+
+        try transcript.append(&session, .validate_pubkey, "first-pubkey", first_pubkey.*);
+        try transcript.append(&session, .validate_pubkey, "second-pubkey", second_pubkey.*);
+        transcript.append(&session, .pubkey, "third-pubkey", third_pubkey.*);
+        try transcript.append(&session, .validate_grouped_3, "grouped-ciphertext-lo", grouped_ciphertext_lo.*);
+        try transcript.append(&session, .validate_grouped_3, "grouped-ciphertext-hi", grouped_ciphertext_hi.*);
+
+        transcript.appendDomSep(&session, .@"batched-validity-proof");
+        transcript.append(&session, .u64, "handles", 3);
+        const t = transcript.challengeScalar(&session, "t");
+
+        try self.verifyDirect(true, .{
+            .first_pubkey = first_pubkey,
+            .second_pubkey = second_pubkey,
+            .third_pubkey = third_pubkey,
+            .commitment = &grouped_ciphertext_lo.commitment,
+            .first_handle = &grouped_ciphertext_lo.handles[0],
+            .second_handle = &grouped_ciphertext_lo.handles[1],
+            .third_handle = &grouped_ciphertext_lo.handles[2],
+            .commitment_hi = &grouped_ciphertext_hi.commitment,
+            .first_handle_hi = &grouped_ciphertext_hi.handles[0],
+            .second_handle_hi = &grouped_ciphertext_hi.handles[1],
+            .third_handle_hi = &grouped_ciphertext_hi.handles[2],
+        }, t, transcript);
     }
 
     fn Params(batched: bool) type {
@@ -170,24 +288,19 @@ pub const Proof = struct {
             };
     }
 
-    pub fn verify(
+    /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L198
+    pub fn verifyDirect(
         self: Proof,
         comptime batched: bool,
         params: Params(batched),
+        t: if (batched) Scalar else void,
         transcript: *Transcript,
     ) !void {
-        comptime var session = Transcript.getSession(if (batched)
-            batched_contract ++ contract
-        else
-            contract);
+        comptime var session = Transcript.getSession(base_contract);
         defer session.finish();
 
-        const t = if (batched) t: {
-            transcript.appendHandleDomSep(.batched, .three);
-            break :t transcript.challengeScalar(&session, "t");
-        } else void; // shouldn't be referenced
-
-        transcript.appendHandleDomSep(.unbatched, .three);
+        transcript.appendDomSep(&session, .@"validity-proof");
+        transcript.append(&session, .u64, "handles", 3);
 
         try transcript.append(&session, .validate_point, "Y_0", self.Y_0);
         try transcript.append(&session, .validate_point, "Y_1", self.Y_1);
@@ -276,7 +389,7 @@ pub const Proof = struct {
             });
         }
 
-        // give the optimizer a little hint on the two possible lengths
+        // Give the optimizer a little hint on the two possible lengths
         switch (points.len) {
             12, 16 => {},
             else => unreachable,
@@ -344,7 +457,7 @@ pub const Data = struct {
         first_pubkey: ElGamalPubkey,
         second_pubkey: ElGamalPubkey,
         third_pubkey: ElGamalPubkey,
-        grouped_ciphertext: GroupedElGamalCiphertext(3),
+        grouped_ciphertext: GroupedElGamalCiphertext,
 
         pub const BYTE_LEN = 224;
 
@@ -363,24 +476,13 @@ pub const Data = struct {
                 self.third_pubkey.toBytes() ++
                 self.grouped_ciphertext.toBytes();
         }
-
-        // zig fmt: off
-        fn newTranscript(self: Context) Transcript {
-            return .init(.@"grouped-ciphertext-validity-3-handles-instruction", &.{
-                .{ .label = "first-pubkey",       .message = .{ .pubkey = self.first_pubkey } },
-                .{ .label = "second-pubkey",      .message = .{ .pubkey = self.second_pubkey } },
-                .{ .label = "third-pubkey",       .message = .{ .pubkey = self.third_pubkey } },
-                .{ .label = "grouped-ciphertext", .message = .{ .grouped_3 = self.grouped_ciphertext } },
-            });
-        }
-        // zig fmt: on
     };
 
     pub fn init(
         first_pubkey: *const ElGamalPubkey,
         second_pubkey: *const ElGamalPubkey,
         third_pubkey: *const ElGamalPubkey,
-        grouped_ciphertext: *const GroupedElGamalCiphertext(3),
+        grouped_ciphertext: *const GroupedElGamalCiphertext,
         amount: u64,
         opening: *const pedersen.Opening,
     ) Data {
@@ -390,11 +492,12 @@ pub const Data = struct {
             .third_pubkey = third_pubkey.*,
             .grouped_ciphertext = grouped_ciphertext.*,
         };
-        var transcript = context.newTranscript();
+        var transcript = Transcript.init(.@"batched-grouped-ciphertext-validity-3-handles-instruction");
         const proof = Proof.init(
             first_pubkey,
             second_pubkey,
             third_pubkey,
+            grouped_ciphertext,
             amount,
             opening,
             &transcript,
@@ -415,24 +518,12 @@ pub const Data = struct {
     }
 
     pub fn verify(self: Data) !void {
-        var transcript = self.context.newTranscript();
-
-        const grouped_ciphertext = self.context.grouped_ciphertext;
-        const first_handle = grouped_ciphertext.handles[0];
-        const second_handle = grouped_ciphertext.handles[1];
-        const third_handle = grouped_ciphertext.handles[2];
-
+        var transcript = Transcript.init(.@"batched-grouped-ciphertext-validity-3-handles-instruction");
         try self.proof.verify(
-            false,
-            .{
-                .commitment = &grouped_ciphertext.commitment,
-                .first_pubkey = &self.context.first_pubkey,
-                .second_pubkey = &self.context.second_pubkey,
-                .third_pubkey = &self.context.third_pubkey,
-                .first_handle = &first_handle,
-                .second_handle = &second_handle,
-                .third_handle = &third_handle,
-            },
+            &self.context.first_pubkey,
+            &self.context.second_pubkey,
+            &self.context.third_pubkey,
+            &self.context.grouped_ciphertext,
             &transcript,
         );
     }
@@ -463,7 +554,6 @@ pub const Data = struct {
             amount,
             &opening,
         );
-
         try proof.verify();
     }
 };
@@ -479,8 +569,8 @@ pub const BatchedData = struct {
         first_pubkey: ElGamalPubkey,
         second_pubkey: ElGamalPubkey,
         third_pubkey: ElGamalPubkey,
-        grouped_ciphertext_lo: GroupedElGamalCiphertext(3),
-        grouped_ciphertext_hi: GroupedElGamalCiphertext(3),
+        grouped_ciphertext_lo: GroupedElGamalCiphertext,
+        grouped_ciphertext_hi: GroupedElGamalCiphertext,
 
         pub const BYTE_LEN = 352;
 
@@ -501,26 +591,14 @@ pub const BatchedData = struct {
                 self.grouped_ciphertext_lo.toBytes() ++
                 self.grouped_ciphertext_hi.toBytes();
         }
-
-        // zig fmt: off
-        fn newTranscript(self: Context) Transcript {
-            return .init(.@"batched-grouped-ciphertext-validity-3-handles-instruction", &.{
-                .{ .label = "first-pubkey",          .message = .{ .pubkey = self.first_pubkey } },
-                .{ .label = "second-pubkey",         .message = .{ .pubkey = self.second_pubkey } },
-                .{ .label = "third-pubkey",          .message = .{ .pubkey = self.third_pubkey } },
-                .{ .label = "grouped-ciphertext-lo", .message = .{ .grouped_3 = self.grouped_ciphertext_lo } },
-                .{ .label = "grouped-ciphertext-hi", .message = .{ .grouped_3 = self.grouped_ciphertext_hi } },
-            });
-        }
-        // zig fmt: on
     };
 
     pub fn init(
         first_pubkey: *const ElGamalPubkey,
         second_pubkey: *const ElGamalPubkey,
         third_pubkey: *const ElGamalPubkey,
-        grouped_ciphertext_lo: *const GroupedElGamalCiphertext(3),
-        grouped_ciphertext_hi: *const GroupedElGamalCiphertext(3),
+        grouped_ciphertext_lo: *const GroupedElGamalCiphertext,
+        grouped_ciphertext_hi: *const GroupedElGamalCiphertext,
         amount_lo: u64,
         amount_hi: u64,
         opening_lo: *const pedersen.Opening,
@@ -533,11 +611,13 @@ pub const BatchedData = struct {
             .grouped_ciphertext_lo = grouped_ciphertext_lo.*,
             .grouped_ciphertext_hi = grouped_ciphertext_hi.*,
         };
-        var transcript = context.newTranscript();
+        var transcript = Transcript.init(.@"batched-grouped-ciphertext-validity-2-handles-instruction");
         const proof = Proof.initBatched(
             first_pubkey,
             second_pubkey,
             third_pubkey,
+            grouped_ciphertext_lo,
+            grouped_ciphertext_hi,
             amount_lo,
             amount_hi,
             opening_lo,
@@ -560,34 +640,13 @@ pub const BatchedData = struct {
     }
 
     pub fn verify(self: BatchedData) !void {
-        var transcript = self.context.newTranscript();
-
-        const grouped_ciphertext_lo = self.context.grouped_ciphertext_lo;
-        const grouped_ciphertext_hi = self.context.grouped_ciphertext_hi;
-
-        const first_handle_lo = grouped_ciphertext_lo.handles[0];
-        const second_handle_lo = grouped_ciphertext_lo.handles[1];
-        const third_handle_lo = grouped_ciphertext_lo.handles[2];
-
-        const first_handle_hi = grouped_ciphertext_hi.handles[0];
-        const second_handle_hi = grouped_ciphertext_hi.handles[1];
-        const third_handle_hi = grouped_ciphertext_hi.handles[2];
-
-        try self.proof.verify(
-            true,
-            .{
-                .commitment = &grouped_ciphertext_lo.commitment,
-                .commitment_hi = &grouped_ciphertext_hi.commitment,
-                .first_pubkey = &self.context.first_pubkey,
-                .second_pubkey = &self.context.second_pubkey,
-                .third_pubkey = &self.context.third_pubkey,
-                .first_handle = &first_handle_lo,
-                .second_handle = &second_handle_lo,
-                .third_handle = &third_handle_lo,
-                .first_handle_hi = &first_handle_hi,
-                .second_handle_hi = &second_handle_hi,
-                .third_handle_hi = &third_handle_hi,
-            },
+        var transcript = Transcript.init(.@"batched-grouped-ciphertext-validity-2-handles-instruction");
+        try self.proof.verifyBatched(
+            &self.context.first_pubkey,
+            &self.context.second_pubkey,
+            &self.context.third_pubkey,
+            &self.context.grouped_ciphertext_lo,
+            &self.context.grouped_ciphertext_hi,
             &transcript,
         );
     }
@@ -604,10 +663,8 @@ pub const BatchedData = struct {
 
         const amount_lo: u64 = 11;
         const amount_hi: u64 = 22;
-
         const opening_lo = pedersen.Opening.random();
         const opening_hi = pedersen.Opening.random();
-
         const grouped_ciphertext_lo = elgamal.GroupedElGamalCiphertext(3).encryptWithOpening(
             .{ first_pubkey, second_pubkey, third_pubkey },
             amount_lo,
@@ -630,11 +687,11 @@ pub const BatchedData = struct {
             &opening_lo,
             &opening_hi,
         );
-
         try proof.verify();
     }
 };
 
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L362
 test "correctness" {
     const first_kp = ElGamalKeypair.random();
     const first_pubkey = first_kp.public;
@@ -646,11 +703,12 @@ test "correctness" {
     const third_pubkey = third_kp.public;
 
     const amount: u64 = 55;
-    const commitment, const opening = pedersen.initValue(u64, amount);
-
-    const first_handle = pedersen.DecryptHandle.init(&first_pubkey, &opening);
-    const second_handle = pedersen.DecryptHandle.init(&second_pubkey, &opening);
-    const third_handle = pedersen.DecryptHandle.init(&third_pubkey, &opening);
+    const opening = pedersen.Opening.random();
+    const grouped_ciphertext = GroupedElGamalCiphertext.encryptWithOpening(
+        .{ first_pubkey, second_pubkey, third_pubkey },
+        amount,
+        &opening,
+    );
 
     var prover_transcript = Transcript.initTest("Test");
     var verifier_transcript = Transcript.initTest("Test");
@@ -659,41 +717,35 @@ test "correctness" {
         &first_pubkey,
         &second_pubkey,
         &third_pubkey,
+        &grouped_ciphertext,
         amount,
         &opening,
         &prover_transcript,
     );
-
     try proof.verify(
-        false,
-        .{
-            .commitment = &commitment,
-            .first_pubkey = &first_pubkey,
-            .second_pubkey = &second_pubkey,
-            .third_pubkey = &third_pubkey,
-            .first_handle = &first_handle,
-            .second_handle = &second_handle,
-            .third_handle = &third_handle,
-        },
+        &first_pubkey,
+        &second_pubkey,
+        &third_pubkey,
+        &grouped_ciphertext,
         &verifier_transcript,
     );
 }
 
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L410-L451
 test "first/second pubkey zeroed" {
-    // if first or second public key zeroed, then the proof should always fail
-
-    const first_pubkey = try ElGamalPubkey.fromBytes(.{0} ** 32);
-    const second_pubkey = try ElGamalPubkey.fromBytes(.{0} ** 32);
+    const first_pubkey = try ElGamalPubkey.fromBytes(@splat(0));
+    const second_pubkey = try ElGamalPubkey.fromBytes(@splat(0));
 
     const third_kp = ElGamalKeypair.random();
     const third_pubkey = third_kp.public;
 
     const amount: u64 = 55;
-    const commitment, const opening = pedersen.initValue(u64, amount);
-
-    const first_handle = pedersen.DecryptHandle.init(&first_pubkey, &opening);
-    const second_handle = pedersen.DecryptHandle.init(&second_pubkey, &opening);
-    const third_handle = pedersen.DecryptHandle.init(&third_pubkey, &opening);
+    const opening = pedersen.Opening.random();
+    const grouped_ciphertext = GroupedElGamalCiphertext.encryptWithOpening(
+        .{ first_pubkey, second_pubkey, third_pubkey },
+        amount,
+        &opening,
+    );
 
     var prover_transcript = Transcript.initTest("Test");
     var verifier_transcript = Transcript.initTest("Test");
@@ -702,31 +754,25 @@ test "first/second pubkey zeroed" {
         &first_pubkey,
         &second_pubkey,
         &third_pubkey,
+        &grouped_ciphertext,
         amount,
         &opening,
         &prover_transcript,
     );
-
     try std.testing.expectError(
         error.IdentityElement,
         proof.verify(
-            false,
-            .{
-                .commitment = &commitment,
-                .first_pubkey = &first_pubkey,
-                .second_pubkey = &second_pubkey,
-                .third_pubkey = &third_pubkey,
-                .first_handle = &first_handle,
-                .second_handle = &second_handle,
-                .third_handle = &third_handle,
-            },
+            &first_pubkey,
+            &second_pubkey,
+            &third_pubkey,
+            &grouped_ciphertext,
             &verifier_transcript,
         ),
     );
 }
 
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L453-L497
 test "zeroed ciphertext" {
-    // zeroed ciphertext should still be successfully verify
     const first_kp = ElGamalKeypair.random();
     const first_pubkey = first_kp.public;
 
@@ -744,6 +790,11 @@ test "zeroed ciphertext" {
     const second_handle = pedersen.DecryptHandle.init(&second_pubkey, &opening);
     const third_handle = pedersen.DecryptHandle.init(&third_pubkey, &opening);
 
+    const grouped_ciphertext: GroupedElGamalCiphertext = .{
+        .commitment = commitment,
+        .handles = .{ first_handle, second_handle, third_handle },
+    };
+
     var prover_transcript = Transcript.initTest("Test");
     var verifier_transcript = Transcript.initTest("Test");
 
@@ -751,116 +802,53 @@ test "zeroed ciphertext" {
         &first_pubkey,
         &second_pubkey,
         &third_pubkey,
+        &grouped_ciphertext,
         amount,
         &opening,
         &prover_transcript,
     );
-
-    try proof.verify(
-        false,
-        .{
-            .commitment = &commitment,
-            .first_pubkey = &first_pubkey,
-            .second_pubkey = &second_pubkey,
-            .third_pubkey = &third_pubkey,
-            .first_handle = &first_handle,
-            .second_handle = &second_handle,
-            .third_handle = &third_handle,
-        },
-        &verifier_transcript,
+    try std.testing.expectError(
+        error.IdentityElement,
+        proof.verify(
+            &first_pubkey,
+            &second_pubkey,
+            &third_pubkey,
+            &grouped_ciphertext,
+            &verifier_transcript,
+        ),
     );
 }
 
-test "zeroed decryption handle" {
-    // decryption handle can be zero as long as the Pedersen commitment is valid
-    const first_kp = ElGamalKeypair.random();
-    const first_pubkey = first_kp.public;
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L501
+test "proof string" {
+    const first_pubkey_string = "EAbHeljb89aEvbxaq2i3T8e7kEh1iZa55G67S4aPN2U=";
+    const first_pubkey = try ElGamalPubkey.fromBase64(first_pubkey_string);
 
-    const second_kp = ElGamalKeypair.random();
-    const second_pubkey = second_kp.public;
+    const second_pubkey_string = "lH291F1FwDQEFq3kyCEQ7ANACAoS+tthsCLBRMMKvCo=";
+    const second_pubkey = try ElGamalPubkey.fromBase64(second_pubkey_string);
 
-    const third_kp = ElGamalKeypair.random();
-    const third_pubkey = third_kp.public;
+    const third_pubkey_string = "EuaVaP3a6YvTokc8dq6kKTnn9cz8A92nMISmDzWElGo=";
+    const third_pubkey = try ElGamalPubkey.fromBase64(third_pubkey_string);
 
-    const amount: u64 = 55;
-    const zeroed_opening = try pedersen.Opening.fromBytes(.{0} ** 32);
-    const commitment = pedersen.initOpening(u64, amount, &zeroed_opening);
+    // sig fmt: off
+    const grouped_ciphertext_string = "BpvM2hRQg9xKqEC68Zjc7jtVKyfZ5hiF+BgF0+Pnz1CI+/lX8i7xgBejr9O+hrrKWAomNC6Zv5M8B+MUokxAClLrs+zhcm5TdpLbvtUsM/PTKVNKh30PRGSKr12e65EJ5EgyNO2FjjLL4o2jSJepbrOohkUVWojqTGQ4nZAhtVI=";
+    const grouped_ciphertext = try GroupedElGamalCiphertext.fromBase64(grouped_ciphertext_string);
 
-    const first_handle = pedersen.DecryptHandle.init(&first_pubkey, &zeroed_opening);
-    const second_handle = pedersen.DecryptHandle.init(&second_pubkey, &zeroed_opening);
-    const third_handle = pedersen.DecryptHandle.init(&third_pubkey, &zeroed_opening);
+    const proof_string = "yAJhtqJPhXdUN24lYeD7J+n7/6F+aV+H0rBSseHvD1dEr2FWy9bl20Qf5E3CHA8IlvOzQQpMJiZ8B9sxhqGdDgwVNbhPhMaKksRqMyKrHq2Vpi3Uz8LB6/uCQNcYyLBMlCjgVpscvudqpLuIpk3PRVhC5igNBV9GSL6iXKAuhkWc2ubCdlZKXJM1xFAnTbn5RSoRmSonESBr4NBwjHyaCHMwX7W8+jjxBc3hDSJOqKNkZgym0gmWv64cc32wKVEA";
+    const proof = try Proof.fromBase64(proof_string);
+    // sig fmt: on
 
-    var prover_transcript = Transcript.initTest("Test");
     var verifier_transcript = Transcript.initTest("Test");
-
-    const proof = Proof.init(
+    try proof.verify(
         &first_pubkey,
         &second_pubkey,
         &third_pubkey,
-        amount,
-        &zeroed_opening,
-        &prover_transcript,
-    );
-
-    try proof.verify(
-        false,
-        .{
-            .commitment = &commitment,
-            .first_pubkey = &first_pubkey,
-            .second_pubkey = &second_pubkey,
-            .third_pubkey = &third_pubkey,
-            .first_handle = &first_handle,
-            .second_handle = &second_handle,
-            .third_handle = &third_handle,
-        },
+        &grouped_ciphertext,
         &verifier_transcript,
     );
 }
 
-test "proof string" {
-    const commitment_string = "DDSCVZLH+eqC9gX+ZeP3HQQxigojAOgda3YwVChR5W4=";
-    const commitment = try pedersen.Commitment.fromBase64(commitment_string);
-
-    const first_pubkey_string = "yGGJnLUs8B744So/Ua3n2wNm+8u9ey/6KrDdHx4ySwk=";
-    const first_pubkey = try ElGamalPubkey.fromBase64(first_pubkey_string);
-
-    const second_pubkey_string = "ZFETe85sZdWpxLAo177kwiOxZCpsXGeyZEnzern7tAk=";
-    const second_pubkey = try ElGamalPubkey.fromBase64(second_pubkey_string);
-
-    const third_pubkey_string = "duUYiBx0l0jRRPsTLCoCD8PIKFczPdrxl+2f4eCflhQ=";
-    const third_pubkey = try ElGamalPubkey.fromBase64(third_pubkey_string);
-
-    const first_handle_string = "Asor2klomf847EmJZmXn3qoi0SGE3cBXCkKttbJa+lE=";
-    const first_handle = try pedersen.DecryptHandle.fromBase64(first_handle_string);
-
-    const second_handle_string = "kJ0GYHDVeB1Kgvqp+MY/my3BYZvqsC5Mv0gQLJHnNBQ=";
-    const second_handle = try pedersen.DecryptHandle.fromBase64(second_handle_string);
-
-    const third_handle_string = "Jnd5jZLNDOMMt+kbgQWCQqTytbwHx3Bz5vwtfDLhRn0=";
-    const third_handle = try pedersen.DecryptHandle.fromBase64(third_handle_string);
-
-    // zig fmt: off
-    const proof_string = "8NoqOM40+fvPY2aHzO0SdWZM6lvSoaqI7KpaFuE4wQUaqewILtQV8IMHeHmpevxt/GTErJsdcV8kY3HDZ1GHbMoDujYpstUhyubX1voJh/DstYAL1SQqlRpNLG+kWEUZYvCudTur7i5R+zqZQY3sRMEAxW458V+1GmyCWbWP3FZEz5gX/Pa28/ZNLBvmSPpJBZapXRI5Ra0dKPskFmQ0CH0gBWo6pxj/PH9sgNEkLrbVZB7jpVtdmNzivwgFeb4M";
-    const proof = try Proof.fromBase64(proof_string);
-    // zig fmt: on
-
-    var verifier_transcript = Transcript.initTest("Test");
-
-    try proof.verify(
-        false,
-        .{
-            .commitment = &commitment,
-            .first_pubkey = &first_pubkey,
-            .second_pubkey = &second_pubkey,
-            .third_pubkey = &third_pubkey,
-            .first_handle = &first_handle,
-            .second_handle = &second_handle,
-            .third_handle = &third_handle,
-        },
-        &verifier_transcript,
-    );
-}
-
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/batched_grouped_ciphertext_validity/handles_3.rs#L222
 test "batched correctness" {
     const first_kp = ElGamalKeypair.random();
     const first_pubkey = first_kp.public;
@@ -873,18 +861,18 @@ test "batched correctness" {
 
     const amount_lo: u64 = 55;
     const amount_hi: u64 = 77;
-
-    const commitment_lo, const opening_lo = pedersen.initValue(u64, amount_lo);
-    const commitment_hi, const opening_hi = pedersen.initValue(u64, amount_hi);
-
-    const first_handle_lo = pedersen.DecryptHandle.init(&first_pubkey, &opening_lo);
-    const first_handle_hi = pedersen.DecryptHandle.init(&first_pubkey, &opening_hi);
-
-    const second_handle_lo = pedersen.DecryptHandle.init(&second_pubkey, &opening_lo);
-    const second_handle_hi = pedersen.DecryptHandle.init(&second_pubkey, &opening_hi);
-
-    const third_handle_lo = pedersen.DecryptHandle.init(&third_pubkey, &opening_lo);
-    const third_handle_hi = pedersen.DecryptHandle.init(&third_pubkey, &opening_hi);
+    const opening_lo = pedersen.Opening.random();
+    const opening_hi = pedersen.Opening.random();
+    const grouped_ciphertext_lo = GroupedElGamalCiphertext.encryptWithOpening(
+        .{ first_pubkey, second_pubkey, third_pubkey },
+        amount_lo,
+        &opening_lo,
+    );
+    const grouped_ciphertext_hi = GroupedElGamalCiphertext.encryptWithOpening(
+        .{ first_pubkey, second_pubkey, third_pubkey },
+        amount_hi,
+        &opening_hi,
+    );
 
     var prover_transcript = Transcript.initTest("Test");
     var verifier_transcript = Transcript.initTest("Test");
@@ -893,88 +881,53 @@ test "batched correctness" {
         &first_pubkey,
         &second_pubkey,
         &third_pubkey,
+        &grouped_ciphertext_lo,
+        &grouped_ciphertext_hi,
         amount_lo,
         amount_hi,
         &opening_lo,
         &opening_hi,
         &prover_transcript,
     );
-
-    try proof.verify(
-        true,
-        .{
-            .first_pubkey = &first_pubkey,
-            .second_pubkey = &second_pubkey,
-            .third_pubkey = &third_pubkey,
-            .commitment = &commitment_lo,
-            .commitment_hi = &commitment_hi,
-            .first_handle = &first_handle_lo,
-            .first_handle_hi = &first_handle_hi,
-            .second_handle = &second_handle_lo,
-            .second_handle_hi = &second_handle_hi,
-            .third_handle = &third_handle_lo,
-            .third_handle_hi = &third_handle_hi,
-        },
+    try proof.verifyBatched(
+        &first_pubkey,
+        &second_pubkey,
+        &third_pubkey,
+        &grouped_ciphertext_lo,
+        &grouped_ciphertext_hi,
         &verifier_transcript,
     );
 }
 
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/batched_grouped_ciphertext_validity/handles_3.rs#L290
 test "batched proof string" {
-    const first_pubkey_string = "PFQ4AD4W/Y4BEg3nI/qckFLhnjMQ12xPHyaMg9Bkg3w=";
+    const first_pubkey_string = "mv/4oSby3PfTEG9gG4SDDlkN3b0YTpuyjdX9+40FKQY=";
     const first_pubkey = try ElGamalPubkey.fromBase64(first_pubkey_string);
 
-    const second_pubkey_string = "2CZ4h5oK7zh4/3P6s/kCQoNlpUPk1IrsrAtTWjCtfFo=";
+    const second_pubkey_string = "hPehNW3wI5YdK5b4yeIM+t9zS5oBtGILLiltFUui1UA=";
     const second_pubkey = try ElGamalPubkey.fromBase64(second_pubkey_string);
 
-    const third_pubkey_string = "yonKhqkoXNvMbN/tU6fjHFhfZuNPpvMj8L55aP2bBG4=";
+    const third_pubkey_string = "hlACCsmVJVIZxa25qpKbjBO11wg/Tdtcz954OtHOWVw=";
     const third_pubkey = try ElGamalPubkey.fromBase64(third_pubkey_string);
 
-    const commitment_lo_string = "atIteiveexponnuF2Z1nbovZYYtcGWjglpEA3caMShM=";
-    const commitment_lo = try pedersen.Commitment.fromBase64(commitment_lo_string);
+    // sig fmt: off
+    const grouped_ciphertext_lo_string = "ksKg6KXMBA9iFSh/PMqV9k03AGz5eigsm2+TT6RZplg2HCExsRJJQCpHbCu+ab7aj5hMEWhNLokKB2S2uEsnEF7w6HriN99/+vKbkGg7613d2+TzX8gxjeC6boZWtGFCqH00JXSvbZIjbvOPffhGy/Y7u/zh1r+aeDmuQRd7vmM=";
+    const grouped_ciphertext_lo = try GroupedElGamalCiphertext.fromBase64(grouped_ciphertext_lo_string);
 
-    const commitment_hi_string = "IoZlSj7spae2ogiAUiEuuwAjYA5khgBH8FhaHzkh+lc=";
-    const commitment_hi = try pedersen.Commitment.fromBase64(commitment_hi_string);
+    const grouped_ciphertext_hi_string = "DMNBOrDAamfntobNpK1EXJ/dSA44Qmhc5EeVcZTz/gQOnxO4GYRSpeiu7IwujAPPalnuaWkQYlzfS8b79OfNJRganJZYVQg4aU2Ul+OjKrETKdhCo7K3qFhMoJiZGJFKnHLFCGyDsCPyvc2FQopxjbaDjrVsmDTMEJPStpZZAH8=";
+    const grouped_ciphertext_hi = try GroupedElGamalCiphertext.fromBase64(grouped_ciphertext_hi_string);
 
-    const first_handle_lo_string = "6PlKiitdapVZnh7VccQNbskXop9nmITGppLsV42UMkU=";
-    const first_handle_lo = try pedersen.DecryptHandle.fromBase64(first_handle_lo_string);
-
-    const first_handle_hi_string = "vF+oZ3WWnrJyJ95Wl8EW+aVJiFmruiuRw6+TT3QVMBI=";
-    const first_handle_hi = try pedersen.DecryptHandle.fromBase64(first_handle_hi_string);
-
-    const second_handle_lo_string = "rvxzo5ZyrD6YTm7X3GjplgOGJjx6PtoZ+DKbL4LsQWA=";
-    const second_handle_lo = try pedersen.DecryptHandle.fromBase64(second_handle_lo_string);
-
-    const second_handle_hi_string = "0mdZSGiWQhOjqsExqFMD8hfgUlRRRrF/G3CJ7d0LEEk=";
-    const second_handle_hi = try pedersen.DecryptHandle.fromBase64(second_handle_hi_string);
-
-    const third_handle_lo_string = "bpT2LuFektFhI/sacjSsqNtCsO8ac5qn0jWeMeQq4WM=";
-    const third_handle_lo = try pedersen.DecryptHandle.fromBase64(third_handle_lo_string);
-
-    const third_handle_hi_string = "OE8z7Bbv2AHnjxebK6ASJfkJbOlYQdnN6ZPkG2u4SnA=";
-    const third_handle_hi = try pedersen.DecryptHandle.fromBase64(third_handle_hi_string);
-
-    // zig fmt: off
-    const proof_string = "GkjZ7QKcJq5X/OU8wb26wZ7p2D9thVK+Cb11CzRjWUoihYvGfuCbVG1vr4qtnfx65SS4jVK1H0q/948A9wy8ZPTrOZJA122G4+cpt5mKnSrKq/vbv4ZRha0oR9RGJFZ2SPT3gx2jysKDKRAQgBLOzSGfQg9Hsbz57i55SQfliUF5mByZKuzGKHSIHi81BDqbrFAj6x5bOeMAaLqsCboCA5XGDUZ2HMPUGuAd9F+OaVH+eJZnuoDjwwcBQ2eANgMB";
+    const proof_string = "tA4eOWOFFKF50h5vEGUdh7znZDV2KY/PJN8aFsqtyVuOvHoJQTyxMA8f1PTYa39rTkiVEYz3r2eV4Es8gvDMXCZdQoSc/mHE5QsPLT02ArpTSsFoZ1z4E9DZOxIuoqQ5EBc4Zy/brk2NWbpJua4FtPQB7fLHWIS/YgK7v6/cKlKhz64iyKeZxmNFKi12awd5s9vRGDGZvv0inoF+QoqgBB5PRTCR933/r4+Alkx340oFTQnZG7HABG4ora3i0KwK";
     const proof = try Proof.fromBase64(proof_string);
-    // zig fmt: on
+    // sig fmt: on
 
     var verifier_transcript = Transcript.initTest("Test");
-
-    try proof.verify(
-        true,
-        .{
-            .first_pubkey = &first_pubkey,
-            .second_pubkey = &second_pubkey,
-            .third_pubkey = &third_pubkey,
-            .commitment = &commitment_lo,
-            .commitment_hi = &commitment_hi,
-            .first_handle = &first_handle_lo,
-            .first_handle_hi = &first_handle_hi,
-            .second_handle = &second_handle_lo,
-            .second_handle_hi = &second_handle_hi,
-            .third_handle = &third_handle_lo,
-            .third_handle_hi = &third_handle_hi,
-        },
+    try proof.verifyBatched(
+        &first_pubkey,
+        &second_pubkey,
+        &third_pubkey,
+        &grouped_ciphertext_lo,
+        &grouped_ciphertext_hi,
         &verifier_transcript,
     );
 }

@@ -17,7 +17,20 @@ pub const Proof = struct {
     max_proof: MaxProof,
     equality_proof: EqualityProof,
 
-    const contract: Transcript.Contract = &.{
+    /// The percentage-with-cap sigma proof is a bit different in that it creates
+    /// two possible proofs and then selects which one to use. This requires us
+    /// to perform the same transcript contract twice. The best way to represent
+    /// that in a safe manner is to simply have an "init" contract, which will be
+    /// run a single time at the start, and the state of that transcript is cloned
+    /// and copied into each of the potential proofs which then run the "proof" contract.
+    const init_contract: Transcript.Contract = &.{
+        .{ .label = "percentage-commitment", .type = .validate_commitment },
+        .{ .label = "delta-commitment", .type = .validate_commitment },
+        .{ .label = "claimed-commitment", .type = .validate_commitment },
+        .{ .label = "max-value", .type = .u64 },
+        .domain(.@"percentage-with-cap-proof"),
+    };
+    const proof_contract: Transcript.Contract = &.{
         .{ .label = "Y_max_proof", .type = .validate_point },
         .{ .label = "Y_delta", .type = .validate_point },
         .{ .label = "Y_claimed", .type = .validate_point },
@@ -43,7 +56,16 @@ pub const Proof = struct {
         max_value: u64,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendDomSep(.@"percentage-with-cap-proof");
+        {
+            comptime var session = Transcript.getInitSession(init_contract);
+            defer session.finish();
+
+            transcript.appendNoValidate(&session, .commitment, "percentage-commitment", percentage_commitment.*);
+            transcript.appendNoValidate(&session, .commitment, "delta-commitment", delta_commitment.*);
+            transcript.appendNoValidate(&session, .commitment, "claimed-commitment", claimed_commitment.*);
+            transcript.append(&session, .u64, "max-value", max_value);
+            transcript.appendDomSep(&session, .@"percentage-with-cap-proof");
+        }
 
         var transcript_percentage_above_max = transcript.*;
         var transcript_percentage_below_max = transcript.*;
@@ -68,23 +90,6 @@ pub const Proof = struct {
         // on whether the percentage amount is above the max amount.
         const below_max = percentage_amount <= max_value;
         const active = if (below_max) proof_below_max else proof_above_max;
-
-        if (builtin.mode == .Debug) {
-            comptime var session = Transcript.getSession(contract);
-            defer session.finish();
-
-            transcript.appendNoValidate(&session, "Y_max_proof", active.max_proof.Y_max_proof);
-            transcript.appendNoValidate(&session, "Y_delta", active.equality_proof.Y_delta);
-            transcript.appendNoValidate(&session, "Y_claimed", active.equality_proof.Y_claimed);
-            _ = transcript.challengeScalar(&session, "c");
-
-            transcript.append(&session, .scalar, "z_max", active.max_proof.z_max_proof);
-            transcript.append(&session, .scalar, "c_max_proof", active.max_proof.c_max_proof);
-            transcript.append(&session, .scalar, "z_x", active.equality_proof.z_x);
-            transcript.append(&session, .scalar, "z_delta_real", active.equality_proof.z_delta);
-            transcript.append(&session, .scalar, "z_claimed", active.equality_proof.z_claimed);
-            _ = transcript.challengeScalar(&session, "w");
-        }
 
         return .{
             .max_proof = active.max_proof,
@@ -138,16 +143,15 @@ pub const Proof = struct {
         const r_percentage = percentage_opening.scalar;
 
         var y_max_proof = Scalar.random();
-        // Scalar.random() cannot return zero, and H isn't an identity.
-        const Y_max_proof = pedersen.H.mul(y_max_proof.toBytes()) catch unreachable;
+        const Y_max_proof = ed25519.straus.mulByKnown(pedersen.H, y_max_proof.toBytes());
         defer std.crypto.secureZero(u64, &y_max_proof.limbs);
 
-        comptime var session = Transcript.getSession(contract);
+        comptime var session = Transcript.getSession(proof_contract);
         defer session.finish();
 
-        transcript.appendNoValidate(&session, "Y_max_proof", Y_max_proof);
-        transcript.appendNoValidate(&session, "Y_delta", Y_delta);
-        transcript.appendNoValidate(&session, "Y_claimed", Y_claimed);
+        transcript.appendNoValidate(&session, .point, "Y_max_proof", Y_max_proof);
+        transcript.appendNoValidate(&session, .point, "Y_delta", Y_delta);
+        transcript.appendNoValidate(&session, .point, "Y_claimed", Y_claimed);
 
         const c = transcript.challengeScalar(&session, "c").toBytes();
         const c_max_proof = Edwards25519.scalar.sub(c, c_equality.toBytes());
@@ -236,12 +240,12 @@ pub const Proof = struct {
             y_claimed.toBytes(),
         });
 
-        comptime var session = Transcript.getSession(contract);
+        comptime var session = Transcript.getSession(proof_contract);
         defer session.finish();
 
-        transcript.appendNoValidate(&session, "Y_max_proof", Y_max_proof);
-        transcript.appendNoValidate(&session, "Y_delta", Y_delta);
-        transcript.appendNoValidate(&session, "Y_claimed", Y_claimed);
+        transcript.appendNoValidate(&session, .point, "Y_max_proof", Y_max_proof);
+        transcript.appendNoValidate(&session, .point, "Y_delta", Y_delta);
+        transcript.appendNoValidate(&session, .point, "Y_claimed", Y_claimed);
 
         const c = transcript.challengeScalar(&session, "c").toBytes();
         var c_equality = Scalar.fromBytes(Edwards25519.scalar.sub(c, c_max_proof.toBytes()));
@@ -282,7 +286,16 @@ pub const Proof = struct {
         max_value: u64,
         transcript: *Transcript,
     ) !void {
-        transcript.appendDomSep(.@"percentage-with-cap-proof");
+        {
+            comptime var session = Transcript.getInitSession(init_contract);
+            defer session.finish();
+
+            try transcript.append(&session, .validate_commitment, "percentage-commitment", percentage_commitment.*);
+            try transcript.append(&session, .validate_commitment, "delta-commitment", delta_commitment.*);
+            try transcript.append(&session, .validate_commitment, "claimed-commitment", claimed_commitment.*);
+            transcript.append(&session, .u64, "max-value", max_value);
+            transcript.appendDomSep(&session, .@"percentage-with-cap-proof");
+        }
 
         const m = pedersen.scalarFromInt(u64, max_value);
 
@@ -290,7 +303,7 @@ pub const Proof = struct {
         const C_delta = delta_commitment.point;
         const C_claimed = claimed_commitment.point;
 
-        comptime var session = Transcript.getSession(contract);
+        comptime var session = Transcript.getSession(proof_contract);
         defer session.finish();
 
         try transcript.append(&session, .validate_point, "Y_max_proof", self.max_proof.Y_max_proof);
@@ -452,17 +465,6 @@ pub const Data = struct {
             return self.percentage_commitment.toBytes() ++ self.delta_commitment.toBytes() ++
                 self.claimed_commitment.toBytes() ++ @as([8]u8, @bitCast(self.max_value));
         }
-
-        // zig fmt: off
-        fn newTranscript(self: Context) Transcript {
-            return .init(.@"percentage-with-cap-instruction", &.{
-                .{ .label = "percentage-commitment", .message = .{ .commitment = self.percentage_commitment } },
-                .{ .label = "delta-commitment",      .message = .{ .commitment = self.delta_commitment } },
-                .{ .label = "claimed-commitment",    .message = .{ .commitment = self.claimed_commitment } },
-                .{ .label = "max-value",             .message = .{ .u64 = self.max_value } },
-            });
-        }
-        // zig fmt: on
     };
 
     pub fn init(
@@ -482,7 +484,7 @@ pub const Data = struct {
             .claimed_commitment = claimed_commitment.*,
             .max_value = max_value,
         };
-        var transcript = context.newTranscript();
+        var transcript = Transcript.init(.@"percentage-with-cap-instruction");
         const proof = Proof.init(
             percentage_commitment,
             percentage_opening,
@@ -511,7 +513,7 @@ pub const Data = struct {
     }
 
     pub fn verify(self: Data) !void {
-        var transcript = self.context.newTranscript();
+        var transcript = Transcript.init(.@"percentage-with-cap-instruction");
         try self.proof.verify(
             &self.context.percentage_commitment,
             &self.context.delta_commitment,
@@ -799,22 +801,21 @@ test "is zero" {
 test "proof string" {
     const max_value: u64 = 3;
 
-    const percentage_commitment_string = "JGuzRjhmp3d8PWshbrN3Q7kg027OdPn7IU26ISTiz3c=";
+    const percentage_commitment_string = "OBDhFPvEfM1g2lR5dF0eH2pFGJC+MSW+B71WrUz8bkk=";
     const percentage_commitment = try pedersen.Commitment.fromBase64(percentage_commitment_string);
 
-    const delta_commitment_string = "3mwfK4u0J0UqCVznbxyCjlGEgMrI+XHdW7g00YVjSVA=";
+    const delta_commitment_string = "DGcxgwh381H/WiDlptyk3o2Q+eyDIEmIVY6JsdUI3GA=";
     const delta_commitment = try pedersen.Commitment.fromBase64(delta_commitment_string);
 
-    const claimed_commitment_string = "/t9n3yJa7p9wJV5P2cclnUiirKU5oNUv/gQMe27WMT4=";
+    const claimed_commitment_string = "PCUoVQfHE0ZV/ZrV5ECyqTzcZpSa3Hs9rkgoCTPsoxI=";
     const claimed_commitment = try pedersen.Commitment.fromBase64(claimed_commitment_string);
 
     // zig fmt: off
-    const proof_string = "SpmzL7hrLLp7P/Cz+2kBh22QKq3mWb0v28Er6lO9aRfBer77VY03i9VSEd4uHYMXdaf/MBPUsDVjUxNjoauwBmw6OrAcq6tq9o1Z+NS8lkukVh6sqSrSh9dy9ipq6JcIePAVmGwDNk07ACgPE/ynrenwSPJ7ZHDGZszGkw95h25gTKPyoaMbvZoXGLtkuHmvXJ7KBBJmK2eTzELb6UF2HOUg9cGFgomL8Xa3l14LBDMwLAokJK4n2d6eTkk1O0ECddmTDwoG6lmt0fHXYm37Z+k4yrQkhUgKwph2nLWG3Q7zvRM2qVFxFUGfLWJq5Sm7l7segOm+hQpRaH+q7OHNBg==";
+    const proof_string ="NPcjkaOzpPNz7uNZXMry5MsiVyqbSnThXioe+Ulw606XDZl2dpKcQ+wYhQqC+XH4aXCgbNB2mClYNZcR0pt7CFh64cJdNGkNuzVAjQBfeq0G+UM7ciF31UcT+1gvjcsIXA2RX9dpiXZWNqCBYbV4nwAV94RFi+ro4HNDBLnmQ3+C2xtal1Qob2tqurvUTYnUdaQDEpDdVhGhvOh8Y/jvTr4h2aQeDSBCi03qN9L4y8jAUXR4UcqwPWBJo7hp2gsF+qmg3iawG/d9taaOssRny6OVWwhuBU1P7pMKZeh1xAo/HCbAYY+CEz9SyMnUPPuZq+38npHiy6icqQoItwfRDg==";
     const proof = try Proof.fromBase64(proof_string);
     // zig fmt: on
 
     var verifier_transcript = Transcript.initTest("test");
-
     try proof.verify(
         &percentage_commitment,
         &delta_commitment,
