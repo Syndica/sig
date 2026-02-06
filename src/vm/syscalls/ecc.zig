@@ -4,6 +4,7 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const bn254 = sig.crypto.bn254;
+const bls12_381 = sig.crypto.bls12_381;
 
 const MemoryMap = sig.vm.memory.MemoryMap;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
@@ -25,9 +26,15 @@ pub const CurveId = enum(u64) {
     edwards = 0,
     ristretto = 1,
 
+    bls12_381_be = 4,
+    bls12_381_le = 4 | 0x80,
+    bls12_381_g1_be = 5,
+    bls12_381_g1_le = 5 | 0x80,
+    bls12_381_g2_be = 6,
+    bls12_381_g2_le = 6 | 0x80,
+
     fn wrap(id: u64) ?CurveId {
-        if (id > 1) return null;
-        return @enumFromInt(id);
+        return std.meta.intToEnum(CurveId, id) catch null;
     }
 };
 
@@ -42,140 +49,258 @@ pub const GroupOp = enum(u64) {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1042-L1106
+fn invalidError(tc: *const TransactionContext, registers: *RegisterMap) !void {
+    if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
+        return SyscallError.InvalidAttribute;
+    } else {
+        registers.set(.r0, 1);
+        return;
+    }
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/a3e2a62a942a497e00e4e091e888a1945dcdad53/syscalls/src/lib.rs#L978-L1111
 pub fn curvePointValidation(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
     registers: *RegisterMap,
 ) Error!void {
-    const curve_id = CurveId.wrap(registers.get(.r1)) orelse {
-        if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
-            return SyscallError.InvalidAttribute;
-        } else {
-            registers.set(.r0, 1);
-            return;
-        }
-    };
+    const curve_id = CurveId.wrap(registers.get(.r1)) orelse
+        return invalidError(tc, registers);
     const point_addr = registers.get(.r2);
+
+    // Only allow the BLS12-381 syscalls if the feature gate is enabled.
+    if (!tc.feature_set.active(.enable_bls12_381_syscall, tc.slot)) {
+        switch (curve_id) {
+            .bls12_381_g1_be,
+            .bls12_381_g1_le,
+            .bls12_381_g2_be,
+            .bls12_381_g2_le,
+            => return SyscallError.InvalidAttribute,
+            else => {},
+        }
+    }
 
     const cost = switch (curve_id) {
         .edwards => tc.compute_budget.curve25519_edwards_validate_point_cost,
         .ristretto => tc.compute_budget.curve25519_ristretto_validate_point_cost,
+        .bls12_381_g1_be,
+        .bls12_381_g1_le,
+        => tc.compute_budget.bls12_381_g1_validate_cost,
+        .bls12_381_g2_be,
+        .bls12_381_g2_le,
+        => tc.compute_budget.bls12_381_g2_validate_cost,
+        else => return invalidError(tc, registers),
     };
     try tc.consumeCompute(cost);
 
-    const buffer = try memory_map.translateType(
-        [32]u8,
-        .constant,
-        point_addr,
-        tc.getCheckAligned(),
-    );
-
     const is_error = switch (curve_id) {
-        .edwards => std.meta.isError(Edwards25519.fromBytes(buffer.*)),
-        .ristretto => std.meta.isError(Ristretto255.fromBytes(buffer.*)),
+        inline .edwards, .ristretto => |t| err: {
+            const buffer = try memory_map.translateType(
+                [32]u8,
+                .constant,
+                point_addr,
+                tc.getCheckAligned(),
+            );
+            const result = switch (t) {
+                .edwards => Edwards25519.fromBytes(buffer.*),
+                .ristretto => Ristretto255.fromBytes(buffer.*),
+                else => unreachable,
+            };
+            break :err std.meta.isError(result);
+        },
+        inline //
+        .bls12_381_g1_be,
+        .bls12_381_g1_le,
+        .bls12_381_g2_be,
+        .bls12_381_g2_le,
+        => |t| err: {
+            const degree: enum { g1, g2 }, //
+            const endian: std.builtin.Endian = switch (t) {
+                .bls12_381_g1_be => .{ .g1, .big },
+                .bls12_381_g1_le => .{ .g1, .little },
+                .bls12_381_g2_be => .{ .g2, .big },
+                .bls12_381_g2_le => .{ .g2, .little },
+                else => unreachable,
+            };
+            const size = switch (degree) {
+                .g1 => 96,
+                .g2 => 192,
+            };
+            const T = switch (degree) {
+                .g1 => bls12_381.G1,
+                .g2 => bls12_381.G2,
+            };
+
+            const buffer = try memory_map.translateType(
+                [size]u8,
+                .constant,
+                point_addr,
+                tc.getCheckAligned(),
+            );
+
+            const result = T.validate(buffer, endian);
+            break :err std.meta.isError(result);
+        },
+        else => unreachable, // Unreachable via the cost switch above.
     };
 
     registers.set(.r0, @intFromBool(is_error));
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1108-L1332
+/// [agave] https://github.com/anza-xyz/agave/blob/734a250745533616bd29e86bd69ac90dbc26f38c/syscalls/src/lib.rs#L1210-L1679
 pub fn curveGroupOp(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
     registers: *RegisterMap,
 ) Error!void {
-    const curve_id = CurveId.wrap(registers.get(.r1)) orelse {
-        if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
-            return SyscallError.InvalidAttribute;
-        } else {
-            registers.set(.r0, 1);
-            return;
-        }
-    };
-    const group_op = GroupOp.wrap(registers.get(.r2)) orelse {
-        if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
-            return SyscallError.InvalidAttribute;
-        } else {
-            registers.set(.r0, 1);
-            return;
-        }
-    };
+    const curve_id = CurveId.wrap(registers.get(.r1)) orelse
+        return invalidError(tc, registers);
+    const group_op = GroupOp.wrap(registers.get(.r2)) orelse
+        return invalidError(tc, registers);
 
+    // Only allow the BLS12-381 syscalls if the feature gate is enabled.
+    // [agave] https://github.com/anza-xyz/agave/blob/734a250745533616bd29e86bd69ac90dbc26f38c/syscalls/src/lib.rs#L1239-L1246
+    if (!tc.feature_set.active(.enable_bls12_381_syscall, tc.slot)) {
+        switch (curve_id) {
+            .bls12_381_g1_be,
+            .bls12_381_g1_le,
+            .bls12_381_g2_be,
+            .bls12_381_g2_le,
+            => return SyscallError.InvalidAttribute,
+            else => {},
+        }
+    }
+
+    // For `mul` group operations, the "left" side is the scalar.
     const left_input_addr = registers.get(.r3);
     const right_input_addr = registers.get(.r4);
     const result_point_addr = registers.get(.r5);
-
     const cost = tc.compute_budget.curveGroupOperationCost(curve_id, group_op);
     try tc.consumeCompute(cost);
 
     switch (curve_id) {
-        inline .edwards, .ristretto => |id| {
+        inline //
+        .edwards,
+        .ristretto,
+        .bls12_381_g1_be,
+        .bls12_381_g1_le,
+        .bls12_381_g2_be,
+        .bls12_381_g2_le,
+        => |id| {
             const T = switch (id) {
                 .edwards => Edwards25519,
                 .ristretto => Ristretto255,
+                .bls12_381_g1_be, .bls12_381_g1_le => bls12_381.G1,
+                .bls12_381_g2_be, .bls12_381_g2_le => bls12_381.G2,
+                else => unreachable,
+            };
+            const right_size: u32 = switch (T) {
+                Edwards25519, Ristretto255 => 32,
+                bls12_381.G1 => 96,
+                bls12_381.G2 => 192,
+                else => unreachable,
             };
 
-            const left_point_data = try memory_map.translateType(
-                [32]u8,
-                .constant,
-                left_input_addr,
-                tc.getCheckAligned(),
-            );
+            switch (group_op) {
+                inline .add, .subtract, .multiply => |op| {
+                    const left_size = switch (op) {
+                        .add, .subtract => right_size,
+                        .multiply => 32,
+                    };
 
-            const right_point_data = try memory_map.translateType(
-                [32]u8,
-                .constant,
-                right_input_addr,
-                tc.getCheckAligned(),
-            );
+                    const check_aligned = tc.getCheckAligned();
+                    const left_data = try memory_map.translateType(
+                        [left_size]u8,
+                        .constant,
+                        left_input_addr,
+                        check_aligned,
+                    );
+                    const right_data = try memory_map.translateType(
+                        [right_size]u8,
+                        .constant,
+                        right_input_addr,
+                        check_aligned,
+                    );
 
-            const result = groupOp(
-                T,
-                group_op,
-                left_point_data.*,
-                right_point_data.*,
-            ) catch {
-                registers.set(.r0, 1);
-                return;
-            };
-
-            const result_point = try memory_map.translateType(
-                [32]u8,
-                .mutable,
-                result_point_addr,
-                tc.getCheckAligned(),
-            );
-            result_point.* = result.toBytes();
+                    switch (T) {
+                        Edwards25519, Ristretto255 => {
+                            const result = edwardsGroupOp(
+                                T,
+                                group_op,
+                                left_data.*,
+                                right_data.*,
+                            ) catch {
+                                registers.set(.r0, 1);
+                                return;
+                            };
+                            const result_ptr = try memory_map.translateType(
+                                [right_size]u8,
+                                .mutable,
+                                result_point_addr,
+                                check_aligned,
+                            );
+                            result_ptr.* = result.toBytes();
+                        },
+                        bls12_381.G1, bls12_381.G2 => {
+                            const endian: std.builtin.Endian = switch (id) {
+                                .bls12_381_g1_be, .bls12_381_g2_be => .big,
+                                .bls12_381_g1_le, .bls12_381_g2_le => .little,
+                                else => unreachable,
+                            };
+                            var result: [right_size]u8 = undefined;
+                            // {G1, G2}.{add,sub,mul}
+                            @field(T, @tagName(op))(&result, left_data, right_data, endian) catch {
+                                registers.set(.r0, 1);
+                                return;
+                            };
+                            // NOTE: We write the operation result into a temporary buffer `result`
+                            // before copying it in. It's important to perform the operation before
+                            // the result memory access, as the former is a soft-error while the latter
+                            // will hard-error.
+                            const result_ptr = try memory_map.translateType(
+                                [right_size]u8,
+                                .mutable,
+                                result_point_addr,
+                                check_aligned,
+                            );
+                            @memcpy(result_ptr, &result);
+                        },
+                        else => unreachable,
+                    }
+                },
+            }
         },
+        else => return invalidError(tc, registers),
     }
 }
 
-fn groupOp(comptime T: type, group_op: GroupOp, left: [32]u8, right: [32]u8) !T {
+/// A small wrapper around performing the Edwards-based group operations to simplify catching
+/// the soft error returned by any of the errors inside.
+fn edwardsGroupOp(comptime T: type, group_op: GroupOp, left_bytes: [32]u8, right_bytes: [32]u8) !T {
     switch (group_op) {
         .add, .subtract => {
-            const left_point = try T.fromBytes(left);
-            const right_point = try T.fromBytes(right);
+            const left = try T.fromBytes(left_bytes);
+            const right = try T.fromBytes(right_bytes);
             return switch (group_op) {
-                .add => left_point.add(right_point),
+                .add => left.add(right),
                 // TODO:(0.15) Use the alias https://github.com/ziglang/zig/pull/23724
                 .subtract => switch (T) {
-                    Edwards25519 => left_point.sub(right_point),
-                    Ristretto255 => .{ .p = left_point.p.sub(right_point.p) },
+                    Edwards25519 => left.sub(right),
+                    Ristretto255 => .{ .p = left.p.sub(right.p) },
                     else => unreachable,
                 },
                 else => unreachable,
             };
         },
         .multiply => {
-            try Edwards25519.scalar.rejectNonCanonical(left);
-            const input_point = try T.fromBytes(right);
-            return ed25519.mul(T == Ristretto255, input_point, left);
+            try Edwards25519.scalar.rejectNonCanonical(left_bytes);
+            const input_point = try T.fromBytes(right_bytes);
+            return ed25519.mul(T == Ristretto255, input_point, left_bytes);
         },
     }
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1334-L1445
+/// [agave] https://github.com/anza-xyz/agave/blob/734a250745533616bd29e86bd69ac90dbc26f38c/syscalls/src/lib.rs#L1681-L1797
 pub fn curveMultiscalarMul(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -189,22 +314,18 @@ pub fn curveMultiscalarMul(
 
     if (points_len > 512) return SyscallError.InvalidLength;
 
-    const curve_id = CurveId.wrap(attribute_id) orelse {
-        if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
-            return SyscallError.InvalidAttribute;
-        } else {
-            registers.set(.r0, 1);
-            return;
-        }
-    };
+    const curve_id = CurveId.wrap(attribute_id) orelse
+        return invalidError(tc, registers);
 
     const cost = switch (curve_id) {
         .edwards => tc.compute_budget.curve25519_edwards_msm_base_cost,
         .ristretto => tc.compute_budget.curve25519_ristretto_msm_base_cost,
+        else => return invalidError(tc, registers),
     };
     const incremental_cost = switch (curve_id) {
         .edwards => tc.compute_budget.curve25519_edwards_msm_incremental_cost,
         .ristretto => tc.compute_budget.curve25519_ristretto_msm_incremental_cost,
+        else => unreachable, // Unreachable due to cost switch above.
     } * (points_len -| 1);
     try tc.consumeCompute(cost + incremental_cost);
 
@@ -252,6 +373,7 @@ pub fn curveMultiscalarMul(
             );
             result_point_data.* = msm.toBytes();
         },
+        else => unreachable, // Unreachable due to cost switch above.
     }
 }
 
@@ -534,6 +656,120 @@ pub fn secp256k1Recover(
     @memcpy(recovery_result, pubkey.toUncompressedSec1()[1..65]);
 }
 
+pub fn curveDecompress(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const attribute_id = registers.get(.r1);
+    const point_addr = registers.get(.r2);
+    const result_addr = registers.get(.r3);
+
+    const curve_id = CurveId.wrap(attribute_id) orelse
+        return SyscallError.InvalidAttribute;
+
+    switch (curve_id) {
+        inline //
+        .bls12_381_g1_be,
+        .bls12_381_g1_le,
+        .bls12_381_g2_be,
+        .bls12_381_g2_le,
+        => |t| {
+            const degree: enum { g1, g2 }, //
+            const endian: std.builtin.Endian = switch (t) {
+                .bls12_381_g1_be => .{ .g1, .big },
+                .bls12_381_g1_le => .{ .g1, .little },
+                .bls12_381_g2_be => .{ .g2, .big },
+                .bls12_381_g2_le => .{ .g2, .little },
+                else => unreachable,
+            };
+            const T, const length, const cost = switch (degree) {
+                .g1 => .{ bls12_381.G1, 96, tc.compute_budget.bls12_381_g1_decompress_cost },
+                .g1 => .{ bls12_381.G2, 192, tc.compute_budget.bls12_381_g2_decompress_cost },
+            };
+            try tc.consumeCompute(cost);
+
+            const compressed = try memory_map.translateType(
+                [length / 2]u8,
+                .constant,
+                point_addr,
+                tc.getCheckAligned(),
+            );
+
+            var result: [length]u8 = undefined;
+            T.decompress(compressed, &result, endian) catch {
+                registers.set(.r0, 1);
+                return;
+            };
+
+            const result_ptr = try memory_map.translateType(
+                [length]u8,
+                .mutable,
+                result_addr,
+                tc.getCheckAligned(),
+            );
+            @memcpy(result_ptr, &result);
+        },
+        else => return SyscallError.InvalidAttribute,
+    }
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/a3e2a62a942a497e00e4e091e888a1945dcdad53/syscalls/src/lib.rs#L1799-L1876
+pub fn curvePairingMap(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const curve_id = CurveId.wrap(registers.get(.r1)) orelse
+        return SyscallError.InvalidAttribute;
+    const num_pairs = registers.get(.r2);
+    const g1_points_addr = registers.get(.r3);
+    const g2_points_addr = registers.get(.r4);
+    const result_addr = registers.get(.r5);
+
+    // [agave] https://github.com/anza-xyz/agave/blob/a3e2a62a942a497e00e4e091e888a1945dcdad53/syscalls/src/lib.rs#L1825
+    const cost = tc.compute_budget.bls12_381_one_pair_cost +|
+        (tc.compute_budget.bls12_381_additional_pair_cost *| (num_pairs -| 1));
+    try tc.consumeCompute(cost);
+
+    const endian: std.builtin.Endian = switch (curve_id) {
+        .bls12_381_be => .big,
+        .bls12_381_le => .little,
+        else => return SyscallError.InvalidAttribute,
+    };
+
+    const g1_points = try memory_map.translateSlice(
+        u8,
+        .constant,
+        g1_points_addr,
+        // [fd] https://github.com/firedancer-io/firedancer/blob/f02626d7483e689e3724959b11e697406759a3b9/src/flamenco/vm/syscall/fd_vm_syscall_curve.c#L707
+        num_pairs *| 96, // Size of an uncompressed G1 point
+        tc.getCheckAligned(),
+    );
+    const g2_points = try memory_map.translateSlice(
+        u8,
+        .constant,
+        g2_points_addr,
+        // [fd] https://github.com/firedancer-io/firedancer/blob/f02626d7483e689e3724959b11e697406759a3b9/src/flamenco/vm/syscall/fd_vm_syscall_curve.c#L710
+        num_pairs *| 192, // Size of an uncompressed G2 point
+        tc.getCheckAligned(),
+    );
+
+    var result: [48 * 12]u8 = undefined;
+    bls12_381.pairingSyscall(&result, g1_points, g2_points, num_pairs, endian) catch {
+        registers.set(.r0, 1);
+        return;
+    };
+
+    const result_ptr = try memory_map.translateType(
+        [48 * 12]u8,
+        .mutable,
+        result_addr,
+        tc.getCheckAligned(),
+    );
+    @memcpy(result_ptr, &result);
+}
+
 test "edwards curve point validation" {
     const valid_bytes = [_]u8{
         201, 179, 241, 122, 180, 185, 239, 50,  183, 52,  221, 0,  153,
@@ -562,7 +798,7 @@ test "edwards curve point validation" {
         &.{
             .{ .{ 0, valid_bytes_addr,   0, 0, 0 }, 0 }, // success
             .{ .{ 0, invalid_bytes_addr, 0, 0, 0 }, 1 }, // failed
-            .{ .{ 5, valid_bytes_addr,   0, 0, 0 }, 1 }, // invalid curve ID
+            .{ .{ 8, valid_bytes_addr,   0, 0, 0 }, 1 }, // invalid curve ID
             .{ .{ 0, valid_bytes_addr,   0, 0, 0 }, error.ComputationalBudgetExceeded },
         },
         // zig fmt: on
@@ -599,7 +835,7 @@ test "ristretto curve point validation" {
         &.{
             .{ .{ 1, valid_bytes_addr,   0, 0, 0 }, 0 }, // success
             .{ .{ 1, invalid_bytes_addr, 0, 0, 0 }, 1 }, // failed
-            .{ .{ 5, valid_bytes_addr,   0, 0, 0 }, 1 }, // invalid curve ID
+            .{ .{ 8, valid_bytes_addr,   0, 0, 0 }, 1 }, // invalid curve ID
             .{ .{ 1, valid_bytes_addr,   0, 0, 0 }, error.ComputationalBudgetExceeded },
         },
         // zig fmt: on
