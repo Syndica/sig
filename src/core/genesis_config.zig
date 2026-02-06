@@ -303,7 +303,8 @@ pub const GenesisConfig = struct {
         const file_bytes = try file.readToEndAlloc(allocator, 100 * 1024 * 1024); // 100 MB max
         defer allocator.free(file_bytes);
 
-        // Compute hash from original file bytes (this matches Agave's behavior)
+        // Compute hash from original file bytes
+        // [agave] https://github.com/anza-xyz/solana-sdk/blob/f2d15de6f7a1715ff806f0c39bba8f64bf6a587d/genesis-config/src/lib.rs#L144
         var hash_bytes: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(file_bytes, &hash_bytes, .{});
 
