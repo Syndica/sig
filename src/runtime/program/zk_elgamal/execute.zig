@@ -156,7 +156,7 @@ fn processVerifyProof(
         break :cd proof_data.context;
     };
 
-    // create context state if additional accounts are provided with the instruction
+    // Create context state if additional accounts are provided with the instruction.
     if (ic.ixn_info.account_metas.items.len >= accessed_accounts + 2) {
         const context_authority_key = blk: {
             const context_state_authority = try ic.borrowInstructionAccount(accessed_accounts + 1);

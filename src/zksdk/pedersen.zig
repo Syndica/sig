@@ -66,6 +66,10 @@ pub const Commitment = struct {
         );
         return fromBytes(buffer);
     }
+
+    pub fn rejectIdentity(self: *const Commitment) error{IdentityElement}!void {
+        try self.point.rejectIdentity();
+    }
 };
 
 pub const DecryptHandle = struct {
