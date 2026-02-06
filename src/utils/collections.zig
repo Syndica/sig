@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const sorted_map = @import("sorted_map.zig");
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -290,629 +291,10 @@ test "SplitUnionList: addOne, get, and swapRemove" {
     _ = list.swapRemove(.{ .tag = .one, .index = 0 });
 }
 
-/// DEPRECATED: use the unmanaged variant instead
-pub fn SortedSet(comptime T: type) type {
-    return SortedSetCustom(T, .{});
-}
+pub const SortedSet = sorted_map.SortedSet;
+pub const SortedMap = sorted_map.SortedMap;
 
-/// DEPRECATED: use the unmanaged variant instead
-pub fn SortedSetCustom(comptime T: type, comptime config: SortedMapConfig(T)) type {
-    return struct {
-        map: SortedMapCustom(T, void, config),
-        const SortedSetSelf = @This();
-
-        pub fn init(allocator: Allocator) SortedSetSelf {
-            return .{ .map = .init(allocator) };
-        }
-
-        pub fn deinit(self: SortedSetSelf) void {
-            self.map.deinit();
-        }
-
-        pub fn clone(self: SortedSetSelf) !SortedSetSelf {
-            return .{ .map = try self.map.clone() };
-        }
-
-        pub fn eql(self: *SortedSetSelf, other: *SortedSetSelf) bool {
-            return self.map.eql(&other.map);
-        }
-
-        pub fn put(self: *SortedSetSelf, item: T) !void {
-            try self.map.put(item, {});
-        }
-
-        pub fn orderedRemove(self: *SortedSetSelf, item: T) bool {
-            return self.map.orderedRemove(item);
-        }
-
-        pub fn contains(self: SortedSetSelf, item: T) bool {
-            return self.map.contains(item);
-        }
-
-        pub fn count(self: SortedSetSelf) usize {
-            return self.map.count();
-        }
-
-        pub fn items(self: *SortedSetSelf) []const T {
-            return self.map.keys();
-        }
-
-        /// subslice of items ranging from start (inclusive) to end (exclusive)
-        pub fn range(self: *SortedSetSelf, start: ?T, end: ?T) []const T {
-            return self.map.range(start, end)[0];
-        }
-
-        /// subslice of items ranging from start (inclusive) to end (exclusive)
-        pub fn rangeCustom(self: *SortedSetSelf, start: ?Bound(T), end: ?Bound(T)) []const T {
-            return self.map.rangeCustom(start, end)[0];
-        }
-    };
-}
-
-/// A set that guarantees the contained items will be sorted whenever
-/// accessed through public methods like `items` and `range`.
-///
-/// Compatible with numbers, slices of numbers, and types that have an "order" method
-pub fn SortedSetUnmanaged(comptime T: type) type {
-    return SortedSetUnmanagedCustom(T, .{});
-}
-
-/// A set that guarantees the contained items will be sorted whenever
-/// accessed through public methods like `items` and `range`.
-pub fn SortedSetUnmanagedCustom(comptime T: type, comptime config: SortedMapConfig(T)) type {
-    return struct {
-        map: SortedMapUnmanagedCustom(T, void, config),
-        const SortedSetSelf = @This();
-
-        pub const empty: SortedSetSelf = .{
-            .map = .empty,
-        };
-
-        pub fn deinit(self: SortedSetSelf, allocator: std.mem.Allocator) void {
-            self.map.deinit(allocator);
-        }
-
-        pub fn clearRetainingCapacity(self: *SortedSetSelf) void {
-            return self.map.inner.clearRetainingCapacity();
-        }
-
-        pub fn clone(
-            self: SortedSetSelf,
-            allocator: std.mem.Allocator,
-        ) std.mem.Allocator.Error!SortedSetSelf {
-            return .{ .map = try self.map.clone(allocator) };
-        }
-
-        pub fn eql(self: *SortedSetSelf, other: *SortedSetSelf) bool {
-            return self.map.eql(&other.map);
-        }
-
-        pub fn put(
-            self: *SortedSetSelf,
-            allocator: std.mem.Allocator,
-            item: T,
-        ) std.mem.Allocator.Error!void {
-            try self.map.put(allocator, item, {});
-        }
-
-        pub fn orderedRemove(self: *SortedSetSelf, item: T) bool {
-            return self.map.orderedRemove(item);
-        }
-
-        pub fn pop(self: *SortedSetSelf) ?T {
-            self.map.sort();
-            const kv = self.map.inner.pop() orelse return null;
-            return kv.key;
-        }
-
-        pub fn contains(self: SortedSetSelf, item: T) bool {
-            return self.map.contains(item);
-        }
-
-        pub fn count(self: SortedSetSelf) usize {
-            return self.map.count();
-        }
-
-        pub fn items(self: *SortedSetSelf) []const T {
-            return self.map.keys();
-        }
-
-        /// subslice of items ranging from start (inclusive) to end (exclusive)
-        pub fn range(self: *SortedSetSelf, start: ?T, end: ?T) []const T {
-            return self.map.range(start, end)[0];
-        }
-
-        /// subslice of items ranging from start (inclusive) to end (exclusive)
-        pub fn rangeCustom(self: *SortedSetSelf, start: ?Bound(T), end: ?Bound(T)) []const T {
-            return self.map.rangeCustom(start, end)[0];
-        }
-    };
-}
-
-/// DEPRECATED: use the unmanaged variant instead
-pub fn SortedMap(comptime K: type, comptime V: type) type {
-    return SortedMapCustom(K, V, .{});
-}
-
-/// DEPRECATED: use the unmanaged variant instead
-pub fn SortedMapCustom(
-    comptime K: type,
-    comptime V: type,
-    comptime config: SortedMapConfig(K),
-) type {
-    return struct {
-        allocator: std.mem.Allocator,
-        unmanaged: Unmanaged,
-        const SortedMapSelf = @This();
-
-        const Unmanaged = SortedMapUnmanagedCustom(K, V, config);
-
-        pub const @"!bincode-config": sig.bincode.FieldConfig(SortedMapSelf) = .{
-            .deserializer = bincodeDeserialize,
-            .serializer = bincodeSerialize,
-            .free = bincodeFree,
-        };
-
-        pub fn init(allocator: Allocator) SortedMapSelf {
-            return .{
-                .allocator = allocator,
-                .unmanaged = .empty,
-            };
-        }
-
-        pub fn deinit(self: SortedMapSelf) void {
-            var self_mut = self;
-            self_mut.unmanaged.deinit(self.allocator);
-        }
-
-        pub fn clone(self: SortedMapSelf) std.mem.Allocator.Error!SortedMapSelf {
-            return .{
-                .allocator = self.allocator,
-                .unmanaged = try self.unmanaged.clone(self.allocator),
-            };
-        }
-
-        pub fn eql(self: *SortedMapSelf, other: *SortedMapSelf) bool {
-            return self.unmanaged.eql(&other.unmanaged);
-        }
-
-        pub fn get(self: SortedMapSelf, key: K) ?V {
-            return self.unmanaged.get(key);
-        }
-
-        pub fn getEntry(self: SortedMapSelf, key: K) ?Unmanaged.Entry {
-            return self.unmanaged.getEntry(key);
-        }
-
-        pub fn fetchSwapRemove(self: *SortedMapSelf, key: K) ?Unmanaged.Inner.KV {
-            return self.unmanaged.fetchSwapRemove(key);
-        }
-
-        pub fn swapRemoveNoSort(self: *SortedMapSelf, key: K) bool {
-            return self.unmanaged.swapRemoveNoSort(key);
-        }
-
-        pub fn getOrPut(
-            self: *SortedMapSelf,
-            key: K,
-        ) std.mem.Allocator.Error!Unmanaged.Inner.GetOrPutResult {
-            return self.unmanaged.getOrPut(self.allocator, key);
-        }
-
-        pub fn put(self: *SortedMapSelf, key: K, value: V) std.mem.Allocator.Error!void {
-            try self.unmanaged.put(self.allocator, key, value);
-        }
-
-        pub fn orderedRemove(self: *SortedMapSelf, key: K) bool {
-            return self.unmanaged.orderedRemove(key);
-        }
-
-        pub fn contains(self: SortedMapSelf, key: K) bool {
-            return self.unmanaged.contains(key);
-        }
-
-        pub fn count(self: SortedMapSelf) usize {
-            return self.unmanaged.count();
-        }
-
-        pub fn keys(self: *SortedMapSelf) []const K {
-            return self.unmanaged.keys();
-        }
-
-        pub fn mutableKeys(self: *SortedMapSelf) []K {
-            return self.unmanaged.mutableKeys();
-        }
-
-        pub fn items(self: *SortedMapSelf) struct { []const K, []const V } {
-            return self.unmanaged.items();
-        }
-
-        pub fn iterator(self: *SortedMapSelf) Unmanaged.Inner.Iterator {
-            return self.unmanaged.iterator();
-        }
-
-        /// subslice of items ranging from start (inclusive) to end (exclusive)
-        pub fn range(self: *SortedMapSelf, start: ?K, end: ?K) struct { []const K, []const V } {
-            return self.unmanaged.range(start, end);
-        }
-
-        /// subslice of items ranging from start to end
-        pub fn rangeCustom(
-            self: *SortedMapSelf,
-            start_bound: ?Bound(K),
-            end_bound: ?Bound(K),
-        ) struct { []const K, []const V } {
-            return self.unmanaged.rangeCustom(start_bound, end_bound);
-        }
-
-        pub fn sort(self: *SortedMapSelf) void {
-            self.unmanaged.sort();
-        }
-
-        fn bincodeDeserialize(
-            limit_allocator: *sig.bincode.LimitAllocator,
-            reader: anytype,
-            params: sig.bincode.Params,
-        ) !SortedMapSelf {
-            const unmanaged =
-                try sig.bincode.readWithLimit(limit_allocator, Unmanaged, reader, params);
-            return .{
-                .allocator = limit_allocator.backing_allocator, // patch persistent.
-                .unmanaged = unmanaged,
-            };
-        }
-
-        fn bincodeSerialize(
-            writer: anytype,
-            data: anytype,
-            params: sig.bincode.Params,
-        ) !void {
-            try sig.bincode.write(writer, data.unmanaged, params);
-        }
-
-        fn bincodeFree(_: std.mem.Allocator, data: anytype) void {
-            data.deinit();
-        }
-    };
-}
-
-/// A map that guarantees the contained items will be sorted by key
-/// whenever accessed through public methods like `keys` and `range`.
-///
-/// Compatible with numbers, slices of numbers, and types that have an "order" method
-pub fn SortedMapUnmanaged(comptime K: type, comptime V: type) type {
-    return SortedMapUnmanagedCustom(K, V, .{});
-}
-
-/// A map that guarantees the contained items will be sorted by key
-/// whenever accessed through public methods like `keys` and `range`.
-///
-/// TODO consider reimplementing with something faster (e.g. binary tree)
-pub fn SortedMapUnmanagedCustom(
-    comptime K: type,
-    comptime V: type,
-    comptime config: SortedMapConfig(K),
-) type {
-    const order = config.orderFn;
-
-    return struct {
-        inner: Inner,
-        max: ?K,
-        is_sorted: bool,
-
-        const SortedMapSelf = @This();
-
-        const Inner = std.ArrayHashMapUnmanaged(K, V, config.Context, config.store_hash);
-
-        pub const Entry = Inner.Entry;
-
-        pub const empty: SortedMapSelf = .{
-            .inner = .empty,
-            .max = null,
-            .is_sorted = true,
-        };
-
-        pub fn deinit(self: SortedMapSelf, allocator: std.mem.Allocator) void {
-            var self_mut = self;
-            self_mut.inner.deinit(allocator);
-        }
-
-        pub fn init(
-            allocator: std.mem.Allocator,
-            keys_init: []const K,
-            values_init: []const V,
-        ) std.mem.Allocator.Error!SortedMapSelf {
-            var result: SortedMapSelf = .empty;
-            errdefer result.deinit(allocator);
-            try result.inner.reinit(allocator, keys_init, values_init);
-            result.sort();
-            return result;
-        }
-
-        pub fn clone(
-            self: SortedMapSelf,
-            allocator: std.mem.Allocator,
-        ) std.mem.Allocator.Error!SortedMapSelf {
-            return .{
-                .inner = try self.inner.clone(allocator),
-                .max = self.max,
-                .is_sorted = self.is_sorted,
-            };
-        }
-
-        pub fn eql(self: *SortedMapSelf, other: *SortedMapSelf) bool {
-            if (self.count() != other.count()) return false;
-            self.sort();
-            other.sort();
-            for (
-                self.inner.keys(),
-                self.inner.values(),
-                other.inner.keys(),
-                other.inner.values(),
-            ) |sk, sv, ok, ov| {
-                if (sk != ok or sv != ov) return false;
-            }
-            return true;
-        }
-
-        pub fn get(self: SortedMapSelf, key: K) ?V {
-            return self.inner.get(key);
-        }
-
-        pub fn getPtr(self: SortedMapSelf, key: K) ?*V {
-            return self.inner.getPtr(key);
-        }
-
-        pub fn getEntry(self: SortedMapSelf, key: K) ?Inner.Entry {
-            return self.inner.getEntry(key);
-        }
-
-        pub fn fetchSwapRemove(self: *SortedMapSelf, key: K) ?Inner.KV {
-            const item = self.inner.fetchSwapRemove(key);
-            if (item != null and !self.resetMaxOnRemove(key)) {
-                self.is_sorted = false;
-            }
-            return item;
-        }
-
-        pub fn swapRemoveNoSort(self: *SortedMapSelf, key: K) bool {
-            const was_removed = self.inner.swapRemove(key);
-            if (was_removed and !self.resetMaxOnRemove(key)) {
-                self.is_sorted = false;
-            }
-            return was_removed;
-        }
-
-        pub fn getOrPut(
-            self: *SortedMapSelf,
-            allocator: std.mem.Allocator,
-            key: K,
-        ) std.mem.Allocator.Error!Inner.GetOrPutResult {
-            const result = try self.inner.getOrPut(allocator, key);
-            if (self.max == null or order(key, self.max.?) == .gt) {
-                self.max = key;
-            } else {
-                self.is_sorted = false;
-            }
-            return result;
-        }
-
-        pub fn put(
-            self: *SortedMapSelf,
-            allocator: std.mem.Allocator,
-            key: K,
-            value: V,
-        ) std.mem.Allocator.Error!void {
-            try self.ensureUnusedCapacity(allocator, 1);
-            self.putAssumeCapacity(key, value);
-        }
-
-        pub fn putAssumeCapacity(self: *SortedMapSelf, key: K, value: V) void {
-            self.inner.putAssumeCapacity(key, value);
-            if (self.max == null or order(key, self.max.?) == .gt) {
-                self.max = key;
-            } else {
-                self.is_sorted = false;
-            }
-        }
-
-        /// Inserts a new `Entry` into the hash map, returning the previous one, if any.
-        pub fn fetchPut(
-            self: *SortedMapSelf,
-            allocator: Allocator,
-            key: K,
-            value: V,
-        ) std.mem.Allocator.Error!?Inner.KV {
-            const gop = try self.getOrPut(allocator, key);
-            const result: ?Inner.KV = if (!gop.found_existing) null else .{
-                .key = gop.key_ptr.*,
-                .value = gop.value_ptr.*,
-            };
-            gop.key_ptr.* = key;
-            gop.value_ptr.* = value;
-            return result;
-        }
-
-        pub fn orderedRemove(self: *SortedMapSelf, key: K) bool {
-            const was_removed = self.inner.orderedRemove(key);
-            if (was_removed) _ = self.resetMaxOnRemove(key);
-            return was_removed;
-        }
-
-        /// - returns whether the key was the prior max.
-        /// - don't call this unless an item was definitely removed.
-        fn resetMaxOnRemove(self: *SortedMapSelf, removed_key: K) bool {
-            std.debug.assert(self.max != null);
-            if (self.count() == 0) {
-                self.max = null;
-                return true;
-            } else switch (order(removed_key, self.max.?)) {
-                .eq => {
-                    const sorted_keys = self.keys();
-                    self.max = sorted_keys[sorted_keys.len - 1];
-                    return true;
-                },
-                .gt => unreachable,
-                .lt => return false,
-            }
-        }
-
-        pub fn contains(self: SortedMapSelf, key: K) bool {
-            return self.inner.contains(key);
-        }
-
-        pub fn count(self: SortedMapSelf) usize {
-            return self.inner.count();
-        }
-
-        pub fn keys(self: *SortedMapSelf) []const K {
-            self.sort();
-            return self.inner.keys();
-        }
-
-        pub fn mutableKeys(self: *SortedMapSelf) []K {
-            self.sort();
-            return self.inner.keys();
-        }
-
-        pub fn values(self: *SortedMapSelf) []V {
-            self.sort();
-            return self.inner.values();
-        }
-
-        pub fn items(self: *SortedMapSelf) struct { []const K, []const V } {
-            self.sort();
-            return .{ self.inner.keys(), self.inner.values() };
-        }
-
-        pub fn iterator(self: *SortedMapSelf) Inner.Iterator {
-            self.sort();
-            return self.inner.iterator();
-        }
-
-        /// subslice of items ranging from start (inclusive) to end (exclusive)
-        pub fn range(self: *SortedMapSelf, start: ?K, end: ?K) struct { []const K, []const V } {
-            return self.rangeCustom(
-                if (start) |b| .{ .inclusive = b } else null,
-                if (end) |b| .{ .exclusive = b } else null,
-            );
-        }
-
-        /// subslice of items ranging from start to end
-        pub fn rangeCustom(
-            self: *SortedMapSelf,
-            start_bound: ?Bound(K),
-            end_bound: ?Bound(K),
-        ) struct { []const K, []const V } {
-            // TODO: can the code in this fn be simplified while retaining identical logic?
-            const len = self.count();
-            if (len == 0) return .{ &.{}, &.{} };
-
-            // extract relevant info from bounds
-            const start, const incl_start = if (start_bound) |b|
-                .{ b.val(), b == .inclusive }
-            else
-                .{ null, false };
-            const end, const excl_end = if (end_bound) |b|
-                .{ b.val(), b == .exclusive }
-            else
-                .{ null, false };
-
-            // edge case: check if bounds could permit any items
-            if (start) |s| if (end) |e| {
-                if (incl_start and !excl_end) {
-                    if (order(e, s) == .lt) return .{ &.{}, &.{} };
-                } else if (order(e, s) != .gt) return .{ &.{}, &.{} };
-            };
-
-            self.sort();
-            var keys_ = self.inner.keys();
-            var values_ = self.inner.values();
-            if (start) |start_| {
-                // .any instead of .first because uniqueness is guaranteed
-                const start_index = switch (binarySearch(K, keys_, start_, .any, order)) {
-                    .found => |index| if (incl_start) index else @min(len - 1, index + 1),
-                    .after => |index| index + 1,
-                    .less => 0,
-                    .greater => return .{ &.{}, &.{} },
-                    .empty => unreachable, // count checked above
-                };
-                keys_ = keys_[start_index..];
-                values_ = values_[start_index..];
-            }
-            if (end) |end_| {
-                // .any instead of .last because uniqueness is guaranteed
-                const end_index = switch (binarySearch(K, keys_, end_, .any, order)) {
-                    .found => |index| if (excl_end) index else index + 1,
-                    .after => |index| index + 1,
-                    .less => return .{ &.{}, &.{} },
-                    .greater => keys_.len,
-                    .empty => unreachable, // count checked above
-                };
-                keys_ = keys_[0..end_index];
-                values_ = values_[0..end_index];
-            }
-            return .{ keys_, values_ };
-        }
-
-        pub fn sort(self: *SortedMapSelf) void {
-            if (self.is_sorted) return;
-            self.inner.sort(struct {
-                items: std.MultiArrayList(Inner.Data).Slice,
-                pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
-                    return order(ctx.items.get(a_index).key, ctx.items.get(b_index).key) == .lt;
-                }
-            }{ .items = self.inner.entries.slice() });
-            self.is_sorted = true;
-        }
-
-        pub fn capacity(self: *const SortedMapSelf) usize {
-            return self.inner.capacity();
-        }
-
-        pub fn unusedCapacity(self: *const SortedMapSelf) usize {
-            return self.inner.capacity() - self.count();
-        }
-
-        pub fn ensureUnusedCapacity(
-            self: *SortedMapSelf,
-            gpa: std.mem.Allocator,
-            additional_capacity: usize,
-        ) Allocator.Error!void {
-            try self.inner.ensureUnusedCapacity(gpa, additional_capacity);
-        }
-    };
-}
-
-pub fn Bound(comptime T: type) type {
-    return union(enum) {
-        inclusive: T,
-        exclusive: T,
-
-        pub fn val(self: @This()) T {
-            return switch (self) {
-                inline .inclusive, .exclusive => |x| x,
-            };
-        }
-    };
-}
-
-pub fn SortedMapConfig(comptime K: type) type {
-    const default_Context, const default_store_hash = if (K == []const u8 or K == []u8)
-        .{ std.array_hash_map.StringContext, true }
-    else
-        .{ std.array_hash_map.AutoContext(K), !std.array_hash_map.autoEqlIsCheap(K) };
-
-    return struct {
-        orderFn: fn (a: K, b: K) std.math.Order = defaultOrderFn(K),
-        /// passthrough to std.ArrayHashMap
-        Context: type = default_Context,
-        /// passthrough to std.ArrayHashMap
-        store_hash: bool = default_store_hash,
-    };
-}
-
-fn defaultOrderFn(comptime K: type) fn (lhs: K, rhs: K) std.math.Order {
+pub fn defaultOrderFn(comptime K: type) fn (lhs: K, rhs: K) std.math.Order {
     return struct {
         fn orderFn(lhs: K, rhs: K) std.math.Order {
             switch (@typeInfo(K)) {
@@ -1166,91 +548,122 @@ pub fn deinitMapAndValues(allocator: Allocator, const_map: anytype) void {
 
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
-const expectEqualSlices = std.testing.expectEqualSlices;
 
 test SortedSet {
-    var set = SortedSet(u64).init(std.testing.allocator);
-    defer set.deinit();
+    const allocator = std.testing.allocator;
+
+    var set: SortedSet(u64, .{}) = .empty;
+    defer set.deinit(allocator);
 
     // add/contains
     try expect(!set.contains(3));
-    try set.put(3);
+    try set.put(allocator, 3, {});
     try expect(set.contains(3));
-    try set.put(0);
-    try set.put(2);
-    try set.put(1);
-    try set.put(4);
-    try set.put(5);
+    try set.put(allocator, 0, {});
+    try set.put(allocator, 2, {});
+    try set.put(allocator, 1, {});
+    try set.put(allocator, 4, {});
+    try set.put(allocator, 5, {});
 
     // remove
-    try expect(set.orderedRemove(5));
+    try expect(set.remove(5));
     try expect(!set.contains(5));
-    try expect(!set.orderedRemove(5));
-    try set.put(5);
+    try expect(!set.remove(5));
+    try set.put(allocator, 5, {});
     try expect(set.contains(5));
 
-    // ordering
-    for (set.items(), 0..) |key, i| {
-        try expect(key == i);
+    var iter = set.iterator();
+    var i: u64 = 0;
+    while (iter.next()) |entry| : (i += 1) {
+        try expectEqual(i, entry.key_ptr.*);
+    }
+
+    var j: u64 = i;
+    while (iter.prev()) |entry| {
+        j -= 1;
+        try expectEqual(j, entry.key_ptr.*);
     }
 }
 
-test "SortedSet bincode round trip does not break sorting" {
-    var set = SortedSet(u8).init(std.testing.allocator);
-    defer set.deinit();
+test "SortedMap bincode round trip does not break sorting" {
+    const allocator = std.testing.allocator;
 
-    try set.put(5);
-    try set.put(3);
+    const Set = SortedSet(u8, .{});
 
-    const ser = try sig.bincode.writeAlloc(std.testing.allocator, set, .{});
-    defer std.testing.allocator.free(ser);
+    var set: Set = .empty;
+    defer set.deinit(allocator);
 
-    var des = try sig.bincode.readFromSlice(std.testing.allocator, SortedSet(u8), ser, .{});
-    defer des.deinit();
+    try set.put(allocator, 5, {});
+    try set.put(allocator, 3, {});
 
-    const items = des.items();
-    try std.testing.expectEqual(3, items[0]);
-    try std.testing.expectEqual(5, items[1]);
+    const ser = try sig.bincode.writeAlloc(allocator, set, .{});
+    defer allocator.free(ser);
+
+    var des = try sig.bincode.readFromSlice(allocator, Set, ser, .{});
+    defer des.deinit(allocator);
+
+    var iter = set.iterator();
+    try std.testing.expectEqual(3, iter.next().?.key_ptr.*);
+    try std.testing.expectEqual(5, iter.next().?.key_ptr.*);
 }
 
-test "SortedSet range" {
-    var set = SortedSet(u8).init(std.testing.allocator);
-    defer set.deinit();
+fn testRange(
+    expected: []const u8,
+    iterator: SortedSet(u8, .{}).Iterator,
+) !void {
+    const allocator = std.testing.allocator;
 
-    try set.put(5);
-    try set.put(3);
-    try set.put(1);
-    try set.put(3);
+    var found_data: std.ArrayListUnmanaged(u8) = .empty;
+    defer found_data.deinit(allocator);
 
-    try expectEqualSlices(u8, &.{ 1, 3, 5 }, set.range(null, null));
-    try expectEqualSlices(u8, &.{}, set.range(0, 0));
-    try expectEqualSlices(u8, &.{}, set.range(10, 10));
-    try expectEqualSlices(u8, &.{}, set.range(10, 11));
-    try expectEqualSlices(u8, &.{}, set.range(12, 11));
-    try expectEqualSlices(u8, &.{1}, set.range(null, 3));
-    try expectEqualSlices(u8, &.{ 1, 3 }, set.range(null, 4));
-    try expectEqualSlices(u8, &.{ 1, 3 }, set.range(null, 5));
-    try expectEqualSlices(u8, &.{ 1, 3, 5 }, set.range(null, 6));
-    try expectEqualSlices(u8, &.{ 1, 3, 5 }, set.range(0, null));
-    try expectEqualSlices(u8, &.{ 1, 3, 5 }, set.range(1, null));
-    try expectEqualSlices(u8, &.{ 3, 5 }, set.range(2, null));
-    try expectEqualSlices(u8, &.{ 3, 5 }, set.range(3, null));
-    try expectEqualSlices(u8, &.{5}, set.range(4, null));
-    try expectEqualSlices(u8, &.{5}, set.range(5, null));
-    try expectEqualSlices(u8, &.{ 1, 3, 5 }, set.range(1, 6));
-    try expectEqualSlices(u8, &.{ 1, 3 }, set.range(1, 5));
-    try expectEqualSlices(u8, &.{ 1, 3 }, set.range(1, 4));
-    try expectEqualSlices(u8, &.{1}, set.range(1, 3));
-    try expectEqualSlices(u8, &.{1}, set.range(1, 2));
-    try expectEqualSlices(u8, &.{}, set.range(1, 1));
-    try expectEqualSlices(u8, &.{ 3, 5 }, set.range(2, 6));
-    try expectEqualSlices(u8, &.{ 3, 5 }, set.range(3, 6));
-    try expectEqualSlices(u8, &.{5}, set.range(4, 6));
-    try expectEqualSlices(u8, &.{5}, set.range(5, 6));
-    try expectEqualSlices(u8, &.{3}, set.range(3, 4));
-    try expectEqualSlices(u8, &.{}, set.range(3, 3));
-    try expectEqualSlices(u8, &.{}, set.range(2, 3));
-    try expectEqualSlices(u8, &.{}, set.range(2, 2));
+    var iter = iterator;
+    while (iter.next()) |entry| {
+        try found_data.append(allocator, entry.key_ptr.*);
+    }
+
+    try std.testing.expectEqualSlices(u8, expected, found_data.items);
+}
+
+test "SortedMap.iteratorRanged" {
+    const allocator = std.testing.allocator;
+
+    var set: SortedSet(u8, .{}) = .empty;
+    defer set.deinit(allocator);
+
+    try set.put(allocator, 5, {});
+    try set.put(allocator, 3, {});
+    try set.put(allocator, 1, {});
+    try set.put(allocator, 3, {});
+
+    try testRange(&.{ 1, 3, 5 }, set.iteratorRanged(null, null, .start));
+    try testRange(&.{}, set.iteratorRanged(0, 0, .start));
+    try testRange(&.{}, set.iteratorRanged(10, 10, .start));
+    try testRange(&.{}, set.iteratorRanged(10, 11, .start));
+    try testRange(&.{}, set.iteratorRanged(12, 11, .start));
+    try testRange(&.{1}, set.iteratorRanged(null, 3, .start));
+    try testRange(&.{ 1, 3 }, set.iteratorRanged(null, 4, .start));
+    try testRange(&.{ 1, 3 }, set.iteratorRanged(null, 5, .start));
+    try testRange(&.{ 1, 3, 5 }, set.iteratorRanged(null, 6, .start));
+    try testRange(&.{ 1, 3, 5 }, set.iteratorRanged(0, null, .start));
+    try testRange(&.{ 1, 3, 5 }, set.iteratorRanged(1, null, .start));
+    try testRange(&.{ 3, 5 }, set.iteratorRanged(2, null, .start));
+    try testRange(&.{ 3, 5 }, set.iteratorRanged(3, null, .start));
+    try testRange(&.{5}, set.iteratorRanged(4, null, .start));
+    try testRange(&.{5}, set.iteratorRanged(5, null, .start));
+    try testRange(&.{ 1, 3, 5 }, set.iteratorRanged(1, 6, .start));
+    try testRange(&.{ 1, 3 }, set.iteratorRanged(1, 5, .start));
+    try testRange(&.{ 1, 3 }, set.iteratorRanged(1, 4, .start));
+    try testRange(&.{1}, set.iteratorRanged(1, 3, .start));
+    try testRange(&.{1}, set.iteratorRanged(1, 2, .start));
+    try testRange(&.{}, set.iteratorRanged(1, 1, .start));
+    try testRange(&.{ 3, 5 }, set.iteratorRanged(2, 6, .start));
+    try testRange(&.{ 3, 5 }, set.iteratorRanged(3, 6, .start));
+    try testRange(&.{5}, set.iteratorRanged(4, 6, .start));
+    try testRange(&.{5}, set.iteratorRanged(5, 6, .start));
+    try testRange(&.{3}, set.iteratorRanged(3, 4, .start));
+    try testRange(&.{}, set.iteratorRanged(3, 3, .start));
+    try testRange(&.{}, set.iteratorRanged(2, 3, .start));
+    try testRange(&.{}, set.iteratorRanged(2, 2, .start));
 }
 
 test binarySearch {
@@ -1289,23 +702,6 @@ test "order slices" {
     try expectEqual(orderSlices(u8, std.math.order, &c, &b), .lt);
     try expectEqual(orderSlices(u8, std.math.order, &b, &e), .gt);
     try expectEqual(orderSlices(u8, std.math.order, &e, &b), .lt);
-}
-
-test "sorted set slice range" {
-    var set = SortedSet([]const u8).init(std.testing.allocator);
-    defer set.deinit();
-    try set.put(&.{ 0, 0, 10 });
-    try set.put(&.{ 0, 0, 20 });
-    try set.put(&.{ 0, 0, 30 });
-    try set.put(&.{ 0, 0, 40 });
-
-    const range = set.rangeCustom(null, .{ .inclusive = &.{ 0, 0, 40 } });
-
-    try std.testing.expectEqual(4, range.len);
-    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 10 }, range[0]);
-    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 20 }, range[1]);
-    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 30 }, range[2]);
-    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 40 }, range[3]);
 }
 
 test "binarySearch slice of slices" {
@@ -1451,38 +847,162 @@ test "Window realigns" {
 }
 
 test "SortedMap" {
-    var map = SortedMap(u64, u64).init(std.testing.allocator);
-    defer map.deinit();
+    const allocator = std.testing.allocator;
 
-    try map.put(3, 30);
-    try map.put(1, 10);
-    try map.put(2, 20);
-    try map.put(4, 40);
-    try map.put(5, 50);
+    var map: SortedMap(
+        u64,
+        u64,
+        .{},
+    ) = .empty;
+    defer map.deinit(allocator);
 
-    // Get the keys and values
-    const items = map.items();
-    const keys = items[0];
-    const values = items[1];
+    try map.put(allocator, 3, 30);
+    try map.put(allocator, 1, 10);
+    try map.put(allocator, 2, 20);
+    try map.put(allocator, 4, 40);
+    try map.put(allocator, 5, 50);
 
     // Check that the keys and values are sorted.
-    for (keys, 0..) |key, i| {
+    var iter = map.iterator();
+    var i: u64 = 0;
+    while (iter.next()) |entry| : (i += 1) {
         // Keys should be 1, 2, 3, 4, 5
-        try expectEqual(key, i + 1);
+        try expectEqual(entry.key_ptr.*, i + 1);
         // Values should be 10, 20, 30, 40, 50
-        try expectEqual(values[i], (i + 1) * 10);
+        try expectEqual(entry.value_ptr.*, (i + 1) * 10);
     }
-    // Check that the map is sorted
-    try expect(map.unmanaged.is_sorted);
 
     // Remove a non terminal item with no sort.
-    try expect(map.swapRemoveNoSort(3));
-    try expect(!map.swapRemoveNoSort(3));
-    try expect(map.swapRemoveNoSort(1));
+    try expect(map.remove(3));
+    try expect(!map.remove(3));
+    try expect(map.remove(1));
+}
 
-    try expect(!map.unmanaged.is_sorted);
-    map.sort();
-    try expect(map.unmanaged.is_sorted);
+test "SortedMap.put primitives" {
+    const allocator = std.testing.allocator;
+
+    var map: SortedMap(i32, u128, .{}) = .empty;
+    defer map.deinit(allocator);
+    try std.testing.expectEqual(0, map.count());
+
+    try map.put(allocator, 5, 500);
+    try std.testing.expectEqual(1, map.count());
+    try std.testing.expectEqual(@as(?u128, 500), map.get(5));
+
+    try map.put(allocator, 5, 600);
+    try std.testing.expectEqual(@as(u32, 1), map.count());
+    try std.testing.expectEqual(@as(?u128, 600), map.get(5));
+
+    try map.put(allocator, 1, 100);
+    try map.put(allocator, 3, 300);
+    try map.put(allocator, 2, 200);
+    try map.put(allocator, 4, 400);
+    try map.put(allocator, 5, 500);
+
+    var iter = map.iterator();
+    var i: u16 = 1;
+    while (iter.next()) |entry| : (i += 1) {
+        try std.testing.expectEqual(i, entry.key_ptr.*);
+        try std.testing.expectEqual(i * 100, entry.value_ptr.*);
+    }
+
+    var large_map: SortedMap(i32, i32, .{}) = .empty;
+    defer large_map.deinit(allocator);
+
+    for (0..100) |j| {
+        try large_map.put(allocator, @intCast(j), @intCast(j * 10));
+    }
+    try std.testing.expectEqual(@as(u32, 100), large_map.count());
+
+    var large_iter = large_map.iterator();
+    var count: u32 = 0;
+    while (large_iter.next()) |_| count += 1;
+    try std.testing.expectEqual(@as(u32, 100), count);
+}
+
+test "SortedMap.getOrPut" {
+    const allocator = std.testing.allocator;
+
+    var map: SortedMap(i32, i32, .{}) = .empty;
+    defer map.deinit(allocator);
+
+    const entry1 = try map.getOrPut(allocator, 100);
+    try std.testing.expect(!entry1.found_existing);
+    try std.testing.expectEqual(100, entry1.key_ptr.*);
+    try std.testing.expectEqual(1, map.count());
+    entry1.value_ptr.* = 500;
+
+    const entry2 = try map.getOrPut(allocator, 100);
+    try std.testing.expect(entry2.found_existing);
+    try std.testing.expectEqual(100, entry2.key_ptr.*);
+    try std.testing.expectEqual(500, entry2.value_ptr.*);
+    try std.testing.expectEqual(1, map.count());
+
+    try std.testing.expectEqual(entry1.value_ptr, entry2.value_ptr);
+
+    (try map.getOrPut(allocator, 200)).value_ptr.* = 2000;
+    (try map.getOrPut(allocator, 300)).value_ptr.* = 3000;
+
+    try std.testing.expectEqual(3, map.count());
+    try std.testing.expectEqual(2000, map.get(200).?);
+    try std.testing.expectEqual(3000, map.get(300).?);
+}
+
+test "SortedMap.iteratorRanged bidirectional" {
+    const allocator = std.testing.allocator;
+
+    var map: SortedMap(i32, i32, .{}) = .empty;
+    defer map.deinit(allocator);
+
+    try map.put(allocator, 0, 0);
+    try map.put(allocator, 1, 10);
+    try map.put(allocator, 2, 20);
+    try map.put(allocator, 3, 30);
+
+    // forward iteration
+    {
+        var iter = map.iteratorRanged(null, null, .start);
+        var count: u32 = 0;
+        var keys: [4]i32 = undefined;
+
+        while (iter.next()) |entry| {
+            keys[count] = entry.key_ptr.*;
+            count += 1;
+        }
+
+        try std.testing.expectEqual(4, count);
+        try std.testing.expectEqualSlices(i32, &.{ 0, 1, 2, 3 }, &keys);
+    }
+
+    // backward iteration
+    {
+        var iter = map.iteratorRanged(null, null, .end);
+        var count: u32 = 0;
+        var keys: [4]i32 = undefined;
+
+        while (iter.prev()) |entry| {
+            keys[count] = entry.key_ptr.*;
+            count += 1;
+        }
+
+        try std.testing.expectEqual(4, count);
+        try std.testing.expectEqualSlices(i32, &.{ 3, 2, 1, 0 }, &keys);
+    }
+
+    // backward ranged
+    {
+        var iter = map.iteratorRanged(1, 3, .end);
+        var count: u32 = 0;
+        var keys: [3]i32 = undefined;
+
+        while (iter.prev()) |entry| {
+            keys[count] = entry.key_ptr.*;
+            count += 1;
+        }
+
+        try std.testing.expectEqual(3, count);
+        try std.testing.expectEqualSlices(i32, &.{ 3, 2, 1 }, &keys);
+    }
 }
 
 test "checkAllAllocationFailures in cloneMapAndValues" {

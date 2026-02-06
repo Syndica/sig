@@ -567,6 +567,11 @@ pub const ErasureSetId = struct {
     /// aka "fec_set_index"
     erasure_set_index: u64,
 
+    pub const empty: ErasureSetId = .{
+        .slot = std.math.maxInt(Slot),
+        .erasure_set_index = std.math.maxInt(u64),
+    };
+
     pub fn order(a: ErasureSetId, b: ErasureSetId) std.math.Order {
         if (a.slot == b.slot and a.erasure_set_index == b.erasure_set_index) {
             return .eq;
