@@ -6,6 +6,8 @@ const G2 = bls12_381.G2;
 const pairingSyscall = bls12_381.pairingSyscall;
 
 // sig fmt: off
+
+// [agave] https://github.com/anza-xyz/agave/blob/master/bls12-381/src/test_vectors/validation.rs
 test "g1 val" {
     for ([_]struct { in: []const u8, result: bool }{
         .{
@@ -64,6 +66,7 @@ test "g1 val" {
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/master/bls12-381/src/test_vectors/decompression.rs
 test "g1 decompress" {
     for ([_]struct { before: []const u8, after: ?[]const u8 }{
         .{
@@ -140,6 +143,7 @@ test "g1 decompress" {
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/master/bls12-381/src/test_vectors/addition.rs
 test "g1 add" {
     for ([_]struct { in: []const u8, out: []const u8 }{
         .{
@@ -208,6 +212,7 @@ test "g1 add" {
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/master/bls12-381/src/test_vectors/subtraction.rs
 test "g1 subtract" {
     for ([_]struct { in: []const u8, out: []const u8 }{
         .{
@@ -276,6 +281,7 @@ test "g1 subtract" {
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/master/bls12-381/src/test_vectors/multiplication.rs
 test "g1 multiply" {
     for ([_]struct { in: []const u8, out: []const u8 }{
         .{
@@ -344,6 +350,7 @@ test "g1 multiply" {
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/master/bls12-381/src/test_vectors/validation.rs
 test "g2 val" {
     for ([_]struct { in: []const u8, result: bool }{
         .{
@@ -394,6 +401,7 @@ test "g2 val" {
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/master/bls12-381/src/test_vectors/decompression.rs
 test "g2 decompress" {
     for ([_]struct { before: []const u8, after: ?[]const u8 }{
         .{
@@ -470,6 +478,7 @@ test "g2 decompress" {
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/master/bls12-381/src/test_vectors/addition.rs
 test "g2 add" {
     for ([_]struct { in: []const u8, out: []const u8 }{
         .{
@@ -538,6 +547,7 @@ test "g2 add" {
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/master/bls12-381/src/test_vectors/subtraction.rs
 test "g2 subtract" {
     for ([_]struct { in: []const u8, out: []const u8 }{
         .{
@@ -606,6 +616,7 @@ test "g2 subtract" {
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/master/bls12-381/src/test_vectors/multiplication.rs
 test "g2 multiply" {
     for ([_]struct { in: []const u8, out: []const u8 }{
         .{
@@ -674,6 +685,7 @@ test "g2 multiply" {
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/master/bls12-381/src/test_vectors/pairing.rs
 test "pairing" {
     for ([_]struct { in: []const u8, out: []const u8 }{
         .{
