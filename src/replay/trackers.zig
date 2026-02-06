@@ -10,6 +10,7 @@ const EpochSchedule = sig.core.EpochSchedule;
 const Slot = sig.core.Slot;
 const SlotConstants = sig.core.SlotConstants;
 const SlotState = sig.core.SlotState;
+const Commitment = sig.rpc.methods.common.Commitment;
 
 pub const ForkChoiceProcessedSlot = struct {
     slot: std.atomic.Value(Slot) = .init(0),
@@ -120,6 +121,14 @@ pub const SlotTracker = struct {
     pub fn get(self: *const SlotTracker, slot: Slot) ?Reference {
         const elem = self.slots.get(slot) orelse return null;
         return elem.toRef();
+    }
+
+    pub fn getSlotForCommitment(self: *const SlotTracker, commitment: Commitment) Slot {
+        return switch (commitment) {
+            .processed => self.latest_processed_slot.get(),
+            .confirmed => self.latest_confirmed_slot.get(),
+            .finalized => self.root.load(.monotonic),
+        };
     }
 
     pub const GetOrPutResult = struct {
