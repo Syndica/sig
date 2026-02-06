@@ -40,7 +40,10 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             allocator: Allocator,
             logger: database.interface.Logger,
             path: []const u8,
+            read_only: bool,
         ) anyerror!Self {
+            _ = read_only;
+
             logger.info().log("Initializing SharedHashMapDB");
             const actual_path = try std.fmt.allocPrint(allocator, "{s}/hashmapdb", .{path});
             defer allocator.free(actual_path);

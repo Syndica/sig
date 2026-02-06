@@ -29,9 +29,10 @@ pub fn Database(comptime Impl: type) type {
             allocator: Allocator,
             logger: Logger,
             path: []const u8,
+            read_only: bool,
         ) anyerror!Database(Impl) {
             return .{
-                .impl = try Impl.open(allocator, logger, path),
+                .impl = try Impl.open(allocator, logger, path, read_only),
             };
         }
 
@@ -335,7 +336,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             try db.put(cf1, 123, .{ .hello = 345 });
@@ -357,7 +358,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             try db.put(cf1, 0, .{ .hello = 99 });
@@ -389,7 +390,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             try db.put(cf1, 4, .{ .hello = 44 });
@@ -420,7 +421,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             try db.put(cf1, 40, .{ .hello = 44 });
@@ -448,7 +449,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             try db.put(cf1, 40, .{ .hello = 44 });
@@ -476,7 +477,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             try db.put(cf1, 4, .{ .hello = 44 });
@@ -507,7 +508,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             try db.put(cf1, 4, .{ .hello = 44 });
@@ -538,7 +539,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             try db.put(cf1, 40, .{ .hello = 44 });
@@ -566,7 +567,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             try db.put(cf1, 40, .{ .hello = 44 });
@@ -594,7 +595,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             try db.put(cf1, 40, .{ .hello = 44 });
@@ -625,7 +626,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             try db.put(cf1, 40, .{ .hello = 44 });
@@ -643,7 +644,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             try db.put(cf1, 40, .{ .hello = 44 });
@@ -674,7 +675,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             try db.put(cf1, 40, .{ .hello = 44 });
@@ -692,7 +693,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             var iter = try db.iterator(cf1, .forward, 1);
@@ -705,7 +706,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             var iter = try db.iterator(cf1, .reverse, 1);
@@ -718,7 +719,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             var iter = try db.iterator(cf1, .forward, null);
@@ -731,7 +732,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             var iter = try db.iterator(cf1, .reverse, null);
@@ -746,7 +747,7 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             const allocator = std.testing.allocator;
             const path = test_dir ++ @src().fn_name;
             try ledger.tests.freshDir(path);
-            var db = try DB.open(allocator, .noop, path);
+            var db = try DB.open(allocator, .noop, path, false);
             defer db.deinit();
 
             try db.put(cf1, 40, .{ .hello = 44 });
