@@ -36,7 +36,7 @@ pub fn init(
     path: []const u8,
     registry: ?*sig.prometheus.Registry(.{}),
 ) !Ledger {
-    var db = try LedgerDB.open(allocator, .from(logger), path);
+    var db = try LedgerDB.open(allocator, .from(logger), path, false);
     errdefer db.deinit();
 
     return .{

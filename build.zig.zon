@@ -18,8 +18,8 @@
             .hash = "zstd-0.0.1-8QsqCeqhAABbGuDYc-yqJEj0qitvmq52AEg0puJT6FHu",
         },
         .rocksdb = .{
-            .url = "git+https://github.com/Syndica/rocksdb-zig#bb5b0c687415925a2afa7d517056f6bb8ac78096",
-            .hash = "rocksdb-9.7.4-z_CUTtK8AAAAtFrlpI1HL6eAMl6N8LF3hlgQ90uaNznK",
+            .url = "git+https://github.com/Syndica/rocksdb-zig#c36d983df405f20824945043a0c150330925b8cc",
+            .hash = "rocksdb-9.7.4-z_CUTobHAAC6pCdDXul51SoKId-lY6_Ni1QTtaU43tbN",
         },
         .lsquic = .{
             .url = "git+https://github.com/Syndica/lsquic#3a062c7346e88b32ef7b203d3d3880b76335edc7",
