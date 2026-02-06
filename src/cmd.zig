@@ -1479,8 +1479,9 @@ fn validator(
     });
     defer replay_service_state.deinit(allocator);
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.methods.SlotHookContext{
+    try app_base.rpc_hooks.set(allocator, sig.rpc.methods.RpcHookContext{
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+        .epoch_tracker = &replay_service_state.replay_state.epoch_tracker,
     });
 
     const replay_thread = try replay_service_state.spawnService(

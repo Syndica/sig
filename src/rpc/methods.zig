@@ -18,6 +18,7 @@ const ParseOptions = std.json.ParseOptions;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
+const Commitment = common.Commitment;
 
 pub fn Result(comptime method: MethodAndParams.Tag) type {
     return union(enum) {
@@ -582,7 +583,7 @@ pub const GetVoteAccounts = struct {
         commitment: ?common.Commitment = null,
         votePubkey: ?Pubkey = null,
         keepUnstakedDelinquents: ?bool = null,
-        delinquintSlotDistance: ?u64 = null,
+        delinquentSlotDistance: ?u64 = null,
     };
 
     pub const Response = struct {
@@ -645,7 +646,7 @@ pub const common = struct {
 
     /// Used to configure several RPC method requests
     pub const CommitmentSlotConfig = struct {
-        commitment: ?Commitment = null,
+        commitment: ?common.Commitment = null,
         minContextSlot: ?sig.core.Slot = null,
     };
 
@@ -687,30 +688,27 @@ pub const common = struct {
     };
 };
 
-pub const SlotHookContext = struct {
+pub const RpcHookContext = struct {
     slot_tracker: *const sig.replay.trackers.SlotTracker,
+    epoch_tracker: *const sig.replay.trackers.EpochTracker,
 
-    fn getLatestProcessedSlot(self: @This()) !Slot {
-        const slot = self.slot_tracker.latest_processed_slot.get();
-        if (slot == 0) {
-            return error.RpcNoProcessedSlot;
-        }
-        return slot;
-    }
+    // Limit the length of the `epoch_credits` array for each validator in a `get_vote_accounts`
+    // response.
+    // See: https://github.com/anza-xyz/agave/blob/cd00ceb1fdf43f694caf7af23cb87987922fce2c/rpc-client-types/src/request.rs#L159
+    const MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY: usize = 5;
 
-    fn getLatestConfirmedSlot(self: @This()) !Slot {
-        const slot = self.slot_tracker.latest_confirmed_slot.get();
-        if (slot == 0) {
-            return error.RpcNoConfirmedSlot;
-        }
-        return slot;
-    }
+    // Validators that are this number of slots behind are considered delinquent.
+    // See: https://github.com/anza-xyz/agave/blob/cd00ceb1fdf43f694caf7af23cb87987922fce2c/rpc-client-types/src/request.rs#L162
+    const DELINQUENT_VALIDATOR_SLOT_DISTANCE: u64 = 128;
 
-    fn getLatestFinalizedSlot(self: @This()) !Slot {
-        const slot = self.slot_tracker.root.load(.monotonic);
-        if (slot == 0) {
-            return error.RpcNoFinalizedSlot;
-        }
+    fn getSlotForCommitment(self: @This(), commitment: Commitment) !Slot {
+        const slot = switch (commitment) {
+            .processed => self.slot_tracker.latest_processed_slot.get(),
+            .confirmed => self.slot_tracker.latest_confirmed_slot.get(),
+            .finalized => self.slot_tracker.root.load(.monotonic),
+        };
+
+        if (slot == 0) return error.RpcNoSlotForCommitment;
         return slot;
     }
 
@@ -720,11 +718,7 @@ pub const SlotHookContext = struct {
     ) !Slot {
         const commitment = config.commitment orelse .finalized;
 
-        const slot = switch (commitment) {
-            .processed => try self.getLatestProcessedSlot(),
-            .confirmed => try self.getLatestConfirmedSlot(),
-            .finalized => try self.getLatestFinalizedSlot(),
-        };
+        const slot = try self.getSlotForCommitment(commitment);
 
         if (config.minContextSlot) |min_slot| {
             if (slot < min_slot) {
@@ -737,7 +731,109 @@ pub const SlotHookContext = struct {
 
     pub fn getSlot(self: @This(), _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
         const config = params.config orelse common.CommitmentSlotConfig{};
-
         return self.getSlotImpl(config);
+    }
+
+    pub fn getVoteAccounts(
+        self: @This(),
+        allocator: std.mem.Allocator,
+        params: GetVoteAccounts,
+    ) !GetVoteAccounts.Response {
+        const config: GetVoteAccounts.Config = params.config orelse .{};
+
+        // get slot for requested commitment. Agave uses finalized as default.
+        const slot = try self.getSlotForCommitment(config.commitment orelse Commitment.finalized);
+
+        // Get the root slot's state which contains stakes_cache.
+        const root_ref = self.slot_tracker.getRoot();
+
+        // Setup config consts for the request.
+        const delinquent_distance = config.delinquentSlotDistance orelse
+            DELINQUENT_VALIDATOR_SLOT_DISTANCE;
+        const keep_unstaked = config.keepUnstakedDelinquents orelse false;
+        const filter_pk = config.votePubkey;
+
+        // Get epoch info for epochVoteAccounts check
+        // const epoch = self.epoch_tracker.schedule.getEpoch(slot);
+        const epoch_constants = self.epoch_tracker.getPtrForSlot(slot);
+        const epoch_vote_accounts = if (epoch_constants) |ec|
+            &ec.stakes.stakes.vote_accounts
+        else
+            null;
+
+        var current_list = std.ArrayList(GetVoteAccounts.VoteAccount).init(allocator);
+        errdefer current_list.deinit();
+        var delinqt_list = std.ArrayList(GetVoteAccounts.VoteAccount).init(allocator);
+        errdefer delinqt_list.deinit();
+
+        // Access stakes cache (takes read lock).
+        const stakes, var stakes_guard = root_ref.state.stakes_cache.stakes.readWithLock();
+        const vote_accounts_map = &stakes.vote_accounts.vote_accounts;
+        for (vote_accounts_map.keys(), vote_accounts_map.values()) |vote_pk, stake_and_vote| {
+            // Apply filter if specified.
+            if (filter_pk) |f| {
+                if (!vote_pk.equals(&f)) continue;
+            }
+
+            const vote_state = stake_and_vote.account.state;
+            const activated_stake = stake_and_vote.stake;
+
+            // Get the slot this vote account last voted on.
+            // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1172
+            const last_vote_slot = vote_state.lastVotedSlot() orelse 0;
+
+            // Check if vote account is active in current epoch.
+            const is_epoch_vote_account = if (epoch_vote_accounts) |eva|
+                eva.vote_accounts.contains(vote_pk)
+            else
+                activated_stake > 0;
+
+            // Convert epoch credits to [3]u64 format
+            // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1174
+            const all_credits = vote_state.epoch_credits.items;
+            const num_credits_to_return = @min(
+                all_credits.len,
+                MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY,
+            );
+            const epoch_credits = all_credits[all_credits.len - num_credits_to_return ..];
+            var credits = try allocator.alloc([3]u64, num_credits_to_return);
+            for (epoch_credits, 0..) |ec, i| {
+                credits[i] = .{ ec.epoch, ec.credits, ec.prev_credits };
+            }
+
+            const info = GetVoteAccounts.VoteAccount{
+                .votePubkey = vote_pk,
+                .nodePubkey = vote_state.node_pubkey,
+                .activatedStake = activated_stake,
+                .epochVoteAccount = is_epoch_vote_account,
+                .commission = vote_state.commission,
+                .lastVote = last_vote_slot,
+                .epochCredits = credits,
+                // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1188
+                .rootSlot = vote_state.root_slot orelse 0,
+            };
+
+            // Partition by delinquent status. current is set when last_vote_slot > slot - delinquent_distance.
+            // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1194
+            const is_current = if (slot >= delinquent_distance)
+                last_vote_slot > slot - delinquent_distance
+            else
+                last_vote_slot > 0;
+
+            // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1203
+            if (is_current) {
+                try current_list.append(info);
+            } else {
+                if (keep_unstaked or activated_stake > 0) {
+                    try delinqt_list.append(info);
+                }
+            }
+        }
+        stakes_guard.unlock();
+
+        return .{
+            .current = try current_list.toOwnedSlice(),
+            .delinquent = try delinqt_list.toOwnedSlice(),
+        };
     }
 };
