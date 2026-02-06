@@ -4,6 +4,8 @@ const build_options = @import("build-options");
 
 const version = build_options.version;
 
+const feature_set = sig.core.features.FEATURE_SET_ID;
+
 pub const ClientVersion = struct {
     major: u16,
     minor: u16,
@@ -18,7 +20,7 @@ pub const ClientVersion = struct {
         .patch = version.patch,
         .commit = std.fmt.parseInt(u32, version.build orelse "0", 16) catch
             @compileError("failed to parse build"),
-        .feature_set = 0,
+        .feature_set = feature_set,
         .client = .sig,
     };
 
