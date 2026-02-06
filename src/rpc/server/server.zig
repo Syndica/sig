@@ -285,7 +285,7 @@ test "serveSpawn getSnapshot" {
     var rpc_hooks = sig.rpc.Hooks{};
     defer rpc_hooks.deinit(accountsdb.allocator);
 
-    try accountsdb.registerRPCHooks(&rpc_hooks);
+    try accountsdb.registerRPCHooks(&rpc_hooks, null, 0);
 
     const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
     var server_ctx = try Context.init(.{
@@ -440,7 +440,7 @@ test "serveSpawn getAccountInfo" {
 
     var rpc_hooks = sig.rpc.Hooks{};
     defer rpc_hooks.deinit(allocator);
-    try accountsdb.registerRPCHooks(&rpc_hooks);
+    try accountsdb.registerRPCHooks(&rpc_hooks, null, expected_slot);
 
     const test_sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
     var server_ctx = try Context.init(.{

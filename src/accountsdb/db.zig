@@ -8,6 +8,7 @@ const tracy = @import("tracy");
 
 const sysvar = sig.runtime.sysvar;
 const snapgen = sig.accounts_db.snapshot.data.generate;
+const methods = sig.rpc.methods;
 
 const Resolution = @import("../benchmarks.zig").Resolution;
 
@@ -2873,9 +2874,64 @@ pub const AccountsDB = struct {
         return slotSatisfiesMax(slot, max_slot) and slotSatisfiesMin(slot, min_slot);
     }
 
-    pub fn registerRPCHooks(self: *AccountsDB, rpc_hooks: *sig.rpc.Hooks) !void {
+    pub fn registerRPCHooks(
+        self: *AccountsDB,
+        rpc_hooks: *sig.rpc.Hooks,
+        slot_tracker: ?*const sig.replay.trackers.SlotTracker,
+        snapshot_slot: Slot,
+    ) !void {
         try rpc_hooks.set(self.allocator, struct {
             accountsdb: *AccountsDB,
+            slot_tracker: ?*const sig.replay.trackers.SlotTracker,
+            snapshot_slot: Slot,
+
+            pub fn getBalance(
+                this: @This(),
+                _: std.mem.Allocator,
+                params: methods.GetBalance,
+            ) !methods.GetBalance.Response {
+                const config = params.config orelse methods.common.CommitmentSlotConfig{};
+
+                const commitment = config.commitment orelse .finalized;
+                const commitment_slot: Slot = if (this.slot_tracker) |tracker|
+                    tracker.getSlotForCommitment(commitment)
+                else
+                    this.snapshot_slot;
+                const max_slot: ?Slot = if (commitment == .processed) null else commitment_slot;
+
+                // Check minContextSlot constraint.
+                if (config.minContextSlot) |min_slot| {
+                    if (commitment_slot < min_slot) {
+                        return error.RpcMinContextSlotNotMet;
+                    }
+                }
+
+                // Look up account
+                const result = this.accountsdb.getSlotAndAccountInSlotRangeWithReadLock(
+                    &params.pubkey,
+                    config.minContextSlot,
+                    max_slot,
+                ) catch return error.AccountsDbError;
+
+                const lamports: u64 = if (result) |r| blk: {
+                    const account, _, var account_lock = r;
+                    defer account_lock.unlock();
+
+                    break :blk switch (account) {
+                        .file => |aif| aif.account_info.lamports,
+                        .unrooted_map => |um| um.lamports,
+                    };
+                    // TODO: is defaulting to 0 the correct behavior here?
+                } else 0;
+
+                return .{
+                    .context = .{
+                        .slot = commitment_slot,
+                        .apiVersion = "2.0.15",
+                    },
+                    .value = lamports,
+                };
+            }
 
             pub fn getAccountInfo(
                 this: @This(),
@@ -3098,7 +3154,7 @@ pub const AccountsDB = struct {
 
                 return null;
             }
-        }{ .accountsdb = self });
+        }{ .accountsdb = self, .slot_tracker = slot_tracker, .snapshot_slot = snapshot_slot });
     }
 };
 
