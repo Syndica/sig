@@ -300,7 +300,7 @@ pub const GenesisConfig = struct {
         defer file.close();
 
         // Read the entire file to compute hash from raw bytes
-        const file_bytes = try file.readToEndAlloc(allocator, 1024 * 1024 * 100); // 100 MB max
+        const file_bytes = try file.readToEndAlloc(allocator, 100 * 1024 * 1024); // 100 MB max
         defer allocator.free(file_bytes);
 
         // Compute hash from original file bytes (this matches Agave's behavior)
