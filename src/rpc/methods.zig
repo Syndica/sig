@@ -686,3 +686,26 @@ pub const common = struct {
         shredVersion: ?u16 = null,
     };
 };
+
+pub const SlotHookContext = struct {
+    slot_tracker: *const sig.replay.trackers.SlotTracker,
+
+    fn getSlotImpl(
+        self: @This(),
+        config: common.CommitmentSlotConfig,
+    ) !Slot {
+        const commitment = config.commitment orelse .finalized;
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) {
+                return error.RpcMinContextSlotNotMet;
+            }
+        }
+        return slot;
+    }
+
+    pub fn getSlot(self: @This(), _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+        return self.getSlotImpl(config);
+    }
+};

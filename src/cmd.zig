@@ -1460,6 +1460,9 @@ fn validator(
     else
         null;
 
+    var latest_processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
+    var latest_confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db_two = &new_db },
@@ -1471,8 +1474,14 @@ fn validator(
         .voting_enabled = voting_enabled,
         .vote_account_address = maybe_vote_pubkey,
         .stop_at_slot = cfg.stop_at_slot,
+        .latest_processed_slot = &latest_processed_slot,
+        .latest_confirmed_slot = &latest_confirmed_slot,
     });
     defer replay_service_state.deinit(allocator);
+
+    try app_base.rpc_hooks.set(allocator, sig.rpc.methods.SlotHookContext{
+        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+    });
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
@@ -1710,6 +1719,9 @@ fn replayOffline(
         });
     }
 
+    var latest_processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
+    var latest_confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db_two = &new_db },
@@ -1721,6 +1733,8 @@ fn replayOffline(
         .voting_enabled = false,
         .vote_account_address = null,
         .stop_at_slot = cfg.stop_at_slot,
+        .latest_processed_slot = &latest_processed_slot,
+        .latest_confirmed_slot = &latest_confirmed_slot,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -2421,6 +2435,8 @@ const ReplayAndConsensusServiceState = struct {
             voting_enabled: bool,
             vote_account_address: ?Pubkey,
             stop_at_slot: ?Slot,
+            latest_processed_slot: *sig.replay.trackers.ForkChoiceProcessedSlot,
+            latest_confirmed_slot: *sig.replay.trackers.OptimisticallyConfirmedSlot,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
@@ -2491,6 +2507,8 @@ const ReplayAndConsensusServiceState = struct {
                 .hard_forks = hard_forks,
                 .replay_threads = params.replay_threads,
                 .stop_at_slot = params.stop_at_slot,
+                .latest_processed_slot = params.latest_processed_slot,
+                .latest_confirmed_slot = params.latest_confirmed_slot,
             }, if (params.disable_consensus) .disabled else .enabled);
         };
         errdefer replay_state.deinit();

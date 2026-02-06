@@ -10,6 +10,34 @@ const EpochSchedule = sig.core.EpochSchedule;
 const Slot = sig.core.Slot;
 const SlotConstants = sig.core.SlotConstants;
 const SlotState = sig.core.SlotState;
+const Commitment = sig.rpc.methods.common.Commitment;
+
+pub const ForkChoiceProcessedSlot = struct {
+    slot: std.atomic.Value(Slot) = .init(0),
+
+    /// Set the current processed slot (heaviest fork tip).
+    /// Uses store() because this can decrease when the fork choice
+    /// switches to a different fork with a lower slot.
+    pub fn set(self: *@This(), new_slot: Slot) void {
+        self.slot.store(new_slot, .monotonic);
+    }
+
+    pub fn get(self: *const @This()) Slot {
+        return self.slot.load(.monotonic);
+    }
+};
+
+pub const OptimisticallyConfirmedSlot = struct {
+    slot: std.atomic.Value(Slot) = .init(0),
+
+    pub fn update(self: *@This(), new_slot: Slot) void {
+        _ = self.slot.fetchMax(new_slot, .monotonic);
+    }
+
+    pub fn get(self: *const @This()) Slot {
+        return self.slot.load(.monotonic);
+    }
+};
 
 /// Central registry that tracks high-level info about slots and how they fork.
 ///
@@ -23,7 +51,9 @@ const SlotState = sig.core.SlotState;
 /// will end as soon as the items are removed.
 pub const SlotTracker = struct {
     slots: std.AutoArrayHashMapUnmanaged(Slot, *Element),
-    root: Slot,
+    latest_processed_slot: *ForkChoiceProcessedSlot,
+    latest_confirmed_slot: *OptimisticallyConfirmedSlot,
+    root: std.atomic.Value(Slot),
 
     pub const Element = struct {
         constants: SlotConstants,
@@ -44,13 +74,17 @@ pub const SlotTracker = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
+        latest_processed_slot: *ForkChoiceProcessedSlot,
+        latest_confirmed_slot: *OptimisticallyConfirmedSlot,
         root_slot: Slot,
         /// ownership is transferred to this function, except in the case of an error return
         slot_init: Element,
     ) std.mem.Allocator.Error!SlotTracker {
         var self: SlotTracker = .{
-            .root = root_slot,
+            .root = .init(root_slot),
             .slots = .empty,
+            .latest_processed_slot = latest_processed_slot,
+            .latest_confirmed_slot = latest_confirmed_slot,
         };
         errdefer self.deinit(allocator);
 
@@ -89,6 +123,14 @@ pub const SlotTracker = struct {
         return elem.toRef();
     }
 
+    pub fn getSlotForCommitment(self: *const SlotTracker, commitment: Commitment) Slot {
+        return switch (commitment) {
+            .processed => self.latest_processed_slot.get(),
+            .confirmed => self.latest_confirmed_slot.get(),
+            .finalized => self.root.load(.monotonic),
+        };
+    }
+
     pub const GetOrPutResult = struct {
         found_existing: bool,
         reference: Reference,
@@ -117,7 +159,7 @@ pub const SlotTracker = struct {
     }
 
     pub fn getRoot(self: *const SlotTracker) Reference {
-        return self.get(self.root).?; // root slot's bank must exist
+        return self.get(self.root.load(.monotonic)).?; // root slot's bank must exist
     }
 
     pub fn contains(self: *const SlotTracker, slot: Slot) bool {
@@ -191,8 +233,9 @@ pub const SlotTracker = struct {
 
         var slice = self.slots.entries.slice();
         var index: usize = 0;
+        const root = self.root.load(.monotonic);
         while (index < slice.len) {
-            if (slice.items(.key)[index] < self.root) {
+            if (slice.items(.key)[index] < root) {
                 const element = slice.items(.value)[index];
                 element.state.deinit(allocator);
                 element.constants.deinit(allocator);
@@ -214,6 +257,16 @@ pub const SlotTree = struct {
 
     const List = std.ArrayListUnmanaged;
     const min_age = 32;
+
+    /// Returns the highest slot among all fork tips (leaves).
+    /// In bypass mode (without ForkChoice), this represents the "processed" slot.
+    pub fn tip(self: *const SlotTree) Slot {
+        var max_slot: Slot = self.root.slot;
+        for (self.leaves.items) |leaf| {
+            max_slot = @max(max_slot, leaf.slot);
+        }
+        return max_slot;
+    }
 
     pub fn deinit(const_self: SlotTree, allocator: Allocator) void {
         var self = const_self;
@@ -486,10 +539,18 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
 test "SlotTracker.prune removes all slots less than root" {
     const allocator = std.testing.allocator;
     const root_slot: Slot = 4;
-    var tracker: SlotTracker = try .init(allocator, root_slot, .{
-        .constants = testDummySlotConstants(root_slot),
-        .state = .GENESIS,
-    });
+    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
+    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+    var tracker: SlotTracker = try .init(
+        allocator,
+        &processed_slot,
+        &confirmed_slot,
+        root_slot,
+        .{
+            .constants = testDummySlotConstants(root_slot),
+            .state = .GENESIS,
+        },
+    );
     defer tracker.deinit(allocator);
 
     // Add slots 1, 2, 3, 4, 5
@@ -510,6 +571,9 @@ test "SlotTracker.prune removes all slots less than root" {
     try std.testing.expect(!tracker.contains(1));
     try std.testing.expect(!tracker.contains(2));
     try std.testing.expect(!tracker.contains(3));
+
+    try std.testing.expectEqual(0, processed_slot.get());
+    try std.testing.expectEqual(0, confirmed_slot.get());
 }
 
 test "SlotTree: if no forks, root follows 32 behind latest" {
