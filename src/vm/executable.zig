@@ -5,7 +5,6 @@ const tracy = @import("tracy");
 const sbpf = sig.vm.sbpf;
 const memory = sig.vm.memory;
 
-const Elf = sig.vm.elf.Elf;
 const Instruction = sbpf.Instruction;
 const Register = Instruction.Register;
 const SyscallMap = sig.vm.SyscallMap;
@@ -20,41 +19,6 @@ pub const Executable = struct {
     text_vaddr: u64,
     function_registry: Registry,
     config: Config,
-
-    /// Takes ownership of the `Elf`.
-    pub fn fromElf(elf: Elf) Executable {
-        const text_section_addr = elf.getShdrByName(".text").?.sh_addr;
-        const text_vaddr = if (elf.version.enableElfVaddr() and
-            text_section_addr >= memory.RODATA_START)
-            text_section_addr
-        else
-            text_section_addr +| memory.RODATA_START;
-
-        return .{
-            .bytes = elf.bytes,
-            .ro_section = elf.ro_section,
-            .instructions = elf.getInstructions(),
-            .version = elf.version,
-            .entry_pc = elf.entry_pc,
-            .from_asm = false,
-            .text_vaddr = text_vaddr,
-            .function_registry = elf.function_registry,
-            .config = elf.config,
-        };
-    }
-
-    pub fn fromBytes(
-        allocator: std.mem.Allocator,
-        source: []u8,
-        loader: *const SyscallMap,
-        config: Config,
-    ) !Executable {
-        const zone = tracy.Zone.init(@src(), .{ .name = "Executable.fromBytes" });
-        defer zone.deinit();
-
-        const elf = try Elf.parse(allocator, source, loader, config);
-        return fromElf(elf);
-    }
 
     pub fn fromAsm(
         allocator: std.mem.Allocator,
@@ -123,10 +87,30 @@ pub const Executable = struct {
         };
     }
 
+    const VerifierError = error{
+        NoProgram,
+        DivisionByZero,
+        UnsupportedLEBEArgument,
+        LddwCannotBeLast,
+        IncompleteLddw,
+        JumpOutOfCode,
+        InvalidSourceRegister,
+        CannotWriteR10,
+        InvalidDestinationRegister,
+        UnknownOpCode,
+        InvalidRegister,
+        InvalidSyscall,
+        InvalidFunction,
+        UnalignedImmediate,
+        ShiftWithOverflow,
+        JumpToMiddleOfLddw,
+    };
+
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/verifier.rs#L227
     pub fn verify(
         self: *const Executable,
         loader: *const SyscallMap,
-    ) !void {
+    ) VerifierError!void {
         const zone = tracy.Zone.init(@src(), .{ .name = "Executable.Verify" });
         defer zone.deinit();
 
@@ -134,21 +118,27 @@ pub const Executable = struct {
         const instructions = self.instructions;
         if (instructions.len == 0) return error.NoProgram;
 
-        const map = self.function_registry.map;
-        var iter = map.iterator();
         var function_start: u64 = 0;
         var function_end: u64 = instructions.len;
-
         var pc: u64 = 0;
+
+        if (version.enableStricterVerification() and !instructions[pc].isFunctionStartMarker()) {
+            return error.InvalidFunction;
+        }
         while (pc + 1 <= instructions.len) : (pc += 1) {
             const inst = instructions[pc];
             var store: bool = false;
 
-            if (version.enableStaticSyscalls() and map.contains(pc)) {
-                function_start = if (iter.next()) |entry| entry.key_ptr.* else 0;
-                const before_index = iter.index;
-                function_end = if (iter.next()) |entry| entry.key_ptr.* else instructions.len;
-                iter.index = before_index;
+            if (version.enableStricterVerification() and inst.isFunctionStartMarker()) {
+                function_start = pc;
+                function_end = pc +| 1;
+
+                while (function_end < instructions.len and
+                    !instructions[function_end].isFunctionStartMarker())
+                {
+                    function_end +|= 1;
+                }
+
                 switch (instructions[function_end -| 1].opcode) {
                     .ja, .@"return" => {},
                     else => return error.InvalidFunction,
@@ -202,7 +192,7 @@ pub const Executable = struct {
                 => if (inst.imm >= 64) return error.ShiftWithOverflow,
 
                 .neg32,
-                => if (version.disableNegation()) return error.UnsupportedInstruction,
+                => if (version.disableNegation()) return error.UnknownOpCode,
 
                 .mul32_reg,
                 .div32_reg,
@@ -227,11 +217,11 @@ pub const Executable = struct {
                     return error.DivisionByZero;
                 },
 
-                .mul32_imm => if (version.enablePqr()) return error.UnsupportedInstruction,
+                .mul32_imm => if (version.enablePqr()) return error.UnknownOpCode,
                 .mod32_imm,
                 .div32_imm,
                 => if (version.enablePqr()) {
-                    return error.UnsupportedInstruction;
+                    return error.UnknownOpCode;
                 } else {
                     if (inst.imm == 0) return error.DivisionByZero;
                 },
@@ -252,7 +242,7 @@ pub const Executable = struct {
                 .urem64_reg,
                 .srem32_reg,
                 .srem64_reg,
-                => if (!version.enablePqr()) return error.UnsupportedInstruction,
+                => if (!version.enablePqr()) return error.UnknownOpCode,
 
                 .udiv32_imm,
                 .udiv64_imm,
@@ -264,13 +254,13 @@ pub const Executable = struct {
                 .srem64_imm,
                 => if (version.enablePqr()) {
                     if (inst.imm == 0) return error.DivisionByZero;
-                } else return error.UnsupportedInstruction,
+                } else return error.UnknownOpCode,
 
-                .hor64_imm => if (!version.disableLddw()) return error.UnsupportedInstruction,
+                .hor64_imm => if (!version.disableLddw()) return error.UnknownOpCode,
 
                 .le, .be => {
                     if (inst.opcode == .le and version.disableLe()) {
-                        return error.UnsupportedInstruction;
+                        return error.UnknownOpCode;
                     }
                     switch (inst.imm) {
                         16, 32, 64 => {},
@@ -303,6 +293,7 @@ pub const Executable = struct {
                 .jslt_reg,
                 => {
                     const destination = @as(i64, @bitCast(pc)) + 1 + inst.off;
+
                     if (destination < 0 or
                         destination < function_start or
                         destination >= function_end)
@@ -320,7 +311,7 @@ pub const Executable = struct {
                 .ld_h_reg,
                 .ld_w_reg,
                 .ld_dw_reg,
-                => if (version.moveMemoryInstructionClasses()) return error.UnsupportedInstruction,
+                => if (version.moveMemoryInstructionClasses()) return error.UnknownOpCode,
 
                 .st_b_imm,
                 .st_h_imm,
@@ -332,14 +323,14 @@ pub const Executable = struct {
                 .st_dw_reg,
                 => if (!version.moveMemoryInstructionClasses()) {
                     store = true;
-                } else return error.UnsupportedInstruction,
+                } else return error.UnknownOpCode,
 
                 .ld_4b_reg,
-                => if (!version.moveMemoryInstructionClasses()) return error.UnsupportedInstruction,
+                => if (!version.moveMemoryInstructionClasses()) return error.UnknownOpCode,
                 .st_4b_reg,
                 => if (version.moveMemoryInstructionClasses()) {
                     store = true;
-                } else return error.UnsupportedInstruction,
+                } else return error.UnknownOpCode,
 
                 .ld_dw_imm => if (!version.disableLddw()) {
                     // If this is the last instructions, half of it is missing!
@@ -347,11 +338,13 @@ pub const Executable = struct {
                     pc += 1;
                     const next_instruction = instructions[pc];
                     if (@intFromEnum(next_instruction.opcode) != 0) return error.IncompleteLddw;
-                } else return error.UnsupportedInstruction,
+                } else return error.UnknownOpCode,
 
                 .call_imm => if (version.enableStaticSyscalls()) {
                     const target_pc = version.computeTargetPc(pc, inst);
-                    if (!self.function_registry.map.contains(target_pc)) {
+                    if (target_pc >= instructions.len or
+                        !instructions[target_pc].isFunctionStartMarker())
+                    {
                         return error.InvalidFunction;
                     }
                 },
@@ -364,31 +357,25 @@ pub const Executable = struct {
                     if (@intFromEnum(reg) >= 10) return error.InvalidRegister;
                 },
 
-                .@"return" => if (!version.enableStaticSyscalls())
-                    return error.UnsupportedInstruction,
-                .exit_or_syscall => if (version.enableStaticSyscalls() and
-                    loader.get(inst.imm) == null)
-                {
-                    return error.InvalidSyscall;
+                .@"return" => if (!version.enableStaticSyscalls()) return error.UnknownOpCode,
+                .exit_or_syscall => if (version.enableStaticSyscalls()) {
+                    if (loader.get(inst.imm) == null) return error.InvalidSyscall;
                 },
 
-                else => return error.UnsupportedInstruction,
+                else => return error.UnknownOpCode,
             }
 
             try inst.checkRegisters(store, version);
         }
+
+        // The program counter should now be equal to the number of instructions.
+        if (pc != instructions.len) return error.JumpOutOfCode;
     }
 
-    /// When the executable comes from the assembler, we need to guarantee that the
-    /// instructions are aligned to `sbpf.Instruction` rather than 1 like they would be
-    /// if we created the executable from the Elf file. The GPA requires allocations and
-    /// deallocations to be made with the same semantic alignment.
     pub fn deinit(self: *const Executable, allocator: std.mem.Allocator) void {
-        if (self.from_asm) allocator.free(@as(
-            []const Instruction,
-            @alignCast(self.instructions),
-        ));
-
+        // Only deinit if we own the bytes/instructions, which is only the case
+        // for when we create the executable from assembly for testing.
+        if (self.from_asm) allocator.free(@as([]const Instruction, @alignCast(self.instructions)));
         self.ro_section.deinit(allocator);
         self.function_registry.deinit(allocator);
     }
@@ -513,19 +500,31 @@ pub const Assembler = struct {
 
                     const instruction: Instruction = switch (bind.inst) {
                         .alu_binary => inst: {
-                            const is_immediate = operands[1] == .integer;
-                            break :inst if (is_immediate) .{
+                            const is_register = operands[1] == .register;
+                            if (is_register) {
+                                break :inst .{
+                                    .opcode = @enumFromInt(bind.opc | Instruction.x),
+                                    .dst = operands[0].register,
+                                    .src = operands[1].register,
+                                    .off = 0,
+                                    .imm = 0,
+                                };
+                            }
+                            if (operands[0].register == .r10) {
+                                if (!version.enableDynamicStackFrames()) break :inst .{
+                                    .opcode = .or64_imm,
+                                    .dst = @enumFromInt(0),
+                                    .src = @enumFromInt(0),
+                                    .off = 0,
+                                    .imm = 0,
+                                };
+                            }
+                            break :inst .{
                                 .opcode = @enumFromInt(bind.opc | Instruction.k),
                                 .dst = operands[0].register,
                                 .src = .r0,
                                 .off = 0,
                                 .imm = @truncate(@as(u64, @bitCast(operands[1].integer))),
-                            } else .{
-                                .opcode = @enumFromInt(bind.opc | Instruction.x),
-                                .dst = operands[0].register,
-                                .src = operands[1].register,
-                                .off = 0,
-                                .imm = 0,
                             };
                         },
                         .alu_unary => .{
@@ -536,12 +535,11 @@ pub const Assembler = struct {
                             .imm = 0,
                         },
                         .no_operand => .{
-                            // Harded to work for both `exit` and `return`, even though
-                            // the `exit` instruction was technically deprecated.
-                            .opcode = if (version == .v0)
-                                .exit_or_syscall
-                            else
-                                .@"return",
+                            .opcode = switch (version) {
+                                .v0, .v1, .v2 => .exit_or_syscall,
+                                .v3 => .@"return",
+                                else => unreachable,
+                            },
                             .dst = .r0,
                             .src = .r0,
                             .off = 0,
@@ -560,7 +558,6 @@ pub const Assembler = struct {
                                         inst_ptr,
                                         &labels,
                                         operands[2].label,
-                                        version,
                                     )),
                                     .imm = @bitCast(@as(i32, @intCast(operands[1].integer))),
                                 } else .{
@@ -571,7 +568,6 @@ pub const Assembler = struct {
                                         inst_ptr,
                                         &labels,
                                         operands[2].label,
-                                        version,
                                     )),
                                     .imm = 0,
                                 };
@@ -596,12 +592,7 @@ pub const Assembler = struct {
                             .dst = .r0,
                             .src = .r0,
                             .off = switch (operands[0]) {
-                                .label => |label| @intCast(resolveLabel(
-                                    inst_ptr,
-                                    &labels,
-                                    label,
-                                    version,
-                                )),
+                                .label => |label| @intCast(resolveLabel(inst_ptr, &labels, label)),
                                 .integer => |int| @intCast(int),
                                 else => unreachable,
                             },
@@ -654,18 +645,17 @@ pub const Assembler = struct {
                         .call_imm => inst: {
                             const is_label = operands[0] == .label;
                             if (is_label) {
-                                const label = operands[0].label;
+                                var target_pc: i64 = labels.get(operands[0].label) orelse
+                                    std.debug.panic("label not found: {s}", .{name});
+                                if (version.enableStaticSyscalls()) {
+                                    target_pc = target_pc - inst_ptr - 1;
+                                }
                                 break :inst .{
                                     .opcode = @enumFromInt(bind.opc),
                                     .dst = .r0,
                                     .src = .r1,
                                     .off = 0,
-                                    .imm = @bitCast(resolveLabel(
-                                        inst_ptr,
-                                        &labels,
-                                        label,
-                                        version,
-                                    )),
+                                    .imm = @bitCast(@as(i32, @intCast(target_pc))),
                                 };
                             } else {
                                 const offset = operands[0].integer;
@@ -743,14 +733,10 @@ pub const Assembler = struct {
         inst_ptr: u32,
         labels: *const std.StringHashMapUnmanaged(u32),
         name: []const u8,
-        version: sbpf.Version,
     ) i32 {
-        var target_pc: i64 = labels.get(name) orelse
+        const target_pc: i64 = labels.get(name) orelse
             std.debug.panic("label not found: {s}", .{name});
-        if (version.enableStaticSyscalls()) {
-            target_pc = target_pc - inst_ptr - 1;
-        }
-        return @intCast(target_pc);
+        return @intCast(target_pc - inst_ptr - 1);
     }
 
     fn tokenize(self: *Assembler, allocator: std.mem.Allocator) ![]const Statement {
@@ -939,8 +925,6 @@ pub const Config = struct {
     stack_frame_size: usize = 4096,
     /// Enable instruction meter and limiting
     enable_instruction_meter: bool = true,
-    /// Enable dynamic string allocation for labels
-    enable_symbol_and_section_labels: bool = false,
     /// Reject ELF files containing issues that the verifier did not catch before (up to v0.2.21)
     reject_broken_elfs: bool = false,
     /// Avoid copying read only sections when possible

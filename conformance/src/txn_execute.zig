@@ -5,7 +5,6 @@ const utils = @import("utils.zig");
 const protobuf = @import("protobuf");
 
 const EMIT_LOGS = false;
-const TOGGLE_DIRECT_MAPPING = false;
 const STACK_SIZE = 32 * 1024 * 1024;
 
 /// [fd] https://github.com/firedancer-io/firedancer/blob/61e3d2e21419fc71002aa1c037ab637cea85416d/src/flamenco/runtime/tests/harness/fd_exec_sol_compat.c#L583
@@ -129,7 +128,7 @@ fn executeTxnContext(
     }
 
     // Load info from the protobuf transaction context
-    var feature_set = try loadFeatureSet(&pb_txn_ctx);
+    var feature_set = try utils.loadFeatureSet(&pb_txn_ctx);
 
     const blockhashes = try loadBlockhashes(allocator, &pb_txn_ctx);
     defer allocator.free(blockhashes);
@@ -358,7 +357,6 @@ fn executeTxnContext(
                 &feature_set,
                 &compute_budget,
                 slot,
-                false,
                 false,
             );
         }
@@ -763,11 +761,14 @@ fn executeTxnContext(
     defer transaction.deinit(allocator);
 
     // Verify transaction
-    const msg_hash, const compute_budget_instruction_details =
-        switch (preprocessTransaction(transaction, .skip_sig_verify)) {
-            .ok => |hash| hash,
-            .err => |err| return serializeSanitizationError(err),
-        };
+    const msg_hash, const compute_budget_instruction_details = switch (preprocessTransaction(
+        transaction,
+        .skip_sig_verify,
+        feature_set.active(.static_instruction_limit, slot),
+    )) {
+        .ok => |hash| hash,
+        .err => |err| return serializeSanitizationError(err),
+    };
 
     // Resolve transaction
     const resolved_transaction = resolveTransaction(allocator, transaction, .{
@@ -906,12 +907,6 @@ fn serializeOutput(
 
     const errors = utils.convertTransactionError(txn.err);
 
-    // Special casing to return only the custom error for transactions which have
-    // encountered the loader v4 program or bpf loader v3 migrate instruction.
-    if (errors.custom_error == 0x30000000 or errors.custom_error == 0x40000000) {
-        return .{ .custom_error = errors.custom_error };
-    }
-
     var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
     errdefer acct_states.deinit();
     if (result.ok.outputs != null and result.ok.err != null) {
@@ -930,22 +925,6 @@ fn serializeOutput(
             } else false;
 
             if (was_an_input_and_is_writable) try acct_states.append(
-                try sharedAccountToState(allocator, account.pubkey, account.account),
-            );
-        }
-    } else if (result.ok.outputs == null and result.ok.err != null) {
-        // This block exists solely to replicate a bug in solfuzz_agave.
-        // solfuzz_agave zips the rollback accounts with the list of all
-        // accounts, but they don't line up correctly. The rollback accounts are
-        // actually all writeable, but solfuzz_agave filters them out because it
-        // mistakenly compares them against the is_writable field from a totally
-        // different account. This is nonsense, but we need to replicate the bug
-        // in order to return a conformant set of accounts.
-        // https://github.com/firedancer-io/solfuzz-agave/blob/dfbb3f36a3866a82db5eed03fde068940297858e/src/txn_fuzzer.rs#L553
-        // https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=139114012
-        const writes = result.ok.writes.slice();
-        for (writes, sanitized.accounts.items(.is_writable)[0..writes.len]) |account, is_writable| {
-            if (is_writable) try acct_states.append(
                 try sharedAccountToState(allocator, account.pubkey, account.account),
             );
         }
@@ -1008,7 +987,6 @@ fn sharedAccountToState(
         .data = data_duped,
         .executable = value.executable,
         .owner = owner_duped,
-        .seed_addr = null,
     };
 }
 
@@ -1022,36 +1000,10 @@ fn parsePubkey(bytes: []const u8) !Pubkey {
     return .{ .data = bytes[0..Pubkey.SIZE].* };
 }
 
-fn loadSlot(pb_txn_ctx: *const pb.TxnContext) u64 {
-    return if (pb_txn_ctx.slot_ctx) |ctx| ctx.slot else 10;
-}
-
-fn loadFeatureSet(pb_txn_ctx: *const pb.TxnContext) !FeatureSet {
-    var feature_set: FeatureSet = set: {
-        const maybe_pb_features = if (pb_txn_ctx.epoch_ctx) |epoch_ctx|
-            if (epoch_ctx.features) |pb_features| pb_features else null
-        else
-            null;
-
-        const pb_features = maybe_pb_features orelse break :set .ALL_DISABLED;
-
-        var feature_set: FeatureSet = .ALL_DISABLED;
-        for (pb_features.features.items) |id| {
-            // only way for `setId` to fail is if the `id` doesn't exist.
-            feature_set.setSlotId(id, 0) catch std.debug.panic("unknown id: 0x{x}", .{id});
-        }
-        break :set feature_set;
-    };
-
-    if (TOGGLE_DIRECT_MAPPING) {
-        if (feature_set.active(.bpf_account_data_direct_mapping, 0)) {
-            feature_set.disable(.bpf_account_data_direct_mapping);
-        } else {
-            feature_set.setSlot(.bpf_account_data_direct_mapping, 0);
-        }
-    }
-
-    return feature_set;
+/// [agave] https://github.com/firedancer-io/solfuzz-agave/blob/agave-v3.1.0-beta.0/src/txn_fuzzer.rs#L319-L323
+fn loadSlot(txn_ctx: *const pb.TxnContext) u64 {
+    const slot = if (txn_ctx.slot_context) |ctx| ctx.slot else return 10;
+    return if (slot == 0) 10 else slot;
 }
 
 /// Load blockhashes from the protobuf transaction context.

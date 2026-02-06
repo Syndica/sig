@@ -27,6 +27,7 @@ const EpochSchedule = sig.core.EpochSchedule;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 const VoteProgramInstruction = vote_instruction.Instruction;
+const VoteVersion = vote_instruction.Version;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/2b0966de426597399ed4570d4e6c0635db2f80bf/programs/vote/src/vote_processor.rs#L54
 pub fn execute(
@@ -36,9 +37,11 @@ pub fn execute(
     const zone = tracy.Zone.init(@src(), .{ .name = "vote: execute" });
     defer zone.deinit();
 
+    const tc = ic.tc;
+
     // Default compute units for the system program are applied via the declare_process_instruction macro
-    // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/vote/src/vote_processor.rs#L55C40-L55C45
-    try ic.tc.consumeCompute(vote_program.COMPUTE_UNITS);
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/programs/vote/src/vote_processor.rs#L55
+    try tc.consumeCompute(vote_program.COMPUTE_UNITS);
 
     var vote_account = try ic.borrowInstructionAccount(
         @intFromEnum(vote_instruction.InitializeAccount.AccountIndex.account),
@@ -48,6 +51,13 @@ pub fn execute(
     if (!vote_account.account.owner.equals(&vote_program.ID)) {
         return InstructionError.InvalidAccountOwner;
     }
+
+    const target_version: VoteVersion = if (tc.feature_set.active(.vote_state_v4, tc.slot))
+        .v4
+    else
+        .v3;
+    // We will need to implement vote-state v4 for Alpenglow.
+    if (target_version == .v4) @panic("TODO: implement vote state v4");
 
     const instruction = try ic.ixn_info.deserializeInstruction(
         allocator,
@@ -271,7 +281,6 @@ fn executeAuthorize(
     );
 
     const signers = ic.ixn_info.getSigners();
-
     try authorize(
         allocator,
         ic,
@@ -308,11 +317,6 @@ fn authorize(
 
     switch (vote_authorize) {
         .voter => {
-            const authorized_withdrawer_signer = !std.meta.isError(validateIsSigner(
-                vote_state.withdrawer,
-                signers,
-            ));
-
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L697-L701
             const target_epoch = std.math.add(u64, clock.leader_schedule_epoch, 1) catch {
                 return InstructionError.InvalidAccountData;
@@ -326,13 +330,11 @@ fn authorize(
 
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L701-L709
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L701-L709
-            // current authorized withdrawer or epoch authorized voter must sign transaction.
-            if (!authorized_withdrawer_signer) {
-                _ = try validateIsSigner(
-                    epoch_authorized_voter,
-                    signers,
-                );
-            }
+            // The current authorized withdrawer or the epoch authorized voter must sign the transaction.
+            validateIsSigner(vote_state.withdrawer, signers) catch {
+                // If the vote state isn't a valid signer, check if the epoch voter is.
+                try validateIsSigner(epoch_authorized_voter, signers);
+            };
 
             const maybe_err = try vote_state.setNewAuthorizedVoter(
                 allocator,
@@ -345,15 +347,7 @@ fn authorize(
             }
         },
         .withdrawer => {
-            // current authorized withdrawer must say "yay".
-            const authorized_withdrawer_signer = !std.meta.isError(validateIsSigner(
-                vote_state.withdrawer,
-                signers,
-            ));
-
-            if (!authorized_withdrawer_signer) {
-                return InstructionError.MissingRequiredSignature;
-            }
+            try validateIsSigner(vote_state.withdrawer, signers);
             vote_state.withdrawer = authorized;
         },
     }
@@ -409,7 +403,7 @@ fn authorizeWithSeed(
     const clock = try ic.getSysvarWithAccountCheck(Clock, clock_index);
 
     const signer_meta = ic.ixn_info.getAccountMetaAtIndex(signer_index) orelse
-        return InstructionError.NotEnoughAccountKeys;
+        return InstructionError.MissingAccount;
 
     const expected_authority_keys = if (signer_meta.is_signer)
         &[_]Pubkey{pubkey_utils.createWithSeed(
@@ -490,19 +484,13 @@ fn executeAuthorizeChecked(
         @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.clock_sysvar),
     );
 
-    const authorize_pubkey = switch (vote_authorize) {
-        .voter => VoteAuthorize.voter,
-        .withdrawer => VoteAuthorize.withdrawer,
-    };
-
     const signers = ic.ixn_info.getSigners();
-
     try authorize(
         allocator,
         ic,
         vote_account,
         new_authority_meta.pubkey,
-        authorize_pubkey,
+        vote_authorize,
         clock,
         signers.constSlice(),
     );
@@ -1062,6 +1050,7 @@ fn setVoteState(
             .last_timestamp = state.last_timestamp,
         } });
     }
+
     return account.serializeIntoAccountData(VoteStateVersions{ .current = state.* });
 }
 

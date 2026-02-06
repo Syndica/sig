@@ -23,10 +23,6 @@ const ComputeBudget = sig.runtime.ComputeBudget;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 pub const ExecuteContextsParams = struct {
-    // If a user requires a mutable reference to the created feature set, they should
-    // allocate it themselves and pass it in the params. Deinitialization is handled
-    // by deinitTransactionContext.
-    feature_set_ptr: ?*FeatureSet = null,
     feature_set: []const FeatureParams = &.{},
     epoch_stakes: []const EpochStakeParam = &.{},
 
@@ -131,10 +127,7 @@ fn initTransactionContext(
         @compileError("createTransactionContext should only be called in test mode");
 
     // Create FeatureSet
-    const feature_set = if (params.feature_set_ptr) |ptr|
-        ptr
-    else
-        try allocator.create(FeatureSet);
+    const feature_set = try allocator.create(FeatureSet);
     feature_set.* = try createFeatureSet(params.feature_set);
 
     // Create ProgramMap
@@ -282,9 +275,7 @@ pub fn createEpochStakes(
 }
 
 pub fn createFeatureSet(params: []const ExecuteContextsParams.FeatureParams) !FeatureSet {
-    if (!builtin.is_test)
-        @compileError("createFeatureSet should only be called in test mode");
-
+    if (!builtin.is_test) @compileError("createFeatureSet should only be called in test mode");
     var feature_set: FeatureSet = .ALL_DISABLED;
     for (params) |args| feature_set.setSlot(args.feature, args.slot);
     return feature_set;

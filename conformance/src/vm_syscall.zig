@@ -104,7 +104,7 @@ fn executeSyscall(
     // } else {
     //     try pb_instr_ctx.accounts.append(.{
     //         .address = try pb_instr_ctx.program_id.dupe(allocator),
-    //         .owner = protobuf.ManagedString.static(&(.{0} ** 32)),
+    //         .owner = protobuf.ManagedString.static(comptime &(.{0} ** 32)),
     //     });
     // }
 
@@ -130,16 +130,14 @@ fn executeSyscall(
     );
 
     const reject_broken_elfs = false;
-    const debugging_features = false;
     const direct_mapping = tc.feature_set.active(
-        .bpf_account_data_direct_mapping,
+        .account_data_direct_mapping,
         tc.slot,
     );
     const config = sig.vm.Environment.initV1Config(
         tc.feature_set,
         &tc.compute_budget,
         tc.slot,
-        debugging_features,
         reject_broken_elfs,
     );
     vm_environment.config = config;
@@ -215,18 +213,15 @@ fn executeSyscall(
         .mask_out_rent_epoch_in_vm_serialization,
         tc.slot,
     );
-    var parameter_bytes, var regions, const accounts_metadata = try serialize.serializeParameters(
+    var serialized = try serialize.serializeParameters(
         allocator,
         ic,
         direct_mapping,
         stricter_abi_and_runtime_constraints,
         mask_out_rent_epoch_in_vm_serialization,
     );
-    defer {
-        parameter_bytes.deinit(allocator);
-        regions.deinit(allocator);
-    }
-    tc.serialized_accounts = accounts_metadata;
+    defer serialized.deinit(allocator);
+    tc.serialized_accounts = serialized.account_metas;
 
     if (pb_vm.heap_max > HEAP_MAX) return error.InvalidHeapSize;
 
@@ -253,7 +248,7 @@ fn executeSyscall(
         ),
         memory.Region.init(.mutable, heap, memory.HEAP_START),
     });
-    try input_memory_regions.appendSlice(allocator, regions.items);
+    try input_memory_regions.appendSlice(allocator, serialized.regions.items);
 
     const memory_map = try memory.MemoryMap.init(
         allocator,
@@ -268,19 +263,26 @@ fn executeSyscall(
         memory_map,
         syscall_registry,
         stack.len,
+        0,
         &tc,
     );
     defer vm.deinit();
 
-    // r0 is the return value register
-    // r1-5 are the argument registers
-    // r6-11 aren't used by the syscalls
-    vm.registers.set(.r0, 0);
+    // NOTE: We do not set the value of r0, as it'll always be overridden by `dispatchSyscall`
+    // in the "real world". We might consider having every syscall set `r0 = 0` when they return
+    // without error, however this is generally more error-prone.
+    // vm.registers.set(.r0, pb_vm.r0);
     vm.registers.set(.r1, pb_vm.r1);
     vm.registers.set(.r2, pb_vm.r2);
     vm.registers.set(.r3, pb_vm.r3);
     vm.registers.set(.r4, pb_vm.r4);
     vm.registers.set(.r5, pb_vm.r5);
+    vm.registers.set(.r6, pb_vm.r6);
+    vm.registers.set(.r7, pb_vm.r7);
+    vm.registers.set(.r8, pb_vm.r8);
+    vm.registers.set(.r9, pb_vm.r9);
+    vm.registers.set(.r10, pb_vm.r10);
+    vm.registers.set(.pc, pb_vm.r11);
 
     utils.copyPrefix(heap, pb_syscall_invocation.heap_prefix.getSlice());
     utils.copyPrefix(stack, pb_syscall_invocation.stack_prefix.getSlice());
@@ -313,15 +315,6 @@ fn executeSyscall(
             instr_info.program_meta.pubkey,
             err,
         );
-    }
-
-    // Special casing to return only the custom error for transactions which have
-    // encountered the loader v4 program or bpf loader v3 migrate instruction.
-    if (tc.custom_error == 0x30000000 or tc.custom_error == 0x40000000) {
-        return .{
-            .@"error" = tc.custom_error.?,
-            .input_data_regions = .init(allocator),
-        };
     }
 
     const effects = try utils.createSyscallEffect(allocator, .{

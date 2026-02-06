@@ -27,49 +27,33 @@ const InstructionContext = sig.runtime.InstructionContext;
 // const MAX_SEED_LEN = sig.runtime.pubkey_utils.MAX_SEED_LEN;
 pub const SEED_FIELD_CONFIG = sig.bincode.utf8StringCodec([]const u8, 1024 * 1024);
 
-const EntrypointFn = *const fn (
-    std.mem.Allocator,
-    *InstructionContext,
-) (error{OutOfMemory} || InstructionError)!void;
+const Program = struct {
+    func: EntrypointFn,
+    gate: ?sig.core.features.Feature = null,
 
-const StaticFuncMap = struct {
-    keys: []const sig.core.Pubkey,
-    values: []const EntrypointFn,
-
-    fn init(entries: []const struct { sig.core.Pubkey, EntrypointFn }) StaticFuncMap {
-        var keys: []const sig.core.Pubkey = &.{};
-        var values: []const EntrypointFn = &.{};
-        for (entries) |entry| {
-            keys = keys ++ [_]sig.core.Pubkey{entry.@"0"};
-            values = values ++ [_]EntrypointFn{entry.@"1"};
-        }
-        return .{ .keys = keys, .values = values };
-    }
-
-    pub fn get(self: *const StaticFuncMap, key: *const sig.core.Pubkey) ?EntrypointFn {
-        for (self.keys, 0..) |k, i|
-            if (k.equals(key)) return self.values[i];
-        return null;
-    }
+    const EntrypointFn = *const fn (
+        std.mem.Allocator,
+        *InstructionContext,
+    ) (error{OutOfMemory} || InstructionError)!void;
 };
 
 // zig fmt: off
-pub const PROGRAM_ENTRYPOINTS: StaticFuncMap = .init(&.{
-    .{ bpf_loader.v1.ID       , bpf_loader.execute           },
-    .{ bpf_loader.v2.ID       , bpf_loader.execute           },
-    .{ bpf_loader.v3.ID       , bpf_loader.execute           },
-    .{ bpf_loader.v4.ID       , bpf_loader.execute           },
-    .{ system.ID              , system.execute               },
-    .{ vote.ID                , vote.execute                 },
-    .{ address_lookup_table.ID, address_lookup_table.execute },
-    .{ compute_budget.ID      , compute_budget.entrypoint    },
-    .{ zk_elgamal.ID          , zk_elgamal.execute           },
-    .{ stake.ID               , stake.execute                },
+pub const NATIVE = sig.utils.pht(Program, &.{
+    .{ bpf_loader.v1.ID,        .{ .func = bpf_loader.execute } },
+    .{ bpf_loader.v2.ID,        .{ .func = bpf_loader.execute } },
+    .{ bpf_loader.v3.ID,        .{ .func = bpf_loader.execute } },
+    .{ bpf_loader.v4.ID,        .{ .func = bpf_loader.execute, .gate = .enable_loader_v4 } },
+    .{ system.ID,               .{ .func = system.execute } },
+    .{ vote.ID,                 .{ .func = vote.execute } },
+    .{ address_lookup_table.ID, .{ .func = address_lookup_table.execute } },
+    .{ compute_budget.ID,       .{ .func = compute_budget.entrypoint } },
+    .{ stake.ID,                .{ .func = stake.execute } },
+    .{ zk_elgamal.ID,           .{ .func = zk_elgamal.execute, .gate = .zk_elgamal_proof_program_enabled } },
 });
-pub const PRECOMPILE_ENTRYPOINTS: StaticFuncMap = .init(&.{
-    .{ precompiles.ed25519.ID  , precompiles.ed25519.execute  },
-    .{ precompiles.secp256k1.ID, precompiles.secp256k1.execute },
-    .{ precompiles.secp256r1.ID, precompiles.secp256r1.execute },
 
+pub const PRECOMPILE = sig.utils.pht(Program, &.{
+    .{ precompiles.ed25519.ID,      .{ .func = precompiles.ed25519.execute } },
+    .{ precompiles.secp256k1.ID,    .{ .func = precompiles.secp256k1.execute } },
+    .{ precompiles.secp256r1.ID,    .{ .func = precompiles.secp256r1.execute } },
 });
 // zig fmt: on

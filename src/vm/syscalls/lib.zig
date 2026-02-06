@@ -169,8 +169,8 @@ pub const Syscall = enum {
         .sol_get_epoch_stake = getEpochStake,
         .sol_remaining_compute_units = remainingComputeUnits,
 
-        .sol_invoke_signed_c = cpi.invokeSignedC,
-        .sol_invoke_signed_rust = cpi.invokeSignedRust,
+        .sol_invoke_signed_c = cpi.invokeSigned(cpi.AccountInfoC),
+        .sol_invoke_signed_rust = cpi.invokeSigned(cpi.AccountInfoRust),
     });
 
     const Gate = struct {
@@ -391,7 +391,7 @@ const ProcessedSiblingInstruction = extern struct {
     accounts_len: u64,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/4d9d57c433b491689ba7793aa9339eae22c218d3/programs/bpf_loader/src/syscalls/mod.rs#L1529
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/syscalls/src/lib.rs#L1450-L1536
 pub fn getProcessedSiblingInstruction(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -428,66 +428,30 @@ pub fn getProcessedSiblingInstruction(
         if (header.data_len == info.instruction_data.len and
             header.accounts_len == info.account_metas.items.len)
         {
-            const program_id = try memory_map.translateType(
-                Pubkey,
-                .mutable,
-                program_id_addr,
-                check_aligned,
-            );
-            const data = try memory_map.translateSlice(
-                u8,
-                .mutable,
-                data_addr,
-                header.data_len,
-                check_aligned,
-            );
-            const accounts = try memory_map.translateSlice(
-                AccountMeta,
-                .mutable,
-                accounts_addr,
-                header.accounts_len,
-                check_aligned,
-            );
-            if (memops.isOverlapping(
-                @intFromPtr(header),
-                @sizeOf(ProcessedSiblingInstruction),
-                @intFromPtr(program_id),
-                @sizeOf(Pubkey),
-            ) or memops.isOverlapping(
-                @intFromPtr(header),
-                @sizeOf(ProcessedSiblingInstruction),
-                @intFromPtr(accounts.ptr),
-                accounts.len *| @sizeOf(AccountMeta),
-            ) or memops.isOverlapping(
-                @intFromPtr(header),
-                @sizeOf(ProcessedSiblingInstruction),
-                @intFromPtr(data.ptr),
-                data.len,
-            ) or memops.isOverlapping(
-                @intFromPtr(program_id),
-                @sizeOf(Pubkey),
-                @intFromPtr(data.ptr),
-                data.len,
-            ) or memops.isOverlapping(
-                @intFromPtr(program_id),
-                @sizeOf(Pubkey),
-                @intFromPtr(accounts.ptr),
-                accounts.len *| @sizeOf(AccountMeta),
-            ) or memops.isOverlapping(
-                @intFromPtr(data.ptr),
-                data.len,
-                @intFromPtr(accounts.ptr),
-                accounts.len *| @sizeOf(AccountMeta),
-            )) {
+            // sig fmt: off
+            const program_id = try memory_map.translateType(Pubkey, .mutable, program_id_addr, check_aligned);
+            const data = try memory_map.translateSlice(u8, .mutable, data_addr, header.data_len, check_aligned);
+            const accounts = try memory_map.translateSlice(AccountMeta, .mutable, accounts_addr, header.accounts_len, check_aligned);
+            // sig fmt: on
+
+            if (memops.isOverlapping(header, program_id) or
+                memops.isOverlapping(header, accounts) or
+                memops.isOverlapping(header, data) or
+                memops.isOverlapping(program_id, accounts) or
+                memops.isOverlapping(program_id, data) or
+                memops.isOverlapping(data, accounts))
+            {
                 return SyscallError.CopyOverlapping;
             }
 
             program_id.* = info.program_meta.pubkey;
             @memcpy(data, info.instruction_data);
 
+            // Ensured by the if-check before the `translate*` calls above.
+            std.debug.assert(info.account_metas.items.len == accounts.len);
             for (info.account_metas.items, 0..) |meta, i| {
                 const acc = tc.getAccountAtIndex(meta.index_in_transaction) orelse
-                    return InstructionError.NotEnoughAccountKeys;
+                    return InstructionError.MissingAccount;
 
                 accounts[i] = .{
                     .pubkey = acc.pubkey,
@@ -499,11 +463,10 @@ pub fn getProcessedSiblingInstruction(
 
         header.data_len = info.instruction_data.len;
         header.accounts_len = info.account_metas.items.len;
-        registers.set(.r0, 1);
+        registers.set(.r0, 1); // true
         return;
     }
-
-    registers.set(.r0, 0);
+    registers.set(.r0, 0); // false
     return;
 }
 
@@ -568,33 +531,26 @@ pub fn getReturnData(
         const cost = (length +| @sizeOf(Pubkey)) / tc.compute_budget.cpi_bytes_per_unit;
         try tc.consumeCompute(cost);
 
-        const return_data_result = try memory_map.translateSlice(
+        const return_data_ptr = try memory_map.translateSlice(
             u8,
             .mutable,
             return_data_addr,
             length,
             tc.getCheckAligned(),
         );
-
-        const program_id_result = try memory_map.translateType(
+        const program_id_ptr = try memory_map.translateType(
             Pubkey,
             .mutable,
             program_id_addr,
             tc.getCheckAligned(),
         );
 
-        if (memops.isOverlapping(
-            @intFromPtr(return_data_result.ptr),
-            length,
-            @intFromPtr(program_id_result),
-            @sizeOf(Pubkey),
-        )) {
+        if (memops.isOverlapping(return_data_ptr, program_id_ptr)) {
             return SyscallError.CopyOverlapping;
         }
 
-        const source = return_data[0..length];
-        @memcpy(return_data_result, source);
-        program_id_result.* = program_id;
+        @memcpy(return_data_ptr, return_data[0..length]);
+        program_id_ptr.* = program_id;
     }
 
     registers.set(.r0, return_data.len);
@@ -645,7 +601,6 @@ pub fn panic(
     if (!std.unicode.utf8ValidateSlice(message)) {
         return SyscallError.InvalidString;
     }
-
     return SyscallError.Panic;
 }
 
@@ -658,7 +613,7 @@ pub fn findProgramAddress(
     const seeds_addr = registers.get(.r1);
     const seeds_len = registers.get(.r2);
     const program_id_addr = registers.get(.r3);
-    const address_addr = registers.get(.r4);
+    const pubkey_addr = registers.get(.r4);
     const bump_seed_addr = registers.get(.r5);
 
     const cost = tc.compute_budget.create_program_address_units;
@@ -680,34 +635,31 @@ pub fn findProgramAddress(
             &.{bump_seed},
             program_id,
         ) catch {
-            bump_seed -|= 1;
+            // NOTE: This subtraction cannot fail as we iterate a maximum of 255 times.
+            bump_seed -= 1;
             try tc.consumeCompute(cost);
             continue;
         };
 
-        const bump_seed_ref = try memory_map.translateType(
+        const bump_seed_ptr = try memory_map.translateType(
             u8,
             .mutable,
             bump_seed_addr,
             check_aligned,
         );
-        const address = try memory_map.translateSlice(
-            u8,
+        const pubkey_ptr = try memory_map.translateType(
+            Pubkey,
             .mutable,
-            address_addr,
-            @sizeOf(Pubkey),
+            pubkey_addr,
             check_aligned,
         );
 
-        if (memops.isOverlapping(
-            @intFromPtr(bump_seed_ref),
-            @sizeOf(u8),
-            @intFromPtr(address.ptr),
-            address.len,
-        )) return SyscallError.CopyOverlapping;
+        if (memops.isOverlapping(bump_seed_ptr, pubkey_ptr)) {
+            return SyscallError.CopyOverlapping;
+        }
 
-        bump_seed_ref.* = bump_seed;
-        @memcpy(address, std.mem.asBytes(&new_address));
+        bump_seed_ptr.* = bump_seed;
+        pubkey_ptr.* = new_address;
         return; // r0 = 0
     }
 
@@ -737,7 +689,11 @@ pub fn createProgramAddress(
         check_aligned,
     );
 
-    const new_address = pubkey_utils.createProgramAddress(seeds.slice(), &.{}, program_id) catch {
+    const new_address = pubkey_utils.createProgramAddress(
+        seeds.constSlice(),
+        &.{},
+        program_id,
+    ) catch {
         registers.set(.r0, 1);
         return;
     };
@@ -834,16 +790,18 @@ fn callProgramAddressSyscall(
     }
 
     // seeds_addr is only finalized now, but should appear before the others.
-    try regions.appendSlice(&.{
-        memory.Region.init(.constant, std.mem.sliceAsBytes(seed_slices.items), seeds_addr),
-    });
+    try regions.append(memory.Region.init(
+        .constant,
+        std.mem.sliceAsBytes(seed_slices.items),
+        seeds_addr,
+    ));
     std.mem.sort(memory.Region, regions.items, {}, struct {
         fn less(_: void, r1: memory.Region, r2: memory.Region) bool {
             return r1.vm_addr_start < r2.vm_addr_start;
         }
     }.less);
 
-    var memory_map = try MemoryMap.init(allocator, regions.items, .v3, .{});
+    var memory_map = try MemoryMap.init(allocator, regions.items, .v2, .{});
     defer memory_map.deinit(allocator);
 
     var registers = RegisterMap.initFill(0);
@@ -877,7 +835,7 @@ test findProgramAddress {
     }
 
     const cost = tc.compute_budget.create_program_address_units;
-    const address = sig.runtime.program.bpf_loader.v3.ID;
+    const address = sig.runtime.program.bpf_loader.v2.ID;
     const max_tries: u64 = 256; // once per seed
 
     for (0..1000) |_| {
@@ -982,12 +940,10 @@ test createProgramAddress {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
-        .accounts = &.{
-            .{
-                .pubkey = Pubkey.initRandom(prng.random()),
-                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-            },
-        },
+        .accounts = &.{.{
+            .pubkey = Pubkey.initRandom(prng.random()),
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        }},
     });
     defer {
         testing.deinitTransactionContext(allocator, &tc);
@@ -998,7 +954,8 @@ test createProgramAddress {
     const address = sig.runtime.program.bpf_loader.v3.ID;
     tc.compute_meter = cost * 12; // enough for 12 calls to createProgramAddress
 
-    const exceeded_seed: []const u8 = &([_]u8{127} ** (pubkey_utils.MAX_SEED_LEN + 1));
+    const exceeded_seed: *const [pubkey_utils.MAX_SEED_LEN + 1]u8 = &@splat(127);
+
     try std.testing.expectError(
         SyscallError.BadSeeds,
         callProgramAddressSyscall(
@@ -1022,7 +979,7 @@ test createProgramAddress {
         ),
     );
 
-    const max_seed: []const u8 = &([_]u8{0} ** pubkey_utils.MAX_SEED_LEN);
+    const max_seed: *const [pubkey_utils.MAX_SEED_LEN]u8 = &@splat(0);
     _ = try callProgramAddressSyscall(
         allocator,
         &tc,
@@ -1032,10 +989,12 @@ test createProgramAddress {
         false,
     );
 
-    comptime var exceeded_seeds: []const []const u8 = &.{};
-    inline for (1..16) |i| {
-        exceeded_seeds = exceeded_seeds ++ &[_][]const u8{&[_]u8{@intCast(i + 1)}};
-    }
+    const exceeded_seeds: []const []const u8 = &.{
+        &.{2},  &.{3},  &.{4},  &.{5},  &.{6},
+        &.{7},  &.{8},  &.{9},  &.{10}, &.{11},
+        &.{12}, &.{13}, &.{14}, &.{15}, &.{16},
+    };
+
     _ = try callProgramAddressSyscall(
         allocator,
         &tc,
@@ -1045,10 +1004,12 @@ test createProgramAddress {
         false,
     );
 
-    comptime var max_seeds: []const []const u8 = &.{};
-    inline for (0..17) |i| {
-        max_seeds = max_seeds ++ &[_][]const u8{&[_]u8{@intCast(i + 1)}};
-    }
+    const max_seeds: []const []const u8 = &.{
+        &.{1},  &.{2},  &.{3},  &.{4},  &.{5},  &.{6},
+        &.{7},  &.{8},  &.{9},  &.{10}, &.{11}, &.{12},
+        &.{13}, &.{14}, &.{15}, &.{16}, &.{17},
+    };
+
     try std.testing.expectError(
         SyscallError.BadSeeds,
         callProgramAddressSyscall(
@@ -1069,10 +1030,7 @@ test createProgramAddress {
         address,
         false,
     );
-    try std.testing.expect(
-        Pubkey.parse("BwqrghZA2htAcqq8dzP1WDAhTXYTYWj7CHxF5j7TDBAe")
-            .equals(&pk),
-    );
+    try std.testing.expect(pk.equals(&.parse("BwqrghZA2htAcqq8dzP1WDAhTXYTYWj7CHxF5j7TDBAe")));
 
     pk, _ = try callProgramAddressSyscall(
         allocator,
@@ -1170,7 +1128,7 @@ test allocFree {
             memory.Region.init(.mutable, &.{}, memory.STACK_START),
             memory.Region.init(.mutable, heap, memory.HEAP_START),
         },
-        .v3,
+        .v2,
         .{},
     );
     defer memory_map.deinit(allocator);
@@ -1269,7 +1227,7 @@ test getProcessedSiblingInstruction {
     var memory_map = try MemoryMap.init(
         allocator,
         &.{memory.Region.init(.mutable, &buffer, vm_addr)},
-        .v3,
+        .v2,
         .{},
     );
     defer memory_map.deinit(allocator);
@@ -1388,7 +1346,7 @@ test getEpochStake {
     {
         tc.compute_meter = tc.compute_budget.syscall_base_cost;
 
-        var memory_map = try MemoryMap.init(allocator, &.{}, .v3, .{});
+        var memory_map = try MemoryMap.init(allocator, &.{}, .v2, .{});
         defer memory_map.deinit(allocator);
 
         var registers = RegisterMap.initFill(0);
@@ -1411,7 +1369,7 @@ test getEpochStake {
 
         var memory_map = try MemoryMap.init(allocator, &.{
             memory.Region.init(.constant, vote_buffer, vote_addr),
-        }, .v3, .{});
+        }, .v2, .{});
         defer memory_map.deinit(allocator);
 
         var registers = RegisterMap.initFill(0);
@@ -1434,7 +1392,7 @@ test getEpochStake {
 
         var memory_map = try MemoryMap.init(allocator, &.{
             memory.Region.init(.constant, vote_buffer, vote_addr),
-        }, .v3, .{});
+        }, .v2, .{});
         defer memory_map.deinit(allocator);
 
         var registers = RegisterMap.initFill(0);
@@ -1459,7 +1417,7 @@ test getEpochStake {
 
         var memory_map = try MemoryMap.init(allocator, &.{
             memory.Region.init(.constant, vote_buffer, vote_addr),
-        }, .v3, .{});
+        }, .v2, .{});
         defer memory_map.deinit(allocator);
 
         var registers = RegisterMap.initFill(0);
@@ -1520,7 +1478,7 @@ test "set and get return data" {
         memory.Region.init(.constant, &data, src_addr),
         memory.Region.init(.mutable, &data_buffer, dst_addr),
         memory.Region.init(.mutable, &id_buffer, program_id_addr),
-    }, .v3, .{});
+    }, .v2, .{});
     defer memory_map.deinit(allocator);
 
     {

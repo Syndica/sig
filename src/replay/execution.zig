@@ -328,11 +328,18 @@ pub fn replayBatch(
             return .exit;
         }
 
-        const hash, const compute_budget_details =
-            switch (preprocessTransaction(transaction.transaction, .run_sig_verify)) {
-                .ok => |res| res,
-                .err => |err| return .{ .failure = err },
-            };
+        const instruction_limit = svm_gateway.params.feature_set.active(
+            .static_instruction_limit,
+            svm_gateway.params.slot,
+        );
+        const hash, const compute_budget_details = switch (preprocessTransaction(
+            transaction.transaction,
+            .run_sig_verify,
+            instruction_limit,
+        )) {
+            .ok => |res| res,
+            .err => |err| return .{ .failure = err },
+        };
 
         const runtime_transaction = transaction.toRuntimeTransaction(hash, compute_budget_details);
 

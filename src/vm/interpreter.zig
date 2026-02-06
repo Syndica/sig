@@ -45,6 +45,7 @@ pub const Vm = struct {
         memory_map: MemoryMap,
         loader: *const SyscallMap,
         stack_len: u64,
+        instruction_data_offset: u64,
         ctx: *TransactionContext,
     ) error{OutOfMemory}!Vm {
         const offset = if (executable.version.enableDynamicStackFrames())
@@ -71,14 +72,13 @@ pub const Vm = struct {
                 .v0, .v1 => &v0.table,
                 .v2 => &v2.table,
                 .v3 => &v3.table,
-                // TODO: remove the `reserved` tag entirely, it is a hack around Agave's out-dated behaviour.
-                .reserved => unreachable,
-                _ => @panic("un-numbered sBPF versions should have been checked in `Elf.parse`"),
+                else => @panic("should have been checked when creating the executable"),
             },
         };
 
         self.registers.set(.r10, stack_pointer);
         self.registers.set(.r1, memory.INPUT_START);
+        self.registers.set(.r2, instruction_data_offset);
         self.registers.set(.pc, executable.entry_pc);
 
         return self;
@@ -627,20 +627,16 @@ pub const Vm = struct {
             pc: u64,
         ) DispatchError!void {
             switch (opcode) {
-                // LD_1B_REG
-                .mul32_reg,
-                // LD_2B_REG
-                .div32_reg,
-                // LD_4B_REG
-                .ld_4b_reg,
-                // LD_8B_REG
-                .mod32_reg,
+                OpCode.ld_1b_reg,
+                OpCode.ld_2b_reg,
+                OpCode.ld_4b_reg,
+                OpCode.ld_8b_reg,
                 => |tag| {
                     const T = switch (tag) {
-                        .mul32_reg => u8,
-                        .div32_reg => u16,
-                        .ld_4b_reg => u32,
-                        .mod32_reg => u64,
+                        OpCode.ld_1b_reg => u8,
+                        OpCode.ld_2b_reg => u16,
+                        OpCode.ld_4b_reg => u32,
+                        OpCode.ld_8b_reg => u64,
                         else => unreachable,
                     };
                     const base_address: i64 = @bitCast(self.registers.getPtrConst(inst.src).*);
@@ -648,20 +644,16 @@ pub const Vm = struct {
                     self.registers.set(inst.dst, try self.memory_map.load(T, vm_addr));
                 },
 
-                // ST_1B_IMM
-                .mul64_imm,
-                // ST_2B_IMM
-                .div64_imm,
-                // ST_4B_IMM
-                .neg64,
-                // ST_8B_IMM
-                .mod64_imm,
+                OpCode.st_1b_imm,
+                OpCode.st_2b_imm,
+                OpCode.st_4b_imm,
+                OpCode.st_8b_imm,
                 => |tag| {
                     const T = switch (tag) {
-                        .mul64_imm => u8,
-                        .div64_imm => u16,
-                        .neg64 => u32,
-                        .mod64_imm => u64,
+                        OpCode.st_1b_imm => u8,
+                        OpCode.st_2b_imm => u16,
+                        OpCode.st_4b_imm => u32,
+                        OpCode.st_8b_imm => u64,
                         else => unreachable,
                     };
                     const base_address: i64 = @bitCast(self.registers.getPtrConst(inst.dst).*);
@@ -669,20 +661,16 @@ pub const Vm = struct {
                     try self.memory_map.store(T, vm_addr, @truncate(extend(inst.imm)));
                 },
 
-                // ST_1B_REG
-                .mul64_reg,
-                // ST_2B_REG
-                .div64_reg,
-                // ST_4B_REG
-                .st_4b_reg,
-                // ST_8B_REG
-                .mod64_reg,
+                OpCode.st_1b_reg,
+                OpCode.st_2b_reg,
+                OpCode.st_4b_reg,
+                OpCode.st_8b_reg,
                 => |tag| {
                     const T = switch (tag) {
-                        .mul64_reg => u8,
-                        .div64_reg => u16,
-                        .st_4b_reg => u32,
-                        .mod64_reg => u64,
+                        OpCode.st_1b_reg => u8,
+                        OpCode.st_2b_reg => u16,
+                        OpCode.st_4b_reg => u32,
+                        OpCode.st_8b_reg => u64,
                         else => unreachable,
                     };
                     const base_address: i64 = @bitCast(self.registers.getPtrConst(inst.dst).*);
@@ -815,14 +803,9 @@ pub const Vm = struct {
         };
 
         pub fn call_imm(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
-            const target_pc: i64 = @as(i64, @intCast(pc)) +| @as(i32, @bitCast(inst.imm)) +| 1;
-            const function_registry = &self.executable.function_registry;
-            if (function_registry.lookupKey(@bitCast(target_pc))) |entry| {
-                try self.pushCallFrame();
-                self.registers.set(.pc, entry.value);
-                return;
-            }
-            return error.UnsupportedInstruction;
+            const target_pc = sbpf.Version.computeTargetPc(.v3, pc, inst);
+            try self.pushCallFrame();
+            self.registers.set(.pc, target_pc);
         }
 
         pub fn exit_or_syscall(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
@@ -841,10 +824,12 @@ pub const Vm = struct {
         pub fn call_reg(self: *Vm, inst: Instruction, _: u64) DispatchError!void {
             const target_pc = self.registers.getPtrConst(inst.src).*;
             try self.pushCallFrame();
+
+            // [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/interpreter.rs#L513
             const next_pc = (target_pc -% self.vm_addr) / 8;
             const instructions = self.executable.instructions;
             if (next_pc >= instructions.len) return error.CallOutsideTextSegment;
-            if (self.executable.function_registry.lookupKey(next_pc) == null) {
+            if (!instructions[next_pc].isFunctionStartMarker()) {
                 return error.UnsupportedInstruction;
             }
             self.registers.set(.pc, next_pc);

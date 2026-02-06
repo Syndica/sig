@@ -19,16 +19,15 @@ const SYSVAR_NOT_FOUND = 2;
 // https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/sysvar.rs#L165
 const OFFSET_LENGTH_EXCEEDS_SYSVAR = 1;
 
-fn getter(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMap) Error!void {
-    std.debug.assert(@typeInfo(T).@"struct".layout == .@"extern");
-
+fn getSyscall(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMap) Error!void {
+    comptime std.debug.assert(@typeInfo(T).@"struct".layout == .@"extern");
     return struct {
         fn getSyscall(
             tc: *TransactionContext,
             memory_map: *MemoryMap,
             registers: *RegisterMap,
         ) Error!void {
-            try tc.consumeCompute(tc.compute_budget.sysvar_base_cost +| @sizeOf(T));
+            try tc.consumeCompute(tc.compute_budget.sysvar_base_cost + @sizeOf(T));
 
             const value_addr = registers.get(.r1);
             const value = try memory_map.translateType(
@@ -49,12 +48,12 @@ fn getter(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMap) E
     }.getSyscall;
 }
 
-pub const getLastRestartSlot = getter(sysvar.LastRestartSlot);
-pub const getRent = getter(sysvar.Rent);
-pub const getFees = getter(sysvar.Fees);
-pub const getEpochRewards = getter(sysvar.EpochRewards);
-pub const getEpochSchedule = getter(sysvar.EpochSchedule);
-pub const getClock = getter(sysvar.Clock);
+pub const getLastRestartSlot = getSyscall(sysvar.LastRestartSlot);
+pub const getRent = getSyscall(sysvar.Rent);
+pub const getFees = getSyscall(sysvar.Fees);
+pub const getEpochRewards = getSyscall(sysvar.EpochRewards);
+pub const getEpochSchedule = getSyscall(sysvar.EpochSchedule);
+pub const getClock = getSyscall(sysvar.Clock);
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/sysvar.rs#L169
 pub fn getSysvar(
@@ -211,7 +210,7 @@ test getSysvar {
                 memory.Region.init(.mutable, &buffer, buffer_addr),
                 memory.Region.init(.constant, &sysvar.Clock.ID.data, id_addr),
             },
-            .v3,
+            .v2,
             .{},
         );
         defer memory_map.deinit(allocator);
@@ -264,7 +263,7 @@ test getSysvar {
                 memory.Region.init(.mutable, &buffer, buffer_addr),
                 memory.Region.init(.constant, &sysvar.EpochSchedule.ID.data, id_addr),
             },
-            .v3,
+            .v2,
             .{},
         );
         defer memory_map.deinit(allocator);
@@ -304,7 +303,7 @@ test getSysvar {
         var memory_map = try MemoryMap.init(
             allocator,
             &.{memory.Region.init(.mutable, std.mem.asBytes(&obj), obj_addr)},
-            .v3,
+            .v2,
             .{},
         );
         defer memory_map.deinit(allocator);
@@ -337,7 +336,7 @@ test getSysvar {
                 memory.Region.init(.mutable, &buffer, buffer_addr),
                 memory.Region.init(.constant, &sysvar.Rent.ID.data, id_addr),
             },
-            .v3,
+            .v2,
             .{},
         );
         defer memory_map.deinit(allocator);
@@ -392,7 +391,7 @@ test getSysvar {
                 memory.Region.init(.mutable, &buffer, buffer_addr),
                 memory.Region.init(.constant, &sysvar.EpochRewards.ID.data, id_addr),
             },
-            .v3,
+            .v2,
             .{},
         );
         defer memory_map.deinit(allocator);
@@ -440,7 +439,7 @@ test getSysvar {
                 memory.Region.init(.mutable, &buffer, buffer_addr),
                 memory.Region.init(.constant, &sysvar.LastRestartSlot.ID.data, id_addr),
             },
-            .v3,
+            .v2,
             .{},
         );
         defer memory_map.deinit(allocator);
@@ -528,7 +527,7 @@ fn testGetStakeHistory(filled: bool) !void {
             memory.Region.init(.mutable, &buffer, buffer_addr),
             memory.Region.init(.constant, &sysvar.StakeHistory.ID.data, id_addr),
         },
-        .v3,
+        .v2,
         .{},
     );
     defer memory_map.deinit(allocator);
@@ -605,7 +604,7 @@ fn testGetSlotHashes(filled: bool) !void {
             memory.Region.init(.mutable, &buffer, buffer_addr),
             memory.Region.init(.constant, &sysvar.SlotHashes.ID.data, id_addr),
         },
-        .v3,
+        .v2,
         .{},
     );
     defer memory_map.deinit(allocator);

@@ -13,7 +13,6 @@ echo Setup solana-conformance
 sudo add-apt-repository ppa:deadsnakes/ppa -y
 sudo apt install -y python3.11 python3.11-dev python3.11-venv rename gcc
 scripts/setup-env.sh get-solana-conformance
-. env/pyvenv/bin/activate
 
 echo Get test fixtures
 wget https://github.com/Syndica/conformance-fixtures/releases/download/test-vectors-$TEST_VECTORS_COMMIT-solfuzz-agave-$SOLFUZZ_AGAVE_COMMIT/fixtures.tar.zst
@@ -55,7 +54,7 @@ export LD_PRELOAD=/lib/x86_64-linux-gnu/libasan.so.8
 export ASAN_OPTIONS=detect_leaks=0
 
 echo "Running fixtures"
-solana-test-suite exec-fixtures \
+env/pyvenv/bin/solana-conformance exec-fixtures \
     --num-processes $NUM_THREADS \
     -t ${PREBUILT_LIB_DIR}/libsolfuzz_sig.so \
     -o test_results/ \

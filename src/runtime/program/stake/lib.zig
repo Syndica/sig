@@ -87,7 +87,7 @@ pub fn execute(
                 allocator,
                 ic,
                 &me,
-                ic.ixn_info.getSigners().slice(),
+                ic.ixn_info.getSigners().constSlice(),
                 &authorized_pubkey,
                 stake_authorize,
                 &clock,
@@ -136,7 +136,7 @@ pub fn execute(
                 1,
                 &clock,
                 &stake_history,
-                ic.ixn_info.getSigners().slice(),
+                ic.ixn_info.getSigners().constSlice(),
                 ic.tc.feature_set,
             );
         },
@@ -153,7 +153,7 @@ pub fn execute(
                 0,
                 lamports,
                 1,
-                ic.ixn_info.getSigners().slice(),
+                ic.ixn_info.getSigners().constSlice(),
                 ic.tc.feature_set,
             );
         },
@@ -177,7 +177,7 @@ pub fn execute(
                 1,
                 &clock,
                 &stake_history,
-                ic.ixn_info.getSigners().slice(),
+                ic.ixn_info.getSigners().constSlice(),
             );
         },
         .withdraw => |lamports| {
@@ -214,14 +214,26 @@ pub fn execute(
             defer me.release();
             const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, 1);
 
-            try deactivate(allocator, ic, &me, &clock, ic.ixn_info.getSigners().slice());
+            try deactivate(
+                allocator,
+                ic,
+                &me,
+                &clock,
+                ic.ixn_info.getSigners().constSlice(),
+            );
         },
         .set_lockup => |lockup| {
             var me = try getStakeAccount(ic);
             defer me.release();
             const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
 
-            try setLockup(allocator, &me, &lockup, ic.ixn_info.getSigners().slice(), &clock);
+            try setLockup(
+                allocator,
+                &me,
+                &lockup,
+                ic.ixn_info.getSigners().constSlice(),
+                &clock,
+            );
         },
         .initialize_checked => {
             var me = try getStakeAccount(ic);
@@ -230,9 +242,9 @@ pub fn execute(
             try ic.ixn_info.checkNumberOfAccounts(4);
 
             const staker = ic.ixn_info.getAccountMetaAtIndex(2) orelse
-                return error.NotEnoughAccountKeys;
+                return error.MissingAccount;
             const withdrawer = ic.ixn_info.getAccountMetaAtIndex(3) orelse
-                return error.NotEnoughAccountKeys;
+                return error.MissingAccount;
 
             if (!(ic.ixn_info.getAccountMetaAtIndex(3) orelse
                 return error.MissingAccount).is_signer)
@@ -256,7 +268,7 @@ pub fn execute(
             try ic.ixn_info.checkNumberOfAccounts(4);
 
             const authorized = ic.ixn_info.getAccountMetaAtIndex(3) orelse
-                return error.NotEnoughAccountKeys;
+                return error.MissingAccount;
 
             if (!(ic.ixn_info.getAccountMetaAtIndex(3) orelse
                 return error.MissingAccount).is_signer)
@@ -288,7 +300,7 @@ pub fn execute(
             try ic.ixn_info.checkNumberOfAccounts(4);
 
             const authorized = ic.ixn_info.getAccountMetaAtIndex(3) orelse
-                return error.NotEnoughAccountKeys;
+                return error.MissingAccount;
 
             if (!(ic.ixn_info.getAccountMetaAtIndex(3) orelse
                 return error.MissingAccount).is_signer)
@@ -323,7 +335,13 @@ pub fn execute(
             };
 
             const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
-            try setLockup(allocator, &me, &lockup, ic.ixn_info.getSigners().slice(), &clock);
+            try setLockup(
+                allocator,
+                &me,
+                &lockup,
+                ic.ixn_info.getSigners().constSlice(),
+                &clock,
+            );
         },
         .get_minimum_delegation => {
             const min_delegation = getMinimumDelegation(ic.tc.slot, ic.tc.feature_set);
@@ -532,7 +550,7 @@ fn authorizeWithSeed(
     var signers: std.BoundedArray(Pubkey, 1) = .{};
     if (meta.is_signer) {
         const account = ic.tc.getAccountAtIndex(meta.index_in_transaction) orelse
-            return error.NotEnoughAccountKeys;
+            return error.MissingAccount;
 
         signers.appendAssumeCapacity(sig.runtime.pubkey_utils.createWithSeed(
             account.pubkey,
@@ -919,7 +937,7 @@ fn split(
         },
         .uninitialized => {
             const account_meta = ic.ixn_info.getAccountMetaAtIndex(stake_account_index) orelse
-                return error.NotEnoughAccountKeys;
+                return error.MissingAccount;
             const stake_pubkey = &account_meta.pubkey;
 
             const has_signer = for (signers) |signer| {
@@ -1205,9 +1223,9 @@ fn merge(
 
     {
         const stake_meta = ic.ixn_info.getAccountMetaAtIndex(stake_account_index) orelse
-            return error.NotEnoughAccountKeys;
+            return error.MissingAccount;
         const source_meta = ic.ixn_info.getAccountMetaAtIndex(source_account_index) orelse
-            return error.NotEnoughAccountKeys;
+            return error.MissingAccount;
         if (stake_meta.index_in_transaction == source_meta.index_in_transaction)
             return error.InvalidArgument;
     }
@@ -1262,7 +1280,7 @@ fn withdraw(
     new_rate_activation_epoch: ?Epoch,
 ) (error{OutOfMemory} || InstructionError)!void {
     const withdraw_authority = ic.ixn_info.getAccountMetaAtIndex(withdraw_authority_index) orelse
-        return error.NotEnoughAccountKeys;
+        return error.MissingAccount;
 
     if (!withdraw_authority.is_signer) return error.MissingRequiredSignature;
 
@@ -1308,7 +1326,7 @@ fn withdraw(
 
         const custodian_pubkey = if (custodian_index) |idx| key: {
             const meta = ic.ixn_info.getAccountMetaAtIndex(idx) orelse
-                return error.NotEnoughAccountKeys;
+                return error.MissingAccount;
             if (!meta.is_signer) break :key null;
 
             break :key &meta.pubkey;
@@ -1380,7 +1398,7 @@ fn deactivateDelinquent(
 ) (error{OutOfMemory} || InstructionError)!void {
     const delinquent_vote_account_meta = ic.ixn_info.getAccountMetaAtIndex(
         delinquent_vote_account_index,
-    ) orelse return error.NotEnoughAccountKeys;
+    ) orelse return error.MissingAccount;
 
     const delinquent_vote_account = try ic.borrowInstructionAccount(delinquent_vote_account_index);
     defer delinquent_vote_account.release();
@@ -1667,7 +1685,7 @@ fn moveStakeOrLamportsSharedChecks(
     stake_authority_index: u16,
 ) (error{OutOfMemory} || InstructionError)!struct { MergeKind, MergeKind } {
     const stake_authority_meta = ic.ixn_info.getAccountMetaAtIndex(stake_authority_index) orelse
-        return error.NotEnoughAccountKeys;
+        return error.MissingAccount;
 
     if (!stake_authority_meta.is_signer) return error.MissingRequiredSignature;
     const signers: []const Pubkey = &.{stake_authority_meta.pubkey};

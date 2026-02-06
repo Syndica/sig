@@ -84,7 +84,6 @@ pub fn prepareBpfV3Test(
         &compute_budget,
         0,
         false,
-        false,
     );
 
     const program_map = try allocator.create(ProgramMap);
@@ -199,7 +198,7 @@ test "print_account" {
             .owner = .parse("3DTD43NijdpuwzQL6fM19vU5hDZ2u6M7A9hMrJH3dJyD"),
             .executable = false,
             .rent_epoch = 25,
-            .data = &[_]u8{ 'm', 'y', ' ', 'd', 'a', 't', 'a', ' ', ':', ')' },
+            .data = "my data :)",
         },
     };
 
@@ -214,7 +213,7 @@ test "print_account" {
                 .is_writable = false,
             },
         },
-        ExecuteContextParams{
+        .{
             .accounts = accounts,
             .compute_meter = 28_650,
             .program_map = program_map,
@@ -284,7 +283,7 @@ test "fast_copy" {
                 .is_writable = true,
             },
         },
-        ExecuteContextParams{
+        .{
             .accounts = &.{
                 program_account,
                 initial_instruction_account,
@@ -341,7 +340,7 @@ test "set_return_data" {
         program_account.pubkey.?,
         &[_]u8{},
         &.{},
-        ExecuteContextParams{
+        .{
             .accounts = &.{program_account},
             .compute_meter = 141,
             .program_map = program_map,
@@ -383,12 +382,12 @@ test "program_is_not_executable" {
     };
 
     try expectProgramExecuteError(
-        error.IncorrectProgramId,
+        error.UnsupportedProgramId,
         allocator,
         program_id,
         &[_]u8{},
         &.{},
-        ExecuteContextParams{
+        .{
             .accounts = accounts,
             .compute_meter = 137,
             .feature_set = &.{
@@ -399,7 +398,7 @@ test "program_is_not_executable" {
     );
 }
 
-test "program_invalid_account_data" {
+test "program_unsupported_program_id" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -423,25 +422,21 @@ test "program_invalid_account_data" {
         },
     };
 
-    const result = expectProgramExecuteResult(
+    try expectProgramExecuteError(
+        error.UnsupportedProgramId,
         allocator,
         program_id,
         &[_]u8{},
         &.{},
-        ExecuteContextParams{
+        .{
             .accounts = accounts,
             .compute_meter = 137,
             .feature_set = &.{
                 .{ .feature = .enable_sbpf_v3_deployment_and_execution },
             },
         },
-        .{
-            .accounts = accounts,
-        },
         .{},
     );
-
-    try std.testing.expectError(error.InvalidAccountData, result);
 }
 
 test "program_init_vm_not_enough_compute" {
@@ -471,7 +466,8 @@ test "program_init_vm_not_enough_compute" {
     // Set heap size so that heap cost is 8
     compute_budget.heap_size = 2 * 32 * 1024;
 
-    const result = expectProgramExecuteResult(
+    try expectProgramExecuteError(
+        error.ProgramEnvironmentSetupFailure,
         allocator,
         program_account.pubkey.?,
         &[_]u8{},
@@ -483,85 +479,6 @@ test "program_init_vm_not_enough_compute" {
             .vm_environment = &environment,
             .compute_budget = compute_budget,
             .feature_set = feature_params,
-        },
-        .{},
-        .{},
-    );
-
-    try std.testing.expectError(error.ProgramEnvironmentSetupFailure, result);
-}
-
-test "basic direct mapping" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-
-    const elf_bytes = try std.fs.cwd().readFileAlloc(
-        allocator,
-        sig.ELF_DATA_DIR ++ "direct_mapping.so",
-        MAX_FILE_BYTES,
-    );
-    defer allocator.free(elf_bytes);
-
-    const feature_params = &[_]FeatureParams{
-        .{ .feature = .enable_sbpf_v3_deployment_and_execution },
-        .{ .feature = .bpf_account_data_direct_mapping },
-    };
-
-    const program_account, const environment, const program_map = try prepareBpfV3Test(
-        allocator,
-        prng.random(),
-        elf_bytes,
-        feature_params,
-    );
-    defer allocator.free(program_account.data);
-
-    const program_id = program_account.pubkey.?;
-    const accounts: []const AccountParams = &.{
-        program_account,
-        .{
-            .pubkey = Pubkey.initRandom(prng.random()),
-            .lamports = 1_234_456,
-            // needs to be the program_id so that we have permission to mutate it
-            .owner = program_id,
-            .executable = false,
-            .rent_epoch = 25,
-            .data = &(.{0xFF} ** 7),
-        },
-    };
-
-    const after_accounts: []const AccountParams = &.{
-        program_account,
-        .{
-            .pubkey = accounts[1].pubkey,
-            .lamports = 1_234_456,
-            // needs to be the program_id so that we have permission to mutate it
-            .owner = program_id,
-            .executable = false,
-            .rent_epoch = 25,
-            .data = &.{ 10, 20, 30, 40, 40, 0xFF, 0xFF }, // NOTE: this changed in the program
-        },
-    };
-
-    try expectProgramExecuteResult(
-        allocator,
-        program_id,
-        &[_]u8{},
-        &.{
-            .{
-                .index_in_transaction = 1,
-                .is_signer = false,
-                .is_writable = true,
-            },
-        },
-        .{
-            .accounts = accounts,
-            .compute_meter = 106,
-            .program_map = program_map,
-            .vm_environment = &environment,
-            .feature_set = feature_params,
-        },
-        .{
-            .accounts = after_accounts,
         },
         .{},
     );

@@ -5,7 +5,7 @@ const cli = @import("cli");
 
 const vm = sig.vm;
 
-const Elf = sig.vm.Elf;
+const elf = sig.vm.elf;
 const memory = sig.vm.memory;
 const Executable = sig.vm.Executable;
 const Vm = sig.vm.Vm;
@@ -82,15 +82,12 @@ pub fn main() !void {
 
     const config: Config = .{
         .maximum_version = cmd.version,
-        .enable_symbol_and_section_labels = false,
         .optimize_rodata = false,
     };
     var executable = if (cmd.assemble)
         try Executable.fromAsm(gpa, bytes, config)
-    else exec: {
-        const elf = try Elf.parse(gpa, bytes, &loader, config);
-        break :exec Executable.fromElf(elf);
-    };
+    else
+        try elf.load(gpa, bytes, &loader, config);
     defer executable.deinit(gpa);
 
     try executable.verify(&loader);
@@ -121,6 +118,7 @@ pub fn main() !void {
         m,
         &loader,
         stack_memory.len,
+        0,
         &tc,
     );
     defer ebpf_vm.deinit();
@@ -161,7 +159,7 @@ const Cmd = struct {
                 .kind = .named,
                 .name_override = null,
                 .alias = .v,
-                .default_value = .v3,
+                .default_value = .v2,
                 .config = {},
                 .help = "sBPF version to execute under",
             },

@@ -4,7 +4,7 @@ const sig = @import("../sig.zig");
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 
 const zksdk = sig.zksdk;
-const el_gamal = zksdk.el_gamal;
+const elgamal = zksdk.elgamal;
 const pedersen = zksdk.pedersen;
 const Keypair = zksdk.ElGamalKeypair;
 const Opening = pedersen.Opening;
@@ -25,7 +25,7 @@ pub const Benchmark = struct {
 
     pub fn zeroCiphertext() !sig.time.Duration {
         const kp = Keypair.random();
-        const ciphertext = el_gamal.encrypt(u64, 0, &kp.public);
+        const ciphertext = elgamal.encrypt(u64, 0, &kp.public);
         const proof_data = zksdk.ZeroCiphertextData.init(&kp, &ciphertext);
 
         var start = sig.time.Timer.start();
@@ -96,7 +96,7 @@ pub const Benchmark = struct {
     pub fn ciphertextCommitmentEquality() !sig.time.Duration {
         const keypair = Keypair.random();
         const amount: u64 = 55;
-        const ciphertext = el_gamal.encrypt(u64, amount, &keypair.public);
+        const ciphertext = elgamal.encrypt(u64, amount, &keypair.public);
         const commitment, const opening = pedersen.initValue(u64, amount);
 
         const proof_data = zksdk.CiphertextCommitmentData.init(
@@ -117,10 +117,10 @@ pub const Benchmark = struct {
         const destination_keypair = Keypair.random();
 
         const amount: u64 = 0;
-        const source_ciphertext = el_gamal.encrypt(u64, amount, &source_keypair.public);
+        const source_ciphertext = elgamal.encrypt(u64, amount, &source_keypair.public);
 
         const destination_opening = Opening.random();
-        const destination_ciphertext = el_gamal.encryptWithOpening(
+        const destination_ciphertext = elgamal.encryptWithOpening(
             u64,
             amount,
             &destination_keypair.public,

@@ -106,8 +106,10 @@ pub const Set = struct {
                 destination.* = slot;
                 return;
             }
+        } else {
+            @branchHint(.unlikely);
+            return error.InvalidPubkey;
         }
-        return error.InvalidPubkey;
     }
 
     pub fn setSlot(self: *Set, feature: Feature, slot: Slot) void {

@@ -6,7 +6,7 @@ const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
-const el_gamal = sig.zksdk.el_gamal;
+const elgamal = sig.zksdk.elgamal;
 const pedersen = sig.zksdk.pedersen;
 const ElGamalCiphertext = sig.zksdk.ElGamalCiphertext;
 const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
@@ -300,7 +300,7 @@ pub const Data = struct {
     test "correctness" {
         const kp = ElGamalKeypair.random();
         const amount: u64 = 55;
-        const ciphertext = el_gamal.encrypt(u64, amount, &kp.public);
+        const ciphertext = elgamal.encrypt(u64, amount, &kp.public);
         const commitment, const opening = pedersen.initValue(u64, amount);
 
         const proof_data = Data.init(
@@ -319,7 +319,7 @@ test "success case" {
     const kp = ElGamalKeypair.random();
     const message: u64 = 55;
 
-    const ciphertext = el_gamal.encrypt(u64, message, &kp.public);
+    const ciphertext = elgamal.encrypt(u64, message, &kp.public);
     const commitment, const opening = pedersen.initValue(u64, message);
 
     var prover_transcript = Transcript.initTest("Test");
@@ -345,7 +345,7 @@ test "fail case" {
     const encrypted_message: u64 = 55;
     const committed_message: u64 = 77;
 
-    const ciphertext = el_gamal.encrypt(u64, encrypted_message, &kp.public);
+    const ciphertext = elgamal.encrypt(u64, encrypted_message, &kp.public);
     const commitment, const opening = pedersen.initValue(u64, committed_message);
 
     var prover_transcript = Transcript.initTest("Test");
@@ -377,7 +377,7 @@ test "public key zeroed" {
     const kp: ElGamalKeypair = .{ .public = zeroed_public, .secret = secret };
 
     const message: u64 = 55;
-    const ciphertext = el_gamal.encrypt(u64, message, &kp.public);
+    const ciphertext = elgamal.encrypt(u64, message, &kp.public);
     const commitment, const opening = pedersen.initValue(u64, message);
 
     var prover_transcript = Transcript.initTest("Test");
@@ -437,7 +437,7 @@ test "commitment zeroed" {
     const kp = ElGamalKeypair.random();
 
     const message: u64 = 0;
-    const ciphertext = el_gamal.encrypt(u64, message, &kp.public);
+    const ciphertext = elgamal.encrypt(u64, message, &kp.public);
     const commitment = try pedersen.Commitment.fromBytes(.{0} ** 32);
     const opening = try pedersen.Opening.fromBytes(.{0} ** 32);
 

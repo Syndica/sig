@@ -6,7 +6,7 @@ const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
-const el_gamal = sig.zksdk.el_gamal;
+const elgamal = sig.zksdk.elgamal;
 const pedersen = sig.zksdk.pedersen;
 const ElGamalCiphertext = sig.zksdk.ElGamalCiphertext;
 const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
@@ -353,10 +353,10 @@ pub const Data = struct {
 
         {
             const amount: u64 = 0;
-            const first_ciphertext = el_gamal.encrypt(u64, amount, &first_kp.public);
+            const first_ciphertext = elgamal.encrypt(u64, amount, &first_kp.public);
 
             const second_opening = pedersen.Opening.random();
-            const second_ciphertext = el_gamal.encryptWithOpening(
+            const second_ciphertext = elgamal.encryptWithOpening(
                 u64,
                 amount,
                 &second_kp.public,
@@ -376,10 +376,10 @@ pub const Data = struct {
 
         {
             const amount: u64 = 55;
-            const first_ciphertext = el_gamal.encrypt(u64, amount, &first_kp.public);
+            const first_ciphertext = elgamal.encrypt(u64, amount, &first_kp.public);
 
             const second_opening = pedersen.Opening.random();
-            const second_ciphertext = el_gamal.encryptWithOpening(
+            const second_ciphertext = elgamal.encryptWithOpening(
                 u64,
                 amount,
                 &second_kp.public,
@@ -399,10 +399,10 @@ pub const Data = struct {
 
         {
             const amount: u64 = std.math.maxInt(u64);
-            const first_ciphertext = el_gamal.encrypt(u64, amount, &first_kp.public);
+            const first_ciphertext = elgamal.encrypt(u64, amount, &first_kp.public);
 
             const second_opening = pedersen.Opening.random();
-            const second_ciphertext = el_gamal.encryptWithOpening(
+            const second_ciphertext = elgamal.encryptWithOpening(
                 u64,
                 amount,
                 &second_kp.public,
@@ -427,9 +427,9 @@ test "correctness" {
     const second_kp = ElGamalKeypair.random();
     const message: u64 = 55;
 
-    const first_ciphertext = el_gamal.encrypt(u64, message, &first_kp.public);
+    const first_ciphertext = elgamal.encrypt(u64, message, &first_kp.public);
     const second_opening = pedersen.Opening.random();
-    const second_ciphertext = el_gamal.encryptWithOpening(
+    const second_ciphertext = elgamal.encryptWithOpening(
         u64,
         message,
         &second_kp.public,
@@ -463,9 +463,9 @@ test "different messages" {
     const first_message: u64 = 55;
     const second_message: u64 = 77;
 
-    const first_ciphertext = el_gamal.encrypt(u64, first_message, &first_kp.public);
+    const first_ciphertext = elgamal.encrypt(u64, first_message, &first_kp.public);
     const second_opening = pedersen.Opening.random();
-    const second_ciphertext = el_gamal.encryptWithOpening(
+    const second_ciphertext = elgamal.encryptWithOpening(
         u64,
         second_message,
         &second_kp.public,
