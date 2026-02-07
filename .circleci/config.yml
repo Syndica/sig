@@ -95,7 +95,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted-v3
       - run:
           name: Build
           command: |
@@ -103,7 +103,7 @@ jobs:
             ./scripts/proxy_workaround.sh workspace/zig/zig
             workspace/zig/zig build -Denable-tsan=true -p workspace/zig-out -Dcpu=x86_64_v3 --summary all
       - save_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted-v3
           paths:
             - .zig-cache
             - ~/.cache/zig

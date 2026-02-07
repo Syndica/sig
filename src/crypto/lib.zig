@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const FnvHasher = @import("fnv.zig").FnvHasher;
 pub const bn254 = @import("bn254/lib.zig");
+pub const bls12_381 = @import("bls12_381/lib.zig");
 pub const ed25519 = @import("ed25519/lib.zig");
 
 /// Extern definition of Ecdsa signature.
