@@ -350,10 +350,10 @@ pub fn Channel(T: type) type {
 
                     // We're waiting for another thread to install the next_block
                     // and next_index, so we "mock" increment our tail as if it was installed.
-                    if ((tail >> SHIFT) % (LAP - 1) == (LAP - 1)) {
+                    if ((tail >> SHIFT) % LAP == (LAP - 1)) {
                         tail +%= (1 << SHIFT);
                     }
-                    if ((head >> SHIFT) % (LAP - 1) == (LAP - 1)) {
+                    if ((head >> SHIFT) % LAP == (LAP - 1)) {
                         head +%= (1 << SHIFT);
                     }
 
