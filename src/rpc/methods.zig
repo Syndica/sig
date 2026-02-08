@@ -12,6 +12,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const rpc = @import("lib.zig");
 const base58 = @import("base58");
+const zstd = @import("zstd");
 
 const Allocator = std.mem.Allocator;
 const ParseOptions = std.json.ParseOptions;
@@ -735,17 +736,35 @@ pub const AccountHookContext = struct {
         if (maybe_account) |account| {
             defer account.deinit(allocator);
 
-            const data_encoded = try encodeAccountData(
+            const estimated_size = estimateEncodedSize(
+                account,
+                encoding,
+                config.dataSlice,
+            );
+            var encoded_data = try std.ArrayList(u8).initCapacity(
+                allocator,
+                estimated_size,
+            );
+            errdefer encoded_data.deinit();
+
+            try encodeAccountData(
                 allocator,
                 account,
                 encoding,
+                config.dataSlice,
+                encoded_data.writer(),
             );
 
             return GetAccountInfo.Response{
                 // TODO: Thread through the Sig version const to be used as the apiVersion here.
                 .context = .{ .slot = slot, .apiVersion = "TODO" },
                 .value = .{
-                    .data = .{ .encoded = .{ data_encoded, encoding } },
+                    .data = .{
+                        .encoded = .{
+                            try encoded_data.toOwnedSlice(),
+                            encoding,
+                        },
+                    },
                     .executable = account.executable,
                     .lamports = account.lamports,
                     .owner = account.owner,
@@ -763,19 +782,84 @@ pub const AccountHookContext = struct {
         }
     }
 
+    fn estimateEncodedSize(
+        account: sig.core.Account,
+        encoding: common.AccountEncoding,
+        data_slice: ?common.DataSlice,
+    ) usize {
+        const start, const end = calculateSliceRange(account, data_slice);
+        const data_len = end - start;
+        return switch (encoding) {
+            .base58 => base58.encodedMaxSize(data_len),
+            .base64 => std.base64.standard.Encoder.calcSize(data_len),
+            // NOTE: we just use base64 size as a catch-all.
+            .@"base64+zstd" => std.base64.standard.Encoder.calcSize(data_len),
+            .jsonParsed => @panic("TODO: jsonParsed"),
+        };
+    }
+
     fn encodeAccountData(
         allocator: std.mem.Allocator,
         account: sig.core.Account,
         encoding: common.AccountEncoding,
         data_slice: ?common.DataSlice,
-    ) ![]const u8 {
+        // std.io.Writer
+        writer: anytype,
+    ) !void {
+        const start, const end = calculateSliceRange(account, data_slice);
         return switch (encoding) {
             .base58 => {
-                @panic("TODO: base58");
+                const data_len = end - start;
+
+                if (data_len > MAX_BASE58_INPUT_LEN) {
+                    return error.Base58DataTooLarge;
+                }
+
+                var input_buf: [MAX_BASE58_INPUT_LEN]u8 = undefined;
+                var output_buf: [MAX_BASE58_OUTPUT_LEN]u8 = undefined;
+                _ = account.data.read(start, input_buf[0..data_len]);
+                const encoded_len = base58.Table.BITCOIN.encode(&output_buf, input_buf[0..data_len]);
+
+                try writer.writeAll(output_buf[0..encoded_len]);
             },
-            .base64 => return try encodeAccountDataBase64Streaming(allocator, account, data_slice),
+            .base64 => {
+                var stream = sig.utils.base64.EncodingStream.init(std.base64.standard.Encoder);
+                const base64_ctx = stream.writerCtx(writer);
+                var iter = account.data.iteratorRanged(start, end);
+
+                while (iter.nextFrame()) |frame_slice| {
+                    try base64_ctx.writer().writeAll(frame_slice);
+                }
+                try base64_ctx.flush();
+            },
             .@"base64+zstd" => {
-                @panic("TODO: base64+zstd");
+                var stream = sig.utils.base64.EncodingStream.init(std.base64.standard.Encoder);
+                const base64_ctx = stream.writerCtx(writer);
+                // TODO: propagate more specifi errors.
+                const compressor = zstd.Compressor.init(.{}) catch return error.OutOfMemory;
+                defer compressor.deinit();
+
+                // TODO: recommOutSize is usually 128KiB. We could stack allocate this or re-use
+                // buffer set in AccountHookContext instead of allocating it on each call
+                // since the server is single-threaded. Unfortunately, the zstd lib's doesn't give us a
+                // comptime-known size to use for stack allocation. Instead of assuming, just allocate for now.
+                const zstd_out_buf = try allocator.alloc(
+                    u8,
+                    zstd.Compressor.recommOutSize(),
+                );
+                defer allocator.free(zstd_out_buf);
+                var zstd_ctx = zstd.writerCtx(
+                    base64_ctx.writer(),
+                    &compressor,
+                    zstd_out_buf,
+                );
+                var iter = account.data.iteratorRanged(start, end);
+
+                while (iter.nextFrame()) |frame_slice| {
+                    try zstd_ctx.writer().writeAll(frame_slice);
+                }
+                try zstd_ctx.finish();
+                try base64_ctx.flush();
             },
             .jsonParsed => {
                 @panic("TODO: jsonParsed");
@@ -783,11 +867,10 @@ pub const AccountHookContext = struct {
         };
     }
 
-    fn encodeAccountDataBase64Streaming(
-        allocator: std.mem.Allocator,
+    fn calculateSliceRange(
         account: sig.core.Account,
         data_slice: ?common.DataSlice,
-    ) ![]u8 {
+    ) struct { u32, u32 } {
         const len = account.data.len();
         const slice_start, const slice_end = blk: {
             const ds = data_slice orelse break :blk .{ 0, len };
@@ -795,71 +878,6 @@ pub const AccountHookContext = struct {
             const end = @min(ds.offset + ds.length, len);
             break :blk .{ start, end };
         };
-        // TODO: asserts/saturating math for safety?
-        const data_len = slice_end - slice_start;
-        const encoded_len = std.base64.standard.Encoder.calcSize(data_len);
-        var output = try std.ArrayListUnmanaged(u8).initCapacity(allocator, encoded_len);
-        errdefer output.deinit(allocator);
-
-        var encoding_stream = sig.utils.base64.EncodingStream.init(std.base64.standard.Encoder);
-        const writer_ctx = encoding_stream.writerCtx(output.writer(allocator));
-
-        var iter = account.data.iteratorRanged(slice_start, slice_end);
-        while (iter.nextFrame()) |frame_slice| {
-            try writer_ctx.writer().writeAll(frame_slice);
-        }
-
-        try writer_ctx.flush();
-        return output.toOwnedSlice();
-    }
-
-    // // TODO: Pre-allocate buffer, then use writer + encode stream instead.
-    // // TODO: add support for reading from offset and length (specified by pre-allocated buffer size).
-    // fn encodeAccountDataBase64(
-    //     allocator: std.mem.Allocator,
-    //     account: sig.core.Account,
-    // ) ![]const u8 {
-    //     const data = try account.data.readAllAllocate(allocator);
-    //     defer allocator.free(data);
-
-    //     const encoded_len = std.base64.standard.Encoder.calcSize(data.len);
-    //     const encoded = try allocator.alloc(u8, encoded_len);
-    //     _ = std.base64.standard.Encoder.encode(encoded, data);
-
-    //     return encoded;
-    // }
-
-    fn encodeAccountDataBase58(
-        allocator: std.mem.Allocator,
-        account: sig.core.Account,
-        data_slice: ?common.DataSlice,
-    ) ![]u8 {
-        const len = account.data.len();
-        const slice_start, const slice_end = blk: {
-            const ds = data_slice orelse break :blk .{ 0, len };
-            const start: u32 = @intCast(@min(ds.offset, len));
-            const end: u32 = @intCast(@min(ds.offset + ds.length, len));
-            break :blk .{ start, end };
-        };
-        const data_len = slice_end - slice_start;
-
-        // Enforce 128-byte limit
-        if (data_len > 128) {
-            return error.Base58DataTooLarge;
-        }
-
-        // Stack-allocate input buffer and read data
-        var input_buf: [MAX_BASE58_INPUT_LEN]u8 = undefined;
-        _ = account.data.read(slice_start, input_buf[0..data_len]);
-
-        // Stack-allocate output buffer and encode
-        var output_buf: [MAX_BASE58_OUTPUT_LEN]u8 = undefined;
-        const encoded_len = base58.Table.BITCOIN.encode(&output_buf, input_buf[0..data_len]);
-
-        // Allocate final result and copy
-        const result = try allocator.alloc(u8, encoded_len);
-        @memcpy(result, output_buf[0..encoded_len]);
-
-        return result;
+        return .{ slice_start, slice_end };
     }
 };
