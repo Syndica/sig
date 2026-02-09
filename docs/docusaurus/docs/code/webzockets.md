@@ -139,28 +139,6 @@ e2e_tests/                Client-server integration tests
 autobahn/                 Autobahn conformance suite runners
 ```
 
-### Module Dependencies
-
-```
-root.zig
-├── types.zig
-├── mask.zig
-├── buffer.zig
-├── control_queue.zig      ← types
-├── frame.zig              ← types, mask
-├── http.zig               ← types
-├── reader.zig             ← types, frame, buffer
-├── server/
-│   ├── server.zig         ← slot_pool, server/handshake, server/connection, xev
-│   ├── slot_pool.zig      ← std.heap.MemoryPool
-│   ├── handshake.zig      ← http, types, server/connection, xev
-│   └── connection.zig     ← types, frame, reader, buffer, control_queue, xev
-└── client/
-    ├── client.zig         ← client/handshake, client/connection, buffer, xev
-    ├── handshake.zig      ← http, xev
-    └── connection.zig     ← types, frame, reader, buffer, mask, control_queue, xev
-```
-
 ## API Reference
 
 ### Server Config
