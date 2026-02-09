@@ -2,6 +2,7 @@
 //! of RPC requests.
 
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../../sig.zig");
 
 const IncrementalSnapshotFileInfo = sig.accounts_db.snapshot.data.IncrementalSnapshotFileInfo;
@@ -15,7 +16,7 @@ pub const ContentType = enum(u8) {
     @"application/json",
 };
 
-pub const TargetBoundedStr = std.BoundedArray(u8, MAX_TARGET_LEN);
+pub const TargetBoundedStr = std14.BoundedArray(u8, MAX_TARGET_LEN);
 pub const MAX_TARGET_LEN: usize = blk: {
     const SnapSpec = IncrementalSnapshotFileInfo.SnapshotArchiveNameFmtSpec;
     break :blk "/".len + SnapSpec.fmtLenValue(.{

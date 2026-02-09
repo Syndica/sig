@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const std14 = @import("std14");
 const sig = @import("../../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
@@ -218,8 +219,8 @@ pub const Proof = struct {
         const c_negated_w = c_negated.mul(w);
         const z_r_w = self.z_r.mul(w);
 
-        var points: std.BoundedArray(Ristretto255, 12) = .{};
-        var scalars: std.BoundedArray([32]u8, 12) = .{};
+        var points: std14.BoundedArray(Ristretto255, 12) = .{};
+        var scalars: std14.BoundedArray([32]u8, 12) = .{};
 
         try points.appendSlice(&.{
             pedersen.G,

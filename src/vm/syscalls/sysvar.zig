@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const std14 = @import("std14");
 const sig = @import("../../sig.zig");
 
 const bincode = sig.bincode;
@@ -484,7 +485,7 @@ fn testGetStakeHistory(filled: bool) !void {
     else
         sysvar.StakeHistory.MAX_ENTRIES / 2;
 
-    var entries: std.BoundedArray(
+    var entries: std14.BoundedArray(
         sysvar.StakeHistory.Entry,
         sysvar.StakeHistory.MAX_ENTRIES,
     ) = .{};
@@ -563,7 +564,7 @@ fn testGetSlotHashes(filled: bool) !void {
     else
         sysvar.SlotHashes.MAX_ENTRIES / 2;
 
-    var entries: std.BoundedArray(
+    var entries: std14.BoundedArray(
         sysvar.SlotHashes.Entry,
         sysvar.SlotHashes.MAX_ENTRIES,
     ) = .{};

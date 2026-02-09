@@ -1,5 +1,6 @@
 //! [agave] Analogous to https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L1
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../../../sig.zig");
 const vote_program = @import("lib.zig");
 const builtin = @import("builtin");
@@ -170,7 +171,7 @@ pub fn serializeCompactVoteStateUpdate(
 ) anyerror!void {
     // Calculate lockout offsets
     var slot = data.root orelse 0;
-    var lockouts = std.BoundedArray(struct {
+    var lockouts = std14.BoundedArray(struct {
         Slot,
         u8,
     }, MAX_LOCKOUT_HISTORY){};
@@ -281,7 +282,7 @@ pub const TowerSync = struct {
 pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params) anyerror!void {
     // Calculate lockout offsets
     var slot = data.root orelse 0;
-    var lockouts = std.BoundedArray(struct {
+    var lockouts = std14.BoundedArray(struct {
         Slot,
         u8,
     }, MAX_LOCKOUT_HISTORY){};
@@ -1666,7 +1667,7 @@ pub const VoteStateV3 = struct {
         // index into the slot_hashes, starting at the oldest known slot hash
         var slot_hashes_index = slot_hash_entries.len;
         // The maximum number of elements is bounded by the maximum instruction size possible.
-        var lockouts_to_filter: std.BoundedArray(
+        var lockouts_to_filter: std14.BoundedArray(
             u64,
             sig.vm.syscalls.cpi.MAX_DATA_LEN / @sizeOf(u64),
         ) = .{};

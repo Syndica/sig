@@ -7,6 +7,7 @@ pub const optional = @import("optional.zig");
 pub const shortvec = @import("shortvec.zig");
 
 const std = @import("std");
+const std14 = @import("std14");
 const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 
@@ -40,7 +41,7 @@ pub fn sizeOf(data: anytype, params: bincode.Params) usize {
     if (@TypeOf(data) == type) {
         @compileError("sizeOf called with type instead of value");
     }
-    var stream = std.io.countingWriter(std.io.null_writer);
+    var stream = std14.countingWriter(std.io.null_writer);
     bincode.write(stream.writer(), data, params) catch unreachable;
     return @intCast(stream.bytes_written);
 }

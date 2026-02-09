@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 
@@ -457,8 +458,8 @@ pub const Message = struct {
     pub fn serializeBounded(
         self: Message,
         version: Version,
-    ) !std.BoundedArray(u8, Transaction.MAX_BYTES) {
-        var buf: std.BoundedArray(u8, Transaction.MAX_BYTES) = .{};
+    ) !std14.BoundedArray(u8, Transaction.MAX_BYTES) {
+        var buf: std14.BoundedArray(u8, Transaction.MAX_BYTES) = .{};
         try self.serialize(buf.writer(), version);
         return buf;
     }

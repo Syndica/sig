@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../sig.zig");
 
 const LockoutIntervals = sig.consensus.replay_tower.LockoutIntervals;
@@ -65,10 +66,10 @@ pub const TowerError = error{
 
 pub const Tower = struct {
     root: ?Slot,
-    votes: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},
+    votes: std14.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},
 
     pub fn fromAccount(account_state: *const sig.runtime.program.vote.state.VoteStateV4) !Tower {
-        var lockouts: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{};
+        var lockouts: std14.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{};
         for (account_state.votes.items) |landed| {
             try lockouts.append(.{
                 .slot = landed.lockout.slot,
