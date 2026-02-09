@@ -6,6 +6,7 @@ const account_loader = sig.runtime.account_loader;
 const program_loader = sig.runtime.program_loader;
 const executor = sig.runtime.executor;
 const compute_budget_program = sig.runtime.program.compute_budget;
+const cost_model = sig.runtime.cost_model;
 const vm = sig.vm;
 
 const Ancestors = sig.core.Ancestors;
@@ -68,6 +69,27 @@ pub const RuntimeTransaction = struct {
     accounts: std.MultiArrayList(AccountMeta) = .{},
     compute_budget_instruction_details: ComputeBudgetInstructionDetails = .{},
     num_lookup_tables: u64,
+
+    /// Check if this transaction is a simple vote transaction.
+    /// A simple vote transaction has:
+    /// - Exactly 1 instruction
+    /// - That instruction is a Vote program instruction
+    /// - 1 or 2 signatures
+    /// - No address lookup tables (legacy message)
+    pub fn isSimpleVoteTransaction(self: *const RuntimeTransaction) bool {
+        // Must have exactly 1 instruction
+        if (self.instructions.len != 1) return false;
+
+        // Must have 1 or 2 signatures
+        if (self.signature_count == 0 or self.signature_count > 2) return false;
+
+        // Must be a legacy message (no lookup tables)
+        if (self.num_lookup_tables > 0) return false;
+
+        // First instruction must be vote program
+        const instr = self.instructions[0];
+        return instr.program_meta.pubkey.equals(&sig.runtime.program.vote.ID);
+    }
 };
 
 pub const TransactionExecutionEnvironment = struct {
@@ -130,8 +152,20 @@ pub const ProcessedTransaction = struct {
     /// If null, the transaction did not execute, due to a failure before
     /// execution could begin.
     outputs: ?ExecutedTransaction,
+    /// Pre-execution lamport balances for all accounts in the transaction.
+    /// Order matches the transaction's account keys.
+    pre_balances: PreBalances,
+    /// Pre-execution token balances for SPL Token accounts in the transaction.
+    /// Used for RPC transaction status metadata.
+    pre_token_balances: PreTokenBalances,
+    /// Total cost units for this transaction, used for block scheduling/packing.
+    /// This is the sum of signature_cost + write_lock_cost + data_bytes_cost +
+    /// programs_execution_cost + loaded_accounts_data_size_cost.
+    cost_units: u64,
 
     pub const Writes = LoadedTransactionAccounts.Accounts;
+    pub const PreBalances = std.BoundedArray(u64, account_loader.MAX_TX_ACCOUNT_LOCKS);
+    pub const PreTokenBalances = sig.runtime.spl_token.RawTokenBalances;
 
     pub fn deinit(self: ProcessedTransaction, allocator: std.mem.Allocator) void {
         for (self.writes.slice()) |account| account.deinit(allocator);
@@ -241,17 +275,45 @@ pub fn loadAndExecuteTransaction(
                 try wrapDB(account_store.put(item.pubkey, item.account));
                 loaded_accounts_data_size += @intCast(rollback.account.data.len);
             }
-            return .{ .ok = .{
-                .fees = fees,
-                .rent = 0,
-                .writes = writes,
-                .err = err,
-                .loaded_accounts_data_size = loaded_accounts_data_size,
-                .outputs = null,
-            } };
+            // Calculate cost units even for failed transactions
+            const tx_cost = cost_model.calculateTransactionCost(
+                transaction,
+                &compute_budget_limits,
+                loaded_accounts_data_size,
+            );
+            return .{
+                .ok = .{
+                    .fees = fees,
+                    .rent = 0,
+                    .writes = writes,
+                    .err = err,
+                    .loaded_accounts_data_size = loaded_accounts_data_size,
+                    .outputs = null,
+                    .pre_balances = .{}, // Empty - accounts failed to load
+                    .pre_token_balances = .{}, // Empty - accounts failed to load
+                    .cost_units = tx_cost.total(),
+                },
+            };
         },
     };
     errdefer for (loaded_accounts.accounts.slice()) |acct| acct.deinit(tmp_allocator);
+
+    // Capture pre-execution balances for all accounts (for RPC transaction status)
+    // Note: The fee payer (index 0) has already had the fee deducted by checkFeePayer,
+    // so we add it back to get the true pre-execution balance.
+    var pre_balances = ProcessedTransaction.PreBalances{};
+    for (loaded_accounts.accounts.slice(), 0..) |account, idx| {
+        const balance = if (idx == 0)
+            account.account.lamports + fees.total()
+        else
+            account.account.lamports;
+        pre_balances.append(balance) catch unreachable;
+    }
+
+    // Capture pre-execution token balances for SPL Token accounts
+    const pre_token_balances = sig.runtime.spl_token.collectRawTokenBalances(
+        loaded_accounts.accounts.slice(),
+    );
 
     for (loaded_accounts.accounts.slice()) |account| try program_loader.loadIfProgram(
         programs_allocator,
@@ -295,6 +357,15 @@ pub fn loadAndExecuteTransaction(
 
     for (writes.slice()) |*acct| try wrapDB(account_store.put(acct.pubkey, acct.account));
 
+    // Calculate cost units for executed transaction using actual consumed CUs
+    // Actual consumed = compute_limit - compute_meter (remaining)
+    const actual_programs_execution_cost = executed_transaction.compute_limit - executed_transaction.compute_meter;
+    const tx_cost = cost_model.calculateCostForExecutedTransaction(
+        transaction,
+        actual_programs_execution_cost,
+        loaded_accounts.loaded_accounts_data_size,
+    );
+
     return .{
         .ok = .{
             .fees = fees,
@@ -303,6 +374,9 @@ pub fn loadAndExecuteTransaction(
             .err = executed_transaction.err,
             .loaded_accounts_data_size = loaded_accounts.loaded_accounts_data_size,
             .outputs = executed_transaction,
+            .pre_balances = pre_balances,
+            .pre_token_balances = pre_token_balances,
+            .cost_units = tx_cost.total(),
         },
     };
 }

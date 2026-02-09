@@ -237,6 +237,27 @@ pub const SetRootsIncremental = struct {
         self.max_new_rooted_slot = @max(self.max_new_rooted_slot, rooted_slot);
         try self.write_batch.put(schema.rooted_slots, rooted_slot, true);
     }
+
+    /// Add a root with block_time, block_height, and rewards metadata.
+    /// This is used when rooting slots during replay to persist all block metadata atomically.
+    pub fn addRootWithMeta(
+        self: *SetRootsIncremental,
+        rooted_slot: Slot,
+        block_height: u64,
+        block_time: sig.core.UnixTimestamp,
+        rewards: []const ledger_mod.meta.Reward,
+        num_partitions: ?u64,
+    ) !void {
+        std.debug.assert(!self.is_committed_or_cancelled);
+        self.max_new_rooted_slot = @max(self.max_new_rooted_slot, rooted_slot);
+        try self.write_batch.put(schema.rooted_slots, rooted_slot, true);
+        try self.write_batch.put(schema.block_height, rooted_slot, block_height);
+        try self.write_batch.put(schema.blocktime, rooted_slot, block_time);
+        try self.write_batch.put(schema.rewards, rooted_slot, .{
+            .rewards = rewards,
+            .num_partitions = num_partitions,
+        });
+    }
 };
 
 /// agave: mark_slots_as_if_rooted_normally_at_startup
