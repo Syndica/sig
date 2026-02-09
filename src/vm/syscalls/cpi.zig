@@ -1086,7 +1086,10 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                 instruction,
                 signers.slice(),
             );
-            defer info.deinit(ic.tc.allocator);
+            // NOTE: We don't call info.deinit() here because the InstructionInfo is stored
+            // in the instruction_trace (by value copy). The trace needs the account_metas
+            // memory to remain valid until the transaction completes. Cleanup happens in
+            // TransactionContext.deinit() which iterates over the trace and deinits each entry.
 
             var accounts = try translateAccounts(
                 AccountInfo,
