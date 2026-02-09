@@ -383,7 +383,7 @@ fn executeTxnContext(
                 .update_sysvar_deps = update_sysvar_deps,
             },
         );
-        var slot_block_time = .init(0);
+        var slot_block_time: std.atomic.Value(i64) = .init(0);
         try update_sysvar.updateClock(allocator, .{
             .feature_set = &feature_set,
             .epoch_schedule = &epoch_schedule,
@@ -609,7 +609,7 @@ fn executeTxnContext(
                         .update_sysvar_deps = update_sysvar_deps,
                     },
                 );
-                var slot_block_time = .init(0);
+                var slot_block_time: std.atomic.Value(i64) = .init(0);
                 try update_sysvar.updateClock(allocator, .{
                     .feature_set = &feature_set,
                     .epoch_schedule = &epoch_schedule,
