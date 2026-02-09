@@ -223,9 +223,27 @@ pub const SlotState = struct {
     /// Contains reference counted partitioned rewards and partitioned indices.
     reward_status: EpochRewardStatus,
 
+    /// The unix timestamp for this slot, from the Clock sysvar.
+    /// Set during sysvar updates, used for block_time persistence when rooting.
+    unix_timestamp: Atomic(i64),
+
+    /// Protocol-level rewards that were distributed by this bank.
+    /// Matches Agave's `Bank.rewards: RwLock<Vec<(Pubkey, RewardInfo)>>`.
+    ///
+    /// This collects fee rewards, vote rewards, and staking rewards during block processing.
+    /// When the slot is rooted, these rewards are written to the ledger for RPC queries.
+    rewards: RwMux(sig.replay.rewards.BlockRewards),
+
     pub fn deinit(self: *SlotState, allocator: Allocator) void {
         self.stakes_cache.deinit(allocator);
         self.reward_status.deinit(allocator);
+
+        {
+            var rewards = self.rewards.tryWrite() orelse
+                @panic("attempted to deinit SlotState.rewards while still in use");
+            defer rewards.unlock();
+            rewards.mut().deinit();
+        }
 
         var blockhash_queue = self.blockhash_queue.tryWrite() orelse
             @panic("attempted to deinit SlotState.blockhash_queue while still in use");
@@ -246,6 +264,8 @@ pub const SlotState = struct {
         .collected_transaction_fees = .init(0),
         .collected_priority_fees = .init(0),
         .reward_status = .inactive,
+        .unix_timestamp = .init(0),
+        .rewards = .init(.EMPTY),
     };
 
     pub fn fromBankFields(
@@ -273,6 +293,8 @@ pub const SlotState = struct {
             .collected_transaction_fees = .init(0),
             .collected_priority_fees = .init(0),
             .reward_status = .inactive,
+            .unix_timestamp = .init(0),
+            .rewards = .init(.EMPTY),
         };
     }
 
@@ -309,6 +331,8 @@ pub const SlotState = struct {
             .collected_transaction_fees = .init(0),
             .collected_priority_fees = .init(0),
             .reward_status = parent.reward_status.clone(),
+            .unix_timestamp = .init(0),
+            .rewards = .init(sig.replay.rewards.BlockRewards.init(allocator)),
         };
     }
 
@@ -349,6 +373,8 @@ pub const SlotState = struct {
             .collected_transaction_fees = .init(0),
             .collected_priority_fees = .init(0),
             .reward_status = .inactive,
+            .unix_timestamp = .init(0),
+            .rewards = .init(sig.replay.rewards.BlockRewards.init(allocator)),
         };
     }
 };

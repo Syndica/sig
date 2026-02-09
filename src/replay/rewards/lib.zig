@@ -24,11 +24,99 @@ pub const RewardType = enum {
     voting,
 };
 
+/// Protocol-level reward information that was distributed by the bank.
+/// Matches Agave's `RewardInfo` struct in runtime/src/reward_info.rs.
 pub const RewardInfo = struct {
     reward_type: RewardType,
-    lamports: u64,
+    /// Can be negative in edge cases (e.g., when rent is deducted)
+    lamports: i64,
     post_balance: u64,
-    commission: u8,
+    /// Commission for vote/staking rewards, null for fee rewards
+    commission: ?u8,
+};
+
+/// A reward paired with the pubkey of the account that received it.
+/// Matches Agave's `(Pubkey, RewardInfo)` tuple used in `Bank.rewards`.
+pub const KeyedRewardInfo = struct {
+    pubkey: Pubkey,
+    reward_info: RewardInfo,
+
+    /// Convert to the ledger Reward format for storage.
+    pub fn toLedgerReward(self: KeyedRewardInfo, allocator: Allocator) !sig.ledger.meta.Reward {
+        const pubkey_bytes = try allocator.dupe(u8, &self.pubkey.data);
+        return .{
+            .pubkey = pubkey_bytes,
+            .lamports = self.reward_info.lamports,
+            .post_balance = self.reward_info.post_balance,
+            .reward_type = self.reward_info.reward_type,
+            .commission = self.reward_info.commission,
+        };
+    }
+};
+
+/// Protocol-level rewards that were distributed by the bank.
+/// Matches Agave's `Bank.rewards: RwLock<Vec<(Pubkey, RewardInfo)>>`.
+///
+/// This is used to collect fee rewards, vote rewards, and staking rewards
+/// during block processing. When the slot is rooted, these rewards are
+/// written to the ledger for RPC queries.
+pub const BlockRewards = struct {
+    rewards: std.ArrayListUnmanaged(KeyedRewardInfo),
+    allocator: Allocator,
+
+    pub const EMPTY: BlockRewards = .{
+        .rewards = .{},
+        .allocator = undefined,
+    };
+
+    pub fn init(allocator: Allocator) BlockRewards {
+        return .{
+            .rewards = .{},
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *BlockRewards) void {
+        self.rewards.deinit(self.allocator);
+    }
+
+    /// Push a reward to the list. Used by fee distribution, vote rewards, and staking rewards.
+    /// Matches Agave's `self.rewards.write().unwrap().push(...)`.
+    pub fn push(self: *BlockRewards, keyed_reward: KeyedRewardInfo) !void {
+        try self.rewards.append(self.allocator, keyed_reward);
+    }
+
+    /// Reserve capacity for additional rewards.
+    /// Matches Agave's `rewards.reserve(...)`.
+    pub fn reserve(self: *BlockRewards, additional: usize) !void {
+        try self.rewards.ensureUnusedCapacity(self.allocator, additional);
+    }
+
+    /// Get a slice of all rewards.
+    pub fn items(self: *const BlockRewards) []const KeyedRewardInfo {
+        return self.rewards.items;
+    }
+
+    /// Get the number of rewards.
+    pub fn len(self: *const BlockRewards) usize {
+        return self.rewards.items.len;
+    }
+
+    /// Check if empty.
+    pub fn isEmpty(self: *const BlockRewards) bool {
+        return self.rewards.items.len == 0;
+    }
+
+    /// Convert all rewards to ledger format for storage.
+    pub fn toLedgerRewards(self: *const BlockRewards, allocator: Allocator) ![]sig.ledger.meta.Reward {
+        const ledger_rewards = try allocator.alloc(sig.ledger.meta.Reward, self.rewards.items.len);
+        errdefer allocator.free(ledger_rewards);
+
+        for (self.rewards.items, 0..) |keyed_reward, i| {
+            ledger_rewards[i] = try keyed_reward.toLedgerReward(allocator);
+        }
+        return ledger_rewards;
+    }
 };
 
 pub const StakeReward = struct {
