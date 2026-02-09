@@ -30,6 +30,10 @@ pub const TransactionStatusMeta = struct {
     return_data: ?TransactionReturnData,
     /// The amount of BPF instructions that were executed in order to complete this transaction.
     compute_units_consumed: ?u64,
+    /// The total cost units for this transaction, used for block scheduling/packing.
+    /// This is the sum of: signature_cost + write_lock_cost + data_bytes_cost +
+    /// programs_execution_cost + loaded_accounts_data_size_cost.
+    cost_units: ?u64,
 
     pub const EMPTY_FOR_TEST = TransactionStatusMeta{
         .status = null,
@@ -44,6 +48,7 @@ pub const TransactionStatusMeta = struct {
         .loaded_addresses = .{},
         .return_data = null,
         .compute_units_consumed = null,
+        .cost_units = null,
     };
 
     pub fn deinit(self: @This(), allocator: Allocator) void {
@@ -164,6 +169,245 @@ pub const TransactionReturnData = struct {
 
     pub fn deinit(self: @This(), allocator: Allocator) void {
         allocator.free(self.data);
+    }
+};
+
+/// Builder for creating TransactionStatusMeta from execution results.
+/// This is used by the replay system to persist transaction status metadata
+/// to the ledger for RPC queries like getBlock and getTransaction.
+pub const TransactionStatusMetaBuilder = struct {
+    const runtime = sig.runtime;
+    const TransactionContext = runtime.transaction_context.TransactionContext;
+    const LogCollector = runtime.LogCollector;
+    const InstructionTrace = TransactionContext.InstructionTrace;
+    const RuntimeInstructionInfo = runtime.InstructionInfo;
+    const RuntimeTransactionReturnData = runtime.transaction_context.TransactionReturnData;
+    const ProcessedTransaction = runtime.transaction_execution.ProcessedTransaction;
+    const ExecutedTransaction = runtime.transaction_execution.ExecutedTransaction;
+
+    /// Build TransactionStatusMeta from a ProcessedTransaction and pre-captured balances.
+    ///
+    /// Arguments:
+    /// - allocator: Used to allocate the returned slices (caller owns the memory)
+    /// - processed_tx: The result of transaction execution
+    /// - pre_balances: Lamport balances of accounts before execution (caller must capture these)
+    /// - post_balances: Lamport balances of accounts after execution (caller must capture these)
+    /// - loaded_addresses: Addresses loaded from address lookup tables
+    /// - pre_token_balances: SPL Token balances before execution (optional)
+    /// - post_token_balances: SPL Token balances after execution (optional)
+    ///
+    /// Returns owned TransactionStatusMeta that must be freed with deinit().
+    pub fn build(
+        allocator: Allocator,
+        processed_tx: ProcessedTransaction,
+        pre_balances: []const u64,
+        post_balances: []const u64,
+        loaded_addresses: LoadedAddresses,
+        pre_token_balances: ?[]const TransactionTokenBalance,
+        post_token_balances: ?[]const TransactionTokenBalance,
+    ) error{OutOfMemory}!TransactionStatusMeta {
+        // Convert log messages from LogCollector
+        const log_messages: ?[]const []const u8 = if (processed_tx.outputs) |outputs| blk: {
+            if (outputs.log_collector) |log_collector| {
+                break :blk try extractLogMessages(allocator, log_collector);
+            }
+            break :blk null;
+        } else null;
+        errdefer if (log_messages) |logs| allocator.free(logs);
+
+        // Convert inner instructions from InstructionTrace
+        const inner_instructions: ?[]const InnerInstructions = if (processed_tx.outputs) |outputs| blk: {
+            if (outputs.instruction_trace) |trace| {
+                break :blk try convertInstructionTrace(allocator, trace);
+            }
+            break :blk null;
+        } else null;
+        errdefer if (inner_instructions) |inner| {
+            for (inner) |item| item.deinit(allocator);
+            allocator.free(inner);
+        };
+
+        // Convert return data
+        const return_data: ?TransactionReturnData = if (processed_tx.outputs) |outputs| blk: {
+            if (outputs.return_data) |rd| {
+                break :blk try convertReturnData(allocator, rd);
+            }
+            break :blk null;
+        } else null;
+        errdefer if (return_data) |rd| rd.deinit(allocator);
+
+        // Calculate compute units consumed
+        const compute_units_consumed: ?u64 = if (processed_tx.outputs) |outputs|
+            outputs.compute_limit - outputs.compute_meter
+        else
+            null;
+
+        // Copy balances (caller provided these, we need to own them)
+        const owned_pre_balances = try allocator.dupe(u64, pre_balances);
+        errdefer allocator.free(owned_pre_balances);
+
+        const owned_post_balances = try allocator.dupe(u64, post_balances);
+        errdefer allocator.free(owned_post_balances);
+
+        // Copy loaded addresses
+        const owned_loaded_addresses = LoadedAddresses{
+            .writable = try allocator.dupe(sig.core.Pubkey, loaded_addresses.writable),
+            .readonly = try allocator.dupe(sig.core.Pubkey, loaded_addresses.readonly),
+        };
+
+        return TransactionStatusMeta{
+            .status = processed_tx.err,
+            .fee = processed_tx.fees.total(),
+            .pre_balances = owned_pre_balances,
+            .post_balances = owned_post_balances,
+            .inner_instructions = inner_instructions,
+            .log_messages = log_messages,
+            .pre_token_balances = pre_token_balances,
+            .post_token_balances = post_token_balances,
+            .rewards = null, // Transaction-level rewards are not typically populated
+            .loaded_addresses = owned_loaded_addresses,
+            .return_data = return_data,
+            .compute_units_consumed = compute_units_consumed,
+            .cost_units = processed_tx.cost_units,
+        };
+    }
+
+    /// Extract log messages from a LogCollector into an owned slice.
+    fn extractLogMessages(
+        allocator: Allocator,
+        log_collector: LogCollector,
+    ) error{OutOfMemory}![]const []const u8 {
+        // Count messages first
+        var count: usize = 0;
+        var iter = log_collector.iterator();
+        while (iter.next()) |_| {
+            count += 1;
+        }
+
+        if (count == 0) return &.{};
+
+        const messages = try allocator.alloc([]const u8, count);
+        errdefer allocator.free(messages);
+
+        iter = log_collector.iterator();
+        var i: usize = 0;
+        while (iter.next()) |msg| : (i += 1) {
+            // The log collector returns sentinel-terminated strings, we just store the slice
+            messages[i] = msg;
+        }
+
+        return messages;
+    }
+
+    /// Convert InstructionTrace to InnerInstructions array.
+    /// The trace contains all CPI calls; we need to group them by top-level instruction index.
+    fn convertInstructionTrace(
+        allocator: Allocator,
+        trace: InstructionTrace,
+    ) error{OutOfMemory}![]const InnerInstructions {
+        if (trace.len == 0) return &.{};
+
+        // Group instructions by their top-level instruction index (depth == 1 starts a new group)
+        // Instructions at depth > 1 are inner instructions of the most recent depth == 1 instruction
+
+        var result = std.ArrayList(InnerInstructions).init(allocator);
+        errdefer {
+            for (result.items) |item| item.deinit(allocator);
+            result.deinit();
+        }
+
+        var current_inner = std.ArrayList(InnerInstruction).init(allocator);
+        defer current_inner.deinit();
+
+        var current_top_level_index: u8 = 0;
+        var has_top_level: bool = false;
+
+        for (trace.slice()) |entry| {
+            if (entry.depth == 1) {
+                // This is a top-level instruction - flush previous group if any
+                if (has_top_level and current_inner.items.len > 0) {
+                    try result.append(InnerInstructions{
+                        .index = current_top_level_index,
+                        .instructions = try current_inner.toOwnedSlice(),
+                    });
+                }
+                current_inner.clearRetainingCapacity();
+                if (result.items.len > std.math.maxInt(u8)) {
+                    std.debug.panic(
+                        "Too many top-level instructions for u8 index: {d}",
+                        .{result.items.len},
+                    );
+                }
+                current_top_level_index = @intCast(result.items.len);
+                has_top_level = true;
+            } else if (entry.depth > 1) {
+                // This is an inner instruction (CPI)
+                const inner = try convertToInnerInstruction(allocator, entry.ixn_info, entry.depth);
+                try current_inner.append(inner);
+            }
+        }
+
+        // Flush final group
+        if (has_top_level and current_inner.items.len > 0) {
+            try result.append(InnerInstructions{
+                .index = current_top_level_index,
+                .instructions = try current_inner.toOwnedSlice(),
+            });
+        }
+
+        return try result.toOwnedSlice();
+    }
+
+    /// Convert a single instruction from InstructionInfo to InnerInstruction format.
+    fn convertToInnerInstruction(
+        allocator: Allocator,
+        ixn_info: RuntimeInstructionInfo,
+        depth: u8,
+    ) error{OutOfMemory}!InnerInstruction {
+        // Build account indices array
+        const accounts = try allocator.alloc(u8, ixn_info.account_metas.items.len);
+        errdefer allocator.free(accounts);
+
+        for (ixn_info.account_metas.items, 0..) |meta, i| {
+            if (meta.index_in_transaction > std.math.maxInt(u8)) {
+                std.debug.panic(
+                    "Too many accounts in instruction for u8 index: meta.index_in_transaction={d}",
+                    .{meta.index_in_transaction},
+                );
+            }
+            accounts[i] = @intCast(meta.index_in_transaction);
+        }
+
+        // Copy instruction data
+        const data = try allocator.dupe(u8, ixn_info.instruction_data);
+        errdefer allocator.free(data);
+
+        if (ixn_info.program_meta.index_in_transaction > std.math.maxInt(u8)) {
+            std.debug.panic(
+                "Too many accounts in instruction for u8 index: ixn_info.program_meta.index_in_transaction={d}",
+                .{ixn_info.program_meta.index_in_transaction},
+            );
+        }
+
+        return InnerInstruction{
+            .instruction = CompiledInstruction{
+                .program_id_index = @intCast(ixn_info.program_meta.index_in_transaction),
+                .accounts = accounts,
+                .data = data,
+            },
+            .stack_height = depth,
+        };
+    }
+
+    /// Convert runtime TransactionReturnData to ledger TransactionReturnData.
+    fn convertReturnData(
+        allocator: Allocator,
+        rd: RuntimeTransactionReturnData,
+    ) error{OutOfMemory}!TransactionReturnData {
+        return TransactionReturnData{
+            .program_id = rd.program_id,
+            .data = try allocator.dupe(u8, rd.data.slice()),
+        };
     }
 };
 

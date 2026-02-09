@@ -2498,6 +2498,7 @@ test getTransactionStatus {
         .loaded_addresses = .{},
         .return_data = .{},
         .compute_units_consumed = 1000,
+        .cost_units = null,
     };
 
     // insert transaction status and root it
@@ -2689,6 +2690,7 @@ test getConfirmedSignaturesForAddress {
         .loaded_addresses = .{},
         .return_data = .{},
         .compute_units_consumed = 1000,
+        .cost_units = null,
     };
     try write_batch.put(schema.transaction_status, .{ sig1, slot }, status_meta);
 
