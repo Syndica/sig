@@ -46,7 +46,10 @@ pub fn executeNativeCpiInstruction(
     signers: []const Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
     const instruction_info = try prepareCpiInstructionInfo(tc, instruction, signers);
-    defer instruction_info.deinit(tc.allocator);
+    // NOTE: We don't call instruction_info.deinit() here because the InstructionInfo is stored
+    // in the instruction_trace (by value copy in pushInstruction). The trace needs the account_metas
+    // memory to remain valid until the transaction completes. Cleanup happens in
+    // TransactionContext.deinit() which iterates over the trace and deinits each CPI entry.
 
     try executeInstruction(allocator, tc, instruction_info);
 }
@@ -373,7 +376,7 @@ test pushInstruction {
         deinitAccountMap(cache, allocator);
     }
 
-    var instruction_info = try testing.createInstructionInfo(
+    const instruction_info = try testing.createInstructionInfo(
         &tc,
         system_program.ID,
         system_program.Instruction{
@@ -386,7 +389,12 @@ test pushInstruction {
             .{ .index_in_transaction = 1 },
         },
     );
-    defer instruction_info.deinit(allocator);
+    // NOTE: instruction_info is not deinitialized here because it gets copied into
+    // tc.instruction_trace multiple times (sharing the same account_metas memory).
+    // The trace entry with depth > 1 will be cleaned up by tc.deinit(), which frees
+    // the shared account_metas. The depth == 1 entry is not cleaned up by tc.deinit()
+    // (as it's considered owned externally), but since both share the same memory,
+    // it's already freed when the depth > 1 entry is cleaned up.
 
     // Success
     try pushInstruction(&tc, instruction_info);

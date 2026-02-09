@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
+const InstructionAccount = sig.core.instruction.InstructionAccount;
 const Pubkey = sig.core.Pubkey;
 
 /// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/instruction.rs#L64
@@ -29,14 +30,16 @@ pub fn transfer(
     to: Pubkey,
     lamports: u64,
 ) error{OutOfMemory}!sig.core.Instruction {
+    const accounts = try allocator.alloc(InstructionAccount, 2);
+    errdefer allocator.free(accounts);
+    accounts[0] = .{ .pubkey = from, .is_signer = true, .is_writable = true };
+    accounts[1] = .{ .pubkey = to, .is_signer = false, .is_writable = true };
+
     return try sig.core.Instruction.initUsingBincodeAlloc(
         allocator,
         Instruction,
         ID,
-        &.{
-            .{ .pubkey = from, .is_signer = true, .is_writable = true },
-            .{ .pubkey = to, .is_signer = false, .is_writable = true },
-        },
+        accounts,
         &.{ .transfer = .{ .lamports = lamports } },
     );
 }
@@ -47,13 +50,15 @@ pub fn allocate(
     pubkey: Pubkey,
     space: u64,
 ) error{OutOfMemory}!sig.core.Instruction {
+    const accounts = try allocator.alloc(InstructionAccount, 1);
+    errdefer allocator.free(accounts);
+    accounts[0] = .{ .pubkey = pubkey, .is_signer = true, .is_writable = true };
+
     return try sig.core.Instruction.initUsingBincodeAlloc(
         allocator,
         Instruction,
         ID,
-        &.{
-            .{ .pubkey = pubkey, .is_signer = true, .is_writable = true },
-        },
+        accounts,
         &.{ .allocate = .{ .space = space } },
     );
 }
@@ -64,13 +69,15 @@ pub fn assign(
     pubkey: Pubkey,
     owner: Pubkey,
 ) error{OutOfMemory}!sig.core.Instruction {
+    const accounts = try allocator.alloc(InstructionAccount, 1);
+    errdefer allocator.free(accounts);
+    accounts[0] = .{ .pubkey = pubkey, .is_signer = true, .is_writable = true };
+
     return try sig.core.Instruction.initUsingBincodeAlloc(
         allocator,
         Instruction,
         ID,
-        &.{
-            .{ .pubkey = pubkey, .is_signer = true, .is_writable = true },
-        },
+        accounts,
         &.{ .assign = .{ .owner = owner } },
     );
 }
