@@ -54,7 +54,10 @@ pub const ParsedTokenAccount = struct {
 
         // Check state - must be initialized or frozen
         const state_byte = data[STATE_OFFSET];
-        const state: TokenAccountState = std.meta.intToEnum(TokenAccountState, state_byte) catch return null;
+        const state: TokenAccountState = std.meta.intToEnum(
+            TokenAccountState,
+            state_byte,
+        ) catch return null;
         if (state == .uninitialized) return null;
 
         return ParsedTokenAccount{
@@ -128,7 +131,9 @@ pub fn collectRawTokenBalances(
         if (account.account.data.len < TOKEN_ACCOUNT_SIZE) continue;
 
         // Try to parse as token account
-        const parsed = ParsedTokenAccount.parse(account.account.data[0..TOKEN_ACCOUNT_SIZE]) orelse continue;
+        const parsed = ParsedTokenAccount.parse(
+            account.account.data[0..TOKEN_ACCOUNT_SIZE],
+        ) orelse continue;
 
         // Add to result (won't fail since we can't have more token accounts than total accounts)
         result.append(.{

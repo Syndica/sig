@@ -8,7 +8,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const Pubkey = sig.core.Pubkey;
 const FeatureSet = sig.core.FeatureSet;
 const Slot = sig.core.Slot;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
@@ -180,7 +179,9 @@ fn calculateTransactionCostInternal(
 
     // 5. Loaded accounts data size cost: 8 CU per 32KB page
     // This is calculated based on the actual loaded account data size
-    const loaded_accounts_data_size_cost = calculateLoadedAccountsDataSizeCost(loaded_accounts_data_size);
+    const loaded_accounts_data_size_cost = calculateLoadedAccountsDataSizeCost(
+        loaded_accounts_data_size,
+    );
 
     return .{
         .transaction = .{

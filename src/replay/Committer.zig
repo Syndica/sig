@@ -11,7 +11,6 @@ const Logger = sig.trace.Logger("replay.committer");
 
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
-const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 const Transaction = sig.core.Transaction;
 
@@ -21,7 +20,6 @@ const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 const TransactionStatusMeta = sig.ledger.transaction_status.TransactionStatusMeta;
 const TransactionStatusMetaBuilder = sig.ledger.transaction_status.TransactionStatusMetaBuilder;
-const TransactionTokenBalance = sig.ledger.transaction_status.TransactionTokenBalance;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
 const Ledger = sig.ledger.Ledger;
 const spl_token = sig.runtime.spl_token;
@@ -218,10 +216,10 @@ fn writeTransactionStatus(
     defer mint_cache.deinit();
 
     // Populate cache with any mints found in the transaction writes
-    for (tx_result.writes.constSlice()) |*written_account| {
-        if (written_account.account.data.len >= spl_token.MINT_ACCOUNT_SIZE) {
-            if (spl_token.ParsedMint.parse(written_account.account.data[0..spl_token.MINT_ACCOUNT_SIZE])) |parsed_mint| {
-                mint_cache.put(written_account.pubkey, parsed_mint.decimals) catch {};
+    for (tx_result.writes.constSlice()) |*acc| {
+        if (acc.data.len >= spl_token.MINT_ACCOUNT_SIZE) {
+            if (spl_token.ParsedMint.parse(acc.data[0..spl_token.MINT_ACCOUNT_SIZE])) |mint| {
+                mint_cache.put(acc.pubkey, mint.decimals) catch {};
             }
         }
     }
