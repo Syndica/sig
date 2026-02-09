@@ -46,7 +46,7 @@ pub const Service = enum {
 };
 
 const RequiredRegion = struct {
-    region: Region,
+    region: RegionType,
     rw: bool = false,
 };
 
@@ -65,9 +65,14 @@ const SharedRegion = struct {
     }
 };
 
-pub const Region = enum {
+pub const RegionType = enum {
     prng_state,
     net_pair,
+};
+
+pub const Region = union(RegionType) {
+    prng_state,
+    net_pair: struct { port: u16 },
 
     pub fn size(self: Region) usize {
         return switch (self) {
@@ -76,26 +81,21 @@ pub const Region = enum {
         };
     }
 
-    pub fn init(self: Region) *const fn ([]align(page_size_min) u8) void {
+    pub fn init(self: Region, buf: []align(page_size_min) u8) void {
         return switch (self) {
-            .prng_state => struct {
-                fn f(buf: []align(page_size_min) u8) void {
-                    std.debug.assert(buf.len == @sizeOf(std.Random.Xoroshiro128));
-                    const data: *std.Random.Xoroshiro128 = @ptrCast(buf);
+            .prng_state => {
+                std.debug.assert(buf.len == @sizeOf(std.Random.Xoroshiro128));
+                const data: *std.Random.Xoroshiro128 = @ptrCast(buf);
+                data.* = .init(0);
+            },
+            .net_pair => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(common.net.Pair));
+                const data: *common.net.Pair = @ptrCast(buf);
 
-                    data.* = .init(0);
-                }
-            }.f,
-            .net_pair => struct {
-                fn f(buf: []align(page_size_min) u8) void {
-                    std.debug.assert(buf.len == @sizeOf(common.net.Pair));
-                    const data: *common.net.Pair = @ptrCast(buf);
-
-                    data.recv.init();
-                    data.send.init();
-                    data.port = std.math.maxInt(u16);
-                }
-            }.f,
+                data.recv.init();
+                data.send.init();
+                data.port = cfg.port;
+            },
         };
     }
 };
@@ -158,12 +158,12 @@ fn serviceMap(
 
     // check all service instances request regions which are shared with them
     inline for (services) |instance| {
-        for (instance.service.requiredRegions()) |region_instance| {
+        for (instance.service.requiredRegions()) |required_region| {
             const found_region: LookupResult = blk: for (
                 regions,
                 region_memfds,
             ) |shared_region, region_memfd| {
-                if (shared_region.region != region_instance.region) continue;
+                if (shared_region.region != required_region.region) continue;
 
                 for (shared_region.shares) |share| {
                     if (instance.service == share.instance.service and
@@ -172,14 +172,14 @@ fn serviceMap(
                         std.debug.assert(region_memfd.size == shared_region.region.size());
                         break :blk .{
                             .shared = shared_region,
-                            .rw = region_instance.rw,
+                            .rw = required_region.rw,
                             .memfd = region_memfd,
                         };
                     }
                 }
             } else std.debug.panic(
                 "Service instance {f} requested {} region which was not shared with it",
-                .{ instance, region_instance },
+                .{ instance, required_region },
             );
 
             const entry = try map.getOrPut(allocator, instance);
@@ -228,7 +228,7 @@ pub fn spawnAndWait(
     for (regions, region_memfds) |shared_region, region_memfd| {
         const buf = try region_memfd.mmap(shared_region.requested_location);
         defer std.posix.munmap(buf);
-        shared_region.region.init()(buf);
+        shared_region.region.init(buf);
     }
 
     var map = try serviceMap(allocator, services, regions, region_memfds);
@@ -350,7 +350,7 @@ fn spawnService(
     // mseal our shared VMAs (essentially making sure their mapping can't be tampered with)
     for (resolved_args.ro, resolved_args.ro_len) |ptr, len| mseal(ptr orelse continue, len);
     for (resolved_args.rw, resolved_args.rw_len) |ptr, len| mseal(ptr orelse continue, len);
-    mseal(resolved_args.exit, 4);
+    mseal(resolved_args.exit, @sizeOf(common.Exit));
 
     closeAllFdsExceptStderr(stderr.handle);
 

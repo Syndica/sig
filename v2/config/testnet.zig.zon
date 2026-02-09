@@ -1,0 +1,6 @@
+.{
+    .gossip = .{
+        .cluster = .testnet,
+        .port = 8001,
+    },
+}

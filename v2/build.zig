@@ -4,30 +4,18 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const common = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/common.zig" } },
-    });
-
-    const start_service = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/start_service.zig" } },
-    });
+    const common = b.createModule(.{ .root_source_file = b.path("src/common.zig") });
+    const start_service = b.createModule(.{ .root_source_file = b.path("src/start_service.zig") });
     start_service.addImport("common", common);
 
     const sig_init = b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/main.zig" } },
+        .root_source_file = b.path("src/main.zig"),
     });
     sig_init.addImport("common", common);
 
-    const sig_init_exe = b.addExecutable(.{
-        .name = "sig-init",
-        .root_module = sig_init,
-    });
+    const sig_init_exe = b.addExecutable(.{ .name = "sig-init", .root_module = sig_init });
     b.installArtifact(sig_init_exe);
 
     const sig_init_tests = b.addTest(.{ .root_module = sig_init, .name = "sig_init" });
@@ -50,7 +38,7 @@ pub fn build(b: *std.Build) void {
         const service_mod = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = path } },
+            .root_source_file = b.path(path),
             .single_threaded = true,
             .omit_frame_pointer = false,
         });
