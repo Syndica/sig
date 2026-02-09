@@ -1,9 +1,7 @@
 const std = @import("std");
 const Build = std.Build;
 
-// TODO(0.15): replace with `.parse(@import("build.zig.zon").version)` since
-// importing zon without a result type didn't make it into 0.14.x.
-const sig_version: std.SemanticVersion = .{ .major = 0, .minor = 2, .patch = 0 };
+const sig_version = std.SemanticVersion.parse(@import("build.zig.zon").version) catch unreachable;
 
 const LedgerDB = enum {
     rocksdb,
@@ -133,7 +131,7 @@ pub const Config = struct {
                     "Override Sig's version string. The default is to find out through git.",
                 );
                 const version_slice = if (maybe_version_string) |version| version else v: {
-                    const version_string = b.fmt("{}", .{sig_version});
+                    const version_string = b.fmt("{f}", .{sig_version});
 
                     var code: u8 = undefined;
                     const git_describe_untrimmed = b.runAllowFail(&.{
@@ -169,7 +167,7 @@ pub const Config = struct {
                             const ancestor_ver = try std.SemanticVersion.parse(tagged_ancestor[1..]);
                             if (sig_version.order(ancestor_ver) != .gt) {
                                 std.debug.print(
-                                    "'{}' must be greater than tagged ancestor '{}'\n",
+                                    "'{f}' must be greater than tagged ancestor '{f}'\n",
                                     .{ sig_version, ancestor_ver },
                                 );
                                 std.process.exit(1);
