@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../../sig.zig");
 const replay = @import("../lib.zig");
 const tracy = @import("tracy");
@@ -685,14 +686,14 @@ fn processDuplicateSlots(
 ) !void {
     const MAX_BATCH_SIZE = 1024;
 
-    var new_duplicate_slots: std.BoundedArray(Slot, MAX_BATCH_SIZE) = .{};
+    var new_duplicate_slots: std14.BoundedArray(Slot, MAX_BATCH_SIZE) = .{};
     while (new_duplicate_slots.unusedCapacitySlice().len != 0) {
         const new_duplicate_slot = duplicate_slots_receiver.tryReceive() orelse break;
         new_duplicate_slots.appendAssumeCapacity(new_duplicate_slot);
     }
 
     const root_slot, const slots_hashes = blk: {
-        var slots_hashes: std.BoundedArray(?Hash, MAX_BATCH_SIZE) = .{};
+        var slots_hashes: std14.BoundedArray(?Hash, MAX_BATCH_SIZE) = .{};
         for (new_duplicate_slots.constSlice()) |duplicate_slot| {
             slots_hashes.appendAssumeCapacity(hash: {
                 const bf_elem = slot_tracker.slots.get(duplicate_slot) orelse break :hash null;

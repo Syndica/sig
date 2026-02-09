@@ -1,5 +1,6 @@
 const lsquic = @import("lsquic");
 const std = @import("std");
+const std14 = @import("std14");
 const xev = @import("xev");
 const ssl = @import("ssl");
 const sig = @import("../sig.zig");
@@ -33,7 +34,7 @@ pub fn Client(
         allocator: std.mem.Allocator,
         receiver: *Channel(Packet),
         socket: sig.net.UdpSocket,
-        connections: std.BoundedArray(*Connection, max_connections),
+        connections: std14.BoundedArray(*Connection, max_connections),
         exit: ExitCondition,
         logger: Logger,
 

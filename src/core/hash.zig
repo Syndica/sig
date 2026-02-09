@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 const base58 = @import("base58");
@@ -83,7 +84,7 @@ pub const Hash = extern struct {
 
     pub fn parseRuntime(str: []const u8) error{InvalidHash}!Hash {
         if (str.len > BASE58_MAX_SIZE) return error.InvalidHash;
-        var encoded: std.BoundedArray(u8, BASE58_MAX_SIZE) = .{};
+        var encoded: std14.BoundedArray(u8, BASE58_MAX_SIZE) = .{};
         encoded.appendSliceAssumeCapacity(str);
 
         if (@inComptime()) @setEvalBranchQuota(str.len * str.len * str.len);
@@ -96,7 +97,7 @@ pub const Hash = extern struct {
     }
 
     pub const BASE58_MAX_SIZE = base58.encodedMaxSize(SIZE);
-    pub const Base58String = std.BoundedArray(u8, BASE58_MAX_SIZE);
+    pub const Base58String = std14.BoundedArray(u8, BASE58_MAX_SIZE);
     pub fn base58String(self: Hash) Base58String {
         return BASE58_ENDEC.encodeArray(SIZE, self.data);
     }

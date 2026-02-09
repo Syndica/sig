@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../sig.zig");
 const cli = @import("cli");
 
@@ -173,7 +174,7 @@ pub fn run(
     }
 
     var reader_exit: std.atomic.Value(bool) = .init(true);
-    var threads: std.BoundedArray(std.Thread, N_RANDOM_THREADS) = .{};
+    var threads: std14.BoundedArray(std.Thread, N_RANDOM_THREADS) = .{};
     defer {
         reader_exit.store(true, .seq_cst);
         for (threads.constSlice()) |thread| thread.join();

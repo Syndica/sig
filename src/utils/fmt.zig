@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../sig.zig");
 
 /// Wrapper for `BoundedSpec(fmt_str).fmt(args)`.
@@ -40,7 +41,7 @@ pub fn BoundedSpec(comptime spec: []const u8) type {
         }
 
         pub fn BoundedArray(comptime Args: type) type {
-            return std.BoundedArray(u8, fmtLen(Args));
+            return std14.BoundedArray(u8, fmtLen(Args));
         }
 
         pub fn BoundedArrayValue(comptime args_value: anytype) type {
@@ -53,7 +54,7 @@ pub fn BoundedSpec(comptime spec: []const u8) type {
         /// try expectEqualStrings("fizz.buzz", BoundedFmtSpec("{s}.{s}").fmt(.{ "foo", "buzz" }).constSlice());
         /// ```
         pub inline fn fmt(args: anytype) BoundedArray(@TypeOf(args)) {
-            var out: std.BoundedArray(u8, fmtLen(@TypeOf(args))) = .{};
+            var out: std14.BoundedArray(u8, fmtLen(@TypeOf(args))) = .{};
             _ = fmtInto(args, &out);
             return out;
         }
@@ -76,14 +77,14 @@ pub fn BoundedSpec(comptime spec: []const u8) type {
 /// Returns a wrapper around the bounded array which will be usable as an argument
 /// to `BoundedSpec(spec)` functions.
 pub inline fn boundedString(
-    /// `*const std.BoundedArray(u8, capacity)`
+    /// `*const std14.BoundedArray(u8, capacity)`
     bounded: anytype,
 ) if (sig.utils.types.boundedArrayInfo(@TypeOf(bounded.*))) |ba_info|
     BoundedString(ba_info.capacity)
 else
     noreturn {
     const lazy = struct {
-        const compile_err = "Expected `std.BoundedArray(u8, capacity)`, got " ++
+        const compile_err = "Expected `std14.BoundedArray(u8, capacity)`, got " ++
             @typeName(@TypeOf(bounded.*));
     };
     const ba_info = sig.utils.types.boundedArrayInfo(@TypeOf(bounded.*)) orelse
@@ -92,11 +93,11 @@ else
     return .{ .bounded = bounded };
 }
 
-/// A wrapper around a `*const std.BoundedArray(u8, capacity)` which is
+/// A wrapper around a `*const std14.BoundedArray(u8, capacity)` which is
 /// usable as an argument type by `BoundedSpec(spec)` functions.
 pub fn BoundedString(comptime capacity: usize) type {
     return struct {
-        bounded: *const std.BoundedArray(u8, capacity),
+        bounded: *const std14.BoundedArray(u8, capacity),
         const Self = @This();
 
         pub fn format(

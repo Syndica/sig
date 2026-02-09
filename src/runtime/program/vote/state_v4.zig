@@ -1,5 +1,6 @@
 //! [SIMD-0185] Vote account state v4: commission in bps, no prior_voters, collectors, BLS key.
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../../../sig.zig");
 
 const Allocator = std.mem.Allocator;
@@ -660,7 +661,7 @@ pub const VoteStateV4 = struct {
         // index into the slot_hashes, starting at the oldest known slot hash
         var slot_hashes_index = slot_hash_entries.len;
         // The maximum number of elements is bounded by the maximum instruction size possible.
-        var lockouts_to_filter: std.BoundedArray(
+        var lockouts_to_filter: std14.BoundedArray(
             u64,
             sig.vm.syscalls.cpi.MAX_DATA_LEN / @sizeOf(u64),
         ) = .{};
