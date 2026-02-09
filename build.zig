@@ -277,7 +277,11 @@ pub fn build(b: *Build) !void {
     });
 
     // G/H table for Bulletproofs
-    const gh_table = b.createModule(.{ .root_source_file = generateTable(b) });
+    const gh_table = b.createModule(.{
+        .root_source_file = generateTable(b),
+        .target = config.target,
+        .optimize = config.optimize,
+    });
 
     const sqlite_mod = genSqlite(b, config.target, config.optimize);
     const blst_mod = b.dependency("blst", .{
@@ -439,6 +443,7 @@ pub fn build(b: *Build) !void {
             .root_source_file = b.path("src/vm/main.zig"),
             .target = config.target,
             .optimize = config.optimize,
+            .imports = imports,
             .sanitize_thread = config.enable_tsan,
             .error_tracing = config.error_tracing,
         }),
@@ -513,7 +518,13 @@ fn generateTable(b: *Build) Build.LazyPath {
             .root_source_file = b.path("scripts/generator_chain.zig"),
         }),
     });
-    return b.addRunArtifact(gen).captureStdOut();
+    const run = b.addRunArtifact(gen);
+    const generated = run.captureStdOut();
+    // Write the generated table to a file so it can be file-path imported
+    const wf = b.addWriteFiles();
+    const table_file = wf.addCopyFile(generated, "table.zig");
+    wf.step.dependOn(&run.step);
+    return table_file;
 }
 
 fn genSqlite(
@@ -681,9 +692,11 @@ const ssh = struct {
         if (static.exe == null) {
             static.exe = b.addExecutable(.{
                 .name = "send-file",
-                .root_source_file = b.path("scripts/send-file.zig"),
-                .target = b.graph.host,
-                .link_libc = true,
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("scripts/send-file.zig"),
+                    .target = b.graph.host,
+                    .link_libc = true,
+                }),
             });
         }
 
