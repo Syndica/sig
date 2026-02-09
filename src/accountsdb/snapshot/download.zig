@@ -341,7 +341,7 @@ fn downloadSnapshotWithRetry(
         } else {
             if (peers.len == 0) {
                 // We don't have peers yet, wait for gossip table population
-                std.time.sleep(1 * std.time.ns_per_s);
+                std.Thread.sleep(1 * std.time.ns_per_s);
             }
             continue :get_peers; // Failed to download from all peers, getting new peers
         }
