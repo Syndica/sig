@@ -1,0 +1,349 @@
+const std = @import("std");
+const ws = @import("webzockets_lib");
+
+/// Client-side handler that closes immediately on open.
+/// Useful for testing close handshake and connection pool exhaustion.
+pub const CloseOnOpenHandler = struct {
+    open_called: bool = false,
+    close_called: bool = false,
+
+    pub fn onOpen(self: *CloseOnOpenHandler, conn: anytype) void {
+        self.open_called = true;
+        conn.close(.normal, "");
+    }
+
+    pub fn onMessage(_: *CloseOnOpenHandler, _: anytype, _: ws.Message) void {}
+    pub fn onWriteComplete(_: *CloseOnOpenHandler, _: anytype) void {}
+
+    pub fn onClose(self: *CloseOnOpenHandler, _: anytype) void {
+        self.close_called = true;
+    }
+};
+
+/// Client-side handler that tracks open_called but takes no action.
+/// Useful for testing rejection scenarios where onOpen should not be called.
+pub const NoOpHandler = struct {
+    open_called: bool = false,
+
+    pub fn onOpen(self: *NoOpHandler, _: anytype) void {
+        self.open_called = true;
+    }
+
+    pub fn onMessage(_: *NoOpHandler, _: anytype, _: ws.Message) void {}
+    pub fn onWriteComplete(_: *NoOpHandler, _: anytype) void {}
+    pub fn onClose(_: *NoOpHandler, _: anytype) void {}
+};
+
+/// Client-side handler that waits for the server to close.
+/// Tracks that onClose was called and that the client never initiated the close.
+/// Used by client close_tests.zig for server-initiated close tests.
+pub const ServerCloseHandler = struct {
+    close_called: bool = false,
+    open_called: bool = false,
+
+    pub fn onOpen(self: *ServerCloseHandler, _: anytype) void {
+        self.open_called = true;
+    }
+
+    pub fn onMessage(_: *ServerCloseHandler, _: anytype, _: ws.Message) void {}
+    pub fn onWriteComplete(_: *ServerCloseHandler, _: anytype) void {}
+
+    pub fn onClose(self: *ServerCloseHandler, _: anytype) void {
+        self.close_called = true;
+    }
+};
+
+/// Client-side handler that tracks pong reception and then closes.
+/// Used by client ping_pong_tests.zig to verify the onPong callback fires.
+pub const PongTrackingHandler = struct {
+    pong_received: bool = false,
+    pong_data: ?[]const u8 = null,
+    open_called: bool = false,
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *PongTrackingHandler) void {
+        if (self.pong_data) |data| {
+            self.allocator.free(data);
+            self.pong_data = null;
+        }
+    }
+
+    pub fn onOpen(self: *PongTrackingHandler, _: anytype) void {
+        self.open_called = true;
+    }
+
+    pub fn onMessage(_: *PongTrackingHandler, _: anytype, _: ws.Message) void {}
+    pub fn onWriteComplete(_: *PongTrackingHandler, _: anytype) void {}
+
+    pub fn onPong(self: *PongTrackingHandler, conn: anytype, data: []const u8) void {
+        self.pong_received = true;
+        self.pong_data = self.allocator.dupe(u8, data) catch null;
+        conn.close(.normal, "");
+    }
+
+    pub fn onClose(_: *PongTrackingHandler, _: anytype) void {}
+};
+
+/// Client-side handler that tracks whether onClose was called.
+/// Does not send or receive data. Used for max_message_size tests where the
+/// server sends an oversized message and the client is expected to close with 1009.
+pub const MaxMessageHandler = struct {
+    open_called: bool = false,
+    close_called: bool = false,
+    message_received: bool = false,
+
+    pub fn onOpen(self: *MaxMessageHandler, _: anytype) void {
+        self.open_called = true;
+    }
+
+    pub fn onMessage(self: *MaxMessageHandler, _: anytype, _: ws.Message) void {
+        self.message_received = true;
+    }
+
+    pub fn onWriteComplete(_: *MaxMessageHandler, _: anytype) void {}
+
+    pub fn onClose(self: *MaxMessageHandler, _: anytype) void {
+        self.close_called = true;
+    }
+};
+
+/// Client-side handler that tracks socket-level close for connection failure tests.
+/// Implements onSocketClose to detect TCP/handshake failures.
+pub const ConnectFailHandler = struct {
+    open_called: bool = false,
+    socket_close_called: bool = false,
+
+    pub fn onOpen(self: *ConnectFailHandler, _: anytype) void {
+        self.open_called = true;
+    }
+
+    pub fn onMessage(_: *ConnectFailHandler, _: anytype, _: ws.Message) void {}
+    pub fn onWriteComplete(_: *ConnectFailHandler, _: anytype) void {}
+    pub fn onClose(_: *ConnectFailHandler, _: anytype) void {}
+
+    pub fn onSocketClose(self: *ConnectFailHandler) void {
+        self.socket_close_called = true;
+    }
+};
+
+/// Client-side handler that explicitly responds to pings via onPing.
+/// Used to test that declaring onPing disables auto-pong and the handler
+/// can manually send pong.
+pub const ExplicitPongHandler = struct {
+    open_called: bool = false,
+    close_called: bool = false,
+    ping_received: bool = false,
+
+    pub fn onOpen(self: *ExplicitPongHandler, _: anytype) void {
+        self.open_called = true;
+    }
+
+    pub fn onPing(self: *ExplicitPongHandler, conn: anytype, data: []const u8) void {
+        self.ping_received = true;
+        conn.sendPong(data) catch |err| std.debug.panic("sendPong failed: {}", .{err});
+    }
+
+    pub fn onMessage(_: *ExplicitPongHandler, _: anytype, _: ws.Message) void {}
+    pub fn onWriteComplete(_: *ExplicitPongHandler, _: anytype) void {}
+
+    pub fn onClose(self: *ExplicitPongHandler, _: anytype) void {
+        self.close_called = true;
+    }
+};
+
+/// Common client-side handler for e2e tests.
+///
+/// Behavior:
+/// - Optionally sends one message/ping on open.
+/// - Captures the first message/pong.
+/// - Initiates a normal close.
+///
+/// Owns any allocations made for sending/capturing and provides `deinit()`
+/// so tests can clean up consistently.
+pub const SendOnceHandler = struct {
+    pub const SendKind = enum {
+        none,
+        text,
+        binary,
+        ping,
+    };
+
+    /// What to send on open.
+    send_kind: SendKind = .none,
+
+    /// Payload to send (required unless `send_kind == .none`).
+    send_data: ?[]const u8 = null,
+
+    /// Captured data from the first received message/pong.
+    received_data: ?[]const u8 = null,
+    received_type: ?ws.Message.Type = null,
+
+    open_called: bool = false,
+
+    allocator: std.mem.Allocator,
+
+    /// Owned copy used for text/binary sends.
+    sent_data: ?[]const u8 = null,
+
+    pub fn deinit(self: *SendOnceHandler) void {
+        if (self.received_data) |data| {
+            self.allocator.free(data);
+            self.received_data = null;
+        }
+        if (self.sent_data) |data| {
+            self.allocator.free(data);
+            self.sent_data = null;
+        }
+    }
+
+    pub fn onOpen(self: *SendOnceHandler, conn: anytype) void {
+        self.open_called = true;
+
+        const kind = self.send_kind;
+        if (kind == .none) return;
+        const data = self.send_data orelse return;
+
+        switch (kind) {
+            .ping => {
+                // sendPing copies the payload into an internal queue (no onWriteComplete),
+                // so no allocation or lifetime management is needed.
+                conn.sendPing(data) catch return;
+            },
+            .text => {
+                const copy = self.allocator.dupe(u8, data) catch return;
+                conn.sendText(copy) catch {
+                    self.allocator.free(copy);
+                    return;
+                };
+                self.sent_data = copy;
+            },
+            .binary => {
+                const copy = self.allocator.dupe(u8, data) catch return;
+                conn.sendBinary(copy) catch {
+                    self.allocator.free(copy);
+                    return;
+                };
+                self.sent_data = copy;
+            },
+            .none => {},
+        }
+    }
+
+    pub fn onMessage(self: *SendOnceHandler, conn: anytype, message: ws.Message) void {
+        self.received_data = self.allocator.dupe(u8, message.data) catch null;
+        self.received_type = message.type;
+        conn.close(.normal, "");
+    }
+
+    pub fn onPong(self: *SendOnceHandler, conn: anytype, data: []const u8) void {
+        self.received_data = self.allocator.dupe(u8, data) catch null;
+        self.received_type = .pong;
+        conn.close(.normal, "");
+    }
+
+    pub fn onWriteComplete(self: *SendOnceHandler, _: anytype) void {
+        if (self.sent_data) |data| {
+            self.allocator.free(data);
+            self.sent_data = null;
+        }
+    }
+
+    pub fn onClose(self: *SendOnceHandler, _: anytype) void {
+        if (self.sent_data) |data| {
+            self.allocator.free(data);
+            self.sent_data = null;
+        }
+    }
+};
+
+/// Client-side handler that sends multiple messages sequentially.
+/// Sends the next message only after the previous write completes and echo is received.
+/// Supports mixed text/binary messages via MsgSpec.
+pub const SequenceHandler = struct {
+    /// Message specification for sending.
+    pub const MsgSpec = struct {
+        data: []const u8,
+        is_binary: bool = false,
+    };
+
+    /// Captured result for a received message.
+    pub const RecvResult = struct {
+        data: []const u8,
+        len: usize,
+    };
+
+    messages: []const MsgSpec,
+    send_index: usize = 0,
+    recv_index: usize = 0,
+    results: std.ArrayList(RecvResult),
+    allocator: std.mem.Allocator,
+    sent_data: ?[]const u8 = null,
+    open_called: bool = false,
+
+    pub fn deinit(self: *SequenceHandler) void {
+        for (self.results.items) |item| {
+            self.allocator.free(item.data);
+        }
+        self.results.deinit();
+        if (self.sent_data) |data| {
+            self.allocator.free(data);
+            self.sent_data = null;
+        }
+    }
+
+    pub fn onOpen(self: *SequenceHandler, conn: anytype) void {
+        self.open_called = true;
+        self.maybeSendNext(conn);
+    }
+
+    fn maybeSendNext(self: *SequenceHandler, conn: anytype) void {
+        if (self.sent_data != null) return;
+        if (self.recv_index < self.send_index) return;
+        if (self.send_index >= self.messages.len) return;
+
+        const spec = self.messages[self.send_index];
+        const copy = self.allocator.dupe(u8, spec.data) catch return;
+        if (spec.is_binary) {
+            conn.sendBinary(copy) catch {
+                self.allocator.free(copy);
+                return;
+            };
+        } else {
+            conn.sendText(copy) catch {
+                self.allocator.free(copy);
+                return;
+            };
+        }
+        self.sent_data = copy;
+        self.send_index += 1;
+    }
+
+    pub fn onMessage(self: *SequenceHandler, conn: anytype, message: ws.Message) void {
+        const copy = self.allocator.dupe(u8, message.data) catch return;
+        self.results.append(.{ .data = copy, .len = message.data.len }) catch {
+            self.allocator.free(copy);
+            return;
+        };
+        self.recv_index += 1;
+        if (self.recv_index >= self.messages.len) {
+            conn.close(.normal, "");
+        } else {
+            self.maybeSendNext(conn);
+        }
+    }
+
+    pub fn onWriteComplete(self: *SequenceHandler, conn: anytype) void {
+        if (self.sent_data) |data| {
+            self.allocator.free(data);
+            self.sent_data = null;
+        }
+        self.maybeSendNext(conn);
+    }
+
+    pub fn onClose(self: *SequenceHandler, _: anytype) void {
+        if (self.sent_data) |data| {
+            self.allocator.free(data);
+            self.sent_data = null;
+        }
+    }
+};

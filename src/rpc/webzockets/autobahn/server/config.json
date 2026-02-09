@@ -1,0 +1,9 @@
+{
+  "outdir": "/ab/reports/",
+  "options": { "failByDrop": false },
+  "servers": [
+    { "agent": "webzockets", "url": "ws://host.docker.internal:9001" }
+  ],
+  "cases": ["*"],
+  "exclude-cases": ["12.*", "13.*"]
+}
