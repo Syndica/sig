@@ -1,5 +1,6 @@
 const sig = @import("../../sig.zig");
 const std = @import("std");
+const std14 = @import("std14");
 const builtin = @import("builtin");
 
 pub const pippenger = @import("pippenger.zig");
@@ -51,10 +52,10 @@ pub fn verifyBatchOverSingleMessage(
     std.debug.assert(public_keys.len <= max);
     std.debug.assert(signatures.len == public_keys.len);
 
-    var s_batch: std.BoundedArray(CompressedScalar, max) = .{};
-    var a_batch: std.BoundedArray(Edwards25519, max) = .{};
-    var hram_batch: std.BoundedArray(CompressedScalar, max) = .{};
-    var expected_r_batch: std.BoundedArray(Edwards25519, max) = .{};
+    var s_batch: std14.BoundedArray(CompressedScalar, max) = .{};
+    var a_batch: std14.BoundedArray(Edwards25519, max) = .{};
+    var hram_batch: std14.BoundedArray(CompressedScalar, max) = .{};
+    var expected_r_batch: std14.BoundedArray(Edwards25519, max) = .{};
 
     for (signatures, public_keys) |signature, pubkey| {
         const r = signature.r;

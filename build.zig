@@ -277,11 +277,18 @@ pub fn build(b: *Build) !void {
     }).module("tracy");
     tracy_mod.sanitize_c = .off; // Workaround UB in Tracy.
 
+    const std14_mod = b.createModule(.{
+        .root_source_file = b.path("src/std14.zig"),
+        .target = config.target,
+        .optimize = config.optimize,
+    });
+
     const cli_mod = b.createModule(.{
         .root_source_file = b.path("src/cli.zig"),
         .target = config.target,
         .optimize = config.optimize,
     });
+    cli_mod.addImport("std14", std14_mod);
 
     // G/H table for Bulletproofs
     const gh_table = b.createModule(.{
@@ -338,6 +345,8 @@ pub fn build(b: *Build) !void {
         .imports = imports,
     });
 
+    sig_mod.addImport("std14", std14_mod);
+
     switch (config.ledger_db) {
         .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
@@ -358,6 +367,7 @@ pub fn build(b: *Build) !void {
     });
     sig_exe.root_module.addObject(memcpy);
     sig_exe.root_module.addImport("cli", cli_mod);
+    sig_exe.root_module.addImport("std14", std14_mod);
 
     // make sure pyroscope's got enough info to profile
     sig_exe.build_id = .fast;
@@ -382,6 +392,7 @@ pub fn build(b: *Build) !void {
     });
     unit_tests_exe.root_module.addObject(memcpy);
     unit_tests_exe.root_module.addImport("cli", cli_mod);
+    unit_tests_exe.root_module.addImport("std14", std14_mod);
     switch (config.ledger_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
@@ -402,6 +413,7 @@ pub fn build(b: *Build) !void {
     });
     fuzz_exe.root_module.addObject(memcpy);
     fuzz_exe.root_module.addImport("cli", cli_mod);
+    fuzz_exe.root_module.addImport("std14", std14_mod);
     switch (config.ledger_db) {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
@@ -422,6 +434,7 @@ pub fn build(b: *Build) !void {
     });
     benchmark_exe.root_module.addObject(memcpy);
     benchmark_exe.root_module.addImport("cli", cli_mod);
+    benchmark_exe.root_module.addImport("std14", std14_mod);
 
     // make sure pyroscope's got enough info to profile
     benchmark_exe.build_id = .fast;
@@ -446,6 +459,7 @@ pub fn build(b: *Build) !void {
     geyser_reader_exe.root_module.addObject(memcpy);
     geyser_reader_exe.root_module.addImport("sig", sig_mod);
     geyser_reader_exe.root_module.addImport("cli", cli_mod);
+    geyser_reader_exe.root_module.addImport("std14", std14_mod);
     addInstallAndRun(b, geyser_reader_step, geyser_reader_exe, config);
 
     const vm_exe = b.addExecutable(.{
@@ -462,6 +476,7 @@ pub fn build(b: *Build) !void {
     vm_exe.root_module.addObject(memcpy);
     vm_exe.root_module.addImport("sig", sig_mod);
     vm_exe.root_module.addImport("cli", cli_mod);
+    vm_exe.root_module.addImport("std14", std14_mod);
     addInstallAndRun(b, vm_step, vm_exe, config);
 
     // docs for the Sig library

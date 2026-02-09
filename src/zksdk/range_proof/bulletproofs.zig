@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const std14 = @import("std14");
 const sig = @import("../../sig.zig");
 const table = @import("table");
 pub const InnerProductProof = @import("ipp.zig").Proof; // pub so tests can run
@@ -369,8 +370,8 @@ pub fn Proof(bit_size: comptime_int) type {
             //
             // basepoint_scalar depends on a bunch of values computed beforehand so it's added last
 
-            var points: std.BoundedArray(Ristretto255, max) = .{};
-            var scalars: std.BoundedArray([32]u8, max) = .{};
+            var points: std14.BoundedArray(Ristretto255, max) = .{};
+            var scalars: std14.BoundedArray([32]u8, max) = .{};
 
             points.appendSliceAssumeCapacity(&.{
                 pedersen.H,
@@ -623,8 +624,8 @@ pub fn Data(bit_size: comptime_int) type {
 
         pub fn verify(self: Self) !void {
             const context = self.context;
-            var commitments: std.BoundedArray(pedersen.Commitment, 8) = .{};
-            var bit_lengths: std.BoundedArray(u64, 8) = .{};
+            var commitments: std14.BoundedArray(pedersen.Commitment, 8) = .{};
+            var bit_lengths: std14.BoundedArray(u64, 8) = .{};
 
             for (context.commitments, context.bit_lengths) |commitment, length| {
                 if (std.mem.allEqual(u8, &commitment, 0)) break; // we've hit the terminator

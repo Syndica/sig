@@ -3340,8 +3340,13 @@ pub fn writeSnapshotTarWithFields(
         try snapgen.writeAccountFileHeader(archive_writer_counted, file_slot, file_info);
 
         try account_file.file.seekTo(0);
-        var fifo = std.fifo.LinearFifo(u8, .{ .Static = std.heap.page_size_min }).init();
-        try fifo.pump(account_file.file.reader(), archive_writer_counted);
+        var buf: [std.heap.page_size_min]u8 = undefined;
+        const file_reader = account_file.file.reader();
+        while (true) {
+            const bytes_read = try file_reader.read(&buf);
+            if (bytes_read == 0) break;
+            try archive_writer_counted.writeAll(buf[0..bytes_read]);
+        }
 
         try snapgen.writeAccountFilePadding(archive_writer_counted, account_file.file_size);
     }

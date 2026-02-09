@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const tracy = @import("tracy");
 const sig = @import("../../../sig.zig");
 
@@ -349,7 +350,7 @@ pub fn execute(
             const bytes = std.mem.asBytes(&std.mem.nativeToLittle(u64, min_delegation));
 
             std.debug.assert(bytes.len == 8);
-            const data = std.BoundedArray(u8, MAX_RETURN_DATA).fromSlice(bytes) catch unreachable;
+            const data = std14.BoundedArray(u8, MAX_RETURN_DATA).fromSlice(bytes) catch unreachable;
 
             ic.tc.return_data = .{
                 .program_id = ID,
@@ -548,7 +549,7 @@ fn authorizeWithSeed(
     const meta = ic.ixn_info.getAccountMetaAtIndex(authority_base_index) orelse
         return error.MissingAccount;
 
-    var signers: std.BoundedArray(Pubkey, 1) = .{};
+    var signers: std14.BoundedArray(Pubkey, 1) = .{};
     if (meta.is_signer) {
         const account = ic.tc.getAccountAtIndex(meta.index_in_transaction) orelse
             return error.MissingAccount;

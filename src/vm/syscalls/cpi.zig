@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const std14 = @import("std14");
 const sig = @import("../../sig.zig");
 
 const ids = sig.runtime.ids;
@@ -551,7 +552,7 @@ fn updateCalleeAccount(
     return must_update_caller;
 }
 
-const TranslatedAccounts = std.BoundedArray(TranslatedAccount, InstructionInfo.MAX_ACCOUNT_METAS);
+const TranslatedAccounts = std14.BoundedArray(TranslatedAccount, InstructionInfo.MAX_ACCOUNT_METAS);
 const TranslatedAccount = struct {
     index_in_caller: u16,
     caller_account: CallerAccount,
@@ -622,7 +623,7 @@ fn translateAccounts(
     }
 
     // translate keys upfront before inner loop below.
-    var account_info_keys: std.BoundedArray(
+    var account_info_keys: std14.BoundedArray(
         *align(1) const Pubkey,
         InstructionInfo.MAX_ACCOUNT_METAS,
     ) = .{};
@@ -850,7 +851,7 @@ fn translateSigners(
     signers_seeds_addr: u64,
     signers_seeds_len: u64,
     program_id: Pubkey,
-) !std.BoundedArray(Pubkey, MAX_SIGNERS) {
+) !std14.BoundedArray(Pubkey, MAX_SIGNERS) {
     if (signers_seeds_len == 0) return .{};
 
     const signers_seeds = try memory_map.translateSlice(
@@ -865,7 +866,7 @@ fn translateSigners(
         return SyscallError.TooManySigners;
     }
 
-    var signers: std.BoundedArray(Pubkey, MAX_SIGNERS) = .{};
+    var signers: std14.BoundedArray(Pubkey, MAX_SIGNERS) = .{};
     for (signers_seeds) |signer_vm_slice| {
         const untranslated_seeds = try memory_map.translateSlice(
             VmSlice,
@@ -879,7 +880,7 @@ fn translateSigners(
             return SyscallError.MaxSeedLengthExceeded;
         }
 
-        var seeds: std.BoundedArray([]const u8, MAX_SIGNERS) = .{};
+        var seeds: std14.BoundedArray([]const u8, MAX_SIGNERS) = .{};
         for (untranslated_seeds) |seeds_vm_slice| {
             seeds.appendAssumeCapacity(try memory_map.translateSlice(
                 u8,
@@ -1819,7 +1820,7 @@ const TestCallerAccount = struct {
         }
 
         // Setup regions
-        var regions: std.BoundedArray(memory.Region, 6) = .{};
+        var regions: std14.BoundedArray(memory.Region, 6) = .{};
         try regions.append(memory.Region.init(.constant, &.{}, memory.RODATA_START));
         try regions.append(memory.Region.init(.constant, &.{}, memory.STACK_START));
         const vm_addr = memory.HEAP_START;

@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../../sig.zig");
 
 pub const cpi = @import("cpi.zig");
@@ -723,7 +724,7 @@ fn translateAndCheckProgramAddressInputs(
     seeds_len: u64,
     program_id_addr: u64,
     check_aligned: bool,
-) Error!struct { Pubkey, std.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) } {
+) Error!struct { Pubkey, std14.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) } {
     const untranslated_seeds = try memory_map.translateSlice(
         memory.VmSlice,
         .constant,
@@ -735,7 +736,7 @@ fn translateAndCheckProgramAddressInputs(
         return SyscallError.BadSeeds; // PubkeyError.MaxSeedLengthExceeded
     }
 
-    var seeds: std.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) = .{};
+    var seeds: std14.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) = .{};
     for (untranslated_seeds) |untranslated_seed| {
         if (untranslated_seed.len > pubkey_utils.MAX_SEED_LEN) return SyscallError.BadSeeds;
         seeds.appendAssumeCapacity(try memory_map.translateSlice(

@@ -55,6 +55,7 @@
 //! `foo file/path --arg=a`, but not `foo --arg=a file/path`.
 
 const std = @import("std");
+const std14 = @import("std14");
 
 // -- API -- //
 
@@ -1502,7 +1503,7 @@ fn CmdHelper(
                 try writer.writeByteNTimes(' ', 2);
 
                 // write argument alias & name
-                var cw = std.io.countingWriter(writer);
+                var cw = std14.countingWriter(writer);
                 try writeArgumentNameWithDefault(null, arg_name, cw.writer());
                 max_name_alias_width = @max(max_name_alias_width, cw.bytes_written);
 
@@ -1557,7 +1558,7 @@ fn CmdHelper(
                 try writer.writeByteNTimes(' ', 2);
 
                 // write argument alias & name
-                var cw = std.io.countingWriter(writer);
+                var cw = std14.countingWriter(writer);
                 try writeArgumentNameWithDefault(
                     arg_info.alias,
                     @tagName(arg_tag),

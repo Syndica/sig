@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../../sig.zig");
 const tracy = @import("tracy");
 const accountsdb = @import("../lib.zig");
@@ -420,7 +421,7 @@ fn insertFromSnapshotArchive(
                 return error.InvalidAccountFile;
 
             // Insert accounts in AccountFile into Rooted db
-            var account_file_stream = std.io.limitedReader(tar_file.reader(), info.length);
+            var account_file_stream = std14.limitedReader(tar_file.reader(), info.length);
             while (account_file_stream.bytes_left > 0) {
                 const r = account_file_stream.reader();
 

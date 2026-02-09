@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const time = @import("../time/time.zig");
 const Level = @import("level.zig").Level;
 
@@ -47,7 +48,7 @@ pub fn countLog(
 ) usize {
     const time_len: usize = 29;
 
-    var counter = std.io.countingWriter(std.io.null_writer);
+    var counter = std14.countingWriter(std.io.null_writer);
     try writeLogWithoutTime(counter.writer(), maybe_scope, level, fields, fmt, args);
 
     return time_len + counter.bytes_written;

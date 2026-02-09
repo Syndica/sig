@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 const tracy = @import("tracy");
@@ -575,7 +576,7 @@ pub const FrameManager = struct {
 ///    eviction when no free frames can be made available is illegal behaviour.
 pub const HierarchicalFIFO = struct {
     pub const Key = FrameIndex;
-    pub const Fifo = std.fifo.LinearFifo(FrameIndex, .Slice);
+    pub const Fifo = std14.LinearFifo(FrameIndex);
 
     pub const InQueue = enum(u8) { none, small, main, ghost }; // u8 required for extern usage
 

@@ -1,6 +1,7 @@
 //! Generic type reflection.
 
 const std = @import("std");
+const std14 = @import("std14");
 
 pub fn getVariant(
     tagged_union: anytype,
@@ -290,7 +291,7 @@ pub const BoundedArrayInfo = struct {
     alignment: usize,
 
     pub fn Type(comptime info: BoundedArrayInfo) type {
-        return std.BoundedArrayAligned(info.Elem, info.alignment, info.capacity);
+        return std14.BoundedArrayAligned(info.Elem, info.alignment, info.capacity);
     }
 };
 pub fn boundedArrayInfo(comptime T: type) ?BoundedArrayInfo {
@@ -306,7 +307,7 @@ pub fn boundedArrayInfo(comptime T: type) ?BoundedArrayInfo {
         else => return null,
     };
 
-    const Actual = std.BoundedArrayAligned(Elem, alignment, capacity);
+    const Actual = std14.BoundedArrayAligned(Elem, alignment, capacity);
     if (T != Actual) return null;
 
     return .{

@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../../sig.zig");
 
 const bincode = sig.bincode;
@@ -30,7 +31,7 @@ pub const DuplicateShredHandler = struct {
     logger: Logger,
 
     /// Tracks slots for which this handler has already pushed a duplicate proof to gossip.
-    slots_pushed_to_gossip: std.BoundedArray(Slot, MAX_DUPLICATE_SHREDS) = .{},
+    slots_pushed_to_gossip: std14.BoundedArray(Slot, MAX_DUPLICATE_SHREDS) = .{},
 
     /// Ring index used as part of the gossip table label for duplicate shred entries.
     ring_index: u16 = 0,
