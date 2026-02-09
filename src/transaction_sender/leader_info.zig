@@ -33,9 +33,7 @@ pub const LeaderScheduleCache = struct {
     epoch_schedule: EpochSchedule,
     leader_schedules: RwMux(std.AutoArrayHashMap(Epoch, LeaderSchedule)),
 
-    const Self = @This();
-
-    pub fn init(allocator: Allocator, epoch_schedule: EpochSchedule) Self {
+    pub fn init(allocator: Allocator, epoch_schedule: EpochSchedule) LeaderScheduleCache {
         return .{
             .epoch_schedule = epoch_schedule,
             .leader_schedules = RwMux(std.AutoArrayHashMap(Epoch, LeaderSchedule)).init(
@@ -44,11 +42,11 @@ pub const LeaderScheduleCache = struct {
         };
     }
 
-    pub fn slotLeaders(self: *Self) sig.core.leader_schedule.SlotLeaders {
+    pub fn slotLeaders(self: *LeaderScheduleCache) sig.core.leader_schedule.SlotLeaders {
         return sig.core.leader_schedule.SlotLeaders.init(self, LeaderScheduleCache.slotLeader);
     }
 
-    pub fn put(self: *Self, epoch: Epoch, leader_schedule: LeaderSchedule) !void {
+    pub fn put(self: *LeaderScheduleCache, epoch: Epoch, leader_schedule: LeaderSchedule) !void {
         const leader_schedules, var leader_schedules_lg = self.leader_schedules.writeWithLock();
         defer leader_schedules_lg.unlock();
 
@@ -59,14 +57,14 @@ pub const LeaderScheduleCache = struct {
         try leader_schedules.put(epoch, leader_schedule);
     }
 
-    pub fn slotLeader(self: *Self, slot: Slot) ?Pubkey {
+    pub fn slotLeader(self: *LeaderScheduleCache, slot: Slot) ?Pubkey {
         const epoch, _ = self.epoch_schedule.getEpochAndSlotIndex(slot);
         const leader_schedules, var leader_schedules_lg = self.leader_schedules.readWithLock();
         defer leader_schedules_lg.unlock();
         return if (leader_schedules.get(epoch)) |schedule| schedule.getLeaderOrNull(slot) else null;
     }
 
-    pub fn uniqueLeaders(self: *Self, allocator: std.mem.Allocator) ![]const Pubkey {
+    pub fn uniqueLeaders(self: *LeaderScheduleCache, allocator: std.mem.Allocator) ![]const Pubkey {
         const leader_schedules, var leader_schedules_lg = self.leader_schedules.readWithLock();
         defer leader_schedules_lg.unlock();
 
@@ -101,8 +99,7 @@ pub const LeaderInfo = struct {
     leader_addresses_cache: sig.utils.collections.PubkeyMap(SocketAddr),
     gossip_table_rw: *RwMux(GossipTable),
 
-    const Self = @This();
-    const Logger = sig.trace.Logger(@typeName(Self));
+    const Logger = sig.trace.Logger(@typeName(LeaderInfo));
 
     pub fn init(
         allocator: Allocator,
@@ -114,7 +111,7 @@ pub const LeaderInfo = struct {
         return .{
             .allocator = allocator,
             .config = config,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger.withScope(@typeName(LeaderInfo)),
             .rpc_client = try RpcClient.init(
                 allocator,
                 config.cluster,
