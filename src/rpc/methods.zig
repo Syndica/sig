@@ -765,13 +765,13 @@ pub const AccountHookContext = struct {
         allocator: std.mem.Allocator,
         account: sig.core.Account,
     ) !GetAccountInfo.Response.Value.Data {
-        const account_data = try account.data.readAllAllocate(allocator);
-        defer allocator.free(account_data);
+        var account_data_iter = account.data.iterator();
         // Try to parse based on owner program
         if (try account_decoder.parse_account(
             allocator,
             account.owner,
-            account_data,
+            account_data_iter.reader(),
+            account.data.len(),
         )) |parsed| {
             return .{ .jsonParsed = parsed };
         }

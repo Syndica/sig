@@ -11,11 +11,15 @@ const ParseError = account_decoder.ParseError;
 
 /// Parses a vote account's data into a `VoteAccountType` for JSON encoding in RPC responses.
 /// TODO: somehow enforce arena allocation for all allocations here?
-pub fn parse_vote(allocator: Allocator, data: []const u8) ParseError!VoteAccountType {
-    var vote_state_versions = sig.bincode.readFromSlice(
+pub fn parse_vote(
+    allocator: Allocator,
+    // std.io.Reader
+    reader: anytype,
+) ParseError!VoteAccountType {
+    var vote_state_versions = sig.bincode.read(
         allocator,
         vote_program.state.VoteStateVersions,
-        data,
+        reader,
         .{},
     ) catch return ParseError.InvalidAccountData;
     defer vote_state_versions.deinit(allocator);

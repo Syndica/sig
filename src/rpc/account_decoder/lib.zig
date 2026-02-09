@@ -67,19 +67,19 @@ const ParsableProgram = enum {
 pub fn parse_account(
     allocator: std.mem.Allocator,
     program_id: Pubkey,
-    data: []const u8,
+    // std.io.Reader
+    reader: anytype,
+    data_len: u32,
 ) ParseError!?ParsedAccount {
     const program = ParsableProgram.fromProgramId(program_id) orelse return null;
-
     const parsed: ParsedContent = switch (program) {
-        .vote => .{ .vote = try parse_vote.parse_vote(allocator, data) },
+        .vote => .{ .vote = try parse_vote.parse_vote(allocator, reader) },
         // TODO: stake
         // TODO: nonce
     };
-
     return ParsedAccount{
         .program = program.programName(),
         .parsed = parsed,
-        .space = data.len,
+        .space = data_len,
     };
 }
