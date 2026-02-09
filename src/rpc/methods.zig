@@ -739,6 +739,7 @@ pub const GetBlock = struct {
             }
 
             pub fn fromLedgerReward(
+                allocator: Allocator,
                 reward: sig.ledger.meta.Reward,
             ) !Reward {
                 const reward_type = if (reward.reward_type) |rt| switch (rt) {
@@ -749,7 +750,7 @@ pub const GetBlock = struct {
                 } else null;
 
                 return .{
-                    .pubkey = try Pubkey.parseRuntime(reward.pubkey),
+                    .pubkey = try allocator.dupe(u8, reward.pubkey),
                     .lamports = reward.lamports,
                     .postBalance = reward.post_balance,
                     .rewardType = reward_type,
@@ -1353,6 +1354,8 @@ pub const BlockHookContext = struct {
     ledger: *sig.ledger.Ledger,
     slot_tracker: *const sig.replay.trackers.SlotTracker,
 
+    const SlotTrackerRef = sig.replay.trackers.SlotTracker.Reference;
+
     pub fn getBlock(
         self: @This(),
         allocator: std.mem.Allocator,
@@ -1365,28 +1368,44 @@ pub const BlockHookContext = struct {
         const encoding = config.encoding orelse .json;
         const max_supported_version = config.maxSupportedTransactionVersion;
 
-        // Reject processed commitment (Agave behavior)
+        // Reject processed commitment (Agave behavior: only confirmed and finalized supported)
         if (commitment == .processed) {
             return error.ProcessedNotSupported;
         }
 
-        // Phase 2: Only support finalized commitment
-        // TODO Phase 3: Add confirmed commitment support
-        if (commitment != .finalized) {
-            return error.BlockNotFinalized;
-        }
-
-        // Check slot is within finalized range
         const root = self.slot_tracker.root.load(.monotonic);
-        if (params.slot > root) {
-            return error.RootNotSoonEnough;
-        }
-        const slot_elem = self.slot_tracker.get(params.slot) orelse {
-            return error.SlotUnavailableSomehow;
-        };
 
-        const block_height = slot_elem.constants.block_height;
-        const block_time = slot_elem.state.unix_timestamp.load(.monotonic);
+        // Determine whether the slot is available at the requested commitment level.
+        //
+        // Agave flow (https://github.com/anza-xyz/agave/blob/71aac0b755c052835f581cfaea15b2682894b959/rpc/src/rpc.rs#L1305-1401):
+        //   1. If slot <= highest_super_majority_root → finalized path (get_rooted_block)
+        //   2. Else if commitment == confirmed AND slot in status_cache_ancestors → confirmed path (get_complete_block)
+        //   3. Else → BlockNotAvailable
+        //
+        // For the finalized path, the slot must be at or below root.
+        // For the confirmed path, the slot must be between root and the latest
+        // confirmed slot (inclusive), and tracked in the SlotTracker.
+        //
+        // When the SlotTracker has the slot, we use it for block_time, block_height,
+        // and rewards (equivalent to Agave's bank fallback at rpc.rs:1371-1383 where
+        // it fills block_time from bank.clock().unix_timestamp and block_height from
+        // bank.block_height() when they're missing from the blockstore).
+        const maybe_slot_elem: ?SlotTrackerRef = if (params.slot <= root) blk: {
+            // Finalized path: slot is at or below root, serve regardless of commitment level.
+            break :blk self.slot_tracker.get(params.slot) orelse
+                return error.SlotUnavailableSomehow;
+        } else if (commitment == .confirmed) blk: {
+            // Confirmed path: slot is above root but at or below the confirmed slot.
+            const confirmed_slot = self.slot_tracker.latest_confirmed_slot.get();
+            if (params.slot > confirmed_slot) {
+                return error.BlockNotAvailable;
+            }
+            // The slot may have been pruned from SlotTracker but still be in the blockstore.
+            break :blk self.slot_tracker.get(params.slot);
+        } else {
+            // Finalized commitment was requested but slot is not yet finalized.
+            return error.BlockNotAvailable;
+        };
 
         // Get block from ledger
         const reader = self.ledger.reader();
@@ -1406,11 +1425,36 @@ pub const BlockHookContext = struct {
         );
         errdefer allocator.free(previous_blockhash);
 
-        // Convert rewards if requested
+        // Resolve block_time and block_height:
+        // - If the SlotTracker has the slot, use its values (authoritative).
+        // - Otherwise, fall back to what the blockstore returned (may be null for
+        //   confirmed-but-not-yet-finalized blocks).
+        const block_height: ?u64 = blk: {
+            if (maybe_slot_elem) |elem| {
+                break :blk elem.constants.block_height;
+            } else {
+                break :blk block.block_height;
+            }
+        };
+        const block_time: ?i64 = blk: {
+            if (maybe_slot_elem) |elem| {
+                break :blk elem.constants.block_time;
+            } else {
+                break :blk block.block_time;
+            }
+        };
+
+        // Convert rewards if requested.
+        // Prefer SlotTracker rewards (in-memory, most current) when available,
+        // otherwise fall back to blockstore rewards.
         const rewards: ?[]const GetBlock.Response.Reward = if (show_rewards) blk: {
-            const slot_rewards, var slot_rewards_lock = slot_elem.state.rewards.readWithLock();
-            defer slot_rewards_lock.unlock();
-            break :blk try convertBlockRewards(allocator, slot_rewards);
+            if (maybe_slot_elem) |elem| {
+                const slot_rewards, var slot_rewards_lock = elem.state.rewards.readWithLock();
+                defer slot_rewards_lock.unlock();
+                break :blk try convertBlockRewards(allocator, slot_rewards);
+            } else {
+                break :blk try convertRewards(allocator, block.rewards);
+            }
         } else null;
 
         // Build response based on transaction_details mode
@@ -1758,8 +1802,7 @@ pub const BlockHookContext = struct {
         errdefer allocator.free(rewards);
 
         for (internal_rewards, 0..) |r, i| {
-            // pubkey is already a string in internal format
-            rewards[i] = try GetBlock.Response.Reward.fromLedgerReward(r);
+            rewards[i] = try GetBlock.Response.Reward.fromLedgerReward(allocator, r);
         }
         return rewards;
     }
