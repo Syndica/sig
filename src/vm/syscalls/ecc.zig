@@ -256,11 +256,15 @@ pub fn curveMultiscalarMul(
 }
 
 const AltBn128GroupOp = packed struct(u8) {
-    op: enum(u7) {
+    op: enum(u2) {
         add = 0,
         sub = 1,
         mul = 2,
         pairing = 3,
+    },
+    degree: enum(u5) {
+        g1,
+        g2,
     },
     endian: enum(u1) {
         big = 0,
@@ -270,9 +274,10 @@ const AltBn128GroupOp = packed struct(u8) {
     fn wrap(id: u64) ?AltBn128GroupOp {
         if (std.math.cast(u8, id)) |byte| {
             return .{
-                .op = std.meta.intToEnum(
-                    @FieldType(AltBn128GroupOp, "op"),
-                    byte & 0x7F,
+                .op = @enumFromInt(byte & 0b11),
+                .degree = std.meta.intToEnum(
+                    @FieldType(AltBn128GroupOp, "degree"),
+                    (byte & 0b01111100) >> 2,
                 ) catch return null,
                 .endian = @enumFromInt(byte >> 7),
             };
@@ -285,7 +290,7 @@ const AltBn128GroupOp = packed struct(u8) {
     fn operation(
         group_op: AltBn128GroupOp,
         input: []const u8,
-        out: *[64]u8,
+        out: *[128]u8,
         feature_set: *const FeatureSet,
         slot: sig.core.Slot,
     ) ![]const u8 {
@@ -294,26 +299,44 @@ const AltBn128GroupOp = packed struct(u8) {
             .big => .big,
         };
         switch (group_op.op) {
-            .add => {
-                if (input.len > 128) return error.InvalidLength;
-                // For the newer little-endian operations, we require exact lengths.
-                if (endian == .little and input.len != 128) return error.InvalidLength;
+            .add => switch (group_op.degree) {
+                .g1 => {
+                    if (input.len > 128) return error.InvalidLength;
+                    // For the newer little-endian operations, we require exact lengths.
+                    if (endian == .little and input.len != 128) return error.InvalidLength;
 
-                // Pad the end with zeroes.
-                var buffer: [128]u8 = @splat(0);
-                @memcpy(buffer[0..input.len], input);
-                try bn254.addSyscall(out, &buffer, endian);
-                return out[0..64];
+                    // Pad the end with zeroes.
+                    var buffer: [128]u8 = @splat(0);
+                    @memcpy(buffer[0..input.len], input);
+                    try bn254.G1.addSyscall(out[0..64], &buffer, endian);
+                    return out[0..64];
+                },
+                .g2 => {
+                    // Expecting 256-bytes (2 uncompressed points).
+                    // [agave] https://github.com/anza-xyz/solana-sdk/blob/bn254%40v3.2.1/bn254/src/addition.rs#L234-L236
+                    if (input.len != 256) return error.InvalidLenght;
+                    try bn254.G2.addSyscall(out[0..128], input[0..256], endian);
+                    return out[0..128];
+                },
             },
-            .mul => {
-                if (input.len > 96) return error.InvalidLength;
-                if (endian == .little and input.len != 96) return error.InvalidLengths;
+            .mul => switch (group_op.degree) {
+                .g1 => {
+                    if (input.len > 96) return error.InvalidLength;
+                    if (endian == .little and input.len != 96) return error.InvalidLengths;
 
-                // Copy over 96-bytes, padding out with zeroes if needed.
-                var buffer: [96]u8 = @splat(0);
-                @memcpy(buffer[0..@min(input.len, 96)], input.ptr);
-                try bn254.mulSyscall(out, &buffer, endian);
-                return out[0..64];
+                    // Copy over 96-bytes, padding out with zeroes if needed.
+                    var buffer: [96]u8 = @splat(0);
+                    @memcpy(buffer[0..@min(input.len, 96)], input.ptr);
+                    try bn254.G1.mulSyscall(out[0..64], &buffer, endian);
+                    return out[0..64];
+                },
+                .g2 => {
+                    // Expecting 160-bytes (1 uncompressed G2 + 32-byte scalar)
+                    // [agave] https://github.com/anza-xyz/solana-sdk/blob/bn254%40v3.2.1/bn254/src/multiplication.rs#L248-L250
+                    if (input.len != 160) return error.InvalidLength;
+                    try bn254.G2.mulSyscall(out[0..128], input[0..160], endian);
+                    return out[0..128];
+                },
             },
             .pairing => {
                 // Originally Agave did not check that the input length is a multiple
@@ -363,14 +386,34 @@ pub fn altBn128GroupOp(
         return SyscallError.InvalidAttribute;
     }
 
+    // Disallow G2 group operations if the feature gate is not yet active.
+    if (!tc.feature_set.active(.enable_alt_bn128_g2_syscalls, tc.slot) and
+        group_op.degree == .g2)
+    {
+        return SyscallError.InvalidAttribute;
+    }
+
+    // We've generalized the ID system, but this abstraction leaks one bit-pattern (degree == g2 && op == pairing).
+    // We simply catch it here, although we must be mindful of any future extensions, it may be
+    // simpler to rewrite this to use a singular enum for all of the variants.
+    if (group_op.op == .pairing and group_op.degree == .g2) {
+        return SyscallError.InvalidAttribute;
+    }
+
     const cb = tc.compute_budget;
     const cost, const length: u32 = switch (group_op.op) {
-        .add => .{ cb.alt_bn128_addition_cost, 64 },
-        .mul => .{ cb.alt_bn128_multiplication_cost, 64 },
+        .add => switch (group_op.degree) {
+            .g1 => .{ cb.alt_bn128_g1_addition_cost, 64 },
+            .g2 => .{ cb.alt_bn128_g2_addition_cost, 128 },
+        },
+        .mul => switch (group_op.degree) {
+            .g1 => .{ cb.alt_bn128_g1_multiplication_cost, 64 },
+            .g2 => .{ cb.alt_bn128_g2_multiplication_cost, 128 },
+        },
         .pairing => blk: {
             const elem_length = input_size / 192;
             // This mess untangles into:
-            // first_cost + (other_cost * (elements - 1)) + sha256_cost + input_sz + 32
+            // first_cost + (other_cost * (elements -| 1)) + sha256_cost + input_sz + 32
             const cost = cb.alt_bn128_pairing_one_pair_cost_first +|
                 (cb.alt_bn128_pairing_one_pair_cost_other *| (elem_length -| 1)) +|
                 cb.sha256_base_cost +|
@@ -398,8 +441,8 @@ pub fn altBn128GroupOp(
         tc.getCheckAligned(),
     );
 
-    // 64-bytes is the largest result we'll need.
-    var buffer: [64]u8 = undefined;
+    // 128-bytes is the largest result we'll need (1x uncompressed G2 point)
+    var buffer: [128]u8 = undefined;
     const result = group_op.operation(input, &buffer, tc.feature_set, tc.slot) catch {
         registers.set(.r0, 1);
         return;
@@ -428,7 +471,7 @@ const AltBn128CompressionOp = packed struct(u8) {
                 .op = @enumFromInt(byte & 0b1),
                 .degree = std.meta.intToEnum(
                     @FieldType(AltBn128CompressionOp, "degree"),
-                    (byte & 0xFE) >> 1,
+                    (byte & 0b011111110) >> 1,
                 ) catch return null,
                 .endian = @enumFromInt(byte >> 7),
             };

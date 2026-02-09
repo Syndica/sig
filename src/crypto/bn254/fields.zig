@@ -122,6 +122,15 @@ pub const Fp = struct {
     }
 
     pub fn byteSwap(a: [32]u8) [32]u8 {
+        // NOTE: This compiles down into a single ymm vpshufb, which is nice
+        // however it has a high latency (10 cycles on tigerlake), so I'm not
+        // sure if this is better than just 4 mov + 4 movbe instructions, which
+        // could be trivially executed in parallel.
+        //
+        // Alternative:
+        // const x: u256 = @bitCast(a);
+        // return @bitCast(@byteSwap(x));
+
         const limbs: [4]u64 = @bitCast(a);
         const array: [4]u64 = .{
             @byteSwap(limbs[3]),
@@ -565,7 +574,7 @@ pub const Fp2 = struct {
     }
 
     /// https://eprint.iacr.org/2010/354.pdf, Alg. 8
-    fn inverse(a: Fp2) Fp2 {
+    pub fn inverse(a: Fp2) Fp2 {
         // t0 ← a0^2
         var t0 = a.c0.sq();
         // t1 ← a1^2

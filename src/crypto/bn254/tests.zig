@@ -67,15 +67,85 @@ test "add" {
             var buffer: [128]u8 = @splat(0);
             _ = try std.fmt.hexToBytes(&buffer, case.input);
 
-            var result: [64]u8 = undefined;
-            try bn254.addSyscall(&result, &buffer, endian);
+            {
+                var result: [64]u8 = undefined;
+                try bn254.G1.addSyscall(&result, &buffer, endian);
 
-            var expected_buffer: [64]u8 = undefined;
-            try std.testing.expectEqualSlices(
-                u8,
-                try std.fmt.hexToBytes(&expected_buffer, case.expected),
-                &result,
-            );
+                var expected_buffer: [64]u8 = undefined;
+                try std.testing.expectEqualSlices(
+                    u8,
+                    try std.fmt.hexToBytes(&expected_buffer, case.expected),
+                    &result,
+                );
+            }
+            {
+                bswapG1(buffer[0..64]);
+                bswapG1(buffer[64..128]);
+
+                // big -> little, little -> big
+                var result: [64]u8 = undefined;
+                try bn254.G1.addSyscall(&result, &buffer, @enumFromInt(@intFromEnum(endian) ^ 1));
+
+                var expected: [64]u8 = undefined;
+                _ = try std.fmt.hexToBytes(&expected, case.expected);
+                bswapG1(&expected);
+                try std.testing.expectEqualSlices(u8, &expected, &result);
+            }
+        }
+    }
+
+    inline for (.{
+        // sig fmt: off
+        .{
+            // [agave] https://github.com/anza-xyz/solana-sdk/blob/daa969beae794c71feb9ba62c941d0dbe37b1e10/bn254/tests/data/addition_g2_cases.json
+            [_]Case{ .{
+                .input = "0c637909c3dbd27b0213aeda88ffda5ac18f44db6b830e56c252516d7dd918ff164a7ec20e94fae519d9b1a2bae8271ca148c612b4f848ed7f07c6b62878907502de1901d7640f75ac5748db8e635af2ad81f09988f709dcc66ca54cd606c7e7025f43a1dbfc8c4651077239091e76dc248cd99d1c8af399f40c8916d4fc0aae07923af190d825e959dd7b95a67fab44917c4e8da278a06edd2c7aea35bcc8b019b62074331470c83e17134374ffadb0baf84312194fda3caf795c84c92b216d11ee8bcd475511c468d9983a288302e8673cdcc714a6ddc180d35d7dd0cfac4915e9eb42bb760271829b224aeb2ae0c06e800348e0d1cf6f712817768007cc7a",
+                .expected = "265f7dc03c5cca900001c251258fb56ca82611538570917db731b39c66d5f28a2e667015f89fc1b7579451bdaa212b98c58f01849a40783697a8f5e1107819801608ac87fa00ea9702a1c07a0a36fb494ceea2a2a40b8cd8d8451eb21dab812229fe448304a1819068b2d267252059a45f0c2d169dfed1c4f1bcc075a3761c2f",
+            }, .{
+                .input = "0c637909c3dbd27b0213aeda88ffda5ac18f44db6b830e56c252516d7dd918ff164a7ec20e94fae519d9b1a2bae8271ca148c612b4f848ed7f07c6b62878907502de1901d7640f75ac5748db8e635af2ad81f09988f709dcc66ca54cd606c7e7025f43a1dbfc8c4651077239091e76dc248cd99d1c8af399f40c8916d4fc0aae0c637909c3dbd27b0213aeda88ffda5ac18f44db6b830e56c252516d7dd918ff164a7ec20e94fae519d9b1a2bae8271ca148c612b4f848ed7f07c6b62878907502de1901d7640f75ac5748db8e635af2ad81f09988f709dcc66ca54cd606c7e7025f43a1dbfc8c4651077239091e76dc248cd99d1c8af399f40c8916d4fc0aae",
+                .expected = "10a3693db344bbd5567a49f182aed627c3d635f62239ec968453343579d2c97f1ad21074c95351bd1fd2aad875550ae54f524d29e73709b1ad7acacd514c0c3725c1bceec760b6faa9442f8952a2629d480d3412765319ebb321df7852a298350ed5d25a80ab891a9712b6e4bc37d1f94e8747055f448453983ab9c69e56fed7",
+            }, .{
+                .input = "0c637909c3dbd27b0213aeda88ffda5ac18f44db6b830e56c252516d7dd918ff164a7ec20e94fae519d9b1a2bae8271ca148c612b4f848ed7f07c6b62878907502de1901d7640f75ac5748db8e635af2ad81f09988f709dcc66ca54cd606c7e7025f43a1dbfc8c4651077239091e76dc248cd99d1c8af399f40c8916d4fc0aae0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                .expected = "0c637909c3dbd27b0213aeda88ffda5ac18f44db6b830e56c252516d7dd918ff164a7ec20e94fae519d9b1a2bae8271ca148c612b4f848ed7f07c6b62878907502de1901d7640f75ac5748db8e635af2ad81f09988f709dcc66ca54cd606c7e7025f43a1dbfc8c4651077239091e76dc248cd99d1c8af399f40c8916d4fc0aae",
+            }, .{
+                .input = "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c637909c3dbd27b0213aeda88ffda5ac18f44db6b830e56c252516d7dd918ff164a7ec20e94fae519d9b1a2bae8271ca148c612b4f848ed7f07c6b62878907502de1901d7640f75ac5748db8e635af2ad81f09988f709dcc66ca54cd606c7e7025f43a1dbfc8c4651077239091e76dc248cd99d1c8af399f40c8916d4fc0aae",
+                .expected = "0c637909c3dbd27b0213aeda88ffda5ac18f44db6b830e56c252516d7dd918ff164a7ec20e94fae519d9b1a2bae8271ca148c612b4f848ed7f07c6b62878907502de1901d7640f75ac5748db8e635af2ad81f09988f709dcc66ca54cd606c7e7025f43a1dbfc8c4651077239091e76dc248cd99d1c8af399f40c8916d4fc0aae",
+            }, .{
+                .input = "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                .expected = "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            } },
+            .big,
+        },
+        // sig fmt: on
+    }) |entry| {
+        const cases, const endian: std.builtin.Endian = entry;
+        for (cases) |case| {
+            var buffer: [256]u8 = @splat(0);
+            _ = try std.fmt.hexToBytes(&buffer, case.input);
+
+            {
+                var result: [128]u8 = undefined;
+                try bn254.G2.addSyscall(&result, &buffer, endian);
+
+                var expected_buffer: [128]u8 = undefined;
+                try std.testing.expectEqualSlices(
+                    u8,
+                    try std.fmt.hexToBytes(&expected_buffer, case.expected),
+                    &result,
+                );
+            }
+            {
+                bswapG2(buffer[0..128]);
+                bswapG2(buffer[128..256]);
+
+                var result: [128]u8 = undefined;
+                try bn254.G2.addSyscall(&result, &buffer, @enumFromInt(@intFromEnum(endian) ^ 1));
+
+                var expected: [128]u8 = undefined;
+                _ = try std.fmt.hexToBytes(&expected, case.expected);
+                bswapG2(&expected);
+                try std.testing.expectEqualSlices(u8, &expected, &result);
+            }
         }
     }
 }
@@ -156,15 +226,83 @@ test "mul" {
             var buffer: [96]u8 = @splat(0);
             _ = try std.fmt.hexToBytes(&buffer, case.input);
 
-            var result: [64]u8 = undefined;
-            try bn254.mulSyscall(&result, &buffer, endian);
+            {
+                var result: [64]u8 = undefined;
+                try bn254.G1.mulSyscall(&result, &buffer, endian);
 
-            var expected_buffer: [64]u8 = undefined;
-            try std.testing.expectEqualSlices(
-                u8,
-                try std.fmt.hexToBytes(&expected_buffer, case.expected),
-                &result,
-            );
+                var expected_buffer: [64]u8 = undefined;
+                try std.testing.expectEqualSlices(
+                    u8,
+                    try std.fmt.hexToBytes(&expected_buffer, case.expected),
+                    &result,
+                );
+            }
+            {
+                bswapG1(buffer[0..64]);
+                buffer[64..][0..32].* = Fp.byteSwap(buffer[64..][0..32].*);
+
+                // big -> little, little -> big
+                var result: [64]u8 = undefined;
+                try bn254.G1.mulSyscall(&result, &buffer, @enumFromInt(@intFromEnum(endian) ^ 1));
+
+                var expected: [64]u8 = undefined;
+                _ = try std.fmt.hexToBytes(&expected, case.expected);
+                bswapG1(&expected);
+                try std.testing.expectEqualSlices(u8, &expected, &result);
+            }
+        }
+    }
+
+    inline for (.{
+        // sig fmt: off
+        .{
+            // [agave] https://github.com/anza-xyz/solana-sdk/blob/daa969beae794c71feb9ba62c941d0dbe37b1e10/bn254/tests/data/multiplication_g2_cases.json
+            [_]Case{ .{
+                .input = "24b96ea5d95769cdd611ef3be56658a26e4e390e293616b8ece193a023317925073fe1cb76ebafbcd1d7983e5cc1fe43610ace18e41460f8269aa450bddb7886008d6719fe6394737077ce2534f1846f86d6b5ccb40fbd2a05608b123025f7b9085a5a52e30f2e403c29ec97036c880b497f2efa60a5e28aa91307ebfaf5e85a0000000000000000000000000000000000000000000000000000000000000000",
+                .expected = "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            }, .{
+                .input = "24b96ea5d95769cdd611ef3be56658a26e4e390e293616b8ece193a023317925073fe1cb76ebafbcd1d7983e5cc1fe43610ace18e41460f8269aa450bddb7886008d6719fe6394737077ce2534f1846f86d6b5ccb40fbd2a05608b123025f7b9085a5a52e30f2e403c29ec97036c880b497f2efa60a5e28aa91307ebfaf5e85a0000000000000000000000000000000000000000000000000000000000000001",
+                .expected = "24b96ea5d95769cdd611ef3be56658a26e4e390e293616b8ece193a023317925073fe1cb76ebafbcd1d7983e5cc1fe43610ace18e41460f8269aa450bddb7886008d6719fe6394737077ce2534f1846f86d6b5ccb40fbd2a05608b123025f7b9085a5a52e30f2e403c29ec97036c880b497f2efa60a5e28aa91307ebfaf5e85a",
+            }, .{
+                .input = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009ea9b2b89d9e9b7296c67452f9e685f0366533e9d2f12b509a03a8068359585",
+                .expected = "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            }, .{
+                .input = "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                .expected = "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            } },
+            .big,
+        },
+        // sig fmt: on
+    }) |entry| {
+        const cases, const endian: std.builtin.Endian = entry;
+        for (cases) |case| {
+            var buffer: [160]u8 = @splat(0);
+            _ = try std.fmt.hexToBytes(&buffer, case.input);
+
+            {
+                var result: [128]u8 = undefined;
+                try bn254.G2.mulSyscall(&result, &buffer, endian);
+
+                var expected_buffer: [128]u8 = undefined;
+                try std.testing.expectEqualSlices(
+                    u8,
+                    try std.fmt.hexToBytes(&expected_buffer, case.expected),
+                    &result,
+                );
+            }
+            {
+                bswapG2(buffer[0..128]);
+                buffer[128..][0..32].* = Fp.byteSwap(buffer[128..][0..32].*);
+
+                // big -> little, little -> big
+                var result: [128]u8 = undefined;
+                try bn254.G2.mulSyscall(&result, &buffer, @enumFromInt(@intFromEnum(endian) ^ 1));
+
+                var expected: [128]u8 = undefined;
+                _ = try std.fmt.hexToBytes(&expected, case.expected);
+                bswapG2(&expected);
+                try std.testing.expectEqualSlices(u8, &expected, &result);
+            }
         }
     }
 }
@@ -346,4 +484,18 @@ test "edge cases" {
             bn254.pairingSyscall(&out, input, .big),
         );
     }
+}
+
+fn bswapG1(bytes: *[64]u8) void {
+    const c0: u256 = @bitCast(bytes[0..32].*);
+    const c1: u256 = @bitCast(bytes[32..64].*);
+    bytes[0..32].* = @bitCast(@byteSwap(c0));
+    bytes[32..64].* = @bitCast(@byteSwap(c1));
+}
+
+fn bswapG2(bytes: *[128]u8) void {
+    const c0: u512 = @bitCast(bytes[0..64].*);
+    const c1: u512 = @bitCast(bytes[64..128].*);
+    bytes[0..64].* = @bitCast(@byteSwap(c0));
+    bytes[64..128].* = @bitCast(@byteSwap(c1));
 }

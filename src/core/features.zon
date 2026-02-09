@@ -253,4 +253,5 @@
     .{ .name = "increase_cpi_account_info_limit", .pubkey = "H6iVbVaDZgDphcPbcZwc5LoznMPWQfnJ1AM7L1xzqvt5" },
     .{ .name = "vote_state_v4", .pubkey = "Gx4XFcrVMt4HUvPzTpTSVkdDVgcDSjKhDN1RqRS6KDuZ" },
     .{ .name = "alt_bn128_little_endian", .pubkey = "bnS3pWfLrxHRJvMyLm6EaYQkP7A2Fe9DxoKv4aGA8YM" },
+    .{ .name = "enable_alt_bn128_g2_syscalls", .pubkey = "bn1hKNURMGQaQoEVxahcEAcqiX3NwRs6hgKKNSLeKxH" },
 }

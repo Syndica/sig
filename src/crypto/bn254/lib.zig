@@ -67,7 +67,7 @@ pub const G1 = struct {
             return;
         }
 
-        var r = p.toAffine();
+        var r = shared.toAffine(p);
         r.x.fromMont();
         r.y.fromMont();
         r.x.toBytes(out[0..32], endian);
@@ -76,24 +76,6 @@ pub const G1 = struct {
 
     fn isZero(p: G1) bool {
         return p.z.isZero();
-    }
-
-    fn toAffine(p: G1) G1 {
-        if (p.z.isZero() or p.z.isOne()) {
-            // nothing to do
-            return p;
-        }
-
-        // if Z is neither zero nor one, need to flatten down
-        const iz = p.z.inverse();
-        const iz2 = iz.sq();
-
-        // x / z^2, y / z^3
-        return .{
-            .x = p.x.mul(iz2),
-            .y = p.y.mul(iz2).mul(iz),
-            .z = .one,
-        };
     }
 
     pub fn compress(out: *[32]u8, input: *const [64]u8, endian: std.builtin.Endian) !void {
@@ -146,45 +128,22 @@ pub const G1 = struct {
         // no flags on y
     }
 
-    /// Compute a + b.
-    ///
-    /// Both a and b are affine (Z == 1).
-    /// https://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-3.html#addition-mmadd-2007-bl
-    pub fn affineAdd(a: G1, b: G1) G1 {
-        // if a == 0, return b
-        if (a.isZero()) return b;
-        // if b == 0, return a
-        if (b.isZero()) return a;
+    pub fn addSyscall(out: *[64]u8, input: *const [128]u8, endian: std.builtin.Endian) !void {
+        const x: G1 = try .fromBytes(input[0..64], endian);
+        const y: G1 = try .fromBytes(input[64..128], endian);
+        const result = shared.affineAdd(x, y);
+        result.toBytes(out, endian);
+    }
 
-        // if X coord is equal, means either the points are the same (same side)
-        // or they're opposite (one on the top, other one on the bottom).
-        const lambda = if (a.x.eql(b.x)) r: {
-            if (a.y.eql(b.y)) {
-                // a == b => point double: lambda = 3 * x1^2 / (2 * y1)
-                const x = a.x.sq().triple();
-                const y = a.y.dbl(); // y = 2 * y1
-                break :r y.inverse().mul(x);
-            } else {
-                // a == -b => 0
-                return .zero;
-            }
-        } else r: {
-            // point add: lambda = (y1 - y2) / (x1 - x2)
-            const x = a.x.sub(b.x);
-            const y = a.y.sub(b.y);
-            break :r x.inverse().mul(y);
-        };
-
-        // x3 = lambda^2 - x1 - x2
-        const x = lambda.sq().sub(a.x).sub(b.x);
-        // y3 = lambda * (x1 - x3) - y1
-        const y = a.x.sub(x).mul(lambda).sub(a.y);
-
-        return .{
-            .x = x,
-            .y = y,
-            .z = .one,
-        };
+    pub fn mulSyscall(out: *[64]u8, input: *const [96]u8, endian: std.builtin.Endian) !void {
+        const a: G1 = try .fromBytes(input[0..64], endian);
+        // Scalar is provided in big-endian and we do *not* validate it.
+        const b: u256 = @bitCast(switch (endian) {
+            .big => Fp.byteSwap(input[64..][0..32].*),
+            .little => input[64..][0..32].*,
+        });
+        const result = shared.mulScalar(a, b);
+        result.toBytes(out, endian);
     }
 };
 
@@ -222,13 +181,13 @@ pub const G2 = struct {
         // G2 does *not* have prime order, so we need to perform a secondary subgroup membership check.
         // https://eprint.iacr.org/2022/348, Sec 3.1.
         // [r]P == 0 <==> [x+1]P + ψ([x]P) + ψ²([x]P) = ψ³([2x]P)
-        const xp: G2 = mulScalar(p, Fp.constants.x);
+        const xp: G2 = shared.mulScalar(p, Fp.constants.x);
 
         const psi = xp.frob();
         const psi2 = xp.frob2();
 
-        const l = addMixed(xp, p).add(psi).add(psi2);
-        const r = dbl(psi2.frob());
+        const l = shared.addMixed(xp, p).add(psi).add(psi2);
+        const r = shared.dbl(psi2.frob());
 
         if (!l.eql(r)) return error.NotWellFormed;
     }
@@ -244,6 +203,19 @@ pub const G2 = struct {
         try g2.isWellFormed();
 
         return g2;
+    }
+
+    fn toBytes(p: G2, out: *[128]u8, endian: std.builtin.Endian) void {
+        if (p.isZero()) {
+            @memset(out, 0); // no flags
+            return;
+        }
+
+        var r = shared.toAffine(p);
+        r.x.fromMont();
+        r.y.fromMont();
+        r.x.toBytes(out[0..64], endian);
+        r.y.toBytes(out[64..128], endian);
     }
 
     fn isZero(p: G2) bool {
@@ -333,7 +305,7 @@ pub const G2 = struct {
         const s2 = b.y.mul(a.z).mul(z1z1);
 
         // if a==b, return dbl(a)
-        if (u_2.eql(a.x) and s2.eql(a.y)) return dbl(a);
+        if (u_2.eql(a.x) and s2.eql(a.y)) return shared.dbl(a);
 
         // H = U2-U1
         const h = u_2.sub(u_1);
@@ -389,118 +361,179 @@ pub const G2 = struct {
             .z = a.z,
         };
     }
+
+    pub fn addSyscall(out: *[128]u8, input: *const [256]u8, endian: std.builtin.Endian) !void {
+        const x: G2 = try .fromBytes(input[0..128], endian);
+        const y: G2 = try .fromBytes(input[128..256], endian);
+        const result = shared.affineAdd(x, y);
+        result.toBytes(out, endian);
+    }
+
+    pub fn mulSyscall(out: *[128]u8, input: *const [160]u8, endian: std.builtin.Endian) !void {
+        const a: G2 = try .fromBytes(input[0..128], endian);
+        const scalar = input[128..][0..32].*;
+        const b: u256 = @bitCast(switch (endian) {
+            .big => Fp.byteSwap(scalar),
+            .little => scalar,
+        });
+        const result = shared.mulScalar(a, b);
+        result.toBytes(out, endian);
+    }
 };
 
-/// Implementation is shared between G1 and G2.
-/// http://www.hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-0.html#addition-madd-2007-bl
-/// Assumes b is affine (z == 1).
-fn addMixed(a: anytype, b: anytype) @TypeOf(a, b) {
-    // a==0, return b
-    if (a.isZero()) return b;
+const shared = struct {
+    fn toAffine(p: anytype) @TypeOf(p) {
+        if (p.z.isZero() or p.z.isOne()) {
+            // nothing to do
+            return p;
+        }
 
-    // Z1Z1 = Z1^2
-    const z1z1 = a.z.sq();
-    // U2 = X2*Z1Z1
-    const u_2 = b.x.mul(z1z1);
-    // S2 = Y2*Z1*Z1Z1
-    const s2 = b.y.mul(a.z).mul(z1z1);
+        // if Z is neither zero nor one, need to flatten down
+        const iz = p.z.inverse();
+        const iz2 = iz.sq();
 
-    if (u_2.eql(a.x) and s2.eql(a.y)) return dbl(a);
-
-    // H = U2-X1
-    const h = u_2.sub(a.x);
-    // HH = H^2
-    const hh = h.sq();
-    // I = 4*HH
-    const i = hh.dbl().dbl();
-    // J = H*I
-    const j = h.mul(i);
-    // r = 2*(S2-Y1)
-    const rr = s2.sub(a.y).dbl();
-    // V = X1*I
-    const v = a.x.mul(i);
-    // X3 = r^2 - J - 2*V
-    const x3 = rr.sq().sub(j).sub(v).sub(v);
-    // Y3 = r*(V - V3) - 2*Y1*J
-    const y3 = v.sub(x3).mul(rr).sub(a.y.mul(j).dbl());
-    // Z3 = (Z1 + H)^2 - Z1Z1 - HH
-    const z3 = a.z.add(h).sq().sub(z1z1).sub(hh);
-
-    return .{
-        .x = x3,
-        .y = y3,
-        .z = z3,
-    };
-}
-
-/// Implementation shared between G1 and G2.
-/// https://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-3.html#doubling-dbl-2007-bl
-fn dbl(p: anytype) @TypeOf(p) {
-    if (p.isZero()) return .zero;
-
-    // XX = X1^2
-    const xx = p.x.sq();
-    // YY = Y1^2
-    const yy = p.y.sq();
-    // ZZ = Z1^2
-    const zz = p.z.sq();
-    // YYYY = YY^2
-    const y4 = yy.sq();
-    // S = 2*((X1+YY)^2-XX-YYYY)
-    const s = p.x.add(yy).sq().sub(xx).sub(y4).dbl();
-    // M = 3*XX + a*ZZ^2, but a = 0
-    const m = xx.triple();
-
-    // T = M^2-2*S
-    const t = m.sq().sub(s).sub(s);
-    // Y3 = M*(S-T)-8*YYYY
-    const y3 = s.sub(t).mul(m).sub(y4.dbl().dbl().dbl());
-    // Z3 = (Y1+Z1)^2-YY-ZZ
-    const z3 = p.y.add(p.z).sq().sub(yy).sub(zz);
-
-    return .{
-        .x = t,
-        .y = y3,
-        .z = z3,
-    };
-}
-
-/// Assumes that `a` is affine.
-///
-/// https://encrypt.a41.io/primitives/abstract-algebra/elliptic-curve/scalar-multiplication/double-and-add
-/// https://en.wikipedia.org/wiki/Elliptic_curve_point_multiplication#Double-and-add
-fn mulScalar(a: anytype, scalar: u256) @TypeOf(a) {
-    // TODO: can be further optimized with GLV and wNAF
-    const limbs: [4]u64 = @bitCast(scalar);
-    const leading = @clz(scalar);
-    if (leading == 256) return .zero;
-    var i: u8 = @intCast(256 - 1 - leading);
-    var r = a;
-    while (i > 0) {
-        i -= 1;
-        r = dbl(r);
-        if (bit(limbs, i)) r = addMixed(r, a);
+        // x / z^2, y / z^3
+        return .{
+            .x = p.x.mul(iz2),
+            .y = p.y.mul(iz2).mul(iz),
+            .z = .one,
+        };
     }
-    return r;
-}
 
-pub fn addSyscall(out: *[64]u8, input: *const [128]u8, endian: std.builtin.Endian) !void {
-    const x: G1 = try .fromBytes(input[0..64], endian);
-    const y: G1 = try .fromBytes(input[64..128], endian);
-    const result = x.affineAdd(y);
-    result.toBytes(out, endian);
-}
+    /// Implementation is shared between G1 and G2.
+    /// https://www.hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-0.html#addition-madd-2007-bl
+    /// Assumes b is affine (Z2 == 1).
+    fn addMixed(a: anytype, b: anytype) @TypeOf(a, b) {
+        // a==0, return b
+        if (a.isZero()) return b;
 
-pub fn mulSyscall(out: *[64]u8, input: *const [96]u8, endian: std.builtin.Endian) !void {
-    const a: G1 = try .fromBytes(input[0..64], endian);
-    // Scalar is provided in big-endian and we do *not* validate it.
-    const b: u256 = @bitCast(switch (endian) {
-        .big => Fp.byteSwap(input[64..][0..32].*),
-        .little => input[64..][0..32].*,
-    });
-    const result = mulScalar(a, b);
-    result.toBytes(out, endian);
-}
+        // Z1Z1 = Z1^2
+        const z1z1 = a.z.sq();
+        // U2 = X2*Z1Z1
+        const u_2 = b.x.mul(z1z1);
+        // S2 = Y2*Z1*Z1Z1
+        const s2 = b.y.mul(a.z).mul(z1z1);
+
+        if (u_2.eql(a.x) and s2.eql(a.y)) return dbl(a);
+
+        // H = U2-X1
+        const h = u_2.sub(a.x);
+        // HH = H^2
+        const hh = h.sq();
+        // I = 4*HH
+        const i = hh.dbl().dbl();
+        // J = H*I
+        const j = h.mul(i);
+        // r = 2*(S2-Y1)
+        const rr = s2.sub(a.y).dbl();
+        // V = X1*I
+        const v = a.x.mul(i);
+        // X3 = r^2 - J - 2*V
+        const x3 = rr.sq().sub(j).sub(v).sub(v);
+        // Y3 = r*(V - V3) - 2*Y1*J
+        const y3 = v.sub(x3).mul(rr).sub(a.y.mul(j).dbl());
+        // Z3 = (Z1 + H)^2 - Z1Z1 - HH
+        const z3 = a.z.add(h).sq().sub(z1z1).sub(hh);
+
+        return .{
+            .x = x3,
+            .y = y3,
+            .z = z3,
+        };
+    }
+
+    /// Compute a + b.
+    ///
+    /// Both a and b are affine (Z1 == 1, Z2 == 1).
+    /// https://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-0.html#addition-mmadd-2007-bl
+    fn affineAdd(a: anytype, b: anytype) @TypeOf(a, b) {
+        // if a == 0, return b
+        if (a.isZero()) return b;
+        // if b == 0, return a
+        if (b.isZero()) return a;
+
+        // if X coord is equal, means either the points are the same (same side)
+        // or they're opposite (one on the top, other one on the bottom).
+        const lambda = if (a.x.eql(b.x)) r: {
+            if (a.y.eql(b.y)) {
+                // a == b => point double: lambda = 3 * x1^2 / (2 * y1)
+                const x = a.x.sq().triple();
+                const y = a.y.dbl(); // y = 2 * y1
+                break :r y.inverse().mul(x);
+            } else {
+                // a == -b => 0
+                return .zero;
+            }
+        } else r: {
+            // point add: lambda = (y1 - y2) / (x1 - x2)
+            const x = a.x.sub(b.x);
+            const y = a.y.sub(b.y);
+            break :r x.inverse().mul(y);
+        };
+
+        // x3 = lambda^2 - x1 - x2
+        const x = lambda.sq().sub(a.x).sub(b.x);
+        // y3 = lambda * (x1 - x3) - y1
+        const y = a.x.sub(x).mul(lambda).sub(a.y);
+
+        return .{
+            .x = x,
+            .y = y,
+            .z = .one,
+        };
+    }
+
+    /// Implementation shared between G1 and G2.
+    /// https://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-3.html#doubling-dbl-2007-bl
+    fn dbl(p: anytype) @TypeOf(p) {
+        if (p.isZero()) return .zero;
+
+        // XX = X1^2
+        const xx = p.x.sq();
+        // YY = Y1^2
+        const yy = p.y.sq();
+        // ZZ = Z1^2
+        const zz = p.z.sq();
+        // YYYY = YY^2
+        const y4 = yy.sq();
+        // S = 2*((X1+YY)^2-XX-YYYY)
+        const s = p.x.add(yy).sq().sub(xx).sub(y4).dbl();
+        // M = 3*XX + a*ZZ^2, but a = 0
+        const m = xx.triple();
+
+        // T = M^2-2*S
+        const t = m.sq().sub(s).sub(s);
+        // Y3 = M*(S-T)-8*YYYY
+        const y3 = s.sub(t).mul(m).sub(y4.dbl().dbl().dbl());
+        // Z3 = (Y1+Z1)^2-YY-ZZ
+        const z3 = p.y.add(p.z).sq().sub(yy).sub(zz);
+
+        return .{
+            .x = t,
+            .y = y3,
+            .z = z3,
+        };
+    }
+
+    /// Assumes that `a` is affine.
+    ///
+    /// https://encrypt.a41.io/primitives/abstract-algebra/elliptic-curve/scalar-multiplication/double-and-add
+    /// https://en.wikipedia.org/wiki/Elliptic_curve_point_multiplication#Double-and-add
+    fn mulScalar(a: anytype, scalar: u256) @TypeOf(a) {
+        // TODO: can be further optimized with GLV and wNAF
+        const limbs: [4]u64 = @bitCast(scalar);
+        const leading = @clz(scalar);
+        if (leading == 256) return .zero;
+        var i: u8 = @intCast(256 - 1 - leading);
+        var r = a;
+        while (i > 0) {
+            i -= 1;
+            r = dbl(r);
+            if (bit(limbs, i)) r = addMixed(r, a);
+        }
+        return r;
+    }
+};
 
 pub fn pairingSyscall(out: *[32]u8, input: []const u8, endian: std.builtin.Endian) !void {
     const num_elements = input.len / 192;
