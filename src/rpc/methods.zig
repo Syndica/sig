@@ -1438,7 +1438,7 @@ pub const BlockHookContext = struct {
         };
         const block_time: ?i64 = blk: {
             if (maybe_slot_elem) |elem| {
-                break :blk elem.constants.block_time;
+                break :blk elem.state.unix_timestamp.load(.monotonic);
             } else {
                 break :blk block.block_time;
             }
