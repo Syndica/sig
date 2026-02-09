@@ -13,7 +13,7 @@ LimitNOFILE=infinity
 ExecStopPost=/home/sig/sig/ci/run-and-update-service/handle-exit.sh
 MemoryAccounting=yes
 MemoryMax=85%
-TimeoutStopSec=10m
+TimeoutStopSec=30m
 
 [Install]
 WantedBy=multi-user.target

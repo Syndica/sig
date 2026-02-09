@@ -24,4 +24,10 @@ if [ -d "$BASE_DIR/validator" ]; then
     mv "$BASE_DIR/validator" "$BASE_DIR/validator-archive"
 fi
 
+# Clear out old archives to avoid running out of disk space. They should have
+# been uploaded to S3 and then deleted right away. If not, we must be flooding
+# the disk with archives on failed uploads, and we're going to run out of disk
+# space.
+rm -f $BASE_DIR/validator-*tar.zst
+
 "$BASE_DIR/zig-out/bin/sig" $@ 2>>"$BASE_DIR/logs/sig.log" >>"$BASE_DIR/logs/sig.log"
