@@ -1381,24 +1381,29 @@ pub const BlockHookContext = struct {
         if (params.slot > root) {
             return error.RootNotSoonEnough;
         }
-        const slot_elem = self.slot_tracker.get(params.slot) orelse return error.SlotUnavailableSomehow;
+        const slot_elem = self.slot_tracker.get(params.slot) orelse {
+            return error.SlotUnavailableSomehow;
+        };
 
         const block_height = slot_elem.constants.block_height;
         const block_time = slot_elem.state.unix_timestamp.load(.monotonic);
 
         // Get block from ledger
         const reader = self.ledger.reader();
-        const block = reader.getCompleteBlock(allocator, params.slot, true) catch |err| switch (err) {
-            error.SlotNotRooted => return error.SlotNotRooted,
-            error.SlotUnavailable => return error.SlotUnavailable,
-            else => return err,
-        };
+        const block = try reader.getCompleteBlock(
+            allocator,
+            params.slot,
+            true,
+        );
         defer block.deinit(allocator);
 
         // Encode blockhashes as base58
         const blockhash = try allocator.dupe(u8, block.blockhash.base58String().constSlice());
         errdefer allocator.free(blockhash);
-        const previous_blockhash = try allocator.dupe(u8, block.previous_blockhash.base58String().constSlice());
+        const previous_blockhash = try allocator.dupe(
+            u8,
+            block.previous_blockhash.base58String().constSlice(),
+        );
         errdefer allocator.free(previous_blockhash);
 
         // Convert rewards if requested
@@ -1462,8 +1467,9 @@ pub const BlockHookContext = struct {
                 errdefer allocator.free(transactions);
 
                 for (block.transactions, 0..) |tx_with_meta, i| {
+                    const tx_version = tx_with_meta.transaction.version;
                     // Check version compatibility
-                    if (max_supported_version == null and tx_with_meta.transaction.version != .legacy) {
+                    if (max_supported_version == null and tx_version != .legacy) {
                         return error.UnsupportedTransactionVersion;
                     }
 
@@ -1623,17 +1629,26 @@ pub const BlockHookContext = struct {
         allocator: std.mem.Allocator,
         inner_instructions: []const sig.ledger.transaction_status.InnerInstructions,
     ) ![]const GetBlock.Response.UiInnerInstructions {
-        const result = try allocator.alloc(GetBlock.Response.UiInnerInstructions, inner_instructions.len);
+        const result = try allocator.alloc(
+            GetBlock.Response.UiInnerInstructions,
+            inner_instructions.len,
+        );
         errdefer allocator.free(result);
 
         for (inner_instructions, 0..) |ii, i| {
-            const instructions = try allocator.alloc(GetBlock.Response.UiInstruction, ii.instructions.len);
+            const instructions = try allocator.alloc(
+                GetBlock.Response.UiInstruction,
+                ii.instructions.len,
+            );
             errdefer allocator.free(instructions);
 
             for (ii.instructions, 0..) |inner_ix, j| {
                 // Base58 encode the instruction data
                 const base58_encoder = base58.Table.BITCOIN;
-                const data_str = base58_encoder.encodeAlloc(allocator, inner_ix.instruction.data) catch {
+                const data_str = base58_encoder.encodeAlloc(
+                    allocator,
+                    inner_ix.instruction.data,
+                ) catch {
                     return error.EncodingError;
                 };
 
@@ -1663,11 +1678,26 @@ pub const BlockHookContext = struct {
         errdefer allocator.free(result);
 
         for (balances, 0..) |b, i| {
+            const mint = try allocator.dupe(u8, b.mint);
+            const owner = blk: {
+                if (b.owner.len > 0) {
+                    break :blk try allocator.dupe(u8, b.owner);
+                } else {
+                    break :blk null;
+                }
+            };
+            const program_id = blk: {
+                if (b.program_id.len > 0) {
+                    break :blk try allocator.dupe(u8, b.program_id);
+                } else {
+                    break :blk null;
+                }
+            };
             result[i] = .{
                 .accountIndex = b.account_index,
-                .mint = try allocator.dupe(u8, b.mint),
-                .owner = if (b.owner.len > 0) try allocator.dupe(u8, b.owner) else null,
-                .programId = if (b.program_id.len > 0) try allocator.dupe(u8, b.program_id) else null,
+                .mint = mint,
+                .owner = owner,
+                .programId = program_id,
                 .uiTokenAmount = .{
                     .amount = try allocator.dupe(u8, b.ui_token_amount.amount),
                     .decimals = b.ui_token_amount.decimals,

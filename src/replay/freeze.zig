@@ -11,9 +11,7 @@ const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
 const Logger = sig.trace.Logger(@typeName(@This()));
-const RewardType = rewards.RewardType;
 const RewardInfo = rewards.RewardInfo;
-const KeyedRewardInfo = rewards.KeyedRewardInfo;
 const BlockRewards = rewards.BlockRewards;
 
 const Ancestors = core.Ancestors;

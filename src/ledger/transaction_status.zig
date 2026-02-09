@@ -216,7 +216,7 @@ pub const TransactionStatusMetaBuilder = struct {
         errdefer if (log_messages) |logs| allocator.free(logs);
 
         // Convert inner instructions from InstructionTrace
-        const inner_instructions: ?[]const InnerInstructions = if (processed_tx.outputs) |outputs| blk: {
+        const inner_instructions = if (processed_tx.outputs) |outputs| blk: {
             if (outputs.instruction_trace) |trace| {
                 break :blk try convertInstructionTrace(allocator, trace);
             }
@@ -332,12 +332,6 @@ pub const TransactionStatusMetaBuilder = struct {
                     });
                 }
                 current_inner.clearRetainingCapacity();
-                if (result.items.len > std.math.maxInt(u8)) {
-                    std.debug.panic(
-                        "Too many top-level instructions for u8 index: {d}",
-                        .{result.items.len},
-                    );
-                }
                 current_top_level_index = @intCast(result.items.len);
                 has_top_level = true;
             } else if (entry.depth > 1) {
@@ -369,25 +363,12 @@ pub const TransactionStatusMetaBuilder = struct {
         errdefer allocator.free(accounts);
 
         for (ixn_info.account_metas.items, 0..) |meta, i| {
-            if (meta.index_in_transaction > std.math.maxInt(u8)) {
-                std.debug.panic(
-                    "Too many accounts in instruction for u8 index: meta.index_in_transaction={d}",
-                    .{meta.index_in_transaction},
-                );
-            }
             accounts[i] = @intCast(meta.index_in_transaction);
         }
 
         // Copy instruction data
         const data = try allocator.dupe(u8, ixn_info.instruction_data);
         errdefer allocator.free(data);
-
-        if (ixn_info.program_meta.index_in_transaction > std.math.maxInt(u8)) {
-            std.debug.panic(
-                "Too many accounts in instruction for u8 index: ixn_info.program_meta.index_in_transaction={d}",
-                .{ixn_info.program_meta.index_in_transaction},
-            );
-        }
 
         return InnerInstruction{
             .instruction = CompiledInstruction{
