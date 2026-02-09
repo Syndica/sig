@@ -3,12 +3,12 @@
     .version = "0.1.0",
     .paths = .{""},
     .fingerprint = 0xdf162ceee1635531,
-    .minimum_zig_version = "0.14.1",
+    .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .sig = .{ .path = "../" },
         .pb = .{
-            .url = "git+https://github.com/Rexicon226/zig-protobuf#4a11b59f6e668f97e4d0f0bfa86a4cf805a9b86e",
-            .hash = "protobuf-2.0.0-0e82aiacGwDJs2XReVH5wmkc9AJ40bS2IxfvooQwZEId",
+            .url = "git+https://github.com/Arwalk/zig-protobuf#66d91758c2d4e74feecee0889f171cfc26899617",
+            .hash = "protobuf-3.0.0-0e82ahnTKAChABSv79UCNbcik-g1JNoA1wGAPZcvYzFH",
         },
     },
 }
