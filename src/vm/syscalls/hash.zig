@@ -72,10 +72,6 @@ pub fn poseidon(
         return;
     }
 
-    // Agave handles poseidon errors in an annoying way.
-    // The feature SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES simplifies this handling.
-    // It is acitvated on all clusters, we still check for activation here and panic if it is not active.
-    const simplified = tc.feature_set.active(.simplify_alt_bn128_syscall_error_codes, tc.slot);
     const enforce_padding = tc.feature_set.active(.poseidon_enforce_padding, tc.slot);
 
     // [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/mod.rs#L1815-L1825
@@ -103,10 +99,8 @@ pub fn poseidon(
         }
 
         hasher.append(&buffer) catch {
-            if (simplified) {
-                registers.set(.r0, 1);
-                return;
-            } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
+            registers.set(.r0, 1);
+            return;
         };
     }
 
@@ -259,7 +253,6 @@ test "poseidon element with padding" {
             .compute_meter = total_compute,
             .feature_set = &.{
                 .{ .feature = .poseidon_enforce_padding },
-                .{ .feature = .simplify_alt_bn128_syscall_error_codes },
             },
         },
     );

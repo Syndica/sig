@@ -26,13 +26,12 @@ pub const G1 = struct {
         .z = .zero,
     };
 
-    fn fromBytesInternal(input: *const [64]u8) !G1 {
+    fn fromBytesInternal(input: *const [64]u8, endian: std.builtin.Endian) !G1 {
         if (std.mem.allEqual(u8, input, 0)) return .zero;
-
         var flags: Flags = undefined;
         return .{
-            .x = try .fromBytes(input[0..32], null),
-            .y = try .fromBytes(input[32..64], &flags),
+            .x = try .fromBytes(input[0..32], endian, null),
+            .y = try .fromBytes(input[32..64], endian, &flags),
             .z = if (flags.is_inf) .zero else .one,
         };
     }
@@ -49,8 +48,8 @@ pub const G1 = struct {
         // G1 has prime order so we do not need a subgroup membership check.
     }
 
-    pub fn fromBytes(input: *const [64]u8) !G1 {
-        var g1 = try fromBytesInternal(input);
+    pub fn fromBytes(input: *const [64]u8, endian: std.builtin.Endian) !G1 {
+        var g1 = try fromBytesInternal(input, endian);
         if (g1.isZero()) return g1;
 
         g1.x.toMont();
@@ -62,19 +61,17 @@ pub const G1 = struct {
         return g1;
     }
 
-    fn toBytes(p: G1, out: *[64]u8) void {
+    fn toBytes(p: G1, out: *[64]u8, endian: std.builtin.Endian) void {
         if (p.isZero()) {
-            // no flags
-            @memset(out, 0);
+            @memset(out, 0); // no flags
             return;
         }
 
         var r = p.toAffine();
         r.x.fromMont();
         r.y.fromMont();
-
-        r.x.toBytes(out[0..32]);
-        r.y.toBytes(out[32..64]);
+        r.x.toBytes(out[0..32], endian);
+        r.y.toBytes(out[32..64], endian);
     }
 
     fn isZero(p: G1) bool {
@@ -99,8 +96,8 @@ pub const G1 = struct {
         };
     }
 
-    pub fn compress(out: *[32]u8, input: *const [64]u8) !void {
-        const p: G1 = try .fromBytesInternal(input);
+    pub fn compress(out: *[32]u8, input: *const [64]u8, endian: std.builtin.Endian) !void {
+        const p: G1 = try .fromBytesInternal(input, endian);
 
         const is_inf = p.isZero();
         const flag_inf = input[32] & Flags.INF;
@@ -115,33 +112,37 @@ pub const G1 = struct {
 
         const is_neg = p.y.isNegative();
         @memcpy(out, input[0..32]);
-        if (is_neg) out[0] |= Flags.NEG;
+        const offset: u32 = switch (endian) {
+            .little => 31,
+            .big => 0,
+        };
+        if (is_neg) out[offset] |= Flags.NEG;
         return;
     }
 
-    pub fn decompress(out: *[64]u8, input: *const [32]u8) !void {
+    pub fn decompress(out: *[64]u8, input: *const [32]u8, endian: std.builtin.Endian) !void {
         // All zeroes input, all zeroes out, no flags.
         if (std.mem.allEqual(u8, input, 0)) return @memset(out, 0);
 
         var flags: Flags = undefined;
-        var x: Fp = try .fromBytes(input, &flags);
+        const x: Fp = try .fromBytes(input, endian, &flags);
 
         // If the point at infinity flag is set, return the point at infinity without any
         // checks on the coordinates (X, Y) and no flags set.
         if (flags.is_inf) return @memset(out, 0);
 
+        var xm = x;
+        xm.toMont();
         // y^2 = x^3+b
-        x.toMont();
-        const x3b = x.sq().mul(x).add(Fp.constants.b_mont);
+        const x3b = xm.sq().mul(xm).add(Fp.constants.b_mont);
         var y = try x3b.sqrt();
         y.fromMont();
         if (flags.is_neg != y.isNegative()) {
             y.negateNotMontgomery(y); // correct the sign to the requested one
         }
 
-        @memcpy(out[0..32], input);
-        out[0] &= Flags.MASK;
-        y.toBytes(out[32..64]);
+        x.toBytes(out[0..32], endian);
+        y.toBytes(out[32..64], endian);
         // no flags on y
     }
 
@@ -198,13 +199,13 @@ pub const G2 = struct {
         .z = .zero,
     };
 
-    fn fromBytesInternal(input: *const [128]u8) !G2 {
+    fn fromBytesInternal(input: *const [128]u8, endian: std.builtin.Endian) !G2 {
         if (std.mem.allEqual(u8, input, 0)) return .zero;
 
         var flags: Flags = undefined;
         return .{
-            .x = try .fromBytes(input[0..64], null),
-            .y = try .fromBytes(input[64..128], &flags),
+            .x = try .fromBytes(input[0..64], endian, null),
+            .y = try .fromBytes(input[64..128], endian, &flags),
             .z = if (flags.is_inf) .zero else .one,
         };
     }
@@ -232,8 +233,8 @@ pub const G2 = struct {
         if (!l.eql(r)) return error.NotWellFormed;
     }
 
-    fn fromBytes(input: *const [128]u8) !G2 {
-        var g2: G2 = try .fromBytesInternal(input);
+    fn fromBytes(input: *const [128]u8, endian: std.builtin.Endian) !G2 {
+        var g2: G2 = try .fromBytesInternal(input, endian);
         if (g2.isZero()) return g2;
 
         g2.x.toMont();
@@ -249,8 +250,8 @@ pub const G2 = struct {
         return p.z.isZero();
     }
 
-    pub fn compress(out: *[64]u8, input: *const [128]u8) !void {
-        const p: G2 = try .fromBytesInternal(input);
+    pub fn compress(out: *[64]u8, input: *const [128]u8, endian: std.builtin.Endian) !void {
+        const p: G2 = try .fromBytesInternal(input, endian);
 
         const is_inf = p.isZero();
         const flag_inf = input[64] & Flags.INF;
@@ -263,23 +264,28 @@ pub const G2 = struct {
         }
 
         const is_neg = p.y.isNegative();
-        @memcpy(out, input[0..64]);
-        if (is_neg) out[0] |= Flags.NEG;
+        p.x.toBytes(out, endian);
+        const offset: u32 = switch (endian) {
+            .little => 63,
+            .big => 0,
+        };
+        if (is_neg) out[offset] |= Flags.NEG;
         return;
     }
 
-    pub fn decompress(out: *[128]u8, input: *const [64]u8) !void {
+    pub fn decompress(out: *[128]u8, input: *const [64]u8, endian: std.builtin.Endian) !void {
         if (std.mem.allEqual(u8, input, 0)) return @memset(out, 0);
 
         var flags: Flags = undefined;
-        var x: Fp2 = try .fromBytes(input, &flags);
+        const x: Fp2 = try .fromBytes(input, endian, &flags);
 
         // no flags
         if (flags.is_inf) return @memset(out, 0);
 
         // y^2 = x^3+b
-        x.toMont();
-        const x3b = x.sq().mul(x).add(Fp2.constants.twist_b_mont);
+        var xm = x;
+        xm.toMont();
+        const x3b = xm.sq().mul(xm).add(Fp2.constants.twist_b_mont);
         var y = try x3b.sqrt();
 
         y.fromMont();
@@ -287,9 +293,8 @@ pub const G2 = struct {
             y.negateNotMontgomery(y);
         }
 
-        @memcpy(out[0..64], input);
-        out[0] &= Flags.MASK;
-        y.toBytes(out[64..128]);
+        x.toBytes(out[0..64], endian);
+        y.toBytes(out[64..128], endian);
     }
 
     fn eql(a: G2, b: G2) bool {
@@ -479,22 +484,25 @@ fn mulScalar(a: anytype, scalar: u256) @TypeOf(a) {
     return r;
 }
 
-pub fn addSyscall(out: *[64]u8, input: *const [128]u8) !void {
-    const x: G1 = try .fromBytes(input[0..64]);
-    const y: G1 = try .fromBytes(input[64..128]);
+pub fn addSyscall(out: *[64]u8, input: *const [128]u8, endian: std.builtin.Endian) !void {
+    const x: G1 = try .fromBytes(input[0..64], endian);
+    const y: G1 = try .fromBytes(input[64..128], endian);
     const result = x.affineAdd(y);
-    result.toBytes(out);
+    result.toBytes(out, endian);
 }
 
-pub fn mulSyscall(out: *[64]u8, input: *const [96]u8) !void {
-    const a: G1 = try .fromBytes(input[0..64]);
+pub fn mulSyscall(out: *[64]u8, input: *const [96]u8, endian: std.builtin.Endian) !void {
+    const a: G1 = try .fromBytes(input[0..64], endian);
     // Scalar is provided in big-endian and we do *not* validate it.
-    const b: u256 = @bitCast(Fp.byteSwap(input[64..][0..32].*));
+    const b: u256 = @bitCast(switch (endian) {
+        .big => Fp.byteSwap(input[64..][0..32].*),
+        .little => input[64..][0..32].*,
+    });
     const result = mulScalar(a, b);
-    result.toBytes(out);
+    result.toBytes(out, endian);
 }
 
-pub fn pairingSyscall(out: *[32]u8, input: []const u8) !void {
+pub fn pairingSyscall(out: *[32]u8, input: []const u8, endian: std.builtin.Endian) !void {
     const num_elements = input.len / 192;
 
     var p: std.BoundedArray(G1, pairing.BATCH_SIZE) = .{};
@@ -502,8 +510,8 @@ pub fn pairingSyscall(out: *[32]u8, input: []const u8) !void {
 
     var r: Fp12 = .one;
     for (0..num_elements) |i| {
-        const a: G1 = try .fromBytes(input[i * 192 ..][0..64]);
-        const b: G2 = try .fromBytes(input[i * 192 ..][64..][0..128]);
+        const a: G1 = try .fromBytes(input[i * 192 ..][0..64], endian);
+        const b: G2 = try .fromBytes(input[i * 192 ..][64..][0..128], endian);
 
         // Skip any pair where either A or B are points at infinity.
         if (a.isZero() or b.isZero()) continue;
@@ -521,7 +529,11 @@ pub fn pairingSyscall(out: *[32]u8, input: []const u8) !void {
     }
 
     r = pairing.finalExp(r);
-    // Output is 0 or 1 as a big-endian u256.
+    // Output is 0 or 1 as a u256.
     @memset(out, 0);
-    if (r.isOne()) out[31] = 1;
+    const offset: u32 = switch (endian) {
+        .little => 0,
+        .big => 31,
+    };
+    if (r.isOne()) out[offset] = 1;
 }
