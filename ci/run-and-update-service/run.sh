@@ -28,6 +28,6 @@ fi
 # been uploaded to S3 and then deleted right away. If not, we must be flooding
 # the disk with archives on failed uploads, and we're going to run out of disk
 # space.
-rm -f $BASE_DIR/validator-*tar.zst
+rm -f "$BASE_DIR/validator-*.tar.zst"
 
 "$BASE_DIR/zig-out/bin/sig" $@ 2>>"$BASE_DIR/logs/sig.log" >>"$BASE_DIR/logs/sig.log"
