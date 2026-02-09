@@ -20,6 +20,7 @@ const ParseOptions = std.json.ParseOptions;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
+const account_decoder = sig.rpc.account_decoder;
 
 const MAX_BASE58_INPUT_LEN = 128;
 const MAX_BASE58_OUTPUT_LEN = base58.encodedMaxSize(MAX_BASE58_INPUT_LEN);
@@ -203,8 +204,7 @@ pub const GetAccountInfo = struct {
 
             pub const Data = union(enum) {
                 encoded: struct { []const u8, common.AccountEncoding },
-                // TODO: this should be a json value/map, test cases can't compare that though
-                jsonParsed: noreturn,
+                jsonParsed: account_decoder.ParsedAccount,
 
                 /// This field is only set when the request object asked for `jsonParsed` encoding,
                 /// and the server couldn't find a parser, therefore falling back to simply returning
@@ -721,50 +721,28 @@ pub const AccountHookContext = struct {
         const encoding = config.encoding orelse common.AccountEncoding.base64;
 
         const slot = self.slot_tracker.getSlotForCommitment(commitment);
-
-        // minContextSlot check
         if (config.minContextSlot) |min_slot| {
             if (slot < min_slot) return error.RpcMinContextSlotNotMet;
         }
 
         // TODO: is this the best way to get the right slot to use?
         const ref = self.slot_tracker.get(slot) orelse return error.SlotNotFound;
-
         const slot_reader = self.account_reader.forSlot(&ref.constants.ancestors);
         const maybe_account = try slot_reader.get(allocator, params.pubkey);
 
         if (maybe_account) |account| {
             defer account.deinit(allocator);
 
-            const estimated_size = estimateEncodedSize(
-                account,
-                encoding,
-                config.dataSlice,
-            );
-            var encoded_data = try std.ArrayList(u8).initCapacity(
-                allocator,
-                estimated_size,
-            );
-            errdefer encoded_data.deinit();
-
-            try encodeAccountData(
-                allocator,
-                account,
-                encoding,
-                config.dataSlice,
-                encoded_data.writer(),
-            );
+            const data: GetAccountInfo.Response.Value.Data = if (encoding == .jsonParsed)
+                try encodeJsonParsed(allocator, account)
+            else
+                try encodeStandard(allocator, account, encoding, config.dataSlice);
 
             return GetAccountInfo.Response{
                 // TODO: Thread through the Sig version const to be used as the apiVersion here.
                 .context = .{ .slot = slot, .apiVersion = "TODO" },
                 .value = .{
-                    .data = .{
-                        .encoded = .{
-                            try encoded_data.toOwnedSlice(),
-                            encoding,
-                        },
-                    },
+                    .data = data,
                     .executable = account.executable,
                     .lamports = account.lamports,
                     .owner = account.owner,
@@ -782,6 +760,35 @@ pub const AccountHookContext = struct {
         }
     }
 
+    /// Handles jsonParsed encoding with fallback to base64
+    fn encodeJsonParsed(
+        allocator: std.mem.Allocator,
+        account: sig.core.Account,
+    ) !GetAccountInfo.Response.Value.Data {
+        const account_data = try account.data.readAllAllocate(allocator);
+        defer allocator.free(account_data);
+        // Try to parse based on owner program
+        if (try account_decoder.parse_account(
+            allocator,
+            account.owner,
+            account_data,
+        )) |parsed| {
+            return .{ .jsonParsed = parsed };
+        }
+        // Fallback: encode as base64 string
+        // TODO: document Agave line of code for this logic. It does match.
+        var encoded = try std.ArrayListUnmanaged(u8).initCapacity(
+            allocator,
+            // NOTE: If jsonPased fails, we fallback to base64 encoding, so we need to make sure to allocate
+            // enough capacity for the encoded string here. It's a bit difficult to estimate the exact
+            // size for jsonParsed up front.
+            std.base64.standard.Encoder.calcSize(account.data.len()),
+        );
+        errdefer encoded.deinit(allocator);
+        try encodeAccountData(allocator, account, .base64, null, encoded.writer(allocator));
+        return .{ .json_parsed_base64_fallback = try encoded.toOwnedSlice(allocator) };
+    }
+
     fn estimateEncodedSize(
         account: sig.core.Account,
         encoding: common.AccountEncoding,
@@ -794,7 +801,32 @@ pub const AccountHookContext = struct {
             .base64 => std.base64.standard.Encoder.calcSize(data_len),
             // NOTE: we just use base64 size as a catch-all.
             .@"base64+zstd" => std.base64.standard.Encoder.calcSize(data_len),
-            .jsonParsed => @panic("TODO: jsonParsed"),
+            .jsonParsed => unreachable, // should be handled in encodeJsonParsed
+        };
+    }
+
+    /// Handles base58, base64, base64+zstd encodings
+    fn encodeStandard(
+        allocator: std.mem.Allocator,
+        account: sig.core.Account,
+        encoding: common.AccountEncoding,
+        data_slice: ?common.DataSlice,
+    ) !GetAccountInfo.Response.Value.Data {
+        const estimated_size = estimateEncodedSize(account, encoding, data_slice);
+        var encoded_data = try std.ArrayListUnmanaged(u8).initCapacity(allocator, estimated_size);
+        errdefer encoded_data.deinit(allocator);
+        try encodeAccountData(
+            allocator,
+            account,
+            encoding,
+            data_slice,
+            encoded_data.writer(allocator),
+        );
+        return .{
+            .encoded = .{
+                try encoded_data.toOwnedSlice(allocator),
+                encoding,
+            },
         };
     }
 
@@ -861,9 +893,7 @@ pub const AccountHookContext = struct {
                 try zstd_ctx.finish();
                 try base64_ctx.flush();
             },
-            .jsonParsed => {
-                @panic("TODO: jsonParsed");
-            },
+            .jsonParsed => unreachable, // should be handled in encodeJsonParsed
         };
     }
 

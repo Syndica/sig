@@ -1,6 +1,6 @@
 /// This module provides support for `jsonParsed` decoding of Solana accounts.
 const std = @import("std");
-const sig = @import("sig");
+const sig = @import("../../sig.zig");
 const Pubkey = sig.core.Pubkey;
 
 const parse_vote = @import("parse_vote.zig");
@@ -49,7 +49,7 @@ const ParsableProgram = enum {
     // TODO: bpf upgradeable loader
 
     pub fn fromProgramId(program_id: Pubkey) ?ParsableProgram {
-        if (program_id.equals(sig.runtime.program.vote.ID)) return .vote;
+        if (program_id.equals(&sig.runtime.program.vote.ID)) return .vote;
         // TODO: stake
         // TODO: nonce
         return null;
@@ -69,9 +69,9 @@ pub fn parse_account(
     program_id: Pubkey,
     data: []const u8,
 ) ParseError!?ParsedAccount {
-    const program = ParsableProgram.fromProgramId(program_id) orelse null;
+    const program = ParsableProgram.fromProgramId(program_id) orelse return null;
 
-    const parsed: ParsedAccount = switch (program) {
+    const parsed: ParsedContent = switch (program) {
         .vote => .{ .vote = try parse_vote.parse_vote(allocator, data) },
         // TODO: stake
         // TODO: nonce

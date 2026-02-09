@@ -1,12 +1,13 @@
 /// Types for parsing a vote account for RPC responses using the `jsonParsed` encoding.
 /// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_vote.rs
 const std = @import("std");
-const sig = @import("sig");
+const sig = @import("../../sig.zig");
+const account_decoder = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 const Pubkey = sig.core.Pubkey;
 const vote_program = sig.runtime.program.vote;
-const ParseError = @import("../lib.zig").ParseError;
+const ParseError = account_decoder.ParseError;
 
 /// Parses a vote account's data into a `VoteAccountType` for JSON encoding in RPC responses.
 /// TODO: somehow enforce arena allocation for all allocations here?
@@ -16,12 +17,12 @@ pub fn parse_vote(allocator: Allocator, data: []const u8) ParseError!VoteAccount
         vote_program.state.VoteStateVersions,
         data,
         .{},
-    ) catch return error.InvalidAccountData;
-    defer vote_state_versions.deinit();
+    ) catch return ParseError.InvalidAccountData;
+    defer vote_state_versions.deinit(allocator);
 
     var vote_state = vote_state_versions.convertToCurrent(allocator) catch
-        return error.OutOfMemory;
-    defer vote_state.deinit();
+        return ParseError.OutOfMemory;
+    defer vote_state.deinit(allocator);
 
     const votes = try allocator.alloc(
         UiLandedVote,
@@ -30,8 +31,8 @@ pub fn parse_vote(allocator: Allocator, data: []const u8) ParseError!VoteAccount
     for (vote_state.votes.items, 0..) |vote, i| {
         votes[i] = UiLandedVote{
             .latency = vote.latency,
-            .slot = vote.slot,
-            .confirmation_count = vote.confirmation_count,
+            .slot = vote.lockout.slot,
+            .confirmation_count = vote.lockout.confirmation_count,
         };
     }
 
@@ -39,10 +40,12 @@ pub fn parse_vote(allocator: Allocator, data: []const u8) ParseError!VoteAccount
         UiAuthorizedVoter,
         vote_state.voters.len(),
     );
-    for (vote_state.voters.voters.items(), 0..) |auth_voter, i| {
-        auth_voters[i] = UiAuthorizedVoter{
-            .epoch = auth_voter.epoch,
-            .authorized_voter = auth_voter.authorized_voter.base58String(),
+    const voter_keys = vote_state.voters.voters.keys();
+    const voter_values = vote_state.voters.voters.values();
+    for (auth_voters, voter_keys, voter_values) |*av, epoch, voter_pubkey| {
+        av.* = UiAuthorizedVoter{
+            .epoch = epoch,
+            .authorized_voter = voter_pubkey.base58String(),
         };
     }
 
@@ -50,11 +53,11 @@ pub fn parse_vote(allocator: Allocator, data: []const u8) ParseError!VoteAccount
         UiEpochCredits,
         vote_state.epoch_credits.items.len,
     );
-    for (vote_state.epoch_credits.items, 0..) |ec, i| {
-        epoch_credits[i] = UiEpochCredits{
-            .epoch = ec.epoch,
-            .credits = ec.credits,
-            .previous_credits = ec.previous_credits,
+    for (epoch_credits, vote_state.epoch_credits.items) |*ec, vote_state_ec| {
+        ec.* = UiEpochCredits{
+            .epoch = vote_state_ec.epoch,
+            .credits = vote_state_ec.credits,
+            .previous_credits = vote_state_ec.prev_credits,
         };
     }
 
@@ -187,7 +190,7 @@ pub const UiAuthorizedVoter = struct {
         try jw.objectField("epoch");
         try jw.write(self.epoch);
         try jw.objectField("authorizedVoter");
-        try jw.write(self.authorized_voter);
+        try jw.write(self.authorized_voter.slice());
         try jw.endObject();
     }
 };
@@ -201,7 +204,7 @@ pub const UiPriorVoter = struct {
     pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("authorizedPubkey");
-        try jw.write(self.authorized_pubkey);
+        try jw.write(self.authorized_pubkey.slice());
         try jw.objectField("epochOfLastAuthorizedSwitch");
         try jw.write(self.epoch_of_last_authorized_switch);
         try jw.objectField("targetEpoch");
