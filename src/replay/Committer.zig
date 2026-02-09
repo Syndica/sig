@@ -216,10 +216,12 @@ fn writeTransactionStatus(
     defer mint_cache.deinit();
 
     // Populate cache with any mints found in the transaction writes
-    for (tx_result.writes.constSlice()) |*acc| {
+    for (tx_result.writes.constSlice()) |*written_account| {
+        const acc = written_account.account;
+        const pubkey = written_account.pubkey;
         if (acc.data.len >= spl_token.MINT_ACCOUNT_SIZE) {
             if (spl_token.ParsedMint.parse(acc.data[0..spl_token.MINT_ACCOUNT_SIZE])) |mint| {
-                mint_cache.put(acc.pubkey, mint.decimals) catch {};
+                mint_cache.put(pubkey, mint.decimals) catch {};
             }
         }
     }
