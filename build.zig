@@ -254,7 +254,7 @@ pub fn build(b: *Build) !void {
     const rocksdb_mod = rocksdb_dep.module("bindings");
     // TODO: UB might be fixed by future RocksDB version upgrade.
     // reproducable via: zig build test -Dfilter="ledger"
-    rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = false;
+    rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = .off;
 
     const secp256k1_mod = b.dependency("secp256k1", .{
         .target = config.target,
@@ -268,7 +268,7 @@ pub fn build(b: *Build) !void {
         .tracy_no_system_tracing = false,
         .tracy_callstack = 6,
     }).module("tracy");
-    tracy_mod.sanitize_c = false; // Workaround UB in Tracy.
+    tracy_mod.sanitize_c = .off; // Workaround UB in Tracy.
 
     const cli_mod = b.createModule(.{
         .root_source_file = b.path("src/cli.zig"),
