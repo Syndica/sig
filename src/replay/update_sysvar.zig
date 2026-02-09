@@ -93,6 +93,7 @@ pub fn updateSysvarsForNewSlot(
             .ns_per_slot = epoch_tracker.cluster.nanosPerSlot(),
             .update_sysvar_deps = sysvar_deps,
         },
+        &state.unix_timestamp,
     );
     try updateLastRestartSlot(
         allocator,
@@ -179,7 +180,7 @@ pub const UpdateClockDeps = struct {
     update_sysvar_deps: UpdateSysvarAccountDeps,
 };
 
-pub fn updateClock(allocator: Allocator, deps: UpdateClockDeps) !void {
+pub fn updateClock(allocator: Allocator, deps: UpdateClockDeps, slot_block_time: *std.atomic.Value(i64)) !void {
     const clock = try nextClock(
         allocator,
         deps.feature_set,
@@ -194,6 +195,9 @@ pub fn updateClock(allocator: Allocator, deps: UpdateClockDeps) !void {
         deps.parent_slots_epoch,
     );
     try updateSysvarAccount(Clock, allocator, clock, deps.update_sysvar_deps);
+
+    // Store unix_timestamp in the slot's block_time for easy access at rooting time
+    slot_block_time.store(clock.unix_timestamp, .monotonic);
 }
 
 pub fn updateLastRestartSlot(
@@ -874,17 +878,23 @@ test "update all sysvars" {
         var stakes_cache = StakesCache.EMPTY;
         defer stakes_cache.deinit(allocator);
 
-        try updateClock(allocator, .{
-            .feature_set = &feature_set,
-            .epoch_schedule = &epoch_schedule,
-            .epoch_stakes = &epoch_stakes,
-            .stakes_cache = &stakes_cache,
-            .epoch = epoch_schedule.getEpoch(slot),
-            .parent_slots_epoch = null,
-            .genesis_creation_time = 0,
-            .ns_per_slot = 0,
-            .update_sysvar_deps = update_sysvar_deps,
-        });
+        var slot_block_time: std.atomic.Value(i64) = .init(0);
+
+        try updateClock(
+            allocator,
+            .{
+                .feature_set = &feature_set,
+                .epoch_schedule = &epoch_schedule,
+                .epoch_stakes = &epoch_stakes,
+                .stakes_cache = &stakes_cache,
+                .epoch = epoch_schedule.getEpoch(slot),
+                .parent_slots_epoch = null,
+                .genesis_creation_time = 0,
+                .ns_per_slot = 0,
+                .update_sysvar_deps = update_sysvar_deps,
+            },
+            &slot_block_time,
+        );
 
         const new_sysvar, const new_account =
             (try getSysvarAndAccount(Clock, allocator, account_reader)).?;

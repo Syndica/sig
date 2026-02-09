@@ -5,11 +5,16 @@ const tracy = @import("tracy");
 
 const core = sig.core;
 const features = sig.core.features;
+const rewards = sig.replay.rewards;
 
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
 const Logger = sig.trace.Logger(@typeName(@This()));
+const RewardType = rewards.RewardType;
+const RewardInfo = rewards.RewardInfo;
+const KeyedRewardInfo = rewards.KeyedRewardInfo;
+const BlockRewards = rewards.BlockRewards;
 
 const Ancestors = core.Ancestors;
 const Hash = core.Hash;
@@ -38,6 +43,10 @@ pub const FreezeParams = struct {
     slot_hash: *sig.sync.RwMux(?Hash),
     accounts_lt_hash: *sig.sync.Mux(?LtHash),
 
+    /// Pointer to the block rewards list for this slot.
+    /// Matches Agave's `Bank.rewards: RwLock<Vec<(Pubkey, RewardInfo)>>`.
+    rewards: *sig.sync.RwMux(BlockRewards),
+
     hash_slot: HashSlotParams,
     finalize_state: FinalizeStateParams,
 
@@ -55,6 +64,7 @@ pub const FreezeParams = struct {
             .slot_hash = &state.hash,
             .thread_pool = thread_pool,
             .accounts_lt_hash = &state.accounts_lt_hash,
+            .rewards = &state.rewards,
             .hash_slot = .{
                 .account_reader = account_store.reader(),
                 .slot = slot,
@@ -104,7 +114,10 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
 
     if (slot_hash.get().* != null) return; // already frozen
 
-    try finalizeState(allocator, params.finalize_state);
+    // Set up finalize params with the rewards pointer
+    var finalize_params = params.finalize_state;
+    finalize_params.rewards = params.rewards;
+    try finalizeState(allocator, finalize_params);
 
     const maybe_lt_hash, slot_hash.mut().* = try hashSlot(
         allocator,
@@ -141,6 +154,10 @@ const FinalizeStateParams = struct {
     collector_id: Pubkey,
     collected_transaction_fees: u64,
     collected_priority_fees: u64,
+
+    /// Pointer to block rewards list. Matches Agave's `Bank.rewards`.
+    /// Fee rewards (and future vote/staking rewards) are pushed here.
+    rewards: ?*sig.sync.RwMux(BlockRewards) = null,
 };
 
 /// Updates some accounts and other shared state to finish up the slot execution.
@@ -171,6 +188,7 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
         params.collector_id,
         params.collected_transaction_fees,
         params.collected_priority_fees,
+        params.rewards,
     );
 
     // Run incinerator
@@ -192,6 +210,8 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
 }
 
 /// Burn and payout the appropriate portions of collected fees.
+/// Pushes fee reward to the block rewards list if fees were distributed to the leader.
+/// Matches Agave's fee distribution in `runtime/src/bank/fee_distribution.rs`.
 fn distributeTransactionFees(
     allocator: Allocator,
     account_store: AccountStore,
@@ -202,6 +222,7 @@ fn distributeTransactionFees(
     collector_id: Pubkey,
     collected_transaction_fees: u64,
     collected_priority_fees: u64,
+    rewards_mux: ?*sig.sync.RwMux(BlockRewards),
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "distributeTransactionFees" });
     defer zone.deinit();
@@ -211,7 +232,7 @@ fn distributeTransactionFees(
     const payout = total_fees -| burn;
 
     if (payout > 0) blk: {
-        const post_balance = tryPayoutFees(
+        const payout_result = tryPayoutFees(
             allocator,
             account_store,
             account_reader,
@@ -229,14 +250,34 @@ fn distributeTransactionFees(
             },
             else => return err,
         };
-        // TODO: record rewards returned by tryPayoutFees
-        _ = post_balance;
+
+        // Push fee reward to the rewards list
+        // Matches Agave's `self.rewards.write().unwrap().push(...)` in deposit_or_burn_fee
+        if (rewards_mux) |mux| {
+            var rewards_guard = mux.write();
+            defer rewards_guard.unlock();
+            try rewards_guard.mut().push(.{
+                .pubkey = collector_id,
+                .reward_info = .{
+                    .reward_type = .fee,
+                    .lamports = @intCast(payout_result.payout_amount),
+                    .post_balance = payout_result.post_balance,
+                    .commission = null,
+                },
+            });
+        }
     }
 
     _ = capitalization.fetchSub(burn, .monotonic);
 }
 
 /// Attempt to pay the payout to the collector.
+/// Returns the payout amount and post-balance on success.
+const PayoutResult = struct {
+    payout_amount: u64,
+    post_balance: u64,
+};
+
 fn tryPayoutFees(
     allocator: Allocator,
     account_store: AccountStore,
@@ -245,7 +286,7 @@ fn tryPayoutFees(
     slot: Slot,
     collector_id: Pubkey,
     payout: u64,
-) !u64 {
+) !PayoutResult {
     var fee_collector_account =
         if (try account_reader.get(allocator, collector_id)) |old_account| blk: {
             defer old_account.deinit(allocator);
@@ -272,7 +313,10 @@ fn tryPayoutFees(
     // duplicates fee_collector_account, so we need to free it.
     try account_store.put(slot, collector_id, fee_collector_account);
 
-    return fee_collector_account.lamports;
+    return PayoutResult{
+        .payout_amount = payout,
+        .post_balance = fee_collector_account.lamports,
+    };
 }
 
 pub const HashSlotParams = struct {
