@@ -140,6 +140,10 @@ pub const ExecutedTransaction = struct {
     pub fn deinit(self: *ExecutedTransaction, allocator: std.mem.Allocator) void {
         if (self.log_collector) |*lc| lc.deinit(allocator);
     }
+
+    pub fn total_cost(self: *const ExecutedTransaction) u64 {
+        return self.compute_limit - self.compute_meter;
+    }
 };
 
 pub const ProcessedTransaction = struct {
@@ -359,7 +363,7 @@ pub fn loadAndExecuteTransaction(
 
     // Calculate cost units for executed transaction using actual consumed CUs
     // Actual consumed = compute_limit - compute_meter (remaining)
-    const actual_programs_execution_cost = executed_transaction.compute_limit - executed_transaction.compute_meter;
+    const actual_programs_execution_cost = executed_transaction.total_cost();
     const tx_cost = cost_model.calculateCostForExecutedTransaction(
         transaction,
         actual_programs_execution_cost,

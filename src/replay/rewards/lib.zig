@@ -108,7 +108,10 @@ pub const BlockRewards = struct {
     }
 
     /// Convert all rewards to ledger format for storage.
-    pub fn toLedgerRewards(self: *const BlockRewards, allocator: Allocator) ![]sig.ledger.meta.Reward {
+    pub fn toLedgerRewards(
+        self: *const BlockRewards,
+        allocator: Allocator,
+    ) ![]sig.ledger.meta.Reward {
         const ledger_rewards = try allocator.alloc(sig.ledger.meta.Reward, self.rewards.items.len);
         errdefer allocator.free(ledger_rewards);
 

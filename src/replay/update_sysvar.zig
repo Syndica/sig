@@ -92,8 +92,8 @@ pub fn updateSysvarsForNewSlot(
             .genesis_creation_time = epoch_tracker.cluster.genesis_creation_time,
             .ns_per_slot = epoch_tracker.cluster.nanosPerSlot(),
             .update_sysvar_deps = sysvar_deps,
+            .slot_block_time = &state.unix_timestamp,
         },
-        &state.unix_timestamp,
     );
     try updateLastRestartSlot(
         allocator,
@@ -178,9 +178,11 @@ pub const UpdateClockDeps = struct {
     ns_per_slot: u64,
 
     update_sysvar_deps: UpdateSysvarAccountDeps,
+
+    slot_block_time: *std.atomic.Value(i64),
 };
 
-pub fn updateClock(allocator: Allocator, deps: UpdateClockDeps, slot_block_time: *std.atomic.Value(i64)) !void {
+pub fn updateClock(allocator: Allocator, deps: UpdateClockDeps) !void {
     const clock = try nextClock(
         allocator,
         deps.feature_set,
@@ -197,7 +199,7 @@ pub fn updateClock(allocator: Allocator, deps: UpdateClockDeps, slot_block_time:
     try updateSysvarAccount(Clock, allocator, clock, deps.update_sysvar_deps);
 
     // Store unix_timestamp in the slot's block_time for easy access at rooting time
-    slot_block_time.store(clock.unix_timestamp, .monotonic);
+    deps.slot_block_time.store(clock.unix_timestamp, .monotonic);
 }
 
 pub fn updateLastRestartSlot(
@@ -892,8 +894,8 @@ test "update all sysvars" {
                 .genesis_creation_time = 0,
                 .ns_per_slot = 0,
                 .update_sysvar_deps = update_sysvar_deps,
+                .slot_block_time = &slot_block_time,
             },
-            &slot_block_time,
         );
 
         const new_sysvar, const new_account =
