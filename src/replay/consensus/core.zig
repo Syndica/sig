@@ -1605,7 +1605,52 @@ fn checkAndHandleNewRoot(
     const rooted_slots = try slot_tracker.parents(allocator, new_root);
     defer allocator.free(rooted_slots);
 
-    try ledger.setRoots(rooted_slots);
+    // Write roots with rewards to the ledger
+    {
+        var roots_setter = try ledger.setRootsIncremental();
+        defer roots_setter.deinit();
+        errdefer roots_setter.cancel();
+
+        for (rooted_slots) |rooted_slot| {
+            if (slot_tracker.get(rooted_slot)) |slot_ref| {
+                // Read rewards from the slot state
+                // Matches Agave's `bank.get_rewards_and_num_partitions()`
+                var rewards_guard = slot_ref.state.rewards.read();
+                defer rewards_guard.unlock();
+                const block_rewards = rewards_guard.get();
+
+                if (!block_rewards.isEmpty()) {
+                    // Convert all rewards to ledger format
+                    const ledger_rewards = try block_rewards.toLedgerRewards(allocator);
+                    defer {
+                        for (ledger_rewards) |r| allocator.free(r.pubkey);
+                        allocator.free(ledger_rewards);
+                    }
+
+                    // Get block time and height from slot constants
+                    const block_height = slot_ref.constants.block_height;
+                    // TODO: get actual block time - for now use 0
+                    const block_time: sig.core.UnixTimestamp = 0;
+
+                    try roots_setter.addRootWithMeta(
+                        rooted_slot,
+                        block_height,
+                        block_time,
+                        ledger_rewards,
+                        null, // num_partitions - TODO: implement for epoch rewards
+                    );
+                } else {
+                    // No rewards, just add the root
+                    try roots_setter.addRoot(rooted_slot);
+                }
+            } else {
+                // Slot not in tracker, just add root
+                try roots_setter.addRoot(rooted_slot);
+            }
+        }
+
+        try roots_setter.commit();
+    }
 
     try epoch_tracker.onSlotRooted(
         allocator,
