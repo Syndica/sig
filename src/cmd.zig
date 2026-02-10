@@ -85,8 +85,8 @@ pub fn main() !void {
     defer std.process.argsFree(gpa, argv);
 
     const parser = cli.Parser(Cmd, Cmd.cmd_info);
-    const tty_config = std.io.tty.detectConfig(std.io.getStdOut());
-    const stdout = std.io.getStdOut().writer();
+    const tty_config = std.io.tty.detectConfig(.stdout());
+    const stdout = std.fs.File.stdout().deprecatedWriter();
     const cmd = try parser.parse(
         gpa,
         "sig",
@@ -2164,9 +2164,10 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     };
     defer leader_schedule.deinit(allocator);
 
-    var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
-    try leader_schedule.write(stdout.writer());
-    try stdout.flush();
+    var buffer: [4096]u8 = undefined;
+    var stdout = std.fs.File.stdout().writer(&buffer);
+    try leader_schedule.write(&stdout.interface);
+    try stdout.interface.flush();
 }
 
 fn getLeaderScheduleFromCli(
@@ -2175,9 +2176,12 @@ fn getLeaderScheduleFromCli(
 ) !?LeaderSchedule {
     return if (cfg.leader_schedule_path) |path|
         if (std.mem.eql(u8, "--", path))
-            try LeaderSchedule.read(allocator, std.io.getStdIn().reader())
+            try LeaderSchedule.read(allocator, std.fs.File.stdin().deprecatedReader())
         else
-            try LeaderSchedule.read(allocator, (try std.fs.cwd().openFile(path, .{})).reader())
+            try LeaderSchedule.read(
+                allocator,
+                (try std.fs.cwd().openFile(path, .{})).deprecatedReader(),
+            )
     else
         null;
 }
@@ -2353,7 +2357,8 @@ fn ledgerTool(
     defer if (maybe_file) |file| file.close();
     defer logger.deinit();
 
-    const stdout = std.io.getStdOut().writer();
+    const stdout_file_writer = std.fs.File.stdout().writer(&.{});
+    var stdout = stdout_file_writer.interface;
 
     const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
     defer allocator.free(ledger_dir);
@@ -2802,7 +2807,7 @@ fn spawnLogger(
             else => return e,
         };
         try file.seekFromEnd(0);
-        break :blk .{ file, file.writer() };
+        break :blk .{ file, file.deprecatedWriter() };
     } else .{ null, null };
 
     var std_logger = try ChannelPrintLogger.init(.{
@@ -2866,7 +2871,10 @@ fn downloadSnapshot(
     defer if (maybe_inc_file) |inc_file| inc_file.close();
 }
 
-fn getTrustedValidators(allocator: std.mem.Allocator, cfg: config.Cmd) !?std.array_list.Managed(Pubkey) {
+fn getTrustedValidators(
+    allocator: std.mem.Allocator,
+    cfg: config.Cmd,
+) !?std.array_list.Managed(Pubkey) {
     var trusted_validators: ?std.array_list.Managed(Pubkey) = null;
     if (cfg.gossip.trusted_validators.len > 0) {
         trusted_validators = try std.array_list.Managed(Pubkey).initCapacity(
@@ -2885,7 +2893,7 @@ pub const panic = std.debug.FullPanic(loggingPanic);
 fn loggingPanic(message: []const u8, first_trace_addr: ?usize) noreturn {
     std.debug.lockStdErr();
     defer std.debug.unlockStdErr();
-    const writer = std.io.getStdErr().writer();
+    const writer = std.fs.File.stderr().deprecatedWriter();
     sig.trace.logfmt.writeLog(writer, "panic", .@"error", .{}, "{s}", .{message}) catch {};
     std.debug.defaultPanic(message, first_trace_addr);
 }

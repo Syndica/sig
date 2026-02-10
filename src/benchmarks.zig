@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const cli = @import("cli");
 const builtin = @import("builtin");
 const sig = @import("sig.zig");
@@ -189,8 +190,8 @@ pub fn main() !void {
     const cmd = try parser.parse(
         gpa,
         "benchmark",
-        std.io.tty.detectConfig(std.io.getStdOut()),
-        std.io.getStdOut().writer(),
+        std.io.tty.detectConfig(.stdout()),
+        std.fs.File.stdout().deprecatedWriter(),
         argv[1..],
     ) orelse return;
     defer parser.free(gpa, cmd);
@@ -380,7 +381,9 @@ pub fn benchmark(
             .{ .read = true },
         );
         defer averages_file.close();
-        const averages_writer = averages_file.writer();
+        var averages_write_buf: [4096]u8 = undefined;
+        var averages_file_writer = averages_file.writer(&averages_write_buf);
+        const averages_writer = &averages_file_writer.interface;
         logger.debug().logf("writing benchmark results to {s}", .{averages_file_name});
 
         const runtimes_file_name = B.name ++ "/" ++ decl.name ++ "_runtimes.csv";
@@ -389,7 +392,9 @@ pub fn benchmark(
             .{ .read = true },
         );
         defer runtimes_file.close();
-        const runtimes_writer = runtimes_file.writer();
+        var runtimes_write_buf: [4096]u8 = undefined;
+        var runtimes_file_writer = runtimes_file.writer(&runtimes_write_buf);
+        const runtimes_writer = &runtimes_file_writer.interface;
 
         inline for (inputs, 0..) |input, i| {
             const input_name = if (has_inputs) input.name else "no input";
@@ -599,6 +604,9 @@ pub fn benchmark(
                 },
             }
         }
+
+        try averages_file_writer.interface.flush();
+        try runtimes_file_writer.interface.flush();
     }
 
     // print the results in a formatted table
@@ -611,7 +619,9 @@ pub fn benchmark(
         defer table.deinit();
 
         var read_buf: [1024 * 1024]u8 = undefined;
-        try table.readFrom(average_file.reader(), &read_buf, ",", true);
+        var file_reader = average_file.reader(&read_buf);
+        const reader = std14.deprecatedReader(&file_reader.interface);
+        try table.readFrom(reader, &read_buf, ",", true);
 
         const bench_function = @field(B, decl.name);
         const info = @typeInfo(@TypeOf(bench_function)).@"fn";
@@ -689,5 +699,8 @@ const Metric = struct {
 pub fn saveMetricsJson(metrics: []const Metric, output_path: []const u8) !void {
     const output_file = try std.fs.cwd().createFile(output_path, .{});
     defer output_file.close();
-    try std.json.stringify(metrics, .{}, output_file.writer());
+    var write_buf: [4096]u8 = undefined;
+    var file_writer = output_file.writer(&write_buf);
+    try std.json.fmt(metrics, .{}).format(&file_writer.interface);
+    try file_writer.interface.flush();
 }

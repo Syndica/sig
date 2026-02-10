@@ -295,7 +295,8 @@ pub const GenesisConfig = struct {
         var file = try std.fs.cwd().openFile(genesis_path, .{});
         defer file.close();
 
-        return try bincode.read(allocator, GenesisConfig, file.reader(), .{});
+        const reader = file.deprecatedReader();
+        return try bincode.read(allocator, GenesisConfig, reader, .{});
     }
 
     pub fn default(allocator: Allocator) GenesisConfig {

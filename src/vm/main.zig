@@ -31,8 +31,8 @@ pub fn main() !void {
     const cmd = try parser.parse(
         gpa,
         "vm",
-        std.io.tty.detectConfig(std.io.getStdOut()),
-        std.io.getStdOut().writer(),
+        std.io.tty.detectConfig(.stdout()),
+        std.fs.File.stdout().deprecatedWriter(),
         argv[1..],
     ) orelse return;
     defer parser.free(gpa, cmd);
