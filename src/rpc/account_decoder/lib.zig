@@ -5,6 +5,7 @@ const Pubkey = sig.core.Pubkey;
 
 const parse_vote = @import("parse_vote.zig");
 const parse_stake = @import("parse_stake.zig");
+const parse_nonce = @import("parse_nonce.zig");
 
 pub const ParseError = error{
     InvalidAccountData,
@@ -33,6 +34,7 @@ pub const ParsedAccount = struct {
 pub const ParsedContent = union(enum) {
     vote: parse_vote.VoteAccountType,
     stake: parse_stake.StakeAccountType,
+    nonce: parse_nonce.NonceAccountType,
     // TODO: add more parsers
     // nonce: parse_nonce.NonceAccountType,
     pub fn jsonStringify(self: ParsedContent, jw: anytype) @TypeOf(jw.*).Error!void {
@@ -46,14 +48,16 @@ pub const ParsedContent = union(enum) {
 const ParsableProgram = enum {
     vote,
     stake,
-    // TODO: nonce
+    nonce,
     // TODO: address lookup table
     // TODO: bpf upgradeable loader
 
     pub fn fromProgramId(program_id: Pubkey) ?ParsableProgram {
         if (program_id.equals(&sig.runtime.program.vote.ID)) return .vote;
         if (program_id.equals(&sig.runtime.program.stake.ID)) return .stake;
-        // TODO: nonce
+        // Nonce accounts are owned by the system program, so we check the program ID against the system program ID.
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L36
+        if (program_id.equals(&sig.runtime.program.system.ID)) return .nonce;
         return null;
     }
 
@@ -61,7 +65,7 @@ const ParsableProgram = enum {
         return switch (self) {
             .vote => "vote",
             .stake => "stake",
-            // TODO: nonce
+            .nonce => "nonce",
         };
     }
 };
@@ -77,7 +81,7 @@ pub fn parse_account(
     const parsed: ParsedContent = switch (program) {
         .vote => .{ .vote = try parse_vote.parse_vote(allocator, reader) },
         .stake => .{ .stake = try parse_stake.parse_stake(allocator, reader) },
-        // TODO: nonce
+        .nonce => .{ .nonce = try parse_nonce.parse_nonce(allocator, reader) },
     };
     return ParsedAccount{
         .program = program.programName(),
