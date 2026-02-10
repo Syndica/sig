@@ -690,10 +690,8 @@ pub const common = struct {
 pub const SlotHookContext = struct {
     slot_tracker: *const sig.replay.trackers.SlotTracker,
 
-    fn getSlotImpl(
-        self: @This(),
-        config: common.CommitmentSlotConfig,
-    ) !Slot {
+    pub fn getSlot(self: @This(), _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
         const commitment = config.commitment orelse .finalized;
         const slot = self.slot_tracker.getSlotForCommitment(commitment);
         if (config.minContextSlot) |min_slot| {
@@ -702,10 +700,5 @@ pub const SlotHookContext = struct {
             }
         }
         return slot;
-    }
-
-    pub fn getSlot(self: @This(), _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
-        const config = params.config orelse common.CommitmentSlotConfig{};
-        return self.getSlotImpl(config);
     }
 };
