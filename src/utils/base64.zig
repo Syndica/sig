@@ -96,7 +96,7 @@ pub const EncodingStream = struct {
             inner: Inner,
             const Self = @This();
 
-            pub const Writer = std.io.Writer(Self, Inner.Error, writeFn);
+            pub const Writer = std.io.GenericWriter(Self, Inner.Error, writeFn);
 
             pub fn writer(self: Self) Writer {
                 return .{ .context = self };

@@ -217,7 +217,9 @@ pub fn loadShredsFromFile(allocator: Allocator, path: []const u8) ![]const Shred
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
-    const reader = file.reader();
+    var read_buf: [4096]u8 = undefined;
+    var file_reader = file.reader(&read_buf);
+    const reader = &file_reader.interface;
     var shreds = std.array_list.Managed(Shred).init(allocator);
     errdefer {
         for (shreds.items) |shred| shred.deinit();
@@ -232,31 +234,29 @@ pub fn loadShredsFromFile(allocator: Allocator, path: []const u8) ![]const Shred
 
 pub fn saveShredsToFile(path: []const u8, shreds: []const Shred) !void {
     const file = try std.fs.cwd().createFile(path, .{});
-    for (shreds) |s| try writeChunk(file.writer(), s.payload());
+    defer file.close();
+    var write_buf: [4096]u8 = undefined;
+    var file_writer = file.writer(&write_buf);
+    for (shreds) |s| try writeChunk(&file_writer.interface, s.payload());
+    try file_writer.interface.flush();
 }
 
-fn readChunk(allocator: Allocator, reader: anytype) !?[]const u8 {
+fn readChunk(allocator: Allocator, reader: *std.Io.Reader) !?[]const u8 {
     var size_bytes: [8]u8 = undefined;
-    const num_size_bytes_read = try reader.readAll(&size_bytes);
-    if (num_size_bytes_read == 0) {
-        return null;
-    }
-    if (num_size_bytes_read != 8) {
-        return error.IncompleteSize;
-    }
+    reader.readSliceAll(&size_bytes) catch |err| switch (err) {
+        error.EndOfStream => return null,
+        else => return err,
+    };
     const size = std.mem.readInt(u64, &size_bytes, .little);
 
     const chunk = try allocator.alloc(u8, @intCast(size));
     errdefer allocator.free(chunk);
-    const num_bytes_read = try reader.readAll(chunk);
-    if (num_bytes_read != size) {
-        return error.IncompleteChunk;
-    }
+    try reader.readSliceAll(chunk);
 
     return chunk;
 }
 
-fn writeChunk(writer: anytype, chunk: []const u8) !void {
+fn writeChunk(writer: *std.Io.Writer, chunk: []const u8) !void {
     var chunk_size_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &chunk_size_bytes, @intCast(chunk.len), .little);
     try writer.writeAll(&chunk_size_bytes);
@@ -284,7 +284,9 @@ pub fn deinitShreds(allocator: Allocator, shreds: []const Shred) void {
 /// ```
 pub fn loadEntriesFromFile(allocator: Allocator, path: []const u8) ![]const Entry {
     const file = try std.fs.cwd().openFile(path, .{});
-    const reader = file.reader();
+    var read_buf: [4096]u8 = undefined;
+    var file_reader = file.reader(&read_buf);
+    const reader = &file_reader.interface;
     var entries = std.array_list.Managed(Entry).init(allocator);
     errdefer {
         for (entries.items) |entry| entry.deinit(allocator);
@@ -380,7 +382,8 @@ pub fn insertDataForBlockTest(
     const parent_meta = SlotMeta.init(allocator, 0, null);
     try db.put(schema.slot_meta, slot - 1, parent_meta);
 
-    var expected_transactions = std.array_list.Managed(VersionedTransactionWithStatusMeta).init(allocator);
+    var expected_transactions: std.array_list.Managed(VersionedTransactionWithStatusMeta) =
+        .init(allocator);
     for (entries) |entry| {
         for (entry.transactions) |transaction| {
             var pre_balances = std.array_list.Managed(u64).init(allocator);

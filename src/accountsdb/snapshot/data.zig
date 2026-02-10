@@ -717,7 +717,7 @@ pub const StatusCache = struct {
     }
 
     pub fn readFromFile(allocator: std.mem.Allocator, file: std.fs.File) !StatusCache {
-        return decodeFromBincode(allocator, file.reader());
+        return decodeFromBincode(allocator, file.deprecatedReader());
     }
 
     pub fn decodeFromBincode(
