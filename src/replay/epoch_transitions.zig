@@ -26,6 +26,7 @@ const FeatureSet = sig.core.FeatureSet;
 const Rent = sig.runtime.sysvar.Rent;
 
 const beginPartitionedRewards = sig.replay.rewards.calculation.beginPartitionedRewards;
+const updateRent = sig.replay.update_sysvar.updateRent;
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
 /// Process a new epoch. This includes:
@@ -190,19 +191,53 @@ pub fn applyFeatureActivations(
         const feature_id: Pubkey = features.map.get(feature).key;
         if (try slot_store.reader().get(allocator, feature_id)) |feature_account| {
             defer feature_account.deinit(allocator);
-            if (try featureActivationSlotFromAccount(feature_account)) |activation_slot| {
-                feature_set.setSlot(feature, activation_slot);
-            } else if (allow_new_activations) {
-                feature_set.setSlot(feature, slot);
-                new_feature_activations.setSlot(feature, slot);
-                const account = try AccountSharedData.fromAccount(allocator, &feature_account);
-                defer allocator.free(account.data);
-                try slot_store.put(feature_id, account);
+            switch (try featureActivationStateFromAccount(feature_account)) {
+                .activated => |activation_slot| {
+                    feature_set.setSlot(feature, activation_slot);
+                },
+                .pending => if (allow_new_activations) {
+                    feature_set.setSlot(feature, slot);
+                    new_feature_activations.setSlot(feature, slot);
+                    // Create new account data with the activation slot serialized
+                    // Feature accounts contain a bincode-serialized ?u64 (optional Slot)
+                    const new_data = try allocator.alloc(u8, 9);
+                    defer allocator.free(new_data);
+                    const maybe_slot: ?Slot = slot;
+                    _ = try sig.bincode.writeToSlice(new_data, maybe_slot, .{});
+                    const updated_account: AccountSharedData = .{
+                        .lamports = feature_account.lamports,
+                        .data = new_data,
+                        .owner = feature_account.owner,
+                        .executable = feature_account.executable,
+                        .rent_epoch = feature_account.rent_epoch,
+                    };
+                    try slot_store.put(feature_id, updated_account);
+                },
+                .invalid => {
+                    // Invalid feature account (wrong owner, wrong size, etc.) - skip
+                    // TODO: Log warning
+                },
             }
         }
     }
 
     slot_constants.reserved_accounts.update(feature_set, slot);
+
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.0.0/runtime/src/bank.rs#L5352-L5357
+    if (new_feature_activations.active(.deprecate_rent_exemption_threshold, slot)) {
+        // Deprecate rent exemption threshold by folding it into lamports_per_byte_year
+        slot_constants.rent_collector.rent.lamports_per_byte_year =
+            @intFromFloat(@as(f64, @floatFromInt(slot_constants.rent_collector.rent.lamports_per_byte_year)) *
+            slot_constants.rent_collector.rent.exemption_threshold);
+        slot_constants.rent_collector.rent.exemption_threshold = 1.0;
+        // Update the rent sysvar account
+        try updateRent(allocator, slot_constants.rent_collector.rent, .{
+            .slot = slot,
+            .slot_store = slot_store,
+            .capitalization = &slot_state.capitalization,
+            .rent = &slot_constants.rent_collector.rent,
+        });
+    }
 
     if (new_feature_activations.active(.pico_inflation, slot)) {
         slot_constants.inflation = .PICO;
@@ -528,11 +563,29 @@ fn migrateBuiltinProgramToCoreBpf(
     // if (delta_size > 0) { accounts_data_size_delta_off_chain += delta_size }
 }
 
-fn featureActivationSlotFromAccount(account: Account) !?u64 {
-    if (!account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) return null;
+/// Returns the activation slot from a feature account.
+/// - Returns `.pending` if the feature is pending activation (valid 9-byte account with null slot)
+/// - Returns `.{ .activated = slot }` if already activated
+/// - Returns `.invalid` if the account is not a valid feature account
+const FeatureActivationState = union(enum) {
+    pending,
+    activated: u64,
+    invalid,
+};
+
+fn featureActivationStateFromAccount(account: Account) !FeatureActivationState {
+    if (!account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) return .invalid;
+    // Feature accounts must have exactly 9 bytes of data (bincode-serialized ?u64)
+    // An empty account (0 bytes) is not a valid pending feature
+    if (account.data.len() != 9) return .invalid;
     var feature_bytes = [_]u8{0} ** 9;
     account.data.readAll(&feature_bytes);
-    return bincode.readFromSlice(failing_allocator, ?u64, &feature_bytes, .{});
+    const maybe_slot = try bincode.readFromSlice(failing_allocator, ?u64, &feature_bytes, .{});
+    if (maybe_slot) |slot| {
+        return .{ .activated = slot };
+    } else {
+        return .pending;
+    }
 }
 
 fn putAndUpdateCapitalization(
