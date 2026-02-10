@@ -6,6 +6,8 @@ const servers = @import("../support/test_servers.zig");
 const RawClient = @import("../support/raw_client.zig").RawClient;
 const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
 
+const wait_ms: u64 = 2_000;
+
 test "e2e fragment: text message in 2 fragments" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
@@ -24,9 +26,8 @@ test "e2e fragment: text message in 2 fragments" {
     var frag2 = "lo".*;
     try client.writeFrameEx(CONTINUATION, &frag2, .{});
 
-    const response = (try client.read()) orelse return error.NoResponse;
+    const response = try client.waitForMessageType(.text, wait_ms);
     defer client.done(response);
-    try testing.expectEqual(.text, response.type);
     try testing.expectEqualSlices(u8, "Hello", response.data);
 }
 
@@ -60,9 +61,8 @@ test "e2e fragment: text message in 6 fragments" {
     @memcpy(&buf_last, parts[5]);
     try client.writeFrameEx(CONTINUATION, &buf_last, .{});
 
-    const response = (try client.read()) orelse return error.NoResponse;
+    const response = try client.waitForMessageType(.text, wait_ms);
     defer client.done(response);
-    try testing.expectEqual(.text, response.type);
     try testing.expectEqualSlices(u8, expected, response.data);
 }
 
@@ -84,9 +84,8 @@ test "e2e fragment: binary message in 2 fragments" {
     var frag2 = [_]u8{ 0x04, 0x05 };
     try client.writeFrameEx(CONTINUATION, &frag2, .{});
 
-    const response = (try client.read()) orelse return error.NoResponse;
+    const response = try client.waitForMessageType(.binary, wait_ms);
     defer client.done(response);
-    try testing.expectEqual(.binary, response.type);
     try testing.expectEqualSlices(u8, &[_]u8{ 0x01, 0x02, 0x03, 0x04, 0x05 }, response.data);
 }
 
@@ -113,15 +112,13 @@ test "e2e fragment: ping interleaved during fragmentation" {
     try client.writeFrameEx(CONTINUATION, &frag2, .{});
 
     // Should get the pong first (server dispatches control frames immediately)
-    const pong = (try client.read()) orelse return error.NoResponse;
+    const pong = try client.waitForMessageType(.pong, wait_ms);
     defer client.done(pong);
-    try testing.expectEqual(.pong, pong.type);
     try testing.expectEqualSlices(u8, "ping", pong.data);
 
     // Then the reassembled text message
-    const response = (try client.read()) orelse return error.NoResponse;
+    const response = try client.waitForMessageType(.text, wait_ms);
     defer client.done(response);
-    try testing.expectEqual(.text, response.type);
     try testing.expectEqualSlices(u8, "Hello", response.data);
 }
 
@@ -143,9 +140,8 @@ test "e2e fragment: non-empty first, empty final continuation" {
     var frag2 = [0]u8{};
     try client.writeFrameEx(CONTINUATION, &frag2, .{});
 
-    const response = (try client.read()) orelse return error.NoResponse;
+    const response = try client.waitForMessageType(.text, wait_ms);
     defer client.done(response);
-    try testing.expectEqual(.text, response.type);
     try testing.expectEqualSlices(u8, "data", response.data);
 }
 
@@ -167,9 +163,8 @@ test "e2e fragment: empty first, non-empty final continuation" {
     var frag2 = "data".*;
     try client.writeFrameEx(CONTINUATION, &frag2, .{});
 
-    const response = (try client.read()) orelse return error.NoResponse;
+    const response = try client.waitForMessageType(.text, wait_ms);
     defer client.done(response);
-    try testing.expectEqual(.text, response.type);
     try testing.expectEqualSlices(u8, "data", response.data);
 }
 
@@ -191,9 +186,8 @@ test "e2e fragment: all-empty fragments produce empty message" {
     var frag2 = [0]u8{};
     try client.writeFrameEx(CONTINUATION, &frag2, .{});
 
-    const response = (try client.read()) orelse return error.NoResponse;
+    const response = try client.waitForMessageType(.text, wait_ms);
     defer client.done(response);
-    try testing.expectEqual(.text, response.type);
     try testing.expectEqual(@as(usize, 0), response.data.len);
 }
 
@@ -234,11 +228,9 @@ test "e2e fragment: 8KB message across 4 fragments" {
     }
 
     // Note: assumes the echo server responds with a single unfragmented frame.
-    // RawClient.read() returns raw frames, so fragmented responses would need
-    // multiple read() calls.
-    const response = (try client.read()) orelse return error.NoResponse;
+    // Fragmented responses would need multiple waits.
+    const response = try client.waitForMessageType(.text, wait_ms);
     defer client.done(response);
-    try testing.expectEqual(.text, response.type);
     try testing.expectEqual(@as(usize, total_size), response.data.len);
     try testing.expectEqualSlices(u8, &expected, response.data);
 }
@@ -281,11 +273,9 @@ test "e2e fragment: 256KB message across 64 fragments" {
     }
 
     // Note: assumes the echo server responds with a single unfragmented frame.
-    // RawClient.read() returns raw frames, so fragmented responses would need
-    // multiple read() calls.
-    const response = (try client.read()) orelse return error.NoResponse;
+    // Fragmented responses would need multiple waits.
+    const response = try client.waitForMessageType(.binary, wait_ms);
     defer client.done(response);
-    try testing.expectEqual(.binary, response.type);
     try testing.expectEqual(@as(usize, total_size), response.data.len);
     try testing.expectEqualSlices(u8, expected, response.data);
 }

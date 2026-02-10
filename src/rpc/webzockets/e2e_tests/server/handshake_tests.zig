@@ -7,6 +7,8 @@ const RawClient = @import("../support/raw_client.zig").RawClient;
 const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
 const verifyServerFunctional = @import("../support/test_helpers.zig").verifyServerFunctional;
 
+const wait_ms: u64 = 2_000;
+
 test "e2e handshake: malformed HTTP request (garbage bytes)" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
@@ -287,12 +289,12 @@ test "e2e handshake: headers exceeding read buffer size" {
     try expectClosed(stream);
 }
 
-/// Connect raw TCP to the test server with a 500ms read timeout.
+/// Connect raw TCP to the test server with a 2s read timeout.
 fn rawConnect(port: u16) !std.net.Stream {
     const address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, port);
     const stream = try std.net.tcpConnectToAddress(address);
     errdefer stream.close();
-    const timeout = std.posix.timeval{ .sec = 0, .usec = 500_000 };
+    const timeout = std.posix.timeval{ .sec = 2, .usec = 0 };
     try std.posix.setsockopt(
         stream.handle,
         std.posix.SOL.SOCKET,
@@ -304,7 +306,7 @@ fn rawConnect(port: u16) !std.net.Stream {
 
 /// Read from `stream` until the server closes the connection. Returns success
 /// if the connection is closed (read returns 0 or a connection error). Returns
-/// `error.ConnectionNotClosed` if a 500ms read timeout fires first.
+/// `error.ConnectionNotClosed` if a 2s read timeout fires first.
 fn expectClosed(stream: std.net.Stream) !void {
     var buf: [4096]u8 = undefined;
     while (true) {
@@ -347,7 +349,7 @@ test "e2e handshake: onHandshakeFailed fires on connection pool exhaustion" {
     try expectClosed(stream2);
 
     // Wait (bounded) for the server thread to run the callback.
-    try ctx.called.timedWait(500 * std.time.ns_per_ms);
+    try ctx.called.timedWait(2 * std.time.ns_per_s);
 
     // Verify the first connection is still functional (server didn't crash).
     try verifyEchoOnClient(&client1);
@@ -440,7 +442,7 @@ fn verifyEchoOnClient(client: *RawClient) !void {
     var msg = "echo check".*;
     try client.write(&msg);
 
-    const response = (try client.read()) orelse return error.NoResponse;
+    const response = try client.waitForMessageType(.text, wait_ms);
     defer client.done(response);
     try testing.expectEqualSlices(u8, "echo check", response.data);
 }

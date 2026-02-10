@@ -6,6 +6,8 @@ const RawClient = @import("../support/raw_client.zig").RawClient;
 const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
 const helpers = @import("../support/test_helpers.zig");
 
+const wait_ms: u64 = 2_000;
+
 test "e2e close: normal code 1000" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
@@ -19,7 +21,7 @@ test "e2e close: normal code 1000" {
     var msg = "test".*;
     try client.write(&msg);
 
-    const response = (try client.read()) orelse return error.NoResponse;
+    const response = try client.waitForMessageType(.text, wait_ms);
     defer client.done(response);
     try testing.expectEqualSlices(u8, "test", response.data);
 
@@ -105,9 +107,8 @@ test "e2e close: server accepts close with no payload" {
     var empty = [0]u8{};
     try client.writeFrame(.close, &empty);
 
-    const response = (try client.read()) orelse return error.NoResponse;
+    const response = try client.waitForCloseFrame(wait_ms);
     defer client.done(response);
-    try testing.expectEqual(.close, response.type);
 }
 
 /// Send a close frame with the given raw payload and assert the server

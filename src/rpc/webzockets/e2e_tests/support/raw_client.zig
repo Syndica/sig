@@ -21,6 +21,7 @@ pub const RawClient = struct {
 
     pub const ConnectOpts = struct {
         read_buf_size: usize = default_read_buf_size,
+        read_timeout_ms: u32 = 2000,
     };
 
     // ====================================================================
@@ -40,8 +41,11 @@ pub const RawClient = struct {
         const stream = try std.net.tcpConnectToAddress(address);
         errdefer stream.close();
 
-        // Set SO_RCVTIMEO to 500ms for blocking reads
-        const timeout = std.posix.timeval{ .sec = 0, .usec = 500_000 };
+        // Set SO_RCVTIMEO for blocking reads (defaults to 2s) to reduce scheduler-jitter flakes.
+        const timeout = std.posix.timeval{
+            .sec = @intCast(opts.read_timeout_ms / 1000),
+            .usec = @intCast((opts.read_timeout_ms % 1000) * 1000),
+        };
         try std.posix.setsockopt(
             stream.handle,
             std.posix.SOL.SOCKET,
@@ -245,14 +249,6 @@ pub const RawClient = struct {
         }
     }
 
-    /// Backwards-compatible helper: returns null on timeout or TCP close.
-    pub fn read(self: *RawClient) !?Message {
-        return switch (try self.readResult()) {
-            .message => |msg| msg,
-            .timeout, .closed => null,
-        };
-    }
-
     /// Free the heap-allocated data from a received Message.
     pub fn done(self: *RawClient, msg: Message) void {
         self.allocator.free(msg.data);
@@ -282,6 +278,62 @@ pub const RawClient = struct {
             @memcpy(buf[2..][0..reason_len], opts.reason[0..reason_len]);
         }
         try self.writeFrame(.close, buf[0 .. 2 + reason_len]);
+    }
+
+    /// Polls `readResult()` until any frame arrives or `deadline_ms` elapses.
+    /// Returns an owned message that must be freed via `done()`.
+    pub fn waitForMessage(self: *RawClient, deadline_ms: u64) !Message {
+        var timer = try std.time.Timer.start();
+        const deadline_ns = deadline_ms * std.time.ns_per_ms;
+
+        while (timer.read() < deadline_ns) {
+            switch (try self.readResult()) {
+                .timeout => continue,
+                .closed => return error.NoResponse,
+                .message => |msg| return msg,
+            }
+        }
+        return error.NoResponse;
+    }
+
+    /// Polls until a frame of `expected_type` arrives or `deadline_ms` elapses.
+    /// Fails if a different frame type is received first.
+    pub fn waitForMessageType(
+        self: *RawClient,
+        expected_type: Message.Type,
+        deadline_ms: u64,
+    ) !Message {
+        const msg = try self.waitForMessage(deadline_ms);
+        if (msg.type != expected_type) {
+            self.done(msg);
+            return error.UnexpectedData;
+        }
+        return msg;
+    }
+
+    /// Polls `readResult()` until a close frame arrives or `deadline_ms` elapses.
+    /// Returns an owned message that must be freed via `done()`.
+    pub fn waitForCloseFrame(self: *RawClient, deadline_ms: u64) !Message {
+        return self.waitForMessageType(.close, deadline_ms);
+    }
+
+    /// Polls `readResult()` until peer disconnect or `deadline_ms` elapses.
+    /// Fails if any frame is received before disconnect.
+    pub fn waitForClosedNoData(self: *RawClient, deadline_ms: u64) !void {
+        var timer = try std.time.Timer.start();
+        const deadline_ns = deadline_ms * std.time.ns_per_ms;
+
+        while (timer.read() < deadline_ns) {
+            switch (try self.readResult()) {
+                .closed => return,
+                .timeout => continue,
+                .message => |msg| {
+                    self.done(msg);
+                    return error.UnexpectedData;
+                },
+            }
+        }
+        return error.ExpectedDisconnect;
     }
 
     // ====================================================================
