@@ -48,33 +48,30 @@ pub const Signature = extern struct {
 
     pub fn parseRuntime(str: []const u8) error{InvalidSignature}!Signature {
         if (str.len > BASE58_MAX_SIZE) return error.InvalidSignature;
-        var encoded: std14.BoundedArray(u8, BASE58_MAX_SIZE) = .{};
-        encoded.appendSliceAssumeCapacity(str);
 
         if (@inComptime()) @setEvalBranchQuota(str.len * str.len * str.len);
-        const decoded = BASE58_ENDEC.decodeBounded(BASE58_MAX_SIZE, encoded) catch {
+        var decoded_buf: [base58.decodedMaxSize(BASE58_MAX_SIZE)]u8 = undefined;
+        const decoded_len = BASE58_ENDEC.decode(&decoded_buf, str) catch {
             return error.InvalidSignature;
         };
 
-        if (decoded.len != SIZE) return error.InvalidSignature;
-        return .fromBytes(decoded.constSlice()[0..SIZE].*);
+        if (decoded_len != SIZE) return error.InvalidSignature;
+        return .fromBytes(decoded_buf[0..SIZE].*);
     }
 
     pub const BASE58_MAX_SIZE = base58.encodedMaxSize(SIZE);
     pub const Base58String = std14.BoundedArray(u8, BASE58_MAX_SIZE);
 
     pub fn base58String(self: Signature) Base58String {
-        return BASE58_ENDEC.encodeArray(SIZE, self.toBytes());
+        var result: Base58String = .{};
+        const len = BASE58_ENDEC.encode(result.unusedCapacitySlice(), &self.toBytes());
+        result.len = len;
+        return result;
     }
 
-    pub fn format(
-        self: Signature,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+    pub fn format(self: Signature, w: *std.Io.Writer) std.Io.Writer.Error!void {
         const str = self.base58String();
-        return writer.writeAll(str.constSlice());
+        return w.writeAll(str.constSlice());
     }
 
     pub fn jsonStringify(self: Signature, writer: anytype) @TypeOf(writer.*).Error!void {
