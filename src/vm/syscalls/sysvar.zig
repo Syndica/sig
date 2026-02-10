@@ -29,21 +29,19 @@ fn getSyscall(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMa
         ) Error!void {
             try tc.consumeCompute(tc.compute_budget.sysvar_base_cost + @sizeOf(T));
 
-            const value_addr = registers.get(.r1);
-            const value = try memory_map.translateType(
+            const address = registers.get(.r1);
+
+            const ptr = try memory_map.translateType(
                 T,
                 .mutable,
-                value_addr,
+                address,
                 tc.getCheckAligned(),
             );
 
-            const v = try tc.sysvar_cache.get(T);
-
-            // Avoid value.* = v as it sets padding bytes to undefined instead of 0.
-            @memset(std.mem.asBytes(value), 0);
-            inline for (@typeInfo(T).@"struct".fields) |f| {
-                @field(value, f.name) = @field(v, f.name);
-            }
+            const value = try tc.sysvar_cache.get(T);
+            // We need to memset the underlying bytes to 0, as the set may have some undefined bytes.
+            @memset(std.mem.asBytes(ptr), 0);
+            ptr.* = value;
         }
     }.getSyscall;
 }

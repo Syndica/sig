@@ -108,16 +108,16 @@ pub fn init(
     else
         0;
 
-    const heap = try allocator.alloc(u8, heap_size);
+    const heap = try allocator.alignedAlloc(u8, 16, heap_size);
     @memset(heap, 0);
     errdefer allocator.free(heap);
 
-    const stack = try allocator.alloc(u8, stack_size);
+    const stack = try allocator.alignedAlloc(u8, 16, stack_size);
     @memset(stack, 0);
     errdefer allocator.free(stack);
 
     // 3 regions for the input, stack, and heap.
-    const regions = try allocator.alloc(memory.Region, 3 + trailing_regions.len);
+    const regions = try allocator.alignedAlloc(memory.Region, 16, 3 + trailing_regions.len);
     errdefer allocator.free(regions);
 
     regions[0..3].* = .{
