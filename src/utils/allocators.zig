@@ -323,7 +323,7 @@ pub fn RecycleFBA(config: struct {
         // this does the data allocations (data is returned from alloc)
         fba_allocator: std.heap.FixedBufferAllocator,
         // recycling depot
-        records: std.ArrayList(Record),
+        records: std.array_list.Managed(Record),
         // for thread safety
         mux: std.Thread.Mutex = .{},
 
@@ -339,7 +339,7 @@ pub fn RecycleFBA(config: struct {
         pub fn init(allocator_config: AllocatorConfig, n_bytes: u64) !Self {
             const buf = try allocator_config.bytes_allocator.alloc(u8, n_bytes);
             const fba_allocator = std.heap.FixedBufferAllocator.init(buf);
-            const records = std.ArrayList(Record).init(allocator_config.records_allocator);
+            const records = std.array_list.Managed(Record).init(allocator_config.records_allocator);
 
             return .{
                 .bytes_allocator = allocator_config.bytes_allocator,
@@ -519,7 +519,7 @@ pub fn RecycleFBA(config: struct {
 
         /// collapses adjacent free records into a single record
         pub fn tryCollapse(self: *Self) void {
-            var new_records = std.ArrayList(Record).init(self.bytes_allocator);
+            var new_records = std.array_list.Managed(Record).init(self.bytes_allocator);
             var last_was_free = false;
 
             for (self.records.items) |record| {
@@ -1202,7 +1202,7 @@ test "disk allocator on arraylists" {
             tmp_dir.access("bin_0", .{}),
         ); // this should not exist
 
-        var disk_account_refs = try std.ArrayList(u8).initCapacity(dma, 1);
+        var disk_account_refs = try std.array_list.Managed(u8).initCapacity(dma, 1);
         defer disk_account_refs.deinit();
 
         disk_account_refs.appendAssumeCapacity(19);
@@ -1433,7 +1433,7 @@ fn fuzzAllocator(
     subject: Allocator,
 ) Allocator.Error!void {
     // all existing allocations from the allocator
-    var allocations = std.ArrayList(struct { usize, []u8 }).init(params.allocator);
+    var allocations = std.array_list.Managed(struct { usize, []u8 }).init(params.allocator);
     defer {
         for (allocations.items) |pair| {
             const item_id, const item = pair;

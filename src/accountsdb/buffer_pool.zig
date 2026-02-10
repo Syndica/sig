@@ -1502,7 +1502,7 @@ test "AccountDataHandle bincode" {
     defer allocator.free(read_data);
 
     {
-        var serialised_from_slice = std.ArrayList(u8).init(allocator);
+        var serialised_from_slice = std.array_list.Managed(u8).init(allocator);
         defer serialised_from_slice.deinit();
 
         try bincode.write(serialised_from_slice.writer(), read_data, .{});
@@ -1523,7 +1523,7 @@ test "AccountDataHandle bincode" {
     }
 
     {
-        var serialised_from_handle = std.ArrayList(u8).init(allocator);
+        var serialised_from_handle = std.array_list.Managed(u8).init(allocator);
         defer serialised_from_handle.deinit();
 
         try bincode.write(serialised_from_handle.writer(), read, .{});

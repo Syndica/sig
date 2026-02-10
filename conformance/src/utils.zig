@@ -195,7 +195,7 @@ pub fn createTransactionContextAccounts(
         std.debug.print("createTransactionContextAccounts: error={}\n", .{err});
     }
 
-    var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
+    var accounts = std.array_list.Managed(TransactionContextAccount).init(allocator);
     errdefer {
         for (accounts.items) |account| {
             allocator.free(account.account.data);
@@ -433,8 +433,8 @@ pub fn createInstrEffects(
 fn modifiedAccounts(
     allocator: std.mem.Allocator,
     tc: *const TransactionContext,
-) !std.ArrayList(pb.AcctState) {
-    var accounts = std.ArrayList(pb.AcctState).init(allocator);
+) !std.array_list.Managed(pb.AcctState) {
+    var accounts = std.array_list.Managed(pb.AcctState).init(allocator);
     errdefer accounts.deinit();
 
     for (tc.accounts) |acc| {
@@ -470,7 +470,7 @@ pub fn createSyscallEffect(allocator: std.mem.Allocator, params: struct {
     memory_map: sig.vm.memory.MemoryMap,
     registers: sig.vm.interpreter.RegisterMap = sig.vm.interpreter.RegisterMap.initFill(0),
 }) !pb.SyscallEffects {
-    var log = std.ArrayList(u8).init(allocator);
+    var log = std.array_list.Managed(u8).init(allocator);
     defer log.deinit();
     if (params.tc.log_collector) |log_collector| {
         var iter = log_collector.iterator();
@@ -519,8 +519,8 @@ pub fn copyPrefix(dst: []u8, prefix: []const u8) void {
 pub fn extractInputDataRegions(
     allocator: std.mem.Allocator,
     memory_map: memory.MemoryMap,
-) !std.ArrayList(pb.InputDataRegion) {
-    var regions = std.ArrayList(pb.InputDataRegion).init(allocator);
+) !std.array_list.Managed(pb.InputDataRegion) {
+    var regions = std.array_list.Managed(pb.InputDataRegion).init(allocator);
     errdefer regions.deinit();
 
     const mm_regions: []const sig.vm.memory.Region = switch (memory_map) {

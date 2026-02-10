@@ -45,19 +45,19 @@ pub fn run(seed: u64, args: []const []const u8) !void {
     var total_action_count: u64 = 0;
     var now: u64 = 100;
 
-    var insertion_times = try std.ArrayList(u64).initCapacity(allocator, 100);
+    var insertion_times = try std.array_list.Managed(u64).initCapacity(allocator, 100);
     defer insertion_times.deinit();
 
-    var pubkeys = try std.ArrayList(Pubkey).initCapacity(allocator, 100);
+    var pubkeys = try std.array_list.Managed(Pubkey).initCapacity(allocator, 100);
     defer pubkeys.deinit();
 
-    var keypairs = try std.ArrayList(KeyPair).initCapacity(allocator, 100);
+    var keypairs = try std.array_list.Managed(KeyPair).initCapacity(allocator, 100);
     defer keypairs.deinit();
 
     var signatures = sig.utils.collections.PubkeyMapManaged(Signature).init(allocator);
     defer signatures.deinit();
 
-    var keys = try std.ArrayList(GossipKey).initCapacity(allocator, 100);
+    var keys = try std.array_list.Managed(GossipKey).initCapacity(allocator, 100);
     defer keys.deinit();
 
     var timer = sig.time.Timer.start();

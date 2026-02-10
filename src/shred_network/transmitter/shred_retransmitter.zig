@@ -78,7 +78,7 @@ pub fn runShredRetransmitter(params: ShredRetransmitterParams) !void {
     defer retransmit_socket.close();
     try retransmit_socket.bind(.initIp4(.{ 0, 0, 0, 0 }, 0));
 
-    var thread_handles = std.ArrayList(std.Thread).init(params.allocator);
+    var thread_handles = std.array_list.Managed(std.Thread).init(params.allocator);
     defer thread_handles.deinit();
 
     try thread_handles.append(try std.Thread.spawn(
@@ -151,7 +151,7 @@ fn receiveShreds(
     );
     defer deduper.deinit();
 
-    var shreds = std.ArrayList(Packet).init(allocator);
+    var shreds = std.array_list.Managed(Packet).init(allocator);
     var receive_shreds_timer = sig.time.Timer.start();
 
     while (true) {
@@ -212,12 +212,12 @@ fn receiveShreds(
 /// Returns a map of slot to a list of shred_id and packet pairs
 fn dedupAndGroupShredsBySlot(
     allocator: std.mem.Allocator,
-    shreds: *std.ArrayList(Packet),
+    shreds: *std.array_list.Managed(Packet),
     deduper: *ShredDeduper(2),
     metrics: *RetransmitServiceMetrics,
-) !std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)) {
+) !std.AutoArrayHashMap(Slot, std.array_list.Managed(ShredIdAndPacket)) {
     var dedup_and_group_shreds_timer = sig.time.Timer.start();
-    var result = std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)).init(allocator);
+    var result = std.AutoArrayHashMap(Slot, std.array_list.Managed(ShredIdAndPacket)).init(allocator);
     for (shreds.items) |shred_packet| {
         const shred_id = try sig.ledger.shred.layout.getShredId(&shred_packet);
 
@@ -236,7 +236,7 @@ fn dedupAndGroupShredsBySlot(
         if (result.getEntry(shred_id.slot)) |entry| {
             try entry.value_ptr.append(.{ shred_id, shred_packet });
         } else {
-            var new_slot_shreds = std.ArrayList(ShredIdAndPacket).init(allocator);
+            var new_slot_shreds = std.array_list.Managed(ShredIdAndPacket).init(allocator);
             try new_slot_shreds.append(.{ shred_id, shred_packet });
             try result.put(shred_id.slot, new_slot_shreds);
         }
@@ -249,7 +249,7 @@ fn dedupAndGroupShredsBySlot(
 /// Retransmit info contains the slot leader, the shred_id, the shred_packet, and the turbine_tree
 fn createAndSendRetransmitInfo(
     allocator: std.mem.Allocator,
-    shreds: std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)),
+    shreds: std.AutoArrayHashMap(Slot, std.array_list.Managed(ShredIdAndPacket)),
     my_contact_info: ThreadSafeContactInfo,
     epoch_tracker: *const sig.core.EpochTracker,
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
@@ -318,12 +318,12 @@ fn retransmitShreds(
     metrics: *RetransmitServiceMetrics,
     exit: *AtomicBool,
 ) !void {
-    var children = try std.ArrayList(TurbineTree.Node).initCapacity(
+    var children = try std.array_list.Managed(TurbineTree.Node).initCapacity(
         allocator,
         TurbineTree.getDataPlaneFanout(),
     );
     defer children.deinit();
-    var shuffled_nodes = std.ArrayList(TurbineTree.Node).init(allocator);
+    var shuffled_nodes = std.array_list.Managed(TurbineTree.Node).init(allocator);
     defer shuffled_nodes.deinit();
 
     while (!exit.load(.acquire)) {

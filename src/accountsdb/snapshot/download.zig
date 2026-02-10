@@ -82,7 +82,7 @@ fn findPeersToDownloadFrom(
     blacklist: []const Pubkey,
     trusted_validators: ?[]const Pubkey,
 ) !struct { []PeerSnapshotHash, PeerSearchResult } {
-    var valid_peers: std.ArrayList(PeerSnapshotHash) = try .initCapacity(
+    var valid_peers: std.array_list.Managed(PeerSnapshotHash) = try .initCapacity(
         allocator,
         contact_infos.len,
     );
@@ -250,7 +250,7 @@ fn downloadSnapshotWithRetry(
         .incremental => Slot,
         .full => @TypeOf(null),
     },
-    bad_peers: *std.ArrayList(Pubkey),
+    bad_peers: *std.array_list.Managed(Pubkey),
     maybe_trusted_validators: ?[]const Pubkey,
     min_mb_per_sec: usize,
     max_attempts: u64,
@@ -364,7 +364,7 @@ pub fn downloadSnapshotsFromGossip(
     const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb downloadSnapshotsFromGossip" });
     defer zone.deinit();
 
-    var bad_peers: std.ArrayList(Pubkey) = .init(allocator);
+    var bad_peers: std.array_list.Managed(Pubkey) = .init(allocator);
     defer bad_peers.deinit();
 
     const full_slot, const full_file = try downloadSnapshotWithRetry(
@@ -789,7 +789,7 @@ test "accounts_db.download: test remove untrusted peers" {
         ci.shred_version = 19; // matching shred version
     }
 
-    var trusted_validators = try std.ArrayList(Pubkey).initCapacity(allocator, 10);
+    var trusted_validators = try std.array_list.Managed(Pubkey).initCapacity(allocator, 10);
     defer trusted_validators.deinit();
 
     for (contact_infos) |ci| {
@@ -1231,9 +1231,6 @@ test "can't download snapshot" {
         gossip_service.shutdown();
         gossip_service.deinit();
     }
-
-    var bad_peers: std.ArrayList(Pubkey) = .init(allocator);
-    defer bad_peers.deinit();
 
     try std.testing.expectError(error.UnableToDownloadSnapshot, downloadSnapshotsFromGossip(
         allocator,

@@ -14,7 +14,7 @@ const Pubkey = sig.core.Pubkey;
 const UnixTimestamp = sig.core.UnixTimestamp;
 const Rent = sig.runtime.sysvar.Rent;
 
-pub const String = std.ArrayList(u8);
+pub const String = std.array_list.Managed(u8);
 
 pub const RustDuration = struct {
     secs: u64,
@@ -270,7 +270,7 @@ pub const GenesisConfig = struct {
     // initial accounts
     accounts: AutoHashMap(Pubkey, Account),
     // /// built-in programs
-    native_instruction_processors: std.ArrayList(struct { String, Pubkey }),
+    native_instruction_processors: std.array_list.Managed(struct { String, Pubkey }),
     /// accounts for network rewards, these do not count towards capitalization
     rewards_pools: AutoHashMap(Pubkey, Account),
     ticks_per_slot: u64,

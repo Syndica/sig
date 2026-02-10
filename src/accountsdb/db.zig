@@ -11,7 +11,7 @@ const snapgen = sig.accounts_db.snapshot.data.generate;
 
 const Resolution = @import("../benchmarks.zig").Resolution;
 
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
@@ -4044,7 +4044,7 @@ test "load sysvars" {
 
 //     // mock gossip service
 //     var push_msg_queue_mux = sig.gossip.GossipService.PushMessageQueue.init(.{
-//         .queue = std.ArrayList(sig.gossip.data.GossipData).init(allocator),
+//         .queue = std.array_list.Managed(sig.gossip.data.GossipData).init(allocator),
 //         .data_allocator = allocator,
 //     });
 //     defer push_msg_queue_mux.private.v.queue.deinit();

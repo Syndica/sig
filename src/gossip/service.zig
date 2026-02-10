@@ -7,7 +7,7 @@ const socket_utils = sig.net.socket_utils;
 const pull_request = sig.gossip.pull_request;
 const pull_response = sig.gossip.pull_response;
 
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const Thread = std.Thread;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -2529,7 +2529,7 @@ test "handling prune messages" {
     };
     try prune_data.sign(&my_keypair);
 
-    var data = std.ArrayList(PruneData).init(allocator);
+    var data = std.array_list.Managed(PruneData).init(allocator);
     defer data.deinit();
     try data.append(prune_data);
 

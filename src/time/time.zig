@@ -366,7 +366,7 @@ pub const DateTime = struct {
         alloc: std.mem.Allocator,
         comptime fmt: []const u8,
     ) ![]const u8 {
-        var list = std.ArrayList(u8).init(alloc);
+        var list = std.array_list.Managed(u8).init(alloc);
         defer list.deinit();
 
         try self.format(fmt, .{}, list.writer());

@@ -29,14 +29,14 @@ pub const InstructionsSysvarAccountMeta = packed struct(u8) {
 pub fn serializeInstructions(
     allocator: std.mem.Allocator,
     instructions: []const Instruction,
-) !std.ArrayList(u8) {
+) !std.array_list.Managed(u8) {
     if (instructions.len > std.math.maxInt(u16)) unreachable;
 
     const asBytes = std.mem.asBytes;
     const nativeToLittle = std.mem.nativeToLittle;
 
     // estimated required capacity
-    var data = try std.ArrayList(u8).initCapacity(allocator, instructions.len * 64);
+    var data = try std.array_list.Managed(u8).initCapacity(allocator, instructions.len * 64);
     errdefer data.deinit();
 
     try data.appendSlice(asBytes(&nativeToLittle(u16, @intCast(instructions.len))));

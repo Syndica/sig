@@ -372,12 +372,12 @@ fn setupDirtySet(
     lvvfb: *LatestValidatorVotes,
     num_validators: u64,
     vote_kind: LatestValidatorVotes.VoteKind,
-) !std.ArrayList(struct { Pubkey, SlotAndHash }) {
+) !std.array_list.Managed(struct { Pubkey, SlotAndHash }) {
     if (!builtin.is_test) {
         @compileError("setupDirtySet should only be called in test mode");
     }
 
-    var result = std.ArrayList(struct { Pubkey, SlotAndHash }).init(allocator);
+    var result = std.array_list.Managed(struct { Pubkey, SlotAndHash }).init(allocator);
     errdefer result.deinit();
 
     for (0..num_validators) |i| {
@@ -478,7 +478,7 @@ fn runFrozenBanksTakeVotesDirtySet(
         );
         defer dirty_set.deinit();
 
-        var expected_dirty_set = std.ArrayList(
+        var expected_dirty_set = std.array_list.Managed(
             struct { Pubkey, SlotAndHash },
         ).init(std.testing.allocator);
         defer expected_dirty_set.deinit();

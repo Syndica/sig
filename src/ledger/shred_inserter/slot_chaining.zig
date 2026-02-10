@@ -196,7 +196,7 @@ fn traverseChildrenMut(
     working_set: *AutoHashMap(u64, SlotMetaWorkingSetEntry),
     passed_visited_slots: *AutoHashMap(u64, SlotMeta),
 ) !void {
-    var slot_lists = std.ArrayList([]const u64).init(allocator);
+    var slot_lists = std.array_list.Managed([]const u64).init(allocator);
     defer slot_lists.deinit();
     try slot_lists.append(slots);
     var i: usize = 0;

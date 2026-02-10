@@ -907,7 +907,7 @@ fn serializeOutput(
 
     const errors = utils.convertTransactionError(txn.err);
 
-    var acct_states: std.ArrayList(pb.AcctState) = .init(allocator);
+    var acct_states: std.array_list.Managed(pb.AcctState) = .init(allocator);
     errdefer acct_states.deinit();
     if (result.ok.outputs != null and result.ok.err != null) {
         // In the event that the transaction is executed and fails, agave
@@ -1373,8 +1373,8 @@ pub fn createPbManagedStrings(
     allocator: std.mem.Allocator,
     comptime T: type,
     strings: []const []const u8,
-) !std.ArrayList(ManagedString) {
-    var result = try std.ArrayList(ManagedString).initCapacity(allocator, strings.len);
+) !std.array_list.Managed(ManagedString) {
+    var result = try std.array_list.Managed(ManagedString).initCapacity(allocator, strings.len);
     for (strings) |string| {
         const parsed = T.parseRuntime(string) catch unreachable;
         result.appendAssumeCapacity(try ManagedString.copy(&parsed.data, allocator));
@@ -1391,13 +1391,13 @@ pub const PbInstructionsParams = struct {
 pub fn createPbInstructions(
     allocator: std.mem.Allocator,
     instructions: []const PbInstructionsParams,
-) !std.ArrayList(pb.CompiledInstruction) {
-    var result = try std.ArrayList(pb.CompiledInstruction).initCapacity(
+) !std.array_list.Managed(pb.CompiledInstruction) {
+    var result = try std.array_list.Managed(pb.CompiledInstruction).initCapacity(
         allocator,
         instructions.len,
     );
     for (instructions) |instruction| {
-        var accounts = std.ArrayList(u32).init(allocator);
+        var accounts = std.array_list.Managed(u32).init(allocator);
         try accounts.appendSlice(instruction.accounts);
         const data = try ManagedString.copy(instruction.data, allocator);
         try result.append(.{
@@ -1418,15 +1418,15 @@ pub const PbAddressLookupTablesParams = struct {
 pub fn createPbAddressLookupTables(
     allocator: std.mem.Allocator,
     lookup_tables: []const PbAddressLookupTablesParams,
-) !std.ArrayList(pb.MessageAddressTableLookup) {
-    var result = try std.ArrayList(pb.MessageAddressTableLookup).initCapacity(
+) !std.array_list.Managed(pb.MessageAddressTableLookup) {
+    var result = try std.array_list.Managed(pb.MessageAddressTableLookup).initCapacity(
         allocator,
         lookup_tables.len,
     );
     for (lookup_tables) |lookup_table| {
-        var writable_indexes = std.ArrayList(u32).init(allocator);
+        var writable_indexes = std.array_list.Managed(u32).init(allocator);
         try writable_indexes.appendSlice(lookup_table.writable_indexes);
-        var readonly_indexes = std.ArrayList(u32).init(allocator);
+        var readonly_indexes = std.array_list.Managed(u32).init(allocator);
         try readonly_indexes.appendSlice(lookup_table.readonly_indexes);
         try result.append(.{
             .account_key = try createPbManagedString(allocator, Pubkey, lookup_table.account_key),

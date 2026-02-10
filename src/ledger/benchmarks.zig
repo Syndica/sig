@@ -157,7 +157,7 @@ pub const BenchmarkLedger = struct {
 
         var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-        var indices = try std.ArrayList(u32).initCapacity(allocator, num_reads);
+        var indices = try std.array_list.Managed(u32).initCapacity(allocator, num_reads);
         defer indices.deinit();
         for (0..num_reads) |_| {
             indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds)));
@@ -244,7 +244,7 @@ pub const BenchmarkLedger = struct {
 
         var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-        var indices = try std.ArrayList(u32).initCapacity(allocator, total_shreds);
+        var indices = try std.array_list.Managed(u32).initCapacity(allocator, total_shreds);
         defer indices.deinit();
         for (0..total_shreds) |_| {
             indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds)));
@@ -300,17 +300,17 @@ pub const BenchmarkLedger = struct {
         defer state.deinit();
         var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-        var signatures: std.ArrayList(Signature) =
-            try std.ArrayList(Signature).initCapacity(allocator, 64);
+        var signatures: std.array_list.Managed(Signature) =
+            try std.array_list.Managed(Signature).initCapacity(allocator, 64);
         defer signatures.deinit();
         var writable_keys =
-            try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(allocator, 64);
+            try std.array_list.Managed(std.array_list.Managed(Pubkey)).initCapacity(allocator, 64);
         defer {
             for (writable_keys.items) |l| l.deinit();
             writable_keys.deinit();
         }
         var readonly_keys =
-            try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(allocator, 64);
+            try std.array_list.Managed(std.array_list.Managed(Pubkey)).initCapacity(allocator, 64);
         defer {
             for (readonly_keys.items) |l| l.deinit();
             readonly_keys.deinit();
@@ -318,13 +318,13 @@ pub const BenchmarkLedger = struct {
 
         for (0..64) |_| {
             // Two writable keys
-            var w_keys = try std.ArrayList(Pubkey).initCapacity(allocator, 2);
+            var w_keys = try std.array_list.Managed(Pubkey).initCapacity(allocator, 2);
             try w_keys.append(Pubkey.initRandom(rng.random()));
             try w_keys.append(Pubkey.initRandom(rng.random()));
             writable_keys.appendAssumeCapacity(w_keys);
 
             // Two readonly keys
-            var r_keys = try std.ArrayList(Pubkey).initCapacity(allocator, 2);
+            var r_keys = try std.array_list.Managed(Pubkey).initCapacity(allocator, 2);
             try r_keys.append(Pubkey.initRandom(rng.random()));
             try r_keys.append(Pubkey.initRandom(rng.random()));
             readonly_keys.appendAssumeCapacity(r_keys);

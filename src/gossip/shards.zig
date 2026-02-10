@@ -57,7 +57,7 @@ pub const GossipTableShards = struct {
     }
 
     /// see filterGossipVersionedDatas for more readable (but inefficient) version  of what this fcn is doing
-    pub fn find(self: *const Self, alloc: std.mem.Allocator, mask: u64, mask_bits: u32) error{OutOfMemory}!std.ArrayList(usize) {
+    pub fn find(self: *const Self, alloc: std.mem.Allocator, mask: u64, mask_bits: u32) error{OutOfMemory}!std.array_list.Managed(usize) {
         const ones = (~@as(u64, 0) >> @as(u6, @intCast(mask_bits)));
         const match_mask = mask | ones;
 
@@ -66,7 +66,7 @@ pub const GossipTableShards = struct {
             var shard = self.shards[GossipTableShards.computeShardIndex(self.shard_bits, mask)];
 
             var shard_iter = shard.iterator();
-            var result = std.ArrayList(usize).init(alloc);
+            var result = std.array_list.Managed(usize).init(alloc);
             while (shard_iter.next()) |entry| {
                 const hash = entry.value_ptr.*;
 
@@ -81,7 +81,7 @@ pub const GossipTableShards = struct {
             // when bits are equal we know the lookup will be exact
             var shard = self.shards[GossipTableShards.computeShardIndex(self.shard_bits, mask)];
 
-            var result = try std.ArrayList(usize).initCapacity(alloc, shard.count());
+            var result = try std.array_list.Managed(usize).initCapacity(alloc, shard.count());
             try result.insertSlice(0, shard.keys());
             return result;
         } else {
@@ -90,7 +90,7 @@ pub const GossipTableShards = struct {
             const count: usize = @intCast(@as(u64, 1) << shift_bits);
             const end = GossipTableShards.computeShardIndex(self.shard_bits, match_mask) + 1;
 
-            var result = std.ArrayList(usize).init(alloc);
+            var result = std.array_list.Managed(usize).init(alloc);
             var insert_index: usize = 0;
             for ((end - count)..end) |shard_index| {
                 const shard = self.shards[shard_index];
@@ -155,7 +155,7 @@ test "gossip.gossip_shards: test shard find" {
     defer gossip_table.deinit();
 
     // gen ranndom values
-    var values = try std.ArrayList(GossipVersionedData).initCapacity(std.testing.allocator, 1000);
+    var values = try std.array_list.Managed(GossipVersionedData).initCapacity(std.testing.allocator, 1000);
     defer values.deinit();
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);

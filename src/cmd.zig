@@ -2866,10 +2866,10 @@ fn downloadSnapshot(
     defer if (maybe_inc_file) |inc_file| inc_file.close();
 }
 
-fn getTrustedValidators(allocator: std.mem.Allocator, cfg: config.Cmd) !?std.ArrayList(Pubkey) {
-    var trusted_validators: ?std.ArrayList(Pubkey) = null;
+fn getTrustedValidators(allocator: std.mem.Allocator, cfg: config.Cmd) !?std.array_list.Managed(Pubkey) {
+    var trusted_validators: ?std.array_list.Managed(Pubkey) = null;
     if (cfg.gossip.trusted_validators.len > 0) {
-        trusted_validators = try std.ArrayList(Pubkey).initCapacity(
+        trusted_validators = try std.array_list.Managed(Pubkey).initCapacity(
             allocator,
             cfg.gossip.trusted_validators.len,
         );
