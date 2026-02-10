@@ -70,11 +70,13 @@ fn downloadGenesisArchive(
     var response_body = std.array_list.Managed(u8).init(allocator);
     errdefer response_body.deinit();
 
+    var buf: [1024]u8 = undefined;
+    var writer = response_body.writer().adaptToNewApi(&buf);
+
     const result = client.fetch(.{
         .location = .{ .url = url },
         .method = .GET,
-        .response_storage = .{ .dynamic = &response_body },
-        .max_append_size = 100 * 1024 * 1024, // 100MB max
+        .response_writer = &writer.new_interface,
     }) catch |err| {
         logger.err().logf("Failed to fetch genesis archive: {}", .{err});
         return error.HttpRequestFailed;
