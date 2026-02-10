@@ -15,11 +15,11 @@ pub const ForkChoiceProcessedSlot = struct {
     /// Set the current processed slot (heaviest fork tip).
     /// Uses store() because this can decrease when the fork choice
     /// switches to a different fork with a lower slot.
-    pub fn set(self: *@This(), new_slot: Slot) void {
+    pub fn set(self: *ForkChoiceProcessedSlot, new_slot: Slot) void {
         self.slot.store(new_slot, .monotonic);
     }
 
-    pub fn get(self: *const @This()) Slot {
+    pub fn get(self: *const ForkChoiceProcessedSlot) Slot {
         return self.slot.load(.monotonic);
     }
 };
@@ -27,11 +27,11 @@ pub const ForkChoiceProcessedSlot = struct {
 pub const OptimisticallyConfirmedSlot = struct {
     slot: std.atomic.Value(Slot) = .init(0),
 
-    pub fn update(self: *@This(), new_slot: Slot) void {
+    pub fn update(self: *OptimisticallyConfirmedSlot, new_slot: Slot) void {
         _ = self.slot.fetchMax(new_slot, .monotonic);
     }
 
-    pub fn get(self: *const @This()) Slot {
+    pub fn get(self: *const OptimisticallyConfirmedSlot) Slot {
         return self.slot.load(.monotonic);
     }
 };
