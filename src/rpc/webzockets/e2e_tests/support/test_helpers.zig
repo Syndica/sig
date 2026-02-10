@@ -19,9 +19,8 @@ pub fn verifyServerFunctional(port: u16) !void {
     try testing.expectEqualSlices(u8, "hi", response.data);
 
     try client.close(.{ .code = 1000 });
-    if (client.waitForCloseFrame(default_wait_ms)) |close_resp| {
-        client.done(close_resp);
-    } else |_| {}
+    const close_resp = try client.waitForCloseFrame(default_wait_ms);
+    client.done(close_resp);
 }
 
 /// Read a close frame from the client and assert the close code matches.
