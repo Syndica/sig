@@ -784,7 +784,7 @@ test EpochTracker {
 
         _ = try epoch_tracker.insertUnrootedEpochInfo(
             allocator,
-            branch.maxSlot(),
+            branch.last(),
             &branch,
             try sig.core.stakes.randomEpochStakes(
                 allocator,
@@ -794,7 +794,7 @@ test EpochTracker {
             &.ALL_DISABLED,
         );
 
-        try epoch_tracker.onSlotRooted(allocator, branch.maxSlot(), &branch);
+        try epoch_tracker.onSlotRooted(allocator, branch.last(), &branch);
     }
 
     // Check that the root slot is 9 * 32 and epochs 6, 7, 8, 9 are available
@@ -815,10 +815,10 @@ test EpochTracker {
     // Check that trying to insert epoch info for epoch 9 fails because it is already rooted
     const branch = try Ancestors.initWithSlots(allocator, &.{319});
     defer branch.deinit(allocator);
-    fail_stakes.stakes.epoch = epoch_schedule.getEpoch(branch.maxSlot());
+    fail_stakes.stakes.epoch = epoch_schedule.getEpoch(branch.last());
     try std.testing.expectError(error.InvalidInsert, epoch_tracker.insertUnrootedEpochInfo(
         allocator,
-        branch.maxSlot(),
+        branch.last(),
         &branch,
         fail_stakes,
         &.ALL_DISABLED,
@@ -845,12 +845,12 @@ test EpochTracker {
     defer allocator.free(insert_ptrs);
     for (0..4) |i| insert_ptrs[i] = try epoch_tracker.insertUnrootedEpochInfo(
         allocator,
-        branches[i].maxSlot(),
+        branches[i].last(),
         &branches[i],
         try sig.core.stakes.randomEpochStakes(
             allocator,
             random,
-            .{ .epoch = epoch_schedule.getEpoch(branches[i].maxSlot()) },
+            .{ .epoch = epoch_schedule.getEpoch(branches[i].last()) },
         ),
         &.ALL_DISABLED,
     );
@@ -862,17 +862,17 @@ test EpochTracker {
     );
 
     // Check that another insert hits max forks
-    fail_stakes.stakes.epoch = epoch_schedule.getEpoch(branches[4].maxSlot());
+    fail_stakes.stakes.epoch = epoch_schedule.getEpoch(branches[4].last());
     try std.testing.expectError(error.MaxForksExceeded, epoch_tracker.insertUnrootedEpochInfo(
         allocator,
-        branches[4].maxSlot(),
+        branches[4].last(),
         &branches[4],
         fail_stakes,
         &.ALL_DISABLED,
     ));
 
     // Root the first slot from branch 2
-    try epoch_tracker.onSlotRooted(allocator, branches[2].maxSlot(), &branches[2]);
+    try epoch_tracker.onSlotRooted(allocator, branches[2].last(), &branches[2]);
 
     // Check that the pointers returned from insert match the pointers returned from get
     for (0..4) |i| try std.testing.expectEqual(
@@ -880,13 +880,13 @@ test EpochTracker {
         if (i != 2)
             try epoch_tracker.unrooted_epochs.get(&branches[i])
         else
-            try epoch_tracker.rooted_epochs.get(epoch_schedule.getEpoch(branches[i].maxSlot())),
+            try epoch_tracker.rooted_epochs.get(epoch_schedule.getEpoch(branches[i].last())),
     );
 
     // Check we can't insert unrooted if the epoch is already rooted
     try std.testing.expectError(error.InvalidInsert, epoch_tracker.insertUnrootedEpochInfo(
         allocator,
-        branches[4].maxSlot(),
+        branches[4].last(),
         &branches[4],
         fail_stakes,
         &.ALL_DISABLED,
