@@ -6,6 +6,7 @@ const Pubkey = sig.core.Pubkey;
 const parse_vote = @import("parse_vote.zig");
 const parse_stake = @import("parse_stake.zig");
 const parse_nonce = @import("parse_nonce.zig");
+const parse_address_lookup_table = @import("parse_account_lookup_table.zig");
 
 pub const ParseError = error{
     InvalidAccountData,
@@ -35,8 +36,8 @@ pub const ParsedContent = union(enum) {
     vote: parse_vote.VoteAccountType,
     stake: parse_stake.StakeAccountType,
     nonce: parse_nonce.NonceAccountType,
+    address_lookup_table: parse_address_lookup_table.LookupTableAccountType,
     // TODO: add more parsers
-    // nonce: parse_nonce.NonceAccountType,
     pub fn jsonStringify(self: ParsedContent, jw: anytype) @TypeOf(jw.*).Error!void {
         switch (self) {
             inline else => |content| try content.jsonStringify(jw),
@@ -49,7 +50,7 @@ const ParsableProgram = enum {
     vote,
     stake,
     nonce,
-    // TODO: address lookup table
+    address_lookup_table,
     // TODO: bpf upgradeable loader
 
     pub fn fromProgramId(program_id: Pubkey) ?ParsableProgram {
@@ -58,6 +59,7 @@ const ParsableProgram = enum {
         // Nonce accounts are owned by the system program, so we check the program ID against the system program ID.
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L36
         if (program_id.equals(&sig.runtime.program.system.ID)) return .nonce;
+        if (program_id.equals(&sig.runtime.program.address_lookup_table.ID)) return .address_lookup_table;
         return null;
     }
 
@@ -66,6 +68,7 @@ const ParsableProgram = enum {
             .vote => "vote",
             .stake => "stake",
             .nonce => "nonce",
+            .address_lookup_table => "address_lookup_table",
         };
     }
 };
@@ -82,6 +85,13 @@ pub fn parse_account(
         .vote => .{ .vote = try parse_vote.parse_vote(allocator, reader) },
         .stake => .{ .stake = try parse_stake.parse_stake(allocator, reader) },
         .nonce => .{ .nonce = try parse_nonce.parse_nonce(allocator, reader) },
+        .address_lookup_table => .{
+            .address_lookup_table = try parse_address_lookup_table.parse_address_lookup_table(
+                allocator,
+                reader,
+                data_len,
+            ),
+        },
     };
     return ParsedAccount{
         .program = program.programName(),
