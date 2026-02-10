@@ -120,7 +120,8 @@ fn runBufferTierTest(msg_size: usize, max_message_size: ?usize) !void {
 
     try testing.expect(handler.open_called);
     try testing.expectEqual(msg_size, handler.received_len);
-    for (handler.received_data.?, 0..) |byte, i| {
+    const received = handler.received_data orelse return error.NoData;
+    for (received, 0..) |byte, i| {
         try testing.expectEqual(@as(u8, @truncate(i)), byte);
     }
 }

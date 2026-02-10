@@ -81,17 +81,18 @@ test "idle timeout: activity resets timer" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
-    const ts = try servers.startEchoServerWithTimeouts(testing.allocator, 300, 5000);
+    // Worst-case close arrives 2 × idle_timeout after last message,
+    // so keep 2 × 200ms = 400ms under the 500ms read timeout.
+    const ts = try servers.startEchoServerWithTimeouts(testing.allocator, 200, 5000);
     defer ts.stop();
 
     var client = try RawClient.connect(testing.allocator, ts.port);
     defer client.deinit();
 
-    // Send messages at 100ms intervals (faster than 300ms idle timeout)
-    // for a total of ~500ms — well past the idle timeout if it weren't reset
+    // Send messages at 50ms intervals for ~500ms, well past idle timeout
     var i: usize = 0;
-    while (i < 5) : (i += 1) {
-        std.time.sleep(100 * std.time.ns_per_ms);
+    while (i < 10) : (i += 1) {
+        std.time.sleep(50 * std.time.ns_per_ms);
         var msg = "ping".*;
         try client.write(&msg);
 
@@ -100,7 +101,7 @@ test "idle timeout: activity resets timer" {
         client.done(echo);
     }
 
-    // Now stop sending and wait for idle timeout + close
+    // Wait for idle timeout close
     const close_msg = (try client.read()) orelse return error.NoResponse;
     defer client.done(close_msg);
     try testing.expectEqual(.close, close_msg.type);

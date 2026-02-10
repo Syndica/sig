@@ -316,22 +316,24 @@ test "e2e/stress: mixed operations under load" {
     for (0..num_loops) |i| {
         // Text echo
         try testing.expect(contexts[i].text_handler.open_called);
-        try testing.expectEqual(.text, contexts[i].text_handler.received_type.?);
-        try testing.expectEqualSlices(u8, "text-echo", contexts[i].text_handler.received_data.?);
+        const text_type = contexts[i].text_handler.received_type orelse return error.NoData;
+        const text_data = contexts[i].text_handler.received_data orelse return error.NoData;
+        try testing.expectEqual(.text, text_type);
+        try testing.expectEqualSlices(u8, "text-echo", text_data);
 
         // Binary echo
         try testing.expect(contexts[i].binary_handler.open_called);
-        try testing.expectEqual(.binary, contexts[i].binary_handler.received_type.?);
-        try testing.expectEqualSlices(
-            u8,
-            &[_]u8{ 0xDE, 0xAD, 0xBE, 0xEF },
-            contexts[i].binary_handler.received_data.?,
-        );
+        const bin_type = contexts[i].binary_handler.received_type orelse return error.NoData;
+        const bin_data = contexts[i].binary_handler.received_data orelse return error.NoData;
+        try testing.expectEqual(.binary, bin_type);
+        try testing.expectEqualSlices(u8, &[_]u8{ 0xDE, 0xAD, 0xBE, 0xEF }, bin_data);
 
         // Ping/pong
         try testing.expect(contexts[i].ping_handler.open_called);
-        try testing.expectEqual(.pong, contexts[i].ping_handler.received_type.?);
-        try testing.expectEqualSlices(u8, "ping-data", contexts[i].ping_handler.received_data.?);
+        const ping_type = contexts[i].ping_handler.received_type orelse return error.NoData;
+        const ping_data = contexts[i].ping_handler.received_data orelse return error.NoData;
+        try testing.expectEqual(.pong, ping_type);
+        try testing.expectEqualSlices(u8, "ping-data", ping_data);
 
         // Close-on-open
         try testing.expect(contexts[i].close_handler.open_called);

@@ -113,7 +113,8 @@ test "e2e client: 10 concurrent clients to same server" {
         defer if (handlers[i].open_called) conns[i].deinit();
         try testing.expect(handlers[i].open_called);
         const expected = std.fmt.bufPrint(&msg_bufs[i], "client_{d}", .{i}) catch unreachable;
-        try testing.expectEqualSlices(u8, expected, handlers[i].received_data.?);
+        const received_data = handlers[i].received_data orelse return error.NoData;
+        try testing.expectEqualSlices(u8, expected, received_data);
     }
 }
 

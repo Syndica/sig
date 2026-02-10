@@ -33,8 +33,10 @@ test "e2e: text echo" {
     try env.loop.run(.until_done);
 
     try testing.expect(handler.open_called);
-    try testing.expectEqual(.text, handler.received_type.?);
-    try testing.expectEqualSlices(u8, "hello", handler.received_data.?);
+    const received_type = handler.received_type orelse return error.NoData;
+    const received_data = handler.received_data orelse return error.NoData;
+    try testing.expectEqual(.text, received_type);
+    try testing.expectEqualSlices(u8, "hello", received_data);
 }
 
 test "e2e: binary echo" {
@@ -65,8 +67,10 @@ test "e2e: binary echo" {
     try env.loop.run(.until_done);
 
     try testing.expect(handler.open_called);
-    try testing.expectEqual(.binary, handler.received_type.?);
-    try testing.expectEqualSlices(u8, &[_]u8{ 0x01, 0x02, 0x03, 0xFF }, handler.received_data.?);
+    const received_type = handler.received_type orelse return error.NoData;
+    const received_data = handler.received_data orelse return error.NoData;
+    try testing.expectEqual(.binary, received_type);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0x01, 0x02, 0x03, 0xFF }, received_data);
 }
 
 test "e2e: ping/pong" {
@@ -97,8 +101,10 @@ test "e2e: ping/pong" {
     try env.loop.run(.until_done);
 
     try testing.expect(handler.open_called);
-    try testing.expectEqual(.pong, handler.received_type.?);
-    try testing.expectEqualSlices(u8, "ping", handler.received_data.?);
+    const received_type = handler.received_type orelse return error.NoData;
+    const received_data = handler.received_data orelse return error.NoData;
+    try testing.expectEqual(.pong, received_type);
+    try testing.expectEqualSlices(u8, "ping", received_data);
 }
 
 test "e2e: close handshake" {
@@ -197,9 +203,11 @@ test "e2e: large message (>125 bytes)" {
     try env.loop.run(.until_done);
 
     try testing.expect(handler.open_called);
-    try testing.expectEqual(.binary, handler.received_type.?);
-    try testing.expectEqual(@as(usize, 1000), handler.received_data.?.len);
-    for (handler.received_data.?) |byte| {
+    const received_type = handler.received_type orelse return error.NoData;
+    const received = handler.received_data orelse return error.NoData;
+    try testing.expectEqual(.binary, received_type);
+    try testing.expectEqual(@as(usize, 1000), received.len);
+    for (received) |byte| {
         try testing.expectEqual(@as(u8, 'A'), byte);
     }
 }
@@ -246,8 +254,10 @@ test "e2e: multiple concurrent connections" {
     try env.loop.run(.until_done);
 
     try testing.expect(handler1.open_called);
-    try testing.expectEqualSlices(u8, "from_client_1", handler1.received_data.?);
+    const received1 = handler1.received_data orelse return error.NoData;
+    try testing.expectEqualSlices(u8, "from_client_1", received1);
 
     try testing.expect(handler2.open_called);
-    try testing.expectEqualSlices(u8, "from_client_2", handler2.received_data.?);
+    const received2 = handler2.received_data orelse return error.NoData;
+    try testing.expectEqualSlices(u8, "from_client_2", received2);
 }

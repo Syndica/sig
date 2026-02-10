@@ -63,7 +63,8 @@ test "e2e client timeout: normal close completes before timeout" {
 
     // Normal echo + close should work fine with close timer enabled
     try testing.expect(handler.open_called);
-    try testing.expectEqualSlices(u8, "hello", handler.received_data.?);
+    const received_data = handler.received_data orelse return error.NoData;
+    try testing.expectEqualSlices(u8, "hello", received_data);
     conn.deinit();
 }
 

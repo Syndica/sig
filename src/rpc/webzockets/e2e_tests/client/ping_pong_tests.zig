@@ -64,7 +64,8 @@ test "e2e client: onPong callback fires on unsolicited pong" {
 
     try testing.expect(handler.open_called);
     try testing.expect(handler.pong_received);
-    try testing.expectEqualSlices(u8, "hello", handler.pong_data.?);
+    const pong_data = handler.pong_data orelse return error.NoData;
+    try testing.expectEqualSlices(u8, "hello", pong_data);
     conn.deinit();
 }
 

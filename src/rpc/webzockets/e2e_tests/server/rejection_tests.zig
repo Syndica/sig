@@ -60,7 +60,8 @@ test "e2e: handler accepts valid path" {
     try env.loop.run(.until_done);
 
     try testing.expect(handler.open_called);
-    try testing.expectEqualSlices(u8, "test", handler.received_data.?);
+    const received_data = handler.received_data orelse return error.NoData;
+    try testing.expectEqualSlices(u8, "test", received_data);
 }
 
 /// Server-side handler that rejects connections to paths starting with "/reject".
