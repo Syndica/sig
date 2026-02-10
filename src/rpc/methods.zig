@@ -698,7 +698,7 @@ pub const common = struct {
 pub const SlotHookContext = struct {
     slot_tracker: *const sig.replay.trackers.SlotTracker,
 
-    pub fn getSlot(self: @This(), _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
+    pub fn getSlot(self: SlotHookContext, _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
         const config = params.config orelse common.CommitmentSlotConfig{};
         const commitment = config.commitment orelse .finalized;
         const slot = self.slot_tracker.getSlotForCommitment(commitment);
