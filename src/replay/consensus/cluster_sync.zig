@@ -1484,13 +1484,8 @@ const TestData = struct {
             }),
         };
 
-        var latest_processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-        var latest_confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
         var slot_tracker: SlotTracker = try .init(
             allocator,
-            &latest_processed_slot,
-            &latest_confirmed_slot,
             root_slot,
             try slot_infos[root_slot].toDummyElem(&slot_infos, random),
         );

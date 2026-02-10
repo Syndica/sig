@@ -48,8 +48,8 @@ pub const OptimisticallyConfirmedSlot = struct {
 /// will end as soon as the items are removed.
 pub const SlotTracker = struct {
     slots: std.AutoArrayHashMapUnmanaged(Slot, *Element),
-    latest_processed_slot: *ForkChoiceProcessedSlot,
-    latest_confirmed_slot: *OptimisticallyConfirmedSlot,
+    latest_processed_slot: ForkChoiceProcessedSlot,
+    latest_confirmed_slot: OptimisticallyConfirmedSlot,
     root: std.atomic.Value(Slot),
 
     pub const Element = struct {
@@ -71,8 +71,6 @@ pub const SlotTracker = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        latest_processed_slot: *ForkChoiceProcessedSlot,
-        latest_confirmed_slot: *OptimisticallyConfirmedSlot,
         root_slot: Slot,
         /// ownership is transferred to this function, except in the case of an error return
         slot_init: Element,
@@ -80,8 +78,8 @@ pub const SlotTracker = struct {
         var self: SlotTracker = .{
             .root = .init(root_slot),
             .slots = .empty,
-            .latest_processed_slot = latest_processed_slot,
-            .latest_confirmed_slot = latest_confirmed_slot,
+            .latest_processed_slot = .{},
+            .latest_confirmed_slot = .{},
         };
         errdefer self.deinit(allocator);
 
@@ -498,12 +496,8 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
 test "SlotTracker.prune removes all slots less than root" {
     const allocator = std.testing.allocator;
     const root_slot: Slot = 4;
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
     var tracker: SlotTracker = try .init(
         allocator,
-        &processed_slot,
-        &confirmed_slot,
         root_slot,
         .{
             .constants = testDummySlotConstants(root_slot),
@@ -531,8 +525,9 @@ test "SlotTracker.prune removes all slots less than root" {
     try std.testing.expect(!tracker.contains(2));
     try std.testing.expect(!tracker.contains(3));
 
-    try std.testing.expectEqual(0, processed_slot.get());
-    try std.testing.expectEqual(0, confirmed_slot.get());
+    try std.testing.expectEqual(0, tracker.getSlotForCommitment(Commitment.processed));
+    try std.testing.expectEqual(0, tracker.getSlotForCommitment(Commitment.confirmed));
+    try std.testing.expectEqual(4, tracker.getSlotForCommitment(Commitment.finalized));
 }
 
 test "SlotTree: if no forks, root follows 32 behind latest" {

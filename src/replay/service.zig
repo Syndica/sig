@@ -162,8 +162,6 @@ pub const Dependencies = struct {
     hard_forks: sig.core.HardForks,
     replay_threads: u32,
     stop_at_slot: ?Slot,
-    latest_processed_slot: *replay.trackers.ForkChoiceProcessedSlot,
-    latest_confirmed_slot: *replay.trackers.OptimisticallyConfirmedSlot,
 };
 
 pub const ConsensusStatus = enum {
@@ -212,8 +210,6 @@ pub const ReplayState = struct {
 
         var slot_tracker: SlotTracker = try .init(
             deps.allocator,
-            deps.latest_processed_slot,
-            deps.latest_confirmed_slot,
             deps.root.slot,
             .{ .constants = deps.root.constants, .state = deps.root.state },
         );
@@ -813,8 +809,8 @@ test trackNewSlots {
         &.{ 3, 5 },
     );
 
-    try std.testing.expectEqual(0, processed_slot.get());
-    try std.testing.expectEqual(0, confirmed_slot.get());
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.processed));
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 fn expectSlotTracker(
@@ -1264,8 +1260,6 @@ pub const DependencyStubs = struct {
 
             .replay_threads = 1,
             .stop_at_slot = null,
-            .latest_processed_slot = &latest_processed_slot,
-            .latest_confirmed_slot = &latest_confirmed_slot,
         }, .enabled);
     }
 
@@ -1315,9 +1309,6 @@ pub const DependencyStubs = struct {
         const hard_forks = try bank_fields.hard_forks.clone(allocator);
         errdefer hard_forks.deinit(allocator);
 
-        var latest_processed_slot: replay.trackers.ForkChoiceProcessedSlot = .{};
-        var latest_confirmed_slot: replay.trackers.OptimisticallyConfirmedSlot = .{};
-
         return try .init(.{
             .allocator = allocator,
             .logger = .FOR_TESTS,
@@ -1341,8 +1332,6 @@ pub const DependencyStubs = struct {
 
             .replay_threads = num_threads,
             .stop_at_slot = null,
-            .latest_processed_slot = &latest_processed_slot,
-            .latest_confirmed_slot = &latest_confirmed_slot,
         }, .enabled);
     }
 };
