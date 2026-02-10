@@ -1436,7 +1436,7 @@ test "CallerAccount.fromAccountInfoC" {
         @sizeOf(u64) +
         account.data.len;
 
-    const buffer = try allocator.alignedAlloc(u8, @alignOf(AccountInfoC), size);
+    const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.of(AccountInfoC), size);
     defer allocator.free(buffer);
 
     const memory_map = try MemoryMap.init(

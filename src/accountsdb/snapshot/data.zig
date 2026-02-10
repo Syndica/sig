@@ -510,7 +510,7 @@ pub const Manifest = struct {
         file: std.fs.File,
     ) !Manifest {
         const size = (try file.stat()).size;
-        const contents = try file.readToEndAllocOptions(allocator, size, size, @alignOf(u8), null);
+        const contents = try file.readToEndAllocOptions(allocator, size, size, .@"1", null);
         defer allocator.free(contents);
 
         var fbs = std.io.fixedBufferStream(contents);

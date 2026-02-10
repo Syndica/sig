@@ -243,7 +243,7 @@ pub fn ArgumentInfoGroup(comptime S: type) type {
             .type = ArgumentInfo(s_field.type),
             .default_value_ptr = null,
             .is_comptime = false,
-            .alignment = 0,
+            .alignment = @alignOf(ArgumentInfo(s_field.type)),
         };
     }
 
@@ -1701,7 +1701,7 @@ fn computeCmdAndArgBasicInfo(
             .type = FieldType,
             .default_value_ptr = null,
             .is_comptime = false,
-            .alignment = 0,
+            .alignment = @alignOf(FieldType),
         };
     }
 
@@ -1729,7 +1729,7 @@ fn UnionArgDescSubMap(comptime U: type) type {
             .type = CommandInfo(u_field.type),
             .default_value_ptr = null,
             .is_comptime = false,
-            .alignment = 0,
+            .alignment = @alignOf(CommandInfo(u_field.type)),
         };
     }
 
