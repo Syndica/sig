@@ -4,6 +4,7 @@ const sig = @import("../../sig.zig");
 const Pubkey = sig.core.Pubkey;
 
 const parse_vote = @import("parse_vote.zig");
+const parse_stake = @import("parse_stake.zig");
 
 pub const ParseError = error{
     InvalidAccountData,
@@ -16,6 +17,7 @@ pub const ParsedAccount = struct {
     program: []const u8,
     parsed: ParsedContent,
     space: u64,
+
     pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("program");
@@ -30,8 +32,8 @@ pub const ParsedAccount = struct {
 /// Tagged union of all parsable account types.
 pub const ParsedContent = union(enum) {
     vote: parse_vote.VoteAccountType,
+    stake: parse_stake.StakeAccountType,
     // TODO: add more parsers
-    // stake: parse_stake.StakeAccountType,
     // nonce: parse_nonce.NonceAccountType,
     pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
         switch (self) {
@@ -43,14 +45,14 @@ pub const ParsedContent = union(enum) {
 /// Enum of programs that support jsonParsed.
 const ParsableProgram = enum {
     vote,
-    // TODO: stake
+    stake,
     // TODO: nonce
     // TODO: address lookup table
     // TODO: bpf upgradeable loader
 
     pub fn fromProgramId(program_id: Pubkey) ?ParsableProgram {
         if (program_id.equals(&sig.runtime.program.vote.ID)) return .vote;
-        // TODO: stake
+        if (program_id.equals(&sig.runtime.program.stake.ID)) return .stake;
         // TODO: nonce
         return null;
     }
@@ -58,7 +60,7 @@ const ParsableProgram = enum {
     pub fn programName(self: @This()) []const u8 {
         return switch (self) {
             .vote => "vote",
-            // TODO: stake
+            .stake => "stake",
             // TODO: nonce
         };
     }
@@ -74,7 +76,7 @@ pub fn parse_account(
     const program = ParsableProgram.fromProgramId(program_id) orelse return null;
     const parsed: ParsedContent = switch (program) {
         .vote => .{ .vote = try parse_vote.parse_vote(allocator, reader) },
-        // TODO: stake
+        .stake => .{ .stake = try parse_stake.parse_stake(allocator, reader) },
         // TODO: nonce
     };
     return ParsedAccount{
