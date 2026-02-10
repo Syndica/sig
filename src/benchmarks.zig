@@ -57,58 +57,64 @@ fn usageText() []const u8 {
     return text;
 }
 
-const benchmarks: std.EnumMap(Filter, []const Benchmark) = .init(.{
-    .sync = &.{.{
-        .type = @import("sync/channel.zig").BenchmarkChannel,
-        .resolution = .nanos,
-    }},
-    .socket_utils = &.{.{
-        .type = @import("net/socket_utils.zig").BenchmarkPacketProcessing,
-        .resolution = .millis,
-    }},
-    .gossip = &.{
-        .{
-            .type = @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
+/// TODO(0.16): Preferably, this would be implemented with a comptime EnumMap,
+/// but there is a compiler bug in 0.15 that prevents this from working. The bug
+/// is already fixed in 0.16.
+fn getBenchmarks(comptime filter: Filter) []const Benchmark {
+    return switch (filter) {
+        .sync => &.{.{
+            .type = @import("sync/channel.zig").BenchmarkChannel,
             .resolution = .nanos,
-        },
-        .{
-            .type = @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
-            .resolution = .nanos,
-        },
-    },
-    .crypto = &.{
-        .{
-            .type = @import("crypto/benchmark.zig").BenchmarkSigVerify,
-            .resolution = .micros,
-        },
-        .{
-            .type = @import("crypto/benchmark.zig").BenchmarkPohHash,
-            .resolution = .nanos,
-        },
-    },
-    .ledger = &.{
-        .{
-            .type = @import("ledger/benchmarks.zig").BenchmarkLedger,
-            .resolution = .nanos,
-        },
-        .{
-            .type = @import("ledger/benchmarks.zig").BenchmarkLedgerSlow,
+        }},
+        .socket_utils => &.{.{
+            .type = @import("net/socket_utils.zig").BenchmarkPacketProcessing,
             .resolution = .millis,
+        }},
+        .gossip => &.{
+            .{
+                .type = @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
+                .resolution = .nanos,
+            },
+            .{
+                .type = @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
+                .resolution = .nanos,
+            },
         },
-    },
-    .swissmap = &.{.{
-        .type = @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
-        .resolution = .nanos,
-    }},
-    .bincode = &.{.{
-        .type = @import("bincode/benchmarks.zig").BenchmarkEntry,
-        .resolution = .nanos,
-    }},
-    .zksdk = &.{.{
-        .type = @import("zksdk/benchmarks.zig").Benchmark,
-        .resolution = .micros,
-    }},
-});
+        .crypto => &.{
+            .{
+                .type = @import("crypto/benchmark.zig").BenchmarkSigVerify,
+                .resolution = .micros,
+            },
+            .{
+                .type = @import("crypto/benchmark.zig").BenchmarkPohHash,
+                .resolution = .nanos,
+            },
+        },
+        .ledger => &.{
+            .{
+                .type = @import("ledger/benchmarks.zig").BenchmarkLedger,
+                .resolution = .nanos,
+            },
+            .{
+                .type = @import("ledger/benchmarks.zig").BenchmarkLedgerSlow,
+                .resolution = .millis,
+            },
+        },
+        .swissmap => &.{.{
+            .type = @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
+            .resolution = .nanos,
+        }},
+        .bincode => &.{.{
+            .type = @import("bincode/benchmarks.zig").BenchmarkEntry,
+            .resolution = .nanos,
+        }},
+        .zksdk => &.{.{
+            .type = @import("zksdk/benchmarks.zig").Benchmark,
+            .resolution = .micros,
+        }},
+        .geyser, .accounts_db, .accounts_db_snapshot, .accounts_db_readwrite => &.{},
+    };
+}
 
 const Cmd = struct {
     filter: ?Filter,
@@ -217,7 +223,7 @@ pub fn main() !void {
 
     switch (filter) {
         inline else => |tag| {
-            const benches = benchmarks.get(tag).?;
+            const benches = comptime getBenchmarks(tag);
             inline for (benches) |bench| {
                 try benchmark(
                     gpa,
