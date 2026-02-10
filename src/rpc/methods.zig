@@ -702,11 +702,7 @@ pub const SlotHookContext = struct {
         const config = params.config orelse common.CommitmentSlotConfig{};
         const commitment = config.commitment orelse .finalized;
         const slot = self.slot_tracker.getSlotForCommitment(commitment);
-        if (config.minContextSlot) |min_slot| {
-            if (slot < min_slot) {
-                return error.RpcMinContextSlotNotMet;
-            }
-        }
-        return slot;
+        const min_slot = config.minContextSlot orelse return slot;
+        return if (slot >= min_slot) slot else error.RpcMinContextSlotNotMet;
     }
 };
