@@ -51,7 +51,7 @@ pub const HttpPostFetcher = struct {
         allocator: std.mem.Allocator,
         request: []const u8,
     ) Error![]const u8 {
-        var response = std.ArrayList(u8).init(allocator);
+        var response = std.array_list.Managed(u8).init(allocator);
         errdefer response.deinit();
 
         var last_error: ?Error = null;
@@ -87,7 +87,7 @@ pub const HttpPostFetcher = struct {
     pub fn fetchOnce(
         self: *HttpPostFetcher,
         request_payload: []const u8,
-        response_payload: *std.ArrayList(u8),
+        response_payload: *std.array_list.Managed(u8),
     ) ErrorReturn(std.http.Client.fetch)!std.http.Client.FetchResult {
         return self.http_client.fetch(.{
             .location = .{ .url = self.base_url },

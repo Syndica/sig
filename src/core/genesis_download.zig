@@ -67,7 +67,7 @@ fn downloadGenesisArchive(
     var client = std.http.Client{ .allocator = allocator };
     defer client.deinit();
 
-    var response_body = std.ArrayList(u8).init(allocator);
+    var response_body = std.array_list.Managed(u8).init(allocator);
     errdefer response_body.deinit();
 
     const result = client.fetch(.{

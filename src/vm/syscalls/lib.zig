@@ -782,7 +782,7 @@ fn callProgramAddressSyscall(
     var out_address = Pubkey.ZEROES;
 
     // Setup in/out params.
-    var regions = std.ArrayList(memory.Region).init(allocator);
+    var regions = std.array_list.Managed(memory.Region).init(allocator);
     defer regions.deinit();
     try regions.appendSlice(&.{
         memory.Region.init(.constant, std.mem.asBytes(&program_id), program_id_addr),
@@ -791,7 +791,7 @@ fn callProgramAddressSyscall(
     });
 
     // Setup slice of VmSlices
-    var seed_slices = std.ArrayList(memory.VmSlice).init(allocator);
+    var seed_slices = std.array_list.Managed(memory.VmSlice).init(allocator);
     defer seed_slices.deinit();
     for (seeds, 0..) |seed, i| {
         const vm_addr = seed_data_addr +| (i *% 0x100000000);

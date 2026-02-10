@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Hash = sig.core.Hash;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.mux.RwMux;
@@ -99,7 +99,7 @@ test "gossip.pull_response: test filtering values works" {
     const max_bytes = 10;
 
     // recver
-    const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
+    const failed_pull_hashes = std.array_list.Managed(Hash).init(std.testing.allocator);
     var filters = try buildGossipPullFilters(
         std.testing.allocator,
         random,

@@ -8,7 +8,7 @@ const zstd = @import("zstd");
 const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 
 const Account = sig.core.Account;
 const Pubkey = sig.core.Pubkey;
@@ -283,7 +283,7 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
     var file_size: usize = 0;
     for (pubkeys_and_accounts.items(.account)) |account| file_size += account.getSizeInFile();
 
-    var account_file_buf = std.ArrayList(u8).init(db.allocator);
+    var account_file_buf = std.array_list.Managed(u8).init(db.allocator);
     defer account_file_buf.deinit();
 
     var current_offset: u64 = 0;
@@ -393,7 +393,7 @@ fn cleanAccountFiles(
 
     // TODO: move this out into a CleanState struct to reduce allocations
     // track then delete all to avoid deleting while iterating
-    var references_to_delete = std.ArrayList(struct { pubkey: Pubkey, slot: Slot })
+    var references_to_delete = std.array_list.Managed(struct { pubkey: Pubkey, slot: Slot })
         .init(db.allocator);
     defer references_to_delete.deinit();
 
@@ -556,7 +556,7 @@ fn deleteAccountFiles(
         db.metrics.number_files_deleted.add(number_of_files);
     }
 
-    var delete_queue = try std.ArrayList(AccountFile).initCapacity(
+    var delete_queue = try std.array_list.Managed(AccountFile).initCapacity(
         db.allocator,
         number_of_files,
     );
@@ -672,7 +672,7 @@ fn shrinkAccountFiles(
         const slot = shrink_account_file.slot;
 
         // compute size of alive accounts (read)
-        var is_alive_flags = try std.ArrayList(bool).initCapacity(
+        var is_alive_flags = try std.array_list.Managed(bool).initCapacity(
             db.allocator,
             shrink_account_file.number_of_accounts,
         );
@@ -736,11 +736,11 @@ fn shrinkAccountFiles(
             if (is_alive) file_size += account.getSizeInFile();
         }
 
-        var account_file_buf = std.ArrayList(u8).init(db.allocator);
+        var account_file_buf = std.array_list.Managed(u8).init(db.allocator);
         defer account_file_buf.deinit();
 
         // write the alive accounts
-        var offsets = try std.ArrayList(u64).initCapacity(db.allocator, accounts_alive_count);
+        var offsets = try std.array_list.Managed(u64).initCapacity(db.allocator, accounts_alive_count);
         defer offsets.deinit();
 
         account_iter.reset();

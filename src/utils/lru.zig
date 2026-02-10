@@ -342,7 +342,7 @@ test "common.lru: put works as expected" {
 test "common.lru: locked put is thread safe" {
     var cache = try LruCache(.locking, usize, usize).init(testing.allocator, 4);
     defer cache.deinit();
-    var threads = std.ArrayList(std.Thread).init(testing.allocator);
+    var threads = std.array_list.Managed(std.Thread).init(testing.allocator);
     defer threads.deinit();
     for (0..2) |_| try threads.append(try std.Thread.spawn(.{}, testPut, .{ &cache, 1 }));
     for (threads.items) |thread| thread.join();
@@ -351,7 +351,7 @@ test "common.lru: locked put is thread safe" {
 test "common.lru: locked insert is thread safe" {
     var cache = try LruCache(.locking, usize, usize).init(testing.allocator, 4);
     defer cache.deinit();
-    var threads = std.ArrayList(std.Thread).init(testing.allocator);
+    var threads = std.array_list.Managed(std.Thread).init(testing.allocator);
     defer threads.deinit();
     for (0..2) |_| try threads.append(try std.Thread.spawn(.{}, testInsert, .{ &cache, 1 }));
     for (threads.items) |thread| thread.join();

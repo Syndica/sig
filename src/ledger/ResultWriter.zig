@@ -7,7 +7,7 @@ pub const ledger_mod = @import("lib.zig");
 
 // std
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 
 // sig common
 const Hash = sig.core.Hash;

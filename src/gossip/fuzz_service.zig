@@ -343,7 +343,7 @@ pub fn randomPushMessage(
     random: std.Random,
     keypair: *const KeyPair,
     to_addr: sig.net.SocketAddr,
-) !std.ArrayList(Packet) {
+) !std.array_list.Managed(Packet) {
     const size: comptime_int = 5;
     var values: [size]SignedGossipData = undefined;
     const should_pass_sig_verification = random.boolean();
@@ -370,7 +370,7 @@ pub fn randomPullResponse(
     random: std.Random,
     keypair: *const KeyPair,
     to_addr: sig.net.SocketAddr,
-) !std.ArrayList(Packet) {
+) !std.array_list.Managed(Packet) {
     const size: comptime_int = 5;
     var values: [size]SignedGossipData = undefined;
     const should_pass_sig_verification = random.boolean();

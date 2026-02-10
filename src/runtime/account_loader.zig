@@ -503,7 +503,7 @@ fn constructInstructionsAccount(
     const Instruction = sig.core.Instruction;
     const InstructionAccount = sig.core.instruction.InstructionAccount;
 
-    var decompiled_instructions = try std.ArrayList(Instruction).initCapacity(
+    var decompiled_instructions = try std.array_list.Managed(Instruction).initCapacity(
         allocator,
         transaction.instructions.len,
     );
@@ -1370,7 +1370,7 @@ test "load v3 program" {
         },
     };
 
-    var v3_program_buf = std.ArrayList(u8).init(allocator);
+    var v3_program_buf = std.array_list.Managed(u8).init(allocator);
     defer v3_program_buf.deinit();
 
     try sig.bincode.write(v3_program_buf.writer(), v3_program, .{});

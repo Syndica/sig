@@ -754,8 +754,8 @@ pub fn getSerializedSizeWithSlice(slice: []u8, data: anytype, params: Params) !u
     return ser_slice.len;
 }
 
-pub fn writeToArray(allocator: std.mem.Allocator, data: anytype, params: Params) !std.ArrayList(u8) {
-    var array_buf = try std.ArrayList(u8).initCapacity(allocator, 2048);
+pub fn writeToArray(allocator: std.mem.Allocator, data: anytype, params: Params) !std.array_list.Managed(u8) {
+    var array_buf = try std.array_list.Managed(u8).initCapacity(allocator, 2048);
     try bincode.write(array_buf.writer(), data, params);
 
     return array_buf;
@@ -831,7 +831,7 @@ pub fn testRoundTrip(deserialized_item: anytype, bincode_serialized_bytes: []con
 
 test "bincode: custom enum" {
     const x = ShredType.Data;
-    var buf = std.ArrayList(u8).init(std.testing.allocator);
+    var buf = std.array_list.Managed(u8).init(std.testing.allocator);
     defer buf.deinit();
 
     try bincode.write(buf.writer(), x, .{});
@@ -840,8 +840,8 @@ test "bincode: custom enum" {
 test "bincode: default on eof" {
     const Foo = struct {
         value: u8 = 0,
-        accounts: std.ArrayList(u64),
-        pub const @"!bincode-config:accounts" = arraylist.defaultOnEofConfig(std.ArrayList(u64));
+        accounts: std.array_list.Managed(u64),
+        pub const @"!bincode-config:accounts" = arraylist.defaultOnEofConfig(std.array_list.Managed(u64));
         pub const @"!bincode-config:value" = int.defaultOnEof(u8, 0);
     };
 
@@ -852,7 +852,7 @@ test "bincode: default on eof" {
     var buf2: [1024]u8 = undefined;
     const buf3 = try writeToSlice(&buf2, Foo{
         .value = 10,
-        .accounts = std.ArrayList(u64).init(std.testing.allocator),
+        .accounts = std.array_list.Managed(u64).init(std.testing.allocator),
     }, .{});
 
     const r2 = try readFromSlice(std.testing.allocator, Foo, buf3, .{});
@@ -896,7 +896,7 @@ test "bincode: custom field serialization" {
 }
 
 test "bincode: test arraylist" {
-    var array = std.ArrayList(u8).init(std.testing.allocator);
+    var array = std.array_list.Managed(u8).init(std.testing.allocator);
     defer array.deinit();
 
     try array.append(10);
@@ -906,7 +906,7 @@ test "bincode: test arraylist" {
     const bytes = try writeToSlice(&buf, array, .{});
 
     // var bytes = [_]u8{ 2, 0, 0, 0, 0, 0, 0, 0, 10, 11};
-    var array2 = try readFromSlice(std.testing.allocator, std.ArrayList(u8), bytes, .{});
+    var array2 = try readFromSlice(std.testing.allocator, std.array_list.Managed(u8), bytes, .{});
     defer array2.deinit();
 
     try std.testing.expectEqualSlices(u8, array.items, array2.items);
@@ -1026,7 +1026,7 @@ test "bincode: test serialization" {
 }
 
 test "bincode: tuples" {
-    var buffer = std.ArrayList(u8).init(std.testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
     const Foo = struct { u16, u16 };
@@ -1037,7 +1037,7 @@ test "bincode: tuples" {
 }
 
 test "bincode: (legacy) serialize an array" {
-    var buffer = std.ArrayList(u8).init(std.testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(std.testing.allocator);
     defer buffer.deinit();
 
     const Foo = struct {
@@ -1072,7 +1072,7 @@ test "default value" {
 }
 
 test "bincode: serialize and deserialize" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     inline for (.{

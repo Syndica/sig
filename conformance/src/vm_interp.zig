@@ -160,7 +160,7 @@ fn executeVmTest(
 
     if (rodata.len % 8 != 0) return .{
         .@"error" = -2,
-        .input_data_regions = std.ArrayList(pb.InputDataRegion).init(allocator),
+        .input_data_regions = std.array_list.Managed(pb.InputDataRegion).init(allocator),
     };
     const executable: Executable = .{
         .instructions = std.mem.bytesAsSlice(Instruction, rodata),
@@ -185,7 +185,7 @@ fn executeVmTest(
     if (std.meta.isError(verify_result)) {
         return .{
             .@"error" = -2,
-            .input_data_regions = std.ArrayList(pb.InputDataRegion).init(allocator),
+            .input_data_regions = std.array_list.Managed(pb.InputDataRegion).init(allocator),
         };
     }
 
@@ -274,7 +274,7 @@ fn executeVmTest(
             .@"error" = 9,
             .cu_avail = 0,
             .frame_count = vm.depth,
-            .input_data_regions = std.ArrayList(pb.InputDataRegion).init(allocator),
+            .input_data_regions = std.array_list.Managed(pb.InputDataRegion).init(allocator),
         };
     }
 

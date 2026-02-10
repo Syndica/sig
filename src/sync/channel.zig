@@ -514,7 +514,7 @@ test "send-hook" {
     };
 
     const Consumer = struct {
-        collected: std.ArrayList(u64),
+        collected: std.array_list.Managed(u64),
         hook: Channel(u64).SendHook = .{ .after_send = afterSend },
 
         fn afterSend(hook: *Channel(u64).SendHook, channel: *Channel(u64)) void {
@@ -539,7 +539,7 @@ test "send-hook" {
     try expect(counter.count == to_send);
 
     // Check that afterSend consumes any sent values.
-    var consumer = Consumer{ .collected = std.ArrayList(u64).init(allocator) };
+    var consumer = Consumer{ .collected = std.array_list.Managed(u64).init(allocator) };
     ch.send_hook = &consumer.hook;
     defer consumer.collected.deinit();
 

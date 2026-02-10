@@ -218,7 +218,7 @@ pub fn loadShredsFromFile(allocator: Allocator, path: []const u8) ![]const Shred
     defer file.close();
 
     const reader = file.reader();
-    var shreds = std.ArrayList(Shred).init(allocator);
+    var shreds = std.array_list.Managed(Shred).init(allocator);
     errdefer {
         for (shreds.items) |shred| shred.deinit();
         shreds.deinit();
@@ -285,7 +285,7 @@ pub fn deinitShreds(allocator: Allocator, shreds: []const Shred) void {
 pub fn loadEntriesFromFile(allocator: Allocator, path: []const u8) ![]const Entry {
     const file = try std.fs.cwd().openFile(path, .{});
     const reader = file.reader();
-    var entries = std.ArrayList(Entry).init(allocator);
+    var entries = std.array_list.Managed(Entry).init(allocator);
     errdefer {
         for (entries.items) |entry| entry.deinit(allocator);
         entries.deinit();
@@ -380,11 +380,11 @@ pub fn insertDataForBlockTest(
     const parent_meta = SlotMeta.init(allocator, 0, null);
     try db.put(schema.slot_meta, slot - 1, parent_meta);
 
-    var expected_transactions = std.ArrayList(VersionedTransactionWithStatusMeta).init(allocator);
+    var expected_transactions = std.array_list.Managed(VersionedTransactionWithStatusMeta).init(allocator);
     for (entries) |entry| {
         for (entry.transactions) |transaction| {
-            var pre_balances = std.ArrayList(u64).init(allocator);
-            var post_balances = std.ArrayList(u64).init(allocator);
+            var pre_balances = std.array_list.Managed(u64).init(allocator);
+            var post_balances = std.array_list.Managed(u64).init(allocator);
             const num_accounts = transaction.msg.account_keys.len;
             for (0..num_accounts) |i| {
                 try pre_balances.append(i * 10);

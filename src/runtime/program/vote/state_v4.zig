@@ -540,12 +540,12 @@ pub const VoteStateV4 = struct {
         else
             0;
 
-        var recent_vote_slots = std.ArrayList(Slot).init(allocator);
-        defer recent_vote_slots.deinit();
+        var recent_vote_slots: std.ArrayList(Slot) = .{};
+        defer recent_vote_slots.deinit(allocator);
 
         for (vote.slots) |slot| {
             if (slot >= earliest_slot_in_history) {
-                try recent_vote_slots.append(slot);
+                try recent_vote_slots.append(allocator, slot);
             }
         }
 

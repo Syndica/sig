@@ -143,7 +143,7 @@ pub fn newInstruction(
         .message_instruction_index = std.math.maxInt(u16),
     };
 
-    var instruction_data = try std.ArrayList(u8).initCapacity(
+    var instruction_data = try std.array_list.Managed(u8).initCapacity(
         allocator,
         message_data_offset + message.len,
     );

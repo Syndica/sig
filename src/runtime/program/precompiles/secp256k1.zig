@@ -645,7 +645,7 @@ test "secp256 malleability" {
     alt_signature.s = try Secp256k1.scalar.neg(alt_signature.s, .big);
     const alt_recovery_id = recovery_id ^ 1;
 
-    var data = std.ArrayList(u8).init(allocator);
+    var data = std.array_list.Managed(u8).init(allocator);
     defer data.deinit();
     var both_offsets: [2]SignatureOffsets = undefined;
 
@@ -682,7 +682,7 @@ test "secp256 malleability" {
         both_offsets[i] = offsets;
     }
 
-    var instruction_data = std.ArrayList(u8).init(allocator);
+    var instruction_data = std.array_list.Managed(u8).init(allocator);
     defer instruction_data.deinit();
 
     try instruction_data.append(2); // n_signatures
