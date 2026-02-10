@@ -330,7 +330,7 @@ pub const GenesisConfig = struct {
     pub const @"!bincode-config:hash" = bincode.FieldConfig(sig.core.Hash){ .skip = true };
 
     pub fn init(allocator: Allocator, genesis_path: []const u8) !GenesisConfig {
-        var file = try std.fs.cwd().openFile(genesis_path, .{});
+        const file = try std.fs.cwd().openFile(genesis_path, .{});
         defer file.close();
 
         // Read the entire file to compute hash from raw bytes

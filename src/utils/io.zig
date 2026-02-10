@@ -22,7 +22,7 @@ pub fn PeekableReader(comptime ReaderType: type) type {
         next_byte: ?u8 = null,
 
         pub const Error = ReaderType.Error;
-        pub const Reader = std.io.Reader(*Self, Error, read);
+        pub const Reader = std.io.GenericReader(*Self, Error, read);
 
         const Self = @This();
 
