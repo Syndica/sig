@@ -1,6 +1,6 @@
 const std = @import("std");
-const std14 = @import("std14");
 const builtin = @import("builtin");
+const std14 = @import("std14");
 const sig = @import("../sig.zig");
 const base58 = @import("base58");
 
@@ -30,6 +30,10 @@ pub const SlotAndHash = struct {
 
     pub fn equals(a: SlotAndHash, b: SlotAndHash) bool {
         return order(a, b) == .eq;
+    }
+
+    pub fn format(self: SlotAndHash, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.print("({}, {f})", .{ self.slot, self.hash });
     }
 };
 
@@ -84,30 +88,28 @@ pub const Hash = extern struct {
 
     pub fn parseRuntime(str: []const u8) error{InvalidHash}!Hash {
         if (str.len > BASE58_MAX_SIZE) return error.InvalidHash;
-        var encoded: std14.BoundedArray(u8, BASE58_MAX_SIZE) = .{};
-        encoded.appendSliceAssumeCapacity(str);
 
         if (@inComptime()) @setEvalBranchQuota(str.len * str.len * str.len);
-        const decoded = BASE58_ENDEC.decodeBounded(BASE58_MAX_SIZE, encoded) catch {
+        var decoded_buf: [base58.decodedMaxSize(BASE58_MAX_SIZE)]u8 = undefined;
+        const decoded_len = BASE58_ENDEC.decode(&decoded_buf, str) catch {
             return error.InvalidHash;
         };
 
-        if (decoded.len != SIZE) return error.InvalidHash;
-        return .{ .data = decoded.constSlice()[0..SIZE].* };
+        if (decoded_len != SIZE) return error.InvalidHash;
+        return .{ .data = decoded_buf[0..SIZE].* };
     }
 
     pub const BASE58_MAX_SIZE = base58.encodedMaxSize(SIZE);
     pub const Base58String = std14.BoundedArray(u8, BASE58_MAX_SIZE);
+
     pub fn base58String(self: Hash) Base58String {
-        return BASE58_ENDEC.encodeArray(SIZE, self.data);
+        var result: Base58String = .{};
+        const len = BASE58_ENDEC.encode(result.unusedCapacitySlice(), &self.data);
+        result.len = len;
+        return result;
     }
 
-    pub fn format(
-        self: Hash,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) @TypeOf(writer).Error!void {
+    pub fn format(self: Hash, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         const str = self.base58String();
         return writer.writeAll(str.constSlice());
     }
@@ -318,12 +320,7 @@ pub const LtHash = struct {
         return out;
     }
 
-    pub fn format(
-        lt_hash: LtHash,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+    pub fn format(lt_hash: LtHash, writer: *std.io.Writer) std.io.Writer.Error!void {
         const encoded_len = comptime std.base64.standard.Encoder.calcSize(NUM_ELEMENTS * 2);
         var buffer: [encoded_len]u8 = undefined;
         const encoded = std.base64.standard.Encoder.encode(&buffer, @ptrCast(&lt_hash.data));
@@ -587,7 +584,7 @@ test "hello and world hash correctly" {
     // sig fmt: off
     try std.testing.expectFmt(
         "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",
-        "{}",
+        "{f}",
         .{expected_world_lt_hash},
     );
     // sig fmt: on
