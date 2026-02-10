@@ -38,10 +38,10 @@ jobs:
           name: Download Zig
           command: |
             sudo apt update && sudo apt install -y wget unzip xz-utils
-            wget https://ziglang.org/download/0.14.1/zig-<< parameters.target >>-0.14.1.tar.xz
-            tar xf zig-<< parameters.target >>-0.14.1.tar.xz
+            wget https://ziglang.org/download/0.15.2/zig-<< parameters.target >>-0.15.2.tar.xz
+            tar xf zig-<< parameters.target >>-0.15.2.tar.xz
             mkdir -p workspace
-            mv zig-<< parameters.target >>-0.14.1 workspace/zig
+            mv zig-<< parameters.target >>-0.15.2 workspace/zig
       - persist_to_workspace:
           root: workspace
           paths:
@@ -95,7 +95,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted-v3
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig.zon" }}-selfhosted
       - run:
           name: Build
           command: |
@@ -103,7 +103,7 @@ jobs:
             ./scripts/proxy_workaround.sh workspace/zig/zig
             workspace/zig/zig build -Denable-tsan=true -p workspace/zig-out -Dcpu=x86_64_v3 --summary all
       - save_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted-v3
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig.zon" }}-selfhosted
           paths:
             - .zig-cache
             - ~/.cache/zig
@@ -119,7 +119,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted-release
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig.zon" }}-selfhosted-release
       - run:
           name: Build
           command: |
@@ -132,7 +132,7 @@ jobs:
             cd conformance
             ../workspace/zig/zig build -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p ../workspace/conformance-release --summary all
       - save_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted-release
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig.zon" }}-selfhosted-release
           paths:
             - .zig-cache
             - ~/.cache/zig
@@ -150,7 +150,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
+          key: macos-aarch64-0.15.2-{{ checksum "build.zig.zon" }}
       - run:
           name: Build Check
           command: |
@@ -163,7 +163,7 @@ jobs:
 
             zig build -Denable-tsan=true -Dcpu=apple_m4 --summary all -Dno-run -Dno-bin
       - save_cache:
-          key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
+          key: macos-aarch64-0.15.2-{{ checksum "build.zig.zon" }}
           paths:
             - .zig-cache
             - ~/.cache/zig
@@ -175,7 +175,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
+          key: macos-aarch64-0.15.2-{{ checksum "build.zig.zon" }}
       - run:
           name: Build Tests
           command: workspace/zig/zig build test -Dno-run -Denable-tsan=true -Dcpu=apple_m4 --summary all
@@ -186,7 +186,7 @@ jobs:
             ulimit -Sn unlimited
             zig-out/bin/test 2>&1 | cat
       - save_cache:
-          key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
+          key: macos-aarch64-0.15.2-{{ checksum "build.zig.zon" }}
           paths:
             - .zig-cache
             - ~/.cache/zig
@@ -198,7 +198,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
+          key: macos-aarch64-0.15.2-{{ checksum "build.zig.zon" }}
       - run:
           name: Build Tests
           command: workspace/zig/zig build test -Dno-run -Denable-tsan=true -Dcpu=apple_m4 --summary all -Dlong-tests -Dledger=hashmap -Dfilter="ledger"
@@ -209,7 +209,7 @@ jobs:
             ulimit -Sn unlimited
             zig-out/bin/test 2>&1 | cat
       - save_cache:
-          key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
+          key: macos-aarch64-0.15.2-{{ checksum "build.zig.zon" }}
           paths:
             - .zig-cache
             - ~/.cache/zig
@@ -221,7 +221,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig.zon" }}-selfhosted
       - run:
           name: Build Tests
           command: workspace/zig/zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
@@ -238,7 +238,7 @@ jobs:
       # Restore the cache in order to have access to the files which the DWARF info
       # is referencing when dumping stack traces.
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig.zon" }}-selfhosted
       - run:
           name: Build Tests
           # Disable network-accessing tests for this job, which behave badly on circleci
@@ -254,7 +254,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig.zon" }}-selfhosted
       - run:
           name: Build
           command: workspace/zig/zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-network-tests --summary all
@@ -329,7 +329,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted-release
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig.zon" }}-selfhosted-release
       - run:
           name: Run Fixtures
           command: ./conformance/scripts/ci-run.sh
