@@ -42,7 +42,7 @@ pub fn LruCacheCustom(
             std.StringArrayHashMap(*Node)
         else
             std.AutoArrayHashMap(K, *Node),
-        dbl_link_list: DoublyLinkedList(LruEntry),
+        dbl_link_list: DoublyLinkedList,
         max_items: usize,
         len: usize = 0,
         deinit_context: DeinitContext,
@@ -53,8 +53,6 @@ pub fn LruCacheCustom(
             key: K,
             value: V,
 
-            const Self = @This();
-
             pub fn init(key: K, val: V) LruEntry {
                 return LruEntry{
                     .key = key,
@@ -63,7 +61,15 @@ pub fn LruCacheCustom(
             }
         };
 
-        const Node = DoublyLinkedList(LruEntry).Node;
+        /// Node structure with intrusive list node embedded
+        pub const Node = struct {
+            list_node: DoublyLinkedList.Node = .{},
+            data: LruEntry,
+        };
+
+        fn nodeFromListNode(list_node: *DoublyLinkedList.Node) *Node {
+            return @fieldParentPtr("list_node", list_node);
+        }
 
         fn initNode(self: *Self, key: K, val: V) error{OutOfMemory}!*Node {
             self.len += 1;
@@ -96,7 +102,7 @@ pub fn LruCacheCustom(
             var self = Self{
                 .allocator = allocator,
                 .hashmap = hashmap,
-                .dbl_link_list = DoublyLinkedList(LruEntry){},
+                .dbl_link_list = .{},
                 .max_items = max_items,
                 .mux = if (kind == .locking) Mutex{} else undefined,
                 .deinit_context = deinit_context,
@@ -111,7 +117,8 @@ pub fn LruCacheCustom(
         }
 
         pub fn deinit(self: *Self) void {
-            while (self.dbl_link_list.pop()) |node| {
+            while (self.dbl_link_list.pop()) |list_node| {
+                const node = nodeFromListNode(list_node);
                 self.deinitNode(node);
             }
             std.debug.assert(self.len == 0); // no leaks
@@ -126,18 +133,17 @@ pub fn LruCacheCustom(
             key: K,
             value: V,
         ) error{OutOfMemory}!struct { ?LruEntry, LruEntry } {
-            if (self.dbl_link_list.len == self.max_items) {
-                const recycled_node = self.dbl_link_list.popFirst().?;
+            if (self.dbl_link_list.len() == self.max_items) {
+                const recycled_list_node = self.dbl_link_list.popFirst().?;
+                const recycled_node = nodeFromListNode(recycled_list_node);
                 deinitFn(&recycled_node.data.value, self.deinit_context);
                 std.debug.assert(self.hashmap.swapRemove(recycled_node.data.key));
                 // after swap, this node is thrown away
                 var node_to_swap: Node = .{
                     .data = LruEntry.init(key, value),
-                    .next = null,
-                    .prev = null,
                 };
                 std.mem.swap(Node, recycled_node, &node_to_swap);
-                self.dbl_link_list.append(recycled_node);
+                self.dbl_link_list.append(&recycled_node.list_node);
                 self.hashmap.putAssumeCapacityNoClobber(key, recycled_node);
                 return .{ node_to_swap.data, recycled_node.data };
             }
@@ -145,7 +151,7 @@ pub fn LruCacheCustom(
             // key not exist, alloc a new node
             const node = try self.initNode(key, value);
             self.hashmap.putAssumeCapacityNoClobber(key, node);
-            self.dbl_link_list.append(node);
+            self.dbl_link_list.append(&node.list_node);
             return .{ null, node.data };
         }
 
@@ -187,7 +193,8 @@ pub fn LruCacheCustom(
             if (kind == .locking) self.mux.lock();
             defer if (kind == .locking) self.mux.unlock();
 
-            if (self.dbl_link_list.last) |node| {
+            if (self.dbl_link_list.last) |list_node| {
+                const node = nodeFromListNode(list_node);
                 return node.data;
             }
             return null;
@@ -198,7 +205,8 @@ pub fn LruCacheCustom(
             if (kind == .locking) self.mux.lock();
             defer if (kind == .locking) self.mux.unlock();
 
-            if (self.dbl_link_list.first) |node| {
+            if (self.dbl_link_list.first) |list_node| {
+                const node = nodeFromListNode(list_node);
                 return node.data;
             }
             return null;
@@ -206,8 +214,8 @@ pub fn LruCacheCustom(
 
         // reorder Node to the top
         fn internalReorder(self: *Self, node: *Node) void {
-            self.dbl_link_list.remove(node);
-            self.dbl_link_list.append(node);
+            self.dbl_link_list.remove(&node.list_node);
+            self.dbl_link_list.append(&node.list_node);
         }
 
         /// Gets value associated with key if exists
@@ -216,8 +224,8 @@ pub fn LruCacheCustom(
             defer if (kind == .locking) self.mux.unlock();
 
             if (self.hashmap.get(key)) |node| {
-                self.dbl_link_list.remove(node);
-                self.dbl_link_list.append(node);
+                self.dbl_link_list.remove(&node.list_node);
+                self.dbl_link_list.append(&node.list_node);
                 return node.data.value;
             }
             return null;
@@ -229,7 +237,7 @@ pub fn LruCacheCustom(
 
             if (self.hashmap.fetchSwapRemove(k)) |kv| {
                 const node = kv.value;
-                self.dbl_link_list.remove(node);
+                self.dbl_link_list.remove(&node.list_node);
                 defer self.deinitNode(node);
                 return node.data.value;
             }
@@ -282,7 +290,7 @@ pub fn LruCacheCustom(
 
             if (self.hashmap.fetchSwapRemove(key)) |kv| {
                 const node = kv.value;
-                self.dbl_link_list.remove(node);
+                self.dbl_link_list.remove(&node.list_node);
                 self.deinitNode(node);
                 return true;
             }
@@ -299,7 +307,7 @@ test "common.lru: LruCache state is correct" {
     try cache.insert(2, "two");
     try cache.insert(3, "three");
     try cache.insert(4, "four");
-    try testing.expectEqual(@as(usize, 4), cache.dbl_link_list.len);
+    try testing.expectEqual(@as(usize, 4), cache.dbl_link_list.len());
     try testing.expectEqual(@as(usize, 4), cache.hashmap.keys().len);
     try testing.expectEqual(@as(usize, 4), cache.len);
 
@@ -311,7 +319,7 @@ test "common.lru: LruCache state is correct" {
     try cache.insert(5, "five");
     try testing.expectEqual(cache.mru().?.value, "five");
     try testing.expectEqual(cache.lru().?.value, "three");
-    try testing.expectEqual(@as(usize, 4), cache.dbl_link_list.len);
+    try testing.expectEqual(@as(usize, 4), cache.dbl_link_list.len());
     try testing.expectEqual(@as(usize, 4), cache.hashmap.keys().len);
     try testing.expectEqual(@as(usize, 4), cache.len);
 
