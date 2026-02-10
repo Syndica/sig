@@ -43,15 +43,21 @@ pub const Cmd = struct {
             .localnet => return error.MustProvideGenesisFileForLocalHost,
         } else return null;
 
-        std.fs.cwd().access(local_path, .{ .read = true }) catch {
+        const genesis_file = std.fs.cwd().openFile(local_path, .{}) catch {
             return null;
         };
+        genesis_file.close();
+
+        return local_path;
     }
 
     /// Derives a path relative to validator_dir if the param equals the default value.
     /// This is used to allow paths like snapshot_dir and geyser.pipe_path to be relative
     /// to validator_dir when using their default values, while still allowing explicit
     /// overrides.
+    /// TODO:
+    ///     - remove alloc by using fixed-size buffers for paths
+    ///     - https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=156092227)
     pub fn derivePathFromValidatorDir(
         self: Cmd,
         allocator: std.mem.Allocator,
