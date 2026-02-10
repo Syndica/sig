@@ -352,19 +352,15 @@ pub const SocketAddr = union(enum(u8)) {
 
     pub fn toStringBuf(self: SocketAddr, buf: *[53]u8) std.math.IntFittingRange(0, 53) {
         var stream = std.io.fixedBufferStream(buf);
-        self.toAddress().format("", .{}, stream.writer()) catch unreachable;
+        const writer = stream.writer();
+        self.toAddress().format(&writer.interface) catch unreachable;
         return @intCast(stream.pos);
     }
 
-    pub fn format(
-        self: SocketAddr,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+    pub fn format(self: SocketAddr, writer: *std.io.Writer) std.io.Writer.Error!void {
         switch (self) {
-            .V4 => |sav4| try sav4.format(fmt, options, writer),
-            .V6 => |sav6| try sav6.format(fmt, options, writer),
+            .V4 => |sav4| try sav4.format(writer),
+            .V6 => |sav6| try sav6.format(writer),
         }
     }
 
@@ -396,15 +392,8 @@ pub const SocketAddrV4 = struct {
     ip: Ipv4Addr,
     port: u16,
 
-    pub fn format(
-        self: SocketAddrV4,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
-        try writer.print("{}:{d}", .{
+    pub fn format(self: SocketAddrV4, writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.print("{f}:{d}", .{
             self.ip,
             self.port,
         });
@@ -417,15 +406,8 @@ pub const SocketAddrV6 = struct {
     flowinfo: u32,
     scope_id: u32,
 
-    pub fn format(
-        self: SocketAddrV6,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
-        try writer.print("{}:{d}", .{
+    pub fn format(self: SocketAddrV6, writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.print("{f}:{d}", .{
             self.ip,
             self.port,
         });
@@ -443,14 +425,7 @@ pub const Ipv4Addr = struct {
         return std.mem.eql(u8, self.octets[0..], other.octets[0..]);
     }
 
-    pub fn format(
-        self: Ipv4Addr,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
+    pub fn format(self: Ipv4Addr, writer: *std.io.Writer) std.io.Writer.Error!void {
         try writer.print("{}.{}.{}.{}", .{
             self.octets[0],
             self.octets[1],
@@ -478,20 +453,13 @@ pub const Ipv6Addr = struct {
         return self.octets[0] == 255;
     }
 
-    pub fn format(
-        self: Ipv6Addr,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
+    pub fn format(self: Ipv6Addr, writer: *std.io.Writer) std.io.Writer.Error!void {
         if (std.mem.eql(
             u8,
             self.octets[0..12],
             &[12]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff },
         )) {
-            try std.fmt.format(writer, "[::ffff:{}.{}.{}.{}]", .{
+            try writer.print("[::ffff:{}.{}.{}.{}]", .{
                 self.octets[12],
                 self.octets[13],
                 self.octets[14],
@@ -521,7 +489,7 @@ pub const Ipv6Addr = struct {
                 }
                 continue;
             }
-            try std.fmt.format(writer, "{x}", .{native_endian_parts[i]});
+            try writer.print("{x}", .{native_endian_parts[i]});
             if (i != native_endian_parts.len - 1) {
                 try writer.writeAll(":");
             }
@@ -587,15 +555,10 @@ pub const IpAddr = union(enum(u32)) {
         };
     }
 
-    pub fn format(
-        self: IpAddr,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+    pub fn format(self: IpAddr, writer: *std.io.Writer) std.io.Writer.Error!void {
         switch (self) {
-            .ipv4 => |ipv4| try ipv4.format(fmt, options, writer),
-            .ipv6 => |ipv6| try ipv6.format(fmt, options, writer),
+            .ipv4 => |ipv4| try ipv4.format(writer),
+            .ipv6 => |ipv6| try ipv6.format(writer),
         }
     }
 };

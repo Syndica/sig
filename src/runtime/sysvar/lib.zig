@@ -23,12 +23,11 @@ pub const instruction = @import("instruction.zig");
 /// Needed for "sol_get_sysvar" buffer range checks.
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/9148b5cc95b43319f3451391ec66d0086deb5cfa/account/src/lib.rs#L725
 pub fn serialize(allocator: std.mem.Allocator, value: anytype) ![]u8 {
-    var stream = std.io.countingWriter(std.io.null_writer);
-    try bincode.write(stream.writer(), value, .{});
+    const serialized_size = bincode.sizeOf(value, .{});
 
     const T = @TypeOf(value);
     const STORAGE_SIZE: usize = if (@hasDecl(T, "STORAGE_SIZE")) T.STORAGE_SIZE else @sizeOf(T);
-    const size = @max(stream.bytes_written, STORAGE_SIZE);
+    const size = @max(serialized_size, STORAGE_SIZE);
 
     const buffer = try allocator.alloc(u8, size);
     errdefer allocator.free(buffer);

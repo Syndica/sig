@@ -11,7 +11,7 @@ pub fn expectEqualDeepWithOverrides(
 ) !void {
     var sub_accesses: std.ArrayListUnmanaged(SubAccess) = .{};
     defer sub_accesses.deinit(std.testing.allocator);
-    errdefer testPrint("Difference occurs at `expected`{}", .{
+    errdefer testPrint("Difference occurs at `expected`{f}", .{
         SubAccess.suffixListFmt(sub_accesses.items),
     });
     expectEqualDeepWithOverridesImpl(
@@ -38,16 +38,14 @@ const SubAccess = union(enum) {
 
         pub fn format(
             self: SuffixListFmt,
-            comptime fmt_str: []const u8,
-            fmt_options: std.fmt.FormatOptions,
-            writer: anytype,
-        ) @TypeOf(writer).Error!void {
-            _ = fmt_options;
-            if (fmt_str.len != 0) std.fmt.invalidFmtError(fmt_str, self);
-
+            writer: *std.Io.Writer,
+        ) std.Io.Writer.Error!void {
             for (self.items) |access| {
                 switch (access) {
-                    .field => |field| try writer.print(".{p_}", .{std.zig.fmtId(field)}),
+                    .field => |field| {
+                        try writer.writeAll(".");
+                        try writer.print("{f}", .{std.zig.fmtId(field)});
+                    },
                     .index => |index| try writer.print("[{d}]", .{index}),
                 }
             }

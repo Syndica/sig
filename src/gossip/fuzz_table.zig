@@ -97,7 +97,7 @@ pub fn run(seed: u64, args: []const []const u8) !void {
                     const signed_data = SignedGossipData.initSigned(&keypair, data);
 
                     // !
-                    logger.trace().logf("putting pubkey: {}", .{pubkey});
+                    logger.trace().logf("putting pubkey: {f}", .{pubkey});
                     const result = try gossip_table.insert(signed_data, now);
                     std.debug.assert(result == .success);
 
@@ -121,10 +121,10 @@ pub fn run(seed: u64, args: []const []const u8) !void {
 
                     const should_overwrite = random.boolean();
                     if (should_overwrite) {
-                        logger.trace().logf("overwriting pubkey: {}", .{pubkey});
+                        logger.trace().logf("overwriting pubkey: {f}", .{pubkey});
                         data.wallclockPtr().* = now;
                     } else {
-                        logger.trace().logf("writing old pubkey: {}", .{pubkey});
+                        logger.trace().logf("writing old pubkey: {f}", .{pubkey});
                         const old_value = random.boolean();
                         const other_insertion_time = insertion_times.items[index];
                         if (old_value) {
@@ -142,11 +142,11 @@ pub fn run(seed: u64, args: []const []const u8) !void {
                     const result = try gossip_table.insert(signed_data, now);
                     defer if (result == .fail) data.deinit(allocator);
                     if (result == .fail and result.fail == .too_old) {
-                        logger.trace().logf("ignored old value: {}", .{pubkey});
+                        logger.trace().logf("ignored old value: {f}", .{pubkey});
                         std.debug.assert(!should_overwrite);
                     }
                     if (result == .fail and result.fail == .duplicate) {
-                        logger.trace().logf("duplicate value: {}", .{pubkey});
+                        logger.trace().logf("duplicate value: {f}", .{pubkey});
                     }
 
                     if (result == .success) {
@@ -167,7 +167,7 @@ pub fn run(seed: u64, args: []const []const u8) !void {
                 const search_key = keys.items[index];
 
                 errdefer {
-                    logger.err().logf("pubkey failed: {} with key: {}", .{ pubkey, search_key });
+                    logger.err().logf("pubkey failed: {f} with key: {}", .{ pubkey, search_key });
                 }
 
                 const metadata = gossip_table.getMetadata(search_key) orelse {
@@ -176,13 +176,13 @@ pub fn run(seed: u64, args: []const []const u8) !void {
                 };
 
                 if (!metadata.signature.eql(&signatures.get(pubkey).?)) {
-                    logger.err().logf("signature mismatch: {}", .{pubkey});
+                    logger.err().logf("signature mismatch: {f}", .{pubkey});
                     return error.SignatureMismatch;
                 }
 
                 // via direct method
                 if (gossip_table.getThreadSafeContactInfo(pubkey) == null) {
-                    logger.err().logf("failed to get contact info: {}", .{pubkey});
+                    logger.err().logf("failed to get contact info: {f}", .{pubkey});
                     return error.ContactInfoNotFound;
                 }
 
@@ -194,7 +194,7 @@ pub fn run(seed: u64, args: []const []const u8) !void {
                     }
                 } else false;
                 if (!found) {
-                    logger.err().logf("failed to find pubkey: {}", .{pubkey});
+                    logger.err().logf("failed to find pubkey: {f}", .{pubkey});
                     return error.ContactInfoNotFound;
                 }
 

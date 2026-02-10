@@ -439,7 +439,7 @@ fn downloadFile(
     if (download_buffer.len < 1 * BYTE_PER_MIB and
         download_size >= BYTE_PER_GIB)
     {
-        logger.warn().logf("Downloading file of size {} using a buffer of size {};" ++
+        logger.warn().logf("Downloading file of size {} using a buffer of size {Bi};" ++
             " recommended buffer size for such a payload is at least 1 MiB.", .{
             std.fmt.fmtIntSizeBin(download_size),
             std.fmt.fmtIntSizeBin(download_buffer.len),

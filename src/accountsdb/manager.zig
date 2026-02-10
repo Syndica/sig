@@ -393,7 +393,7 @@ fn cleanAccountFiles(
 
     // TODO: move this out into a CleanState struct to reduce allocations
     // track then delete all to avoid deleting while iterating
-    var references_to_delete = std.array_list.Managed(struct { pubkey: Pubkey, slot: Slot })
+    var references_to_delete = ArrayList(struct { pubkey: Pubkey, slot: Slot })
         .init(db.allocator);
     defer references_to_delete.deinit();
 
@@ -628,7 +628,7 @@ fn deleteAccountFile(
     db.snapshot_dir.deleteFile(file_path_bounded.constSlice()) catch |err| switch (err) {
         error.FileNotFound => {
             db.logger.warn().logf(
-                "trying to delete accounts file which does not exist: {s}",
+                "trying to delete accounts file which does not exist: {f}",
                 .{sig.utils.fmt.tryRealPath(db.snapshot_dir, file_path_bounded.constSlice())},
             );
             return error.InvalidAccountFile;
@@ -740,7 +740,10 @@ fn shrinkAccountFiles(
         defer account_file_buf.deinit();
 
         // write the alive accounts
-        var offsets = try std.array_list.Managed(u64).initCapacity(db.allocator, accounts_alive_count);
+        var offsets = try std.array_list.Managed(u64).initCapacity(
+            db.allocator,
+            accounts_alive_count,
+        );
         defer offsets.deinit();
 
         account_iter.reset();
@@ -891,11 +894,11 @@ fn purgeSlot(db: *AccountsDB, slot: Slot) void {
     for (pubkeys_and_accounts.items(.pubkey)) |*pubkey| {
         db.account_index.removeReference(pubkey, slot) catch |err| switch (err) {
             error.PubkeyNotFound => std.debug.panic(
-                "pubkey not found in index while purging: {any}",
+                "pubkey not found in index while purging: {f}",
                 .{pubkey},
             ),
             error.SlotNotFound => std.debug.panic(
-                "pubkey @ slot not found in index while purging: {any} @ {d}",
+                "pubkey @ slot not found in index while purging: {f} @ {d}",
                 .{ pubkey, slot },
             ),
         };

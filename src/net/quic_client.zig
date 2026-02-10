@@ -376,7 +376,7 @@ pub fn Client(
                 const conn_ctx = lsquic.lsquic_conn_get_ctx(maybe_lsquic_connection).?;
                 const self: *Connection = @ptrCast(@alignCast(conn_ctx));
 
-                self.client.logger.debug().logf("onNewConn: {}", .{self.endpoint});
+                self.client.logger.debug().logf("onNewConn: {f}", .{self.endpoint});
                 self.lsquic_connection = maybe_lsquic_connection.?;
                 self.client.connections.append(self) catch @panic("reached max connections");
 

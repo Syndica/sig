@@ -867,14 +867,14 @@ fn loadTower(
     // Validate that the account is owned by the vote program
     if (!vote_account.owner.equals(&sig.runtime.program.vote.ID)) {
         logger.err().logf(
-            "Invalid vote account owner. Expected: {}, Got: {}",
+            "Invalid vote account owner. Expected: {f}, Got: {f}",
             .{ sig.runtime.program.vote.ID, vote_account.owner },
         );
         return error.InvalidVoteAccountOwner;
     }
 
     logger.debug().logf(
-        "Vote account loaded: Pubkey={?}, Lamports={}, Owner={}, Data length={}",
+        "Vote account loaded: Pubkey={f}, Lamports={}, Owner={f}, Data length={}",
         .{
             vote_account_address,
             vote_account.lamports,

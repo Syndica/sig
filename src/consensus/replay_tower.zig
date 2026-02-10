@@ -1709,7 +1709,7 @@ pub fn collectClusterVoteState(
         }
 
         logger.trace().logf(
-            "{?} {} with stake {}",
+            "{any} {f} with stake {}",
             .{ vote_account_pubkey, vote_address, vote.stake },
         );
 

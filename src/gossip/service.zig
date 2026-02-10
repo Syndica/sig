@@ -495,7 +495,7 @@ pub const GossipService = struct {
 
         message.verifySignature() catch |e| {
             logger.err().logf(
-                "packet_verify: failed to verify signature from {}: {s}",
+                "packet_verify: failed to verify signature from {f}: {s}",
                 .{ packet.addr, @errorName(e) },
             );
             return error.VerifyFail;
