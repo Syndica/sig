@@ -136,7 +136,7 @@ pub const TowerConsensus = struct {
             signing: sig.identity.SigningKeys,
             account_reader: AccountReader,
             ledger: *sig.ledger.Ledger,
-            slot_tracker: *const SlotTracker,
+            slot_tracker: *SlotTracker,
             /// Usually `.now()`.
             now: sig.time.Instant,
             registry: *sig.prometheus.Registry(.{}),
@@ -177,7 +177,7 @@ pub const TowerConsensus = struct {
         errdefer replay_tower.deinit(allocator);
 
         var vote_collector: sig.consensus.VoteCollector =
-            try .init(deps.now, root, deps.registry, deps.slot_tracker.latest_confirmed_slot);
+            try .init(deps.now, root, deps.registry);
         errdefer vote_collector.deinit(allocator);
 
         return .{
@@ -2509,8 +2509,8 @@ test "checkAndHandleNewRoot - missing slot" {
         .hash = Hash.initRandom(random),
     };
 
-    var latest_processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var latest_confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+    const latest_processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
+    const latest_confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
     const root: std.atomic.Value(Slot) = .init(0);
 
     // NOTE: TestFixture has its own SlotTracker as well. Unclear if that matters.
@@ -2523,8 +2523,8 @@ test "checkAndHandleNewRoot - missing slot" {
     // Build a tracked slot set wrapped in RwMux
     var slot_tracker: SlotTracker = .{
         .root = root,
-        .latest_processed_slot = &latest_processed_slot,
-        .latest_confirmed_slot = &latest_confirmed_slot,
+        .latest_processed_slot = latest_processed_slot,
+        .latest_confirmed_slot = latest_confirmed_slot,
         .slots = .empty,
     };
     defer slot_tracker.deinit(testing.allocator);
@@ -2568,8 +2568,8 @@ test "checkAndHandleNewRoot - missing slot" {
     try testing.expectError(error.MissingSlot, result);
 
     // Verify slot trackers remain at initial state after failure
-    try testing.expectEqual(0, slot_tracker.latest_processed_slot.get());
-    try testing.expectEqual(0, slot_tracker.latest_confirmed_slot.get());
+    try testing.expectEqual(0, slot_tracker.getSlotForCommitment(.processed));
+    try testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 test "checkAndHandleNewRoot - missing hash" {
@@ -2585,14 +2585,14 @@ test "checkAndHandleNewRoot - missing hash" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+    const processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
+    const confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
 
     var slot_tracker2: SlotTracker = .{
         .root = .init(root.slot),
         .slots = .empty,
-        .latest_processed_slot = &processed_slot,
-        .latest_confirmed_slot = &confirmed_slot,
+        .latest_processed_slot = processed_slot,
+        .latest_confirmed_slot = confirmed_slot,
     };
     defer slot_tracker2.deinit(allocator);
 
@@ -2639,8 +2639,8 @@ test "checkAndHandleNewRoot - missing hash" {
     try testing.expectError(error.MissingHash, result);
 
     // Verify slot trackers remain at initial state after failure
-    try testing.expectEqual(0, processed_slot.get());
-    try testing.expectEqual(0, confirmed_slot.get());
+    try testing.expectEqual(0, slot_tracker2.getSlotForCommitment(.processed));
+    try testing.expectEqual(0, slot_tracker2.getSlotForCommitment(.confirmed));
 }
 
 test "checkAndHandleNewRoot - empty slot tracker" {
@@ -2657,14 +2657,14 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+    const processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
+    const confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
 
     var slot_tracker3: SlotTracker = .{
         .root = .init(root.slot),
         .slots = .empty,
-        .latest_processed_slot = &processed_slot,
-        .latest_confirmed_slot = &confirmed_slot,
+        .latest_processed_slot = processed_slot,
+        .latest_confirmed_slot = confirmed_slot,
     };
     defer slot_tracker3.deinit(testing.allocator);
 
@@ -2698,8 +2698,8 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     try testing.expectError(error.EmptySlotTracker, result);
 
     // Verify slot trackers remain at initial state after failure
-    try testing.expectEqual(0, processed_slot.get());
-    try testing.expectEqual(0, confirmed_slot.get());
+    try testing.expectEqual(0, slot_tracker3.getSlotForCommitment(.processed));
+    try testing.expectEqual(0, slot_tracker3.getSlotForCommitment(.confirmed));
 }
 
 test "checkAndHandleNewRoot - success" {
@@ -2727,14 +2727,14 @@ test "checkAndHandleNewRoot - success" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
+    const processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
+    const confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
 
     var slot_tracker4: SlotTracker = .{
         .root = .init(root.slot),
         .slots = .empty,
-        .latest_processed_slot = &processed_slot,
-        .latest_confirmed_slot = &confirmed_slot,
+        .latest_processed_slot = processed_slot,
+        .latest_confirmed_slot = confirmed_slot,
     };
     defer slot_tracker4.deinit(allocator);
 
@@ -5095,10 +5095,8 @@ test "edge cases - gossip verified vote hashes" {
     const root_slot0 = slot_tracker.root.load(.monotonic);
     std.debug.assert(root_slot0 == 0); // assert initial root value
 
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
     var vote_collector: sig.consensus.vote_listener.VoteCollector =
-        try .init(.EPOCH_ZERO, root_slot0, &registry, &confirmed_slot);
+        try .init(.EPOCH_ZERO, root_slot0, &registry);
     defer vote_collector.deinit(gpa);
 
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
@@ -5251,7 +5249,7 @@ test "edge cases - gossip verified vote hashes" {
     );
 
     // Optimisic confirmation threshold not reached during this test.
-    try std.testing.expectEqual(0, confirmed_slot.get());
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 // TODO: Re-implement tests for the new consolidated API
@@ -5312,13 +5310,8 @@ test "vote on heaviest frozen descendant with no switch" {
         try bhq.mut().insertGenesisHash(allocator, root_state.hash.readCopy().?, 0);
     }
 
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
     var slot_tracker = try SlotTracker.init(
         allocator,
-        &processed_slot,
-        &confirmed_slot,
         root_slot,
         .{
             .constants = root_consts,
@@ -5457,10 +5450,10 @@ test "vote on heaviest frozen descendant with no switch" {
     try std.testing.expectEqual(slot1_hash, consensus.fork_choice.heaviestOverallSlot().hash);
 
     // 6. Assert trackers
-    // processed_slot is updated to slot_1 when the tower votes on it
-    try std.testing.expectEqual(slot_1, processed_slot.get());
-    // confirmed_slot remains at 0 (no optimistic confirmation votes processed)
-    try std.testing.expectEqual(0, confirmed_slot.get());
+    // processed slot is updated to slot_1 when the tower votes on it
+    try std.testing.expectEqual(slot_1, slot_tracker.getSlotForCommitment(.processed));
+    // confirmed slot remains at 0 (no optimistic confirmation votes processed)
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 // State setup
@@ -5497,13 +5490,8 @@ test "vote accounts with landed votes populate bank stats" {
         try bhq.mut().insertGenesisHash(allocator, root_state.hash.readCopy().?, 0);
     }
 
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
     var slot_tracker = try SlotTracker.init(
         allocator,
-        &processed_slot,
-        &confirmed_slot,
         root_slot,
         .{
             .constants = root_consts,
@@ -5688,10 +5676,10 @@ test "vote accounts with landed votes populate bank stats" {
     try std.testing.expectEqual(slot_1, consensus.fork_choice.heaviestOverallSlot().slot);
 
     // Assert trackers
-    // processed_slot is updated to slot_1 when the tower votes on it
-    try std.testing.expectEqual(slot_1, processed_slot.get());
-    // confirmed_slot remains at 0 (no optimistic confirmation votes processed)
-    try std.testing.expectEqual(0, confirmed_slot.get());
+    // processed slot is updated to slot_1 when the tower votes on it
+    try std.testing.expectEqual(slot_1, slot_tracker.getSlotForCommitment(.processed));
+    // confirmed slot remains at 0 (no optimistic confirmation votes processed)
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 // Test case:
@@ -5796,13 +5784,8 @@ test "root advances after vote satisfies lockouts" {
         hashes[i] = Hash{ .data = .{@as(u8, @intCast(i % 256))} ** Hash.SIZE };
     }
 
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
     var slot_tracker: SlotTracker = try .init(
         allocator,
-        &processed_slot,
-        &confirmed_slot,
         initial_root,
         .{ .constants = root_consts, .state = root_state },
     );
@@ -6149,10 +6132,10 @@ test "root advances after vote satisfies lockouts" {
     }
 
     // Assert trackers
-    // processed_slot is updated to slot 33 when the tower votes on it
-    try std.testing.expectEqual(33, processed_slot.get());
-    // confirmed_slot remains at 0 (no optimistic confirmation votes processed)
-    try std.testing.expectEqual(0, confirmed_slot.get());
+    // processed slot is updated to slot 33 when the tower votes on it
+    try std.testing.expectEqual(33, slot_tracker.getSlotForCommitment(.processed));
+    // confirmed slot remains at 0 (no optimistic confirmation votes processed)
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 // Test case:
@@ -6214,13 +6197,8 @@ test "vote refresh when no new vote available" {
         try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
     }
 
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
     var slot_tracker = try SlotTracker.init(
         allocator,
-        &processed_slot,
-        &confirmed_slot,
         root_slot,
         .{ .constants = root_consts, .state = root_state },
     );
@@ -6350,10 +6328,10 @@ test "vote refresh when no new vote available" {
     try std.testing.expectEqual(1, consensus.fork_choice.heaviestOverallSlot().slot);
 
     // Assert trackers
-    // processed_slot is updated to slot 1 when the tower votes on it
-    try std.testing.expectEqual(1, processed_slot.get());
-    // confirmed_slot remains at 0 (no optimistic confirmation votes processed)
-    try std.testing.expectEqual(0, confirmed_slot.get());
+    // processed slot is updated to slot 1 when the tower votes on it
+    try std.testing.expectEqual(1, slot_tracker.getSlotForCommitment(.processed));
+    // confirmed slot remains at 0 (no optimistic confirmation votes processed)
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 // Test case:
@@ -6419,13 +6397,8 @@ test "detect and mark duplicate confirmed fork" {
         try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
     }
 
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
     var slot_tracker = try SlotTracker.init(
         allocator,
-        &processed_slot,
-        &confirmed_slot,
         root_slot,
         .{ .constants = root_consts, .state = root_state },
     );
@@ -6690,13 +6663,8 @@ test "detect and mark duplicate slot" {
         try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
     }
 
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
     var slot_tracker = try SlotTracker.init(
         allocator,
-        &processed_slot,
-        &confirmed_slot,
         root_slot,
         .{ .constants = root_consts, .state = root_state },
     );
@@ -6895,13 +6863,8 @@ test "successful fork switch (switch_proof)" {
         try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
     }
 
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
     var slot_tracker = try SlotTracker.init(
         allocator,
-        &processed_slot,
-        &confirmed_slot,
         root_slot,
         .{ .constants = root_consts, .state = root_state },
     );
