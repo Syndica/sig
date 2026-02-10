@@ -2,8 +2,6 @@ const std = @import("std");
 const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
 const sig = @import("sig");
 
-const ManagedString = @import("protobuf").ManagedString;
-
 const sysvar = sig.runtime.sysvar;
 const memory = sig.vm.memory;
 
@@ -175,7 +173,11 @@ pub fn deinitTransactionContext(
 }
 
 pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
-    const epoch_context = ctx.epoch_context orelse return .ALL_DISABLED;
+    const epoch_context = switch (@TypeOf(ctx)) {
+        *pb.TxnContext, *const pb.TxnContext => ctx.epoch_ctx,
+        pb.InstrContext => ctx.epoch_context,
+        else => comptime unreachable,
+    } orelse return .ALL_DISABLED;
     const pb_features = epoch_context.features orelse return .ALL_DISABLED;
 
     var feature_set: FeatureSet = .ALL_DISABLED;
@@ -196,40 +198,41 @@ pub fn createTransactionContextAccounts(
         std.debug.print("createTransactionContextAccounts: error={}\n", .{err});
     }
 
-    var accounts = std.array_list.Managed(TransactionContextAccount).init(allocator);
+    var accounts: std.ArrayList(TransactionContextAccount) = .{};
     errdefer {
         for (accounts.items) |account| {
             allocator.free(account.account.data);
             allocator.destroy(account.account);
         }
-        accounts.deinit();
+        accounts.deinit(allocator);
     }
 
     for (pb_accounts) |pb_account| {
-        const account_data = try allocator.dupe(u8, pb_account.data.getSlice());
+        const account_data = try allocator.dupe(u8, pb_account.data);
         errdefer allocator.free(account_data);
 
-        if (pb_account.owner.getSlice().len != Pubkey.SIZE) return error.OutOfBounds;
-        if (pb_account.address.getSlice().len != Pubkey.SIZE) return error.OutOfBounds;
+        if (pb_account.owner.len != Pubkey.SIZE) return error.OutOfBounds;
+        if (pb_account.address.len != Pubkey.SIZE) return error.OutOfBounds;
 
         const account_ptr = try allocator.create(AccountSharedData);
         account_ptr.* = .{
             .lamports = pb_account.lamports,
             .data = account_data,
-            .owner = .{ .data = pb_account.owner.getSlice()[0..Pubkey.SIZE].* },
+            .owner = .{ .data = pb_account.owner[0..Pubkey.SIZE].* },
             .executable = pb_account.executable,
             .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
         };
 
         try accounts.append(
+            allocator,
             TransactionContextAccount.init(
-                .{ .data = pb_account.address.getSlice()[0..Pubkey.SIZE].* },
+                .{ .data = pb_account.address[0..Pubkey.SIZE].* },
                 account_ptr,
             ),
         );
     }
 
-    return accounts.toOwnedSlice();
+    return accounts.toOwnedSlice(allocator);
 }
 
 pub fn createInstructionInfo(
@@ -407,8 +410,8 @@ pub fn createSysvarCache(
 
 fn cloneSysvarData(allocator: std.mem.Allocator, ctx: pb.InstrContext, pubkey: Pubkey) !?[]const u8 {
     for (ctx.accounts.items) |acc| {
-        if (acc.lamports > 0 and std.mem.eql(u8, acc.address.getSlice(), &pubkey.data)) {
-            return try allocator.dupe(u8, acc.data.getSlice());
+        if (acc.lamports > 0 and std.mem.eql(u8, acc.address, &pubkey.data)) {
+            return try allocator.dupe(u8, acc.data);
         }
     }
     return null;
@@ -424,36 +427,24 @@ pub fn createInstrEffects(
         .custom_err = tc.custom_error orelse 0,
         .modified_accounts = try modifiedAccounts(allocator, tc),
         .cu_avail = tc.compute_meter,
-        .return_data = try ManagedString.copy(
-            tc.return_data.data.constSlice(),
-            allocator,
-        ),
+        .return_data = try allocator.dupe(u8, tc.return_data.data.constSlice()),
     };
 }
 
 fn modifiedAccounts(
     allocator: std.mem.Allocator,
     tc: *const TransactionContext,
-) !std.array_list.Managed(pb.AcctState) {
-    var accounts = std.array_list.Managed(pb.AcctState).init(allocator);
-    errdefer accounts.deinit();
+) !std.ArrayList(pb.AcctState) {
+    var accounts: std.ArrayList(pb.AcctState) = .{};
+    errdefer accounts.deinit(allocator);
 
     for (tc.accounts) |acc| {
-        try accounts.append(.{
-            .address = try ManagedString.copy(
-                &acc.pubkey.data,
-                allocator,
-            ),
+        try accounts.append(allocator, .{
+            .address = try allocator.dupe(u8, &acc.pubkey.data),
             .lamports = acc.account.lamports,
-            .data = try ManagedString.copy(
-                acc.account.data,
-                allocator,
-            ),
+            .data = try allocator.dupe(u8, acc.account.data),
             .executable = acc.account.executable,
-            .owner = try ManagedString.copy(
-                &acc.account.owner.data,
-                allocator,
-            ),
+            .owner = try allocator.dupe(u8, &acc.account.owner.data),
         });
     }
 
@@ -471,13 +462,13 @@ pub fn createSyscallEffect(allocator: std.mem.Allocator, params: struct {
     memory_map: sig.vm.memory.MemoryMap,
     registers: sig.vm.interpreter.RegisterMap = sig.vm.interpreter.RegisterMap.initFill(0),
 }) !pb.SyscallEffects {
-    var log = std.array_list.Managed(u8).init(allocator);
-    defer log.deinit();
+    var log: std.ArrayList(u8) = .{};
+    defer log.deinit(allocator);
     if (params.tc.log_collector) |log_collector| {
         var iter = log_collector.iterator();
         while (iter.next()) |msg| {
-            try log.appendSlice(msg);
-            try log.append('\n');
+            try log.appendSlice(allocator, msg);
+            try log.append(allocator, '\n');
         }
         if (log.items.len > 0) _ = log.pop();
     }
@@ -491,12 +482,12 @@ pub fn createSyscallEffect(allocator: std.mem.Allocator, params: struct {
         .@"error" = params.err,
         .error_kind = params.err_kind,
         .cu_avail = params.tc.compute_meter,
-        .heap = try ManagedString.copy(params.heap, allocator),
-        .stack = try ManagedString.copy(params.stack, allocator),
+        .heap = try allocator.dupe(u8, params.heap),
+        .stack = try allocator.dupe(u8, params.stack),
         .input_data_regions = input_data_regions,
         .frame_count = params.frame_count,
-        .log = try ManagedString.copy(log.items, allocator),
-        .rodata = try ManagedString.copy(params.rodata, allocator),
+        .log = try allocator.dupe(u8, log.items),
+        .rodata = try allocator.dupe(u8, params.rodata),
         .r0 = params.registers.get(.r0),
         .r1 = params.registers.get(.r1),
         .r2 = params.registers.get(.r2),
@@ -520,9 +511,9 @@ pub fn copyPrefix(dst: []u8, prefix: []const u8) void {
 pub fn extractInputDataRegions(
     allocator: std.mem.Allocator,
     memory_map: memory.MemoryMap,
-) !std.array_list.Managed(pb.InputDataRegion) {
-    var regions = std.array_list.Managed(pb.InputDataRegion).init(allocator);
-    errdefer regions.deinit();
+) !std.ArrayList(pb.InputDataRegion) {
+    var regions: std.ArrayList(pb.InputDataRegion) = .{};
+    errdefer regions.deinit(allocator);
 
     const mm_regions: []const sig.vm.memory.Region = switch (memory_map) {
         .aligned => |amm| amm.regions,
@@ -531,13 +522,13 @@ pub fn extractInputDataRegions(
 
     for (mm_regions) |region| {
         if (region.vm_addr_start >= memory.INPUT_START) {
-            try regions.append(.{
+            try regions.append(allocator, .{
                 .offset = region.vm_addr_start - memory.INPUT_START,
                 .is_writable = switch (region.host_memory) {
                     .constant => false,
                     .mutable => true,
                 },
-                .content = try ManagedString.copy(region.constSlice(), allocator),
+                .content = try allocator.dupe(u8, region.constSlice()),
             });
         }
     }
@@ -557,19 +548,19 @@ pub fn printPbInstrContext(ctx: pb.InstrContext) !void {
     var writer = fbs.writer();
     try writer.writeAll("InstrContext {");
     try std.fmt.format(writer, "\n\tprogram_id: {any}", .{
-        Pubkey{ .data = ctx.program_id.getSlice()[0..Pubkey.SIZE].* },
+        Pubkey{ .data = ctx.program_id[0..Pubkey.SIZE].* },
     });
     try writer.writeAll(",\n\taccounts: [");
     for (ctx.accounts.items) |acc| {
         try writer.writeAll("\n\t\tAcctState {");
         try std.fmt.format(writer, "\n\t\t\taddress: {any}", .{
-            Pubkey{ .data = acc.address.getSlice()[0..Pubkey.SIZE].* },
+            Pubkey{ .data = acc.address[0..Pubkey.SIZE].* },
         });
         try std.fmt.format(writer, ",\n\t\t\tlamports: {d}", .{acc.lamports});
-        try std.fmt.format(writer, ",\n\t\t\tdata.len: {any}", .{acc.data.getSlice().len});
+        try std.fmt.format(writer, ",\n\t\t\tdata.len: {any}", .{acc.data.len});
         try std.fmt.format(writer, ",\n\t\t\texecutable: {}", .{acc.executable});
         try std.fmt.format(writer, ",\n\t\t\towner: {any}", .{
-            Pubkey{ .data = acc.owner.getSlice()[0..Pubkey.SIZE].* },
+            Pubkey{ .data = acc.owner[0..Pubkey.SIZE].* },
         });
         try writer.writeAll("\n\t\t},\n");
     }
@@ -581,7 +572,7 @@ pub fn printPbInstrContext(ctx: pb.InstrContext) !void {
         try std.fmt.format(writer, ",\n\t\t\tis_writable: {}", .{acc.is_writable});
         try writer.writeAll("\n\t\t},\n");
     }
-    try std.fmt.format(writer, "\t],\n\tdata: {any}", .{ctx.data.getSlice()});
+    try std.fmt.format(writer, "\t],\n\tdata: {any}", .{ctx.data});
     try std.fmt.format(writer, ",\n\tcu_avail: {d}", .{ctx.cu_avail});
     try writer.writeAll(",\n}\n");
     std.debug.print("{s}", .{writer.context.getWritten()});
@@ -598,19 +589,19 @@ pub fn printPbInstrEffects(effects: pb.InstrEffects) !void {
     for (effects.modified_accounts.items) |acc| {
         try writer.writeAll("\n\t\tAcctState {");
         try std.fmt.format(writer, "\n\t\t\taddress: {}", .{
-            Pubkey{ .data = acc.address.getSlice()[0..Pubkey.SIZE].* },
+            Pubkey{ .data = acc.address[0..Pubkey.SIZE].* },
         });
         try std.fmt.format(writer, ",\n\t\t\tlamports: {d}", .{acc.lamports});
-        try std.fmt.format(writer, ",\n\t\t\tdata: {any}", .{acc.data.getSlice()});
+        try std.fmt.format(writer, ",\n\t\t\tdata: {any}", .{acc.data});
         try std.fmt.format(writer, ",\n\t\t\texecutable: {}", .{acc.executable});
         try std.fmt.format(writer, ",\n\t\t\towner: {}", .{
-            Pubkey{ .data = acc.owner.getSlice()[0..Pubkey.SIZE].* },
+            Pubkey{ .data = acc.owner[0..Pubkey.SIZE].* },
         });
         try writer.writeAll("\n\t\t},\n");
     }
     try writer.writeAll("\t],");
     try std.fmt.format(writer, ",\n\tcu_avail: {d}", .{effects.cu_avail});
-    try std.fmt.format(writer, ",\n\treturn_data: {any}", .{effects.return_data.getSlice()});
+    try std.fmt.format(writer, ",\n\treturn_data: {any}", .{effects.return_data});
     try writer.writeAll("\n}\n");
     std.debug.print("{s}", .{writer.context.getWritten()});
 }
@@ -621,7 +612,7 @@ pub fn printPbVmContext(ctx: pb.VmContext) !void {
     var writer = fbs.writer();
     try writer.writeAll("VmContext {");
     try std.fmt.format(writer, "\n\theap_max: {}", .{ctx.heap_max});
-    try std.fmt.format(writer, ",\n\trodata: {any}", .{ctx.rodata.getSlice()});
+    try std.fmt.format(writer, ",\n\trodata: {any}", .{ctx.rodata});
     try std.fmt.format(
         writer,
         ",\n\trodata_text_section_offset: {}",
@@ -645,13 +636,13 @@ pub fn printPbVmContext(ctx: pb.VmContext) !void {
     try std.fmt.format(writer, ",\n\tr10: {}", .{ctx.r10});
     try std.fmt.format(writer, ",\n\tr11: {}", .{ctx.r11});
     try std.fmt.format(writer, ",\n\tentry_pc: {}", .{ctx.entry_pc});
-    try std.fmt.format(writer, ",\n\tcall_whitelist: {any}", .{ctx.call_whitelist.getSlice()});
+    try std.fmt.format(writer, ",\n\tcall_whitelist: {any}", .{ctx.call_whitelist});
     try std.fmt.format(writer, ",\n\ttracing_enabled: {}", .{ctx.tracing_enabled});
     try std.fmt.format(writer, ",\n\treturn_data: ", .{});
     if (ctx.return_data) |rd| {
         try std.fmt.format(writer, "{{\n\t\tprogram_id: {},\n\t\tdata: {any}\n\t}}", .{
-            Pubkey{ .data = rd.program_id.getSlice()[0..Pubkey.SIZE].* },
-            rd.data.getSlice(),
+            Pubkey{ .data = rd.program_id[0..Pubkey.SIZE].* },
+            rd.data,
         });
     } else {
         try writer.writeAll("null");
@@ -666,9 +657,9 @@ pub fn printPbSyscallInvocation(ctx: pb.SyscallInvocation) !void {
     var fbs = std.io.fixedBufferStream(&buffer);
     var writer = fbs.writer();
     try writer.writeAll("SyscallInvocation {");
-    try std.fmt.format(writer, "\n\tfunction_name: {s}", .{ctx.function_name.getSlice()});
-    try std.fmt.format(writer, ",\n\theap_prefix: {any}", .{ctx.heap_prefix.getSlice()});
-    try std.fmt.format(writer, ",\n\tstack_prefix: {any}", .{ctx.stack_prefix.getSlice()});
+    try std.fmt.format(writer, "\n\tfunction_name: {s}", .{ctx.function_name});
+    try std.fmt.format(writer, ",\n\theap_prefix: {any}", .{ctx.heap_prefix});
+    try std.fmt.format(writer, ",\n\tstack_prefix: {any}", .{ctx.stack_prefix});
     try writer.writeAll("\n}\n");
     std.debug.print("{s}", .{writer.context.getWritten()});
 }
@@ -694,20 +685,20 @@ pub fn printPbSyscallEffects(ctx: pb.SyscallEffects) !void {
     try std.fmt.format(writer, ",\n\terr_kind: {}", .{ctx.error_kind});
     try std.fmt.format(writer, ",\n\tr0: {}", .{ctx.r0});
     try std.fmt.format(writer, ",\n\tcu_avail: {}", .{ctx.cu_avail});
-    try std.fmt.format(writer, ",\n\theap.len: {}", .{ctx.heap.getSlice().len});
-    try std.fmt.format(writer, ",\n\tstack.len: {}", .{ctx.stack.getSlice().len});
+    try std.fmt.format(writer, ",\n\theap.len: {}", .{ctx.heap.len});
+    try std.fmt.format(writer, ",\n\tstack.len: {}", .{ctx.stack.len});
     try std.fmt.format(writer, ",\n\tinput_data_regions: [", .{});
     for (ctx.input_data_regions.items) |region| {
         try writer.writeAll("\n\t\tInputDataRegion {");
         try std.fmt.format(writer, "\n\t\t\toffset: {}", .{region.offset});
-        try std.fmt.format(writer, ",\n\t\t\tcontent.len: {}", .{region.content.getSlice().len});
+        try std.fmt.format(writer, ",\n\t\t\tcontent.len: {}", .{region.content.len});
         try std.fmt.format(writer, ",\n\t\t\tis_writable: {}", .{region.is_writable});
         try writer.writeAll("\n\t\t},\n");
     }
     try writer.writeAll("\t],");
     try std.fmt.format(writer, "\n\tframe_count: {}", .{ctx.frame_count});
-    try std.fmt.format(writer, ",\n\tlog: {s}", .{ctx.log.getSlice()});
-    try std.fmt.format(writer, ",\n\trodata.len: {}", .{ctx.rodata.getSlice().len});
+    try std.fmt.format(writer, ",\n\tlog: {s}", .{ctx.log});
+    try std.fmt.format(writer, ",\n\trodata.len: {}", .{ctx.rodata.len});
     try std.fmt.format(writer, ",\n\tpc: {}", .{ctx.pc});
     try std.fmt.format(writer, ",\n\tr1: {}", .{ctx.r1});
     try std.fmt.format(writer, ",\n\tr2: {}", .{ctx.r2});

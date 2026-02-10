@@ -22,14 +22,15 @@ export fn sol_compat_txn_execute_v1(
     defer decode_arena.deinit();
 
     const in_slice = in_ptr[0..in_size];
+    var reader: std.Io.Reader = .fixed(in_slice);
     var pb_txn_ctx = pb.TxnContext.decode(
-        in_slice,
+        &reader,
         decode_arena.allocator(),
     ) catch |err| {
         std.debug.print("pb.TxnContext.decode: {s}\n", .{@errorName(err)});
         return 0;
     };
-    defer pb_txn_ctx.deinit();
+    defer pb_txn_ctx.deinit(decode_arena.allocator());
 
     // increase the stack limit
     var rl = try std.posix.getrlimit(.STACK);
@@ -38,13 +39,16 @@ export fn sol_compat_txn_execute_v1(
         try std.posix.setrlimit(.STACK, rl);
     }
 
-    const result = executeTxnContext(allocator, pb_txn_ctx, EMIT_LOGS) catch |err| {
+    var result = executeTxnContext(allocator, pb_txn_ctx, EMIT_LOGS) catch |err| {
         std.debug.print("executeTxnContext: {s}\n", .{@errorName(err)});
         return 0;
     };
+    defer result.deinit(allocator);
 
-    const result_bytes = try result.encode(allocator);
-    defer allocator.free(result_bytes);
+    var writer: std.Io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+    try result.encode(&writer.writer, allocator);
+    const result_bytes = writer.written();
 
     const out_slice = out_ptr[0..out_size.*];
     if (result_bytes.len > out_slice.len) {
@@ -907,8 +911,8 @@ fn serializeOutput(
 
     const errors = utils.convertTransactionError(txn.err);
 
-    var acct_states: std.array_list.Managed(pb.AcctState) = .init(allocator);
-    errdefer acct_states.deinit();
+    var acct_states: std.ArrayList(pb.AcctState) = .{};
+    errdefer acct_states.deinit(allocator);
     if (result.ok.outputs != null and result.ok.err != null) {
         // In the event that the transaction is executed and fails, agave
         // returns *all* the loaded accounts, including all the modifications
@@ -925,25 +929,27 @@ fn serializeOutput(
             } else false;
 
             if (was_an_input_and_is_writable) try acct_states.append(
+                allocator,
                 try sharedAccountToState(allocator, account.pubkey, account.account),
             );
         }
     } else for (txn.writes.constSlice()) |account| {
         try acct_states.append(
+            allocator,
             try sharedAccountToState(allocator, account.pubkey, account.account),
         );
     }
 
     const resulting_state: pb.ResultingState = .{
-        .rent_debits = .init(allocator),
+        .rent_debits = .{},
         .transaction_rent = txn.rent,
         .acct_states = acct_states,
     };
 
-    const return_data: ManagedString = if (txn.outputs) |out|
-        if (out.return_data) |ret| try .copy(ret.data.constSlice(), allocator) else .Empty
+    const return_data: []const u8 = if (txn.outputs) |out|
+        if (out.return_data) |ret| try allocator.dupe(u8, ret.data.constSlice()) else &.{}
     else
-        .Empty;
+        &.{};
 
     return .{
         .executed = true,
@@ -972,14 +978,14 @@ fn sharedAccountToState(
     address: Pubkey,
     value: sig.runtime.AccountSharedData,
 ) !pb.AcctState {
-    const address_duped: protobuf.ManagedString = try .copy(&address.data, allocator);
-    errdefer address_duped.deinit();
+    const address_duped = try allocator.dupe(u8, &address.data);
+    errdefer allocator.free(address_duped);
 
-    const data_duped: protobuf.ManagedString = try .copy(value.data, allocator);
-    errdefer data_duped.deinit();
+    const data_duped = try allocator.dupe(u8, value.data);
+    errdefer allocator.free(data_duped);
 
-    const owner_duped: protobuf.ManagedString = try .copy(&value.owner.data, allocator);
-    errdefer owner_duped.deinit();
+    const owner_duped = try allocator.dupe(u8, &value.owner.data);
+    errdefer allocator.free(owner_duped);
 
     return .{
         .address = address_duped,
@@ -1002,7 +1008,7 @@ fn parsePubkey(bytes: []const u8) !Pubkey {
 
 /// [agave] https://github.com/firedancer-io/solfuzz-agave/blob/agave-v3.1.0-beta.0/src/txn_fuzzer.rs#L319-L323
 fn loadSlot(txn_ctx: *const pb.TxnContext) u64 {
-    const slot = if (txn_ctx.slot_context) |ctx| ctx.slot else return 10;
+    const slot = if (txn_ctx.slot_ctx) |ctx| ctx.slot else return 10;
     return if (slot == 0) 10 else slot;
 }
 
@@ -1020,7 +1026,7 @@ fn loadBlockhashes(
     errdefer allocator.free(blockhashes);
 
     for (blockhashes, pb_blockhashes) |*blockhash, pb_blockhash|
-        blockhash.* = try parseHash(pb_blockhash.getSlice());
+        blockhash.* = try parseHash(pb_blockhash);
 
     return blockhashes;
 }
@@ -1036,10 +1042,10 @@ fn loadAccountsMap(
     errdefer deinitMapAndValues(allocator, accounts);
 
     for (pb_accounts) |pb_account| {
-        try accounts.put(allocator, try parsePubkey(pb_account.address.getSlice()), .{
+        try accounts.put(allocator, try parsePubkey(pb_account.address), .{
             .lamports = pb_account.lamports,
-            .data = try allocator.dupe(u8, pb_account.data.getSlice()),
-            .owner = try parsePubkey(pb_account.owner.getSlice()),
+            .data = try allocator.dupe(u8, pb_account.data),
+            .owner = try parsePubkey(pb_account.owner),
             .executable = pb_account.executable,
             .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
         });
@@ -1062,7 +1068,7 @@ fn loadTransaction(
     );
 
     for (pb_txn.signatures.items, 0..) |pb_signature, i|
-        signatures[i] = .fromBytes(pb_signature.getSlice()[0..Signature.SIZE].*);
+        signatures[i] = .fromBytes(pb_signature[0..Signature.SIZE].*);
 
     if (pb_txn.signatures.items.len == 0)
         signatures[0] = Signature.ZEROES;
@@ -1086,12 +1092,12 @@ fn loadTransactionMesssage(
 ) !struct { TransactionVersion, TransactionMessage } {
     const account_keys = try allocator.alloc(Pubkey, message.account_keys.items.len);
     for (account_keys, message.account_keys.items) |*account_key, pb_account_key|
-        account_key.* = .{ .data = pb_account_key.getSlice()[0..Pubkey.SIZE].* };
+        account_key.* = .{ .data = pb_account_key[0..Pubkey.SIZE].* };
 
-    const recent_blockhash = if (message.recent_blockhash.isEmpty())
+    const recent_blockhash = if (message.recent_blockhash.len == 0)
         Hash.ZEROES
     else
-        Hash{ .data = message.recent_blockhash.getSlice()[0..Hash.SIZE].* };
+        Hash{ .data = message.recent_blockhash[0..Hash.SIZE].* };
 
     const instructions = try allocator.alloc(
         TransactionInstruction,
@@ -1104,7 +1110,7 @@ fn loadTransactionMesssage(
         instruction.* = .{
             .program_index = @truncate(pb_instruction.program_id_index),
             .account_indexes = account_indexes,
-            .data = try allocator.dupe(u8, pb_instruction.data.getSlice()),
+            .data = try allocator.dupe(u8, pb_instruction.data),
         };
     }
 
@@ -1129,7 +1135,7 @@ fn loadTransactionMesssage(
                 readonly_index.* = @truncate(pb_readonly_index);
 
             lookup.* = TransactionAddressLookup{
-                .table_address = .{ .data = pb_lookup.account_key.getSlice()[0..Pubkey.SIZE].* },
+                .table_address = .{ .data = pb_lookup.account_key[0..Pubkey.SIZE].* },
                 .writable_indexes = writable_indexes,
                 .readonly_indexes = readonly_indexes,
             };
@@ -1358,26 +1364,24 @@ fn writeSlice(
     try writer.print("{s}{s}{s}", .{ prefix, str[1 .. str.len - 1], suffix });
 }
 
-const ManagedString = @import("protobuf").ManagedString;
-
-pub fn createPbManagedString(
+pub fn createPbBytesField(
     allocator: std.mem.Allocator,
     comptime T: type,
     string: []const u8,
-) !ManagedString {
+) ![]const u8 {
     const parsed = T.parseRuntime(string) catch unreachable;
-    return try ManagedString.copy(&parsed.data, allocator);
+    return try allocator.dupe(u8, &parsed.data);
 }
 
-pub fn createPbManagedStrings(
+pub fn createPbBytesFields(
     allocator: std.mem.Allocator,
     comptime T: type,
     strings: []const []const u8,
-) !std.array_list.Managed(ManagedString) {
-    var result = try std.array_list.Managed(ManagedString).initCapacity(allocator, strings.len);
+) !std.ArrayList([]const u8) {
+    var result: std.ArrayList([]const u8) = try .initCapacity(allocator, strings.len);
     for (strings) |string| {
         const parsed = T.parseRuntime(string) catch unreachable;
-        result.appendAssumeCapacity(try ManagedString.copy(&parsed.data, allocator));
+        result.appendAssumeCapacity(try allocator.dupe(u8, &parsed.data));
     }
     return result;
 }
@@ -1391,16 +1395,16 @@ pub const PbInstructionsParams = struct {
 pub fn createPbInstructions(
     allocator: std.mem.Allocator,
     instructions: []const PbInstructionsParams,
-) !std.array_list.Managed(pb.CompiledInstruction) {
-    var result = try std.array_list.Managed(pb.CompiledInstruction).initCapacity(
+) !std.ArrayList(pb.CompiledInstruction) {
+    var result: std.ArrayList(pb.CompiledInstruction) = try .initCapacity(
         allocator,
         instructions.len,
     );
     for (instructions) |instruction| {
-        var accounts = std.array_list.Managed(u32).init(allocator);
-        try accounts.appendSlice(instruction.accounts);
-        const data = try ManagedString.copy(instruction.data, allocator);
-        try result.append(.{
+        var accounts: std.ArrayList(u32) = .{};
+        try accounts.appendSlice(allocator, instruction.accounts);
+        const data = try allocator.dupe(u8, instruction.data);
+        try result.append(allocator, .{
             .program_id_index = instruction.program_id,
             .accounts = accounts,
             .data = data,
@@ -1418,18 +1422,18 @@ pub const PbAddressLookupTablesParams = struct {
 pub fn createPbAddressLookupTables(
     allocator: std.mem.Allocator,
     lookup_tables: []const PbAddressLookupTablesParams,
-) !std.array_list.Managed(pb.MessageAddressTableLookup) {
-    var result = try std.array_list.Managed(pb.MessageAddressTableLookup).initCapacity(
+) !std.ArrayList(pb.MessageAddressTableLookup) {
+    var result: std.ArrayList(pb.MessageAddressTableLookup) = try .initCapacity(
         allocator,
         lookup_tables.len,
     );
     for (lookup_tables) |lookup_table| {
-        var writable_indexes = std.array_list.Managed(u32).init(allocator);
-        try writable_indexes.appendSlice(lookup_table.writable_indexes);
-        var readonly_indexes = std.array_list.Managed(u32).init(allocator);
-        try readonly_indexes.appendSlice(lookup_table.readonly_indexes);
-        try result.append(.{
-            .account_key = try createPbManagedString(allocator, Pubkey, lookup_table.account_key),
+        var writable_indexes: std.ArrayList(u32) = .{};
+        try writable_indexes.appendSlice(allocator, lookup_table.writable_indexes);
+        var readonly_indexes: std.ArrayList(u32) = .{};
+        try readonly_indexes.appendSlice(allocator, lookup_table.readonly_indexes);
+        try result.append(allocator, .{
+            .account_key = try createPbBytesField(allocator, Pubkey, lookup_table.account_key),
             .writable_indexes = writable_indexes,
             .readonly_indexes = readonly_indexes,
         });
