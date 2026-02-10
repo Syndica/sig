@@ -98,6 +98,8 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
     zone.value(params.finalize_state.slot);
     defer zone.deinit();
 
+    try sig.replay.freeze.debugPrintDeltaLtHash(params.finalize_state.slot, "freezeSlot", allocator, params.hash_slot.account_reader, params.hash_slot.ancestors);
+
     // TODO: reconsider locking the hash for the entire function. (this is how agave does it)
     var slot_hash = params.slot_hash.write();
     defer slot_hash.unlock();
@@ -377,6 +379,31 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
     return hash;
 }
 
+/// Debug function to print the delta lt hash for a slot. Only prints for slots in the `SLOTS` array at the top of the file.
+pub fn debugPrintDeltaLtHash(
+    slot: Slot,
+    comptime label: []const u8,
+    allocator: Allocator,
+    account_reader: AccountReader,
+    ancestors: *const Ancestors,
+) !void {
+    if (!sig.debug.is_debug_slot(slot)) return;
+
+    var parent_ancestors = try ancestors.clone(allocator);
+    defer parent_ancestors.deinit(allocator);
+    _ = parent_ancestors.ancestors.swapRemove(slot);
+
+    var tp: sig.sync.ThreadPool = .init(.{});
+    defer {
+        tp.shutdown();
+        tp.deinit();
+    }
+
+    const hash = try deltaLtHash(allocator, &tp, account_reader, slot, &parent_ancestors);
+    std.debug.print("{s}: delta_lt_hash={}\n", .{ label, hash });
+}
+
+/// Returns the lattice hash of every account that was modified in the slot.
 pub fn deltaLtHash(
     allocator: std.mem.Allocator,
     thread_pool: *sig.sync.ThreadPool,

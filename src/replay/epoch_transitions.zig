@@ -42,6 +42,8 @@ pub fn processNewEpoch(
     slot_store: SlotAccountStore,
     epoch_tracker: *sig.core.EpochTracker,
 ) !void {
+    const account_reader = sig.accounts_db.AccountReader{ .accounts_db_two = slot_store.accounts_db_two[0] };
+    try sig.replay.freeze.debugPrintDeltaLtHash(slot, "applyFeatureActivations", allocator, account_reader, &slot_constants.ancestors);
     try applyFeatureActivations(
         allocator,
         slot,
@@ -51,12 +53,14 @@ pub fn processNewEpoch(
         true, // allow_new_activations
     );
 
+    try sig.replay.freeze.debugPrintDeltaLtHash(slot, "activateEpoch", allocator, account_reader, &slot_constants.ancestors);
     try slot_state.stakes_cache.activateEpoch(
         allocator,
         epoch_tracker.epoch_schedule.getEpoch(slot),
         slot_constants.feature_set.newWarmupCooldownRateEpoch(&epoch_tracker.epoch_schedule),
     );
 
+    try sig.replay.freeze.debugPrintDeltaLtHash(slot, "updateEpochStakes", allocator, account_reader, &slot_constants.ancestors);
     try updateEpochStakes(
         allocator,
         slot,
@@ -66,6 +70,7 @@ pub fn processNewEpoch(
         epoch_tracker,
     );
 
+    try sig.replay.freeze.debugPrintDeltaLtHash(slot, "beginPartitionedRewards", allocator, account_reader, &slot_constants.ancestors);
     try beginPartitionedRewards(
         allocator,
         slot,

@@ -350,6 +350,7 @@ pub fn trackNewSlots(
 
             // Constants are not constant at this point since processing new epochs
             // may modify the feature set.
+            try sig.replay.freeze.debugPrintDeltaLtHash(slot, "newSlotFromParent", allocator, account_store.reader(), &parent_info.constants.ancestors);
             var constants, var state = try newSlotFromParent(
                 allocator,
                 account_store.reader(),
@@ -368,6 +369,7 @@ pub fn trackNewSlots(
             const store = account_store.forSlot(slot, &constants.ancestors);
 
             if (parent_epoch < slot_epoch) {
+                try sig.replay.freeze.debugPrintDeltaLtHash(slot, "processNewEpoch", allocator, account_store.reader(), &constants.ancestors);
                 try replay.epoch_transitions.processNewEpoch(
                     allocator,
                     slot,
@@ -377,6 +379,7 @@ pub fn trackNewSlots(
                     epoch_tracker,
                 );
             } else {
+                try sig.replay.freeze.debugPrintDeltaLtHash(slot, "updateEpochStakes", allocator, account_store.reader(), &constants.ancestors);
                 try replay.epoch_transitions.updateEpochStakes(
                     allocator,
                     slot,
@@ -387,6 +390,7 @@ pub fn trackNewSlots(
                 );
             }
 
+            try sig.replay.freeze.debugPrintDeltaLtHash(slot, "distributePartitionedEpochRewards", allocator, account_store.reader(), &constants.ancestors);
             try replay.rewards.distribution.distributePartitionedEpochRewards(
                 allocator,
                 slot,
@@ -403,6 +407,7 @@ pub fn trackNewSlots(
                 ),
             );
 
+            try sig.replay.freeze.debugPrintDeltaLtHash(slot, "updateSysvarsForNewSlot", allocator, account_store.reader(), &constants.ancestors);
             try updateSysvarsForNewSlot(
                 allocator,
                 account_store,

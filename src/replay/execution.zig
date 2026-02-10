@@ -94,6 +94,7 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]const ReplayResult {
             };
 
             const result_ptr = results.addOneAssumeCapacity();
+            try sig.replay.freeze.debugPrintDeltaLtHash(slot, "startAsync", state.allocator, state.account_store.reader(), params.svm_gateway.params.ancestors);
             ReplaySlotFuture.startAsync(
                 state.allocator,
                 .from(state.logger),
@@ -146,6 +147,7 @@ fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
         };
         const last_entry_hash = params.entries[params.entries.len - 1].hash;
 
+        try sig.replay.freeze.debugPrintDeltaLtHash(slot, "replaySlotSync", state.allocator, state.account_store.reader(), params.svm_gateway.params.ancestors);
         const maybe_err = try replaySlotSync(allocator, .from(state.logger), params);
         results.appendAssumeCapacity(.{
             .slot = slot,
@@ -351,6 +353,32 @@ pub fn replayBatch(
             .ok => |result| {
                 results[i] = .{ hash, result };
                 populated_count += 1;
+                if (sig.debug.is_debug_slot(svm_gateway.params.slot)) {
+                    if (result.outputs) |executed| {
+                        if (executed.err) |err| {
+                            const err_str = try sig.debug.fmtTransactionErrorRust(tmp_allocator, err);
+                            std.debug.print("transaction({}): exec-error={s}\n", .{ hash, err_str });
+                        } else {
+                            std.debug.print("transaction({}): success\n", .{hash});
+                        }
+                        if (executed.log_collector) |log_collector| {
+                            var logs = log_collector.iterator();
+                            var line: u64 = 1;
+                            while (logs.next()) |log| {
+                                std.debug.print("  transaction({}):log: {} {s}\n", .{ hash, line, log });
+                                line += 1;
+                            }
+                        }
+                    } else {
+                        const err_str = try sig.debug.fmtTransactionErrorRust(tmp_allocator, result.err.?);
+                        std.debug.print("transaction({}): fees-only-err={s}\n", .{ hash, err_str });
+                    }
+
+                    for (result.writes.constSlice()) |write| {
+                        const account_info = try sig.debug.fmtAccount(tmp_allocator, &write.pubkey, &write.account);
+                        std.debug.print("  transaction({}):write: {s}\n", .{ hash, account_info });
+                    }
+                }
             },
             .err => |err| return .{ .failure = err },
         }

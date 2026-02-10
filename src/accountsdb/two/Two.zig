@@ -63,6 +63,12 @@ pub fn deinit(self: *Db) void {
 
 /// Clones the account shared data.
 pub fn put(self: *Db, slot: Slot, address: Pubkey, data: AccountSharedData) !void {
+    if (sig.debug.is_debug_slot(slot)) {
+        const account_info = try sig.debug.fmtAccount(self.allocator, &address, &data);
+        defer self.allocator.free(account_info);
+        std.debug.print("account_write: {s}\n", .{account_info});
+    }
+
     if (self.rooted.largest_rooted_slot) |lrs|
         if (lrs >= slot) return error.CannotWriteRootedSlot;
 
