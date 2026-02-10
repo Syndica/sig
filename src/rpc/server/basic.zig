@@ -16,7 +16,8 @@ pub const AcceptAndServeConnectionError =
     error{NoSpaceLeft} ||
     std.mem.Allocator.Error ||
     // TODO: eventually remove this once we move accountsdb operations to a separate thread, and/or handle them in a way that doesn't kill the server.
-    error{AccountsDbError};
+    error{AccountsDbError} ||
+    error{WriteFailed};
 
 pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConnectionError!void {
     const logger = Logger.from(server_ctx.logger);
@@ -36,26 +37,34 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
     const buffer = try server_ctx.allocator.alloc(u8, server_ctx.read_buffer_size);
     defer server_ctx.allocator.free(buffer);
 
-    var http_server = std.http.Server.init(conn, buffer);
+    const write_buffer = try server_ctx.allocator.alloc(u8, server_ctx.read_buffer_size);
+    defer server_ctx.allocator.free(write_buffer);
+
+    var reader = conn.stream.reader(buffer);
+    var writer = conn.stream.writer(write_buffer);
+
+    var http_server = std.http.Server.init(reader.interface(), &writer.interface);
     var request = http_server.receiveHead() catch |err| {
         logger.err()
             .field("conn", conn.address)
             .logf("Receive head error: {s}", .{@errorName(err)});
         return;
     };
-    const head_info = try parseAndHandleHead(&request, logger) orelse return;
+    const head_info = try parseAndHandleHead(&request, conn.address, logger) orelse return;
 
     logger.debug().field("conn", conn.address).logf(
-        "Responding to request: {} {s}",
+        "Responding to request: {f} {s}",
         .{ requests.httpMethodFmt(request.head.method), request.head.target },
     );
 
     switch (head_info.method) {
         .HEAD => try handleGetOrHead(.HEAD, server_ctx, &request, logger),
         .GET => try handleGetOrHead(.GET, server_ctx, &request, logger),
-        .POST => try handlePost(server_ctx, &request, logger, head_info),
+        .POST => try handlePost(server_ctx, &request, logger, head_info, conn.address),
         else => try respondSimpleErrorStatusBody(&request, logger, .not_found, ""),
     }
+
+    try writer.interface.flush();
 }
 
 fn respondSimpleErrorStatusBody(
@@ -69,45 +78,43 @@ fn respondSimpleErrorStatusBody(
         else => unreachable,
     }
 
-    const conn = request.server.connection;
-    logger.err().field("conn", conn.address).logf(
-        "Unrecognized request '{} {s}'",
+    logger.err().logf(
+        "Unrecognized request '{f} {s}'",
         .{ requests.httpMethodFmt(request.head.method), request.head.target },
     );
     request.respond(body, .{
         .status = status,
         .keep_alive = false,
-    }) catch |e| switch (e) {
-        error.ConnectionResetByPeer => return,
-        else => return error.SystemIoError,
+    }) catch {
+        return error.SystemIoError;
     };
 }
 
 fn parseAndHandleHead(
     request: *std.http.Server.Request,
+    conn_address: std.net.Address,
     logger: Logger,
 ) !?requests.HeadInfo {
-    const conn = request.server.connection;
     return requests.HeadInfo.parseFromStdHead(request.head) catch |err| switch (err) {
         error.RequestTargetTooLong => {
-            logger.err().field("conn", conn.address).logf(
-                "Request target was too long: '{}'",
-                .{std.zig.fmtEscapes(request.head.target)},
+            logger.err().field("conn", conn_address).logf(
+                "Request target was too long: '{s}'",
+                .{request.head.target},
             );
             return null;
         },
         error.UnexpectedTransferEncoding => {
             if (request.head.content_length == null) {
-                logger.err().field("conn", conn.address).log("Request missing Content-Length");
+                logger.err().field("conn", conn_address).log("Request missing Content-Length");
                 try respondSimpleErrorStatusBody(request, logger, .length_required, "");
             } else {
-                logger.err().field("conn", conn.address).log("Transfer-Encoding & Content-Length");
+                logger.err().field("conn", conn_address).log("Transfer-Encoding & Content-Length");
                 try respondSimpleErrorStatusBody(request, logger, .bad_request, "");
             }
             return null;
         },
         error.RequestContentTypeUnrecognized => {
-            logger.err().field("conn", conn.address).log(
+            logger.err().field("conn", conn_address).log(
                 "Request content type unrecognized",
             );
             try respondSimpleErrorStatusBody(request, logger, .not_acceptable, "");
@@ -131,10 +138,7 @@ fn handleGetOrHead(
             request.respond("unknown", .{
                 .status = .ok,
                 .keep_alive = false,
-            }) catch |err| switch (err) {
-                error.ConnectionResetByPeer => return,
-                else => return error.SystemIoError,
-            };
+            }) catch return error.SystemIoError;
             return;
         }
 
@@ -162,18 +166,19 @@ fn handleGetOrHead(
                     defer if (maybe_archive_file) |file| file.close();
 
                     var send_buffer: [4096]u8 = undefined;
-                    var response = request.respondStreaming(.{
-                        .send_buffer = &send_buffer,
+                    var response = request.respondStreaming(&send_buffer, .{
                         .content_length = archive_len,
                         .respond_options = .{},
-                    });
+                    }) catch |err| switch (err) {
+                        error.HttpExpectationFailed => return,
+                        error.WriteFailed => return error.SystemIoError,
+                    };
                     // flush the headers, so that if this is a head request, we can mock the response without doing unnecessary work
-                    response.flush() catch |err| switch (err) {
-                        error.ConnectionResetByPeer => return,
-                        else => return error.SystemIoError,
+                    response.flush() catch {
+                        return error.SystemIoError;
                     };
 
-                    if (!response.elide_body) {
+                    if (!response.isEliding()) {
                         // use a length which is still a multiple of 2, greater than the send_buffer length,
                         // in order to almost always force the http server method to flush, instead of
                         // pointlessly copying data into the send buffer.
@@ -186,32 +191,27 @@ fn handleGetOrHead(
                         while (maybe_archive_file) |archive_file| {
                             var read_buffer: [read_buffer_len]u8 = undefined;
                             const file_data_len =
-                                archive_file.read(&read_buffer) catch |err| switch (err) {
-                                    error.ConnectionResetByPeer,
-                                    error.ConnectionTimedOut,
-                                    => return,
-                                    else => return error.SystemIoError,
+                                archive_file.read(&read_buffer) catch {
+                                    return error.SystemIoError;
                                 };
                             if (file_data_len == 0) break;
                             const file_data = read_buffer[0..file_data_len];
-                            response.writeAll(file_data) catch |err| switch (err) {
-                                error.ConnectionResetByPeer => return,
-                                else => return error.SystemIoError,
+                            response.writer.writeAll(file_data) catch {
+                                return error.SystemIoError;
                             };
                         }
                     } else {
                         std.debug.assert(
-                            response.transfer_encoding.content_length == archive_len,
+                            response.state.content_length == archive_len,
                         );
                         // NOTE: in order to avoid needing to actually spend time writing the response body,
                         // just trick the API into thinking we already wrote the entire thing by setting this
                         // to 0.
-                        response.transfer_encoding.content_length = 0;
+                        response.state = .{ .content_length = 0 };
                     }
 
-                    response.end() catch |err| switch (err) {
-                        error.ConnectionResetByPeer => return,
-                        else => return error.SystemIoError,
+                    response.end() catch {
+                        return error.SystemIoError;
                     };
                     return;
                 },
@@ -238,22 +238,18 @@ fn handlePost(
     request: *std.http.Server.Request,
     logger: Logger,
     head_info: requests.HeadInfo,
+    _: std.net.Address,
 ) !void {
-    const conn = request.server.connection;
     if (head_info.content_type != .@"application/json") {
         try respondSimpleErrorStatusBody(request, logger, .not_acceptable, "");
         return;
     }
 
-    const req_reader = sig.utils.io.narrowAnyReader(
-        // make the server handle the 100-continue in case there is one
-        request.reader() catch |err| switch (err) {
-            error.HttpExpectationFailed => return,
-            error.ConnectionResetByPeer => return,
-            else => return error.SystemIoError,
-        },
-        std.http.Server.Request.ReadError,
-    );
+    var reader_buffer: [4096]u8 = undefined;
+    const req_reader = request.readerExpectContinue(&reader_buffer) catch |err| switch (err) {
+        error.HttpExpectationFailed => return,
+        error.WriteFailed => return error.SystemIoError,
+    };
 
     const content_len = head_info.content_len orelse {
         try respondSimpleErrorStatusBody(request, logger, .length_required, "");
@@ -265,29 +261,24 @@ fn handlePost(
         return;
     }
 
-    const content_body = try server_ctx.allocator.alloc(u8, content_len);
-    defer server_ctx.allocator.free(content_body);
-    req_reader.readNoEof(content_body) catch |err| switch (err) {
-        error.EndOfStream,
-        error.HttpChunkInvalid,
-        error.HttpHeadersOversize,
+    const content_body = req_reader.allocRemaining(
+        server_ctx.allocator,
+        .limited(content_len + 1),
+    ) catch |err| switch (err) {
+        error.ReadFailed,
         => {
             try respondSimpleErrorStatusBody(request, logger, .bad_request, "");
             return;
         },
 
-        error.OperationAborted,
-        error.ConnectionResetByPeer,
-        error.ConnectionTimedOut,
-        => |e| {
-            logger.err()
-                .field("conn", conn.address)
-                .logf("{s}", .{@errorName(e)});
+        error.StreamTooLong => {
+            try respondSimpleErrorStatusBody(request, logger, .payload_too_large, "");
             return;
         },
 
-        else => return error.SystemIoError,
+        error.OutOfMemory => return error.OutOfMemory,
     };
+    defer server_ctx.allocator.free(content_body);
 
     try handleRpcRequest(server_ctx, request, logger, content_body);
 }
@@ -460,31 +451,26 @@ fn writeFinalJsonResponse(
     http_respond_opts: std.http.Server.Request.RespondOptions,
     json_value: anytype,
 ) (std.mem.Allocator.Error || error{SystemIoError})!void {
-    const json_stringify_opts: std.json.StringifyOptions = .{};
-
     const content_length = blk: {
-        var cw = std.io.countingWriter(std.io.null_writer);
-        var cjw = std.json.writeStream(cw.writer(), json_stringify_opts);
-        cjw.write(json_value) catch |err| switch (err) {};
-        break :blk cw.bytes_written;
+        var cw = std.io.Writer.Discarding.init(&.{});
+        std.json.Stringify.value(json_value, .{}, &cw.writer) catch unreachable;
+        break :blk cw.count;
     };
 
     var send_buffer: [4096]u8 = undefined;
-    var response = request.respondStreaming(.{
-        .send_buffer = &send_buffer,
+    var response = request.respondStreaming(&send_buffer, .{
         .content_length = content_length,
         .respond_options = http_respond_opts,
-    });
+    }) catch |err| switch (err) {
+        error.HttpExpectationFailed => return,
+        error.WriteFailed => return error.SystemIoError,
+    };
 
-    const resp_writer = httpResponseWriter(&response);
-    var json_writer = std.json.writeStream(resp_writer, json_stringify_opts);
-    json_writer.write(json_value) catch |err| switch (err) {
-        error.ConnectionResetByPeer => return,
-        else => return error.SystemIoError,
+    std.json.Stringify.value(json_value, .{}, &response.writer) catch |err| switch (err) {
+        error.WriteFailed => return error.SystemIoError,
     };
     response.end() catch |err| switch (err) {
-        error.ConnectionResetByPeer => return,
-        else => return error.SystemIoError,
+        error.WriteFailed => return error.SystemIoError,
     };
 }
 

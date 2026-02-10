@@ -49,15 +49,7 @@ pub const PeerSearchResult = struct {
     untrusted_full_snapshot_count: usize = 0,
     untrusted_inc_snapshot_count: usize = 0,
 
-    pub fn format(
-        self: PeerSearchResult,
-        comptime fmt_str: []const u8,
-        fmt_options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) @TypeOf(writer).Error!void {
-        _ = fmt_str;
-        _ = fmt_options;
-
+    pub fn format(self: PeerSearchResult, writer: *std.io.Writer) std.io.Writer.Error!void {
         inline for (@typeInfo(PeerSearchResult).@"struct".fields) |field| {
             if (@field(self, field.name) != 0) {
                 try writer.print("{s}: {d} ", .{ field.name, @field(self, field.name) });
@@ -231,7 +223,7 @@ fn downloadInfo(
 
     const url = try std.fmt.allocPrint(
         allocator,
-        "http://{}/{s}",
+        "http://{f}/{s}",
         .{ rpc_socket, snapshot_file_name.constSlice() },
     );
 
@@ -295,7 +287,7 @@ fn downloadSnapshotWithRetry(
                 maybe_trusted_validators,
             );
 
-            logger.info().logf("searched for snapshot peers: {}", .{result});
+            logger.info().logf("searched for snapshot peers: {f}", .{result});
 
             break :blk peers;
         };
@@ -315,7 +307,7 @@ fn downloadSnapshotWithRetry(
             defer allocator.free(url);
             defer dl_attempts += 1;
 
-            logger.info().logf("Attempting snapshot download from {}", .{uri});
+            logger.info().logf("Attempting snapshot download from {f}", .{uri});
             const file = downloadFile(
                 allocator,
                 logger,
@@ -364,7 +356,7 @@ pub fn downloadSnapshotsFromGossip(
     const zone = tracy.Zone.init(@src(), .{ .name = "accountsdb downloadSnapshotsFromGossip" });
     defer zone.deinit();
 
-    var bad_peers: std.array_list.Managed(Pubkey) = .init(allocator);
+    var bad_peers = std.array_list.Managed(Pubkey).init(allocator);
     defer bad_peers.deinit();
 
     const full_slot, const full_file = try downloadSnapshotWithRetry(
@@ -421,19 +413,17 @@ fn downloadFile(
     var http_client: std.http.Client = .{ .allocator = allocator };
     defer http_client.deinit();
 
-    var server_header_buffer: [4096]u8 = undefined;
-    var request = try http_client.open(.GET, uri, .{
-        .server_header_buffer = &server_header_buffer,
-    });
+    var request = try http_client.request(.GET, uri, .{});
     defer request.deinit();
 
-    try request.send();
-    try request.finish();
-    try request.wait();
+    try request.sendBodiless();
 
-    if (request.response.status != .ok) return error.BadStatus;
+    var redirect_buffer: [8192]u8 = undefined;
+    var response = try request.receiveHead(&redirect_buffer);
 
-    const download_size = request.response.content_length orelse
+    if (response.head.status != .ok) return error.BadStatus;
+
+    const download_size = response.head.content_length orelse
         return error.NoContentLength;
 
     if (download_buffer.len < 1 * BYTE_PER_MIB and
@@ -441,8 +431,8 @@ fn downloadFile(
     {
         logger.warn().logf("Downloading file of size {} using a buffer of size {Bi};" ++
             " recommended buffer size for such a payload is at least 1 MiB.", .{
-            std.fmt.fmtIntSizeBin(download_size),
-            std.fmt.fmtIntSizeBin(download_buffer.len),
+            download_size,
+            download_buffer.len,
         });
     }
 
@@ -464,19 +454,24 @@ fn downloadFile(
         );
     }
     try output_file.setEndPos(download_size);
-    var buffered_out = std.io.bufferedWriter(output_file.writer());
+    var output_buffer: [4096]u8 = undefined;
+    var file_writer = output_file.writer(&output_buffer);
 
     var total_bytes_read: u64 = 0;
     var lap_timer = sig.time.Timer.start();
     var full_timer = sig.time.Timer.start();
     var checked_speed = false;
 
+    var transfer_buffer: [4096]u8 = undefined;
+    var body_reader = response.reader(&transfer_buffer);
+
     while (true) {
         const max_bytes_to_read = @min(download_buffer.len, download_size - total_bytes_read);
-        const bytes_read = try request.readAll(download_buffer[0..max_bytes_to_read]);
+        try body_reader.readSliceAll(download_buffer[0..max_bytes_to_read]);
+        const bytes_read = max_bytes_to_read;
         total_bytes_read += bytes_read;
 
-        try buffered_out.writer().writeAll(download_buffer[0..bytes_read]);
+        try file_writer.interface.writeAll(download_buffer[0..bytes_read]);
         if (total_bytes_read == download_size) break;
         std.debug.assert(total_bytes_read < download_size);
 
@@ -486,16 +481,19 @@ fn downloadFile(
         // reset at the end of the iteration, after the update, right before the next read & write.
         defer lap_timer.reset();
 
+        const elapsed_secs = elapsed_since_start.asSecs();
+        if (elapsed_secs == 0) continue; // avoid division by zero
+
         const total_bytes_left = download_size - total_bytes_read;
         const time_left_ns = total_bytes_left * (elapsed_since_start.asNanos() / total_bytes_read);
         logger.info().logf(
-            "[download progress]: {d}% done ({:.4}/s - {:.4}/{:.4}) (time left: {d})",
+            "[download progress]: {d}% done ({Bi}/s - {Bi}/{Bi}) (time left: {D})",
             .{
                 total_bytes_read * 100 / download_size,
-                std.fmt.fmtIntSizeBin(total_bytes_read / elapsed_since_start.asSecs()),
-                std.fmt.fmtIntSizeBin(total_bytes_read),
-                std.fmt.fmtIntSizeBin(download_size),
-                std.fmt.fmtDuration(time_left_ns),
+                total_bytes_read / elapsed_secs,
+                total_bytes_read,
+                download_size,
+                time_left_ns,
             },
         );
 
@@ -503,24 +501,24 @@ fn downloadFile(
         checked_speed = true;
 
         const min_bytes_per_second = BYTE_PER_MIB * (maybe_min_mib_per_second orelse continue);
-        const actual_bytes_per_second = total_bytes_read / elapsed_since_start.asSecs();
+        const actual_bytes_per_second = total_bytes_read / elapsed_secs;
 
         if (actual_bytes_per_second < min_bytes_per_second) {
             // not fast enough => abort
             logger.info().logf(
-                "[download progress]: speed is too slow ({:.4}/s) -- disconnecting",
-                .{std.fmt.fmtIntSizeBin(actual_bytes_per_second)},
+                "[download progress]: speed is too slow ({Bi}/s) -- disconnecting",
+                .{actual_bytes_per_second},
             );
             return error.TooSlow;
         }
 
         logger.info().logf(
-            "[download progress]: speed is ok ({:.4}/s) -- maintaining",
-            .{std.fmt.fmtIntSizeBin(actual_bytes_per_second)},
+            "[download progress]: speed is ok ({} bytes/s) -- maintaining",
+            .{actual_bytes_per_second},
         );
     }
 
-    try buffered_out.flush();
+    try file_writer.interface.flush();
     return output_file;
 }
 
@@ -547,8 +545,8 @@ pub fn getOrDownloadSnapshotFiles(
         var timer = try std.time.Timer.start();
         logger.info().log("downloading snapshot");
         defer logger.info().logf(
-            "  downloaded snapshot in {}",
-            .{std.fmt.fmtDuration(timer.read())},
+            "  downloaded snapshot in {D}",
+            .{timer.read()},
         );
 
         const gossip_service = options.gossip_service orelse {
@@ -724,7 +722,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
                 true,
             );
         }
-        logger.info().logf("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+        logger.info().logf("unpacked snapshot in {D}", .{timer.read()});
 
         // TODO: can probs do this in parallel with full snapshot
         if (snapshot_files.incremental()) |incremental_snapshot| {
@@ -748,7 +746,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
                 n_threads_snapshot_unpack,
                 false,
             );
-            logger.info().logf("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+            logger.info().logf("unpacked snapshot in {D}", .{timer.read()});
         }
     } else {
         logger.info().log("not unpacking snapshot...");
@@ -763,7 +761,7 @@ pub fn getOrDownloadAndUnpackSnapshot(
         snapshot_dir,
         snapshot_files,
     );
-    logger.info().logf("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
+    logger.info().logf("read snapshot metdata in {D}", .{timer.read()});
 
     return .{ snapshot_fields, snapshot_files };
 }
@@ -961,7 +959,7 @@ test "PeerSearchResult format" {
 
     for (cases) |case| {
         const result, const expected = case;
-        try std.testing.expectFmt(expected, "{}", .{result});
+        try std.testing.expectFmt(expected, "{f}", .{result});
     }
 }
 
