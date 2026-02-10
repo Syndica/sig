@@ -44,30 +44,33 @@ export fn sol_compat_vm_syscall_execute_v1(
     const allocator = arena.allocator();
 
     const in_slice = in_ptr[0..in_size];
-    var ctx = pb.SyscallContext.decode(in_slice, allocator) catch |err| {
+    var reader: std.Io.Reader = .fixed(in_slice);
+    var ctx = pb.SyscallContext.decode(&reader, allocator) catch |err| {
         std.debug.print("pb.Syscall.decode: {s}\n", .{@errorName(err)});
         return 0;
     };
-    defer ctx.deinit();
+    defer ctx.deinit(allocator);
 
     // utils.printPbSyscallContext(ctx) catch |err| {
     //     std.debug.print("printPbSyscallContext: {s}\n", .{@errorName(err)});
     //     return 0;
     // };
 
-    const result = executeSyscall(allocator, ctx, EMIT_LOGS) catch |err| {
+    var result = executeSyscall(allocator, ctx, EMIT_LOGS) catch |err| {
         std.debug.print("executeSyscall: {s}\n", .{@errorName(err)});
         return 0;
     };
-    defer result.deinit();
+    defer result.deinit(allocator);
 
     // utils.printPbSyscallEffects(result) catch |err| {
     //     std.debug.print("printPbSyscallEffects: {s}\n", .{@errorName(err)});
     //     return 0;
     // };
 
-    const result_bytes = try result.encode(allocator);
-    defer allocator.free(result_bytes);
+    var writer: std.Io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+    try result.encode(&writer.writer, allocator);
+    const result_bytes = writer.written();
 
     const out_slice = out_ptr[0..out_size.*];
     if (result_bytes.len > out_slice.len) {
@@ -144,10 +147,10 @@ fn executeSyscall(
 
     // Set return data
     if (pb_vm.return_data) |return_data| {
-        if (return_data.program_id.getSlice().len != Pubkey.SIZE) return error.OutOfBounds;
-        const program_id = Pubkey{ .data = return_data.program_id.getSlice()[0..Pubkey.SIZE].* };
+        if (return_data.program_id.len != Pubkey.SIZE) return error.OutOfBounds;
+        const program_id = Pubkey{ .data = return_data.program_id[0..Pubkey.SIZE].* };
         tc.return_data = .{ .program_id = program_id, .data = .{} };
-        try tc.return_data.data.appendSlice(return_data.data.getSlice());
+        try tc.return_data.data.appendSlice(return_data.data);
     }
 
     // Program Cache Load Builtins
@@ -170,12 +173,12 @@ fn executeSyscall(
     }
 
     // Create instruction info and push it to the transaction context
-    if (pb_instr.program_id.getSlice().len != Pubkey.SIZE) return error.OutOfBounds;
+    if (pb_instr.program_id.len != Pubkey.SIZE) return error.OutOfBounds;
     const instr_info = try utils.createInstructionInfo(
         allocator,
         &tc,
-        .{ .data = pb_instr.program_id.getSlice()[0..Pubkey.SIZE].* },
-        pb_instr.data.getSlice(),
+        .{ .data = pb_instr.program_id[0..Pubkey.SIZE].* },
+        pb_instr.data,
         pb_instr.instr_accounts.items,
     );
     defer instr_info.deinit(allocator);
@@ -183,11 +186,9 @@ fn executeSyscall(
     try executor.pushInstruction(&tc, instr_info);
     const ic = try tc.getCurrentInstructionContext();
 
-    const host_align = 16;
-
-    const rodata = try allocator.alignedAlloc(u8, host_align, pb_vm.rodata.getSlice().len);
+    const rodata = try allocator.alignedAlloc(u8, .@"16", pb_vm.rodata.len);
     defer allocator.free(rodata);
-    @memcpy(rodata, pb_vm.rodata.getSlice());
+    @memcpy(rodata, pb_vm.rodata);
 
     const executable: sig.vm.Executable = .{
         .instructions = &.{},
@@ -227,11 +228,11 @@ fn executeSyscall(
 
     const heap_max = @min(HEAP_MAX, pb_vm.heap_max);
 
-    const heap = try allocator.alignedAlloc(u8, host_align, heap_max);
+    const heap = try allocator.alignedAlloc(u8, .@"16", heap_max);
     defer allocator.free(heap);
     @memset(heap, 0);
 
-    const stack = try allocator.alignedAlloc(u8, host_align, STACK_SIZE);
+    const stack = try allocator.alignedAlloc(u8, .@"16", STACK_SIZE);
     defer allocator.free(stack);
     @memset(stack, 0);
 
@@ -284,10 +285,10 @@ fn executeSyscall(
     vm.registers.set(.r10, pb_vm.r10);
     vm.registers.set(.pc, pb_vm.r11);
 
-    utils.copyPrefix(heap, pb_syscall_invocation.heap_prefix.getSlice());
-    utils.copyPrefix(stack, pb_syscall_invocation.stack_prefix.getSlice());
+    utils.copyPrefix(heap, pb_syscall_invocation.heap_prefix);
+    utils.copyPrefix(stack, pb_syscall_invocation.stack_prefix);
 
-    const syscall_name = pb_syscall_ctx.syscall_invocation.?.function_name.getSlice();
+    const syscall_name = pb_syscall_ctx.syscall_invocation.?.function_name;
     const syscall_tag = std.meta.stringToEnum(syscalls.Syscall, syscall_name) orelse {
         std.debug.print("Syscall not found: {s}\n", .{syscall_name});
         return error.SyscallNotFound;
