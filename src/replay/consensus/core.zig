@@ -4926,7 +4926,6 @@ test "edge cases - duplicate confirmed slot" {
 
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
-    std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
     const slot1: Slot = 1;
