@@ -691,7 +691,7 @@ pub const BatchAllocator = struct {
         // create new batch
         const batch_bytes = self.backing_allocator
             .rawAlloc(batch_size, .fromByteUnits(@alignOf(Batch)), ret_addr) orelse return null;
-        const new_batch: *Batch = @alignCast(@ptrCast(batch_bytes));
+        const new_batch: *Batch = @ptrCast(@alignCast(batch_bytes));
         new_batch.* = Batch{
             .fba = FixedBufferAllocator.init(batch_bytes[@sizeOf(Batch)..batch_size]),
             .num_allocs = Atomic(usize).init(1),
@@ -1076,7 +1076,7 @@ test "recycle buffer: freeUnused" {
     const bytes2 = try allocator.alloc(50);
     defer allocator.free(bytes2.ptr);
 
-    const expected_ptr: [*]X = @alignCast(@ptrCast(&bytes[50]));
+    const expected_ptr: [*]X = @ptrCast(@alignCast(&bytes[50]));
     try std.testing.expectEqual(expected_ptr, bytes2.ptr);
 }
 

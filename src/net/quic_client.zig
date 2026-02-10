@@ -374,7 +374,7 @@ pub fn Client(
                 maybe_lsquic_connection: ?*lsquic.lsquic_conn_t,
             ) callconv(.c) *lsquic.lsquic_conn_ctx_t {
                 const conn_ctx = lsquic.lsquic_conn_get_ctx(maybe_lsquic_connection).?;
-                const self: *Connection = @alignCast(@ptrCast(conn_ctx));
+                const self: *Connection = @ptrCast(@alignCast(conn_ctx));
 
                 self.client.logger.debug().logf("onNewConn: {}", .{self.endpoint});
                 self.lsquic_connection = maybe_lsquic_connection.?;
@@ -385,7 +385,7 @@ pub fn Client(
 
             fn onConnClosed(maybe_lsquic_connection: ?*lsquic.lsquic_conn_t) callconv(.c) void {
                 const conn_ctx = lsquic.lsquic_conn_get_ctx(maybe_lsquic_connection).?;
-                const conn: *Connection = @alignCast(@ptrCast(conn_ctx));
+                const conn: *Connection = @ptrCast(@alignCast(conn_ctx));
 
                 for (conn.client.connections.constSlice(), 0..) |connection, i| {
                     if (@intFromPtr(connection) == @intFromPtr(conn)) {
@@ -409,7 +409,7 @@ pub fn Client(
             ) callconv(.c) *lsquic.lsquic_stream_ctx_t {
                 const lsquic_connection = lsquic.lsquic_stream_conn(maybe_lsquic_stream);
                 const conn_ctx = lsquic.lsquic_conn_get_ctx(lsquic_connection).?;
-                const connection: *Connection = @alignCast(@ptrCast(conn_ctx));
+                const connection: *Connection = @ptrCast(@alignCast(conn_ctx));
 
                 const stream = connection.client.allocator.create(Stream) catch
                     @panic("OutOfMemory");
@@ -434,7 +434,7 @@ pub fn Client(
                 maybe_lsquic_stream: ?*lsquic.lsquic_stream_t,
                 maybe_stream: ?*lsquic.lsquic_stream_ctx_t,
             ) callconv(.c) void {
-                const stream: *Stream = @alignCast(@ptrCast(maybe_stream.?));
+                const stream: *Stream = @ptrCast(@alignCast(maybe_stream.?));
 
                 if (stream.packet.size != lsquic.lsquic_stream_write(
                     maybe_lsquic_stream,
@@ -453,7 +453,7 @@ pub fn Client(
                 _: ?*lsquic.lsquic_stream_t,
                 maybe_stream: ?*lsquic.lsquic_stream_ctx_t,
             ) callconv(.c) void {
-                const stream: *Stream = @alignCast(@ptrCast(maybe_stream.?));
+                const stream: *Stream = @ptrCast(@alignCast(maybe_stream.?));
                 stream.connection.client.allocator.destroy(stream);
             }
         };
@@ -569,10 +569,10 @@ fn packetsOut(
     n_specs: u32,
 ) callconv(.c) i32 {
     var msg: std.posix.msghdr_const = undefined;
-    const socket: *sig.net.UdpSocket = @alignCast(@ptrCast(ctx.?));
+    const socket: *sig.net.UdpSocket = @ptrCast(@alignCast(ctx.?));
 
     for (specs.?[0..n_specs]) |spec| {
-        msg.name = @alignCast(@ptrCast(spec.dest_sa));
+        msg.name = @ptrCast(@alignCast(spec.dest_sa));
         msg.namelen = @sizeOf(std.posix.sockaddr.in);
         msg.iov = @ptrCast(spec.iov.?);
         msg.iovlen = @intCast(spec.iovlen);

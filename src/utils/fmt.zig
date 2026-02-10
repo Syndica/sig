@@ -136,7 +136,7 @@ inline fn maxArg(comptime T: type) T {
         },
         .array => |array| if (array.child == u8) return .{255} ** array.len,
         .pointer => |pointer| switch (pointer.size) {
-            .One => switch (@typeInfo(pointer.child)) {
+            .one => switch (@typeInfo(pointer.child)) {
                 .array => |array| if (array.child == u8) {
                     const arr = if (array.sentinel()) |sentinel|
                         [array.len:sentinel]u8

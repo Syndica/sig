@@ -58,7 +58,7 @@ pub fn ParamsTuple(comptime function: anytype) type {
             .type = param.type.?,
             .default_value_ptr = null,
             .is_comptime = false,
-            .alignment = 0,
+            .alignment = @alignOf(param.type.?),
         };
     }
     return @Type(.{ .@"struct" = .{

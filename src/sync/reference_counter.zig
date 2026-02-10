@@ -205,11 +205,12 @@ fn RcBase(T: type) type {
         const Allocator = std.mem.Allocator;
 
         const alignment = @max(@alignOf(T), @alignOf(ReferenceCounter));
+        const alignment_enum = std.mem.Alignment.fromByteUnits(alignment);
         const reserved_space = std.mem.alignForward(usize, @sizeOf(ReferenceCounter), @alignOf(T));
 
         pub fn alloc(allocator: Allocator, n: usize) Allocator.Error!Self {
             const total_size = totalSize(n) catch return error.OutOfMemory;
-            const bytes = try allocator.alignedAlloc(u8, alignment, total_size);
+            const bytes = try allocator.alignedAlloc(u8, alignment_enum, total_size);
 
             @as(*ReferenceCounter, @ptrCast(bytes.ptr)).* = .{};
             return .{ .ptr = @alignCast(bytes.ptr) };
