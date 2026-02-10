@@ -390,7 +390,7 @@ pub const Backoff = struct {
 
     pub fn snooze(_: *Backoff) void {
         switch (builtin.cpu.arch) {
-            .aarch64 => asm volatile ("wfe" ::: "memory"),
+            .aarch64 => asm volatile ("wfe" ::: .{ .memory = true }),
             else => std.atomic.spinLoopHint(),
         }
     }
