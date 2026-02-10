@@ -776,33 +776,24 @@ fn translateInstruction(
     );
 
     const tc = ic.tc;
-    const loosen_cpi_size = tc.feature_set.active(.loosen_cpi_size_restriction, tc.slot);
     const increase_info_limit = tc.feature_set.active(.increase_cpi_account_info_limit, tc.slot);
 
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L146-L161
-    if (loosen_cpi_size) {
-        if (account_metas.len >= InstructionInfo.MAX_ACCOUNT_METAS) {
-            return SyscallError.MaxInstructionAccountsExceeded;
-        }
-        if (data.len > MAX_DATA_LEN) {
-            return SyscallError.MaxInstructionDataLenExceeded;
-        }
-
-        var total_cu_cost = data.len / tc.compute_budget.cpi_bytes_per_unit;
-        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L555-L567
-        if (increase_info_limit) {
-            // NOTE: Agave uses the same size here (34 bytes) no matter which type it is.
-            total_cu_cost +|= account_metas.len *| @sizeOf(AccountMetaRust) /
-                tc.compute_budget.cpi_bytes_per_unit;
-        }
-        try tc.consumeCompute(total_cu_cost);
-    } else {
-        // [agave] https://github.com/solana-labs/solana/blob/dbf06e258ae418097049e845035d7d5502fe1327/programs/bpf_loader/src/syscalls/cpi.rs#L1114-L1120
-        const total_size = account_metas.len *| @sizeOf(AccountInfoRust) +| data.len;
-        if (total_size > tc.compute_budget.max_cpi_instruction_size) {
-            return SyscallError.InstructionTooLarge;
-        }
+    if (account_metas.len >= InstructionInfo.MAX_ACCOUNT_METAS) {
+        return SyscallError.MaxInstructionAccountsExceeded;
     }
+    if (data.len > MAX_DATA_LEN) {
+        return SyscallError.MaxInstructionDataLenExceeded;
+    }
+
+    var total_cu_cost = data.len / tc.compute_budget.cpi_bytes_per_unit;
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L555-L567
+    if (increase_info_limit) {
+        // The account meta is always 34 bytes (32 for pubkey, 1 for is_signer, 1 for is_writable).
+        total_cu_cost +|= account_metas.len *| @sizeOf(AccountMetaRust) /
+            tc.compute_budget.cpi_bytes_per_unit;
+    }
+    try tc.consumeCompute(total_cu_cost);
 
     var accounts = try allocator.alloc(InstructionAccount, account_metas.len);
     errdefer allocator.free(accounts);

@@ -40,8 +40,6 @@ poseidon_cost_coefficient_a: u64,
 poseidon_cost_coefficient_c: u64,
 /// Number of account data bytes per compute unit charged during a cross-program invocation
 cpi_bytes_per_unit: u64,
-/// Maximum cross-program invocation instruction size
-max_cpi_instruction_size: usize,
 /// Number of compute units consumed by an invoke call (not including the cost incurred by
 /// the called program)
 invoke_units: u64,
@@ -117,7 +115,6 @@ pub fn init(compute_unit_limit: u64, simd_0339_active: bool) ComputeBudget {
         .mem_op_base_cost = 10,
         .poseidon_cost_coefficient_a = 61,
         .poseidon_cost_coefficient_c = 542,
-        .max_cpi_instruction_size = 1280, // IPv6 Min MTU size
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/execution_budget.rs#L25-L31
         .invoke_units = if (simd_0339_active)
             946
