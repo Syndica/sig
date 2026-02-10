@@ -36,12 +36,12 @@ pub fn downloadAndExtractGenesis(
     output_dir: []const u8,
     logger: Logger,
 ) DownloadError![]const u8 {
-    const genesis_url = try std.fmt.allocPrint(
-        allocator,
+    var genesis_url_buf: [std.fs.max_path_bytes]u8 = @splat(0);
+    const genesis_url = try std.fmt.bufPrint(
+        &genesis_url_buf,
         "{s}/{s}",
         .{ cluster_url, DEFAULT_GENESIS_ARCHIVE },
     );
-    defer allocator.free(genesis_url);
 
     logger.info().logf("Downloading genesis from {s}...", .{genesis_url});
     const archive_data = try downloadGenesisArchive(allocator, genesis_url, logger);
@@ -91,7 +91,7 @@ fn downloadGenesisArchive(
 /// Decompresses bz2 data using libbz2
 fn decompressBz2(allocator: Allocator, compressed_data: []const u8) DownloadError![]u8 {
     // Start with an estimate of 10x compression ratio
-    var dest_len: u32 = @intCast(@min(compressed_data.len * 10, 500 * 1024 * 1024));
+    var dest_len: u32 = @intCast(compressed_data.len * 10);
     var decompressed = allocator.alloc(u8, dest_len) catch return error.OutOfMemory;
     errdefer allocator.free(decompressed);
 
@@ -135,13 +135,8 @@ fn extractGenesisFromTar(
     output_dir: []const u8,
     logger: Logger,
 ) DownloadError![]const u8 {
-    std.fs.cwd().makePath(output_dir) catch |err| {
-        logger.err().logf("Failed to create output directory: {}", .{err});
-        return error.TarExtractError;
-    };
-
-    var dir = std.fs.cwd().openDir(output_dir, .{}) catch |err| {
-        logger.err().logf("Failed to open output directory: {}", .{err});
+    var dir = std.fs.cwd().makeOpenPath(output_dir, .{}) catch |err| {
+        logger.err().logf("Failed to open/create output directory: {}", .{err});
         return error.TarExtractError;
     };
     defer dir.close();

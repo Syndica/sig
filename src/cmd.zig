@@ -1341,10 +1341,19 @@ fn ensureGenesis(
         &.{ cfg.validator_dir, "genesis.bin" },
     );
     errdefer allocator.free(existing_path);
-    if (!std.meta.isError(std.fs.cwd().access(existing_path, .{}))) {
+    const maybe_genesis_file: ?std.fs.File = std.fs.cwd().openFile(
+        existing_path,
+        .{},
+    ) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    if (maybe_genesis_file != null) {
         logger.info().logf("Using existing genesis file: {s}", .{existing_path});
+        maybe_genesis_file.?.close();
         return existing_path;
     }
+    allocator.free(existing_path);
 
     // Determine cluster for genesis
     const cluster = try cfg.gossip.getCluster() orelse {
