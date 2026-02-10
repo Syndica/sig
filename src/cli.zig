@@ -1902,20 +1902,21 @@ inline fn renderArgumentDefaultValue(
     writer: anytype,
 ) !bool {
     const T = @TypeOf(default_value);
-    const value, const fmt_str = if (T == []const u8)
-        .{ std.zig.fmtEscapes(default_value), "" }
-    else switch (@typeInfo(T)) {
-        .bool => .{ default_value, "any" },
-        .@"enum" => .{ @tagName(default_value), "s" },
-        .int => .{ default_value, "d" },
+    try writer.writeAll("(default: ");
+    if (T == []const u8) {
+        try std.fmt.format(writer, "{f}", .{std.zig.fmtString(default_value)});
+    } else switch (@typeInfo(T)) {
+        .bool => try std.fmt.format(writer, "{any}", .{default_value}),
+        .@"enum" => try std.fmt.format(writer, "{s}", .{@tagName(default_value)}),
+        .int => try std.fmt.format(writer, "{d}", .{default_value}),
         .optional => |optional| {
             if (@typeInfo(optional.child) == .optional) return false;
+            // Close the "(default: " we already wrote, then return the inner result
+            try writer.writeAll(")");
             return renderArgumentDefaultValue(default_value orelse return false, writer);
         },
         else => return false,
-    };
-    try writer.writeAll("(default: ");
-    try std.fmt.formatType(value, fmt_str, .{}, writer, 8);
+    }
     try writer.writeAll(")");
     return true;
 }

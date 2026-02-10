@@ -670,7 +670,7 @@ fn translateAccounts(
         const caller_account_index = for (account_info_keys.constSlice(), 0..) |key, idx| {
             if (key.equals(&account_key)) break idx;
         } else {
-            try tc.log("Instruction references an unknown account {}", .{account_key});
+            try tc.log("Instruction references an unknown account {f}", .{account_key});
             return InstructionError.MissingAccount;
         };
 
@@ -678,7 +678,7 @@ fn translateAccounts(
         const serialized_metadata = if (index_in_caller < serialized_account_metas.len) blk: {
             break :blk &serialized_account_metas[index_in_caller];
         } else {
-            try tc.log("Internal error: index mismatch for account {}", .{account_key});
+            try tc.log("Internal error: index mismatch for account {f}", .{account_key});
             return InstructionError.MissingAccount;
         };
 

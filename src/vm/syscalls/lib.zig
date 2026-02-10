@@ -270,7 +270,7 @@ pub fn logPubkey(
     );
     const pubkey: Pubkey = @bitCast(pubkey_bytes[0..@sizeOf(Pubkey)].*);
 
-    try stable_log.programLog(tc, "{}", .{pubkey});
+    try stable_log.programLog(tc, "{f}", .{pubkey});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L58-L80

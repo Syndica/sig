@@ -925,7 +925,10 @@ pub fn writeStakes(
     try std.fmt.format(writer, "\n", .{});
 }
 
-fn writeShuffledIndices(writer: std.fs.File.Writer, shuffled_indices: std.array_list.Managed(usize)) !void {
+fn writeShuffledIndices(
+    writer: std.fs.File.Writer,
+    shuffled_indices: std.array_list.Managed(usize),
+) !void {
     try std.fmt.format(writer, "SHUFFLED_INDICES: ", .{});
     for (shuffled_indices.items) |index| {
         try std.fmt.format(writer, "{}, ", .{index});

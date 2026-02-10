@@ -393,7 +393,7 @@ pub const AccountsDB = struct {
                 allocator,
                 accounts_per_file_estimate,
             );
-            self.logger.info().logf("loadFromSnapshot: total time: {s}", .{load_timer.read()});
+            self.logger.info().logf("loadFromSnapshot: total time: {f}", .{load_timer.read()});
         }
 
         if (validate) {
@@ -414,8 +414,8 @@ pub const AccountsDB = struct {
                 } else null,
             });
             self.logger.info().logf(
-                "validateLoadFromSnapshot: total time: {s}",
-                .{validate_timer.read()},
+                "validateLoadFromSnapshot: total time: {D}",
+                .{validate_timer.read().ns},
             );
         }
 
@@ -450,7 +450,7 @@ pub const AccountsDB = struct {
                 allocator,
                 accounts_per_file_estimate,
             );
-            self.logger.info().logf("loadFromSnapshot: total time: {s}", .{load_timer.read()});
+            self.logger.info().logf("loadFromSnapshot: total time: {f}", .{load_timer.read()});
         }
 
         {
@@ -467,8 +467,8 @@ pub const AccountsDB = struct {
                 } else null,
             });
             self.logger.info().logf(
-                "validateLoadFromSnapshot: total time: {s}",
-                .{validate_timer.read()},
+                "validateLoadFromSnapshot: total time: {D}",
+                .{validate_timer.read().ns},
             );
         }
 
@@ -546,7 +546,7 @@ pub const AccountsDB = struct {
 
         var merge_timer = sig.time.Timer.start();
         try self.mergeMultipleDBs(loading_threads, n_combine_threads);
-        self.logger.debug().logf("mergeMultipleDBs: total time: {}", .{merge_timer.read()});
+        self.logger.debug().logf("mergeMultipleDBs: total time: {D}", .{merge_timer.read()});
     }
 
     /// Initializes a slice of children `AccountsDB`s, used to divide the work of loading from a snapshot.
@@ -1170,7 +1170,7 @@ pub const AccountsDB = struct {
             break :blk .{ lamports_sum, hash };
         };
 
-        self.logger.debug().logf("collecting hashes from accounts took: {s}", .{timer.read()});
+        self.logger.debug().logf("collecting hashes from accounts took: {D}", .{timer.read().ns});
         timer.reset();
 
         return .{
@@ -1283,7 +1283,7 @@ pub const AccountsDB = struct {
 
         if (!params.expected_full.accounts_hash.eql(accounts_hash)) {
             self.logger.err().logf(
-                "incorrect accounts hash: expected vs calculated: {d} vs {d}",
+                "incorrect accounts hash: expected vs calculated: {f} vs {f}",
                 .{ params.expected_full.accounts_hash, accounts_hash },
             );
             return error.IncorrectAccountsHash;
@@ -1330,7 +1330,7 @@ pub const AccountsDB = struct {
 
             if (!expected_incremental.accounts_hash.eql(accounts_delta_hash)) {
                 self.logger.err().logf(
-                    "incorrect accounts delta hash: expected vs calculated: {} vs {}",
+                    "incorrect accounts delta hash: expected vs calculated: {f} vs {f}",
                     .{
                         expected_incremental.accounts_hash.checksum(),
                         accounts_delta_hash.checksum(),
@@ -3006,7 +3006,7 @@ pub const AccountsDB = struct {
                                     switch (err) {
                                         error.FileNotFound => {
                                             this.accountsdb.logger.err().logf(
-                                                "not found: {s}\n",
+                                                "not found: {f}\n",
                                                 .{sig.utils.fmt.tryRealPath(
                                                     this.accountsdb.snapshot_dir,
                                                     archive_name,
@@ -3064,10 +3064,10 @@ pub const AccountsDB = struct {
                         break :blk .{ full_info, inc_info };
                     };
 
-                    accounts_db.logger.debug().logf("Available full: {?s}", .{
+                    accounts_db.logger.debug().logf("Available full: {s}", .{
                         full_info.snapshotArchiveName().constSlice(),
                     });
-                    accounts_db.logger.debug().logf("Available inc: {?s}", .{
+                    accounts_db.logger.debug().logf("Available inc: {any}", .{
                         if (inc_info) |info| info.snapshotArchiveName().constSlice() else null,
                     });
 
@@ -4789,7 +4789,7 @@ test "insert multiple accounts on multiple slots" {
 
         const pubkey = Pubkey.initRandom(random);
         errdefer std.log.err(
-            "Failed to insert and load account: i={}, slot={}, ancestors={any} pubkey={}\n",
+            "Failed to insert and load account: i={}, slot={}, ancestors={any} pubkey={f}\n",
             .{ i, slot, ancestors.ancestors.keys(), pubkey },
         );
 
@@ -4839,7 +4839,7 @@ test "insert account on multiple slots" {
                 \\    j:         {}/{}
                 \\    slot:      {}
                 \\    ancestors: {any}
-                \\    pubkey:    {}
+                \\    pubkey:    {f}
                 \\
             ,
                 .{ i, j, num_slots_to_insert, slot, ancestors.ancestors.keys(), pubkey },

@@ -126,7 +126,7 @@ pub const AllocManagement = enum {
 
 pub const ArrayListInfo = struct {
     Elem: type,
-    alignment: usize,
+    alignment: ?std.mem.Alignment,
     management: AllocManagement,
 };
 
@@ -143,16 +143,16 @@ pub fn arrayListInfo(comptime T: type) ?ArrayListInfo {
         else => return null,
     };
     if (ptr_info.size != .slice) return null;
-    if (ptr_info.alignment > std.math.maxInt(usize)) return null;
-    const alignment = if (@sizeOf(ptr_info.child) != 0) ptr_info.alignment else null;
-    const management: AllocManagement = switch (T) {
-        std.ArrayListAligned(ptr_info.child, alignment) => .managed,
-        std.ArrayListAlignedUnmanaged(ptr_info.child, alignment) => .unmanaged,
-        else => return null,
-    };
+    const management: AllocManagement = if (@hasField(T, "allocator")) .managed else .unmanaged;
+    const alignment: ?std.mem.Alignment = if (@TypeOf(ptr_info.alignment) == std.mem.Alignment)
+        ptr_info.alignment
+    else if (@TypeOf(ptr_info.alignment) == ?std.mem.Alignment)
+        ptr_info.alignment
+    else
+        @enumFromInt(ptr_info.alignment);
     return .{
         .Elem = ptr_info.child,
-        .alignment = ptr_info.alignment,
+        .alignment = alignment,
         .management = management,
     };
 }
@@ -470,7 +470,7 @@ fn sliceEql(comptime T: type, a: []const T, b: []const T, comptime config: EqlCo
 
 const backend_can_use_eql_bytes = switch (@import("builtin").zig_backend) {
     // The SPIR-V backend does not support the optimized path yet.
-    .stage2_spirv64 => false,
+    .stage2_spirv => false,
     // The RISC-V does not support vectors.
     .stage2_riscv64 => false,
     else => true,

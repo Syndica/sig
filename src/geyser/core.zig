@@ -580,7 +580,7 @@ test "streaming accounts" {
     // read from the pipe
     _, const data = try stream_reader.readPayload();
 
-    try std.testing.expectEqualDeep(v_payload, data);
+    try expectEqualPayloads(v_payload, data);
     stream_reader.resetMemory();
 
     // write to the pipe twice
@@ -611,12 +611,12 @@ test "streaming accounts" {
 
     // first payload matches
     _, const data2 = try stream_reader.readPayload();
-    try std.testing.expectEqualDeep(v_payload, data2);
+    try expectEqualPayloads(v_payload, data2);
     stream_reader.resetMemory();
 
     // second payload matches
     _, const data3 = try stream_reader.readPayload();
-    try std.testing.expectEqualDeep(v_payload2, data3);
+    try expectEqualPayloads(v_payload2, data3);
     stream_reader.resetMemory();
 }
 
@@ -683,10 +683,31 @@ test "buf resizing" {
     // read from the pipe
     _, const data = try stream_reader.readPayload();
 
-    try std.testing.expectEqualDeep(v_payload, data);
+    try expectEqualPayloads(v_payload, data);
+
     stream_reader.resetMemory();
 
     // check that the buffers have been resized
     try std.testing.expect(stream_reader.io_buf.len > 1);
     try std.testing.expect(stream_reader.bincode_buf.len > 1);
+}
+
+// std.testing.expectEqualDeep internally uses "{}" which is ambiguous for types
+// with format methods (Pubkey). work around by comparing fields manually.
+fn expectEqualPayloads(expected: VersionedAccountPayload, actual: VersionedAccountPayload) !void {
+    const exp = expected.AccountPayloadV1;
+    const act = actual.AccountPayloadV1;
+    try std.testing.expectEqual(exp.slot, act.slot);
+    try std.testing.expectEqual(exp.pubkeys.len, act.pubkeys.len);
+    try std.testing.expectEqual(exp.accounts.len, act.accounts.len);
+    for (exp.pubkeys, act.pubkeys) |e, a| {
+        try std.testing.expectEqual(e.data, a.data);
+    }
+    for (exp.accounts, act.accounts) |e, a| {
+        try std.testing.expectEqual(e.lamports, a.lamports);
+        try std.testing.expectEqual(e.executable, a.executable);
+        try std.testing.expectEqual(e.rent_epoch, a.rent_epoch);
+        try std.testing.expect(e.data.eql(a.data));
+        try std.testing.expectEqual(e.owner.data, a.owner.data);
+    }
 }

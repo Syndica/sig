@@ -599,13 +599,12 @@ pub const Duration = struct {
         return .{ .ns = self.ns * factor };
     }
 
-    pub fn format(
-        self: @This(),
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        return try writer.print("{s}", .{std.fmt.fmtDuration(self.ns)});
+    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        return writer.print("{D}", .{self.ns});
+    }
+
+    pub fn formatDuration(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        return writer.print("{D}", .{self.ns});
     }
 };
 
@@ -644,13 +643,8 @@ pub const Instant = struct {
         return .{ .uptime_ns = self.uptime_ns -| duration.asNanos() };
     }
 
-    pub fn format(
-        self: @This(),
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        return try writer.print("{s}", .{std.fmt.fmtDuration(self.uptime_ns)});
+    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        return writer.print("{D}", .{self.uptime_ns});
     }
 };
 

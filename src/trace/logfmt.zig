@@ -15,7 +15,7 @@ fn fieldFmtString(comptime Value: type) []const u8 {
             "{s}={any} ",
         .array => |arr| if (arr.child == u8) "{s}={s} " else "{s}={any} ",
         .int, .comptime_int, .float, .comptime_float => "{s}={} ",
-        else => "{s}={any} ",
+        else => if (@hasDecl(Value, "format")) "{s}={f} " else "{s}={any} ",
     };
 }
 

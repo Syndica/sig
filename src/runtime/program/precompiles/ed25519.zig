@@ -213,18 +213,18 @@ test "execute" {
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L279
 test "ed25519 invalid offsets" {
     const allocator = std.testing.allocator;
-    var instruction_data = try std.ArrayListAligned(u8, 2).initCapacity(
+    var instruction_data = try std.ArrayListAligned(u8, .@"2").initCapacity(
         allocator,
         ED25519_DATA_START,
     );
-    defer instruction_data.deinit();
+    defer instruction_data.deinit(allocator);
 
     const offsets: SignatureOffsets = .{};
 
     // Set up instruction data with invalid size
     instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&1));
     instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&offsets));
-    try instruction_data.resize(instruction_data.items.len - 1);
+    try instruction_data.resize(allocator, instruction_data.items.len - 1);
 
     try std.testing.expectEqual(
         error.InvalidInstructionDataSize,

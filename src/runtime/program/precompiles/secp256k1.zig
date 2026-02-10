@@ -82,8 +82,8 @@ pub fn verify(
     for (0..n_signatures) |i| {
         const offset = SECP256K1_SIGNATURE_OFFSETS_START +|
             i *| SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE;
-        const sig_offsets: *align(1) const SignatureOffsets = @alignCast(
-            @ptrCast(data.ptr + offset),
+        const sig_offsets: *align(1) const SignatureOffsets = @ptrCast(
+            @alignCast(data.ptr + offset),
         );
 
         // This case isn't useful, but agave has it.

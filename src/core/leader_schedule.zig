@@ -189,7 +189,7 @@ pub const LeaderSchedule = struct {
     /// `sig leader-schedule` commands.
     pub fn write(self: *const LeaderSchedule, writer: anytype) !void {
         for (self.leaders, 0..) |leader, i| {
-            try writer.print("  {}       {s}\n", .{ self.start + i, leader });
+            try writer.print("  {}       {f}\n", .{ self.start + i, leader });
         }
     }
 };

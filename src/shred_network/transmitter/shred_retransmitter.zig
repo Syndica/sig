@@ -217,7 +217,8 @@ fn dedupAndGroupShredsBySlot(
     metrics: *RetransmitServiceMetrics,
 ) !std.AutoArrayHashMap(Slot, std.array_list.Managed(ShredIdAndPacket)) {
     var dedup_and_group_shreds_timer = sig.time.Timer.start();
-    var result = std.AutoArrayHashMap(Slot, std.array_list.Managed(ShredIdAndPacket)).init(allocator);
+    var result: std.AutoArrayHashMap(Slot, std.array_list.Managed(ShredIdAndPacket)) =
+        .init(allocator);
     for (shreds.items) |shred_packet| {
         const shred_id = try sig.ledger.shred.layout.getShredId(&shred_packet);
 

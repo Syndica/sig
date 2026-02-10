@@ -248,7 +248,7 @@ fn intializeAccount(
 
     // node must agree to accept this vote account
     if (!ic.ixn_info.isPubkeySigner(node_pubkey)) {
-        try ic.tc.log("IntializeAccount: 'node' {} must sign", .{node_pubkey});
+        try ic.tc.log("IntializeAccount: 'node' {f} must sign", .{node_pubkey});
         return InstructionError.MissingRequiredSignature;
     }
 

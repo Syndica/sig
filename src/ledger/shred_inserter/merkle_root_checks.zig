@@ -233,8 +233,8 @@ pub const MerkleRootValidator = struct {
         self.logger.warn().logf(
             "Received conflicting chained merkle roots for slot: {}. Reporting as duplicate. " ++
                 \\Conflicting shreds:
-                \\    erasure set: {?}, type: {?}, index: {?}, merkle root: {any}
-                \\    erasure set: {?}, type: {?}, index: {?}, chained merkle root: {any}
+                \\    erasure set: {any}, type: {any}, index: {any}, merkle root: {any}
+                \\    erasure set: {any}, type: {any}, index: {any}, chained merkle root: {any}
             ,
             .{
                 slot,

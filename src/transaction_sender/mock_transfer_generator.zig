@@ -91,7 +91,7 @@ pub const MockTransferService = struct {
             @panic("transaction amount is less than MIN_LAMPORTS_FOR_RENT");
         }
 
-        self.logger.info().logf("accounts: bank={s}, alice={s}", .{
+        self.logger.info().logf("accounts: bank={f}, alice={f}", .{
             self.accounts.bank.pubkey,
             self.accounts.alice.pubkey,
         });
@@ -141,7 +141,7 @@ pub const MockTransferService = struct {
             if (log_timer.read().asSecs() > 10) {
                 const time_remaining = max_wait.asSecs() - start.elapsed().asSecs();
                 if (log) {
-                    self.logger.info().logf("waiting for signature confirmation ({}s remaining): {s}", .{
+                    self.logger.info().logf("waiting for signature confirmation ({}s remaining): {f}", .{
                         time_remaining,
                         signature,
                     });
@@ -167,7 +167,7 @@ pub const MockTransferService = struct {
         const from_pubkey = Pubkey.fromPublicKey(&from_keypair.public_key);
         for (0..MAX_RPC_RETRIES) |_| {
             self.logger.debug().logf(
-                "rpc transfer: amount={} from_pubkey={s} to_pubkey={s}",
+                "rpc transfer: amount={} from_pubkey={f} to_pubkey={f}",
                 .{ lamports, from_pubkey, to_pubkey },
             );
 
@@ -253,7 +253,7 @@ pub const MockTransferService = struct {
                 null,
             );
             try self.sender.send(transaction_info);
-            self.logger.info().logf("sent transaction: {s}", .{transaction_info.signature});
+            self.logger.info().logf("sent transaction: {f}", .{transaction_info.signature});
 
             const signature_confirmed = try self.waitForSignatureConfirmation(
                 transaction_info.signature,
@@ -308,7 +308,7 @@ pub const MockTransferService = struct {
         if (balance == 0) return;
 
         self.logger.debug().logf(
-            "closing account: transfering {} from {s} to {s}",
+            "closing account: transfering {} from {f} to {f}",
             .{ balance - TRANSFER_FEE_LAMPORTS, pubkey, self.accounts.bank.pubkey },
         );
         try self.rpcTransferAndWait(

@@ -27,7 +27,7 @@ pub fn programInvoke(
     if (tc.log_collector) |*lc| {
         try lc.log(
             tc.allocator,
-            "Program {} invoke [{}]",
+            "Program {f} invoke [{}]",
             .{ program_id, invoke_depth },
         );
     }
@@ -78,7 +78,7 @@ pub fn programData(
 
         try lc.log(
             tc.allocator,
-            "Program data: {str}",
+            "Program data: {s}",
             .{encoded.items},
         );
     }
@@ -108,7 +108,7 @@ pub fn programReturn(
 
         try lc.log(
             tc.allocator,
-            "Program return: {} {s}",
+            "Program return: {f} {s}",
             .{ program_id, encoded },
         );
     }
@@ -125,7 +125,7 @@ pub fn programReturn(
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L93
 pub fn programSuccess(tc: *TransactionContext, program_id: Pubkey) !void {
     if (tc.log_collector) |*lc| {
-        try lc.log(tc.allocator, "Program {} success", .{program_id});
+        try lc.log(tc.allocator, "Program {f} success", .{program_id});
     }
 }
 
@@ -147,12 +147,12 @@ pub fn programFailure(
         if (err == error.Custom) {
             try lc.log(
                 tc.allocator,
-                "Program {} failed: custom program error: 0x{x}",
+                "Program {f} failed: custom program error: 0x{x}",
                 .{ program_id, tc.custom_error.? },
             );
         } else {
             const msg = sig.vm.getExecutionErrorMessage(err);
-            try lc.log(tc.allocator, "Program {} failed: {s}", .{ program_id, msg });
+            try lc.log(tc.allocator, "Program {f} failed: {s}", .{ program_id, msg });
         }
     }
 }

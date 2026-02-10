@@ -1242,11 +1242,11 @@ fn expectEqualDatabaseWithAncestors(
         }
 
         const expected_account = expected_account_opt orelse {
-            std.log.err("Got unexpected account '{}' for ancestors.", .{pubkey});
+            std.log.err("Got unexpected account '{f}' for ancestors.", .{pubkey});
             return error.TestGotUnexpectedAccount;
         };
         const actual_account = actual_account_opt orelse {
-            std.log.err("Missing account '{}' for ancestors.", .{pubkey});
+            std.log.err("Missing account '{f}' for ancestors.", .{pubkey});
             return error.TestMissingExpectedAccount;
         };
         try actual_account.expectEquals(expected_account);
