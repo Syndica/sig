@@ -121,7 +121,8 @@ pub const UiVoteState = struct {
     prior_voters: []const UiPriorVoter,
     epoch_credits: []const UiEpochCredits,
     last_timestamp: UiBlockTimestamp,
-    // TODO: vote state v4 fields for SIMD-0185
+    // TODO: vote state v4 fields for SIMD-0185.
+    // See: https://github.com/Syndica/sig/issues/1224.
 
     pub fn jsonStringify(self: UiVoteState, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();

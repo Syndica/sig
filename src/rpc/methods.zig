@@ -893,7 +893,7 @@ pub const AccountHookContext = struct {
                 try zstd_ctx.finish();
                 try base64_ctx.flush();
             },
-            .jsonParsed => unreachable, // should be handled in encodeJsonParsed
+            .jsonParsed => unreachable, // handled in encodeJsonParsed
         };
     }
 
