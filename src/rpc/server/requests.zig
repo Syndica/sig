@@ -80,12 +80,8 @@ pub const MethodFmt = struct {
     method: std.http.Method,
     pub fn format(
         self: MethodFmt,
-        comptime fmt_str: []const u8,
-        fmt_options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) @TypeOf(writer).Error!void {
-        _ = fmt_options;
-        if (fmt_str.len != 0) std.fmt.invalidFmtError(fmt_str, self);
-        try self.method.write(writer);
+        w: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        try w.writeAll(@tagName(self.method));
     }
 };

@@ -13,6 +13,13 @@ pub fn deprecatedReader(
     return .{ .context = reader };
 }
 
+/// Adapts the new Writer interface to the old one.
+pub fn deprecatedWriter(
+    writer: *std.io.Writer,
+) std.io.GenericWriter(*std.io.Writer, std.io.Writer.Error, std.io.Writer.write) {
+    return .{ .context = writer };
+}
+
 pub fn CountingWriter(comptime WriterType: type) type {
     return struct {
         bytes_written: u64 = 0,
