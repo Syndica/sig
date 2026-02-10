@@ -317,7 +317,6 @@ pub const VoteCollector = struct {
     latest_vote_slot_per_validator: sig.utils.collections.PubkeyMap(Slot),
     last_process_root: sig.time.Instant,
     vote_processing_time: VoteProcessingTiming,
-    latest_confirmed_slot: *sig.replay.trackers.OptimisticallyConfirmedSlot,
     metrics: VoteListenerMetrics,
 
     pub fn deinit(self: *VoteCollector, allocator: std.mem.Allocator) void {
@@ -332,7 +331,6 @@ pub const VoteCollector = struct {
         now: sig.time.Instant,
         root_slot: Slot,
         registry: *sig.prometheus.Registry(.{}),
-        latest_confirmed_slot: *sig.replay.trackers.OptimisticallyConfirmedSlot,
     ) !VoteCollector {
         return .{
             .gossip_vote_receptor = .INIT,
@@ -341,7 +339,6 @@ pub const VoteCollector = struct {
             .latest_vote_slot_per_validator = .empty,
             .last_process_root = now,
             .vote_processing_time = .ZEROES,
-            .latest_confirmed_slot = latest_confirmed_slot,
             .metrics = try .init(registry),
         };
     }
@@ -400,7 +397,6 @@ pub const VoteCollector = struct {
             gossip_vote_txs,
             &self.vote_processing_time,
             &self.latest_vote_slot_per_validator,
-            self.latest_confirmed_slot,
             self.metrics,
         );
         defer allocator.free(confirmed_slots);
@@ -424,7 +420,6 @@ fn listenAndConfirmVotes(
     gossip_vote_txs: []const vote_parser.ParsedVote,
     vote_processing_time: ?*VoteProcessingTiming,
     latest_vote_slot_per_validator: *sig.utils.collections.PubkeyMap(Slot),
-    latest_confirmed_slot: *sig.replay.trackers.OptimisticallyConfirmedSlot,
     metrics: VoteListenerMetrics,
 ) std.mem.Allocator.Error![]const ThresholdConfirmedSlot {
     var replay_votes_buffer: std.ArrayListUnmanaged(vote_parser.ParsedVote) = .empty;
@@ -459,7 +454,6 @@ fn listenAndConfirmVotes(
         latest_vote_slot_per_validator,
         gossip_vote_txs,
         replay_votes,
-        latest_confirmed_slot,
         metrics,
     );
 }
@@ -474,7 +468,6 @@ fn filterAndConfirmWithNewVotes(
     latest_vote_slot_per_validator: *sig.utils.collections.PubkeyMap(Slot),
     gossip_vote_txs: []const vote_parser.ParsedVote,
     replayed_votes: []const vote_parser.ParsedVote,
-    latest_confirmed_slot: *sig.replay.trackers.OptimisticallyConfirmedSlot,
     metrics: VoteListenerMetrics,
 ) std.mem.Allocator.Error![]const ThresholdConfirmedSlot {
     const root_slot = slot_data_provider.rootSlot();
@@ -510,7 +503,6 @@ fn filterAndConfirmWithNewVotes(
                 &new_optimistic_confirmed_slots,
                 is_gossip,
                 latest_vote_slot_per_validator,
-                latest_confirmed_slot,
             );
             if (is_gossip)
                 metrics.gossip_votes_processed.inc()
@@ -968,13 +960,8 @@ test "trackNewVotesAndNotifyConfirmations filter" {
     var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
     const prng = prng_state.random();
 
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
     var slot_tracker: SlotTracker = try .init(
         allocator,
-        &processed_slot,
-        &confirmed_slot,
         0,
         try slotTrackerElementGenesis(allocator, .DEFAULT),
     );
@@ -1051,7 +1038,6 @@ test "trackNewVotesAndNotifyConfirmations filter" {
             &new_optimistic_confirmed_slots,
             is_gossip_vote,
             &latest_vote_slot_per_validator,
-            &confirmed_slot,
         );
     }
     diff.sortAsc();
@@ -1101,7 +1087,6 @@ test "trackNewVotesAndNotifyConfirmations filter" {
             &new_optimistic_confirmed_slots,
             is_gossip_vote,
             &latest_vote_slot_per_validator,
-            &confirmed_slot,
         );
     }
     diff.sortAsc();
@@ -1751,10 +1736,7 @@ test "simple usage" {
     var registry: sig.prometheus.Registry(.{}) = .init(allocator);
     defer registry.deinit();
 
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
-    var slot_tracker: SlotTracker = try .init(allocator, &processed_slot, &confirmed_slot, 0, .{
+    var slot_tracker: SlotTracker = try .init(allocator, 0, .{
         .constants = .{
             .parent_slot = 0,
             .parent_hash = .ZEROES,
@@ -1802,7 +1784,6 @@ test "simple usage" {
         .EPOCH_ZERO,
         slot_data_provider.rootSlot(),
         &registry,
-        &confirmed_slot,
     );
     defer vote_collector.deinit(allocator);
 
@@ -1841,14 +1822,11 @@ test "check trackers" {
 
     const root_slot: Slot = 0;
 
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
     var slot_tracker: SlotTracker = blk: {
         var state: sig.core.SlotState = .GENESIS;
         errdefer state.deinit(allocator);
 
-        break :blk try .init(allocator, &processed_slot, &confirmed_slot, root_slot, .{
+        break :blk try .init(allocator, root_slot, .{
             .constants = .{
                 .parent_slot = root_slot -| 1,
                 .parent_hash = .ZEROES,
@@ -1912,7 +1890,7 @@ test "check trackers" {
     defer replay_votes_channel.destroy();
 
     var vote_collector: VoteCollector =
-        try .init(.EPOCH_ZERO, slot_data_provider.rootSlot(), &registry, &confirmed_slot);
+        try .init(.EPOCH_ZERO, slot_data_provider.rootSlot(), &registry);
     defer vote_collector.deinit(allocator);
 
     var expected_trackers: std.ArrayListUnmanaged(struct { Slot, TestSlotVoteTracker }) = .empty;

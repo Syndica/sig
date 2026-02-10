@@ -177,7 +177,7 @@ pub const TowerConsensus = struct {
         errdefer replay_tower.deinit(allocator);
 
         var vote_collector: sig.consensus.VoteCollector =
-            try .init(deps.now, root, deps.registry, deps.slot_tracker.latest_confirmed_slot);
+            try .init(deps.now, root, deps.registry);
         errdefer vote_collector.deinit(allocator);
 
         return .{
@@ -5096,10 +5096,8 @@ test "edge cases - gossip verified vote hashes" {
     const root_slot0 = slot_tracker.root.load(.monotonic);
     std.debug.assert(root_slot0 == 0); // assert initial root value
 
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
     var vote_collector: sig.consensus.vote_listener.VoteCollector =
-        try .init(.EPOCH_ZERO, root_slot0, &registry, &confirmed_slot);
+        try .init(.EPOCH_ZERO, root_slot0, &registry);
     defer vote_collector.deinit(gpa);
 
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
@@ -5313,13 +5311,8 @@ test "vote on heaviest frozen descendant with no switch" {
         try bhq.mut().insertGenesisHash(allocator, root_state.hash.readCopy().?, 0);
     }
 
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
     var slot_tracker = try SlotTracker.init(
         allocator,
-        &processed_slot,
-        &confirmed_slot,
         root_slot,
         .{
             .constants = root_consts,
@@ -5498,13 +5491,8 @@ test "vote accounts with landed votes populate bank stats" {
         try bhq.mut().insertGenesisHash(allocator, root_state.hash.readCopy().?, 0);
     }
 
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
     var slot_tracker = try SlotTracker.init(
         allocator,
-        &processed_slot,
-        &confirmed_slot,
         root_slot,
         .{
             .constants = root_consts,
@@ -6876,13 +6864,8 @@ test "successful fork switch (switch_proof)" {
         try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
     }
 
-    var processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    var confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
     var slot_tracker = try SlotTracker.init(
         allocator,
-        &processed_slot,
-        &confirmed_slot,
         root_slot,
         .{ .constants = root_consts, .state = root_state },
     );
