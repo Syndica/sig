@@ -18,7 +18,7 @@ pub const ParsedAccount = struct {
     parsed: ParsedContent,
     space: u64,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: ParsedAccount, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("program");
         try jw.write(self.program);
@@ -35,7 +35,7 @@ pub const ParsedContent = union(enum) {
     stake: parse_stake.StakeAccountType,
     // TODO: add more parsers
     // nonce: parse_nonce.NonceAccountType,
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: ParsedContent, jw: anytype) @TypeOf(jw.*).Error!void {
         switch (self) {
             inline else => |content| try content.jsonStringify(jw),
         }
@@ -57,7 +57,7 @@ const ParsableProgram = enum {
         return null;
     }
 
-    pub fn programName(self: @This()) []const u8 {
+    pub fn programName(self: ParsableProgram) []const u8 {
         return switch (self) {
             .vote => "vote",
             .stake => "stake",

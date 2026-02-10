@@ -74,7 +74,7 @@ pub fn parse_vote(
         .authorized_withdrawer = vote_state.withdrawer.base58String(),
         .commission = vote_state.commission,
         .votes = votes,
-        .root_slot = vote_state.root_slot,
+        .maybe_root_slot = vote_state.root_slot,
         .authorized_voters = auth_voters,
         .prior_voters = prior_voters,
         .epoch_credits = epoch_credits,
@@ -94,7 +94,7 @@ pub fn parse_vote(
 pub const VoteAccountType = union(enum) {
     vote: UiVoteState,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: VoteAccountType, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         switch (self) {
             .vote => |state| {
@@ -116,14 +116,14 @@ pub const UiVoteState = struct {
     authorized_withdrawer: Pubkey.Base58String,
     commission: u8,
     votes: []const UiLandedVote,
-    root_slot: ?u64,
+    maybe_root_slot: ?u64,
     authorized_voters: []UiAuthorizedVoter,
     prior_voters: []const UiPriorVoter,
     epoch_credits: []const UiEpochCredits,
     last_timestamp: UiBlockTimestamp,
     // TODO: vote state v4 fields for SIMD-0185
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: UiVoteState, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
 
         try jw.objectField("nodePubkey");
@@ -141,7 +141,7 @@ pub const UiVoteState = struct {
         try jw.endArray();
 
         try jw.objectField("rootSlot");
-        try jw.write(self.root_slot);
+        try jw.write(self.maybe_root_slot);
 
         try jw.objectField("authorizedVoters");
         try jw.beginArray();
@@ -172,7 +172,7 @@ pub const UiLandedVote = struct {
     slot: u64,
     confirmation_count: u32,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: UiLandedVote, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("latency");
         try jw.write(self.latency);
@@ -189,7 +189,7 @@ pub const UiAuthorizedVoter = struct {
     epoch: u64,
     authorized_voter: Pubkey.Base58String,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: UiAuthorizedVoter, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("epoch");
         try jw.write(self.epoch);
@@ -205,7 +205,7 @@ pub const UiPriorVoter = struct {
     epoch_of_last_authorized_switch: u64,
     target_epoch: u64,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: UiPriorVoter, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("authorizedPubkey");
         try jw.write(self.authorized_pubkey.slice());
@@ -223,7 +223,7 @@ pub const UiEpochCredits = struct {
     credits: u64,
     previous_credits: u64,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: UiEpochCredits, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("epoch");
         try jw.write(self.epoch);
@@ -242,7 +242,7 @@ pub const UiBlockTimestamp = struct {
     slot: u64,
     timestamp: i64,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: UiBlockTimestamp, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("slot");
         try jw.write(self.slot);

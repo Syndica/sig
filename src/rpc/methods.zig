@@ -709,7 +709,7 @@ pub const AccountHookContext = struct {
     account_reader: sig.accounts_db.AccountReader,
 
     pub fn getAccountInfo(
-        self: @This(),
+        self: AccountHookContext,
         allocator: std.mem.Allocator,
         params: GetAccountInfo,
     ) !GetAccountInfo.Response {

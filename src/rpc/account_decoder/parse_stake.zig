@@ -27,13 +27,13 @@ pub fn parse_stake(
         .initialized => |meta| .{
             .initialized = UiStakeAccount{
                 .meta = UiMeta.fromStakeStateMeta(meta),
-                .stake = null,
+                .maybe_stake = null,
             },
         },
         .stake => |s| .{
             .delegated = UiStakeAccount{
                 .meta = UiMeta.fromStakeStateMeta(s.meta),
-                .stake = UiStake{
+                .maybe_stake = UiStake{
                     .delegation = UiDelegation{
                         .voter = s.stake.delegation.voter_pubkey.base58String(),
                         .stake = s.stake.delegation.stake,
@@ -56,7 +56,7 @@ pub const StakeAccountType = union(enum) {
     delegated: UiStakeAccount,
     rewards_pool,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: StakeAccountType, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("type");
         switch (self) {
@@ -80,13 +80,13 @@ pub const StakeAccountType = union(enum) {
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_stake.rs#L41
 pub const UiStakeAccount = struct {
     meta: UiMeta,
-    stake: ?UiStake,
+    maybe_stake: ?UiStake,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: UiStakeAccount, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("meta");
         try self.meta.jsonStringify(jw);
-        if (self.stake) |stake| {
+        if (self.maybe_stake) |stake| {
             try jw.objectField("stake");
             try stake.jsonStringify(jw);
         }
@@ -100,7 +100,7 @@ pub const UiMeta = struct {
     authorized: UiAuthorized,
     lockup: UiLockup,
 
-    fn fromStakeStateMeta(meta: StakeStateV2.Meta) @This() {
+    fn fromStakeStateMeta(meta: StakeStateV2.Meta) UiMeta {
         return .{
             .rent_exempt_reserve = meta.rent_exempt_reserve,
             .authorized = .{
@@ -115,7 +115,7 @@ pub const UiMeta = struct {
         };
     }
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: UiMeta, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("rentExemptReserve");
         // NOTE: per agave, use string for JS compatibility
@@ -133,7 +133,7 @@ pub const UiAuthorized = struct {
     staker: Pubkey.Base58String,
     withdrawer: Pubkey.Base58String,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: UiAuthorized, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("staker");
         try jw.write(self.staker.slice());
@@ -149,7 +149,7 @@ pub const UiLockup = struct {
     epoch: u64,
     custodian: Pubkey.Base58String,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: UiLockup, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("unixTimestamp");
         try jw.write(self.unix_timestamp);
@@ -166,7 +166,7 @@ pub const UiStake = struct {
     delegation: UiDelegation,
     credits_observed: u64,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: UiStake, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("delegation");
         try self.delegation.jsonStringify(jw);
@@ -184,7 +184,7 @@ pub const UiDelegation = struct {
     deactivation_epoch: u64,
     warmup_cooldown_rate: f64,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: UiDelegation, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("voter");
         try jw.write(self.voter.slice());
