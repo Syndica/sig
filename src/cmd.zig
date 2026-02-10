@@ -331,7 +331,7 @@ const Cmd = struct {
     const cmd_info: cli.CommandInfo(@This()) = .{
         .help = .{
             .short = std.fmt.comptimePrint(
-                \\Version: {}
+                \\Version: {f}
                 \\
                 \\Sig is a Solana validator client written in Zig. The project is still a
                 \\work in progress so contributions are welcome.
@@ -1391,7 +1391,7 @@ fn identity(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     const keypair = try sig.identity.getOrInit(allocator, .from(logger));
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
-    logger.info().logf("Identity: {s}", .{pubkey});
+    logger.info().logf("Identity: {f}", .{pubkey});
 }
 
 /// entrypoint to run only gossip
@@ -1929,7 +1929,7 @@ fn shredNetwork(
         },
     );
     app_base.logger.info().logf(
-        "Starting after assumed root slot: {?}",
+        "Starting after assumed root slot: {any}",
         .{shred_network_conf.root_slot},
     );
 

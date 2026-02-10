@@ -64,5 +64,5 @@ fn writeChain(comptime name: []const u8, writer: anytype) !void {
 }
 
 fn printPoint(p: Ristretto255.Curve.Fe, writer: anytype) !void {
-    try writer.print(".{{ .limbs = .{d} }}", .{p.limbs});
+    try writer.print(".{{ .limbs = .{any} }}", .{p.limbs});
 }

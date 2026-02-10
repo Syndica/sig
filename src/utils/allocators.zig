@@ -322,7 +322,7 @@ pub fn RecycleFBA(config: struct {
         bytes_allocator: Allocator,
         // this does the data allocations (data is returned from alloc)
         fba_allocator: std.heap.FixedBufferAllocator,
-        // recycling depot
+        // recycling depot (uses Managed ArrayList which stores allocator)
         records: std.array_list.Managed(Record),
         // for thread safety
         mux: std.Thread.Mutex = .{},
@@ -943,7 +943,7 @@ pub const DiskMemoryAllocator = struct {
     }
 
     fn logFailure(self: Self, err: anyerror, file_name: []const u8) void {
-        self.logger.err().logf("Disk Memory Allocator error: {s}, filepath: {s}", .{
+        self.logger.err().logf("Disk Memory Allocator error: {s}, filepath: {f}", .{
             @errorName(err), sig.utils.fmt.tryRealPath(self.dir, file_name),
         });
     }

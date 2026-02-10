@@ -509,12 +509,13 @@ pub const Manifest = struct {
         allocator: std.mem.Allocator,
         file: std.fs.File,
     ) !Manifest {
-        const size = (try file.stat()).size;
+        const stat = try file.stat();
+        const size = stat.size;
         const contents = try file.readToEndAllocOptions(allocator, size, size, .@"1", null);
         defer allocator.free(contents);
 
         var fbs = std.io.fixedBufferStream(contents);
-        return try decodeFromBincode(allocator, fbs.reader());
+        return bincode.read(allocator, Manifest, fbs.reader(), .{ .allocation_limit = 2 << 30 });
     }
 
     pub fn decodeFromBincode(
@@ -805,10 +806,12 @@ pub const FullSnapshotFileInfo = struct {
 
     pub fn snapshotArchiveName(self: FullSnapshotFileInfo) SnapshotArchiveNameStr {
         const b58_str = self.hash.base58String();
-        return SnapshotArchiveNameFmtSpec.fmt(.{
-            .slot = self.slot,
-            .hash = sig.utils.fmt.boundedString(&b58_str),
-        });
+        var out: SnapshotArchiveNameStr = .{};
+        std.fmt.format(out.writer(), "snapshot-{d}-{s}.tar.zst", .{
+            self.slot,
+            b58_str.constSlice(),
+        }) catch unreachable;
+        return out;
     }
 
     pub const ParseFileNameTarZstError = ParseFileBaseNameError || error{
@@ -937,12 +940,13 @@ pub const IncrementalSnapshotFileInfo = struct {
 
     pub fn snapshotArchiveName(self: IncrementalSnapshotFileInfo) SnapshotArchiveNameStr {
         const b58_str = self.hash.base58String();
-
-        return SnapshotArchiveNameFmtSpec.fmt(.{
-            .base_slot = self.base_slot,
-            .slot = self.slot,
-            .hash = sig.utils.fmt.boundedString(&b58_str),
-        });
+        var out: SnapshotArchiveNameStr = .{};
+        std.fmt.format(out.writer(), "incremental-snapshot-{d}-{d}-{s}.tar.zst", .{
+            self.base_slot,
+            self.slot,
+            b58_str.constSlice(),
+        }) catch unreachable;
+        return out;
     }
 
     pub const ParseFileNameTarZstError = ParseFileBaseNameError || error{
@@ -1196,7 +1200,7 @@ pub const FullAndIncrementalManifest = struct {
             const rel_path = rel_path_bounded.constSlice();
 
             logger.info().logf(
-                "reading *full* snapshot fields from: {s}",
+                "reading *full* snapshot fields from: {f}",
                 .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)},
             );
 
@@ -1214,7 +1218,7 @@ pub const FullAndIncrementalManifest = struct {
             );
             const rel_path = rel_path_bounded.constSlice();
             logger.info().logf(
-                "reading *incremental* snapshot fields from: {s}",
+                "reading *incremental* snapshot fields from: {f}",
                 .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)},
             );
 

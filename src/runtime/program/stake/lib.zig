@@ -1,6 +1,6 @@
 const std = @import("std");
-const std14 = @import("std14");
 const tracy = @import("tracy");
+const std14 = @import("std14");
 const sig = @import("../../../sig.zig");
 
 pub const state = @import("state.zig");
@@ -1053,7 +1053,7 @@ const MergeKind = union(enum) {
                 };
 
                 const err = StakeError.merge_transient_stake;
-                try ic.tc.log("{}", .{err});
+                try ic.tc.log("{any}", .{err});
                 ic.tc.custom_error = @intFromEnum(err);
                 return error.Custom;
             },

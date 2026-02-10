@@ -1,7 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const std14 = @import("std14");
 const tracy = @import("tracy");
+const std14 = @import("std14");
 const sig = @import("../../../sig.zig");
 
 const ids = sig.runtime.ids;
@@ -176,7 +176,7 @@ fn executeBpfProgram(
     // TODO: timings
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1646-L1653
-    try ic.tc.log("Program {} consumed {} of {} compute units", .{
+    try ic.tc.log("Program {f} consumed {} of {} compute units", .{
         ic.ixn_info.program_meta.pubkey,
         compute_consumed,
         compute_available,
@@ -1096,7 +1096,7 @@ pub fn executeV3DeployWithMaxDataLen(
         );
     }
 
-    try ic.tc.log("Deployed program {}", .{new_program_id});
+    try ic.tc.log("Deployed program {f}", .{new_program_id});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L705-L894
@@ -1406,7 +1406,7 @@ pub fn executeV3SetAuthority(
     }
 
     if (new_authority) |some| {
-        try ic.tc.log("New authority Some({?})", .{some});
+        try ic.tc.log("New authority Some({f})", .{some});
     } else {
         try ic.tc.log("New authority None", .{});
     }
@@ -1496,7 +1496,7 @@ pub fn executeV3SetAuthorityChecked(
         },
     }
 
-    try ic.tc.log("New authority {?}", .{new_authority});
+    try ic.tc.log("New authority {f}", .{new_authority});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1033-L1138
@@ -2110,7 +2110,7 @@ pub fn deployProgram(
         if (tc.log_collector) |*lc| lc else null,
     );
 
-    try tc.log("Deploying program {}", .{program_id});
+    try tc.log("Deploying program {f}", .{program_id});
 
     // Remove from the program map since it should not be accessible on this slot anymore.
     if (try tc.program_map.fetchPut(tc.programs_allocator, program_id, .failed)) |old| {

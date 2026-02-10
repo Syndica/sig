@@ -259,7 +259,7 @@ pub fn prepareCpiInstructionInfo(
 
     for (callee.accounts) |account| {
         const index_in_transaction = tc.getAccountIndex(account.pubkey) orelse {
-            try tc.log("Instruction references an unknown account {}", .{account.pubkey});
+            try tc.log("Instruction references an unknown account {f}", .{account.pubkey});
             return InstructionError.MissingAccount;
         };
         std.debug.assert(index_in_transaction < InstructionInfo.MAX_ACCOUNT_METAS);
@@ -306,7 +306,7 @@ pub fn prepareCpiInstructionInfo(
 
         // Readonly in caller cannot become writable in callee
         if (account_meta.is_writable and !caller_account_meta.is_writable) {
-            try tc.log("{}'s writable privilege escalated", .{callee_account_key});
+            try tc.log("{f}'s writable privilege escalated", .{callee_account_key});
             return error.PrivilegeEscalation;
         }
 
@@ -316,7 +316,7 @@ pub fn prepareCpiInstructionInfo(
             if (signer.equals(&callee_account_key)) break true;
         } else false;
         if (account_meta.is_signer and !(caller_account_meta.is_signer or in_signers)) {
-            try tc.log("{}'s signer privilege escalated", .{callee_account_key});
+            try tc.log("{f}'s signer privilege escalated", .{callee_account_key});
             return error.PrivilegeEscalation;
         }
     }
@@ -326,7 +326,7 @@ pub fn prepareCpiInstructionInfo(
         const tc_acc = tc.getAccountAtIndex(acc_meta.index_in_transaction) orelse continue;
         if (tc_acc.pubkey.equals(&callee.program_id)) break i;
     } else {
-        try tc.log("Unknown program {}", .{callee.program_id});
+        try tc.log("Unknown program {f}", .{callee.program_id});
         return error.MissingAccount;
     };
 

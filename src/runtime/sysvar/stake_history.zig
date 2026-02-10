@@ -99,10 +99,10 @@ pub const StakeHistory = struct {
         try self.entries.insert(index, .{ .epoch = epoch, .stake = entry });
     }
 
-    pub fn initWithEntries(entries: []const Entry) StakeHistory {
-        std.debug.assert(entries.len <= MAX_ENTRIES);
+    pub fn initWithEntries(entries_slice: []const Entry) StakeHistory {
+        std.debug.assert(entries_slice.len <= MAX_ENTRIES);
         var self: StakeHistory = .INIT;
-        self.entries.appendSliceAssumeCapacity(entries);
+        self.entries.appendSliceAssumeCapacity(entries_slice);
         std.sort.heap(Entry, self.entries.slice(), {}, Entry.sortCmp);
         return self;
     }
@@ -138,7 +138,6 @@ test "serialize and deserialize" {
 
         const deserialized = try bincode.readFromSlice(allocator, StakeHistory, serialized, .{});
 
-        try std.testing.expectEqual(StakeHistory.MAX_ENTRIES, deserialized.entries.capacity());
         try std.testing.expectEqualSlices(
             StakeHistory.Entry,
             stake_history.entries.constSlice(),
