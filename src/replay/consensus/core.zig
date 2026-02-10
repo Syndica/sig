@@ -1672,7 +1672,7 @@ fn resetFork(
     reset_slot: Slot,
     last_reset_hash: Hash,
     last_blockhash: Hash,
-    last_reset_bank_descendants: std.ArrayList(Slot),
+    last_reset_bank_descendants: std.array_list.Managed(Slot),
 ) !void {
     _ = progress;
     _ = ledger;

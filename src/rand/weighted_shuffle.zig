@@ -243,8 +243,8 @@ pub fn WeightedShuffle(comptime Int: type) type {
             pub fn intoArrayList(
                 self: *Iterator,
                 allocator: std.mem.Allocator,
-            ) !std.ArrayList(usize) {
-                var list = std.ArrayList(usize).init(allocator);
+            ) !std.array_list.Managed(usize) {
+                var list = std.array_list.Managed(usize).init(allocator);
                 while (self.next()) |k| {
                     try list.append(k);
                 }
@@ -316,10 +316,10 @@ fn testWeightedShuffleSlow(
     allocator: std.mem.Allocator,
     random: std.Random,
     weights: []u64,
-) !std.ArrayList(usize) {
+) !std.array_list.Managed(usize) {
     // Initialise high as sum of weights and zeros as indices of zero weights
     var high: u64 = 0;
-    var zeros = try std.ArrayList(usize).initCapacity(allocator, weights.len);
+    var zeros = try std.array_list.Managed(usize).initCapacity(allocator, weights.len);
     defer zeros.deinit();
     for (weights, 0..) |weight, k| {
         if (weight == 0) {
@@ -330,7 +330,7 @@ fn testWeightedShuffleSlow(
     }
 
     // Shuffle indices according to their weights
-    var shuffle = try std.ArrayList(usize).initCapacity(allocator, weights.len);
+    var shuffle = try std.array_list.Managed(usize).initCapacity(allocator, weights.len);
     while (high != 0) {
         const sample = uintLessThanRust(u64, random, high);
         var sum: u64 = 0;
@@ -605,7 +605,7 @@ test "agave: match slow" {
     // Initialise random weights
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
-    var weights = try std.ArrayList(u64).initCapacity(std.testing.allocator, 997);
+    var weights = try std.array_list.Managed(u64).initCapacity(std.testing.allocator, 997);
     defer weights.deinit();
     for (0..997) |_| weights.appendAssumeCapacity(random.intRangeLessThan(u64, 0, 1_000));
 
@@ -653,7 +653,7 @@ test "agave: paranoid" {
 
     for (0..end) |size| {
         // Create random weights
-        var weights = try std.ArrayList(u64).initCapacity(std.testing.allocator, size);
+        var weights = try std.array_list.Managed(u64).initCapacity(std.testing.allocator, size);
         defer weights.deinit();
         for (0..size) |_| weights.appendAssumeCapacity(random.intRangeLessThan(u64, 0, 1_000));
 

@@ -4,7 +4,7 @@ const sig = @import("../sig.zig");
 const testing = std.testing;
 const bincode = sig.bincode;
 
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const SocketAddr = sig.net.SocketAddr;
 const Hash = sig.core.Hash;
@@ -1598,7 +1598,7 @@ pub const RestartLastVotedForkSlots = struct {
 };
 
 pub const SlotsOffsets = union(enum(u32)) {
-    RunLengthEncoding: std.ArrayList(u16),
+    RunLengthEncoding: std.array_list.Managed(u16),
     RawOffsets: RawOffsets,
 
     pub fn clone(self: *const SlotsOffsets, allocator: std.mem.Allocator) error{OutOfMemory}!SlotsOffsets {
@@ -1785,7 +1785,7 @@ test "contact info bincode serialize matches rust bincode" {
     }
 
     // Check that the serialized bytes match the rust serialized bytes
-    var buf = std.ArrayList(u8).init(testing.allocator);
+    var buf = std.array_list.Managed(u8).init(testing.allocator);
     bincode.write(buf.writer(), sig_contact_info, bincode.Params.standard) catch unreachable;
     defer buf.deinit();
     try testing.expect(std.mem.eql(u8, &rust_contact_info_serialized_bytes, buf.items));
@@ -1818,7 +1818,7 @@ test "ContactInfo bincode roundtrip maintains data integrity" {
     const ci2 = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
     defer ci2.deinit();
 
-    var buf = std.ArrayList(u8).init(testing.allocator);
+    var buf = std.array_list.Managed(u8).init(testing.allocator);
     bincode.write(buf.writer(), ci2, bincode.Params.standard) catch unreachable;
     defer buf.deinit();
 
@@ -1831,7 +1831,7 @@ test "SocketEntry serializer works" {
     comptime std.debug.assert(@intFromEnum(SocketTag.rpc_pubsub) == 3);
     const se: SocketEntry = .{ .key = .rpc_pubsub, .index = 3, .offset = 30304 };
 
-    var buf = std.ArrayList(u8).init(testing.allocator);
+    var buf = std.array_list.Managed(u8).init(testing.allocator);
     defer buf.deinit();
     try bincode.write(buf.writer(), se, bincode.Params.standard);
 

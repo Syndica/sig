@@ -697,7 +697,7 @@ pub const MERKLE_HASH_PREFIX_LEAF: *const [26]u8 = "\x00SOLANA_MERKLE_SHREDS_LEA
 pub const MERKLE_HASH_PREFIX_NODE: *const [26]u8 = "\x01SOLANA_MERKLE_SHREDS_NODE";
 
 /// agave: make_merkle_tree
-pub fn makeMerkleTree(nodes: *std.ArrayList(Hash)) !void {
+pub fn makeMerkleTree(nodes: *std.array_list.Managed(Hash)) !void {
     var size = nodes.items.len;
     while (size > 1) {
         const offset = nodes.items.len - size;
@@ -1358,7 +1358,7 @@ test "merkle tree round trip" {
     const random = prng.random();
     const size = 100;
 
-    var nodes = try std.ArrayList(Hash).initCapacity(allocator, size);
+    var nodes = try std.array_list.Managed(Hash).initCapacity(allocator, size);
     defer nodes.deinit();
     for (0..size) |_| {
         nodes.appendAssumeCapacity(Hash.initRandom(random));
@@ -1471,7 +1471,7 @@ test makeMerkleTree {
         .parse("EsV8thKpJBh72M4pEm3ZYUrTS8xge7CEzY4L4waQVcrJ"),
         .parse("4Ldwcp5b81BrE9e4SECwc4kmDq3AEuvaaATvU1eF7Phb"),
     };
-    var nodes_list = std.ArrayList(Hash).init(std.testing.allocator);
+    var nodes_list = std.array_list.Managed(Hash).init(std.testing.allocator);
     defer nodes_list.deinit();
     for (nodes) |n| try nodes_list.append(n);
     try makeMerkleTree(&nodes_list);

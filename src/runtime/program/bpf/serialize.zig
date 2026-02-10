@@ -235,7 +235,7 @@ pub fn serializeParameters(
         break :blk program_account.account.owner.equals(&program.bpf_loader.v1.ID);
     };
 
-    var accounts = std.ArrayList(SerializedAccount).initCapacity(
+    var accounts = std.array_list.Managed(SerializedAccount).initCapacity(
         allocator,
         ic.ixn_info.account_metas.items.len,
     ) catch return InstructionError.ProgramEnvironmentSetupFailure;

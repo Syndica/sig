@@ -7,7 +7,7 @@ const meta = ledger_mod.meta;
 const schema = ledger_mod.schema.schema;
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const AutoHashMap = std.AutoHashMap;
 
 const Counter = sig.prometheus.Counter;
@@ -948,7 +948,7 @@ fn tryShredRecovery(
             },
         }
     }
-    return std.ArrayList(Shred).init(allocator);
+    return std.array_list.Managed(Shred).init(allocator);
 }
 
 /// agave: recover_shreds
@@ -959,7 +959,7 @@ fn recoverShreds(
     erasure_meta: *const ErasureMeta,
     shred_store: ShredWorkingStore,
     reed_solomon_cache: *ReedSolomonCache,
-) !std.ArrayList(Shred) {
+) !std.array_list.Managed(Shred) {
     var available_shreds = ArrayList(Shred).init(allocator);
     defer {
         for (available_shreds.items) |shred| shred.deinit();
@@ -991,7 +991,7 @@ fn recoverShreds(
     } else |e| {
         logger.err().logf("shred recovery error: {}", .{e});
         submitRecoveryMetrics(logger, index.slot, erasure_meta, true, "incomplete", 0);
-        return std.ArrayList(Shred).init(allocator);
+        return std.array_list.Managed(Shred).init(allocator);
     }
 }
 
@@ -1295,7 +1295,7 @@ test "insertShreds 100 shreds from mainnet" {
     defer state.deinit();
 
     const shred_bytes = test_shreds.mainnet_shreds;
-    var shreds = std.ArrayList(Shred).init(std.testing.allocator);
+    var shreds = std.array_list.Managed(Shred).init(std.testing.allocator);
     defer shreds.deinit();
     defer for (shreds.items) |s| s.deinit();
 

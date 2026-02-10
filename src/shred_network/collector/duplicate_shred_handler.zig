@@ -397,7 +397,7 @@ test "handleDuplicateSlots: no sender configured" {
     // Create a result with a duplicate shred
     const shred: Shred = try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
 
-    var duplicate_shreds: std.ArrayList(PossibleDuplicateShred) = .init(allocator);
+    var duplicate_shreds: std.array_list.Managed(PossibleDuplicateShred) = .init(allocator);
     try duplicate_shreds.append(.{ .Exists = shred });
 
     const result: ShredInserter.Result = .{
@@ -489,7 +489,7 @@ test "handleDuplicateSlots: single duplicate shred" {
     // Now create the duplicate shred with the modified payload
     const duplicate_shred: Shred = try .fromPayload(allocator, modified_payload);
 
-    var duplicate_shreds: std.ArrayList(PossibleDuplicateShred) = .init(allocator);
+    var duplicate_shreds: std.array_list.Managed(PossibleDuplicateShred) = .init(allocator);
     try duplicate_shreds.append(.{ .Exists = duplicate_shred });
 
     const result: ShredInserter.Result = .{
@@ -561,7 +561,7 @@ test "handleDuplicateSlots: multiple duplicates same slot" {
         const duplicate_shred2: Shred = try .fromPayload(allocator, modified_payload2);
         errdefer duplicate_shred2.deinit();
 
-        var duplicate_shreds = std.ArrayList(PossibleDuplicateShred).init(allocator);
+        var duplicate_shreds = std.array_list.Managed(PossibleDuplicateShred).init(allocator);
         try duplicate_shreds.appendSlice(&.{
             .{ .Exists = duplicate_shred1 },
             .{ .Exists = duplicate_shred2 },
@@ -607,7 +607,7 @@ test "handleDuplicateSlots: Exists but slot already duplicate" {
 
     try ledger.resultWriter().storeDuplicateSlot(slot, shred.payload(), shred.payload());
 
-    var duplicate_shreds: std.ArrayList(PossibleDuplicateShred) = .init(allocator);
+    var duplicate_shreds: std.array_list.Managed(PossibleDuplicateShred) = .init(allocator);
     try duplicate_shreds.append(.{ .Exists = try shred.clone() });
 
     const result: ShredInserter.Result = .{

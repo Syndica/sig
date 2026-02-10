@@ -658,8 +658,8 @@ pub fn benchmark(
                 }
             }
 
-            var field_names_cells: std.ArrayListUnmanaged(pt.Cell) = .empty;
-            var stats_cells: std.ArrayListUnmanaged(pt.Cell) = .empty;
+            var field_names_cells: std.ArrayList(pt.Cell) = .empty;
+            var stats_cells: std.ArrayList(pt.Cell) = .empty;
             for (0..i) |cell_i| {
                 try field_names_cells.append(
                     allocator,
@@ -670,11 +670,11 @@ pub fn benchmark(
                     try pt.Cell.init(allocator, stat_data_row[cell_i]),
                 );
             }
-            const field_name_row = pt.Row.init(allocator, field_names_cells.toManaged(allocator));
-            const stats_row = pt.Row.init(allocator, stats_cells.toManaged(allocator));
+            const field_name_row = pt.Row.init(allocator, field_names_cells);
+            const stats_row = pt.Row.init(allocator, stats_cells);
 
             table.titles = field_name_row;
-            try table.rows.insert(0, stats_row);
+            try table.rows.insert(allocator, 0, stats_row);
             try table.printstd();
         }
     }

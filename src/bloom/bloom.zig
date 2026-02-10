@@ -4,7 +4,7 @@ const sig = @import("../sig.zig");
 const testing = std.testing;
 const bincode = sig.bincode;
 
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;

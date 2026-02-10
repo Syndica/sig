@@ -298,7 +298,7 @@ pub fn Registry(comptime options: RegistryOptions) type {
         fn writeMetrics(allocator: mem.Allocator, map: MetricMap, writer: anytype) !void {
             // Get the keys, sorted
             const keys = blk: {
-                var key_list = try std.ArrayList([]const u8).initCapacity(allocator, map.count());
+                var key_list = try std.array_list.Managed([]const u8).initCapacity(allocator, map.count());
 
                 var key_iter = map.keyIterator();
                 while (key_iter.next()) |key| {
@@ -459,7 +459,7 @@ test "prometheus.registry: write" {
 
         // Write to a buffer
         {
-            var buffer = std.ArrayList(u8).init(testing.allocator);
+            var buffer = std.array_list.Managed(u8).init(testing.allocator);
             defer buffer.deinit();
 
             try registry.write(testing.allocator, buffer.writer());
