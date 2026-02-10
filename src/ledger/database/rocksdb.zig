@@ -35,7 +35,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             open_read_only: bool,
         ) OpenError!Self {
             logger.info().log("Opening RocksDB for ledger");
-            const owned_path = try std.fmt.allocPrintZ(allocator, "{s}/rocksdb", .{path});
+            const owned_path = try std.fmt.allocPrintSentinel(allocator, "{s}/rocksdb", .{path}, 0);
             errdefer allocator.free(owned_path);
             try std.fs.cwd().makePath(owned_path);
 
@@ -96,11 +96,11 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
 
         pub fn count(self: *Self, comptime cf: ColumnFamily) Allocator.Error!u64 {
             const live_files = try self.db.liveFiles(self.allocator);
-            defer live_files.deinit();
-            defer for (live_files.items) |file| file.deinit();
+            defer self.allocator.free(live_files);
+            defer for (live_files) |file| file.deinit();
 
             var sum: u64 = 0;
-            for (live_files.items) |live_file| {
+            for (live_files) |live_file| {
                 if (std.mem.eql(u8, live_file.column_family_name, cf.name)) {
                     sum += live_file.num_entries;
                 }
@@ -368,7 +368,7 @@ fn callRocks(logger: Logger, comptime func: anytype, args: anytype) ReturnType(@
     var maybe_err_str: ?rocks.Data = null;
     return @call(.auto, func, args ++ .{&maybe_err_str}) catch |e| {
         if (maybe_err_str) |err_str|
-            logger.err().logf("{} - {s}", .{ e, err_str })
+            logger.err().logf("{} - {any}", .{ e, err_str })
         else
             logger.err().logf("{}", .{e});
         return e;
