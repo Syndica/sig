@@ -22,7 +22,7 @@ pub fn SharedPointerWindow(
         allocator: Allocator,
         window: Window(Rc(T)),
         center: std.atomic.Value(usize),
-        lock: std.Thread.RwLock = .{},
+        lock: sig.sync.RwLock = .{},
         deinit_context: DeinitContext,
         discard_buf: std.atomic.Value(?[*]?Rc(T)),
 

@@ -551,9 +551,9 @@ pub const BatchAllocator = struct {
     backing_allocator: Allocator,
     batch_size: usize,
     last_batch: Atomic(?*Batch) = Atomic(?*Batch).init(null),
-    new_batch_lock: std.Thread.RwLock = .{},
+    new_batch_lock: sig.sync.RwLock = .{},
     new_batch_waiters: Atomic(usize) = Atomic(usize).init(0),
-    new_batch_wait_lock: std.Thread.RwLock = .{},
+    new_batch_wait_lock: sig.sync.RwLock = .{},
 
     const Self = @This();
 

@@ -20,7 +20,7 @@ pub const VoteTracker = struct {
     /// TODO: document whether a read guard on this map lock permits acquiring
     /// a write guard on the entry's lock lock, and other potential restrictions
     /// and/or allowances around safely accessing any data.
-    map_rwlock: std.Thread.RwLock,
+    map_rwlock: sig.sync.RwLock,
 
     /// Map from a slot to a set of validators who have voted for that slot.
     /// See the doc comment on `map_rwlock` for commentary on accessing this field and its contents.
