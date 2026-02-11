@@ -8,6 +8,7 @@ const parse_stake = @import("parse_stake.zig");
 const parse_nonce = @import("parse_nonce.zig");
 const parse_address_lookup_table = @import("parse_account_lookup_table.zig");
 const parse_bpf_upgradeable_loader = @import("parse_bpf_upgradeable_loader.zig");
+const parse_sysvar = @import("parse_sysvar.zig");
 
 pub const ParseError = error{
     InvalidAccountData,
@@ -39,6 +40,7 @@ pub const ParsedContent = union(enum) {
     nonce: parse_nonce.NonceAccountType,
     address_lookup_table: parse_address_lookup_table.LookupTableAccountType,
     bpf_upgradeable_loader: parse_bpf_upgradeable_loader.BpfUpgradeableLoaderAccountType,
+    sysvar: parse_sysvar.SysvarAccountType,
 
     pub fn jsonStringify(self: ParsedContent, jw: anytype) @TypeOf(jw.*).Error!void {
         switch (self) {
@@ -54,6 +56,7 @@ const ParsableProgram = enum {
     nonce,
     address_lookup_table,
     bpf_upgradeable_loader,
+    sysvar,
 
     pub fn fromProgramId(program_id: Pubkey) ?ParsableProgram {
         if (program_id.equals(&sig.runtime.program.vote.ID)) return .vote;
@@ -63,6 +66,9 @@ const ParsableProgram = enum {
         if (program_id.equals(&sig.runtime.program.system.ID)) return .nonce;
         if (program_id.equals(&sig.runtime.program.address_lookup_table.ID)) return .address_lookup_table;
         if (program_id.equals(&sig.runtime.program.bpf_loader.v3.ID)) return .bpf_upgradeable_loader;
+        // Sysvar accounts are owned by the sysvar program.
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L48
+        if (program_id.equals(&sig.runtime.sysvar.OWNER_ID)) return .sysvar;
         return null;
     }
 
@@ -75,12 +81,14 @@ const ParsableProgram = enum {
             .nonce => "nonce",
             .address_lookup_table => "addressLookupTable",
             .bpf_upgradeable_loader => "bpfUpgradeableLoader",
+            .sysvar => "sysvar",
         };
     }
 };
 
 pub fn parse_account(
     allocator: std.mem.Allocator,
+    pubkey: Pubkey,
     program_id: Pubkey,
     // std.io.Reader
     reader: anytype,
@@ -104,6 +112,20 @@ pub fn parse_account(
                 reader,
                 data_len,
             ),
+        },
+        .sysvar => {
+            // Sysvar parsing dispatches by the account's pubkey, not its owner.
+            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs#L24
+            const sysvar_parsed = try parse_sysvar.parseSysvar(allocator, pubkey, reader);
+            if (sysvar_parsed) |s| {
+                return ParsedAccount{
+                    .program = program.programName(),
+                    .parsed = .{ .sysvar = s },
+                    .space = data_len,
+                };
+            }
+            // Unknown sysvar pubkey - return null to fall back to base64 encoding
+            return null;
         },
     };
     return ParsedAccount{

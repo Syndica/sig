@@ -734,7 +734,7 @@ pub const AccountHookContext = struct {
             defer account.deinit(allocator);
 
             const data: GetAccountInfo.Response.Value.Data = if (encoding == .jsonParsed)
-                try encodeJsonParsed(allocator, account)
+                try encodeJsonParsed(allocator, params.pubkey, account)
             else
                 try encodeStandard(allocator, account, encoding, config.dataSlice);
 
@@ -763,12 +763,14 @@ pub const AccountHookContext = struct {
     /// Handles jsonParsed encoding with fallback to base64
     fn encodeJsonParsed(
         allocator: std.mem.Allocator,
+        pubkey: sig.core.Pubkey,
         account: sig.core.Account,
     ) !GetAccountInfo.Response.Value.Data {
         var account_data_iter = account.data.iterator();
         // Try to parse based on owner program
         if (try account_decoder.parse_account(
             allocator,
+            pubkey,
             account.owner,
             account_data_iter.reader(),
             account.data.len(),
