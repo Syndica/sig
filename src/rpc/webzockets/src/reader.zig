@@ -42,34 +42,21 @@ const BufferPool = buffer.BufferPool;
 /// - `.client`: validates that frames are unmasked (server-to-client)
 pub fn Reader(comptime role: types.Role) type {
     return struct {
-        /// Current buffer being read into.
         buf: []u8,
-
-        /// Current buffer ownership type.
         buf_type: BufferType,
-
         /// Saved reference to embedded buffer for reset() to restore after tier upgrade.
         embedded_buf: []u8,
-
         /// Shared pool reference (server-level).
         pool: *BufferPool,
-
         /// Allocator for dynamic fallback.
         allocator: Allocator,
-
         /// Position within buf that we've read into (end of data).
         pos: usize,
-
         /// Position in buf where the current message starts.
-        /// Used for over-read handling when multiple messages arrive.
         start: usize,
-
-        /// Maximum allowed message size.
         max_message_size: usize,
-
         /// Opcode of the first fragment in an in-progress fragmented message (null if none).
         fragment_opcode: ?types.Opcode,
-
         /// Accumulator for fragmented message payloads.
         fragment_buf: std.ArrayListUnmanaged(u8),
 
