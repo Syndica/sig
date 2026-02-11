@@ -883,7 +883,7 @@ fn loadTower(
         .{},
     ) catch return error.BincodeError;
 
-    var vote_state = try versioned_state.convertToCurrent(allocator);
+    var vote_state = try versioned_state.convertToCurrent(allocator, null);
     defer vote_state.deinit(allocator);
 
     return try Tower.fromAccount(&vote_state);
@@ -1384,7 +1384,7 @@ fn generateVoteTx(
     };
     defer vote_state_versions.deinit(allocator);
 
-    var vote_state = vote_state_versions.convertToCurrent(allocator) catch |err| {
+    var vote_state = vote_state_versions.convertToCurrent(allocator, null) catch |err| {
         logger.err().logf("Failed to convert vote state to current: {}", .{err});
         return .failed;
     };

@@ -5842,7 +5842,7 @@ fn genStakes(
     for (stakes) |stake| {
         const lamports, const votes = stake;
 
-        var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+        var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV4(
             allocator,
             Pubkey.ZEROES,
             null,
@@ -5850,7 +5850,7 @@ fn genStakes(
             0,
         );
         for (votes) |slot| {
-            try sig.runtime.program.vote.state.processSlotVoteUnchecked(
+            try sig.runtime.program.vote.state.processSlotVoteUncheckedV4(
                 allocator,
                 &vote_state,
                 slot,

@@ -825,6 +825,7 @@ test getEpochStakes {
             const vote_account = try VoteAccount.fromAccountSharedData(
                 allocator,
                 raw_vote_account,
+                null,
             );
 
             expected_total_stake += stake;

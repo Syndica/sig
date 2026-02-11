@@ -10,6 +10,7 @@ const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteState = vote_program.state.VoteState;
+const VoteStateV4 = vote_program.state.VoteStateV4;
 const LandedVote = vote_program.state.LandedVote;
 const Lockout = vote_program.state.Lockout;
 const Vote = vote_program.state.Vote;
@@ -17,6 +18,7 @@ const VoteStateUpdate = vote_program.state.VoteStateUpdate;
 const TowerSync = vote_program.state.TowerSync;
 const VoteStateVersions = vote_program.state.VoteStateVersions;
 const VoteAuthorize = vote_program.state.VoteAuthorize;
+const CircBufV1 = vote_program.state.CircBufV1;
 const VoteError = vote_program.VoteError;
 
 const InstructionContext = sig.runtime.InstructionContext;
@@ -56,8 +58,6 @@ pub fn execute(
         .v4
     else
         .v3;
-    // We will need to implement vote-state v4 for Alpenglow.
-    if (target_version == .v4) @panic("TODO: implement vote state v4");
 
     const instruction = try ic.ixn_info.deserializeInstruction(
         allocator,
@@ -74,6 +74,7 @@ pub fn execute(
             args.authorized_voter,
             args.authorized_withdrawer,
             args.commission,
+            target_version,
         ),
         .authorize => |args| try executeAuthorize(
             allocator,
@@ -186,6 +187,7 @@ fn executeIntializeAccount(
     authorized_voter: Pubkey,
     authorized_withdrawer: Pubkey,
     commission: u8,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     const rent = try ic.getSysvarWithAccountCheck(
         Rent,
@@ -211,6 +213,7 @@ fn executeIntializeAccount(
         commission,
         vote_account,
         clock,
+        target_version,
     );
 }
 
@@ -228,15 +231,17 @@ fn intializeAccount(
     commission: u8,
     vote_account: *BorrowedAccount,
     clock: Clock,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (vote_account.constAccountData().len != VoteState.MAX_VOTE_STATE_SIZE) {
         return InstructionError.InvalidAccountData;
     }
 
-    const versioned_vote_state = try vote_account.deserializeFromAccountData(
+    var versioned_vote_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
+    defer versioned_vote_state.deinit(allocator);
 
     if (!versioned_vote_state.isUninitialized()) {
         return InstructionError.AccountAlreadyInitialized;
@@ -248,23 +253,56 @@ fn intializeAccount(
         return InstructionError.MissingRequiredSignature;
     }
 
-    var vote_state = try VoteState.init(
-        allocator,
-        node_pubkey,
-        authorized_voter,
-        authorized_withdrawer,
-        commission,
-        clock.epoch,
-    );
-    defer vote_state.deinit(allocator);
+    const use_v4 = target_version == .v4;
+    if (use_v4) {
+        var vote_state_v4 = try VoteStateV4.init(
+            allocator,
+            node_pubkey,
+            authorized_voter,
+            authorized_withdrawer,
+            commission,
+            clock.epoch,
+            vote_account.pubkey,
+        );
+        defer vote_state_v4.deinit(allocator);
 
-    try setVoteState(
-        allocator,
-        vote_account,
-        &vote_state,
-        &ic.tc.rent,
-        &ic.tc.accounts_resize_delta,
-    );
+        try setVoteState(
+            allocator,
+            vote_account,
+            &vote_state_v4,
+            &ic.tc.rent,
+            &ic.tc.accounts_resize_delta,
+            true,
+            null,
+        );
+    } else {
+        var vote_state = try VoteState.init(
+            allocator,
+            node_pubkey,
+            authorized_voter,
+            authorized_withdrawer,
+            commission,
+            clock.epoch,
+        );
+        defer vote_state.deinit(allocator);
+
+        var vote_state_v4 = try VoteStateV4.fromVoteState(
+            allocator,
+            vote_state,
+            vote_account.pubkey,
+        );
+        defer vote_state_v4.deinit(allocator);
+
+        try setVoteState(
+            allocator,
+            vote_account,
+            &vote_state_v4,
+            &ic.tc.rent,
+            &ic.tc.accounts_resize_delta,
+            false,
+            null,
+        );
+    }
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L77-L79
@@ -312,8 +350,17 @@ fn authorize(
     );
     defer versioned_state.deinit(allocator);
 
-    var vote_state = try versioned_state.convertToCurrent(allocator);
+    // Extract prior_voters from v3 state if present (for preserving when feature is OFF)
+    var prior_voters: ?CircBufV1 = switch (versioned_state) {
+        .current => |s| s.prior_voters,
+        .v1_14_11 => |s| s.prior_voters,
+        else => null,
+    };
+
+    var vote_state = try versioned_state.convertToCurrent(allocator, vote_account.pubkey);
     defer vote_state.deinit(allocator);
+
+    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
 
     switch (vote_authorize) {
         .voter => {
@@ -335,6 +382,31 @@ fn authorize(
                 // If the vote state isn't a valid signer, check if the epoch voter is.
                 try validateIsSigner(epoch_authorized_voter, signers);
             };
+
+            // When feature is OFF, we need to update prior_voters like v3 does
+            if (!use_v4) {
+                const latest_epoch, const latest_pubkey = vote_state.voters.last() orelse
+                    return InstructionError.InvalidAccountData;
+
+                if (!latest_pubkey.equals(&authorized)) {
+                    // Check that target_epoch > latest_epoch (same check as setNewAuthorizedVoter)
+                    if (target_epoch > latest_epoch) {
+                        const epoch_of_last_authorized_switch = if (prior_voters) |pv|
+                            if (pv.last()) |prior_voter| prior_voter.end else 0
+                        else
+                            0;
+
+                        if (prior_voters == null) {
+                            prior_voters = CircBufV1.init();
+                        }
+                        prior_voters.?.append(.{
+                            .key = latest_pubkey,
+                            .start = epoch_of_last_authorized_switch,
+                            .end = target_epoch,
+                        });
+                    }
+                }
+            }
 
             const maybe_err = try vote_state.setNewAuthorizedVoter(
                 allocator,
@@ -358,6 +430,8 @@ fn authorize(
         &vote_state,
         &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
+        use_v4,
+        prior_voters,
     );
 }
 
@@ -532,7 +606,7 @@ fn updateValidatorIdentity(
     );
     defer versioned_state.deinit(allocator);
 
-    var vote_state = try versioned_state.convertToCurrent(allocator);
+    var vote_state = try versioned_state.convertToCurrent(allocator, vote_account.pubkey);
     defer vote_state.deinit(allocator);
 
     // Both the current authorized withdrawer and new identity must sign.
@@ -543,13 +617,17 @@ fn updateValidatorIdentity(
     }
 
     vote_state.node_pubkey = new_identity;
+    vote_state.block_revenue_collector = new_identity; // [SIMD-0185] until SIMD-0232
 
+    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
     try setVoteState(
         allocator,
         vote_account,
         &vote_state,
         &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
+        use_v4,
+        null,
     );
 }
 
@@ -582,7 +660,7 @@ fn updateCommission(
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!void {
     // Decode vote state only once, and only if needed
-    var maybe_vote_state: ?VoteState = null;
+    var maybe_vote_state: ?VoteStateV4 = null;
 
     const enforce_commission_update_rule = blk: {
         if (ic.tc.feature_set.active(.allow_commission_decrease_at_any_time, ic.tc.slot)) {
@@ -592,12 +670,11 @@ fn updateCommission(
             ) catch break :blk true;
             defer versioned_state.deinit(allocator);
 
-            const vote_state = try versioned_state.convertToCurrent(allocator);
+            const vote_state = try versioned_state.convertToCurrent(allocator, vote_account.pubkey);
             maybe_vote_state = vote_state;
             // [agave] https://github.com/anza-xyz/agave/blob/9806724b6d49dec06a9d50396adf26565d6b7745/programs/vote/src/vote_state/mod.rs#L792
-            //
-            // Given a proposed new commission, returns true if this would be a commission increase, false otherwise
-            break :blk commission > vote_state.commission;
+            // [SIMD-0185] New commission value multiplied by 100 for bps; compare with current bps.
+            break :blk @as(u16, commission) * 100 > vote_state.inflation_rewards_commission_bps;
         } else break :blk true;
     };
 
@@ -606,7 +683,6 @@ fn updateCommission(
         ic.tc.slot,
     )) {
         if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
-            // Clean up before returning, if we have a vote_state already.
             if (maybe_vote_state) |*vote_state| vote_state.deinit(allocator);
             ic.tc.custom_error = @intFromEnum(VoteError.commission_update_too_late);
             return InstructionError.Custom;
@@ -620,7 +696,7 @@ fn updateCommission(
         );
         defer versioned_state.deinit(allocator);
 
-        break :state versioned_state.convertToCurrent(allocator) catch {
+        break :state versioned_state.convertToCurrent(allocator, vote_account.pubkey) catch {
             return InstructionError.InvalidAccountData;
         };
     };
@@ -631,14 +707,18 @@ fn updateCommission(
         return InstructionError.MissingRequiredSignature;
     }
 
-    vote_state.commission = commission;
+    // [SIMD-0185] Store as basis points (integer percentage * 100).
+    vote_state.inflation_rewards_commission_bps = @as(u16, commission) * 100;
 
+    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
     try setVoteState(
         allocator,
         vote_account,
         &vote_state,
         &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
+        use_v4,
+        null,
     );
 }
 
@@ -704,7 +784,7 @@ fn widthraw(
     );
     defer versioned_state.deinit(allocator);
 
-    var vote_state = try versioned_state.convertToCurrent(allocator);
+    var vote_state = try versioned_state.convertToCurrent(allocator, vote_account.pubkey);
     defer vote_state.deinit(allocator);
 
     if (!ic.ixn_info.isPubkeySigner(vote_state.withdrawer)) {
@@ -714,6 +794,8 @@ fn widthraw(
     const remaining_balance = std.math.sub(u64, vote_account.account.lamports, lamports) catch {
         return InstructionError.InsufficientFunds;
     };
+
+    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
 
     if (remaining_balance == 0) {
         const reject_active_vote_account_close = blk: {
@@ -733,17 +815,34 @@ fn widthraw(
             ic.tc.custom_error = @intFromEnum(VoteError.active_vote_account_close);
             return InstructionError.Custom;
         } else {
-            // Deinitialize upon zero-balance
-            var deinitialized_state: VoteState = .DEFAULT;
-            defer deinitialized_state.deinit(allocator);
+            // [SIMD-0185] Withdraw: completely zero vote account data for fully withdrawn v4 accounts.
+            if (use_v4) {
+                var zeros: [VoteStateV4.MAX_VOTE_STATE_SIZE]u8 = undefined;
+                @memset(&zeros, 0);
+                try vote_account.setDataFromSlice(
+                    allocator,
+                    &ic.tc.accounts_resize_delta,
+                    &zeros,
+                );
+            } else {
+                const deinitialized_state = VoteState.DEFAULT;
+                var deinitialized_v4 = try VoteStateV4.fromVoteState(
+                    allocator,
+                    deinitialized_state,
+                    vote_account.pubkey,
+                );
+                defer deinitialized_v4.deinit(allocator);
 
-            try setVoteState(
-                allocator,
-                &vote_account,
-                &deinitialized_state,
-                &ic.tc.rent,
-                &ic.tc.accounts_resize_delta,
-            );
+                try setVoteState(
+                    allocator,
+                    &vote_account,
+                    &deinitialized_v4,
+                    &ic.tc.rent,
+                    &ic.tc.accounts_resize_delta,
+                    false,
+                    null,
+                );
+            }
         }
     } else {
         const min_rent_exempt_balance = rent.minimumBalance(vote_account.constAccountData().len);
@@ -839,12 +938,15 @@ fn processVoteWithAccount(
         }
     }
 
+    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
     try setVoteState(
         allocator,
         vote_account,
         &vote_state,
         &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
+        use_v4,
+        null,
     );
 }
 
@@ -905,12 +1007,15 @@ fn voteStateUpdate(
         return InstructionError.Custom;
     }
 
+    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
     try setVoteState(
         allocator,
         vote_account,
         &vote_state,
         &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
+        use_v4,
+        null,
     );
 }
 
@@ -969,12 +1074,15 @@ fn towerSync(
         return InstructionError.Custom;
     }
 
+    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
     try setVoteState(
         allocator,
         vote_account,
         &vote_state,
         &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
+        use_v4,
+        null,
     );
 }
 
@@ -984,7 +1092,7 @@ fn verifyAndGetVoteState(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     epoch: Epoch,
-) (error{OutOfMemory} || InstructionError)!VoteState {
+) (error{OutOfMemory} || InstructionError)!VoteStateV4 {
     var versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
@@ -994,7 +1102,7 @@ fn verifyAndGetVoteState(
 
     if (versioned_state.isUninitialized()) return InstructionError.UninitializedAccount;
 
-    var vote_state = try versioned_state.convertToCurrent(allocator);
+    var vote_state = try versioned_state.convertToCurrent(allocator, vote_account.pubkey);
     errdefer vote_state.deinit(allocator);
 
     const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, epoch);
@@ -1020,10 +1128,32 @@ fn validateIsSigner(
 fn setVoteState(
     allocator: std.mem.Allocator,
     account: *BorrowedAccount,
-    state: *const VoteState,
+    state: *const VoteStateV4,
     rent: *const Rent,
     resize_delta: *i64,
+    use_v4: bool,
+    prior_voters: ?CircBufV1,
 ) (error{OutOfMemory} || InstructionError)!void {
+    if (use_v4) {
+        // [SIMD-0185] v4: resize to 3762 if smaller, then check rent exempt, then serialize v4.
+        if (account.constAccountData().len < VoteStateV4.MAX_VOTE_STATE_SIZE) {
+            if (std.meta.isError(account.setDataLength(
+                allocator,
+                resize_delta,
+                VoteStateV4.MAX_VOTE_STATE_SIZE,
+            ))) {
+                return InstructionError.AccountNotRentExempt;
+            }
+            if (!rent.isExempt(account.account.lamports, VoteStateV4.MAX_VOTE_STATE_SIZE)) {
+                return InstructionError.AccountNotRentExempt;
+            }
+        }
+        return account.serializeIntoAccountData(VoteStateVersions{ .v4 = state.* });
+    }
+
+    var vote_state = try VoteState.fromVoteStateV4(allocator, state.*, prior_voters);
+    defer vote_state.deinit(allocator);
+
     if (account.constAccountData().len < VoteState.MAX_VOTE_STATE_SIZE and
         (!rent.isExempt(account.account.lamports, VoteState.MAX_VOTE_STATE_SIZE) or
             std.meta.isError(account.setDataLength(
@@ -1032,26 +1162,26 @@ fn setVoteState(
                 VoteState.MAX_VOTE_STATE_SIZE,
             ))))
     {
-        const landed_votes = state.votes.items;
+        const landed_votes = vote_state.votes.items;
         const votes = try allocator.alloc(Lockout, landed_votes.len);
         defer allocator.free(votes);
 
         for (votes, landed_votes) |*vote, landed| vote.* = landed.lockout;
 
         return account.serializeIntoAccountData(VoteStateVersions{ .v1_14_11 = .{
-            .node_pubkey = state.node_pubkey,
-            .withdrawer = state.withdrawer,
-            .commission = state.commission,
+            .node_pubkey = vote_state.node_pubkey,
+            .withdrawer = vote_state.withdrawer,
+            .commission = vote_state.commission,
             .votes = .fromOwnedSlice(votes),
-            .root_slot = state.root_slot,
-            .voters = state.voters,
-            .prior_voters = state.prior_voters,
-            .epoch_credits = state.epoch_credits,
-            .last_timestamp = state.last_timestamp,
+            .root_slot = vote_state.root_slot,
+            .voters = vote_state.voters,
+            .prior_voters = vote_state.prior_voters,
+            .epoch_credits = vote_state.epoch_credits,
+            .last_timestamp = vote_state.last_timestamp,
         } });
     }
 
-    return account.serializeIntoAccountData(VoteStateVersions{ .current = state.* });
+    return account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3659

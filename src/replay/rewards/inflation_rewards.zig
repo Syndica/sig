@@ -9,6 +9,7 @@ const Slot = sig.core.Slot;
 const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
 
 const VoteState = sig.runtime.program.vote.state.VoteState;
+const VoteStateV4 = sig.runtime.program.vote.state.VoteStateV4;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
 
 pub const PointValue = struct {
@@ -38,7 +39,7 @@ pub const RedeemRewardResult = struct {
 pub fn redeemRewards(
     epoch: Epoch,
     stake: *Stake,
-    vote_state: *const VoteState,
+    vote_state: *const VoteStateV4,
     point_value: *const PointValue,
     stake_history: *const StakeHistory,
     new_rate_activation_epoch: ?Epoch,
@@ -65,7 +66,7 @@ pub fn calculateStakeRewards(
     epoch: Epoch,
     stake: *Stake,
     point_value: *const PointValue,
-    vote_state: *const VoteState,
+    vote_state: *const VoteStateV4,
     stake_history: *const StakeHistory,
     new_rate_activation_epoch: ?Epoch,
 ) !?CalculatedStakeRewards {
@@ -101,7 +102,7 @@ pub fn calculateStakeRewards(
         return null;
     }
 
-    const commission_split = commissionSplit(vote_state.commission, rewards);
+    const commission_split = commissionSplit(vote_state.commission(), rewards);
 
     if (commission_split.leakedLamports()) {
         return null;
@@ -139,13 +140,13 @@ pub fn commissionSplit(commission: u8, rewards: u64) CommissionSplit {
 
 pub fn calculatePoints(
     stake: Stake,
-    vote_state: VoteState,
+    vote_state: *const VoteStateV4,
     stake_history: *const StakeHistory,
     new_rate_activation_epoch: ?Epoch,
 ) u128 {
     return calculateStakePointsAndCredits(
         &stake,
-        &vote_state,
+        vote_state,
         stake_history,
         new_rate_activation_epoch,
     ).points;
@@ -153,7 +154,7 @@ pub fn calculatePoints(
 
 pub fn calculateStakePointsAndCredits(
     stake: *const Stake,
-    new_vote_state: *const VoteState,
+    new_vote_state: *const VoteStateV4,
     stake_history: *const StakeHistory,
     new_rate_activation_epoch: ?Epoch,
 ) CalculatedStakePoints {
@@ -281,7 +282,7 @@ pub fn newStakeForTest(
 test calculateStakePointsAndCredits {
     const allocator = std.testing.allocator;
 
-    var vote_state = VoteState.DEFAULT;
+    var vote_state = VoteStateV4.DEFAULT;
     defer vote_state.deinit(allocator);
 
     const stake = newStakeForTest(
@@ -298,7 +299,7 @@ test calculateStakePointsAndCredits {
 
     try std.testing.expectEqual(
         stake.delegation.stake * epoch_slots,
-        calculatePoints(stake, vote_state, &StakeHistory.INIT, null),
+        calculatePoints(stake, &vote_state, &StakeHistory.INIT, null),
     );
 }
 
@@ -307,7 +308,7 @@ test redeemRewards {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    var vote_state = VoteState.DEFAULT;
+    var vote_state = VoteStateV4.DEFAULT;
     defer vote_state.deinit(allocator);
 
     var stake = newStakeForTest(
@@ -354,7 +355,7 @@ test calculateStakeRewards {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    var vote_state = VoteState.DEFAULT;
+    var vote_state = VoteStateV4.DEFAULT;
     defer vote_state.deinit(allocator);
 
     var stake = newStakeForTest(
@@ -468,7 +469,7 @@ test calculateStakeRewards {
         ),
     );
 
-    vote_state.commission = 99;
+    vote_state.inflation_rewards_commission_bps = 9900;
 
     try std.testing.expectEqual(
         null,
@@ -562,7 +563,7 @@ test calculateStakeRewards {
         ),
     );
 
-    vote_state.commission = 0;
+    vote_state.inflation_rewards_commission_bps = 0;
     stake.credits_observed = 3;
     stake.delegation.activation_epoch = 1;
 

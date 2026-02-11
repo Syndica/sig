@@ -391,7 +391,7 @@ pub fn parseStakes(
                         .owner = vote_account.owner,
                         .executable = vote_account.executable,
                         .rent_epoch = vote_account.rent_epoch,
-                    });
+                    }, voter_pubkey);
                     if (deserialize_result == error.OutOfMemory) {
                         return error.OutOfMemory;
                     } else if (!std.meta.isError(deserialize_result)) {
@@ -456,7 +456,7 @@ pub fn parseStakes(
         );
         defer db_versioned_vote_state.deinit(allocator);
 
-        var db_vote_state = try db_versioned_vote_state.convertToCurrent(allocator);
+        var db_vote_state = try db_versioned_vote_state.convertToCurrent(allocator, null);
         defer db_vote_state.deinit(allocator);
 
         if (!db_vote_state.equals(&cached_vote_state)) return error.InvalidVoteAccount;
