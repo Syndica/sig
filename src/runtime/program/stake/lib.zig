@@ -17,6 +17,7 @@ const FeatureSet = sig.core.FeatureSet;
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteStateVersions = runtime.program.vote.state.VoteStateVersions;
 const VoteState = runtime.program.vote.state.VoteState;
+const VoteStateV4 = runtime.program.vote.state.VoteStateV4;
 const ExecuteContextsParams = runtime.testing.ExecuteContextsParams;
 
 const Instruction = instruction.Instruction;
@@ -601,7 +602,7 @@ fn validateDelegatedAmount(
 fn newStake(
     stake: u64,
     voter_pubkey: *const Pubkey,
-    vote_state: *const VoteState,
+    vote_state: *const VoteStateV4,
     activation_epoch: Epoch,
 ) StakeStateV2.Stake {
     return .{
@@ -626,7 +627,7 @@ fn redelegateStake(
     stake: *StakeStateV2.Stake,
     stake_lamports: u64,
     voter_pubkey: *const Pubkey,
-    vote_state: *const VoteState,
+    vote_state: *const VoteStateV4,
     clock: *const sysvar.Clock,
     stake_history: *const sysvar.StakeHistory,
 ) ?StakeError {
@@ -693,7 +694,7 @@ fn delegate(
             const stake_amount = validated.stake_amount;
 
             const payload = try vote_state;
-            var current_vote_state = try payload.convertToCurrent(allocator);
+            var current_vote_state = try payload.convertToCurrent(allocator, vote_pubkey);
             defer current_vote_state.deinit(allocator);
 
             const new_stake = newStake(
@@ -718,7 +719,7 @@ fn delegate(
             const stake_amount = validated.stake_amount;
 
             const payload = try vote_state;
-            var current_vote_state = try payload.convertToCurrent(allocator);
+            var current_vote_state = try payload.convertToCurrent(allocator, vote_pubkey);
             defer current_vote_state.deinit(allocator);
             if (redelegateStake(
                 ic,
@@ -1411,7 +1412,7 @@ fn deactivateDelinquent(
     );
     defer delinquent_vote_state_raw.deinit(allocator);
 
-    var delinquent_vote_state = try delinquent_vote_state_raw.convertToCurrent(allocator);
+    var delinquent_vote_state = try delinquent_vote_state_raw.convertToCurrent(allocator, null);
     defer delinquent_vote_state.deinit(allocator);
 
     const reference_vote_account = try ic.borrowInstructionAccount(reference_vote_account_index);
@@ -1425,7 +1426,7 @@ fn deactivateDelinquent(
     );
     defer reference_vote_state_raw.deinit(allocator);
 
-    var reference_vote_state = try reference_vote_state_raw.convertToCurrent(allocator);
+    var reference_vote_state = try reference_vote_state_raw.convertToCurrent(allocator, null);
     defer reference_vote_state.deinit(allocator);
 
     if (!acceptableReferenceEpochCredits(reference_vote_state.epoch_credits.items, current_epoch)) {
@@ -2055,7 +2056,7 @@ test "stake.delegate_stake" {
                     .rent_exempt_reserve = stake_rent,
                 },
                 .stake = .{
-                    .credits_observed = VoteState.DEFAULT.getCredits(),
+                    .credits_observed = VoteStateV4.DEFAULT.getCredits(),
                     .delegation = .{
                         .voter_pubkey = vote_account,
                         .stake = stake_lamports -| stake_rent,

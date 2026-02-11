@@ -22,6 +22,7 @@ const Delegation = StakeStateV2.Delegation;
 const Stake = StakeStateV2.Stake;
 const Meta = StakeStateV2.Meta;
 const VoteState = sig.runtime.program.vote.state.VoteState;
+const VoteStateV4 = sig.runtime.program.vote.state.VoteStateV4;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
 
 const RwMux = sig.sync.RwMux;
@@ -94,7 +95,7 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
                 }
 
                 // does *not* take ownership of the account
-                var vote_account = VoteAccount.fromAccountSharedData(allocator, account) catch {
+                var vote_account = VoteAccount.fromAccountSharedData(allocator, account, pubkey) catch {
                     var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                     defer stakes_guard.unlock();
                     try stakes.removeVoteAccount(allocator, pubkey);
@@ -744,7 +745,7 @@ pub const StakeAccount = struct {
 
 pub const VoteAccount = struct {
     account: MinimalAccount,
-    state: VoteState,
+    state: VoteStateV4,
     rc: *sig.sync.ReferenceCounter,
 
     /// Represents the minimal amount of information needed from the account data.
@@ -757,12 +758,12 @@ pub const VoteAccount = struct {
         .serializer = serialize,
         .deserializer = deserialize,
     };
-    pub const @"!bincode-config:state" = bincode.FieldConfig(VoteState){ .skip = true };
+    pub const @"!bincode-config:state" = bincode.FieldConfig(VoteStateV4){ .skip = true };
 
     pub fn init(
         allocator: Allocator,
         account: MinimalAccount,
-        state: VoteState,
+        state: VoteStateV4,
     ) Allocator.Error!VoteAccount {
         const rc = try allocator.create(sig.sync.ReferenceCounter);
         errdefer allocator.destroy(rc);
@@ -799,10 +800,11 @@ pub const VoteAccount = struct {
         return self.state.node_pubkey;
     }
 
-    /// Does not take ownership of `account`.
+    /// Does not take ownership of `account`. vote_pubkey is the account's address when known (e.g. from checkAndStore).
     pub fn fromAccountSharedData(
         allocator: std.mem.Allocator,
         account: AccountSharedData,
+        vote_pubkey: ?Pubkey,
     ) !VoteAccount {
         if (!vote_program.ID.equals(&account.owner)) return error.InvalidOwner;
 
@@ -814,7 +816,7 @@ pub const VoteAccount = struct {
         );
         defer versioned_vote_state.deinit(allocator); // `convertToCurrent` clones
 
-        var vote_state = try versioned_vote_state.convertToCurrent(allocator);
+        var vote_state = try versioned_vote_state.convertToCurrent(allocator, vote_pubkey);
         errdefer vote_state.deinit(allocator);
 
         return .init(
@@ -829,7 +831,7 @@ pub const VoteAccount = struct {
         allocator: std.mem.Allocator,
     ) !AccountSharedData {
         if (!builtin.is_test) @compileError("only for tests");
-        const versioned_state = VoteStateVersions{ .current = self.state };
+        const versioned_state = VoteStateVersions{ .v4 = self.state };
         const data = try sig.bincode.writeAlloc(allocator, versioned_state, .{});
         return .{
             .lamports = self.account.lamports,
@@ -864,6 +866,7 @@ pub const VoteAccount = struct {
         return fromAccountSharedData(
             limit_allocator.backing_allocator,
             deserialized,
+            null,
         );
     }
 
@@ -891,7 +894,7 @@ pub const VoteAccount = struct {
         );
         defer account.deinit(allocator);
 
-        return VoteAccount.fromAccountSharedData(allocator, account) catch |err| {
+        return VoteAccount.fromAccountSharedData(allocator, account, null) catch |err| {
             switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 // We just created a 'valid' vote account, so the only possible
@@ -962,7 +965,7 @@ fn createStakeAccount(
     );
     defer versioned_vote_state.deinit(allocator);
 
-    var vote_state = try versioned_vote_state.convertToCurrent(allocator);
+    var vote_state = try versioned_vote_state.convertToCurrent(allocator, null);
     defer vote_state.deinit(allocator);
 
     const minimum_rent = rent.minimumBalance(StakeStateV2.SIZE);
@@ -1073,11 +1076,18 @@ pub fn randomStakes(
             ),
             options.epoch + 1,
         );
+        defer vote_state.deinit(allocator);
+        var vote_state_v4 = try VoteStateV4.fromVoteState(
+            allocator,
+            vote_state,
+            voters[i],
+        );
+        errdefer vote_state_v4.deinit(allocator);
         var vote_account = VoteAccount.init(allocator, .{
             .lamports = 1_000_000_000,
             .owner = vote_program.ID,
-        }, vote_state) catch |err| {
-            vote_state.deinit(allocator);
+        }, vote_state_v4) catch |err| {
+            vote_state_v4.deinit(allocator);
             return err;
         };
         errdefer vote_account.deinit(allocator);
@@ -1316,6 +1326,7 @@ pub const TestStakedNodeAccounts = struct {
         return try VoteAccount.fromAccountSharedData(
             allocator,
             self.vote_account,
+            null,
         );
     }
 
@@ -1635,7 +1646,7 @@ test "vote account invalid owner" {
 
     try std.testing.expectError(
         error.InvalidOwner,
-        VoteAccount.fromAccountSharedData(allocator, account_state),
+        VoteAccount.fromAccountSharedData(allocator, account_state, null),
     );
 }
 

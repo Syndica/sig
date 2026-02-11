@@ -17,6 +17,9 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
+pub const VoteStateV4 = @import("state_v4.zig").VoteStateV4;
+pub const createTestVoteStateV4 = @import("state_v4.zig").createTestVoteStateV4;
+
 pub const MAX_PRIOR_VOTERS: usize = 32;
 pub const MAX_LOCKOUT_HISTORY: usize = 31;
 pub const INITIAL_LOCKOUT: usize = 2;
@@ -439,6 +442,37 @@ pub const AuthorizedVoters = struct {
         return true;
     }
 
+    /// [SIMD-0185] For vote state v4: purge only entries less than (current_epoch - 1)
+    /// so that authorized_voters can hold [current_epoch - 1, current_epoch + 2].
+    pub fn purgeAuthorizedVotersPreviousEpoch(
+        self: *AuthorizedVoters,
+        allocator: Allocator,
+        current_epoch: Epoch,
+    ) (error{OutOfMemory} || InstructionError)!void {
+        const min_epoch = if (current_epoch > 0) current_epoch - 1 else 0;
+        var expired_keys = std.ArrayList(Epoch).init(allocator);
+        defer expired_keys.deinit();
+
+        var voter_iter = self.voters.iterator();
+        while (voter_iter.next()) |entry| {
+            if (entry.key_ptr.* < min_epoch) {
+                try expired_keys.append(entry.key_ptr.*);
+            }
+        }
+
+        for (expired_keys.items) |key| {
+            _ = self.voters.swapRemoveNoSort(key);
+        }
+        self.voters.sort();
+
+        // Have to uphold this invariant b/c this is
+        // 1) The check for whether the vote state is initialized
+        // 2) How future authorized voters for uninitialized epochs are set
+        //    by this function
+        std.debug.assert(self.voters.count() != 0);
+        return true;
+    }
+
     pub fn isEmpty(self: *const AuthorizedVoters) bool {
         return self.voters.count() == 0;
     }
@@ -553,7 +587,7 @@ const CircBufV0 = struct {
     }
 };
 
-const CircBufV1 = struct {
+pub const CircBufV1 = struct {
     buf: [MAX_PRIOR_VOTERS]Entry,
     idx: usize,
     is_empty: bool,
@@ -574,7 +608,7 @@ const CircBufV1 = struct {
         self.is_empty = false;
     }
 
-    pub fn last(self: *CircBufV1) ?Entry {
+    pub fn last(self: *const CircBufV1) ?Entry {
         if (self.is_empty) {
             return null;
         }
@@ -598,10 +632,12 @@ const CircBufV1 = struct {
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L20
+/// [SIMD-0185] v4 added with discriminant 3.
 pub const VoteStateVersions = union(enum(u32)) {
     v0_23_5: VoteState0_23_5,
     v1_14_11: VoteState1_14_11,
     current: VoteState,
+    v4: VoteStateV4,
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L80
     pub fn landedVotesFromLockouts(
@@ -626,21 +662,25 @@ pub const VoteStateVersions = union(enum(u32)) {
             .v0_23_5 => |*vote_state| vote_state.deinit(allocator),
             .v1_14_11 => |*vote_state| vote_state.deinit(allocator),
             .current => |*vote_state| vote_state.deinit(allocator),
+            .v4 => |*vote_state| vote_state.deinit(allocator),
         }
     }
 
     pub fn isCorrectSizeAndInitialized(data: []const u8) bool {
         return VoteState.isCorrectSizeAndInitialized(data) or
-            VoteState1_14_11.isCorrectSizeAndInitialized(data);
+            VoteState1_14_11.isCorrectSizeAndInitialized(data) or
+            VoteStateV4.isCorrectSizeAndInitialized(data);
     }
 
     /// Clones the owned data within the vote state.
+    /// [SIMD-0185] Returns VoteStateV4 with default values for new fields when converting from older versions.
+    /// vote_pubkey: when provided, used as inflation_rewards_collector default for old versions.
     ///
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
-    pub fn convertToCurrent(self: VoteStateVersions, allocator: Allocator) !VoteState {
+    pub fn convertToCurrent(self: VoteStateVersions, allocator: Allocator, vote_pubkey: ?Pubkey) !VoteStateV4 {
+        const default_collector = vote_pubkey orelse Pubkey.ZEROES;
         switch (self) {
             .v0_23_5 => |state| {
-                // [agave] https://github.com/anza-xyz/solana-sdk/blob/ddf6523f688f1514baee2890d265bf12f0fe4c49/vote-interface/src/state/vote_state_versions.rs#L48-L52
                 const authorized_voters: AuthorizedVoters = if (state.voter.isZeroed())
                     .EMPTY
                 else
@@ -663,11 +703,15 @@ pub const VoteStateVersions = union(enum(u32)) {
                 return .{
                     .node_pubkey = state.node_pubkey,
                     .withdrawer = state.withdrawer,
-                    .commission = state.commission,
+                    .inflation_rewards_collector = default_collector,
+                    .block_revenue_collector = state.node_pubkey,
+                    .inflation_rewards_commission_bps = @as(u16, state.commission) * 100,
+                    .block_revenue_commission_bps = 10_000,
+                    .pending_delegator_rewards = 0,
+                    .bls_pubkey_compressed = null,
                     .votes = .fromOwnedSlice(votes),
                     .root_slot = state.root_slot,
                     .voters = authorized_voters,
-                    .prior_voters = CircBufV1.init(),
                     .epoch_credits = epoch_credits,
                     .last_timestamp = state.last_timestamp,
                 };
@@ -688,25 +732,57 @@ pub const VoteStateVersions = union(enum(u32)) {
                 return .{
                     .node_pubkey = state.node_pubkey,
                     .withdrawer = state.withdrawer,
-                    .commission = state.commission,
+                    .inflation_rewards_collector = default_collector,
+                    .block_revenue_collector = state.node_pubkey,
+                    .inflation_rewards_commission_bps = @as(u16, state.commission) * 100,
+                    .block_revenue_commission_bps = 10_000,
+                    .pending_delegator_rewards = 0,
+                    .bls_pubkey_compressed = null,
                     .votes = .fromOwnedSlice(votes),
                     .root_slot = state.root_slot,
                     .voters = authorized_voters,
-                    .prior_voters = state.prior_voters,
                     .epoch_credits = epoch_credits,
                     .last_timestamp = state.last_timestamp,
                 };
             },
-            .current => |state| return try state.clone(allocator),
+            .current => |state| {
+                var authorized_voters = try state.voters.clone(allocator);
+                errdefer authorized_voters.deinit(allocator);
+
+                var votes = try state.votes.clone(allocator);
+                errdefer votes.deinit(allocator);
+
+                var epoch_credits = try state.epoch_credits.clone(allocator);
+                errdefer epoch_credits.deinit(allocator);
+
+                return .{
+                    .node_pubkey = state.node_pubkey,
+                    .withdrawer = state.withdrawer,
+                    .inflation_rewards_collector = default_collector,
+                    .block_revenue_collector = state.node_pubkey,
+                    .inflation_rewards_commission_bps = @as(u16, state.commission) * 100,
+                    .block_revenue_commission_bps = 10_000,
+                    .pending_delegator_rewards = 0,
+                    .bls_pubkey_compressed = null,
+                    .votes = votes,
+                    .root_slot = state.root_slot,
+                    .voters = authorized_voters,
+                    .epoch_credits = epoch_credits,
+                    .last_timestamp = state.last_timestamp,
+                };
+            },
+            .v4 => |state| return try state.clone(allocator),
         }
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
+    /// [SIMD-0185] v4 is never uninitialized.
     pub fn isUninitialized(self: VoteStateVersions) bool {
         switch (self) {
             .v0_23_5 => |state| return state.voter.equals(&Pubkey.ZEROES),
             .v1_14_11 => |state| return state.voters.count() == 0,
             .current => |state| return state.voters.count() == 0,
+            .v4 => |_| return false,
         }
     }
 };
@@ -946,6 +1022,28 @@ pub const VoteState = struct {
             .prior_voters = self.prior_voters,
             .epoch_credits = try self.epoch_credits.clone(allocator),
             .last_timestamp = self.last_timestamp,
+        };
+    }
+
+    /// [SIMD-0185] Build VoteState from VoteStateV4 for serializing as .current when feature is off.
+    /// If `prior_voters` is provided, it will be used directly; otherwise an empty CircBuf is used.
+    pub fn fromVoteStateV4(allocator: Allocator, v4: VoteStateV4, prior_voters: ?CircBufV1) Allocator.Error!VoteState {
+        var votes = try v4.votes.clone(allocator);
+        errdefer votes.deinit(allocator);
+
+        const voters = try v4.authorized_voters.clone(allocator);
+        errdefer voters.deinit(allocator);
+
+        return .{
+            .node_pubkey = v4.node_pubkey,
+            .withdrawer = v4.withdrawer,
+            .commission = v4.commission(),
+            .votes = votes,
+            .root_slot = v4.root_slot,
+            .voters = voters,
+            .prior_voters = prior_voters orelse CircBufV1.init(),
+            .epoch_credits = try v4.epoch_credits.clone(allocator),
+            .last_timestamp = v4.last_timestamp,
         };
     }
 
@@ -1946,10 +2044,6 @@ pub const VoteState = struct {
     }
 };
 
-pub const VoteStateV4 = struct {
-    node_pubkey: Pubkey,
-};
-
 /// Re-export of the `VoteAuthorize` enum.
 pub const VoteAuthorize = vote_program.vote_instruction.VoteAuthorize;
 
@@ -2202,7 +2296,8 @@ test "state.Lockout.isLockedOutAtSlot" {
 
 test "state.VoteState.convertToCurrent" {
     const allocator = std.testing.allocator;
-    // VoteState0_23_5 -> Current
+    const vote_pubkey = Pubkey.ZEROES;
+    // VoteState0_23_5 -> V4
     {
         var vote_state_0_23_5: VoteStateVersions = .{ .v0_23_5 = try VoteState0_23_5.init(
             Pubkey.ZEROES,
@@ -2213,20 +2308,21 @@ test "state.VoteState.convertToCurrent" {
         ) };
         defer vote_state_0_23_5.deinit(allocator);
 
-        var vote_state = try VoteStateVersions.convertToCurrent(vote_state_0_23_5, allocator);
+        var vote_state = try VoteStateVersions.convertToCurrent(vote_state_0_23_5, allocator, vote_pubkey);
         defer vote_state.deinit(allocator);
 
-        try std.testing.expectEqual(0, vote_state.voters.count());
+        try std.testing.expectEqual(0, vote_state.authorized_voters.count());
         try std.testing.expect(vote_state.withdrawer.equals(&Pubkey.ZEROES));
-        try std.testing.expectEqual(10, vote_state.commission);
+        try std.testing.expectEqual(10, vote_state.commission());
         try std.testing.expectEqual(0, vote_state.votes.items.len);
         try std.testing.expectEqual(null, vote_state.root_slot);
-        try std.testing.expect(vote_state.prior_voters.is_empty);
+        try std.testing.expectEqual(1000, vote_state.inflation_rewards_commission_bps);
+        try std.testing.expectEqual(10_000, vote_state.block_revenue_commission_bps);
         try std.testing.expectEqual(0, vote_state.epoch_credits.items.len);
         try std.testing.expectEqual(0, vote_state.last_timestamp.slot);
         try std.testing.expectEqual(0, vote_state.last_timestamp.timestamp);
     }
-    // VoteStatev1_14_11 -> Current
+    // VoteStatev1_14_11 -> V4
     {
         var vote_state_1_14_1: VoteStateVersions = .{ .v1_14_11 = try VoteState1_14_11.init(
             allocator,
@@ -2238,23 +2334,23 @@ test "state.VoteState.convertToCurrent" {
         ) };
         defer vote_state_1_14_1.deinit(allocator);
 
-        var vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator);
+        var vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator, vote_pubkey);
         defer vote_state.deinit(allocator);
 
-        try std.testing.expectEqual(1, vote_state.voters.count());
-        var authorized_voter = vote_state.voters;
+        try std.testing.expectEqual(1, vote_state.authorized_voters.count());
+        var authorized_voter = vote_state.authorized_voters;
         try std.testing.expect(authorized_voter.getAuthorizedVoter(0).?.equals(&Pubkey.ZEROES));
         try std.testing.expect(vote_state.withdrawer.equals(&Pubkey.ZEROES));
-        try std.testing.expectEqual(10, vote_state.commission);
+        try std.testing.expectEqual(10, vote_state.commission());
         try std.testing.expectEqual(0, vote_state.votes.items.len);
         try std.testing.expectEqual(null, vote_state.root_slot);
-        try std.testing.expect(vote_state.prior_voters.is_empty);
+        try std.testing.expectEqual(1000, vote_state.inflation_rewards_commission_bps);
         try std.testing.expectEqual(0, vote_state.epoch_credits.items.len);
         try std.testing.expectEqual(0, vote_state.last_timestamp.slot);
         try std.testing.expectEqual(0, vote_state.last_timestamp.timestamp);
     }
 
-    // Current -> Current
+    // Current -> V4
     {
         var expected = try VoteState.init(
             allocator,
@@ -2268,30 +2364,22 @@ test "state.VoteState.convertToCurrent" {
 
         const vote_state_1_14_1: VoteStateVersions = .{ .current = expected };
 
-        var vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator);
+        var vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator, vote_pubkey);
         defer vote_state.deinit(allocator);
 
         try std.testing.expectEqual(
             expected.voters.count(),
-            vote_state.voters.count(),
+            vote_state.authorized_voters.count(),
         );
-        var authorized_voter = vote_state.voters;
+        var authorized_voter = vote_state.authorized_voters;
         var expected_authorized_voter = expected.voters;
-        try std.testing.expectEqual(
-            expected_authorized_voter.getAuthorizedVoter(0).?,
-            authorized_voter.getAuthorizedVoter(0).?,
+        try std.testing.expect(
+            authorized_voter.getAuthorizedVoter(0).?.equals(&expected_authorized_voter.getAuthorizedVoter(0).?),
         );
-        try std.testing.expectEqual(
-            expected.withdrawer,
-            vote_state.withdrawer,
-        );
-        try std.testing.expectEqual(expected.commission, vote_state.commission);
+        try std.testing.expect(expected.withdrawer.equals(&vote_state.withdrawer));
+        try std.testing.expectEqual(expected.commission, vote_state.commission());
         try std.testing.expectEqual(expected.votes.items.len, vote_state.votes.items.len);
         try std.testing.expectEqual(expected.root_slot, vote_state.root_slot);
-        try std.testing.expectEqual(
-            expected.prior_voters.is_empty,
-            vote_state.prior_voters.is_empty,
-        );
         try std.testing.expectEqual(
             expected.epoch_credits.items.len,
             vote_state.epoch_credits.items.len,
@@ -4988,6 +5076,41 @@ pub fn processSlotVoteUnchecked(
     slot: Slot,
 ) !void {
     if (!builtin.is_test) @compileError("processSlotVoteUnchecked only intended for tests");
+
+    var slots: [1]u64 = .{slot};
+
+    const vote: Vote = .{
+        .slots = &slots,
+        .hash = .ZEROES,
+        .timestamp = null,
+    };
+
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{
+        .slot = vote.slots[vote.slots.len - 1],
+        .hash = vote.hash,
+    }});
+
+    const epoch = if (vote_state.epoch_credits.items.len == 0)
+        0
+    else
+        vote_state.epoch_credits.getLast().epoch;
+
+    _ = try vote_state.processVoteUnfiltered(
+        allocator,
+        vote.slots,
+        &vote,
+        &slot_hashes,
+        epoch,
+        0,
+    );
+}
+
+pub fn processSlotVoteUncheckedV4(
+    allocator: Allocator,
+    vote_state: *VoteStateV4,
+    slot: Slot,
+) !void {
+    if (!builtin.is_test) @compileError("processSlotVoteUncheckedV4 only intended for tests");
 
     var slots: [1]u64 = .{slot};
 
