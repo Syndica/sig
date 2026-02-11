@@ -286,7 +286,7 @@ fn intializeAccount(
         );
         defer vote_state.deinit(allocator);
 
-        var vote_state_v4 = try VoteStateV4.fromVoteState(
+        var vote_state_v4 = try VoteStateV4.fromVoteStateV3(
             allocator,
             vote_state,
             vote_account.pubkey,
@@ -385,7 +385,7 @@ fn authorize(
 
             // When feature is OFF, we need to update prior_voters like v3 does
             if (!use_v4) {
-                const latest_epoch, const latest_pubkey = vote_state.voters.last() orelse
+                const latest_epoch, const latest_pubkey = vote_state.authorized_voters.last() orelse
                     return InstructionError.InvalidAccountData;
 
                 if (!latest_pubkey.equals(&authorized)) {
@@ -826,7 +826,7 @@ fn widthraw(
                 );
             } else {
                 const deinitialized_state = VoteState.DEFAULT;
-                var deinitialized_v4 = try VoteStateV4.fromVoteState(
+                var deinitialized_v4 = try VoteStateV4.fromVoteStateV3(
                     allocator,
                     deinitialized_state,
                     vote_account.pubkey,

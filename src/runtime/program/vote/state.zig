@@ -470,7 +470,6 @@ pub const AuthorizedVoters = struct {
         // 2) How future authorized voters for uninitialized epochs are set
         //    by this function
         std.debug.assert(self.voters.count() != 0);
-        return true;
     }
 
     pub fn isEmpty(self: *const AuthorizedVoters) bool {
@@ -711,7 +710,7 @@ pub const VoteStateVersions = union(enum(u32)) {
                     .bls_pubkey_compressed = null,
                     .votes = .fromOwnedSlice(votes),
                     .root_slot = state.root_slot,
-                    .voters = authorized_voters,
+                    .authorized_voters = authorized_voters,
                     .epoch_credits = epoch_credits,
                     .last_timestamp = state.last_timestamp,
                 };
@@ -740,7 +739,7 @@ pub const VoteStateVersions = union(enum(u32)) {
                     .bls_pubkey_compressed = null,
                     .votes = .fromOwnedSlice(votes),
                     .root_slot = state.root_slot,
-                    .voters = authorized_voters,
+                    .authorized_voters = authorized_voters,
                     .epoch_credits = epoch_credits,
                     .last_timestamp = state.last_timestamp,
                 };
@@ -766,7 +765,7 @@ pub const VoteStateVersions = union(enum(u32)) {
                     .bls_pubkey_compressed = null,
                     .votes = votes,
                     .root_slot = state.root_slot,
-                    .voters = authorized_voters,
+                    .authorized_voters = authorized_voters,
                     .epoch_credits = epoch_credits,
                     .last_timestamp = state.last_timestamp,
                 };
