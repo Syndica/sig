@@ -31,6 +31,9 @@ fn getSyscall(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMa
 
             const address = registers.get(.r1);
 
+            if (tc.feature_set.active(.stricter_abi_and_runtime_constraints, tc.slot) and
+                address >= memory.INPUT_START) return error.InvalidPointer;
+
             const ptr = try memory_map.translateType(
                 T,
                 .mutable,
