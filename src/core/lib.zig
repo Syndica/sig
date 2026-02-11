@@ -3,7 +3,6 @@ pub const ancestors = @import("ancestors.zig");
 pub const bank = @import("bank.zig");
 pub const blockhash_queue = @import("blockhash_queue.zig");
 pub const entry = @import("entry.zig");
-pub const epoch_context = @import("epoch_context.zig");
 pub const epoch_schedule = @import("epoch_schedule.zig");
 pub const epoch_stakes = @import("epoch_stakes.zig");
 pub const features = @import("features.zig");
@@ -22,6 +21,7 @@ pub const stakes = @import("stakes.zig");
 pub const status_cache = @import("status_cache.zig");
 pub const time = @import("time.zig");
 pub const transaction = @import("transaction.zig");
+pub const epoch_tracker = @import("epoch_tracker.zig");
 
 /// TODO: Change EpochStakes to use EpochStakes(.stake) everywhere except in the `epoch_stakes` field
 /// of `BankFields` for serialization purposes. When initialising an epoch stakes for production we
@@ -50,9 +50,9 @@ pub const BankFields = bank.BankFields;
 pub const BlockhashQueue = blockhash_queue.BlockhashQueue;
 pub const ClusterType = genesis_config.ClusterType;
 pub const Entry = entry.Entry;
-pub const EpochConstants = bank.EpochConstants;
-pub const EpochContext = epoch_context.EpochContext;
 pub const EpochSchedule = epoch_schedule.EpochSchedule;
+pub const EpochTracker = epoch_tracker.EpochTracker;
+pub const EpochInfo = epoch_tracker.EpochInfo;
 pub const FeeRateGovernor = genesis_config.FeeRateGovernor;
 pub const FeatureSet = features.Set;
 pub const GenesisConfig = genesis_config.GenesisConfig;

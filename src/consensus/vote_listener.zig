@@ -19,7 +19,7 @@ const OptimisticConfirmationVerifier =
     sig.consensus.optimistic_vote_verifier.OptimisticConfirmationVerifier;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
-const EpochTracker = sig.replay.trackers.EpochTracker;
+const EpochTracker = sig.core.EpochTracker;
 
 const Logger = sig.trace.Logger("vote_listener");
 
@@ -37,7 +37,7 @@ pub const SlotDataProvider = struct {
     }
 
     fn getSlotEpoch(self: *const SlotDataProvider, slot: Slot) sig.core.Epoch {
-        return self.epoch_tracker.schedule.getEpoch(slot);
+        return self.epoch_tracker.epoch_schedule.getEpoch(slot);
     }
 
     fn getSlotAncestorsPtr(
@@ -51,12 +51,12 @@ pub const SlotDataProvider = struct {
     }
 
     fn getEpochTotalStake(self: *const SlotDataProvider, epoch: u64) ?u64 {
-        const epoch_info = self.epoch_tracker.epochs.get(epoch) orelse return null;
+        const epoch_info = self.epoch_tracker.rooted_epochs.get(epoch) catch return null;
         return epoch_info.stakes.total_stake;
     }
 
     fn getDelegatedStake(self: *const SlotDataProvider, slot: Slot, pubkey: Pubkey) ?u64 {
-        const epoch_info = self.epoch_tracker.getForSlot(slot) orelse return null;
+        const epoch_info = self.epoch_tracker.getEpochInfo(slot) catch return null;
         return epoch_info.stakes.stakes.vote_accounts.getDelegatedStake(pubkey);
     }
 
@@ -65,7 +65,7 @@ pub const SlotDataProvider = struct {
         slot: Slot,
         vote_account_key: Pubkey,
     ) ?Pubkey {
-        const epoch_consts = self.epoch_tracker.getForSlot(slot) orelse return null;
+        const epoch_consts = self.epoch_tracker.getEpochInfo(slot) catch return null;
         const epoch_authorized_voters = &epoch_consts.stakes.epoch_authorized_voters;
         return epoch_authorized_voters.get(vote_account_key);
     }
@@ -258,7 +258,7 @@ fn parseAndVerifyVoteTransaction(
 
     const slot = vote.lastVotedSlot() orelse return error.Unverified;
     const authorized_voter: Pubkey = blk: {
-        const epoch_consts = epoch_tracker.getForSlot(slot) orelse return error.Unverified;
+        const epoch_consts = epoch_tracker.getEpochInfo(slot) catch return error.Unverified;
         const epoch_authorized_voters = &epoch_consts.stakes.epoch_authorized_voters;
         break :blk epoch_authorized_voters.get(vote_account_key) orelse return error.Unverified;
     };
@@ -966,13 +966,13 @@ test "trackNewVotesAndNotifyConfirmations filter" {
     );
     defer slot_tracker.deinit(allocator);
 
-    var epoch_tracker: EpochTracker = .{ .schedule = .INIT };
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        prng,
+        0,
+        .INIT,
+    );
     defer epoch_tracker.deinit(allocator);
-
-    {
-        const epoch_genesis: sig.core.EpochConstants = .genesis(.default(allocator));
-        try epoch_tracker.epochs.put(allocator, 0, epoch_genesis);
-    }
 
     const slot_data_provider: SlotDataProvider = .{
         .slot_tracker = &slot_tracker,
@@ -1707,7 +1707,14 @@ test "vote_parser.parseSanitizedVoteTransaction" {
 
 test parseAndVerifyVoteTransaction {
     const allocator = std.testing.allocator;
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT };
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        prng.random(),
+        0,
+        .INIT,
+    );
     defer epoch_tracker.deinit(allocator);
 
     try std.testing.expectError(
@@ -1738,26 +1745,20 @@ test "simple usage" {
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = .empty,
             .inflation = .DEFAULT,
+            .rent_collector = .DEFAULT,
         },
         .state = .GENESIS,
     });
     defer slot_tracker.deinit(allocator);
 
-    var epoch_tracker: EpochTracker = .{ .schedule = .INIT };
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        prng.random(),
+        0,
+        .INIT,
+    );
     defer epoch_tracker.deinit(allocator);
-    {
-        const stakes: sig.core.EpochStakes = .EMPTY_WITH_GENESIS;
-        try epoch_tracker.epochs.ensureUnusedCapacity(allocator, 1);
-        epoch_tracker.epochs.putAssumeCapacity(0, .{
-            .hashes_per_tick = 1,
-            .ticks_per_slot = 1,
-            .ns_per_slot = 1,
-            .genesis_creation_time = 1,
-            .slots_per_year = 1,
-            .stakes = stakes,
-            .rent_collector = undefined,
-        });
-    }
 
     const slot_data_provider: SlotDataProvider = .{
         .slot_tracker = &slot_tracker,
@@ -1829,17 +1830,26 @@ test "check trackers" {
                 .feature_set = .ALL_DISABLED,
                 .reserved_accounts = .empty,
                 .inflation = .DEFAULT,
+                .rent_collector = .DEFAULT,
             },
             .state = state,
         });
     };
     defer slot_tracker.deinit(allocator);
 
-    var epoch_tracker: EpochTracker = .{ .schedule = .INIT };
+    var epoch_tracker = sig.core.EpochTracker.init(
+        .default,
+        0,
+        .INIT,
+    );
     defer epoch_tracker.deinit(allocator);
 
     {
-        var stakes: sig.core.EpochStakes = .EMPTY_WITH_GENESIS;
+        var stakes = try sig.core.EpochStakes.initRandom(
+            allocator,
+            random,
+            .{ .epoch = 0 },
+        );
         errdefer stakes.deinit(allocator);
 
         for (tracker_templates) |template| {
@@ -1848,15 +1858,7 @@ test "check trackers" {
             try stakes.epoch_authorized_voters.put(allocator, vote_key, vote_key);
         }
 
-        try epoch_tracker.epochs.put(allocator, 0, .{
-            .hashes_per_tick = 1,
-            .ticks_per_slot = 1,
-            .ns_per_slot = 1,
-            .genesis_creation_time = 1,
-            .slots_per_year = 1,
-            .stakes = stakes,
-            .rent_collector = .DEFAULT,
-        });
+        try epoch_tracker.insertRootedEpochInfo(allocator, stakes, &.ALL_DISABLED);
     }
 
     const slot_data_provider: SlotDataProvider = .{

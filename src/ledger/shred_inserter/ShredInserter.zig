@@ -19,7 +19,6 @@ const CodeShred = ledger_mod.shred.CodeShred;
 const DataShred = ledger_mod.shred.DataShred;
 const ReedSolomonCache = lib.recovery.ReedSolomonCache;
 const ShredId = ledger_mod.shred.ShredId;
-const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SortedSet = sig.utils.collections.SortedSet;
 const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
@@ -58,7 +57,8 @@ pub const Options = struct {
     /// Skip some validations for performance.
     is_trusted: bool = false,
     /// Necessary for shred recovery.
-    slot_leaders: ?SlotLeaders = null,
+    // slot_leaders: ?SlotLeaders = null,
+    leader_schedules: ?*const sig.core.leader_schedule.LeaderSchedules = null,
     /// Send recovered shreds here if provided.
     retransmit_sender: ?RetransmitSender = null,
     /// Records all shreds.
@@ -226,7 +226,7 @@ pub fn insertShreds(
                     merkle_root_validator,
                     write_batch,
                     options.is_trusted,
-                    options.slot_leaders,
+                    options.leader_schedules,
                     shred_source,
                 )) |completed_data_sets| {
                     if (is_repair) {
@@ -270,7 +270,7 @@ pub fn insertShreds(
     var shred_recovery_timer = Timer.start();
     var valid_recovered_shreds = ArrayList([]const u8).init(allocator);
     defer valid_recovered_shreds.deinit();
-    if (options.slot_leaders) |leaders| {
+    if (options.leader_schedules) |leaders| {
         var reed_solomon_cache = try ReedSolomonCache.init(allocator);
         defer reed_solomon_cache.deinit();
         const recovered_shreds = try self.tryShredRecovery(
@@ -291,7 +291,7 @@ pub fn insertShreds(
             if (shred == .data) {
                 if (self.metrics) |m| m.num_recovered.inc();
             }
-            const leader = leaders.get(shred.commonHeader().slot);
+            const leader = leaders.getLeader(shred.commonHeader().slot) catch null;
             if (leader == null) {
                 continue;
             }
@@ -321,7 +321,7 @@ pub fn insertShreds(
                 merkle_root_validator,
                 write_batch,
                 options.is_trusted,
-                options.slot_leaders,
+                leaders,
                 .recovered,
             )) |completed_data_sets| {
                 defer completed_data_sets.deinit();
@@ -638,7 +638,7 @@ fn checkInsertDataShred(
     merkle_root_validator: MerkleRootValidator,
     write_batch: *WriteBatch,
     is_trusted: bool,
-    leader_schedule: ?SlotLeaders,
+    leader_schedule: ?*const sig.core.leader_schedule.LeaderSchedules,
     shred_source: ShredSource,
 ) !ArrayList(CompletedDataSetInfo) {
     const slot = shred.common.slot;
@@ -761,7 +761,7 @@ fn shouldInsertDataShred(
     slot_meta: *const SlotMeta,
     shred_store: ShredWorkingStore,
     max_root: Slot,
-    leader_schedule: ?SlotLeaders,
+    leader_schedule: ?*const sig.core.leader_schedule.LeaderSchedules,
     shred_source: ShredSource,
     duplicate_shreds: *ArrayList(PossibleDuplicateShred),
 ) !bool {
@@ -812,7 +812,7 @@ fn shouldInsertDataShred(
             } });
         }
 
-        const leader_pubkey = slotLeader(leader_schedule, slot);
+        const leader_pubkey = if (leader_schedule) |ls| ls.getLeader(slot) catch null else null;
         self.logger.err().logf(
             "Leader {any}, slot {}: received shred_index {} < slot.received {}, shred_source: {any}",
             .{ leader_pubkey, slot, shred_index_u32, slot_meta.received, shred_source },
@@ -1046,10 +1046,6 @@ fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
     // Ignore shreds that chain to slots before the root,
     // or have invalid parent >= slot.
     return root <= parent and parent < slot;
-}
-
-fn slotLeader(provider: ?SlotLeaders, slot: Slot) ?Pubkey {
-    return if (provider) |p| if (p.get(slot)) |l| l else null else null;
 }
 
 /// update_slot_meta
@@ -1565,8 +1561,23 @@ test "recovery" {
     const data_shreds = shreds[0..34];
     const code_shreds = shreds[34..68];
 
-    var leader_schedule: OneSlotLeaders = .{
-        .leader = .parse("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn"),
+    var min_slot: Slot, var max_slot: Slot = .{ std.math.maxInt(Slot), 0 };
+    for (code_shreds) |shred| {
+        min_slot = @min(min_slot, shred.commonHeader().slot);
+        max_slot = @max(max_slot, shred.commonHeader().slot);
+    }
+
+    const leaders = try allocator.alloc(Pubkey, max_slot - min_slot + 1);
+    defer allocator.free(leaders);
+    for (leaders) |*leader| leader.* = .parse("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn");
+    const leader_schedule = sig.core.leader_schedule.LeaderSchedules{
+        .curr = .{
+            .leaders = leaders,
+            .start = min_slot,
+            .end = max_slot,
+        },
+        .prev = null,
+        .next = null,
     };
 
     const is_repairs = try allocator.alloc(bool, code_shreds.len);
@@ -1579,7 +1590,7 @@ test "recovery" {
         allocator,
         code_shreds,
         is_repairs,
-        .{ .slot_leaders = leader_schedule.provider() },
+        .{ .leader_schedules = &leader_schedule },
     );
     result.deinit();
 
@@ -1592,18 +1603,6 @@ test "recovery" {
 
     // TODO: verify index integrity
 }
-
-const OneSlotLeaders = struct {
-    leader: Pubkey,
-
-    fn getLeader(self: *OneSlotLeaders, _: Slot) ?Pubkey {
-        return self.leader;
-    }
-
-    fn provider(self: *OneSlotLeaders) SlotLeaders {
-        return SlotLeaders.init(self, OneSlotLeaders.getLeader);
-    }
-};
 
 const loadShredsFromFile = ledger_mod.tests.loadShredsFromFile;
 const deinitShreds = ledger_mod.tests.deinitShreds;

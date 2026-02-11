@@ -32,7 +32,6 @@ const PointValue = sig.replay.rewards.inflation_rewards.PointValue;
 const PartitionedStakeReward = sig.replay.rewards.PartitionedStakeReward;
 const PartitionedStakeRewards = sig.replay.rewards.PartitionedStakeRewards;
 const PartitionedVoteReward = sig.replay.rewards.PartitionedVoteReward;
-const EpochTracker = sig.replay.trackers.EpochTracker;
 
 const redeemRewards = sig.replay.rewards.inflation_rewards.redeemRewards;
 const calculatePoints = sig.replay.rewards.inflation_rewards.calculatePoints;
@@ -50,22 +49,20 @@ pub fn beginPartitionedRewards(
     slot_constants: *SlotConstants,
     slot_state: *SlotState,
     slot_store: SlotAccountStore,
-    epoch_tracker: *EpochTracker,
+    epoch_tracker: *sig.core.EpochTracker,
 ) !void {
-    const epoch = epoch_tracker.schedule.getEpoch(slot);
-    const parent_epoch = epoch_tracker.schedule.getEpoch(slot_constants.parent_slot);
+    const epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
+    const parent_epoch = epoch_tracker.epoch_schedule.getEpoch(slot_constants.parent_slot);
 
-    const leader_schedule_epoch = epoch_tracker.schedule.getLeaderScheduleEpoch(slot);
-    const leader_schedule_epoch_constants = epoch_tracker.get(leader_schedule_epoch) orelse
-        return error.NoEpochConstantsForLeaderScheduleEpoch;
-    const epoch_vote_accounts = leader_schedule_epoch_constants.stakes.stakes.vote_accounts;
+    const current_epoch_info = try epoch_tracker.getEpochInfoNoOffset(
+        slot,
+        &slot_constants.ancestors,
+    );
+    const epoch_vote_accounts = current_epoch_info.stakes.stakes.vote_accounts;
 
-    const epoch_constants = epoch_tracker.get(epoch) orelse
-        return error.NoEpochConstants;
-
-    const slots_per_year = epoch_constants.slots_per_year;
+    const slots_per_year = epoch_tracker.cluster.slotsPerYear();
     const previous_epoch_capitalization = &slot_state.capitalization;
-    const epoch_schedule = &epoch_tracker.schedule;
+    const epoch_schedule = &epoch_tracker.epoch_schedule;
     const feature_set = &slot_constants.feature_set;
     const inflation = &slot_constants.inflation;
     const stakes_cache = &slot_state.stakes_cache;
@@ -118,7 +115,7 @@ pub fn beginPartitionedRewards(
             .slot = slot,
             .slot_store = slot_store,
             .capitalization = &slot_state.capitalization,
-            .rent = &epoch_constants.rent_collector.rent,
+            .rent = &slot_constants.rent_collector.rent,
         },
     );
 }

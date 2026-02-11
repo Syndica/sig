@@ -4,7 +4,7 @@
 //! and makes dependencies difficult to manage.
 //!
 //! Instead we have more granular, digestible structs with clear scopes, like
-//! SlotConstants, SlotState, and EpochConstants. These store much of the same
+//! SlotConstants and SlotState. These store much of the same
 //! data that's stored in agave's Bank. Other heavyweight fields from agave's
 //! Bank like like `BankRc` (containing a pointer to accountsdb) and
 //! `TransactionBatchProcessor` are not included in any "bank" struct in sig.
@@ -98,9 +98,6 @@ pub const SlotConstants = struct {
     ancestors: Ancestors,
 
     /// A map of activated features to the slot when they were activated.
-    /// NOTE: Feature activations are only applied at epoch boundaries, so should be constant
-    /// during an epoch, not just a slot. We should evaluate moving this and `reserved_accounts`
-    /// to `EpochConstants`.
     feature_set: FeatureSet,
 
     /// A map of reserved accounts that are not allowed to acquire write locks
@@ -111,6 +108,9 @@ pub const SlotConstants = struct {
     /// NOTE: Agave keeps this in an RwLock in the Bank, but it should be constant across a slot,
     /// so we keep it here.
     inflation: Inflation,
+
+    /// Rent collector
+    rent_collector: RentCollector,
 
     pub fn fromBankFields(
         allocator: Allocator,
@@ -138,6 +138,7 @@ pub const SlotConstants = struct {
             .feature_set = feature_set,
             .reserved_accounts = reserved_accounts,
             .inflation = bank_fields.inflation,
+            .rent_collector = bank_fields.rent_collector,
         };
     }
 
@@ -161,6 +162,7 @@ pub const SlotConstants = struct {
             .feature_set = .ALL_DISABLED,
             .reserved_accounts = try ReservedAccounts.init(allocator),
             .inflation = Inflation.DEFAULT,
+            .rent_collector = .DEFAULT,
         };
     }
 
@@ -496,84 +498,6 @@ pub fn parseStakesForTest(
         .unused = stakes.unused,
     };
 }
-
-/// Constant information about an epoch that is determined before the epoch
-/// starts.
-///
-/// Contains the intersection of epoch-scoped fields from agave's Bank and
-/// firedancer's fd_epoch_bank.
-///
-/// [Bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank.rs#L744)
-/// [fd_epoch_bank](https://github.com/firedancer-io/firedancer/blob/9a18101ee6e1094f27c7fb81da9ef3a7b9efb18b/src/flamenco/types/fd_types.h#L1906)
-pub const EpochConstants = struct {
-    /// The number of hashes in each tick. Null means hashing is disabled.
-    hashes_per_tick: ?u64,
-
-    /// The number of ticks for each slot in this epoch.
-    ticks_per_slot: u64,
-
-    /// target length of a slot, used to estimate timings.
-    ns_per_slot: u128,
-
-    /// genesis time, used for computed clock.
-    genesis_creation_time: UnixTimestamp,
-
-    /// The number of slots per year, used for inflation.
-    slots_per_year: f64,
-
-    /// The pre-determined stakes assigned to this epoch.
-    stakes: sig.core.EpochStakes,
-
-    rent_collector: RentCollector,
-
-    pub fn deinit(self: EpochConstants, allocator: Allocator) void {
-        self.stakes.deinit(allocator);
-    }
-
-    pub fn genesis(genesis_config: core.GenesisConfig) EpochConstants {
-        return .{
-            .hashes_per_tick = genesis_config.poh_config.hashes_per_tick,
-            .ticks_per_slot = genesis_config.ticks_per_slot,
-            .ns_per_slot = genesis_config.nsPerSlot(),
-            .genesis_creation_time = genesis_config.creation_time,
-            .slots_per_year = genesis_config.slotsPerYear(),
-            .stakes = .EMPTY_WITH_GENESIS,
-            .rent_collector = .DEFAULT,
-        };
-    }
-
-    pub fn fromBankFields(
-        bank_fields: *const BankFields,
-        epoch_stakes: sig.core.EpochStakes,
-    ) Allocator.Error!EpochConstants {
-        return .{
-            .hashes_per_tick = bank_fields.hashes_per_tick,
-            .ticks_per_slot = bank_fields.ticks_per_slot,
-            .ns_per_slot = bank_fields.ns_per_slot,
-            .genesis_creation_time = bank_fields.genesis_creation_time,
-            .slots_per_year = bank_fields.slots_per_year,
-            .stakes = epoch_stakes,
-            .rent_collector = bank_fields.rent_collector,
-        };
-    }
-
-    pub fn clone(
-        self: EpochConstants,
-        allocator: std.mem.Allocator,
-    ) std.mem.Allocator.Error!EpochConstants {
-        const stakes = try self.stakes.clone(allocator);
-
-        return .{
-            .hashes_per_tick = self.hashes_per_tick,
-            .ticks_per_slot = self.ticks_per_slot,
-            .ns_per_slot = self.ns_per_slot,
-            .genesis_creation_time = self.genesis_creation_time,
-            .slots_per_year = self.slots_per_year,
-            .stakes = stakes,
-            .rent_collector = self.rent_collector,
-        };
-    }
-};
 
 /// Used for serialization of aggregated bank data, for example in snapshots.
 ///

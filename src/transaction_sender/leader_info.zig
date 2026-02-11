@@ -5,16 +5,83 @@ const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 const AtomicSlot = std.atomic.Value(Slot);
 
+const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
 const SocketAddr = sig.net.SocketAddr;
 const GossipTable = sig.gossip.GossipTable;
 const RpcClient = sig.rpc.Client;
-const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 const EpochSchedule = sig.core.epoch_schedule.EpochSchedule;
 const Config = sig.transaction_sender.service.Config;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
+
+pub const NUM_CONSECUTIVE_LEADER_SLOTS: u64 = 4;
+pub const MAX_CACHED_LEADER_SCHEDULES: usize = 10;
+
+/// LeaderScheduleCache is a cache of leader schedules for each epoch.
+/// Leader schedules are expensive to compute, so this cache is used to avoid
+/// recomputing leader schedules for the same epoch.
+/// LeaderScheduleCache also keeps a copy of the epoch_schedule so that it can
+/// compute epoch and slot index from a slot.
+/// NOTE: This struct is not really a 'cache', we should consider renaming it
+/// to a SlotLeaders and maybe even moving it outside of the core module.
+/// This more accurately describes the purpose of this struct as caching is a means
+/// to an end, not the end itself. It may then follow that we could remove the
+/// above pointer closure in favor of passing the SlotLeaders directly.
+pub const LeaderScheduleCache = struct {
+    epoch_schedule: EpochSchedule,
+    leader_schedules: RwMux(std.AutoArrayHashMap(Epoch, LeaderSchedule)),
+
+    pub fn init(allocator: Allocator, epoch_schedule: EpochSchedule) LeaderScheduleCache {
+        return .{
+            .epoch_schedule = epoch_schedule,
+            .leader_schedules = RwMux(std.AutoArrayHashMap(Epoch, LeaderSchedule)).init(
+                std.AutoArrayHashMap(Epoch, LeaderSchedule).init(allocator),
+            ),
+        };
+    }
+
+    pub fn slotLeaders(self: *LeaderScheduleCache) sig.core.leader_schedule.SlotLeaders {
+        return sig.core.leader_schedule.SlotLeaders.init(self, LeaderScheduleCache.slotLeader);
+    }
+
+    pub fn put(self: *LeaderScheduleCache, epoch: Epoch, leader_schedule: LeaderSchedule) !void {
+        const leader_schedules, var leader_schedules_lg = self.leader_schedules.writeWithLock();
+        defer leader_schedules_lg.unlock();
+
+        if (leader_schedules.count() >= MAX_CACHED_LEADER_SCHEDULES) {
+            _ = leader_schedules.swapRemove(std.mem.min(Epoch, leader_schedules.keys()));
+        }
+
+        try leader_schedules.put(epoch, leader_schedule);
+    }
+
+    pub fn slotLeader(self: *LeaderScheduleCache, slot: Slot) ?Pubkey {
+        const epoch, _ = self.epoch_schedule.getEpochAndSlotIndex(slot);
+        const leader_schedules, var leader_schedules_lg = self.leader_schedules.readWithLock();
+        defer leader_schedules_lg.unlock();
+        return if (leader_schedules.get(epoch)) |schedule| schedule.getLeaderOrNull(slot) else null;
+    }
+
+    pub fn uniqueLeaders(self: *LeaderScheduleCache, allocator: std.mem.Allocator) ![]const Pubkey {
+        const leader_schedules, var leader_schedules_lg = self.leader_schedules.readWithLock();
+        defer leader_schedules_lg.unlock();
+
+        var unique_leaders = sig.utils.collections.PubkeyMapManaged(void).init(allocator);
+        defer unique_leaders.deinit();
+        for (leader_schedules.values()) |leader_schedule| {
+            for (leader_schedule.leaders) |leader| {
+                try unique_leaders.put(leader, {});
+            }
+        }
+
+        const unqiue_list = try allocator.alloc(Pubkey, unique_leaders.count());
+        @memcpy(unqiue_list, unique_leaders.keys());
+
+        return unqiue_list;
+    }
+};
 
 /// LeaderInfo contains information about the cluster that is used to send transactions.
 /// It uses the RpcClient to get the epoch info and leader schedule.
@@ -32,8 +99,7 @@ pub const LeaderInfo = struct {
     leader_addresses_cache: sig.utils.collections.PubkeyMap(SocketAddr),
     gossip_table_rw: *RwMux(GossipTable),
 
-    const Self = @This();
-    const Logger = sig.trace.Logger(@typeName(Self));
+    const Logger = sig.trace.Logger(@typeName(LeaderInfo));
 
     pub fn init(
         allocator: Allocator,
@@ -45,7 +111,7 @@ pub const LeaderInfo = struct {
         return .{
             .allocator = allocator,
             .config = config,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger.withScope(@typeName(LeaderInfo)),
             .rpc_client = try RpcClient.init(
                 allocator,
                 config.cluster,
@@ -121,7 +187,7 @@ pub const LeaderInfo = struct {
     fn getSlotLeader(self: *LeaderInfo, slot: Slot) !?Pubkey {
         if (self.leader_schedule_cache.slotLeader(slot)) |leader| return leader;
 
-        const epoch, const slot_index =
+        const epoch, _ =
             self.leader_schedule_cache.epoch_schedule.getEpochAndSlotIndex(slot);
 
         const leader_schedule = self.getLeaderSchedule(slot) catch |e| {
@@ -134,7 +200,7 @@ pub const LeaderInfo = struct {
 
         try self.leader_schedule_cache.put(epoch, leader_schedule);
 
-        return leader_schedule.slot_leaders[slot_index];
+        return leader_schedule.getLeaderOrNull(slot);
     }
 
     fn getLeaderSchedule(self: *LeaderInfo, slot: Slot) !LeaderSchedule {
@@ -142,6 +208,9 @@ pub const LeaderInfo = struct {
             .getLeaderSchedule(.{ .slot = slot });
         defer rpc_leader_schedule_response.deinit();
         const rpc_leader_schedule = try rpc_leader_schedule_response.result();
-        return try LeaderSchedule.fromMap(self.allocator, rpc_leader_schedule.value);
+        return try sig.core.leader_schedule.computeFromMap(
+            self.allocator,
+            &rpc_leader_schedule.value,
+        );
     }
 };
