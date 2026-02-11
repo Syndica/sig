@@ -2729,16 +2729,17 @@ test "checkAndHandleNewRoot - success" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    const processed_slot: sig.replay.trackers.ForkChoiceProcessedSlot = .{};
-    const confirmed_slot: sig.replay.trackers.OptimisticallyConfirmedSlot = .{};
-
-    var slot_tracker4: SlotTracker = .{
-        .root = .init(root.slot),
+    var slot_tracker4 = RwMux(SlotTracker).init(.{
+        .root = std.atomic.Value(Slot).init(root.slot),
         .slots = .empty,
-        .latest_processed_slot = processed_slot,
-        .latest_confirmed_slot = confirmed_slot,
-    };
-    defer slot_tracker4.deinit(allocator);
+        .latest_processed_slot = .{},
+        .latest_confirmed_slot = .{},
+    });
+    defer {
+        const ptr, var lg = slot_tracker4.writeWithLock();
+        defer lg.unlock();
+        ptr.deinit(allocator);
+    }
 
     {
         var constants2 = try SlotConstants.genesis(allocator, .initRandom(random));
@@ -2758,11 +2759,13 @@ test "checkAndHandleNewRoot - success" {
         state2.hash = .init(hash2.hash);
         state3.hash = .init(hash3.hash);
 
-        try slot_tracker4.put(allocator, hash2.slot, .{
+        const ptr, var lg = slot_tracker4.writeWithLock();
+        defer lg.unlock();
+        try ptr.put(allocator, hash2.slot, .{
             .constants = constants2,
             .state = state2,
         });
-        try slot_tracker4.put(allocator, hash3.slot, .{
+        try ptr.put(allocator, hash3.slot, .{
             .constants = constants3,
             .state = state3,
         });
@@ -2815,8 +2818,13 @@ test "checkAndHandleNewRoot - success" {
     }
 
     try testing.expectEqual(1, fixture.progress.map.count());
-    for (slot_tracker4.slots.keys()) |remaining_slots| {
-        try testing.expect(remaining_slots >= hash3.slot);
+    // Now the write lock is released, we can acquire a read lock
+    {
+        const ptr, var lg = slot_tracker4.readWithLock();
+        defer lg.unlock();
+        for (ptr.slots.keys()) |remaining_slots| {
+            try testing.expect(remaining_slots >= hash3.slot);
+        }
     }
     try testing.expect(!fixture.progress.map.contains(hash1.slot));
 }
