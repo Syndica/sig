@@ -488,7 +488,7 @@ pub fn ClientConnection(
 
             // Mask payload in-place in the caller's buffer
             if (payload.len > 0) {
-                mask_mod.mask(&mask_key, payload);
+                mask_mod.mask(mask_key, payload);
             }
             self.write.payload = payload;
 
@@ -546,7 +546,7 @@ pub fn ClientConnection(
             if (payload.len > 0) {
                 @memcpy(self.write.control_buf[header_len..][0..payload.len], payload);
                 // Mask control payload in-place
-                mask_mod.mask(&mask_key, self.write.control_buf[header_len..][0..payload.len]);
+                mask_mod.mask(mask_key, self.write.control_buf[header_len..][0..payload.len]);
             }
             self.write.control_len = header_len + payload.len;
             self.write.in_flight = .{ .control = .{ .offset = 0 } };

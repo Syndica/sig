@@ -156,7 +156,7 @@ pub const RawClient = struct {
             header_len += 4;
 
             // Mask payload in-place
-            mask_mod.mask(&mask_key, payload);
+            mask_mod.mask(mask_key, payload);
         }
 
         // Write header then payload

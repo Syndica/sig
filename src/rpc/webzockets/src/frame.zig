@@ -40,7 +40,7 @@ pub const FrameHeader = struct {
     /// No-op if the frame is not masked.
     pub fn unmaskPayload(self: FrameHeader, payload: []u8) void {
         if (self.masked) {
-            mask_mod.mask(&self.mask_key, payload);
+            mask_mod.mask(self.mask_key, payload);
         }
     }
 

@@ -512,7 +512,7 @@ fn buildMaskedFrame(
     header_len += 4;
 
     @memcpy(out[header_len..][0..payload.len], payload);
-    mask_mod.mask(&mask_key, out[header_len..][0..payload.len]);
+    mask_mod.mask(mask_key, out[header_len..][0..payload.len]);
 
     return out[0 .. header_len + payload.len];
 }
