@@ -84,31 +84,24 @@ pub fn Server(
 
     return struct {
         allocator: std.mem.Allocator,
-        /// Event loop this server is bound to.
         loop: *xev.Loop,
         config: Config,
-        /// Bound TCP socket accepting new connections.
         listen_socket: xev.TCP,
-        /// xev completion for the accept loop.
         accept_completion: xev.Completion,
         handshake_pool: HandshakePool,
         connection_pool: ConnectionPool,
-        /// Shared buffer pool for medium/large messages.
         buffer_pool: BufPool,
         shutting_down: bool,
         listen_socket_closed: bool,
-        /// Intrusive list tracking all connections in the WebSocket phase (post-handshake).
-        /// Used to close all connections for graceful shutdown.
+        /// Connections in WebSocket phase; walked during shutdown to issue close frames.
         active_connections: ConnectionList,
-        /// Periodic timer that polls for drain completion during shutdown.
+        /// Timer for periodic shutdown drain check.
         shutdown_timer: xev.Timer,
-        /// xev completion for the shutdown drain-check timer.
         shutdown_timer_completion: xev.Completion,
-        /// xev completion for closing the listen socket during shutdown.
+        /// For closing listen socket.
         listen_close_completion: xev.Completion,
         /// Absolute nanoTimestamp after which shutdown times out.
         shutdown_deadline: i128,
-        /// Type-erased context pointer for the shutdown completion callback.
         shutdown_userdata: ?*anyopaque,
 
         const ServerSelf = @This();
