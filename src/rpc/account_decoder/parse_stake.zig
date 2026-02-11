@@ -10,7 +10,7 @@ const StakeStateV2 = sig.runtime.program.stake.state.StakeStateV2;
 const ParseError = account_decoder.ParseError;
 
 /// Parses a stake account's data into a `StakeAccountType` for JSON encoding in RPC responses.
-pub fn parse_stake(
+pub fn parseStake(
     allocator: Allocator,
     // std.io.Reader
     reader: anytype,

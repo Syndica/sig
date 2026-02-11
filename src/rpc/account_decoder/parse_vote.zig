@@ -11,7 +11,7 @@ const ParseError = account_decoder.ParseError;
 
 /// Parses a vote account's data into a `VoteAccountType` for JSON encoding in RPC responses.
 /// TODO: somehow enforce arena allocation for all allocations here?
-pub fn parse_vote(
+pub fn parseVote(
     allocator: Allocator,
     // std.io.Reader
     reader: anytype,

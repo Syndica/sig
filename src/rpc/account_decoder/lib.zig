@@ -7,6 +7,7 @@ const parse_vote = @import("parse_vote.zig");
 const parse_stake = @import("parse_stake.zig");
 const parse_nonce = @import("parse_nonce.zig");
 const parse_address_lookup_table = @import("parse_account_lookup_table.zig");
+const parse_bpf_upgradeable_loader = @import("parse_bpf_upgradeable_loader.zig");
 
 pub const ParseError = error{
     InvalidAccountData,
@@ -37,7 +38,8 @@ pub const ParsedContent = union(enum) {
     stake: parse_stake.StakeAccountType,
     nonce: parse_nonce.NonceAccountType,
     address_lookup_table: parse_address_lookup_table.LookupTableAccountType,
-    // TODO: add more parsers
+    bpf_upgradeable_loader: parse_bpf_upgradeable_loader.BpfUpgradeableLoaderAccountType,
+
     pub fn jsonStringify(self: ParsedContent, jw: anytype) @TypeOf(jw.*).Error!void {
         switch (self) {
             inline else => |content| try content.jsonStringify(jw),
@@ -51,7 +53,7 @@ const ParsableProgram = enum {
     stake,
     nonce,
     address_lookup_table,
-    // TODO: bpf upgradeable loader
+    bpf_upgradeable_loader,
 
     pub fn fromProgramId(program_id: Pubkey) ?ParsableProgram {
         if (program_id.equals(&sig.runtime.program.vote.ID)) return .vote;
@@ -60,15 +62,19 @@ const ParsableProgram = enum {
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L36
         if (program_id.equals(&sig.runtime.program.system.ID)) return .nonce;
         if (program_id.equals(&sig.runtime.program.address_lookup_table.ID)) return .address_lookup_table;
+        if (program_id.equals(&sig.runtime.program.bpf_loader.v3.ID)) return .bpf_upgradeable_loader;
         return null;
     }
 
     pub fn programName(self: ParsableProgram) []const u8 {
+        // NOTE: use camelCase names to match Agave
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L67
         return switch (self) {
             .vote => "vote",
             .stake => "stake",
             .nonce => "nonce",
-            .address_lookup_table => "address_lookup_table",
+            .address_lookup_table => "addressLookupTable",
+            .bpf_upgradeable_loader => "bpfUpgradeableLoader",
         };
     }
 };
@@ -82,11 +88,18 @@ pub fn parse_account(
 ) ParseError!?ParsedAccount {
     const program = ParsableProgram.fromProgramId(program_id) orelse return null;
     const parsed: ParsedContent = switch (program) {
-        .vote => .{ .vote = try parse_vote.parse_vote(allocator, reader) },
-        .stake => .{ .stake = try parse_stake.parse_stake(allocator, reader) },
-        .nonce => .{ .nonce = try parse_nonce.parse_nonce(allocator, reader) },
+        .vote => .{ .vote = try parse_vote.parseVote(allocator, reader) },
+        .stake => .{ .stake = try parse_stake.parseStake(allocator, reader) },
+        .nonce => .{ .nonce = try parse_nonce.parseNonce(allocator, reader) },
         .address_lookup_table => .{
-            .address_lookup_table = try parse_address_lookup_table.parse_address_lookup_table(
+            .address_lookup_table = try parse_address_lookup_table.parseAddressLookupTable(
+                allocator,
+                reader,
+                data_len,
+            ),
+        },
+        .bpf_upgradeable_loader => .{
+            .bpf_upgradeable_loader = try parse_bpf_upgradeable_loader.parseBpfUpgradeableLoader(
                 allocator,
                 reader,
                 data_len,

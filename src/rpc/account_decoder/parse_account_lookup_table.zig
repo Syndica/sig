@@ -10,7 +10,7 @@ const AddressLookupTable = sig.runtime.program.address_lookup_table.AddressLooku
 const ParseError = account_decoder.ParseError;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L7-L20
-pub fn parse_address_lookup_table(
+pub fn parseAddressLookupTable(
     allocator: Allocator,
     // std.io.Reader
     reader: anytype,

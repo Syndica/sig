@@ -11,7 +11,7 @@ const nonce = sig.runtime.nonce;
 const ParseError = account_decoder.ParseError;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/account-decoder/src/parse_nonce.rs#L8
-pub fn parse_nonce(
+pub fn parseNonce(
     allocator: Allocator,
     // std.io.Reader
     reader: anytype,
