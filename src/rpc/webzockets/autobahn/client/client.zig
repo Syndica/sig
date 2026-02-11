@@ -402,13 +402,7 @@ const AutobahnClientHandler = struct {
     }
 };
 
-// ============================================================================
-// main
-// ============================================================================
-
-pub fn main() !void {
-    const allocator = std.heap.c_allocator;
-
+fn run(allocator: std.mem.Allocator) !void {
     // Wait for Docker fuzzingserver to start
     log.info("Waiting for fuzzingserver on port 9001...", .{});
     const max_retries = 60;
@@ -452,4 +446,20 @@ pub fn main() !void {
 
     log.info("Autobahn client test run complete.", .{});
     log.info("Check autobahn/client/reports/index.html for results.", .{});
+}
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    run(allocator) catch |err| {
+        if (gpa.deinit() == .leak) {
+            log.err("GPA detected memory leaks while exiting with error: {}", .{err});
+        }
+        return err;
+    };
+
+    if (gpa.deinit() == .leak) {
+        return error.MemoryLeakDetected;
+    }
 }
