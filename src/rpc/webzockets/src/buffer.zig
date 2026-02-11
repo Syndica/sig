@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 
 /// Growable buffer pool with runtime-configurable buffer size.
 /// Uses an intrusive free list (like std.heap.MemoryPool) for efficient reuse.
-/// Thread-safe for shared use across connections.
+/// Not thread-safe; intended to be used from a single event-loop thread.
 ///
 /// Pool grows beyond preheat size as needed. Use preheat to pre-allocate
 /// buffers for expected concurrent usage, avoiding allocations in the
@@ -23,9 +23,6 @@ pub const BufferPool = struct {
 
     /// Head of the intrusive free list (null if no free buffers).
     free_list: ?*FreeNode,
-
-    /// Mutex for thread-safe access.
-    mutex: std.Thread.Mutex,
 
     /// Intrusive free list node stored at the start of free buffers.
     const FreeNode = struct {
@@ -43,14 +40,11 @@ pub const BufferPool = struct {
             .buffer_size = buffer_size,
             .arena = std.heap.ArenaAllocator.init(allocator),
             .free_list = null,
-            .mutex = .{},
         };
     }
 
     /// Release all pool memory.
     pub fn deinit(self: *BufferPool) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
         self.arena.deinit();
         self.free_list = null;
     }
@@ -60,9 +54,6 @@ pub const BufferPool = struct {
     /// If called after the pool has already been used, it will add `count` new
     /// buffers to the free list.
     pub fn preheat(self: *BufferPool, count: usize) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         for (0..count) |_| {
             const buf = try self.arena.allocator().alloc(u8, self.buffer_size);
             const node: *FreeNode = @ptrCast(@alignCast(buf.ptr));
@@ -75,9 +66,6 @@ pub const BufferPool = struct {
     /// Returns from free list if available, otherwise allocates from arena.
     /// Returns null only on allocation failure.
     pub fn acquire(self: *BufferPool) ?[]u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         if (self.free_list) |node| {
             // Pop from free list
             self.free_list = node.next;
@@ -92,9 +80,6 @@ pub const BufferPool = struct {
     /// Release a buffer back to the pool.
     /// The buffer is added to the free list for reuse.
     pub fn release(self: *BufferPool, buf: []u8) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         // Push onto free list (store next pointer at start of buffer)
         const node: *FreeNode = @ptrCast(@alignCast(buf.ptr));
         node.* = .{ .next = self.free_list };

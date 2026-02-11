@@ -54,9 +54,6 @@ pub fn Reader(comptime role: types.Role) type {
         /// Shared pool reference (server-level).
         pool: *BufferPool,
 
-        /// Cached pool buffer size (for comparison without lock).
-        pool_buffer_size: usize,
-
         /// Allocator for dynamic fallback.
         allocator: Allocator,
 
@@ -100,7 +97,6 @@ pub fn Reader(comptime role: types.Role) type {
                 .buf_type = .embedded,
                 .embedded_buf = embedded_buf,
                 .pool = pool,
-                .pool_buffer_size = pool.buffer_size,
                 .allocator = allocator,
                 .pos = 0,
                 .start = 0,
@@ -300,7 +296,7 @@ pub fn Reader(comptime role: types.Role) type {
             const current_data_len = self.dataLen();
 
             // Try pooled buffer first (if message fits)
-            if (required <= self.pool_buffer_size) {
+            if (required <= self.pool.buffer_size) {
                 if (self.pool.acquire()) |new_buf| {
                     // Copy existing data to new buffer
                     if (current_data_len > 0) {
