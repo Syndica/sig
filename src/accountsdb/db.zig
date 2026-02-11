@@ -104,7 +104,7 @@ pub const AccountsDB = struct {
     file_map: RwMux(FileMap),
     /// `file_map_fd_rw` is used to ensure files in the file_map are not closed while its held as a read-lock.
     /// NOTE: see accountsdb/readme.md for more details on how these are used
-    file_map_fd_rw: std.Thread.RwLock,
+    file_map_fd_rw: sig.sync.RwLock,
 
     buffer_pool: BufferPool,
 
@@ -1551,7 +1551,7 @@ pub const AccountsDB = struct {
         unrooted_map: Account,
     };
     pub const AccountInCacheOrFileLock = union(AccountInCacheOrFileTag) {
-        file: *std.Thread.RwLock,
+        file: *sig.sync.RwLock,
         unrooted_map: RwMux(SlotPubkeyAccounts).RLockGuard,
 
         pub fn unlock(lock: *AccountInCacheOrFileLock) void {

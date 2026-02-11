@@ -324,7 +324,7 @@ pub const SlotAccountReader = union(enum) {
 
 /// Simple implementation of AccountReader and AccountStore, used for tests
 const ThreadSafeAccountMap = struct {
-    rwlock: std.Thread.RwLock.DefaultRwLock,
+    rwlock: sig.sync.RwLock,
     allocator: Allocator,
     /// Ordering of slots (the entry keys) is not guaranteed.
     slot_map: SlotMap,
@@ -578,7 +578,7 @@ const ThreadSafeAccountMap = struct {
 
     pub const SlotModifiedIterator = struct {
         allocator: Allocator,
-        rwlock: *std.Thread.RwLock.DefaultRwLock,
+        rwlock: *sig.sync.RwLock,
         slot_list: []const struct { Pubkey, AccountSharedData },
         cursor: usize,
 
