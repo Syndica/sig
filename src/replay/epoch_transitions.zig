@@ -136,7 +136,7 @@ pub fn getEpochStakes(
             total_stake += stake_and_vote_account.stake;
 
             var vote_state = stake_and_vote_account.account.state;
-            if (vote_state.voters.getAuthorizedVoter(leader_schedule_epoch)) |authorized_voter| {
+            if (vote_state.authorized_voters.getAuthorizedVoter(leader_schedule_epoch)) |authorized_voter| {
                 const node_vote_accounts = try node_id_to_vote_accounts.getOrPut(
                     allocator,
                     vote_state.node_pubkey,

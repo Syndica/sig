@@ -621,7 +621,7 @@ fn newVoteAccountForTest(
         voter_epoch,
     );
     defer vote_state.deinit(allocator);
-    var vote_state_v4 = try sig.runtime.program.vote.state.VoteStateV4.fromVoteState(
+    var vote_state_v4 = try sig.runtime.program.vote.state.VoteStateV4.fromVoteStateV3(
         allocator,
         vote_state,
         vote_pubkey,

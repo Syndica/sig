@@ -1077,7 +1077,7 @@ pub fn randomStakes(
             options.epoch + 1,
         );
         defer vote_state.deinit(allocator);
-        var vote_state_v4 = try VoteStateV4.fromVoteState(
+        var vote_state_v4 = try VoteStateV4.fromVoteStateV3(
             allocator,
             vote_state,
             voters[i],

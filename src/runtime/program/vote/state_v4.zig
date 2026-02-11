@@ -78,7 +78,7 @@ pub const VoteStateV4 = struct {
         .bls_pubkey_compressed = null,
         .votes = .empty,
         .root_slot = null,
-        .voters = .EMPTY,
+        .authorized_voters = .EMPTY,
         .epoch_credits = .empty,
         .last_timestamp = .{ .slot = 0, .timestamp = 0 },
     };
@@ -97,8 +97,8 @@ pub const VoteStateV4 = struct {
         var votes = try v3.votes.clone(allocator);
         errdefer votes.deinit(allocator);
 
-        const voters = try v3.voters.clone(allocator);
-        errdefer voters.deinit(allocator);
+        const authorized_voters = try v3.voters.clone(allocator);
+        errdefer authorized_voters.deinit(allocator);
 
         return .{
             .node_pubkey = v3.node_pubkey,
@@ -111,7 +111,7 @@ pub const VoteStateV4 = struct {
             .bls_pubkey_compressed = null,
             .votes = votes,
             .root_slot = v3.root_slot,
-            .voters = voters,
+            .authorized_voters = authorized_voters,
             .epoch_credits = try v3.epoch_credits.clone(allocator),
             .last_timestamp = v3.last_timestamp,
         };
@@ -144,7 +144,7 @@ pub const VoteStateV4 = struct {
             .bls_pubkey_compressed = null,
             .votes = .empty,
             .root_slot = null,
-            .voters = authorized_voters,
+            .authorized_voters = authorized_voters,
             .epoch_credits = .empty,
             .last_timestamp = .{ .slot = 0, .timestamp = 0 },
         };
@@ -160,8 +160,8 @@ pub const VoteStateV4 = struct {
         var votes = try self.votes.clone(allocator);
         errdefer votes.deinit(allocator);
 
-        const voters = try self.authorized_voters.clone(allocator);
-        errdefer voters.deinit(allocator);
+        const authorized_voters = try self.authorized_voters.clone(allocator);
+        errdefer authorized_voters.deinit(allocator);
 
         return .{
             .node_pubkey = self.node_pubkey,
@@ -174,7 +174,7 @@ pub const VoteStateV4 = struct {
             .bls_pubkey_compressed = self.bls_pubkey_compressed,
             .votes = votes,
             .root_slot = self.root_slot,
-            .voters = voters,
+            .authorized_voters = authorized_voters,
             .epoch_credits = try self.epoch_credits.clone(allocator),
             .last_timestamp = self.last_timestamp,
         };
@@ -1061,7 +1061,7 @@ pub fn createTestVoteStateV4(
         .bls_pubkey_compressed = null,
         .votes = .empty,
         .root_slot = null,
-        .voters = if (maybe_authorized_voter) |authorized_voter|
+        .authorized_voters = if (maybe_authorized_voter) |authorized_voter|
             try AuthorizedVoters.init(allocator, 0, authorized_voter)
         else
             .EMPTY,
