@@ -16,10 +16,7 @@ const max_message_size: usize = 20 * 1024 * 1024;
 
 const AutobahnClient = ws.Client(AutobahnClientHandler, read_buf_size);
 
-// ============================================================================
-// AutobahnRunner — orchestrates sequential test-case execution
-// ============================================================================
-
+/// Execution phase for a single fuzzingserver connection.
 const Phase = enum {
     get_case_count,
     run_case,
@@ -27,6 +24,7 @@ const Phase = enum {
     update_reports_periodic,
 };
 
+/// Orchestrates sequential Autobahn case execution and report updates.
 const AutobahnRunner = struct {
     loop: *xev.Loop,
     allocator: std.mem.Allocator,
@@ -244,10 +242,7 @@ const AutobahnRunner = struct {
     }
 };
 
-// ============================================================================
-// AutobahnClientHandler — echo handler for the Autobahn testsuite
-// ============================================================================
-
+/// Echo handler used for individual Autobahn test-case connections.
 const AutobahnClientHandler = struct {
     const PendingMessage = struct {
         data: []u8,
@@ -258,11 +253,11 @@ const AutobahnClientHandler = struct {
     runner: *AutobahnRunner,
     opened: bool = false,
 
-    /// Data currently being written (freed in onWriteComplete).
+    /// Message currently in-flight; freed in onWriteComplete/onClose.
     sent_data: ?[]u8 = null,
-    /// Head of pending message queue.
+    /// Pending outbound messages while a write is in flight.
     queue_head: ?*PendingMessage = null,
-    /// Tail of pending message queue (for O(1) append).
+    /// Tail pointer for O(1) queue append.
     queue_tail: ?*PendingMessage = null,
 
     pub fn onOpen(self: *AutobahnClientHandler, conn: *AutobahnClient.Conn) void {
