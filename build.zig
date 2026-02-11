@@ -399,6 +399,7 @@ pub fn build(b: *Build) !void {
             .sanitize_thread = config.enable_tsan,
             .link_libc = true,
         }),
+        .use_llvm = config.use_llvm,
     });
     fuzz_exe.root_module.addObject(memcpy);
     fuzz_exe.root_module.addImport("cli", cli_mod);
@@ -420,6 +421,7 @@ pub fn build(b: *Build) !void {
             .sanitize_thread = config.enable_tsan,
             .link_libc = true,
         }),
+        .use_llvm = config.use_llvm,
     });
     benchmark_exe.root_module.addObject(memcpy);
     benchmark_exe.root_module.addImport("cli", cli_mod);
