@@ -8,7 +8,7 @@ const EpochSchedule = sig.core.EpochSchedule;
 const ZonInfo = struct {
     name: [:0]const u8,
     pubkey: [:0]const u8,
-    activated_on_all_clusters: bool = false,
+    hardcoded_for_fuzzing: bool = false,
     reverted: bool = false,
 };
 const features: []const ZonInfo = @import("features.zon");
@@ -32,7 +32,7 @@ pub const Feature = @Type(.{ .@"enum" = .{
 
 const Info = struct {
     key: Pubkey,
-    activated_on_all_clusters: bool,
+    hardcoded_for_fuzzing: bool,
     reverted: bool,
 
     /// Returns the `id` of a feature, aka. the first 8 bytes of the public key.
@@ -47,7 +47,7 @@ pub const map: std.EnumArray(Feature, Info) = map: {
     for (@typeInfo(Feature).@"enum".fields, features) |field, feature| {
         @field(s, field.name) = .{
             .key = .parse(feature.pubkey),
-            .activated_on_all_clusters = feature.activated_on_all_clusters,
+            .hardcoded_for_fuzzing = feature.hardcoded_for_fuzzing,
             .reverted = feature.reverted,
         };
     }

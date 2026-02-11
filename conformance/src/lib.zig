@@ -34,7 +34,7 @@ const FEATURES: SolCompatFeatures = f: {
     for (sig.core.features.map.values) |feature| {
         if (feature.reverted) continue; // skip reverted features
 
-        if (feature.activated_on_all_clusters) {
+        if (feature.hardcoded_for_fuzzing) {
             hardcoded_features = hardcoded_features ++ .{feature.id()};
         } else {
             supported_features = supported_features ++ .{feature.id()};
