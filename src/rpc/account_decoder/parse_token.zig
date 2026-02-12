@@ -81,18 +81,18 @@ fn parseAsTokenAccount(
     const account = TokenAccount.unpack(data) catch return null;
     if (account.state == .uninitialized) return null;
 
-    const decimals = (additional_data orelse return null).decimals;
+    const add_data = additional_data orelse return null;
     const is_native = account.is_native != null;
     return .{ .account = .{
         .mint = account.mint.base58String(),
         .owner = account.owner.base58String(),
-        .token_amount = UiTokenAmount.init(account.amount, decimals),
+        .token_amount = UiTokenAmount.init(account.amount, add_data.*),
         .delegate = if (account.delegate) |d| d.base58String() else null,
         .state = account.state,
         .is_native = is_native,
-        .rent_exempt_reserve = if (account.is_native) |r| UiTokenAmount.init(r, decimals) else null,
+        .rent_exempt_reserve = if (account.is_native) |r| UiTokenAmount.init(r, add_data.*) else null,
         .delegated_amount = if (account.delegate != null and account.delegated_amount > 0)
-            UiTokenAmount.init(account.delegated_amount, decimals)
+            UiTokenAmount.init(account.delegated_amount, add_data.*)
         else
             null,
         .close_authority = if (account.close_authority) |c| c.base58String() else null,
@@ -179,6 +179,7 @@ fn isInitializedAccount(data: []const u8) bool {
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token.rs#L30-L35
 pub const SplTokenAdditionalData = struct {
     decimals: u8,
+    unix_timestamp: i64 = 0, // From bank clock sysvar, used for interest/scaled calculations
     // Token-2022 extension data
     interest_bearing_config: ?InterestBearingConfigData = null,
     scaled_ui_amount_config: ?ScaledUiAmountConfigData = null,
@@ -423,15 +424,42 @@ pub const UiTokenAmount = struct {
     // max u64 digits + decimal point + null
     ui_amount_string: std.BoundedArray(u8, 40),
 
-    /// Create a UiTokenAmount from raw amount and decimals.
-    /// Formats the amount with proper decimal placement and trims trailing zeros.
-    fn init(amount: u64, decimals: u8) UiTokenAmount {
-        // Calculate ui_amount as f64 (may lose precision for large values)
+    /// Create a UiTokenAmount from raw amount and additional data.
+    /// Handles interest-bearing and scaled UI amount calculations if configured.
+    /// Priority: interest-bearing > scaled > simple
+    fn init(amount: u64, additional_data: SplTokenAdditionalData) UiTokenAmount {
+        const decimals = additional_data.decimals;
+
+        // Priority 1: Interest-bearing config
+        if (additional_data.interest_bearing_config) |config| {
+            if (interestBearingAmountToUi(amount, decimals, config, additional_data.unix_timestamp)) |result| {
+                return .{
+                    .ui_amount = result.ui_amount,
+                    .decimals = decimals,
+                    .amount = amount,
+                    .ui_amount_string = result.ui_amount_string,
+                };
+            }
+        }
+
+        // Priority 2: Scaled UI amount config
+        if (additional_data.scaled_ui_amount_config) |config| {
+            const result = scaledAmountToUi(amount, decimals, config, additional_data.unix_timestamp);
+            return .{
+                .ui_amount = result.ui_amount,
+                .decimals = decimals,
+                .amount = amount,
+                .ui_amount_string = result.ui_amount_string,
+            };
+        }
+
+        // Default: Simple calculation
         const ui_amount: ?f64 = if (decimals <= 20) blk: {
             const divisor = std.math.pow(f64, 10.0, @floatFromInt(decimals));
             break :blk @as(f64, @floatFromInt(amount)) / divisor;
         } else null;
-        return UiTokenAmount{
+
+        return .{
             .ui_amount = ui_amount,
             .decimals = decimals,
             .amount = amount,
@@ -491,6 +519,117 @@ fn formatTokenAmount(amount: u64, decimals: u8) std.BoundedArray(u8, 40) {
     }
 
     return buf;
+}
+
+// Constants for interest-bearing calculations
+// [spl] https://github.com/solana-program/token-2022/blob/main/interface/src/extension/interest_bearing_mint/mod.rs
+const SECONDS_PER_YEAR: f64 = 31_556_736.0; // 60 * 60 * 24 * 365.24
+const ONE_IN_BASIS_POINTS: f64 = 10_000.0;
+
+/// Calculate UI amount for interest-bearing tokens using compound interest.
+/// Returns null if timestamps are invalid (e.g., negative timespans).
+fn interestBearingAmountToUi(
+    amount: u64,
+    decimals: u8,
+    config: InterestBearingConfigData,
+    unix_timestamp: i64,
+) ?struct { ui_amount: ?f64, ui_amount_string: std.BoundedArray(u8, 40) } {
+    // pre_update_timespan = last_update_timestamp - initialization_timestamp
+    const pre_timespan = config.last_update_timestamp - config.initialization_timestamp;
+    if (pre_timespan < 0) return null;
+
+    // post_update_timespan = current_timestamp - last_update_timestamp
+    const post_timespan = unix_timestamp - config.last_update_timestamp;
+    if (post_timespan < 0) return null;
+
+    // pre_update_exp = exp(rate * time / SECONDS_PER_YEAR / 10000)
+    const pre_rate: f64 = @floatFromInt(config.pre_update_average_rate);
+    const pre_exponent = pre_rate * @as(f64, @floatFromInt(pre_timespan)) / SECONDS_PER_YEAR / ONE_IN_BASIS_POINTS;
+    const pre_exp = @exp(pre_exponent);
+
+    // post_update_exp
+    const post_rate: f64 = @floatFromInt(config.current_rate);
+    const post_exponent = post_rate * @as(f64, @floatFromInt(post_timespan)) / SECONDS_PER_YEAR / ONE_IN_BASIS_POINTS;
+    const post_exp = @exp(post_exponent);
+
+    // total_scale = pre_exp * post_exp / 10^decimals
+    const divisor = std.math.pow(f64, 10.0, @floatFromInt(decimals));
+    const total_scale = pre_exp * post_exp / divisor;
+
+    // scaled amount
+    const scaled_amount = @as(f64, @floatFromInt(amount)) * total_scale;
+
+    // Format with decimals precision, then trim
+    var buf: std.BoundedArray(u8, 40) = .{};
+    if (std.math.isInf(scaled_amount)) {
+        buf.appendSliceAssumeCapacity("inf");
+    } else {
+        // Format with fixed decimals precision
+        const written = std.fmt.bufPrint(&buf.buffer, "{d:.[1]}", .{ scaled_amount, decimals }) catch return null;
+        buf.len = @intCast(written.len);
+        trimUiAmountStringInPlace(&buf, decimals);
+    }
+
+    // ui_amount as f64
+    const ui_amount: ?f64 = if (std.math.isInf(scaled_amount))
+        scaled_amount
+    else
+        std.fmt.parseFloat(f64, buf.constSlice()) catch null;
+
+    return .{ .ui_amount = ui_amount, .ui_amount_string = buf };
+}
+
+/// Calculate UI amount for scaled tokens using multiplier.
+/// Truncates toward zero before applying decimals (Agave behavior).
+fn scaledAmountToUi(
+    amount: u64,
+    decimals: u8,
+    config: ScaledUiAmountConfigData,
+    unix_timestamp: i64,
+) struct { ui_amount: ?f64, ui_amount_string: std.BoundedArray(u8, 40) } {
+    // Pick current or new multiplier based on timestamp
+    const multiplier = if (unix_timestamp >= config.new_multiplier_effective_timestamp)
+        config.new_multiplier
+    else
+        config.multiplier;
+
+    // scaled_amount = amount * multiplier
+    const scaled_amount = @as(f64, @floatFromInt(amount)) * multiplier;
+
+    // TRUNCATE toward zero BEFORE applying decimals
+    const truncated = @trunc(scaled_amount);
+
+    // Apply decimals
+    const divisor = std.math.pow(f64, 10.0, @floatFromInt(decimals));
+    const ui_value = truncated / divisor;
+
+    // Format
+    var buf: std.BoundedArray(u8, 40) = .{};
+    if (std.math.isInf(ui_value)) {
+        buf.appendSliceAssumeCapacity("inf");
+    } else {
+        const written = std.fmt.bufPrint(&buf.buffer, "{d:.[1]}", .{ ui_value, decimals }) catch unreachable;
+        buf.len = @intCast(written.len);
+        trimUiAmountStringInPlace(&buf, decimals);
+    }
+
+    return .{
+        .ui_amount = if (std.math.isInf(ui_value)) ui_value else std.fmt.parseFloat(f64, buf.constSlice()) catch null,
+        .ui_amount_string = buf,
+    };
+}
+
+/// Trim trailing zeros and decimal point from a formatted number string.
+fn trimUiAmountStringInPlace(buf: *std.BoundedArray(u8, 40), decimals: u8) void {
+    if (decimals == 0) return;
+    // Trim trailing zeros
+    while (buf.len > 0 and buf.buffer[buf.len - 1] == '0') {
+        buf.len -= 1;
+    }
+    // Trim trailing decimal point
+    if (buf.len > 0 and buf.buffer[buf.len - 1] == '.') {
+        buf.len -= 1;
+    }
 }
 
 // SPL Token uses fixed-offset binary layout (Pack trait), not bincode.
@@ -1046,16 +1185,16 @@ test "rpc.account_decoder.parse_token: formatTokenAmount conformance" {
 test "rpc.account_decoder.parse_token: UiTokenAmount.init ui_amount" {
     // ui_amount is Some when decimals <= 20
     {
-        const t = UiTokenAmount.init(1, 0);
+        const t = UiTokenAmount.init(1, .{ .decimals = 0 });
         try std.testing.expectEqual(@as(?f64, 1.0), t.ui_amount);
     }
     {
-        const t = UiTokenAmount.init(1_000_000_000, 9);
+        const t = UiTokenAmount.init(1_000_000_000, .{ .decimals = 9 });
         try std.testing.expectEqual(@as(?f64, 1.0), t.ui_amount);
     }
     // ui_amount is None when decimals > 20
     {
-        const t = UiTokenAmount.init(1_234_567_890, 25);
+        const t = UiTokenAmount.init(1_234_567_890, .{ .decimals = 25 });
         try std.testing.expect(t.ui_amount == null);
     }
 }
@@ -1160,4 +1299,208 @@ test "rpc.account_decoder.parse_token: mint with extensions conformance" {
         },
         else => try std.testing.expect(false),
     }
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token.rs#L368-L396
+test "rpc.account_decoder.parse_token: interest-bearing 5% rate" {
+    const INT_SECONDS_PER_YEAR: i64 = 31_556_736; // 6 * 6 * 24 * 36524
+    const ONE: u64 = 1_000_000_000_000_000_000; // 1e18
+
+    // Constant 5% rate for 1 year
+    const config = InterestBearingConfigData{
+        .rate_authority = null,
+        .initialization_timestamp = 0,
+        .pre_update_average_rate = 500, // 5% = 500 basis points
+        .last_update_timestamp = INT_SECONDS_PER_YEAR,
+        .current_rate = 500,
+    };
+
+    const additional_data = SplTokenAdditionalData{
+        .decimals = 18,
+        .unix_timestamp = INT_SECONDS_PER_YEAR,
+        .interest_bearing_config = config,
+    };
+
+    const t = UiTokenAmount.init(ONE, additional_data);
+
+    // exp(0.05) ≈ 1.051271096376024
+    try std.testing.expect(t.ui_amount != null);
+    try std.testing.expect(std.mem.startsWith(u8, t.ui_amount_string.constSlice(), "1.051271096376024"));
+    // Check ui_amount is close to expected
+    try std.testing.expect(@abs(t.ui_amount.? - 1.051271096376024) < 0.000001);
+}
+
+test "rpc.account_decoder.parse_token: interest-bearing infinity case" {
+    const INT_SECONDS_PER_YEAR: i64 = 31_556_736;
+
+    // Max rate for 1000 years with max amount
+    const config = InterestBearingConfigData{
+        .rate_authority = null,
+        .initialization_timestamp = 0,
+        .pre_update_average_rate = 32767, // max i16
+        .last_update_timestamp = 0,
+        .current_rate = 32767,
+    };
+
+    const additional_data = SplTokenAdditionalData{
+        .decimals = 0,
+        .unix_timestamp = INT_SECONDS_PER_YEAR * 1000, // 1000 years
+        .interest_bearing_config = config,
+    };
+
+    const t = UiTokenAmount.init(std.math.maxInt(u64), additional_data);
+
+    try std.testing.expect(t.ui_amount != null);
+    try std.testing.expect(std.math.isInf(t.ui_amount.?));
+    try std.testing.expectEqualStrings("inf", t.ui_amount_string.constSlice());
+}
+
+test "rpc.account_decoder.parse_token: interest-bearing negative rate" {
+    const INT_SECONDS_PER_YEAR: i64 = 31_556_736;
+    const ONE: u64 = 1_000_000_000_000_000_000;
+
+    // -5% rate for 1 year
+    const config = InterestBearingConfigData{
+        .rate_authority = null,
+        .initialization_timestamp = 0,
+        .pre_update_average_rate = -500, // -5%
+        .last_update_timestamp = INT_SECONDS_PER_YEAR,
+        .current_rate = -500,
+    };
+
+    const additional_data = SplTokenAdditionalData{
+        .decimals = 18,
+        .unix_timestamp = INT_SECONDS_PER_YEAR,
+        .interest_bearing_config = config,
+    };
+
+    const t = UiTokenAmount.init(ONE, additional_data);
+
+    // exp(-0.05) ≈ 0.951229424500714
+    try std.testing.expect(t.ui_amount != null);
+    try std.testing.expect(@abs(t.ui_amount.? - 0.951229424500714) < 0.000001);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token.rs#L398-L413
+test "rpc.account_decoder.parse_token: scaled UI 2x multiplier" {
+    const ONE: u64 = 1_000_000_000_000_000_000; // 1e18
+
+    const config = ScaledUiAmountConfigData{
+        .multiplier = 2.0,
+        .new_multiplier_effective_timestamp = 0,
+        .new_multiplier = 2.0,
+    };
+
+    const additional_data = SplTokenAdditionalData{
+        .decimals = 18,
+        .unix_timestamp = 0,
+        .scaled_ui_amount_config = config,
+    };
+
+    const t = UiTokenAmount.init(ONE, additional_data);
+
+    try std.testing.expectEqualStrings("2", t.ui_amount_string.constSlice());
+    try std.testing.expect(t.ui_amount != null);
+    try std.testing.expect(@abs(t.ui_amount.? - 2.0) < 0.000001);
+}
+
+test "rpc.account_decoder.parse_token: scaled UI infinity case" {
+    const config = ScaledUiAmountConfigData{
+        .multiplier = std.math.inf(f64),
+        .new_multiplier_effective_timestamp = 0,
+        .new_multiplier = std.math.inf(f64),
+    };
+
+    const additional_data = SplTokenAdditionalData{
+        .decimals = 0,
+        .unix_timestamp = 0,
+        .scaled_ui_amount_config = config,
+    };
+
+    const t = UiTokenAmount.init(std.math.maxInt(u64), additional_data);
+
+    try std.testing.expect(t.ui_amount != null);
+    try std.testing.expect(std.math.isInf(t.ui_amount.?));
+    try std.testing.expectEqualStrings("inf", t.ui_amount_string.constSlice());
+}
+
+test "rpc.account_decoder.parse_token: scaled UI multiplier switch at timestamp" {
+    // 1e9
+    const ONE: u64 = 1_000_000_000;
+
+    // Before timestamp: use old multiplier (1x)
+    // At/after timestamp: use new multiplier (3x)
+    const config = ScaledUiAmountConfigData{
+        .multiplier = 1.0,
+        .new_multiplier_effective_timestamp = 100,
+        .new_multiplier = 3.0,
+    };
+
+    // Before effective timestamp
+    {
+        const additional_data = SplTokenAdditionalData{
+            .decimals = 9,
+            .unix_timestamp = 99,
+            .scaled_ui_amount_config = config,
+        };
+        const t = UiTokenAmount.init(ONE, additional_data);
+        try std.testing.expectEqualStrings("1", t.ui_amount_string.constSlice());
+    }
+
+    // At effective timestamp
+    {
+        const additional_data = SplTokenAdditionalData{
+            .decimals = 9,
+            .unix_timestamp = 100,
+            .scaled_ui_amount_config = config,
+        };
+        const t = UiTokenAmount.init(ONE, additional_data);
+        try std.testing.expectEqualStrings("3", t.ui_amount_string.constSlice());
+    }
+
+    // After effective timestamp
+    {
+        const additional_data = SplTokenAdditionalData{
+            .decimals = 9,
+            .unix_timestamp = 200,
+            .scaled_ui_amount_config = config,
+        };
+        const t = UiTokenAmount.init(ONE, additional_data);
+        try std.testing.expectEqualStrings("3", t.ui_amount_string.constSlice());
+    }
+}
+
+test "rpc.account_decoder.parse_token: interest-bearing takes priority over scaled" {
+    const INT_SECONDS_PER_YEAR: i64 = 31_556_736;
+    const ONE: u64 = 1_000_000_000_000_000_000;
+
+    // Both configs present - interest-bearing should take priority
+    const interest_config = InterestBearingConfigData{
+        .rate_authority = null,
+        .initialization_timestamp = 0,
+        .pre_update_average_rate = 500,
+        .last_update_timestamp = INT_SECONDS_PER_YEAR,
+        .current_rate = 500,
+    };
+
+    const scaled_config = ScaledUiAmountConfigData{
+        .multiplier = 10.0, // Would give 10.0 if used
+        .new_multiplier_effective_timestamp = 0,
+        .new_multiplier = 10.0,
+    };
+
+    const additional_data = SplTokenAdditionalData{
+        .decimals = 18,
+        .unix_timestamp = INT_SECONDS_PER_YEAR,
+        .interest_bearing_config = interest_config,
+        .scaled_ui_amount_config = scaled_config,
+    };
+
+    const t = UiTokenAmount.init(ONE, additional_data);
+
+    // Should use interest-bearing result (~1.05), not scaled (10.0)
+    try std.testing.expect(t.ui_amount != null);
+    // Interest-bearing gives ~1.05
+    try std.testing.expect(t.ui_amount.? < 2.0);
+    try std.testing.expect(std.mem.startsWith(u8, t.ui_amount_string.constSlice(), "1.05"));
 }
