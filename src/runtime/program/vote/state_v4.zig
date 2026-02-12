@@ -223,6 +223,8 @@ pub const VoteStateV4 = struct {
     }
 
     /// [SIMD-0185] v4: no prior_voters; setNewAuthorizedVoter only updates authorized_voters.
+    /// Unlike V3, there is no `target_epoch <= latest_epoch` check here since V4 has no
+    /// prior_voters to protect. The V3 path in authorize() handles that check separately.
     pub fn setNewAuthorizedVoter(
         self: *VoteStateV4,
         allocator: Allocator,
@@ -239,13 +241,6 @@ pub const VoteStateV4 = struct {
             return VoteError.too_soon_to_reauthorize;
         }
 
-        const latest_epoch, const latest_pubkey = self.authorized_voters.last() orelse
-            return InstructionError.InvalidAccountData;
-
-        if (!latest_pubkey.equals(&new_authorized_voter) and target_epoch <= latest_epoch) {
-            return InstructionError.InvalidAccountData;
-        }
-
         try self.authorized_voters.insert(allocator, target_epoch, new_authorized_voter);
         return null;
     }
@@ -255,6 +250,7 @@ pub const VoteStateV4 = struct {
         self: *VoteStateV4,
         allocator: Allocator,
         current_epoch: Epoch,
+        use_v4: bool,
     ) (error{OutOfMemory} || InstructionError)!Pubkey {
         const maybe_pubkey = self.authorized_voters.getAndCacheAuthorizedVoterForEpoch(
             allocator,
@@ -262,7 +258,11 @@ pub const VoteStateV4 = struct {
         ) catch return error.OutOfMemory;
         const pubkey = maybe_pubkey orelse return InstructionError.InvalidAccountData;
 
-        try self.authorized_voters.purgeAuthorizedVotersPreviousEpoch(allocator, current_epoch);
+        if (use_v4) {
+            try self.authorized_voters.purgeAuthorizedVotersPreviousEpoch(allocator, current_epoch);
+        } else {
+            _ = try self.authorized_voters.purgeAuthorizedVoters(allocator, current_epoch);
+        }
 
         return pubkey;
     }

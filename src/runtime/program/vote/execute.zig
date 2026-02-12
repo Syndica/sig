@@ -350,17 +350,20 @@ fn authorize(
     );
     defer versioned_state.deinit(allocator);
 
-    // Extract prior_voters from v3 state if present (for preserving when feature is OFF)
-    var prior_voters: ?CircBufV1 = switch (versioned_state) {
-        .current => |s| s.prior_voters,
-        .v1_14_11 => |s| s.prior_voters,
-        else => null,
-    };
+    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
+
+    // [agave] V4 path always checks uninitialized; V0_23_5 is rejected as uninitialized.
+    if (use_v4) {
+        if (versioned_state == .v0_23_5 or versioned_state.isUninitialized()) {
+            return InstructionError.UninitializedAccount;
+        }
+    }
+
+    // Extract prior_voters from v3 state before converting to v4 (which drops it)
+    var prior_voters: ?CircBufV1 = extractPriorVoters(&versioned_state);
 
     var vote_state = try versioned_state.convertToCurrent(allocator, vote_account.pubkey);
     defer vote_state.deinit(allocator);
-
-    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
 
     switch (vote_authorize) {
         .voter => {
@@ -373,6 +376,7 @@ fn authorize(
             const epoch_authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
                 allocator,
                 clock.epoch,
+                use_v4,
             );
 
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L701-L709
@@ -389,22 +393,25 @@ fn authorize(
                     return InstructionError.InvalidAccountData;
 
                 if (!latest_pubkey.equals(&authorized)) {
-                    // Check that target_epoch > latest_epoch (same check as setNewAuthorizedVoter)
-                    if (target_epoch > latest_epoch) {
-                        const epoch_of_last_authorized_switch = if (prior_voters) |pv|
-                            if (pv.last()) |prior_voter| prior_voter.end else 0
-                        else
-                            0;
-
-                        if (prior_voters == null) {
-                            prior_voters = CircBufV1.init();
-                        }
-                        prior_voters.?.append(.{
-                            .key = latest_pubkey,
-                            .start = epoch_of_last_authorized_switch,
-                            .end = target_epoch,
-                        });
+                    // target_epoch must be monotonically increasing and not equal to
+                    // latest_epoch (already checked via TooSoonToReauthorize above)
+                    if (target_epoch <= latest_epoch) {
+                        return InstructionError.InvalidAccountData;
                     }
+
+                    const epoch_of_last_authorized_switch = if (prior_voters) |pv|
+                        if (pv.last()) |prior_voter| prior_voter.end else 0
+                    else
+                        0;
+
+                    if (prior_voters == null) {
+                        prior_voters = CircBufV1.init();
+                    }
+                    prior_voters.?.append(.{
+                        .key = latest_pubkey,
+                        .start = epoch_of_last_authorized_switch,
+                        .end = target_epoch,
+                    });
                 }
             }
 
@@ -606,6 +613,17 @@ fn updateValidatorIdentity(
     );
     defer versioned_state.deinit(allocator);
 
+    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
+
+    // [agave] V4 path always checks uninitialized; V0_23_5 is rejected as uninitialized.
+    if (use_v4) {
+        if (versioned_state == .v0_23_5 or versioned_state.isUninitialized()) {
+            return InstructionError.UninitializedAccount;
+        }
+    }
+
+    const prior_voters = extractPriorVoters(&versioned_state);
+
     var vote_state = try versioned_state.convertToCurrent(allocator, vote_account.pubkey);
     defer vote_state.deinit(allocator);
 
@@ -619,7 +637,6 @@ fn updateValidatorIdentity(
     vote_state.node_pubkey = new_identity;
     vote_state.block_revenue_collector = new_identity; // [SIMD-0185] until SIMD-0232
 
-    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
     try setVoteState(
         allocator,
         vote_account,
@@ -627,7 +644,7 @@ fn updateValidatorIdentity(
         &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
         use_v4,
-        null,
+        prior_voters,
     );
 }
 
@@ -659,8 +676,11 @@ fn updateCommission(
     epoch_schedule: EpochSchedule,
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
+
     // Decode vote state only once, and only if needed
     var maybe_vote_state: ?VoteStateV4 = null;
+    var prior_voters: ?CircBufV1 = null;
 
     const enforce_commission_update_rule = blk: {
         if (ic.tc.feature_set.active(.allow_commission_decrease_at_any_time, ic.tc.slot)) {
@@ -669,6 +689,15 @@ fn updateCommission(
                 VoteStateVersions,
             ) catch break :blk true;
             defer versioned_state.deinit(allocator);
+
+            // [agave] V4 path always checks uninitialized; V0_23_5 is rejected as uninitialized.
+            if (use_v4) {
+                if (versioned_state == .v0_23_5 or versioned_state.isUninitialized()) {
+                    break :blk true;
+                }
+            }
+
+            prior_voters = extractPriorVoters(&versioned_state);
 
             const vote_state = try versioned_state.convertToCurrent(allocator, vote_account.pubkey);
             maybe_vote_state = vote_state;
@@ -696,6 +725,15 @@ fn updateCommission(
         );
         defer versioned_state.deinit(allocator);
 
+        // [agave] V4 path always checks uninitialized; V0_23_5 is rejected as uninitialized.
+        if (use_v4) {
+            if (versioned_state == .v0_23_5 or versioned_state.isUninitialized()) {
+                return InstructionError.UninitializedAccount;
+            }
+        }
+
+        prior_voters = extractPriorVoters(&versioned_state);
+
         break :state versioned_state.convertToCurrent(allocator, vote_account.pubkey) catch {
             return InstructionError.InvalidAccountData;
         };
@@ -710,7 +748,6 @@ fn updateCommission(
     // [SIMD-0185] Store as basis points (integer percentage * 100).
     vote_state.inflation_rewards_commission_bps = @as(u16, commission) * 100;
 
-    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
     try setVoteState(
         allocator,
         vote_account,
@@ -718,7 +755,7 @@ fn updateCommission(
         &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
         use_v4,
-        null,
+        prior_voters,
     );
 }
 
@@ -784,6 +821,15 @@ fn widthraw(
     );
     defer versioned_state.deinit(allocator);
 
+    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
+
+    // [agave] V4 path always checks uninitialized; V0_23_5 is rejected as uninitialized.
+    if (use_v4) {
+        if (versioned_state == .v0_23_5 or versioned_state.isUninitialized()) {
+            return InstructionError.UninitializedAccount;
+        }
+    }
+
     var vote_state = try versioned_state.convertToCurrent(allocator, vote_account.pubkey);
     defer vote_state.deinit(allocator);
 
@@ -794,8 +840,6 @@ fn widthraw(
     const remaining_balance = std.math.sub(u64, vote_account.account.lamports, lamports) catch {
         return InstructionError.InsufficientFunds;
     };
-
-    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
 
     if (remaining_balance == 0) {
         const reject_active_vote_account_close = blk: {
@@ -900,12 +944,13 @@ fn processVoteWithAccount(
     slot_hashes: SlotHashes,
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!void {
-    var vote_state = try verifyAndGetVoteState(
+    const verified = try verifyAndGetVoteState(
         allocator,
         ic,
         vote_account,
         clock.epoch,
     );
+    var vote_state = verified.vote_state;
     defer vote_state.deinit(allocator);
 
     const maybe_err = try vote_state.processVote(
@@ -946,7 +991,7 @@ fn processVoteWithAccount(
         &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
         use_v4,
-        null,
+        verified.prior_voters,
     );
 }
 
@@ -986,12 +1031,13 @@ fn voteStateUpdate(
     clock: Clock,
     vote_state_update: *VoteStateUpdate,
 ) (error{OutOfMemory} || InstructionError)!void {
-    var vote_state = try verifyAndGetVoteState(
+    const verified = try verifyAndGetVoteState(
         allocator,
         ic,
         vote_account,
         clock.epoch,
     );
+    var vote_state = verified.vote_state;
     defer vote_state.deinit(allocator);
 
     const maybe_err = try vote_state.processVoteStateUpdate(
@@ -1015,7 +1061,7 @@ fn voteStateUpdate(
         &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
         use_v4,
-        null,
+        verified.prior_voters,
     );
 }
 
@@ -1053,12 +1099,13 @@ fn towerSync(
     clock: Clock,
     tower_sync: *TowerSync,
 ) (error{OutOfMemory} || InstructionError)!void {
-    var vote_state = try verifyAndGetVoteState(
+    const verified = try verifyAndGetVoteState(
         allocator,
         ic,
         vote_account,
         clock.epoch,
     );
+    var vote_state = verified.vote_state;
     defer vote_state.deinit(allocator);
 
     const maybe_err = try vote_state.processTowerSync(
@@ -1082,9 +1129,14 @@ fn towerSync(
         &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
         use_v4,
-        null,
+        verified.prior_voters,
     );
 }
+
+const VerifiedVoteState = struct {
+    vote_state: VoteStateV4,
+    prior_voters: ?CircBufV1,
+};
 
 /// [agave] https://github.com/anza-xyz/agave/blob/e17340519f792d97cf4af7b9eb81056d475c70f9/programs/vote/src/vote_state/mod.rs#L905
 fn verifyAndGetVoteState(
@@ -1092,7 +1144,7 @@ fn verifyAndGetVoteState(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     epoch: Epoch,
-) (error{OutOfMemory} || InstructionError)!VoteStateV4 {
+) (error{OutOfMemory} || InstructionError)!VerifiedVoteState {
     var versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
@@ -1100,17 +1152,33 @@ fn verifyAndGetVoteState(
     // we either clone it in `convertToCurrent` or don't use at all
     defer versioned_state.deinit(allocator);
 
+    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
+
+    // [agave] V4 path rejects V0_23_5 at deserialization; V3 path converts it.
+    // Both paths check is_uninitialized when check_initialized=true.
+    if (use_v4 and versioned_state == .v0_23_5) return InstructionError.UninitializedAccount;
     if (versioned_state.isUninitialized()) return InstructionError.UninitializedAccount;
+
+    const prior_voters = extractPriorVoters(&versioned_state);
 
     var vote_state = try versioned_state.convertToCurrent(allocator, vote_account.pubkey);
     errdefer vote_state.deinit(allocator);
-
-    const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, epoch);
+    const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, epoch, use_v4);
     if (!ic.ixn_info.isPubkeySigner(authorized_voter)) {
         return InstructionError.MissingRequiredSignature;
     }
 
-    return vote_state;
+    return .{ .vote_state = vote_state, .prior_voters = prior_voters };
+}
+
+/// Extract prior_voters from a versioned vote state before converting to v4.
+/// v4 has no prior_voters field, so this must be captured before convertToCurrent().
+fn extractPriorVoters(versioned_state: *VoteStateVersions) ?CircBufV1 {
+    return switch (versioned_state.*) {
+        .current => |s| s.prior_voters,
+        .v1_14_11 => |s| s.prior_voters,
+        else => null,
+    };
 }
 
 fn validateIsSigner(
