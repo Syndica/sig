@@ -28,124 +28,108 @@ pub fn parseToken(
     data: []const u8,
     additional_data: ?*const SplTokenAdditionalData,
 ) ParseError!?TokenAccountType {
-    // Detect Token-2022 by check discriminator at offset 165
-    const is_token_2022 = data.len > TokenAccount.LEN and
-        data.len != Multisig.LEN and
-        (data[TokenAccount.LEN] == @intFromEnum(AccountTypeDiscriminator.account) or
-            data[TokenAccount.LEN] == @intFromEnum(AccountTypeDiscriminator.mint));
+    const account_type = DetectedType.parse(data) orelse return null;
 
-    // Parse extensions for Token-2022.
-    var extensions_slice: ?[]const UiExtension = null;
-    var extensions_storage: ?std.BoundedArray(UiExtension, MAX_EXTENSIONS) = null;
-
-    if (is_token_2022) {
-        if (parseExtensions(data)) |exts| {
-            extensions_storage = exts;
-            extensions_slice = extensions_storage.?.constSlice();
-        }
-    }
-
-    // Try Token Account (165+ bytes)
-    if (data.len >= TokenAccount.LEN) {
-        if (TokenAccount.unpack(data)) |account| {
-            if (account.state == .uninitialized) {
-                return null; // Uninitialized account
-            }
-            // Token accounts REQUIRE decimals from mint
-            const decimals = if (additional_data) |ad| ad.decimals else {
-                return null; // No decimals provided - fallback to base64
-            };
-            return TokenAccountType{
-                .account = buildUiTokenAccount(account, decimals),
-            };
-        } else |_| {}
-    }
-
-    // Try Mint (82+ bytes, Token-2022 may be larger)
-    if (data.len >= Mint.LEN) {
-        if (Mint.unpack(data)) |mint| {
-            if (!mint.is_initialized) {
-                return null;
-            }
-            return TokenAccountType{
-                .mint = buildUiMint(mint),
-            };
-        } else |_| {}
-    }
-
-    // Try Multisig (exactly 355 bytes, no extensions)
-    if (data.len == Multisig.LEN) {
-        if (Multisig.unpack(data)) |multisig| {
-            if (!multisig.is_initialized) {
-                return null;
-            }
-            return TokenAccountType{
-                .multisig = buildUiMultisig(multisig),
-            };
-        } else |_| {}
-    }
-
-    // TODO: token 22.
-
-    return null;
-}
-
-fn buildUiTokenAccount(account: TokenAccount, decimals: u8) UiTokenAccount {
-    const is_native = account.is_native != null;
-
-    return UiTokenAccount{
-        .mint = account.mint.base58String(),
-        .owner = account.owner.base58String(),
-        .token_amount = .init(account.amount, decimals),
-        .delegate = if (account.delegate) |d| d.base58String() else null,
-        .state = account.state,
-        .is_native = is_native,
-        .rent_exempt_reserve = if (account.is_native) |reserve|
-            .init(reserve, decimals)
-        else
-            null,
-        .delegated_amount = if (account.delegate != null and account.delegated_amount > 0)
-            UiTokenAmount.init(account.delegated_amount, decimals)
-        else
-            null,
-        .close_authority = if (account.close_authority) |c| c.base58String() else null,
+    return switch (account_type) {
+        .token_account => parseAsTokenAccount(data, additional_data),
+        .mint => parseAsMint(data),
+        .multisig => parseAsMultisig(data),
     };
 }
 
-fn buildUiMint(mint: Mint) UiMint {
-    return UiMint{
-        .mint_authority = if (mint.mint_authority) |a| a.base58String() else null,
-        .supply = mint.supply,
-        .decimals = mint.decimals,
-        .is_initialized = mint.is_initialized,
-        .freeze_authority = if (mint.freeze_authority) |a| a.base58String() else null,
-    };
-}
-
-fn buildUiMultisig(multisig: Multisig) UiMultisig {
-    var signers: std.BoundedArray(Pubkey.Base58String, Multisig.MAX_SIGNERS) = .{};
-    // Only include non-default pubkeys up to n valid signers
-    for (0..multisig.n) |i| {
-        const signer = multisig.signers[i];
-        // Skip default (zero) pubkeys
-        if (!signer.isZeroed()) {
-            signers.appendAssumeCapacity(signer.base58String());
-        }
-    }
-    return UiMultisig{
-        .num_required_signers = multisig.m,
-        .num_valid_signers = multisig.n,
-        .is_initialized = multisig.is_initialized,
-        .signers = signers,
-    };
-}
-
-// Token-2022 account type discriminator (placed at TokenAccount.LEN for extended accounts)
+/// Token-2022 account type discriminator (placed at TokenAccount.LEN for extended accounts)
+// TODO: document
 const AccountTypeDiscriminator = enum(u8) {
     uninitialized = 0,
     mint = 1,
     account = 2,
 };
+
+const DetectedType = union(enum) {
+    token_account,
+    mint,
+    multisig,
+
+    fn parse(data: []const u8) ?DetectedType {
+        // Multisig: exactly 355 bytes (never has extensions)
+        if (data.len == Multisig.LEN) return .multisig;
+        // Check for Token-2022 Mint first (discriminator at offset 82)
+        // Mint with extensions: len > 82
+        if (data.len > Mint.LEN) {
+            if (data[Mint.LEN] == @intFromEnum(AccountTypeDiscriminator.mint)) {
+                return .mint;
+            }
+        }
+        // Check for Token-2022 TokenAccount (discriminator at offset 165)
+        // TokenAccount with extensions: len > 165
+        if (data.len > TokenAccount.LEN) {
+            if (data[TokenAccount.LEN] == @intFromEnum(AccountTypeDiscriminator.account)) {
+                return .token_account;
+            }
+        }
+        // SPL Token v1: exact lengths (no extensions)
+        if (data.len == TokenAccount.LEN) return .token_account;
+        if (data.len == Mint.LEN) return .mint;
+        return null;
+    }
+};
+
+fn parseAsTokenAccount(
+    data: []const u8,
+    additional_data: ?*const SplTokenAdditionalData,
+) ?TokenAccountType {
+    const account = TokenAccount.unpack(data) catch return null;
+    if (account.state == .uninitialized) return null;
+
+    const decimals = (additional_data orelse return null).decimals;
+    const is_native = account.is_native != null;
+    return .{ .account = .{
+        .mint = account.mint.base58String(),
+        .owner = account.owner.base58String(),
+        .token_amount = UiTokenAmount.init(account.amount, decimals),
+        .delegate = if (account.delegate) |d| d.base58String() else null,
+        .state = account.state,
+        .is_native = is_native,
+        .rent_exempt_reserve = if (account.is_native) |r| UiTokenAmount.init(r, decimals) else null,
+        .delegated_amount = if (account.delegate != null and account.delegated_amount > 0)
+            UiTokenAmount.init(account.delegated_amount, decimals)
+        else
+            null,
+        .close_authority = if (account.close_authority) |c| c.base58String() else null,
+        .extensions = parseExtensions(data[TokenAccount.LEN..]),
+    } };
+}
+
+fn parseAsMint(data: []const u8) ?TokenAccountType {
+    const mint = Mint.unpack(data) catch return null;
+    if (!mint.is_initialized) return null;
+    return .{ .mint = .{
+        .mint_authority = if (mint.mint_authority) |a| a.base58String() else null,
+        .supply = mint.supply,
+        .decimals = mint.decimals,
+        .is_initialized = mint.is_initialized,
+        .freeze_authority = if (mint.freeze_authority) |a| a.base58String() else null,
+        .extensions = parseExtensions(data[Mint.LEN..]),
+    } };
+}
+
+fn parseAsMultisig(data: []const u8) ?TokenAccountType {
+    const multisig = Multisig.unpack(data) catch return null;
+    if (!multisig.is_initialized) return null;
+    // Collect non-zero signers up to n valid signers
+    var signers: std.BoundedArray(Pubkey.Base58String, Multisig.MAX_SIGNERS) = .{};
+    for (multisig.signers[0..multisig.n]) |signer| {
+        if (!signer.isZeroed()) {
+            signers.appendAssumeCapacity(signer.base58String());
+        }
+    }
+    return .{ .multisig = .{
+        .num_required_signers = multisig.m,
+        .num_valid_signers = multisig.n,
+        .is_initialized = multisig.is_initialized,
+        .signers = signers,
+    } };
+}
 
 /// Get the mint pubkey from token account data if valid.
 /// Returns null if data is not a valid initialized token account.
@@ -334,7 +318,7 @@ pub const UiTokenAccount = struct {
     delegated_amount: ?UiTokenAmount,
     close_authority: ?Pubkey.Base58String,
     // Token-2022.
-    extensions: ?[]const UiExtension = null,
+    extensions: std.BoundedArray(UiExtension, MAX_EXTENSIONS),
 
     pub fn jsonStringify(self: UiTokenAccount, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
@@ -360,10 +344,10 @@ pub const UiTokenAccount = struct {
         if (self.delegated_amount) |d| try d.jsonStringify(jw) else try jw.write(null);
         try jw.objectField("closeAuthority");
         if (self.close_authority) |c| try jw.write(c.slice()) else try jw.write(null);
-        if (self.extensions) |exts| {
+        if (self.extensions.len > 0) {
             try jw.objectField("extensions");
             try jw.beginArray();
-            for (exts) |ext| {
+            for (self.extensions) |ext| {
                 try ext.jsonStringify(jw);
             }
             try jw.endArray();
@@ -380,7 +364,7 @@ pub const UiMint = struct {
     is_initialized: bool,
     freeze_authority: ?Pubkey.Base58String,
     // Token-2022.
-    extensions: ?[]const UiExtension = null,
+    extensions: std.BoundedArray(UiExtension, MAX_EXTENSIONS),
 
     pub fn jsonStringify(self: UiMint, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
@@ -394,10 +378,10 @@ pub const UiMint = struct {
         try jw.write(self.is_initialized);
         try jw.objectField("freezeAuthority");
         if (self.freeze_authority) |a| try jw.write(a.slice()) else try jw.write(null);
-        if (self.extensions) |exts| {
+        if (self.extensions.len > 0) {
             try jw.objectField("extensions");
             try jw.beginArray();
-            for (exts) |ext| {
+            for (self.extensions) |ext| {
                 try ext.jsonStringify(jw);
             }
             try jw.endArray();
@@ -479,37 +463,31 @@ fn formatTokenAmount(amount: u64, decimals: u8) std.BoundedArray(u8, 40) {
     var buf: std.BoundedArray(u8, 40) = .{};
 
     if (decimals == 0) {
-        // No decimal point needed
-        _ = std.fmt.bufPrint(buf.slice(), "{d}", .{amount}) catch unreachable;
-        buf.len = @intCast(std.mem.indexOfScalar(u8, buf.slice(), 0) orelse buf.len);
+        const written = std.fmt.bufPrint(&buf.buffer, "{d}", .{amount}) catch unreachable;
+        buf.len = @intCast(written.len);
         return buf;
     }
 
-    const divisor = std.math.pow(u64, 10, decimals);
-    const whole = amount / divisor;
-    const frac = amount % divisor;
+    // Format amount as string, left-padded with zeros to (decimals + 1) chars minimum
+    // e.g., amount=123, decimals=6 → "0000123" → "0.000123"
+    const min_len = decimals + 1;
+    const written = std.fmt.bufPrint(&buf.buffer, "{d:0>[1]}", .{ amount, min_len }) catch unreachable;
+    buf.len = @intCast(written.len);
 
-    if (frac == 0) {
-        // No fractional part
-        const written = std.fmt.bufPrint(&buf.buffer, "{d}", .{whole}) catch unreachable;
-        buf.len = @intCast(written.len);
-    } else {
-        // Format with fractional part, then trim trailing zeros
-        const written = std.fmt.bufPrint(&buf.buffer, "{d}.{d:0>[2]}", .{
-            whole,
-            frac,
-            decimals,
-        }) catch unreachable;
-        buf.len = @intCast(written.len);
+    // Insert decimal point at position (len - decimals)
+    const decimal_pos = buf.len - decimals;
+    // Shift right to make room for decimal point
+    std.mem.copyBackwards(u8, buf.buffer[decimal_pos + 1 .. buf.len + 1], buf.buffer[decimal_pos..buf.len]);
+    buf.buffer[decimal_pos] = '.';
+    buf.len += 1;
 
-        // Trim trailing zeros (but keep at least one digit after decimal)
-        while (buf.len > 0 and buf.buffer[buf.len - 1] == '0') {
-            buf.len -= 1;
-        }
-        // Don't leave trailing decimal point
-        if (buf.len > 0 and buf.buffer[buf.len - 1] == '.') {
-            buf.len -= 1;
-        }
+    // Trim trailing zeros
+    while (buf.len > 0 and buf.buffer[buf.len - 1] == '0') {
+        buf.len -= 1;
+    }
+    // Trim trailing decimal point
+    if (buf.len > 0 and buf.buffer[buf.len - 1] == '.') {
+        buf.len -= 1;
     }
 
     return buf;
@@ -531,7 +509,7 @@ fn readCOptionU64(data: *const [12]u8) ?u64 {
     return std.mem.readInt(u64, data[4..12], .little);
 }
 
-test "rpc.account_decoder.parseToken: basic token account parsing" {
+test "rpc.account_decoder.parse_token: basic token account parsing" {
     const TEST_MINT_AUTHORITY = Pubkey{ .data = [_]u8{1} ** 32 };
     const TEST_FREEZE_AUTHORITY = Pubkey{ .data = [_]u8{2} ** 32 };
 
@@ -818,7 +796,7 @@ test "rpc.account_decoder.parseToken: basic token account parsing" {
     }
 }
 
-test "rpc.account_decoder.parseExtension: basic extension parsing" {
+test "rpc.account_decoder.parse_token: basic extension parsing" {
     // Test TLV parsing with marker extension
     {
         // make a minimal Token-2022 account with ImmutableOwner extension
@@ -843,10 +821,9 @@ test "rpc.account_decoder.parseExtension: basic extension parsing" {
         data[170] = 0;
         data[171] = 0;
 
-        const extensions = parseExtensions(&data);
-        try std.testing.expect(extensions != null);
-        try std.testing.expectEqual(@as(usize, 1), extensions.?.len);
-        try std.testing.expectEqual(UiExtension.immutable_owner, extensions.?.get(0));
+        const extensions = parseExtensions(data[TokenAccount.LEN..]);
+        try std.testing.expectEqual(1, extensions.len);
+        try std.testing.expectEqual(UiExtension.immutable_owner, extensions.get(0));
     }
 
     // Test multiple extensions
@@ -874,12 +851,11 @@ test "rpc.account_decoder.parseExtension: basic extension parsing" {
         data[175] = 0;
         data[176] = 0;
 
-        const extensions = parseExtensions(&data);
-        try std.testing.expect(extensions != null);
-        try std.testing.expectEqual(@as(usize, 2), extensions.?.len);
-        try std.testing.expectEqual(UiExtension.immutable_owner, extensions.?.get(0));
+        const extensions = parseExtensions(data[TokenAccount.LEN..]);
+        try std.testing.expectEqual(2, extensions.len);
+        try std.testing.expectEqual(UiExtension.immutable_owner, extensions.get(0));
 
-        const memo = extensions.?.get(1);
+        const memo = extensions.get(1);
         switch (memo) {
             .memo_transfer => |m| {
                 try std.testing.expect(m.require_incoming_transfer_memos);
@@ -905,16 +881,283 @@ test "rpc.account_decoder.parseExtension: basic extension parsing" {
         data[170] = 0;
         data[171] = 0;
 
-        const extensions = parseExtensions(&data);
-        try std.testing.expect(extensions != null);
-        try std.testing.expectEqual(@as(usize, 1), extensions.?.len);
-        try std.testing.expectEqual(UiExtension.unparseable_extension, extensions.?.get(0));
+        const extensions = parseExtensions(data[TokenAccount.LEN..]);
+        try std.testing.expectEqual(1, extensions.len);
+        try std.testing.expectEqual(UiExtension.unparseable_extension, extensions.get(0));
     }
 
     // Test insufficient data returns null
     {
-        const data: [100]u8 = undefined;
+        const data: [1]u8 = .{0};
         const extensions = parseExtensions(&data);
-        try std.testing.expect(extensions == null);
+        try std.testing.expect(extensions.len == 0);
+    }
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token.rs#L484
+test "rpc.account_decoder.parse_token: token account with extensions" {
+    const mint_pubkey = Pubkey{ .data = [_]u8{2} ** 32 };
+    const owner_pubkey = Pubkey{ .data = [_]u8{3} ** 32 };
+    // Build token account data manually (165 bytes)
+    // Layout: mint(32) + owner(32) + amount(8) + delegate(36) + state(1) + is_native(12) + delegated_amount(8) + close_authority(36)
+    var account_data: [TokenAccount.LEN]u8 = [_]u8{0} ** TokenAccount.LEN;
+    // mint (bytes 0-31)
+    @memcpy(account_data[0..32], &mint_pubkey.data);
+    // owner (bytes 32-63)
+    @memcpy(account_data[32..64], &owner_pubkey.data);
+    // amount = 42 (bytes 64-71)
+    std.mem.writeInt(u64, account_data[64..72], 42, .little);
+    // delegate = None (COption: tag=0) (bytes 72-107)
+    std.mem.writeInt(u32, account_data[72..76], 0, .little);
+    // state = Initialized (byte 108)
+    account_data[108] = @intFromEnum(AccountState.initialized);
+    // is_native = None (COption: tag=0) (bytes 109-120)
+    std.mem.writeInt(u32, account_data[109..113], 0, .little);
+    // delegated_amount = 0 (bytes 121-128)
+    std.mem.writeInt(u64, account_data[121..129], 0, .little);
+    // close_authority = Some(owner_pubkey) (bytes 129-164)
+    std.mem.writeInt(u32, account_data[129..133], 1, .little);
+    @memcpy(account_data[133..165], &owner_pubkey.data);
+
+    // Test: parsing without decimals returns null (token accounts require decimals)
+    {
+        const result = try parseToken(&account_data, null);
+        try std.testing.expect(result == null);
+    }
+
+    // Test: parsing with decimals succeeds
+    {
+        const additional_data = SplTokenAdditionalData{ .decimals = 2 };
+        const result = try parseToken(&account_data, &additional_data);
+        try std.testing.expect(result != null);
+        switch (result.?) {
+            .account => |ui_account| {
+                try std.testing.expectEqualStrings(mint_pubkey.base58String().slice(), ui_account.mint.slice());
+                try std.testing.expectEqualStrings(owner_pubkey.base58String().slice(), ui_account.owner.slice());
+                try std.testing.expectEqual(@as(u64, 42), ui_account.token_amount.amount);
+                try std.testing.expectEqual(@as(u8, 2), ui_account.token_amount.decimals);
+                try std.testing.expect(ui_account.token_amount.ui_amount != null);
+                try std.testing.expect(@abs(ui_account.token_amount.ui_amount.? - 0.42) < 0.001);
+                try std.testing.expectEqualStrings("0.42", ui_account.token_amount.ui_amount_string.constSlice());
+                try std.testing.expect(ui_account.delegate == null);
+                try std.testing.expectEqual(AccountState.initialized, ui_account.state);
+                try std.testing.expect(!ui_account.is_native);
+                try std.testing.expect(ui_account.rent_exempt_reserve == null);
+                try std.testing.expect(ui_account.delegated_amount == null);
+                try std.testing.expect(ui_account.close_authority != null);
+                try std.testing.expectEqualStrings(owner_pubkey.base58String().slice(), ui_account.close_authority.?.slice());
+            },
+            else => try std.testing.expect(false),
+        }
+    }
+
+    // Test: mint parsing (82 bytes)
+    var mint_data: [Mint.LEN]u8 = [_]u8{0} ** Mint.LEN;
+    // mint_authority = Some(owner_pubkey) (bytes 0-35)
+    std.mem.writeInt(u32, mint_data[0..4], 1, .little);
+    @memcpy(mint_data[4..36], &owner_pubkey.data);
+    // supply = 42 (bytes 36-43)
+    std.mem.writeInt(u64, mint_data[36..44], 42, .little);
+    // decimals = 3 (byte 44)
+    mint_data[44] = 3;
+    // is_initialized = true (byte 45)
+    mint_data[45] = 1;
+    // freeze_authority = Some(owner_pubkey) (bytes 46-81)
+    std.mem.writeInt(u32, mint_data[46..50], 1, .little);
+    @memcpy(mint_data[50..82], &owner_pubkey.data);
+    {
+        const result = try parseToken(&mint_data, null);
+        try std.testing.expect(result != null);
+        switch (result.?) {
+            .mint => |ui_mint| {
+                try std.testing.expect(ui_mint.mint_authority != null);
+                try std.testing.expectEqualStrings(owner_pubkey.base58String().slice(), ui_mint.mint_authority.?.slice());
+                try std.testing.expectEqual(@as(u64, 42), ui_mint.supply);
+                try std.testing.expectEqual(@as(u8, 3), ui_mint.decimals);
+                try std.testing.expect(ui_mint.is_initialized);
+                try std.testing.expect(ui_mint.freeze_authority != null);
+                try std.testing.expectEqualStrings(owner_pubkey.base58String().slice(), ui_mint.freeze_authority.?.slice());
+            },
+            else => try std.testing.expect(false),
+        }
+    }
+
+    // Test: multisig parsing (355 bytes)
+    const signer1 = Pubkey{ .data = [_]u8{1} ** 32 };
+    const signer2 = Pubkey{ .data = [_]u8{2} ** 32 };
+    const signer3 = Pubkey{ .data = [_]u8{3} ** 32 };
+    var multisig_data: [Multisig.LEN]u8 = [_]u8{0} ** Multisig.LEN;
+    multisig_data[0] = 2; // m (required signers)
+    multisig_data[1] = 3; // n (valid signers)
+    multisig_data[2] = 1; // is_initialized
+    @memcpy(multisig_data[3..35], &signer1.data);
+    @memcpy(multisig_data[35..67], &signer2.data);
+    @memcpy(multisig_data[67..99], &signer3.data);
+    {
+        const result = try parseToken(&multisig_data, null);
+        try std.testing.expect(result != null);
+        switch (result.?) {
+            .multisig => |ui_multisig| {
+                try std.testing.expectEqual(@as(u8, 2), ui_multisig.num_required_signers);
+                try std.testing.expectEqual(@as(u8, 3), ui_multisig.num_valid_signers);
+                try std.testing.expect(ui_multisig.is_initialized);
+                try std.testing.expectEqual(@as(usize, 3), ui_multisig.signers.len);
+                try std.testing.expectEqualStrings(signer1.base58String().slice(), ui_multisig.signers.get(0).slice());
+                try std.testing.expectEqualStrings(signer2.base58String().slice(), ui_multisig.signers.get(1).slice());
+                try std.testing.expectEqualStrings(signer3.base58String().slice(), ui_multisig.signers.get(2).slice());
+            },
+            else => try std.testing.expect(false),
+        }
+    }
+
+    // Test: bad data returns null
+    {
+        const bad_data: [4]u8 = [_]u8{0} ** 4;
+        const result = try parseToken(&bad_data, null);
+        try std.testing.expect(result == null);
+    }
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token.rs#L300
+test "rpc.account_decoder.parse_token: formatTokenAmount conformance" {
+
+    // Basic integers
+    try std.testing.expectEqualStrings("1", formatTokenAmount(1, 0).constSlice());
+    try std.testing.expectEqualStrings("10", formatTokenAmount(10, 0).constSlice());
+
+    // Small amounts with decimals
+    try std.testing.expectEqualStrings("0.000000001", formatTokenAmount(1, 9).constSlice());
+
+    // Whole numbers that trim to clean result
+    try std.testing.expectEqualStrings("1", formatTokenAmount(1_000_000_000, 9).constSlice());
+
+    // Partial decimal trimming (trailing zero removed)
+    try std.testing.expectEqualStrings("1234567.89", formatTokenAmount(1_234_567_890, 3).constSlice());
+
+    // Large decimals (25 places) - tests precision
+    try std.testing.expectEqualStrings("0.000000000000000123456789", formatTokenAmount(1_234_567_890, 25).constSlice());
+
+    // Zero amounts
+    try std.testing.expectEqualStrings("0", formatTokenAmount(0, 0).constSlice());
+    try std.testing.expectEqualStrings("0", formatTokenAmount(0, 9).constSlice());
+    try std.testing.expectEqualStrings("0", formatTokenAmount(0, 25).constSlice());
+}
+
+test "rpc.account_decoder.parse_token: UiTokenAmount.init ui_amount" {
+    // ui_amount is Some when decimals <= 20
+    {
+        const t = UiTokenAmount.init(1, 0);
+        try std.testing.expectEqual(@as(?f64, 1.0), t.ui_amount);
+    }
+    {
+        const t = UiTokenAmount.init(1_000_000_000, 9);
+        try std.testing.expectEqual(@as(?f64, 1.0), t.ui_amount);
+    }
+    // ui_amount is None when decimals > 20
+    {
+        const t = UiTokenAmount.init(1_234_567_890, 25);
+        try std.testing.expect(t.ui_amount == null);
+    }
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token.rs#L484
+test "rpc.account_decoder.parse_token: token account with extensions conformance" {
+    const mint_pubkey = Pubkey{ .data = [_]u8{2} ** 32 };
+    const owner_pubkey = Pubkey{ .data = [_]u8{3} ** 32 };
+    // Calculate account size: base(165) + discriminator(1) + extensions
+    // ImmutableOwner: 4 header + 0 value = 4
+    // MemoTransfer: 4 header + 1 value = 5
+    // Total: 165 + 1 + 4 + 5 = 175 bytes
+    const ACCOUNT_SIZE = TokenAccount.LEN + 1 + 4 + 5;
+    var account_data: [ACCOUNT_SIZE]u8 = [_]u8{0} ** ACCOUNT_SIZE;
+    // Build base account (same as existing test)
+    @memcpy(account_data[0..32], &mint_pubkey.data);
+    @memcpy(account_data[32..64], &owner_pubkey.data);
+    std.mem.writeInt(u64, account_data[64..72], 42, .little);
+    std.mem.writeInt(u32, account_data[72..76], 0, .little); // delegate = None
+    account_data[108] = @intFromEnum(AccountState.initialized);
+    std.mem.writeInt(u32, account_data[109..113], 0, .little); // is_native = None
+    std.mem.writeInt(u64, account_data[121..129], 0, .little);
+    std.mem.writeInt(u32, account_data[129..133], 1, .little); // close_authority = Some
+    @memcpy(account_data[133..165], &owner_pubkey.data);
+    // Account type discriminator
+    account_data[165] = @intFromEnum(AccountTypeDiscriminator.account);
+    // Extension 1: ImmutableOwner (type=7, len=0)
+    std.mem.writeInt(u16, account_data[166..168], 7, .little);
+    std.mem.writeInt(u16, account_data[168..170], 0, .little);
+    // Extension 2: MemoTransfer (type=8, len=1, value=1)
+    std.mem.writeInt(u16, account_data[170..172], 8, .little);
+    std.mem.writeInt(u16, account_data[172..174], 1, .little);
+    account_data[174] = 1; // require_incoming_transfer_memos = true
+
+    // Parse and verify
+    const additional_data = SplTokenAdditionalData{ .decimals = 2 };
+    const result = try parseToken(&account_data, &additional_data);
+    try std.testing.expect(result != null);
+    switch (result.?) {
+        .account => |ui_account| {
+            // Verify base fields (same assertions as before)
+            try std.testing.expectEqualStrings(mint_pubkey.base58String().slice(), ui_account.mint.slice());
+            try std.testing.expectEqualStrings(owner_pubkey.base58String().slice(), ui_account.owner.slice());
+            try std.testing.expectEqual(@as(u64, 42), ui_account.token_amount.amount);
+            try std.testing.expectEqual(AccountState.initialized, ui_account.state);
+            // Verify extensions
+            try std.testing.expectEqual(@as(usize, 2), ui_account.extensions.len);
+            try std.testing.expectEqual(UiExtension.immutable_owner, ui_account.extensions.get(0));
+
+            switch (ui_account.extensions.get(1)) {
+                .memo_transfer => |m| {
+                    try std.testing.expect(m.require_incoming_transfer_memos);
+                },
+                else => try std.testing.expect(false),
+            }
+        },
+        else => try std.testing.expect(false),
+    }
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token.rs#L584
+test "rpc.account_decoder.parse_token: mint with extensions conformance" {
+    const owner_pubkey = Pubkey{ .data = [_]u8{3} ** 32 };
+    // Size: 82 base + 1 discriminator + 4 TLV header + 32 value = 119
+    const MINT_SIZE = Mint.LEN + 1 + 4 + 32;
+    var mint_data: [MINT_SIZE]u8 = [_]u8{0} ** MINT_SIZE;
+    // Build base mint
+    std.mem.writeInt(u32, mint_data[0..4], 1, .little); // mint_authority = Some
+    @memcpy(mint_data[4..36], &owner_pubkey.data);
+    std.mem.writeInt(u64, mint_data[36..44], 42, .little); // supply
+    mint_data[44] = 3; // decimals
+    mint_data[45] = 1; // is_initialized
+    std.mem.writeInt(u32, mint_data[46..50], 1, .little); // freeze_authority = Some
+    @memcpy(mint_data[50..82], &owner_pubkey.data);
+    // Account type discriminator
+    mint_data[82] = @intFromEnum(AccountTypeDiscriminator.mint);
+    // Extension: MintCloseAuthority (type=3, len=32)
+    std.mem.writeInt(u16, mint_data[83..85], 3, .little);
+    std.mem.writeInt(u16, mint_data[85..87], 32, .little);
+    @memcpy(mint_data[87..119], &owner_pubkey.data);
+    // Parse and verify
+    const result = try parseToken(&mint_data, null);
+    try std.testing.expect(result != null);
+    switch (result.?) {
+        .mint => |ui_mint| {
+            try std.testing.expect(ui_mint.mint_authority != null);
+            try std.testing.expectEqual(@as(u64, 42), ui_mint.supply);
+            try std.testing.expectEqual(@as(u8, 3), ui_mint.decimals);
+            try std.testing.expect(ui_mint.is_initialized);
+            // Verify extension
+            try std.testing.expectEqual(@as(usize, 1), ui_mint.extensions.len);
+            switch (ui_mint.extensions.get(0)) {
+                .mint_close_authority => |mca| {
+                    try std.testing.expect(mca.close_authority != null);
+                    try std.testing.expectEqualStrings(
+                        owner_pubkey.base58String().slice(),
+                        mca.close_authority.?.slice(),
+                    );
+                },
+                else => try std.testing.expect(false),
+            }
+        },
+        else => try std.testing.expect(false),
     }
 }

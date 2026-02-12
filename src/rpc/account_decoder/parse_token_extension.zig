@@ -12,9 +12,6 @@ const AccountState = account_decoder.AccountState;
 
 /// TLV parsing constants for Token-2022 extensions.
 // TODO: document offset form Agave.
-/// 165 base state + 1 account type discriminator
-const TLV_START_OFFSET: usize = 166;
-// TODO: document offset form Agave.
 /// TLV layout: 2 bytes type + 2 bytes length + value
 const TLV_HEADER_SIZE: usize = 4;
 // TODO: document offset form Agave.
@@ -292,13 +289,14 @@ pub const UiExtension = union(enum) {
 /// Parse Token-2022 TLV extensions from account data.
 /// Returns null if data doesn't contain valid extensions.
 /// TODO: [agave] Uses similar iteration logic to spl-token-2022's get_tlv_data_info
-pub fn parseExtensions(data: []const u8) ?std.BoundedArray(UiExtension, MAX_EXTENSIONS) {
-    // Must have at least base state + account type discriminator
-    if (data.len <= TLV_START_OFFSET) return null;
-
+pub fn parseExtensions(data: []const u8) std.BoundedArray(UiExtension, MAX_EXTENSIONS) {
     var extensions: std.BoundedArray(UiExtension, MAX_EXTENSIONS) = .{};
-    var offset: usize = TLV_START_OFFSET;
 
+    // data[0] is discriminator, TLV starts at data[1].
+    // Need at least discriminator + one TLV header to have any extensions.
+    if (data.len <= 1) return extensions;
+
+    var offset: usize = 1;
     while (offset + TLV_HEADER_SIZE <= data.len) {
         // Read extension type (2 bytes, little-endian)
         const ext_type_raw = std.mem.readInt(u16, data[offset..][0..2], .little);
@@ -330,7 +328,7 @@ pub fn parseExtensions(data: []const u8) ?std.BoundedArray(UiExtension, MAX_EXTE
         offset += length;
     }
 
-    return if (extensions.len > 0) extensions else null;
+    return extensions;
 }
 
 // Parse a single extension from its value bytes.
