@@ -2757,11 +2757,13 @@ test "checkAndHandleNewRoot - success" {
         state2.hash = .init(hash2.hash);
         state3.hash = .init(hash3.hash);
 
-        try slot_tracker4.put(allocator, hash2.slot, .{
+        const ptr, var lg = slot_tracker4.writeWithLock();
+        defer lg.unlock();
+        try ptr.put(allocator, hash2.slot, .{
             .constants = constants2,
             .state = state2,
         });
-        try slot_tracker4.put(allocator, hash3.slot, .{
+        try ptr.put(allocator, hash3.slot, .{
             .constants = constants3,
             .state = state3,
         });
@@ -2814,8 +2816,13 @@ test "checkAndHandleNewRoot - success" {
     }
 
     try testing.expectEqual(1, fixture.progress.map.count());
-    for (slot_tracker4.slots.keys()) |remaining_slots| {
-        try testing.expect(remaining_slots >= hash3.slot);
+    // Now the write lock is released, we can acquire a read lock
+    {
+        const ptr, var lg = slot_tracker4.readWithLock();
+        defer lg.unlock();
+        for (ptr.slots.keys()) |remaining_slots| {
+            try testing.expect(remaining_slots >= hash3.slot);
+        }
     }
     try testing.expect(!fixture.progress.map.contains(hash1.slot));
 }
@@ -4926,7 +4933,6 @@ test "edge cases - duplicate confirmed slot" {
     std.debug.assert(root_slot0 == 0);
 
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
-    std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //

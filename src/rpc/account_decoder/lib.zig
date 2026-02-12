@@ -221,30 +221,29 @@ pub fn buildTokenAdditionalData(
     // Read account data to extract mint pubkey
     var data_iter = account.data.iterator();
     var data_buf: [parse_token.TokenAccount.LEN]u8 = undefined;
-    const bytes_read = data_iter.read(&data_buf);
+    const bytes_read = data_iter.readBytes(&data_buf) catch return .{};
     if (bytes_read < 32) return .{};
 
     // Extract mint pubkey from token account (first 32 bytes)
     const mint_pubkey = parse_token.getTokenAccountMint(data_buf[0..bytes_read]) orelse return .{};
 
     // Fetch the mint account
-    const mint_account = slot_reader.get(allocator, mint_pubkey) catch return .{} orelse return .{};
+    const maybe_mint_account = slot_reader.get(allocator, mint_pubkey) catch return .{};
+    const mint_account = maybe_mint_account orelse return .{};
     defer mint_account.deinit(allocator);
 
     // Read mint data
     var mint_iter = mint_account.data.iterator();
     const mint_data = allocator.alloc(u8, mint_account.data.len()) catch return .{};
     defer allocator.free(mint_data);
-    _ = mint_iter.read(mint_data);
+    _ = mint_iter.readBytes(mint_data) catch return .{};
 
     // Parse mint to get decimals
     const mint = parse_token.Mint.unpack(mint_data) catch return .{};
 
     // Fetch Clock sysvar for timestamp
-    const clock_account = slot_reader.get(
-        allocator,
-        sig.runtime.sysvar.Clock.ID,
-    ) catch return .{} orelse return .{};
+    const maybe_clock_account = slot_reader.get(allocator, sig.runtime.sysvar.Clock.ID) catch return .{};
+    const clock_account = maybe_clock_account orelse return .{};
     defer clock_account.deinit(allocator);
 
     var clock_iter = clock_account.data.iterator();
@@ -256,8 +255,8 @@ pub fn buildTokenAdditionalData(
     ) catch return .{};
 
     // Extract extension configs from mint data
-    const interest_config = parse_token_extension.extractInterestBearingConfig(mint_data);
-    const scaled_config = parse_token_extension.extractScaledUiAmountConfig(mint_data);
+    const interest_config = parse_token_extension.InterestBearingConfigData.extractFromMint(mint_data);
+    const scaled_config = parse_token_extension.ScaledUiAmountConfigData.extractFromMint(mint_data);
 
     return .{
         .spl_token = .{

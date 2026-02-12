@@ -3610,7 +3610,6 @@ fn loadTestAccountsDBFromSnapshot(
 
 // NOTE: this is a memory leak test - geyser correctness is tested in the geyser tests
 test "geyser stream on load" {
-    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const logger: Logger = .noop;
 

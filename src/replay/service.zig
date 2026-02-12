@@ -573,7 +573,6 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     slot,
                     last_entry_hash,
                 ));
-                state.slot_tracker.latest_confirmed_slot.update(slot);
                 processed_a_slot = true;
             } else {
                 state.logger.info().logf("partially replayed slot: {}", .{slot});
