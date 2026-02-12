@@ -1004,6 +1004,12 @@ pub const UiConfidentialTransferAccount = struct {
     }
 };
 
+/// Key-value pair for TokenMetadata additional_metadata.
+const KeyValuePair = struct {
+    key: std.BoundedArray(u8, 64),
+    value: std.BoundedArray(u8, 256),
+};
+
 /// TokenMetadata (variable length, Borsh serialized).
 /// NOTE: Strings are stored inline in the struct's bounded arrays.
 pub const UiTokenMetadata = struct {
@@ -1012,8 +1018,7 @@ pub const UiTokenMetadata = struct {
     name: std.BoundedArray(u8, 128),
     symbol: std.BoundedArray(u8, 32),
     uri: std.BoundedArray(u8, 256),
-    // Additional metadata as key-value pairs (simplified: store as JSON string)
-    additional_metadata_count: u32,
+    additional_metadata: std.BoundedArray(KeyValuePair, 32),
 
     // TODO: document the Borsh format here.
     fn parse(value: []const u8) ?UiExtension {
@@ -1038,10 +1043,19 @@ pub const UiTokenMetadata = struct {
         // uri: String (4-byte len + UTF-8)
         const uri = readBorshString(value, &offset, 256) orelse return null;
 
-        // additional_metadata: Vec<(String, String)> - just read count for now
-        var additional_count: u32 = 0;
-        if (offset + 4 <= value.len) {
-            additional_count = std.mem.readInt(u32, value[offset..][0..4], .little);
+        // additional_metadata: Vec<(String, String)>
+        // Return null (-> unparseable_extension) if limits exceeded
+        if (offset + 4 > value.len) return null;
+        const count = std.mem.readInt(u32, value[offset..][0..4], .little);
+        offset += 4;
+
+        if (count > 32) return null; // Too many pairs
+
+        var additional_metadata: std.BoundedArray(KeyValuePair, 32) = .{};
+        for (0..count) |_| {
+            const key = readBorshString(value, &offset, 64) orelse return null;
+            const val = readBorshString(value, &offset, 256) orelse return null;
+            additional_metadata.append(.{ .key = key, .value = val }) catch return null;
         }
 
         return .{ .token_metadata = .{
@@ -1050,7 +1064,7 @@ pub const UiTokenMetadata = struct {
             .name = name,
             .symbol = symbol,
             .uri = uri,
-            .additional_metadata_count = additional_count,
+            .additional_metadata = additional_metadata,
         } };
     }
 
@@ -1067,8 +1081,13 @@ pub const UiTokenMetadata = struct {
         try jw.objectField("uri");
         try jw.write(self.uri.constSlice());
         try jw.objectField("additionalMetadata");
-        // For now, output empty array. Full implementation would parse Vec<(String, String)>
         try jw.beginArray();
+        for (self.additional_metadata.constSlice()) |pair| {
+            try jw.beginArray();
+            try jw.write(pair.key.constSlice());
+            try jw.write(pair.value.constSlice());
+            try jw.endArray();
+        }
         try jw.endArray();
         try jw.endObject();
     }
@@ -1116,4 +1135,273 @@ fn readOptionalNonZeroBytes(data: []const u8) ?[]const u8 {
         if (b != 0) return data;
     }
     return null;
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+/// Helper to build Borsh-encoded TokenMetadata bytes for testing.
+fn buildTokenMetadataBytes(
+    update_authority: ?Pubkey,
+    mint: Pubkey,
+    name: []const u8,
+    symbol: []const u8,
+    uri: []const u8,
+    additional_metadata: []const struct { key: []const u8, value: []const u8 },
+) std.BoundedArray(u8, 4096) {
+    var buf: std.BoundedArray(u8, 4096) = .{};
+
+    // update_authority: OptionalNonZeroPubkey (32 bytes)
+    if (update_authority) |auth| {
+        buf.appendSliceAssumeCapacity(&auth.data);
+    } else {
+        buf.appendNTimesAssumeCapacity(0, 32);
+    }
+
+    // mint: Pubkey (32 bytes)
+    buf.appendSliceAssumeCapacity(&mint.data);
+
+    // name: Borsh string
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, @intCast(name.len))));
+    buf.appendSliceAssumeCapacity(name);
+
+    // symbol: Borsh string
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, @intCast(symbol.len))));
+    buf.appendSliceAssumeCapacity(symbol);
+
+    // uri: Borsh string
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, @intCast(uri.len))));
+    buf.appendSliceAssumeCapacity(uri);
+
+    // additional_metadata: Vec<(String, String)>
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, @intCast(additional_metadata.len))));
+    for (additional_metadata) |pair| {
+        buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, @intCast(pair.key.len))));
+        buf.appendSliceAssumeCapacity(pair.key);
+        buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, @intCast(pair.value.len))));
+        buf.appendSliceAssumeCapacity(pair.value);
+    }
+
+    return buf;
+}
+
+test "rpc.account_decoder.parse_token_extension: token_metadata empty additional_metadata" {
+    const mint = Pubkey{ .data = [_]u8{1} ** 32 };
+    const authority = Pubkey{ .data = [_]u8{2} ** 32 };
+
+    const bytes = buildTokenMetadataBytes(
+        authority,
+        mint,
+        "Test Token",
+        "TEST",
+        "https://example.com/token.json",
+        &.{}, // empty additional_metadata
+    );
+
+    const result = UiTokenMetadata.parse(bytes.constSlice());
+    try std.testing.expect(result != null);
+
+    switch (result.?) {
+        .token_metadata => |tm| {
+            try std.testing.expectEqualStrings("Test Token", tm.name.constSlice());
+            try std.testing.expectEqualStrings("TEST", tm.symbol.constSlice());
+            try std.testing.expectEqualStrings("https://example.com/token.json", tm.uri.constSlice());
+            try std.testing.expectEqual(@as(usize, 0), tm.additional_metadata.len);
+        },
+        else => try std.testing.expect(false),
+    }
+}
+
+test "rpc.account_decoder.parse_token_extension: token_metadata single pair" {
+    const mint = Pubkey{ .data = [_]u8{1} ** 32 };
+
+    const bytes = buildTokenMetadataBytes(
+        null, // no update authority
+        mint,
+        "NFT",
+        "NFT",
+        "https://example.com/nft.json",
+        &.{.{ .key = "trait_type", .value = "Background" }},
+    );
+
+    const result = UiTokenMetadata.parse(bytes.constSlice());
+    try std.testing.expect(result != null);
+
+    switch (result.?) {
+        .token_metadata => |tm| {
+            try std.testing.expect(tm.update_authority == null);
+            try std.testing.expectEqual(@as(usize, 1), tm.additional_metadata.len);
+            const pair = tm.additional_metadata.get(0);
+            try std.testing.expectEqualStrings("trait_type", pair.key.constSlice());
+            try std.testing.expectEqualStrings("Background", pair.value.constSlice());
+        },
+        else => try std.testing.expect(false),
+    }
+}
+
+test "rpc.account_decoder.parse_token_extension: token_metadata multiple pairs" {
+    const mint = Pubkey{ .data = [_]u8{1} ** 32 };
+    const authority = Pubkey{ .data = [_]u8{2} ** 32 };
+
+    const bytes = buildTokenMetadataBytes(
+        authority,
+        mint,
+        "Cool NFT",
+        "CNFT",
+        "https://example.com/cool.json",
+        &.{
+            .{ .key = "trait_type", .value = "Background" },
+            .{ .key = "value", .value = "Blue" },
+            .{ .key = "rarity", .value = "Legendary" },
+        },
+    );
+
+    const result = UiTokenMetadata.parse(bytes.constSlice());
+    try std.testing.expect(result != null);
+
+    switch (result.?) {
+        .token_metadata => |tm| {
+            try std.testing.expectEqual(@as(usize, 3), tm.additional_metadata.len);
+            try std.testing.expectEqualStrings("trait_type", tm.additional_metadata.get(0).key.constSlice());
+            try std.testing.expectEqualStrings("Background", tm.additional_metadata.get(0).value.constSlice());
+            try std.testing.expectEqualStrings("value", tm.additional_metadata.get(1).key.constSlice());
+            try std.testing.expectEqualStrings("Blue", tm.additional_metadata.get(1).value.constSlice());
+            try std.testing.expectEqualStrings("rarity", tm.additional_metadata.get(2).key.constSlice());
+            try std.testing.expectEqualStrings("Legendary", tm.additional_metadata.get(2).value.constSlice());
+        },
+        else => try std.testing.expect(false),
+    }
+}
+
+test "rpc.account_decoder.parse_token_extension: token_metadata too many pairs returns null" {
+    const mint = Pubkey{ .data = [_]u8{1} ** 32 };
+
+    // Build bytes with 33 pairs (exceeds limit of 32)
+    var buf: std.BoundedArray(u8, 8192) = .{};
+
+    // update_authority: 32 zero bytes
+    buf.appendNTimesAssumeCapacity(0, 32);
+    // mint
+    buf.appendSliceAssumeCapacity(&mint.data);
+    // name
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 4)));
+    buf.appendSliceAssumeCapacity("Test");
+    // symbol
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 4)));
+    buf.appendSliceAssumeCapacity("TEST");
+    // uri
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 4)));
+    buf.appendSliceAssumeCapacity("http");
+    // additional_metadata count: 33
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 33)));
+    // Add 33 pairs
+    for (0..33) |i| {
+        var key_buf: [8]u8 = undefined;
+        const key_len = std.fmt.bufPrint(&key_buf, "key{d}", .{i}) catch unreachable;
+        buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, @intCast(key_len.len))));
+        buf.appendSliceAssumeCapacity(key_len);
+        buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 5)));
+        buf.appendSliceAssumeCapacity("value");
+    }
+
+    const result = UiTokenMetadata.parse(buf.constSlice());
+    // Should fail due to too many pairs
+    try std.testing.expect(result == null);
+}
+
+test "rpc.account_decoder.parse_token_extension: token_metadata key too long returns null" {
+    const mint = Pubkey{ .data = [_]u8{1} ** 32 };
+
+    var buf: std.BoundedArray(u8, 4096) = .{};
+
+    // update_authority: 32 zero bytes
+    buf.appendNTimesAssumeCapacity(0, 32);
+    // mint
+    buf.appendSliceAssumeCapacity(&mint.data);
+    // name
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 4)));
+    buf.appendSliceAssumeCapacity("Test");
+    // symbol
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 4)));
+    buf.appendSliceAssumeCapacity("TEST");
+    // uri
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 4)));
+    buf.appendSliceAssumeCapacity("http");
+    // additional_metadata count: 1
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 1)));
+    // Key with 65 bytes (exceeds 64 limit)
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 65)));
+    buf.appendNTimesAssumeCapacity('x', 65);
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 5)));
+    buf.appendSliceAssumeCapacity("value");
+
+    const result = UiTokenMetadata.parse(buf.constSlice());
+    // Should fail due to key too long
+    try std.testing.expect(result == null);
+}
+
+test "rpc.account_decoder.parse_token_extension: token_metadata value too long returns null" {
+    const mint = Pubkey{ .data = [_]u8{1} ** 32 };
+
+    var buf: std.BoundedArray(u8, 4096) = .{};
+
+    // update_authority: 32 zero bytes
+    buf.appendNTimesAssumeCapacity(0, 32);
+    // mint
+    buf.appendSliceAssumeCapacity(&mint.data);
+    // name
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 4)));
+    buf.appendSliceAssumeCapacity("Test");
+    // symbol
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 4)));
+    buf.appendSliceAssumeCapacity("TEST");
+    // uri
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 4)));
+    buf.appendSliceAssumeCapacity("http");
+    // additional_metadata count: 1
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 1)));
+    // Key (valid)
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 3)));
+    buf.appendSliceAssumeCapacity("key");
+    // Value with 257 bytes (exceeds 256 limit)
+    buf.appendSliceAssumeCapacity(&std.mem.toBytes(@as(u32, 257)));
+    buf.appendNTimesAssumeCapacity('v', 257);
+
+    const result = UiTokenMetadata.parse(buf.constSlice());
+    try std.testing.expect(result == null); // Should fail due to value too long
+}
+
+test "rpc.account_decoder.parse_token_extension: token_metadata JSON output" {
+    const mint = Pubkey{ .data = [_]u8{1} ** 32 };
+
+    const bytes = buildTokenMetadataBytes(
+        null,
+        mint,
+        "Test",
+        "TST",
+        "https://x.com",
+        &.{
+            .{ .key = "trait_type", .value = "Background" },
+            .{ .key = "value", .value = "Blue" },
+        },
+    );
+
+    const result = UiTokenMetadata.parse(bytes.constSlice());
+    try std.testing.expect(result != null);
+
+    switch (result.?) {
+        .token_metadata => |tm| {
+            var json_buf: [2048]u8 = undefined;
+            var fbs = std.io.fixedBufferStream(&json_buf);
+            var jw = std.json.writeStream(fbs.writer(), .{});
+
+            try tm.jsonStringify(&jw);
+
+            const json_output = fbs.getWritten();
+            // Verify JSON contains expected structure
+            try std.testing.expect(std.mem.indexOf(u8, json_output, "\"additionalMetadata\":[[\"trait_type\",\"Background\"],[\"value\",\"Blue\"]]") != null);
+        },
+        else => try std.testing.expect(false),
+    }
 }
