@@ -3,12 +3,16 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const account_decoder = @import("lib.zig");
-const token_extension = @import("token_extension.zig");
+const parse_token_extension = @import("parse_token_extension.zig");
 
 const Allocator = std.mem.Allocator;
 const Pubkey = sig.core.Pubkey;
 const ParseError = account_decoder.ParseError;
 const AccountState = account_decoder.AccountState;
+
+const UiExtension = parse_token_extension.UiExtension;
+const MAX_EXTENSIONS = parse_token_extension.MAX_EXTENSIONS;
+const parseExtensions = parse_token_extension.parseExtensions;
 
 /// Index of the account state byte (108 = offset of `state` field in TokenAccount)
 // TODO: document offset form Agave.
@@ -31,11 +35,11 @@ pub fn parseToken(
             data[TokenAccount.LEN] == @intFromEnum(AccountTypeDiscriminator.mint));
 
     // Parse extensions for Token-2022.
-    var extensions_slice: ?[]const token_extension.UiExtension = null;
-    var extensions_storage: ?std.BoundedArray(token_extension.UiExtension, token_extension.MAX_EXTENSIONS) = null;
+    var extensions_slice: ?[]const UiExtension = null;
+    var extensions_storage: ?std.BoundedArray(UiExtension, MAX_EXTENSIONS) = null;
 
     if (is_token_2022) {
-        if (token_extension.parseExtensions(data)) |exts| {
+        if (parseExtensions(data)) |exts| {
             extensions_storage = exts;
             extensions_slice = extensions_storage.?.constSlice();
         }
@@ -330,7 +334,7 @@ pub const UiTokenAccount = struct {
     delegated_amount: ?UiTokenAmount,
     close_authority: ?Pubkey.Base58String,
     // Token-2022.
-    extensions: ?[]const token_extension.UiExtension = null,
+    extensions: ?[]const UiExtension = null,
 
     pub fn jsonStringify(self: UiTokenAccount, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
@@ -376,7 +380,7 @@ pub const UiMint = struct {
     is_initialized: bool,
     freeze_authority: ?Pubkey.Base58String,
     // Token-2022.
-    extensions: ?[]const token_extension.UiExtension = null,
+    extensions: ?[]const UiExtension = null,
 
     pub fn jsonStringify(self: UiMint, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
@@ -527,7 +531,7 @@ fn readCOptionU64(data: *const [12]u8) ?u64 {
     return std.mem.readInt(u64, data[4..12], .little);
 }
 
-test "rpc.account_decoder.parseToken" {
+test "rpc.account_decoder.parseToken: basic token account parsing" {
     const TEST_MINT_AUTHORITY = Pubkey{ .data = [_]u8{1} ** 32 };
     const TEST_FREEZE_AUTHORITY = Pubkey{ .data = [_]u8{2} ** 32 };
 
@@ -814,7 +818,7 @@ test "rpc.account_decoder.parseToken" {
     }
 }
 
-test "rpc.account_decoder.parseExtensions" {
+test "rpc.account_decoder.parseExtension: basic extension parsing" {
     // Test TLV parsing with marker extension
     {
         // make a minimal Token-2022 account with ImmutableOwner extension
@@ -839,10 +843,10 @@ test "rpc.account_decoder.parseExtensions" {
         data[170] = 0;
         data[171] = 0;
 
-        const extensions = token_extension.parseExtensions(&data);
+        const extensions = parseExtensions(&data);
         try std.testing.expect(extensions != null);
         try std.testing.expectEqual(@as(usize, 1), extensions.?.len);
-        try std.testing.expectEqual(token_extension.UiExtension.immutable_owner, extensions.?.get(0));
+        try std.testing.expectEqual(UiExtension.immutable_owner, extensions.?.get(0));
     }
 
     // Test multiple extensions
@@ -870,10 +874,10 @@ test "rpc.account_decoder.parseExtensions" {
         data[175] = 0;
         data[176] = 0;
 
-        const extensions = token_extension.parseExtensions(&data);
+        const extensions = parseExtensions(&data);
         try std.testing.expect(extensions != null);
         try std.testing.expectEqual(@as(usize, 2), extensions.?.len);
-        try std.testing.expectEqual(token_extension.UiExtension.immutable_owner, extensions.?.get(0));
+        try std.testing.expectEqual(UiExtension.immutable_owner, extensions.?.get(0));
 
         const memo = extensions.?.get(1);
         switch (memo) {
@@ -901,16 +905,16 @@ test "rpc.account_decoder.parseExtensions" {
         data[170] = 0;
         data[171] = 0;
 
-        const extensions = token_extension.parseExtensions(&data);
+        const extensions = parseExtensions(&data);
         try std.testing.expect(extensions != null);
         try std.testing.expectEqual(@as(usize, 1), extensions.?.len);
-        try std.testing.expectEqual(token_extension.UiExtension.unparseable_extension, extensions.?.get(0));
+        try std.testing.expectEqual(UiExtension.unparseable_extension, extensions.?.get(0));
     }
 
     // Test insufficient data returns null
     {
         const data: [100]u8 = undefined;
-        const extensions = token_extension.parseExtensions(&data);
+        const extensions = parseExtensions(&data);
         try std.testing.expect(extensions == null);
     }
 }
