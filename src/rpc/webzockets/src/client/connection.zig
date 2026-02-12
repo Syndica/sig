@@ -151,8 +151,6 @@ pub fn ClientConnection(
             header_len: usize = 0,
             /// Payload for current or pending data write (caller owned slice, data masked in place).
             payload: []const u8 = &.{},
-            /// Whether a data write is pending (deferred due to in-flight control).
-            pending_data: bool = false,
 
             // Control frame buffers (127 payload + 4 mask key)
             /// Control frame buffer for in-flight control writes.
@@ -463,6 +461,11 @@ pub fn ClientConnection(
             return key;
         }
 
+        /// True when a user data write is in-flight or deferred.
+        fn outstandingUserWrite(self: *ConnectionSelf) bool {
+            return self.write.header_len != 0;
+        }
+
         /// Start a two-phase data write: header first, then payload (masked in-place in
         /// the caller's buffer).
         /// If a control frame is in flight, the data write is deferred and will
@@ -470,7 +473,7 @@ pub fn ClientConnection(
         /// Returns error.WriteBusy if another data write is already in flight or pending.
         fn startDataWrite(self: *ConnectionSelf, opcode: types.Opcode, payload: []u8) !void {
             // Only one data write can be pending/in-flight at a time
-            if (self.write.in_flight == .data or self.write.pending_data) {
+            if (self.outstandingUserWrite()) {
                 return error.WriteBusy;
             }
 
@@ -494,7 +497,6 @@ pub fn ClientConnection(
 
             if (self.write.in_flight == .control) {
                 // Control frame in flight — defer data write until it completes
-                self.write.pending_data = true;
                 return;
             }
 
@@ -609,8 +611,8 @@ pub fn ClientConnection(
         fn finishWrite(self: *ConnectionSelf) void {
             self.write.in_flight = .idle;
             self.write.payload = &.{};
-            // Flush pending controls first (priority over data). If flushed,
-            // in_flight is now .control; a send in onWriteComplete defers via pending_data.
+            self.write.header_len = 0;
+            // Flush pending controls first (priority over data) before invoking user callback
             self.trySubmitNextControl();
             self.handler.onWriteComplete(self);
         }
@@ -624,11 +626,10 @@ pub fn ClientConnection(
                 return;
             }
 
-            // Pending controls have priority over pending data writes
+            // Pending controls have priority over pending data writes.
             self.trySubmitNextControl();
-            if (self.write.in_flight == .idle and self.write.pending_data) {
-                // Start deferred data write (header already built in header_buf)
-                self.write.pending_data = false;
+            if (self.write.in_flight == .idle and self.outstandingUserWrite()) {
+                // Start deferred data write (header already built in header_buf).
                 self.write.in_flight = .{ .data = .{ .phase = .header, .offset = 0 } };
                 self.submitWrite(self.write.header_buf[0..self.write.header_len]);
             }
@@ -742,7 +743,7 @@ pub fn ClientConnection(
 
             // Notify handler if a data write was in flight or pending so buffer
             // can be cleaned up. Not fired for internal control frame writes.
-            if (self.write.in_flight == .data or self.write.pending_data) {
+            if (self.outstandingUserWrite()) {
                 self.handler.onWriteComplete(self);
             }
 
