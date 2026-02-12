@@ -7,6 +7,7 @@ const Allocator = std.mem.Allocator;
 const Slot = sig.core.Slot;
 const SlotConstants = sig.core.SlotConstants;
 const SlotState = sig.core.SlotState;
+const ThreadPool = sig.sync.ThreadPool;
 
 /// Central registry that tracks high-level info about slots and how they fork.
 ///
@@ -21,16 +22,38 @@ const SlotState = sig.core.SlotState;
 pub const SlotTracker = struct {
     slots: std.AutoArrayHashMapUnmanaged(Slot, *Element),
     root: Slot,
+    wg: *std.Thread.WaitGroup,
 
     pub const Element = struct {
         constants: SlotConstants,
         state: SlotState,
+        destroy_task: ThreadPool.Task = .{ .callback = runDestroy },
+        pruned_wg: ?*std.Thread.WaitGroup = null,
+        allocator: ?Allocator = null,
 
         fn toRef(self: *Element) Reference {
             return .{
                 .constants = &self.constants,
                 .state = &self.state,
             };
+        }
+
+        fn destroy(self: *Element, allocator: Allocator) void {
+            self.constants.deinit(allocator);
+            self.state.deinit(allocator);
+            allocator.destroy(self);
+        }
+
+        fn runDestroy(task: *ThreadPool.Task) void {
+            const zone = tracy.Zone.init(@src(), .{ .name = "SlotTracker.Element.destroy" });
+            defer zone.deinit();
+
+            const self: *Element = @alignCast(@fieldParentPtr("destroy_task", task));
+            const wg = self.pruned_wg.?; // read it out of self, as this will destroy(self)
+            defer wg.finish();
+
+            const allocator = self.allocator.?;
+            self.destroy(allocator);
         }
     };
 
@@ -39,16 +62,23 @@ pub const SlotTracker = struct {
         state: *SlotState,
     };
 
+    pub fn initEmpty(allocator: Allocator, root_slot: Slot) !SlotTracker {
+        const wg = try allocator.create(std.Thread.WaitGroup);
+        wg.* = .{};
+        return .{
+            .root = root_slot,
+            .slots = .empty,
+            .wg = wg,
+        };
+    }
+
     pub fn init(
         allocator: std.mem.Allocator,
         root_slot: Slot,
         /// ownership is transferred to this function, except in the case of an error return
         slot_init: Element,
     ) std.mem.Allocator.Error!SlotTracker {
-        var self: SlotTracker = .{
-            .root = root_slot,
-            .slots = .empty,
-        };
+        var self: SlotTracker = try .initEmpty(allocator, root_slot);
         errdefer self.deinit(allocator);
 
         try self.put(allocator, root_slot, slot_init);
@@ -58,12 +88,11 @@ pub const SlotTracker = struct {
     }
 
     pub fn deinit(self: SlotTracker, allocator: Allocator) void {
+        self.wg.wait();
+        allocator.destroy(self.wg);
+
         var slots = self.slots;
-        for (slots.values()) |element| {
-            element.constants.deinit(allocator);
-            element.state.deinit(allocator);
-            allocator.destroy(element);
-        }
+        for (slots.values()) |element| element.destroy(allocator);
         slots.deinit(allocator);
     }
 
@@ -126,6 +155,8 @@ pub const SlotTracker = struct {
         allocator: Allocator,
     ) Allocator.Error![]const Slot {
         var list = try std.ArrayListUnmanaged(Slot).initCapacity(allocator, self.slots.count());
+        errdefer list.deinit(allocator);
+
         for (self.slots.keys(), self.slots.values()) |slot, value| {
             if (!value.state.isFrozen()) {
                 list.appendAssumeCapacity(slot);
@@ -180,22 +211,38 @@ pub const SlotTracker = struct {
     /// Analogous to [prune_non_rooted](https://github.com/anza-xyz/agave/blob/441258229dfed75e45be8f99c77865f18886d4ba/runtime/src/bank_forks.rs#L591)
     //  TODO Revisit: Currently this removes all slots less than the rooted slot.
     // In Agave, only the slots not in the root path are removed.
-    pub fn pruneNonRooted(self: *SlotTracker, allocator: Allocator) void {
+    pub fn pruneNonRooted(
+        self: *SlotTracker,
+        allocator: Allocator,
+        maybe_thread_pool: ?*ThreadPool,
+    ) void {
         const zone = tracy.Zone.init(@src(), .{ .name = "SlotTracker.pruneNonRooted" });
         defer zone.deinit();
 
         defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
+
+        var destroy_batch = ThreadPool.Batch{};
+        defer if (maybe_thread_pool) |thread_pool| {
+            self.wg.startMany(destroy_batch.len);
+            thread_pool.schedule(destroy_batch);
+        };
 
         var slice = self.slots.entries.slice();
         var index: usize = 0;
         while (index < slice.len) {
             if (slice.items(.key)[index] < self.root) {
                 const element = slice.items(.value)[index];
-                element.state.deinit(allocator);
-                element.constants.deinit(allocator);
-                allocator.destroy(element);
                 self.slots.swapRemoveAt(index);
                 slice = self.slots.entries.slice();
+
+                // Destroy element inline, or destroy in ThreadPool if provided.
+                if (maybe_thread_pool) |_| {
+                    element.pruned_wg = self.wg;
+                    element.allocator = allocator;
+                    destroy_batch.push(.from(&element.destroy_task));
+                } else {
+                    element.destroy(allocator);
+                }
             } else {
                 index += 1;
             }
@@ -461,7 +508,7 @@ test "SlotTracker.prune removes all slots less than root" {
     }
 
     // Prune slots less than root (4)
-    tracker.pruneNonRooted(allocator);
+    tracker.pruneNonRooted(allocator, null);
 
     // Only slots 4 and 5 should remain
     try std.testing.expect(tracker.contains(4));

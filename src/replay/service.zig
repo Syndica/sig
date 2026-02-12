@@ -106,6 +106,7 @@ pub fn advanceReplay(
         defer duplicate_confirmed_slots.deinit(allocator);
 
         try consensus.tower.process(allocator, .{
+            .maybe_thread_pool = &replay_state.thread_pool,
             .account_store = replay_state.account_store,
             .gossip_votes = consensus.gossip_votes,
             .ledger = replay_state.ledger,
@@ -589,7 +590,7 @@ fn bypassConsensus(state: *ReplayState) !void {
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root = new_root;
-        slot_tracker.pruneNonRooted(state.allocator);
+        slot_tracker.pruneNonRooted(state.allocator, &state.thread_pool);
 
         try state.status_cache.addRoot(state.allocator, new_root);
 

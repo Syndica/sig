@@ -14,6 +14,8 @@ pub const Logger = sig.trace.Logger("consensus");
 
 const Channel = sig.sync.Channel;
 const RwMux = sig.sync.RwMux;
+const ThreadPool = sig.sync.ThreadPool;
+
 const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
 
 const Ancestors = sig.core.Ancestors;
@@ -345,6 +347,7 @@ pub const TowerConsensus = struct {
         params: struct {
             account_store: AccountStore,
             ledger: *Ledger,
+            maybe_thread_pool: ?*ThreadPool = null,
             /// Scanned by the vote collector if provided.
             gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
             slot_tracker: *SlotTracker,
@@ -466,6 +469,7 @@ pub const TowerConsensus = struct {
             params.vote_sockets,
             self.identity.vote_account,
             params.senders,
+            params.maybe_thread_pool,
         );
     }
 
@@ -518,6 +522,7 @@ pub const TowerConsensus = struct {
         vote_sockets: ?*const VoteSockets,
         vote_account: ?Pubkey,
         senders: Senders,
+        maybe_thread_pool: ?*ThreadPool,
     ) !void {
         const newly_computed_consensus_slots = try computeConsensusInputs(
             allocator,
@@ -656,6 +661,7 @@ pub const TowerConsensus = struct {
                 gossip_table,
                 slot_leaders,
                 vote_sockets,
+                maybe_thread_pool,
             );
         }
 
@@ -940,6 +946,7 @@ fn handleVotableBank(
     gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
     maybe_sockets: ?*const VoteSockets,
+    maybe_thread_pool: ?*ThreadPool,
 ) !void {
     const maybe_new_root = try replay_tower.recordBankVote(
         allocator,
@@ -960,6 +967,7 @@ fn handleVotableBank(
             account_store,
             status_cache,
             new_root,
+            maybe_thread_pool,
         );
     }
 
@@ -1574,6 +1582,7 @@ fn checkAndHandleNewRoot(
     account_store: AccountStore,
     status_cache: ?*sig.core.StatusCache,
     new_root: Slot,
+    maybe_thread_pool: ?*ThreadPool,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "checkAndHandleNewRoot" });
     defer zone.deinit();
@@ -1600,7 +1609,7 @@ fn checkAndHandleNewRoot(
     // Set new root.
     slot_tracker.root = new_root;
     // Prune non rooted slots
-    slot_tracker.pruneNonRooted(allocator);
+    slot_tracker.pruneNonRooted(allocator, maybe_thread_pool);
 
     // Tell the status_cache about it for its tracking.
     if (status_cache) |sc| try sc.addRoot(allocator, new_root);
@@ -2506,10 +2515,7 @@ test "checkAndHandleNewRoot - missing slot" {
     defer fixture.deinit(allocator);
 
     // Build a tracked slot set wrapped in RwMux
-    var slot_tracker: SlotTracker = .{
-        .root = root.slot,
-        .slots = .empty,
-    };
+    var slot_tracker: SlotTracker = try .initEmpty(testing.allocator, root.slot);
     defer slot_tracker.deinit(testing.allocator);
 
     {
@@ -2546,6 +2552,7 @@ test "checkAndHandleNewRoot - missing slot" {
         .noop,
         null, // no need to update a StatusCache,
         123, // Non-existent slot
+        null, // no thread pool
     );
 
     try testing.expectError(error.MissingSlot, result);
@@ -2564,7 +2571,7 @@ test "checkAndHandleNewRoot - missing hash" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    var slot_tracker2 = RwMux(SlotTracker).init(.{ .root = root.slot, .slots = .empty });
+    var slot_tracker2 = RwMux(SlotTracker).init(try .initEmpty(allocator, root.slot));
     defer {
         const ptr, var lg = slot_tracker2.writeWithLock();
         defer lg.unlock();
@@ -2612,6 +2619,7 @@ test "checkAndHandleNewRoot - missing hash" {
         .noop,
         null, // no need to update a StatusCache,
         root.slot, // Non-existent hash
+        null, // no thread pool
     );
 
     try testing.expectError(error.MissingHash, result);
@@ -2631,7 +2639,7 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    const slot_tracker_val3: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
+    const slot_tracker_val3: SlotTracker = try .initEmpty(testing.allocator, root.slot);
     var slot_tracker3 = RwMux(SlotTracker).init(slot_tracker_val3);
     defer {
         const ptr, var lg = slot_tracker3.writeWithLock();
@@ -2665,6 +2673,7 @@ test "checkAndHandleNewRoot - empty slot tracker" {
         .noop,
         null, // no need to update a StatusCache,
         root.slot,
+        null, // no thread pool
     );
 
     try testing.expectError(error.EmptySlotTracker, result);
@@ -2695,7 +2704,7 @@ test "checkAndHandleNewRoot - success" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    var slot_tracker4 = RwMux(SlotTracker).init(.{ .root = root.slot, .slots = .empty });
+    var slot_tracker4 = RwMux(SlotTracker).init(try .initEmpty(allocator, root.slot));
     defer {
         const ptr, var lg = slot_tracker4.writeWithLock();
         defer lg.unlock();
@@ -2775,6 +2784,7 @@ test "checkAndHandleNewRoot - success" {
             .noop,
             null, // no need to update a StatusCache,
             hash3.slot,
+            null, // no thread pool
         );
     }
 
@@ -6813,6 +6823,7 @@ test "successful fork switch (switch_proof)" {
         root_slot,
         .{ .constants = root_consts, .state = root_state },
     );
+    defer slot_tracker.deinit(allocator);
 
     // Build first child of root:
     //
@@ -7269,14 +7280,6 @@ test "successful fork switch (switch_proof)" {
         });
         try std.testing.expectEqual(4, consensus.replay_tower.lastVotedSlot());
     }
-
-    // Cleanup: free SlotTracker elements owned via slot_tracker_rw
-    for (slot_tracker.slots.values()) |element| {
-        element.state.deinit(allocator);
-        element.constants.deinit(allocator);
-        allocator.destroy(element);
-    }
-    slot_tracker.slots.deinit(allocator);
 }
 
 test "loadTower handles missing vote account" {
