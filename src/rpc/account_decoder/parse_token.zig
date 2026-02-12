@@ -3,11 +3,15 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const account_decoder = @import("lib.zig");
+const token_extension = @import("token_extension.zig");
+
 const Allocator = std.mem.Allocator;
 const Pubkey = sig.core.Pubkey;
 const ParseError = account_decoder.ParseError;
+const AccountState = account_decoder.AccountState;
 
-// Index of the account state byte (108 = offset of `state` field in TokenAccount)
+/// Index of the account state byte (108 = offset of `state` field in TokenAccount)
+// TODO: document offset form Agave.
 const ACCOUNT_INITIALIZED_INDEX: usize = 108;
 
 /// Parse an SPL Token account.
@@ -20,8 +24,24 @@ pub fn parseToken(
     data: []const u8,
     additional_data: ?*const SplTokenAdditionalData,
 ) ParseError!?TokenAccountType {
-    // Try Token Account first (most common, 165+ bytes)
-    // Token-2022 accounts may be larger due to extensions
+    // Detect Token-2022 by check discriminator at offset 165
+    const is_token_2022 = data.len > TokenAccount.LEN and
+        data.len != Multisig.LEN and
+        (data[TokenAccount.LEN] == @intFromEnum(AccountTypeDiscriminator.account) or
+            data[TokenAccount.LEN] == @intFromEnum(AccountTypeDiscriminator.mint));
+
+    // Parse extensions for Token-2022.
+    var extensions_slice: ?[]const token_extension.UiExtension = null;
+    var extensions_storage: ?std.BoundedArray(token_extension.UiExtension, token_extension.MAX_EXTENSIONS) = null;
+
+    if (is_token_2022) {
+        if (token_extension.parseExtensions(data)) |exts| {
+            extensions_storage = exts;
+            extensions_slice = extensions_storage.?.constSlice();
+        }
+    }
+
+    // Try Token Account (165+ bytes)
     if (data.len >= TokenAccount.LEN) {
         if (TokenAccount.unpack(data)) |account| {
             if (account.state == .uninitialized) {
@@ -171,9 +191,25 @@ fn isInitializedAccount(data: []const u8) bool {
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token.rs#L30-L35
 pub const SplTokenAdditionalData = struct {
     decimals: u8,
-    // TODO Token-2022 fields:
-    // interest_bearing_config: ?InterestBearingConfig,
-    // scaled_ui_amount_config: ?ScaledUiAmountConfig,
+    // Token-2022 extension data
+    interest_bearing_config: ?InterestBearingConfigData = null,
+    scaled_ui_amount_config: ?ScaledUiAmountConfigData = null,
+};
+
+/// Subset of InterestBearingConfig needed for amount calculations.
+pub const InterestBearingConfigData = struct {
+    rate_authority: ?Pubkey,
+    initialization_timestamp: i64,
+    pre_update_average_rate: i16,
+    last_update_timestamp: i64,
+    current_rate: i16,
+};
+
+/// Subset of ScaledUiAmountConfig needed for amount calculations.
+pub const ScaledUiAmountConfigData = struct {
+    multiplier: f64,
+    new_multiplier_effective_timestamp: i64,
+    new_multiplier: f64,
 };
 
 /// SPL Token Mint account layout (82 bytes).
@@ -195,13 +231,6 @@ pub const Mint = struct {
             .freeze_authority = readCOptionPubkey(data[46..82]),
         };
     }
-};
-
-/// SPL Token Account state enum.
-pub const AccountState = enum(u8) {
-    uninitialized = 0,
-    initialized = 1,
-    frozen = 2,
 };
 
 /// SPL Token Account layout (165 bytes).
@@ -300,6 +329,8 @@ pub const UiTokenAccount = struct {
     rent_exempt_reserve: ?UiTokenAmount,
     delegated_amount: ?UiTokenAmount,
     close_authority: ?Pubkey.Base58String,
+    // Token-2022.
+    extensions: ?[]const token_extension.UiExtension = null,
 
     pub fn jsonStringify(self: UiTokenAccount, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
@@ -325,6 +356,14 @@ pub const UiTokenAccount = struct {
         if (self.delegated_amount) |d| try d.jsonStringify(jw) else try jw.write(null);
         try jw.objectField("closeAuthority");
         if (self.close_authority) |c| try jw.write(c.slice()) else try jw.write(null);
+        if (self.extensions) |exts| {
+            try jw.objectField("extensions");
+            try jw.beginArray();
+            for (exts) |ext| {
+                try ext.jsonStringify(jw);
+            }
+            try jw.endArray();
+        }
         try jw.endObject();
     }
 };
@@ -336,6 +375,8 @@ pub const UiMint = struct {
     decimals: u8,
     is_initialized: bool,
     freeze_authority: ?Pubkey.Base58String,
+    // Token-2022.
+    extensions: ?[]const token_extension.UiExtension = null,
 
     pub fn jsonStringify(self: UiMint, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
@@ -349,6 +390,14 @@ pub const UiMint = struct {
         try jw.write(self.is_initialized);
         try jw.objectField("freezeAuthority");
         if (self.freeze_authority) |a| try jw.write(a.slice()) else try jw.write(null);
+        if (self.extensions) |exts| {
+            try jw.objectField("extensions");
+            try jw.beginArray();
+            for (exts) |ext| {
+                try ext.jsonStringify(jw);
+            }
+            try jw.endArray();
+        }
         try jw.endObject();
     }
 };
@@ -463,6 +512,7 @@ fn formatTokenAmount(amount: u64, decimals: u8) std.BoundedArray(u8, 40) {
 }
 
 // SPL Token uses fixed-offset binary layout (Pack trait), not bincode.
+// TODO: COption crate layout might be binary compatible with zig more directly?
 fn readCOptionPubkey(data: *const [36]u8) ?Pubkey {
     const tag = std.mem.readInt(u32, data[0..4], .little);
     if (tag == 0) return null;
@@ -470,6 +520,7 @@ fn readCOptionPubkey(data: *const [36]u8) ?Pubkey {
 }
 
 // COption<T> = 4-byte tag (0=None, 1=Some) + T
+// TODO: COption crate layout might be binary compatible with zig more directly?
 fn readCOptionU64(data: *const [12]u8) ?u64 {
     const tag = std.mem.readInt(u32, data[0..4], .little);
     if (tag == 0) return null;
@@ -760,5 +811,106 @@ test "rpc.account_decoder.parseToken" {
         src[TokenAccount.LEN] = @intFromEnum(AccountTypeDiscriminator.account);
         const result = getTokenAccountMint(&src);
         try std.testing.expect(result == null);
+    }
+}
+
+test "rpc.account_decoder.parseExtensions" {
+    // Test TLV parsing with marker extension
+    {
+        // make a minimal Token-2022 account with ImmutableOwner extension
+        // Layout: [165 bytes base][1 byte discriminator][4 byte TLV header][0 bytes value][2 byte terminator]
+        var data: [172]u8 = undefined;
+        @memset(&data, 0);
+
+        // Account type discriminator at offset 165
+        data[TokenAccount.LEN] = @intFromEnum(AccountTypeDiscriminator.account);
+
+        // TLV entry: type=7 (ImmutableOwner), length=0
+        // ExtensionType.immutable_owner (low byte)
+        data[166] = 7;
+        // (high byte)
+        data[167] = 0;
+        // Length (low byte)
+        data[168] = 0;
+        // Length (high byte)
+        data[169] = 0;
+
+        // Terminator: type=0 (Uninitialized)
+        data[170] = 0;
+        data[171] = 0;
+
+        const extensions = token_extension.parseExtensions(&data);
+        try std.testing.expect(extensions != null);
+        try std.testing.expectEqual(@as(usize, 1), extensions.?.len);
+        try std.testing.expectEqual(token_extension.UiExtension.immutable_owner, extensions.?.get(0));
+    }
+
+    // Test multiple extensions
+    {
+        var data: [180]u8 = undefined;
+        @memset(&data, 0);
+
+        data[TokenAccount.LEN] = @intFromEnum(AccountTypeDiscriminator.account);
+
+        // Extension 1: ImmutableOwner (type=7, len=0)
+        data[166] = 7;
+        data[167] = 0;
+        data[168] = 0;
+        data[169] = 0;
+
+        // Extension 2: MemoTransfer (type=8, len=1, value=1)
+        data[170] = 8;
+        data[171] = 0;
+        data[172] = 1;
+        data[173] = 0;
+        // require_incoming_transfer_memos = true
+        data[174] = 1;
+
+        // Terminator
+        data[175] = 0;
+        data[176] = 0;
+
+        const extensions = token_extension.parseExtensions(&data);
+        try std.testing.expect(extensions != null);
+        try std.testing.expectEqual(@as(usize, 2), extensions.?.len);
+        try std.testing.expectEqual(token_extension.UiExtension.immutable_owner, extensions.?.get(0));
+
+        const memo = extensions.?.get(1);
+        switch (memo) {
+            .memo_transfer => |m| {
+                try std.testing.expect(m.require_incoming_transfer_memos);
+            },
+            else => try std.testing.expect(false),
+        }
+    }
+
+    // Test unknown extension type returns unparseable
+    {
+        var data: [174]u8 = undefined;
+        @memset(&data, 0);
+
+        data[TokenAccount.LEN] = @intFromEnum(AccountTypeDiscriminator.account);
+
+        // Unknown extension type (255)
+        data[166] = 255;
+        data[167] = 0;
+        data[168] = 0;
+        data[169] = 0;
+
+        // Terminator
+        data[170] = 0;
+        data[171] = 0;
+
+        const extensions = token_extension.parseExtensions(&data);
+        try std.testing.expect(extensions != null);
+        try std.testing.expectEqual(@as(usize, 1), extensions.?.len);
+        try std.testing.expectEqual(token_extension.UiExtension.unparseable_extension, extensions.?.get(0));
+    }
+
+    // Test insufficient data returns null
+    {
+        const data: [100]u8 = undefined;
+        const extensions = token_extension.parseExtensions(&data);
+        try std.testing.expect(extensions == null);
     }
 }

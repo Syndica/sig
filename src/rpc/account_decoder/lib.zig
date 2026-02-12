@@ -76,9 +76,8 @@ const ParsableProgram = enum {
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L48
         if (program_id.equals(&sig.runtime.sysvar.OWNER_ID)) return .sysvar;
         if (program_id.equals(&sig.runtime.program.config.ID)) return .config;
-        if (program_id.equals(&sig.runtime.ids.SPL_TOKEN_PROGRAM_ID)) return .token;
-        // TODO: Token-2022 support
-        // if (program_id.equals(&sig.runtime.ids.SPL_TOKEN_2022_PROGRAM_ID)) return .token;
+        if (program_id.equals(&sig.runtime.ids.SPL_TOKEN_PROGRAM_ID) or
+            program_id.equals(&sig.runtime.ids.SPL_TOKEN_2022_PROGRAM_ID)) return .token;
         return null;
     }
 
@@ -102,6 +101,13 @@ const ParsableProgram = enum {
 // TODO: document Agave code.
 pub const AdditionalAccountData = struct {
     spl_token: ?*const parse_token.SplTokenAdditionalData = null,
+};
+
+/// SPL Token Account state enum.
+pub const AccountState = enum(u8) {
+    uninitialized = 0,
+    initialized = 1,
+    frozen = 2,
 };
 
 pub fn parse_account(
