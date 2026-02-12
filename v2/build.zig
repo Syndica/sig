@@ -6,6 +6,7 @@ pub fn build(b: *std.Build) !void {
 
     const common = b.createModule(.{ .root_source_file = b.path("src/common.zig") });
     common.addImport("base58", b.dependency("base58", .{}).module("base58"));
+    common.addImport("binkode", b.dependency("binkode", .{}).module("binkode"));
 
     const start_service = b.createModule(.{ .root_source_file = b.path("src/start_service.zig") });
     start_service.addImport("common", common);
@@ -36,8 +37,7 @@ pub fn build(b: *std.Build) !void {
 
             const service_name = str: {
                 var splitter = std.mem.splitScalar(u8, entry.name, '.');
-                break :str splitter.next() orelse
-                    std.debug.panic("service {s} has invalid path", .{entry.name});
+                break :str splitter.next() orelse unreachable;
             };
 
             const service_mod = b.createModule(.{
@@ -50,11 +50,11 @@ pub fn build(b: *std.Build) !void {
             service_mod.addImport("common", common);
             service_mod.addImport("start", start_service);
 
-            const svc_logger_lib = b.addLibrary(.{
+            const lib_svc = b.addLibrary(.{
                 .name = service_name,
                 .root_module = service_mod,
             });
-            sig_init_exe.linkLibrary(svc_logger_lib);
+            sig_init_exe.linkLibrary(lib_svc);
 
             const service_tests = b.addTest(.{ .root_module = service_mod, .name = service_name });
             const service_tests_run = b.addRunArtifact(service_tests);

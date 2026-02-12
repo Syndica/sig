@@ -3,6 +3,10 @@ const services = @import("services.zig");
 
 const Config = struct {
     cluster: Cluster,
+
+    /// path to a file containing the output of `solana leader-schedule`
+    leader_schedule_file: []const u8,
+
     gossip: Gossip,
     shred_network: ShredNetwork,
 
@@ -41,8 +45,14 @@ pub fn main() !void {
             return err;
         };
     };
+    defer std.zon.parse.free(allocator, config);
 
     std.debug.print("config: {}\n", .{config});
+
+    const schedule_file = try std.fs.cwd().openFile(config.leader_schedule_file, .{});
+    defer schedule_file.close();
+    var reader_buf: [4096]u8 = undefined;
+    var reader = schedule_file.reader(&reader_buf);
 
     try services.spawnAndWait(
         allocator,
@@ -56,6 +66,12 @@ pub fn main() !void {
                 .shares = &.{
                     .{ .instance = .{ .service = .shred_receiver }, .rw = true },
                     .{ .instance = .{ .service = .net }, .rw = true },
+                },
+            },
+            .{
+                .region = .{ .leader_schedule = .{ .schedule_string = &reader.interface } },
+                .shares = &.{
+                    .{ .instance = .{ .service = .shred_receiver } },
                 },
             },
         },

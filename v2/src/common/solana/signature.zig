@@ -1,5 +1,6 @@
 const std = @import("std");
 const common = @import("../../common.zig");
+const binkode = @import("binkode");
 
 const base58 = @import("base58");
 const BASE58_ENDEC = base58.Table.BITCOIN;
@@ -14,6 +15,11 @@ pub const Signature = extern struct {
     pub const SIZE: usize = 64;
 
     pub const ZEROES: Signature = .{ .r = @splat(0), .s = @splat(0) };
+
+    pub const bk_config: binkode.Codec(Signature) = .standard(.tuple(.{
+        .r = .array(.fixint),
+        .s = .array(.fixint),
+    }));
 
     pub fn fromBytes(data: [SIZE]u8) Signature {
         return .{

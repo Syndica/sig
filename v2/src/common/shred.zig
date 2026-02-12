@@ -198,11 +198,6 @@ pub const CodeShred = struct {
         @memcpy(payload[constants.headers_size..][0..shard.len], shard);
         @memset(payload[constants.headers_size + shard.len ..], 0);
 
-        // var buf = std.io.fixedBufferStream(payload);
-        // const writer = buf.writer();
-        // try bincode.write(writer, common_header, .{});
-        // try bincode.write(writer, code_header, .{});
-
         if (chained_merkle_root) |hash|
             try setChainedMerkleRoot(payload, common_header.variant, hash);
 
@@ -457,14 +452,27 @@ fn GenericShred(shred_type: ShredType) type {
         /// - `payload` was allocated with `allocator`
         /// - payload.len >= constants.payload_size
         fn fromPayloadOwned(allocator: Allocator, payload: []u8) !Self {
-            var buf = std.io.fixedBufferStream(payload[0..constants.payload_size]);
-            buf = buf;
-            const self = Self{
+            var reader = std.Io.Reader.fixed(payload[0..constants.payload_size]);
+
+            const read_common = try CommonHeader.bk_config.decode(
+                &reader,
+                allocator,
+                .{ .endian = .little, .int = .fixint },
+                null,
+            );
+
+            const read_custom = try CustomHeader.bk_config.decode(
+                &reader,
+                allocator,
+                .{ .endian = .little, .int = .fixint },
+                null,
+            );
+
+            const self: Self = .{
                 .allocator = allocator,
-                .common = undefined,
-                .custom = undefined,
-                // .common = try bincode.read(allocator, CommonHeader, buf.reader(), .{}),
-                // .custom = try bincode.read(allocator, CustomHeader, buf.reader(), .{}),
+                .common = read_common,
+                .custom = read_custom,
+
                 .payload = payload,
             };
 
@@ -885,11 +893,14 @@ pub const CommonHeader = struct {
     /// aka "fec_set_index"
     erasure_set_index: u32,
 
-    const bk_config: binkode.Config(CommonHeader) = .standard(.tuple(.{
-        .leader_signature = .from(binkode.Config(Signature)),
+    pub const bk_config: binkode.Codec(CommonHeader) = .standard(.tuple(.{
+        .leader_signature = .from(Signature.bk_config),
+        .variant = ShredVariant.bk_codec,
+        .slot = .fixint,
+        .index = .fixint,
+        .version = .fixint,
+        .erasure_set_index = .fixint,
     }));
-
-    // pub const @"!bincode-config:variant" = ShredVariantConfig;
 
     const ZEROED_FOR_TEST: CommonHeader = .{
         .leader_signature = .ZEROES,
@@ -915,6 +926,14 @@ pub const DataHeader = struct {
     flags: ShredFlags,
     size: u16, // common shred header + data shred header + data
 
+    /// Standard codec for a zero-sized value.
+    /// Never fails to encode or decode.
+    pub const bk_config: binkode.Codec(DataHeader) = .standard(.tuple(.{
+        .parent_slot_offset = .fixint,
+        .flags = ShredFlags.bk_config,
+        .size = .fixint,
+    }));
+
     const Self = @This();
 
     const ZEROED_FOR_TEST = Self{
@@ -931,6 +950,12 @@ pub const CodeHeader = struct {
     /// shreds in the set. This index is the code shred's position within that sequence.
     erasure_code_index: u16,
 
+    pub const bk_config: binkode.Codec(CodeHeader) = .standard(.tuple(.{
+        .num_data_shreds = .fixint,
+        .num_code_shreds = .fixint,
+        .erasure_code_index = .fixint,
+    }));
+
     const Self = @This();
 
     const ZEROED_FOR_TEST = Self{
@@ -946,33 +971,69 @@ pub const ShredVariant = struct {
     chained: bool,
     resigned: bool,
 
-    const bk_codec: binkode.Codec(ShredVariant) = .implement(void, void, struct {
-        fn encode(
-            writer: *std.io.Writer,
-            config: binkode.Config,
-            gpa_opt: ?std.mem.Allocator,
-            values: []const ShredVariant,
-            ctx: void,
-        ) !void {
-            _ = config;
-            _ = gpa_opt;
-            _ = ctx;
-            for (values) |v| try writer.writeByte(v.toByte());
+    pub const bk_codec: binkode.StdCodec(ShredVariant) = .from(.implement(void, void, struct {
+        const bk = binkode;
+        const V = ShredVariant;
+
+        pub fn encode(
+            writer: *std.Io.Writer,
+            _: bk.Config,
+            values: []const V,
+            _: ?*[encode_stack_size]u64,
+            limit: std.Io.Limit,
+            _: void,
+        ) bk.EncodeToWriterError!bk.EncodedCounts {
+            const max_count = limit.max(values.len);
+            for (values[0..max_count]) |v| {
+                const byte = v.toByte() catch return error.EncodeFailed;
+                try writer.writeByte(byte);
+            }
+            return .{
+                .value_count = max_count,
+                .byte_count = max_count,
+            };
         }
 
-        fn decode(
+        pub const encode_min_size: usize = 1;
+
+        pub const encode_stack_size: usize = 0;
+
+        pub const decodeInit = null;
+
+        pub fn decode(
             reader: *std.Io.Reader,
-            config: binkode.Config,
-            gpa_opt: ?std.mem.Allocator,
-            value: *ShredVariant,
-            ctx: void,
-        ) !void {
-            _ = config;
-            _ = gpa_opt;
-            _ = ctx;
-            value.* = ShredVariant.fromByte(try reader.takeByte());
+            _: bk.Config,
+            _: ?std.mem.Allocator,
+            values: []V,
+            decoded_count: *usize,
+            _: void,
+        ) bk.DecodeFromReaderError!void {
+            for (values, 0..) |*value, i| {
+                const byte = reader.takeByte() catch |err| {
+                    decoded_count.* = i;
+                    return err;
+                };
+                value.* = V.fromByte(byte) catch {
+                    decoded_count.* = i;
+                    return error.DecodeFailed;
+                };
+            }
+            decoded_count.* = values.len;
         }
-    });
+
+        pub fn decodeSkip(
+            reader: *std.Io.Reader,
+            _: bk.Config,
+            value_count: usize,
+            decoded_count: *usize,
+            _: void,
+        ) bk.DecodeSkipError!void {
+            try reader.discardAll(value_count);
+            decoded_count.* = value_count;
+        }
+
+        pub const free = null;
+    }));
 
     const Self = @This();
 
@@ -1065,6 +1126,58 @@ pub const ShredFlags = packed struct(u8) {
     data_complete_shred: bool,
     // last_shred_in_slot implies data_complete_shred
     last_shred_in_slot: bool,
+
+    pub const bk_config: binkode.StdCodec(ShredFlags) = .from(.implement(void, void, struct {
+        const bk = binkode;
+        const V = ShredFlags;
+
+        pub fn encode(
+            writer: *std.Io.Writer,
+            _: bk.Config,
+            values: []const ShredFlags,
+            _: ?*[encode_stack_size]u64,
+            limit: std.Io.Limit,
+            _: void,
+        ) bk.EncodeToWriterError!bk.EncodedCounts {
+            const bytes_to_write = limit.sliceConst(@ptrCast(values));
+            try writer.writeAll(bytes_to_write);
+            return .{
+                .value_count = bytes_to_write.len,
+                .byte_count = bytes_to_write.len,
+            };
+        }
+
+        pub const encode_min_size: usize = 1;
+
+        pub const encode_stack_size: usize = 0;
+
+        pub const decodeInit = null;
+
+        pub fn decode(
+            reader: *std.Io.Reader,
+            _: bk.Config,
+            _: ?std.mem.Allocator,
+            values: []ShredFlags,
+            decoded_count: *usize,
+            _: void,
+        ) bk.DecodeFromReaderError!void {
+            try reader.readSliceAll(@ptrCast(values));
+            decoded_count.* = values.len;
+        }
+
+        pub fn decodeSkip(
+            reader: *std.Io.Reader,
+            _: bk.Config,
+            value_count: usize,
+            decoded_count: *usize,
+            _: void,
+        ) bk.DecodeSkipError!void {
+            try reader.discardAll(value_count);
+            decoded_count.* = value_count;
+        }
+
+        pub const free = null;
+    }));
 };
 
 pub const layout = struct {

@@ -3,14 +3,13 @@ const start = @import("start");
 const common = @import("common");
 
 const shred = common.shred;
+const layout = shred.layout;
 
 const Pair = common.net.Pair;
 const Packet = common.net.Packet;
 const Slot = common.solana.Slot;
 const Pubkey = common.solana.Pubkey;
 const Atomic = std.atomic.Value;
-
-const layout = shred.layout;
 
 comptime {
     _ = start;
@@ -24,19 +23,16 @@ pub const ReadWrite = struct {
     pair: *Pair,
 };
 
+pub const ReadOnly = struct {
+    leader_schedule: *const common.solana.LeaderSchedule,
+};
+
 // stubs
-const stub_root_slot = 123;
+const stub_root_slot = 0;
 const stub_shred_version: Atomic(u16) = .{ .raw = 29062 }; // TODO: port over getShredAndIPFromEchoServer
-const stub_leader_schedule = struct { // TODO: get leader schedule from snapshot manifest...
-    fn get(self: *const @This(), slot: Slot) ?Pubkey {
-        _ = self;
-        _ = slot;
-        return Pubkey.ZEROES;
-    }
-}{};
 const stub_max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
 
-pub fn main(writer: *std.io.Writer, rw: ReadWrite) !noreturn {
+pub fn main(writer: *std.io.Writer, ro: ReadOnly, rw: ReadWrite) !noreturn {
     try writer.print("Waiting for shreds on port {}\n", .{rw.pair.port});
 
     var fba_buf: [16 * 1024]u8 = undefined;
@@ -48,13 +44,14 @@ pub fn main(writer: *std.io.Writer, rw: ReadWrite) !noreturn {
 
         var slice = rw.pair.recv.getReadable() catch continue;
         const packet = slice.one();
+        defer slice.markUsed(1);
 
         validateShred(packet, stub_root_slot, &stub_shred_version, stub_max_slot) catch |err| {
             try writer.print("invalid shred: {}\n", .{err});
             continue;
         };
 
-        verifyShred(packet) catch |err| {
+        verifyShred(packet, ro.leader_schedule) catch |err| {
             _ = err catch {};
             try writer.print("failed to verify shred: {}\n", .{err});
             continue;
@@ -69,13 +66,25 @@ pub fn main(writer: *std.io.Writer, rw: ReadWrite) !noreturn {
 
         const packet_shred = shred.Shred.fromPayload(allocator, payload) catch |err| {
             try writer.print(
-                "failed to deserialize verified shred {?}.{?}: {}",
+                "failed to deserialize verified shred {?}.{?}: {}\n",
                 .{ layout.getSlot(payload), layout.getIndex(payload), err },
             );
             continue;
         };
 
-        try writer.print("valid+verified shred: {}\n", .{packet_shred});
+        try writer.print(
+            \\slot: {}
+            \\erasure_set_index: {}
+            \\index: {}
+            \\shred_type: {}
+            \\
+            \\
+        , .{
+            packet_shred.commonHeader().slot,
+            packet_shred.commonHeader().erasure_set_index,
+            packet_shred.commonHeader().index,
+            packet_shred.commonHeader().variant.shred_type,
+        });
     }
 }
 
@@ -151,7 +160,7 @@ pub const ShredValidationError = error{
 /// Analogous to [verify_shred_cpu](https://github.com/anza-xyz/agave/blob/83e7d84bcc4cf438905d07279bc07e012a49afd9/ledger/src/sigverify_shreds.rs#L35)
 pub fn verifyShred(
     packet: *const Packet,
-    // leader_schedule: SlotLeaders,
+    leader_schedule: *const common.solana.LeaderSchedule,
     // verified_merkle_roots: *VerifiedMerkleRoots,
     // metrics: Metrics,
 ) ShredVerificationFailure!void {
@@ -163,7 +172,7 @@ pub fn verifyShred(
     // if (verified_merkle_roots.get(signed_data) != null) return;
 
     // metrics.cache_miss_count.inc();
-    const leader = stub_leader_schedule.get(slot) orelse return error.LeaderUnknown;
+    const leader = leader_schedule.get(slot) orelse return error.LeaderUnknown;
 
     signature.verify(leader, &signed_data.data) catch return error.FailedVerification;
     // verified_merkle_roots.insert(signed_data, {}) catch return error.FailedCaching;

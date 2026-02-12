@@ -40,6 +40,7 @@ pub const Service = enum {
             },
             .shred_receiver => &.{
                 .{ .region = .net_pair, .rw = true },
+                .{ .region = .leader_schedule },
             },
         };
     }
@@ -66,28 +67,28 @@ const SharedRegion = struct {
 };
 
 pub const RegionType = enum {
-    prng_state,
     net_pair,
+    leader_schedule,
 };
 
 pub const Region = union(RegionType) {
-    prng_state,
     net_pair: struct { port: u16 },
+    leader_schedule: struct {
+        // TODO: this should not exist - remove once we can open snapshots again
+        schedule_string: *std.io.Reader,
+    },
 
     pub fn size(self: Region) usize {
         return switch (self) {
-            .prng_state => @sizeOf(std.Random.Xoroshiro128),
             .net_pair => @sizeOf(common.net.Pair),
+            .leader_schedule => @sizeOf(common.solana.LeaderSchedule),
         };
     }
 
-    pub fn init(self: Region, buf: []align(page_size_min) u8) void {
+    pub fn init(self: Region, buf: []align(page_size_min) u8) !void {
+        std.debug.print("Initialising: {}\n", .{@as(RegionType, self)});
+
         return switch (self) {
-            .prng_state => {
-                std.debug.assert(buf.len == @sizeOf(std.Random.Xoroshiro128));
-                const data: *std.Random.Xoroshiro128 = @ptrCast(buf);
-                data.* = .init(0);
-            },
             .net_pair => |cfg| {
                 std.debug.assert(buf.len == @sizeOf(common.net.Pair));
                 const data: *common.net.Pair = @ptrCast(buf);
@@ -95,6 +96,12 @@ pub const Region = union(RegionType) {
                 data.recv.init();
                 data.send.init();
                 data.port = cfg.port;
+            },
+            .leader_schedule => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(common.solana.LeaderSchedule));
+                const data: *common.solana.LeaderSchedule = @ptrCast(buf);
+
+                try common.solana.LeaderSchedule.fromCommand(data, cfg.schedule_string);
             },
         };
     }
@@ -107,13 +114,6 @@ pub const ServiceInstance = struct {
     pub fn format(self: ServiceInstance, writer: *std.io.Writer) std.io.Writer.Error!void {
         try writer.print("{s}_{}", .{ @tagName(self.service), self.n });
     }
-};
-
-pub const Instances = [_]ServiceInstance{
-    .{ .service = .prng, .n = 0 },
-    .{ .service = .logger, .n = 0 },
-    .{ .service = .net, .n = 0 },
-    .{ .service = .ping, .n = 0 },
 };
 
 const Share = struct {
@@ -231,7 +231,7 @@ pub fn spawnAndWait(
     for (regions, region_memfds) |shared_region, region_memfd| {
         const buf = try region_memfd.mmap(shared_region.requested_location);
         defer std.posix.munmap(buf);
-        shared_region.region.init(buf);
+        try shared_region.region.init(buf);
 
         std.debug.print("Initialised: {f}\n", .{shared_region});
     }

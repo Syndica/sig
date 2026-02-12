@@ -60,25 +60,49 @@ fn serviceMain(params: common.ResolvedArgs) callconv(.c) noreturn {
     const ret_val =
         if (!@hasDecl(root, "ReadWrite")) err: {
             var read_only: root.ReadOnly = .{};
-            inline for (@typeInfo(root.ReadOnly).@"struct".fields, 0..) |field, i| {
-                @field(read_only, field.name) = @ptrCast(params.ro[i].?[i..params.ro_len[i]]);
+            const root_ro_fields = @typeInfo(root.ReadOnly).@"struct".fields;
+            inline for (
+                root_ro_fields,
+                params.ro[0..root_ro_fields.len],
+                params.ro_len[0..root_ro_fields.len],
+            ) |field, data, data_len| {
+                @field(read_only, field.name) = @ptrCast(data.?[0..data_len]);
             }
+
             break :err root.main(&writer.interface, read_only);
         } else if (!@hasDecl(root, "ReadOnly")) err: {
             var read_write: root.ReadWrite = undefined;
-            inline for (@typeInfo(root.ReadWrite).@"struct".fields, 0..) |field, i| {
-                @field(read_write, field.name) = @ptrCast(params.rw[i].?[i..params.rw_len[i]]);
+            const root_rw_fields = @typeInfo(root.ReadWrite).@"struct".fields;
+            inline for (
+                root_rw_fields,
+                params.rw[0..root_rw_fields.len],
+                params.rw_len[0..root_rw_fields.len],
+            ) |field, data, data_len| {
+                @field(read_write, field.name) = @ptrCast(data.?[0..data_len]);
             }
+
             break :err root.main(&writer.interface, read_write);
         } else err: {
             var read_only: root.ReadOnly = undefined;
-            inline for (@typeInfo(root.ReadOnly).@"struct".fields, 0..) |field, i| {
-                @field(read_only, field.name) = @ptrCast(params.ro[i].?[i..params.ro_len[i]]);
+            const root_ro_fields = @typeInfo(root.ReadOnly).@"struct".fields;
+            inline for (
+                root_ro_fields,
+                params.ro[0..root_ro_fields.len],
+                params.ro_len[0..root_ro_fields.len],
+            ) |field, data, data_len| {
+                @field(read_only, field.name) = @ptrCast(data.?[0..data_len]);
             }
-            var read_write: root.ReadWrite = .{};
-            inline for (@typeInfo(root.ReadWrite).@"struct".fields, 0..) |field, i| {
-                @field(read_write, field.name) = @ptrCast(params.rw[i].?[i..params.rw_len[i]]);
+
+            var read_write: root.ReadWrite = undefined;
+            const root_rw_fields = @typeInfo(root.ReadWrite).@"struct".fields;
+            inline for (
+                root_rw_fields,
+                params.rw[0..root_rw_fields.len],
+                params.rw_len[0..root_rw_fields.len],
+            ) |field, data, data_len| {
+                @field(read_write, field.name) = @ptrCast(data.?[0..data_len]);
             }
+
             break :err root.main(&writer.interface, read_only, read_write);
         };
 
@@ -90,7 +114,7 @@ fn serviceMain(params: common.ResolvedArgs) callconv(.c) noreturn {
         if (@errorReturnTrace()) |trace| {
             // write back error return trace
             exit.error_return_index = trace.index;
-            const n_addresses = @max(exit.error_return.len, trace.instruction_addresses.len);
+            const n_addresses = @min(exit.error_return.len, trace.instruction_addresses.len);
             @memcpy(
                 exit.error_return[0..n_addresses],
                 trace.instruction_addresses[0..n_addresses],
@@ -282,6 +306,9 @@ pub fn servicePanic(
     msg: []const u8,
     first_trace_addr: ?usize,
 ) noreturn {
+    // avoids case of recursive panic
+    @setRuntimeSafety(false);
+
     const exit = panic_state.exit;
 
     // write back the panic message
@@ -291,7 +318,7 @@ pub fn servicePanic(
     // write back error return trace
     if (@errorReturnTrace()) |trace| {
         exit.error_return_index = trace.index;
-        const n_addresses = @max(exit.error_return.len, trace.instruction_addresses.len);
+        const n_addresses = @min(exit.error_return.len, trace.instruction_addresses.len);
         @memcpy(
             exit.error_return[0..n_addresses],
             trace.instruction_addresses[0..n_addresses],
