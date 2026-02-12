@@ -11,6 +11,9 @@ const ParseError = account_decoder.ParseError;
 const AccountState = account_decoder.AccountState;
 
 const UiExtension = parse_token_extension.UiExtension;
+const InterestBearingConfigData = parse_token_extension.InterestBearingConfigData;
+const ScaledUiAmountConfigData = parse_token_extension.ScaledUiAmountConfigData;
+
 const MAX_EXTENSIONS = parse_token_extension.MAX_EXTENSIONS;
 const parseExtensions = parse_token_extension.parseExtensions;
 
@@ -183,22 +186,6 @@ pub const SplTokenAdditionalData = struct {
     // Token-2022 extension data
     interest_bearing_config: ?InterestBearingConfigData = null,
     scaled_ui_amount_config: ?ScaledUiAmountConfigData = null,
-};
-
-/// Subset of InterestBearingConfig needed for amount calculations.
-pub const InterestBearingConfigData = struct {
-    rate_authority: ?Pubkey,
-    initialization_timestamp: i64,
-    pre_update_average_rate: i16,
-    last_update_timestamp: i64,
-    current_rate: i16,
-};
-
-/// Subset of ScaledUiAmountConfig needed for amount calculations.
-pub const ScaledUiAmountConfigData = struct {
-    multiplier: f64,
-    new_multiplier_effective_timestamp: i64,
-    new_multiplier: f64,
 };
 
 /// SPL Token Mint account layout (82 bytes).
@@ -932,6 +919,23 @@ test "rpc.account_decoder.parse_token: basic token account parsing" {
         src[TokenAccount.LEN] = @intFromEnum(AccountTypeDiscriminator.account);
         const result = getTokenAccountMint(&src);
         try std.testing.expect(result == null);
+    }
+
+    // Some additional tests
+    {
+        var account_data: [TokenAccount.LEN]u8 = undefined;
+        @memset(&account_data, 0);
+
+        // Set mint pubkey (first 32 bytes)
+        const expected_mint = Pubkey.parse("So11111111111111111111111111111111111111112");
+        @memcpy(account_data[0..32], &expected_mint.data);
+
+        // Set state to initialized (byte 108)
+        account_data[108] = 1;
+
+        const result = getTokenAccountMint(&account_data);
+        try std.testing.expect(result != null);
+        try std.testing.expectEqual(expected_mint, result.?);
     }
 }
 

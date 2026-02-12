@@ -374,6 +374,86 @@ fn parseExtension(ext_type: ExtensionType, value: []const u8) ?UiExtension {
 }
 
 // TODO: for all parse fns, use defined constants for offsets and expected sizes, and document from agave.
+/// Subset of InterestBearingConfig needed for amount calculations.
+pub const InterestBearingConfigData = struct {
+    rate_authority: ?Pubkey,
+    initialization_timestamp: i64,
+    pre_update_average_rate: i16,
+    last_update_timestamp: i64,
+    current_rate: i16,
+
+    /// Extract InterestBearingConfig data from mint extensions for calculations.
+    /// Returns null if extension not present or data invalid.
+    pub fn extractFromMint(mint_data: []const u8) ?InterestBearingConfigData {
+        const MINT_LEN = 82; // parse_token.Mint.LEN
+        if (mint_data.len <= MINT_LEN) return null;
+
+        const ext_data = mint_data[MINT_LEN..];
+        if (ext_data.len <= 1) return null;
+
+        var offset: usize = 1; // Skip discriminator
+        while (offset + TLV_HEADER_SIZE <= ext_data.len) {
+            const ext_type_raw = std.mem.readInt(u16, ext_data[offset..][0..2], .little);
+            const length = std.mem.readInt(u16, ext_data[offset + 2 ..][0..2], .little);
+            offset += TLV_HEADER_SIZE;
+
+            if (offset + length > ext_data.len or ext_type_raw == 0) break;
+
+            if (ext_type_raw == @intFromEnum(ExtensionType.interest_bearing_config) and length == 52) {
+                const value = ext_data[offset..][0..52];
+                const pubkey = readOptionalNonZeroPubkey(value[0..32]);
+                return .{
+                    .rate_authority = pubkey,
+                    .initialization_timestamp = std.mem.readInt(i64, value[32..40], .little),
+                    .pre_update_average_rate = std.mem.readInt(i16, value[40..42], .little),
+                    .last_update_timestamp = std.mem.readInt(i64, value[42..50], .little),
+                    .current_rate = std.mem.readInt(i16, value[50..52], .little),
+                };
+            }
+
+            offset += length;
+        }
+        return null;
+    }
+};
+
+/// Subset of ScaledUiAmountConfig needed for amount calculations.
+pub const ScaledUiAmountConfigData = struct {
+    multiplier: f64,
+    new_multiplier_effective_timestamp: i64,
+    new_multiplier: f64,
+
+    /// Extract ScaledUiAmountConfig data from mint extensions for calculations.
+    /// Returns null if extension not present or data invalid.
+    pub fn extractFromMint(mint_data: []const u8) ?ScaledUiAmountConfigData {
+        const MINT_LEN = 82; // parse_token.Mint.LEN
+        if (mint_data.len <= MINT_LEN) return null;
+
+        const ext_data = mint_data[MINT_LEN..];
+        if (ext_data.len <= 1) return null;
+
+        var offset: usize = 1; // Skip discriminator
+        while (offset + TLV_HEADER_SIZE <= ext_data.len) {
+            const ext_type_raw = std.mem.readInt(u16, ext_data[offset..][0..2], .little);
+            const length = std.mem.readInt(u16, ext_data[offset + 2 ..][0..2], .little);
+            offset += TLV_HEADER_SIZE;
+
+            if (offset + length > ext_data.len or ext_type_raw == 0) break;
+
+            if (ext_type_raw == @intFromEnum(ExtensionType.scaled_ui_amount_config) and length == 56) {
+                const value = ext_data[offset..][0..56];
+                return .{
+                    .multiplier = @bitCast(std.mem.readInt(u64, value[32..40], .little)),
+                    .new_multiplier_effective_timestamp = std.mem.readInt(i64, value[40..48], .little),
+                    .new_multiplier = @bitCast(std.mem.readInt(u64, value[48..56], .little)),
+                };
+            }
+
+            offset += length;
+        }
+        return null;
+    }
+};
 
 /// DefaultAccountState (1 byte) - sets the default state for new token accounts.
 pub const UiDefaultAccountState = struct {
@@ -1136,10 +1216,6 @@ fn readOptionalNonZeroBytes(data: []const u8) ?[]const u8 {
     }
     return null;
 }
-
-// =============================================================================
-// Tests
-// =============================================================================
 
 /// Helper to build Borsh-encoded TokenMetadata bytes for testing.
 fn buildTokenMetadataBytes(

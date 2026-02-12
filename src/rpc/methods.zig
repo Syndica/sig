@@ -713,7 +713,6 @@ pub const AccountHookContext = struct {
         allocator: std.mem.Allocator,
         params: GetAccountInfo,
     ) !GetAccountInfo.Response {
-        // TODO: handle dataSlice and encoding.
         const config = params.config orelse GetAccountInfo.Config{};
         // TODO: check if finalized is the corrent default here.
         const commitment = config.commitment orelse .finalized;
@@ -734,7 +733,7 @@ pub const AccountHookContext = struct {
             defer account.deinit(allocator);
 
             const data: GetAccountInfo.Response.Value.Data = if (encoding == .jsonParsed)
-                try encodeJsonParsed(allocator, params.pubkey, account)
+                try encodeJsonParsed(allocator, params.pubkey, account, slot_reader)
             else
                 try encodeStandard(allocator, account, encoding, config.dataSlice);
 
@@ -765,7 +764,15 @@ pub const AccountHookContext = struct {
         allocator: std.mem.Allocator,
         pubkey: sig.core.Pubkey,
         account: sig.core.Account,
+        slot_reader: sig.accounts_db.SlotAccountReader,
     ) !GetAccountInfo.Response.Value.Data {
+        // Build additional data for token accounts, fetch mint and clock for Token-2022 responses.
+        const additional_data = account_decoder.buildTokenAdditionalData(
+            allocator,
+            account,
+            slot_reader,
+        );
+
         var account_data_iter = account.data.iterator();
         // Try to parse based on owner program
         if (try account_decoder.parse_account(
@@ -774,7 +781,7 @@ pub const AccountHookContext = struct {
             account.owner,
             account_data_iter.reader(),
             account.data.len(),
-            null,
+            if (additional_data.spl_token != null) &additional_data else null,
         )) |parsed| {
             return .{ .jsonParsed = parsed };
         }

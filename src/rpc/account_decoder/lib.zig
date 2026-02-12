@@ -11,6 +11,7 @@ const parse_bpf_upgradeable_loader = @import("parse_bpf_upgradeable_loader.zig")
 const parse_sysvar = @import("parse_sysvar.zig");
 const parse_config = @import("parse_config.zig");
 const parse_token = @import("parse_token.zig");
+const parse_token_extension = @import("parse_token_extension.zig");
 
 pub const ParseError = error{
     InvalidAccountData,
@@ -100,7 +101,7 @@ const ParsableProgram = enum {
 
 // TODO: document Agave code.
 pub const AdditionalAccountData = struct {
-    spl_token: ?*const parse_token.SplTokenAdditionalData = null,
+    spl_token: ?parse_token.SplTokenAdditionalData = null,
 };
 
 /// SPL Token Account state enum.
@@ -180,7 +181,8 @@ pub fn parse_account(
             const bytes_read = reader.readAll(data) catch return ParseError.InvalidAccountData;
             if (bytes_read != data_len) return ParseError.InvalidAccountData;
 
-            const spl_token_data = if (additional_data) |ad| ad.spl_token else null;
+            const spl_token_data: ?*const parse_token.SplTokenAdditionalData =
+                if (additional_data) |ad| if (ad.spl_token) |*d| d else null else null;
             const token_parsed = try parse_token.parseToken(
                 data,
                 spl_token_data,
@@ -201,5 +203,68 @@ pub fn parse_account(
         .program = program.programName(),
         .parsed = parsed,
         .space = data_len,
+    };
+}
+
+/// Build SplTokenAdditionalData by fetching mint account and Clock syvar.
+/// Returns empty additional data if not a token account or fetch fails
+pub fn buildTokenAdditionalData(
+    allocator: std.mem.Allocator,
+    account: sig.core.Account,
+    slot_reader: sig.accounts_db.SlotAccountReader,
+) AdditionalAccountData {
+    // Check if this is a token account
+    const is_token_program = account.owner.equals(&sig.runtime.ids.SPL_TOKEN_PROGRAM_ID) or
+        account.owner.equals(&sig.runtime.ids.SPL_TOKEN_2022_PROGRAM_ID);
+    if (!is_token_program) return .{};
+
+    // Read account data to extract mint pubkey
+    var data_iter = account.data.iterator();
+    var data_buf: [parse_token.TokenAccount.LEN]u8 = undefined;
+    const bytes_read = data_iter.read(&data_buf);
+    if (bytes_read < 32) return .{};
+
+    // Extract mint pubkey from token account (first 32 bytes)
+    const mint_pubkey = parse_token.getTokenAccountMint(data_buf[0..bytes_read]) orelse return .{};
+
+    // Fetch the mint account
+    const mint_account = slot_reader.get(allocator, mint_pubkey) catch return .{} orelse return .{};
+    defer mint_account.deinit(allocator);
+
+    // Read mint data
+    var mint_iter = mint_account.data.iterator();
+    const mint_data = allocator.alloc(u8, mint_account.data.len()) catch return .{};
+    defer allocator.free(mint_data);
+    _ = mint_iter.read(mint_data);
+
+    // Parse mint to get decimals
+    const mint = parse_token.Mint.unpack(mint_data) catch return .{};
+
+    // Fetch Clock sysvar for timestamp
+    const clock_account = slot_reader.get(
+        allocator,
+        sig.runtime.sysvar.Clock.ID,
+    ) catch return .{} orelse return .{};
+    defer clock_account.deinit(allocator);
+
+    var clock_iter = clock_account.data.iterator();
+    const clock = sig.bincode.read(
+        allocator,
+        sig.runtime.sysvar.Clock,
+        clock_iter.reader(),
+        .{},
+    ) catch return .{};
+
+    // Extract extension configs from mint data
+    const interest_config = parse_token_extension.extractInterestBearingConfig(mint_data);
+    const scaled_config = parse_token_extension.extractScaledUiAmountConfig(mint_data);
+
+    return .{
+        .spl_token = .{
+            .decimals = mint.decimals,
+            .unix_timestamp = clock.unix_timestamp,
+            .interest_bearing_config = interest_config,
+            .scaled_ui_amount_config = scaled_config,
+        },
     };
 }
