@@ -1,4 +1,4 @@
-/// [SIMD-0185] Vote account state v4: commission in bps, no prior_voters, collectors, BLS key.
+//! [SIMD-0185] Vote account state v4: commission in bps, no prior_voters, collectors, BLS key.
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
@@ -32,37 +32,44 @@ const VOTE_CREDITS_MAXIMUM_PER_SLOT = state.VOTE_CREDITS_MAXIMUM_PER_SLOT;
 
 /// SIMD-0185: https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0185-vote-account-v4.md
 pub const VoteStateV4 = struct {
+    /// The validator identity that signs the votes in this account.
     node_pubkey: Pubkey,
+    /// The signer for withdrawals.
     withdrawer: Pubkey,
 
-    /// REMOVED
-    /// commission: u8,
-    ///
-    /// NEW: the collector accounts for validator income
+    /// the collector accounts for validator income
     inflation_rewards_collector: Pubkey,
+    /// The collector account for block revenue.
     block_revenue_collector: Pubkey,
 
-    /// NEW: basis points (0-10,000) that represent how much of each income
+    /// basis points (0-10,000) that represent how much of each income
     /// source should be given to this VoteAccount
     inflation_rewards_commission_bps: u16,
+    /// Basis points (0-10,000) that represent how much of the block revenue
+    /// should be given to this vote account.
     block_revenue_commission_bps: u16,
 
-    /// NEW: reward amount pending distribution to stake delegators
+    /// reward amount pending distribution to stake delegators
     pending_delegator_rewards: u64,
 
-    /// NEW: compressed bls pubkey for alpenglow
+    /// compressed bls pubkey for alpenglow
     bls_pubkey_compressed: ?[48]u8,
 
     votes: std.ArrayListUnmanaged(LandedVote),
     root_slot: ?Slot,
 
-    /// UPDATED: serialization structure of the AuthorizedVoters map is
+    /// The signer for vote transactions.
+    /// Contains entries for the current epoch and the previous epoch.
+    ///
+    /// difference from v3: serialization structure of the AuthorizedVoters map is
     /// unchanged but will now contain entries for the previous epoch.
     authorized_voters: AuthorizedVoters,
 
-    /// REMOVED
-    /// prior_voters: CircBuf<(Pubkey, Epoch, Epoch)>,
+    /// History of credits earned by the end of each epoch.
+    /// Each tuple is (Epoch, credits, prev_credits).
     epoch_credits: std.ArrayListUnmanaged(EpochCredit),
+
+    /// Most recent timestamp submitted with a vote.
     last_timestamp: BlockTimestamp,
 
     pub const MAX_VOTE_STATE_SIZE: usize = 3762;
@@ -329,7 +336,7 @@ pub const VoteStateV4 = struct {
             } else {
                 const last_epoch_credit =
                     &self.epoch_credits.items[self.epoch_credits.items.len - 1];
-                last_epoch_credit.*.epoch = epoch;
+                last_epoch_credit.epoch = epoch;
             }
 
             if (self.epoch_credits.items.len > MAX_EPOCH_CREDITS_HISTORY) {
@@ -337,10 +344,8 @@ pub const VoteStateV4 = struct {
             }
         }
 
-        {
-            const last_epoch_credit = &self.epoch_credits.items[self.epoch_credits.items.len - 1];
-            last_epoch_credit.*.credits = last_epoch_credit.credits +| credits;
-        }
+        const last_epoch_credit = &self.epoch_credits.items[self.epoch_credits.items.len - 1];
+        last_epoch_credit.credits = last_epoch_credit.credits +| credits;
     }
 
     pub fn checkSlotsAreValid(

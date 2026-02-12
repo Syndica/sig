@@ -1,11 +1,12 @@
-/// [agave] Analogous to https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L1
+//! [agave] Analogous to https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L1
 const std = @import("std");
 const sig = @import("../../../sig.zig");
+const vote_program = @import("lib.zig");
 const builtin = @import("builtin");
+const state_v4 = @import("state_v4.zig");
 
 const Allocator = std.mem.Allocator;
 
-const vote_program = sig.runtime.program.vote;
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteError = vote_program.VoteError;
 const Slot = sig.core.Slot;
@@ -17,8 +18,8 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
-pub const VoteStateV4 = @import("state_v4.zig").VoteStateV4;
-pub const createTestVoteStateV4 = @import("state_v4.zig").createTestVoteStateV4;
+pub const VoteStateV4 = state_v4.VoteStateV4;
+pub const createTestVoteStateV4 = state_v4.createTestVoteStateV4;
 
 pub const MAX_PRIOR_VOTERS: usize = 32;
 pub const MAX_LOCKOUT_HISTORY: usize = 31;
