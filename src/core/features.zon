@@ -252,4 +252,5 @@
     .{ .name = "fix_alt_bn128_pairing_length_check", .pubkey = "bnYzodLwmybj7e1HAe98yZrdJTd7we69eMMLgCXqKZm" },
     .{ .name = "increase_cpi_account_info_limit", .pubkey = "H6iVbVaDZgDphcPbcZwc5LoznMPWQfnJ1AM7L1xzqvt5" },
     .{ .name = "vote_state_v4", .pubkey = "Gx4XFcrVMt4HUvPzTpTSVkdDVgcDSjKhDN1RqRS6KDuZ" },
+    .{ .name = "enable_bls12_381_syscall", .pubkey = "b1sraWPVFdcUizB2LV5wQTeMuK8M313bi5bHjco5eVU" },
 }

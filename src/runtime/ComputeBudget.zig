@@ -97,6 +97,30 @@ alt_bn128_g2_compress: u64,
 alt_bn128_g2_decompress: u64,
 /// Number of compute units consumed to call secp256k1_recover
 secp256k1_recover_cost: u64,
+/// Number of compute units consumed to add two bls12_381 g1 points.
+bls12_381_g1_add_cost: u64,
+/// Number of compute units consumed to add two bls12_381 g2 points.
+bls12_381_g2_add_cost: u64,
+/// Number of compute units consumed to subtract two bls12_381 g1 points.
+bls12_381_g1_subtract_cost: u64,
+/// Number of compute units consumed to subtract two bls12_381 g2 points.
+bls12_381_g2_subtract_cost: u64,
+/// Number of compute units consumed to multiply a bls12_381 g1 point.
+bls12_381_g1_multiply_cost: u64,
+/// Number of compute units consumed to multiply a bls12_381 g2 point.
+bls12_381_g2_multiply_cost: u64,
+/// Number of compute units consumed to decompress a bls12_381 g1 point.
+bls12_381_g1_decompress_cost: u64,
+/// Number of compute units consumed to decompress a bls12_381 g2 point.
+bls12_381_g2_decompress_cost: u64,
+/// Number of compute units consumed to validate a bls12_381 g1 point.
+bls12_381_g1_validate_cost: u64,
+/// Number of compute units consumed to validate a bls12_381 g2 point.
+bls12_381_g2_validate_cost: u64,
+/// Base number of compute units consumed to perform a bls12_381 pairing.
+bls12_381_one_pair_cost: u64,
+/// Incremental number of compute units consumed per pair in a bls12_381 pairing.
+bls12_381_additional_pair_cost: u64,
 
 pub const DEFAULT: ComputeBudget = ComputeBudget.init(1_400_000, false);
 
@@ -147,6 +171,18 @@ pub fn init(compute_unit_limit: u64, simd_0339_active: bool) ComputeBudget {
         .alt_bn128_g2_compress = 86,
         .alt_bn128_g2_decompress = 13610,
         .secp256k1_recover_cost = 25_000,
+        .bls12_381_g1_add_cost = 128,
+        .bls12_381_g2_add_cost = 203,
+        .bls12_381_g1_subtract_cost = 129,
+        .bls12_381_g2_subtract_cost = 204,
+        .bls12_381_g1_multiply_cost = 4_627,
+        .bls12_381_g2_multiply_cost = 8_255,
+        .bls12_381_g1_decompress_cost = 2_100,
+        .bls12_381_g2_decompress_cost = 3_050,
+        .bls12_381_g1_validate_cost = 1_565,
+        .bls12_381_g2_validate_cost = 1_968,
+        .bls12_381_one_pair_cost = 25_445,
+        .bls12_381_additional_pair_cost = 13_023,
     };
 }
 
@@ -166,11 +202,26 @@ pub fn curveGroupOperationCost(
     group_op: sig.vm.syscalls.ecc.GroupOp,
 ) u64 {
     switch (curve_id) {
-        inline else => |id| switch (group_op) {
+        inline //
+        .edwards,
+        .ristretto,
+        => |id| switch (group_op) {
             inline else => |op| {
                 const name = "curve25519_" ++ @tagName(id) ++ "_" ++ @tagName(op) ++ "_cost";
                 return @field(self, name);
             },
         },
+        inline //
+        .bls12_381_g1_be,
+        .bls12_381_g1_le,
+        .bls12_381_g2_be,
+        .bls12_381_g2_le,
+        => |id| switch (group_op) {
+            inline else => |op| {
+                const name = @tagName(id)[0.."bls12_381_g1".len] ++ "_" ++ @tagName(op) ++ "_cost";
+                return @field(self, name);
+            },
+        },
+        else => unreachable,
     }
 }

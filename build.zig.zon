@@ -53,5 +53,9 @@
             .url = "https://www.sqlite.org/2025/sqlite-amalgamation-3490200.zip",
             .hash = "N-V-__8AAH-mpwB7g3MnqYU-ooUBF1t99RP27dZ9addtMVXD",
         },
+        .blst = .{
+            .url = "git+https://github.com/supranational/blst#806515251de5cfb9761ad12eb2f2f151b1ad0277",
+            .hash = "blst-0.3.16-fvxk1c82MABYUm65ch0-wpo2CSs1x5TCuBLvgQng0uRC",
+        },
     },
 }
