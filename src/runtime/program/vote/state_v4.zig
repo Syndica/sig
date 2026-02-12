@@ -1069,3 +1069,941 @@ pub fn createTestVoteStateV4(
         .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
     };
 }
+
+test "state_v4.VoteStateV4.commission" {
+    var vs: VoteStateV4 = VoteStateV4.DEFAULT;
+    vs.inflation_rewards_commission_bps = 1000; // 10%
+    try std.testing.expectEqual(@as(u8, 10), vs.commission());
+    vs.inflation_rewards_commission_bps = 0;
+    try std.testing.expectEqual(@as(u8, 0), vs.commission());
+    vs.inflation_rewards_commission_bps = 10_000; // 100%
+    try std.testing.expectEqual(@as(u8, 100), vs.commission());
+    vs.inflation_rewards_commission_bps = 550; // 5.5% truncates to 5
+    try std.testing.expectEqual(@as(u8, 5), vs.commission());
+}
+
+test "state_v4.VoteStateV4.init" {
+    const allocator = std.testing.allocator;
+    const node = Pubkey.ZEROES;
+    const voter = Pubkey.ZEROES;
+    const withdrawer = Pubkey.ZEROES;
+    const vote_pubkey = Pubkey.ZEROES;
+
+    var vs = try VoteStateV4.init(allocator, node, voter, withdrawer, 10, 5, vote_pubkey);
+    defer vs.deinit(allocator);
+
+    try std.testing.expect(vs.node_pubkey.equals(&node));
+    try std.testing.expect(vs.withdrawer.equals(&withdrawer));
+    try std.testing.expect(vs.inflation_rewards_collector.equals(&vote_pubkey));
+    try std.testing.expect(vs.block_revenue_collector.equals(&node));
+    try std.testing.expectEqual(@as(u16, 1000), vs.inflation_rewards_commission_bps);
+    try std.testing.expectEqual(@as(u16, 10_000), vs.block_revenue_commission_bps);
+    try std.testing.expectEqual(@as(u64, 0), vs.pending_delegator_rewards);
+    try std.testing.expectEqual(@as(?[48]u8, null), vs.bls_pubkey_compressed);
+    try std.testing.expectEqual(@as(usize, 0), vs.votes.items.len);
+    try std.testing.expectEqual(@as(?Slot, null), vs.root_slot);
+    try std.testing.expectEqual(@as(usize, 0), vs.epoch_credits.items.len);
+    try std.testing.expect(vs.authorized_voters.getAuthorizedVoter(5) != null);
+}
+
+test "state_v4.VoteStateV4.fromVoteStateV3" {
+    const allocator = std.testing.allocator;
+    var v3 = try VoteState.init(allocator, Pubkey.ZEROES, Pubkey.ZEROES, Pubkey.ZEROES, 25, 0);
+    defer v3.deinit(allocator);
+
+    const vote_pubkey = Pubkey{ .data = [_]u8{0xAB} ** 32 };
+    var vs = try VoteStateV4.fromVoteStateV3(allocator, v3, vote_pubkey);
+    defer vs.deinit(allocator);
+
+    try std.testing.expect(vs.inflation_rewards_collector.equals(&vote_pubkey));
+    try std.testing.expect(vs.block_revenue_collector.equals(&Pubkey.ZEROES));
+    try std.testing.expectEqual(@as(u16, 2500), vs.inflation_rewards_commission_bps);
+    try std.testing.expectEqual(@as(u16, 10_000), vs.block_revenue_commission_bps);
+    try std.testing.expectEqual(@as(u64, 0), vs.pending_delegator_rewards);
+    try std.testing.expectEqual(@as(?[48]u8, null), vs.bls_pubkey_compressed);
+}
+
+test "state_v4.VoteStateV4.clone and equals" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        10,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    try vs.votes.append(allocator, .{
+        .latency = 1,
+        .lockout = Lockout{ .slot = 42, .confirmation_count = 1 },
+    });
+
+    var cloned = try vs.clone(allocator);
+    defer cloned.deinit(allocator);
+
+    try std.testing.expect(vs.equals(&cloned));
+    try std.testing.expect(cloned.equals(&vs));
+
+    // Modify clone, should no longer be equal
+    cloned.inflation_rewards_commission_bps = 9999;
+    try std.testing.expect(!vs.equals(&cloned));
+}
+
+test "state_v4.VoteStateV4.equals different votes length" {
+    const allocator = std.testing.allocator;
+    var a = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        10,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer a.deinit(allocator);
+
+    var b = try a.clone(allocator);
+    defer b.deinit(allocator);
+
+    try b.votes.append(allocator, .{
+        .latency = 1,
+        .lockout = Lockout{ .slot = 1, .confirmation_count = 1 },
+    });
+    try std.testing.expect(!a.equals(&b));
+}
+
+test "state_v4.VoteStateV4.equals different epoch_credits length" {
+    const allocator = std.testing.allocator;
+    var a = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        10,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer a.deinit(allocator);
+
+    var b = try a.clone(allocator);
+    defer b.deinit(allocator);
+
+    try b.epoch_credits.append(allocator, .{ .epoch = 1, .credits = 10, .prev_credits = 0 });
+    try std.testing.expect(!a.equals(&b));
+}
+
+test "state_v4.VoteStateV4.equals bls key difference" {
+    const allocator = std.testing.allocator;
+    var a = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        10,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer a.deinit(allocator);
+
+    var b = try a.clone(allocator);
+    defer b.deinit(allocator);
+
+    b.bls_pubkey_compressed = [_]u8{0xFF} ** 48;
+    try std.testing.expect(!a.equals(&b));
+}
+
+test "state_v4.VoteStateV4.lastLockout and lastVotedSlot" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    // Empty state
+    try std.testing.expectEqual(@as(?Lockout, null), vs.lastLockout());
+    try std.testing.expectEqual(@as(?Slot, null), vs.lastVotedSlot());
+
+    // Add a vote
+    try vs.votes.append(allocator, .{
+        .latency = 1,
+        .lockout = Lockout{ .slot = 42, .confirmation_count = 1 },
+    });
+    try std.testing.expectEqual(@as(Slot, 42), vs.lastVotedSlot().?);
+    try std.testing.expectEqual(@as(Slot, 42), vs.lastLockout().?.slot);
+}
+
+test "state_v4.VoteStateV4.setNewAuthorizedVoter success and too_soon_to_reauthorize" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    const new_voter = Pubkey{ .data = [_]u8{1} ** 32 };
+    // Epoch 0 already has an entry, so setting again should fail
+    const result = try vs.setNewAuthorizedVoter(allocator, new_voter, 0);
+    try std.testing.expectEqual(VoteError.too_soon_to_reauthorize, result.?);
+
+    // Epoch 1 should succeed
+    const result2 = try vs.setNewAuthorizedVoter(allocator, new_voter, 1);
+    try std.testing.expectEqual(@as(?VoteError, null), result2);
+}
+
+test "state_v4.VoteStateV4.getAndUpdateAuthorizedVoter v4 purge" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    const voter1 = Pubkey{ .data = [_]u8{1} ** 32 };
+    _ = try vs.setNewAuthorizedVoter(allocator, voter1, 1);
+
+    // Get voter for epoch 1 with v4 purge
+    const pubkey = try vs.getAndUpdateAuthorizedVoter(allocator, 1, true);
+    try std.testing.expect(pubkey.equals(&voter1));
+}
+
+test "state_v4.VoteStateV4.getAndUpdateAuthorizedVoter v3 purge" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    const voter1 = Pubkey{ .data = [_]u8{1} ** 32 };
+    _ = try vs.setNewAuthorizedVoter(allocator, voter1, 1);
+
+    // Get voter for epoch 1 with v3 purge
+    const pubkey = try vs.getAndUpdateAuthorizedVoter(allocator, 1, false);
+    try std.testing.expect(pubkey.equals(&voter1));
+}
+
+test "state_v4.VoteStateV4.creditsForVoteAtIndex" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    // Out of bounds index returns 0 latency → 1 credit
+    try std.testing.expectEqual(@as(u64, 1), vs.creditsForVoteAtIndex(0));
+
+    // latency 0 → 1 credit
+    try vs.votes.append(allocator, .{
+        .latency = 0,
+        .lockout = Lockout{ .slot = 1, .confirmation_count = 1 },
+    });
+    try std.testing.expectEqual(@as(u64, 1), vs.creditsForVoteAtIndex(0));
+
+    // latency 1 (≤ grace) → VOTE_CREDITS_MAXIMUM_PER_SLOT (16)
+    vs.votes.items[0].latency = 1;
+    try std.testing.expectEqual(VOTE_CREDITS_MAXIMUM_PER_SLOT, vs.creditsForVoteAtIndex(0));
+
+    // latency 2 (≤ grace) → VOTE_CREDITS_MAXIMUM_PER_SLOT (16)
+    vs.votes.items[0].latency = VOTE_CREDITS_GRACE_SLOTS;
+    try std.testing.expectEqual(VOTE_CREDITS_MAXIMUM_PER_SLOT, vs.creditsForVoteAtIndex(0));
+
+    // latency = grace + 1 → MAX - 1
+    vs.votes.items[0].latency = VOTE_CREDITS_GRACE_SLOTS + 1;
+    try std.testing.expectEqual(VOTE_CREDITS_MAXIMUM_PER_SLOT - 1, vs.creditsForVoteAtIndex(0));
+
+    // latency = grace + MAX → 1
+    vs.votes.items[0].latency = VOTE_CREDITS_GRACE_SLOTS + VOTE_CREDITS_MAXIMUM_PER_SLOT;
+    try std.testing.expectEqual(@as(u64, 1), vs.creditsForVoteAtIndex(0));
+
+    // latency very large → 1
+    vs.votes.items[0].latency = 255;
+    try std.testing.expectEqual(@as(u64, 1), vs.creditsForVoteAtIndex(0));
+}
+
+test "state_v4.VoteStateV4.getCredits and incrementCredits" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    // Empty → 0 credits
+    try std.testing.expectEqual(@as(u64, 0), vs.getCredits());
+    try std.testing.expectEqual(@as(u64, 0), vs.epochCredits());
+
+    // First increment creates epoch entry
+    try vs.incrementCredits(allocator, 0, 10);
+    try std.testing.expectEqual(@as(u64, 10), vs.getCredits());
+    try std.testing.expectEqual(@as(usize, 1), vs.epoch_credits.items.len);
+
+    // Same epoch, accumulates
+    try vs.incrementCredits(allocator, 0, 5);
+    try std.testing.expectEqual(@as(u64, 15), vs.getCredits());
+    try std.testing.expectEqual(@as(usize, 1), vs.epoch_credits.items.len);
+
+    // New epoch creates new entry
+    try vs.incrementCredits(allocator, 1, 3);
+    try std.testing.expectEqual(@as(u64, 18), vs.getCredits());
+    try std.testing.expectEqual(@as(usize, 2), vs.epoch_credits.items.len);
+}
+
+test "state_v4.VoteStateV4.incrementCredits epoch with no new credits reuses entry" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    // Create epoch 0 entry with 0 credits (credits == prev_credits)
+    try vs.incrementCredits(allocator, 0, 0);
+    try std.testing.expectEqual(@as(usize, 1), vs.epoch_credits.items.len);
+
+    // New epoch with same credits/prev_credits reuses entry
+    try vs.incrementCredits(allocator, 1, 5);
+    try std.testing.expectEqual(@as(usize, 1), vs.epoch_credits.items.len);
+    try std.testing.expectEqual(@as(u64, 1), vs.epoch_credits.getLast().epoch);
+}
+
+test "state_v4.VoteStateV4.incrementCredits max epoch credits history" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    // Fill up to MAX_EPOCH_CREDITS_HISTORY + 1
+    for (0..MAX_EPOCH_CREDITS_HISTORY + 2) |i| {
+        try vs.incrementCredits(allocator, @intCast(i), 1);
+    }
+    // Should be capped at MAX_EPOCH_CREDITS_HISTORY
+    try std.testing.expect(vs.epoch_credits.items.len <= MAX_EPOCH_CREDITS_HISTORY);
+}
+
+test "state_v4.VoteStateV4.processTimestamp" {
+    var vs: VoteStateV4 = VoteStateV4.DEFAULT;
+
+    // First timestamp succeeds
+    try std.testing.expectEqual(@as(?VoteError, null), vs.processTimestamp(1, 100));
+    try std.testing.expectEqual(@as(Slot, 1), vs.last_timestamp.slot);
+    try std.testing.expectEqual(@as(i64, 100), vs.last_timestamp.timestamp);
+
+    // Same slot+timestamp is fine
+    try std.testing.expectEqual(@as(?VoteError, null), vs.processTimestamp(1, 100));
+
+    // Higher slot, higher timestamp
+    try std.testing.expectEqual(@as(?VoteError, null), vs.processTimestamp(2, 200));
+
+    // Older slot → error
+    try std.testing.expectEqual(VoteError.timestamp_too_old, vs.processTimestamp(1, 300));
+
+    // Same slot, older timestamp → error
+    try std.testing.expectEqual(VoteError.timestamp_too_old, vs.processTimestamp(2, 100));
+
+    // Same slot, different timestamp → error (when slot != 0)
+    try std.testing.expectEqual(VoteError.timestamp_too_old, vs.processTimestamp(2, 201));
+}
+
+test "state_v4.VoteStateV4.processVote empty slots" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    const vote = Vote{ .slots = &[_]Slot{}, .hash = Hash.ZEROES, .timestamp = null };
+    const slot_hashes: SlotHashes = .INIT;
+    const result = try vs.processVote(allocator, &vote, slot_hashes, 0, 0);
+    try std.testing.expectEqual(VoteError.empty_slots, result.?);
+}
+
+test "state_v4.VoteStateV4.processVote votes too old all filtered" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    var slots = [_]Slot{0};
+    const vote = Vote{ .slots = &slots, .hash = Hash.ZEROES, .timestamp = null };
+    // Slot hashes start at slot 100, so slot 0 is too old
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 100, .hash = Hash.ZEROES }});
+    const result = try vs.processVote(allocator, &vote, slot_hashes, 0, 0);
+    try std.testing.expectEqual(VoteError.votes_too_old_all_filtered, result.?);
+}
+
+test "state_v4.VoteStateV4.processVote success" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    var slots = [_]Slot{1};
+    const hash = Hash.ZEROES;
+    const vote = Vote{ .slots = &slots, .hash = hash, .timestamp = null };
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 1, .hash = hash }});
+    const result = try vs.processVote(allocator, &vote, slot_hashes, 0, 1);
+    try std.testing.expectEqual(@as(?VoteError, null), result);
+    try std.testing.expectEqual(@as(Slot, 1), vs.lastVotedSlot().?);
+    try std.testing.expectEqual(@as(usize, 1), vs.votes.items.len);
+}
+
+test "state_v4.VoteStateV4.processNextVoteSlot ignores old slot" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    try vs.processNextVoteSlot(allocator, 5, 0, 5);
+    try std.testing.expectEqual(@as(usize, 1), vs.votes.items.len);
+
+    // Voting for slot <= last voted slot is ignored
+    try vs.processNextVoteSlot(allocator, 5, 0, 5);
+    try std.testing.expectEqual(@as(usize, 1), vs.votes.items.len);
+
+    try vs.processNextVoteSlot(allocator, 3, 0, 5);
+    try std.testing.expectEqual(@as(usize, 1), vs.votes.items.len);
+}
+
+test "state_v4.VoteStateV4.processNextVoteSlot stack full pops root" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    // Fill stack to MAX_LOCKOUT_HISTORY
+    for (0..MAX_LOCKOUT_HISTORY) |i| {
+        try vs.processNextVoteSlot(allocator, @intCast(i), 0, 0);
+    }
+    try std.testing.expectEqual(@as(usize, MAX_LOCKOUT_HISTORY), vs.votes.items.len);
+    try std.testing.expectEqual(@as(?Slot, null), vs.root_slot);
+
+    // One more should pop the oldest and set root
+    try vs.processNextVoteSlot(allocator, MAX_LOCKOUT_HISTORY, 0, 0);
+    try std.testing.expectEqual(@as(usize, MAX_LOCKOUT_HISTORY), vs.votes.items.len);
+    try std.testing.expectEqual(@as(Slot, 0), vs.root_slot.?);
+}
+
+test "state_v4.VoteStateV4.popExpiredVotes" {
+    const allocator = std.testing.allocator;
+    var vs: VoteStateV4 = VoteStateV4.DEFAULT;
+    defer vs.deinit(allocator);
+
+    // Add a vote at slot 1 with confirmation_count 1 → lockout expires at slot 3
+    try vs.votes.append(allocator, .{
+        .latency = 0,
+        .lockout = Lockout{ .slot = 1, .confirmation_count = 1 },
+    });
+
+    // Voting at slot 2 should NOT expire it (still locked)
+    vs.popExpiredVotes(2);
+    try std.testing.expectEqual(@as(usize, 1), vs.votes.items.len);
+
+    // Voting at slot 4 should expire it
+    vs.popExpiredVotes(4);
+    try std.testing.expectEqual(@as(usize, 0), vs.votes.items.len);
+}
+
+test "state_v4.VoteStateV4.containsSlot" {
+    const allocator = std.testing.allocator;
+    var vs: VoteStateV4 = VoteStateV4.DEFAULT;
+    defer vs.deinit(allocator);
+
+    try vs.votes.append(allocator, .{
+        .latency = 1,
+        .lockout = Lockout{ .slot = 5, .confirmation_count = 1 },
+    });
+    try vs.votes.append(allocator, .{
+        .latency = 1,
+        .lockout = Lockout{ .slot = 10, .confirmation_count = 1 },
+    });
+
+    try std.testing.expect(vs.containsSlot(5));
+    try std.testing.expect(vs.containsSlot(10));
+    try std.testing.expect(!vs.containsSlot(1));
+    try std.testing.expect(!vs.containsSlot(7));
+}
+
+test "state_v4.VoteStateV4.processNewVoteState too many votes" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    var new_state: [MAX_LOCKOUT_HISTORY + 1]LandedVote = undefined;
+    for (&new_state, 0..) |*v, i| {
+        v.* = .{
+            .latency = 0,
+            .lockout = Lockout{
+                .slot = @intCast(i),
+                .confirmation_count = @intCast(MAX_LOCKOUT_HISTORY + 1 - i),
+            },
+        };
+    }
+    const result = try vs.processNewVoteState(allocator, &new_state, null, null, 0, 0);
+    try std.testing.expectEqual(VoteError.too_many_votes, result.?);
+}
+
+test "state_v4.VoteStateV4.processNewVoteState root_roll_back" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    // Set current root to slot 10
+    vs.root_slot = 10;
+
+    // Propose a lower root
+    var new_state = [_]LandedVote{.{
+        .latency = 0,
+        .lockout = Lockout{ .slot = 11, .confirmation_count = 1 },
+    }};
+    const result = try vs.processNewVoteState(allocator, &new_state, 5, null, 0, 0);
+    try std.testing.expectEqual(VoteError.root_roll_back, result.?);
+
+    // Propose null root when current root is non-null
+    const result2 = try vs.processNewVoteState(allocator, &new_state, null, null, 0, 0);
+    try std.testing.expectEqual(VoteError.root_roll_back, result2.?);
+}
+
+test "state_v4.VoteStateV4.processNewVoteState zero_confirmations" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    var new_state = [_]LandedVote{.{
+        .latency = 0,
+        .lockout = Lockout{ .slot = 1, .confirmation_count = 0 },
+    }};
+    const result = try vs.processNewVoteState(allocator, &new_state, null, null, 0, 0);
+    try std.testing.expectEqual(VoteError.zero_confirmations, result.?);
+}
+
+test "state_v4.VoteStateV4.processNewVoteState confirmation_too_large" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    var new_state = [_]LandedVote{.{
+        .latency = 0,
+        .lockout = Lockout{ .slot = 1, .confirmation_count = MAX_LOCKOUT_HISTORY + 1 },
+    }};
+    const result = try vs.processNewVoteState(allocator, &new_state, null, null, 0, 0);
+    try std.testing.expectEqual(VoteError.confirmation_too_large, result.?);
+}
+
+test "state_v4.VoteStateV4.processNewVoteState slots_not_ordered" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    var new_state = [_]LandedVote{
+        .{ .latency = 0, .lockout = Lockout{ .slot = 5, .confirmation_count = 2 } },
+        .{ .latency = 0, .lockout = Lockout{ .slot = 3, .confirmation_count = 1 } },
+    };
+    const result = try vs.processNewVoteState(allocator, &new_state, null, null, 0, 0);
+    try std.testing.expectEqual(VoteError.slots_not_ordered, result.?);
+}
+
+test "state_v4.VoteStateV4.processNewVoteState confirmations_not_ordered" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    // Confirmations should be strictly decreasing
+    var new_state = [_]LandedVote{
+        .{ .latency = 0, .lockout = Lockout{ .slot = 1, .confirmation_count = 2 } },
+        .{ .latency = 0, .lockout = Lockout{ .slot = 2, .confirmation_count = 2 } },
+    };
+    const result = try vs.processNewVoteState(allocator, &new_state, null, null, 0, 0);
+    try std.testing.expectEqual(VoteError.confirmations_not_ordered, result.?);
+}
+
+test "state_v4.VoteStateV4.processNewVoteState success" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    var new_state = [_]LandedVote{
+        .{ .latency = 0, .lockout = Lockout{ .slot = 1, .confirmation_count = 2 } },
+        .{ .latency = 0, .lockout = Lockout{ .slot = 2, .confirmation_count = 1 } },
+    };
+    const result = try vs.processNewVoteState(allocator, &new_state, null, null, 0, 0);
+    try std.testing.expectEqual(@as(?VoteError, null), result);
+    try std.testing.expectEqual(@as(usize, 2), vs.votes.items.len);
+}
+
+test "state_v4.VoteStateV4.checkSlotsAreValid vote_too_old" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    // Add a vote at slot 5 so lastVotedSlot = 5
+    try vs.votes.append(allocator, .{
+        .latency = 0,
+        .lockout = Lockout{ .slot = 5, .confirmation_count = 1 },
+    });
+
+    const vote = Vote{ .slots = &[_]Slot{3}, .hash = Hash.ZEROES, .timestamp = null };
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 3, .hash = Hash.ZEROES }});
+    const result = try vs.checkSlotsAreValid(&vote, &[_]Slot{3}, &slot_hashes);
+    try std.testing.expectEqual(VoteError.vote_too_old, result.?);
+}
+
+test "state_v4.VoteStateV4.checkSlotsAreValid slot_hash_mismatch" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    const wrong_hash = Hash{ .data = [_]u8{0xFF} ** 32 };
+    const vote = Vote{ .slots = &[_]Slot{1}, .hash = wrong_hash, .timestamp = null };
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 1, .hash = Hash.ZEROES }});
+    const result = try vs.checkSlotsAreValid(&vote, &[_]Slot{1}, &slot_hashes);
+    try std.testing.expectEqual(VoteError.slot_hash_mismatch, result.?);
+}
+
+test "state_v4.VoteStateV4.checkSlotsAreValid slots_mismatch" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    // Vote for slot 5 but only slot 1 is in the hash history
+    const vote = Vote{ .slots = &[_]Slot{5}, .hash = Hash.ZEROES, .timestamp = null };
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 1, .hash = Hash.ZEROES }});
+    const result = try vs.checkSlotsAreValid(&vote, &[_]Slot{5}, &slot_hashes);
+    try std.testing.expectEqual(VoteError.slots_mismatch, result.?);
+}
+
+test "state_v4.VoteStateV4.checkAndFilterProposedVoteState empty slots" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    var lockouts: std.ArrayListUnmanaged(Lockout) = .empty;
+    defer lockouts.deinit(allocator);
+    var root: ?Slot = null;
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 1, .hash = Hash.ZEROES }});
+    const result = try vs.checkAndFilterProposedVoteState(
+        &lockouts,
+        &root,
+        Hash.ZEROES,
+        &slot_hashes,
+    );
+    try std.testing.expectEqual(VoteError.empty_slots, result.?);
+}
+
+test "state_v4.VoteStateV4.checkAndFilterProposedVoteState vote_too_old" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    // Add existing vote at slot 10
+    try vs.votes.append(allocator, .{
+        .latency = 0,
+        .lockout = Lockout{ .slot = 10, .confirmation_count = 1 },
+    });
+
+    var lockouts: std.ArrayListUnmanaged(Lockout) = .empty;
+    defer lockouts.deinit(allocator);
+    try lockouts.append(allocator, Lockout{ .slot = 5, .confirmation_count = 1 });
+    var root: ?Slot = null;
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 5, .hash = Hash.ZEROES }});
+    const result = try vs.checkAndFilterProposedVoteState(
+        &lockouts,
+        &root,
+        Hash.ZEROES,
+        &slot_hashes,
+    );
+    try std.testing.expectEqual(VoteError.vote_too_old, result.?);
+}
+
+test "state_v4.VoteStateV4.isUninitialized always false" {
+    const vs: VoteStateV4 = VoteStateV4.DEFAULT;
+    try std.testing.expect(!vs.isUninitialized());
+}
+
+test "state_v4.VoteStateV4.isCorrectSizeAndInitialized" {
+    // Wrong size
+    {
+        var data: [100]u8 = undefined;
+        @memset(&data, 0);
+        try std.testing.expect(!VoteStateV4.isCorrectSizeAndInitialized(&data));
+    }
+    // Correct size, wrong version
+    {
+        var data: [VoteStateV4.MAX_VOTE_STATE_SIZE]u8 = undefined;
+        @memset(&data, 0);
+        std.mem.writeInt(u32, data[0..4], 0, .little); // version 0 != 3
+        try std.testing.expect(!VoteStateV4.isCorrectSizeAndInitialized(&data));
+    }
+    // Correct size, correct version
+    {
+        var data: [VoteStateV4.MAX_VOTE_STATE_SIZE]u8 = undefined;
+        @memset(&data, 0);
+        std.mem.writeInt(u32, data[0..4], 3, .little); // v4 discriminant
+        try std.testing.expect(VoteStateV4.isCorrectSizeAndInitialized(&data));
+    }
+}
+
+test "state_v4.blsPubkeyEql" {
+    // both null
+    try std.testing.expect(blsPubkeyEql(null, null));
+    // one null, one non-null
+    try std.testing.expect(!blsPubkeyEql(null, [_]u8{0} ** 48));
+    try std.testing.expect(!blsPubkeyEql([_]u8{0} ** 48, null));
+    // both same
+    try std.testing.expect(blsPubkeyEql([_]u8{0xAB} ** 48, [_]u8{0xAB} ** 48));
+    // both different
+    try std.testing.expect(!blsPubkeyEql([_]u8{0xAB} ** 48, [_]u8{0xCD} ** 48));
+}
+
+test "state_v4.VoteStateV4.processVote skips old vote" {
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    var slots = [_]Slot{0};
+    const vote = Vote{ .slots = &slots, .hash = Hash.ZEROES, .timestamp = null };
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 0, .hash = Hash.ZEROES }});
+
+    const result1 = try vs.processVote(allocator, &vote, slot_hashes, 0, 0);
+    try std.testing.expectEqual(@as(?VoteError, null), result1);
+
+    const result2 = try vs.processVote(allocator, &vote, slot_hashes, 0, 0);
+    try std.testing.expectEqual(VoteError.vote_too_old, result2.?);
+}
+
+test "state_v4.VoteStateV4.getCredits with processNextVoteSlot" {
+    const allocator = std.testing.allocator;
+    const processSlotVoteUncheckedV4 = state.processSlotVoteUncheckedV4;
+
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    for (0..MAX_LOCKOUT_HISTORY) |i| {
+        try processSlotVoteUncheckedV4(allocator, &vs, i);
+    }
+    try std.testing.expectEqual(@as(u64, 0), vs.getCredits());
+
+    try processSlotVoteUncheckedV4(allocator, &vs, MAX_LOCKOUT_HISTORY + 1);
+    try std.testing.expectEqual(@as(u64, 1), vs.getCredits());
+}
+
+test "state_v4.VoteStateV4.doubleLockouts" {
+    const allocator = std.testing.allocator;
+    var vs: VoteStateV4 = VoteStateV4.DEFAULT;
+    defer vs.deinit(allocator);
+
+    // 3 votes: stack_depth = 3
+    // index 0: confirmation = 1, stack_depth(3) > 0 + 1 → increment
+    // index 1: confirmation = 1, stack_depth(3) > 1 + 1 → increment
+    // index 2: confirmation = 1, stack_depth(3) > 2 + 1 → no (3 == 3)
+    try vs.votes.append(
+        allocator,
+        .{ .latency = 0, .lockout = Lockout{ .slot = 1, .confirmation_count = 1 } },
+    );
+    try vs.votes.append(
+        allocator,
+        .{ .latency = 0, .lockout = Lockout{ .slot = 2, .confirmation_count = 1 } },
+    );
+    try vs.votes.append(
+        allocator,
+        .{ .latency = 0, .lockout = Lockout{ .slot = 3, .confirmation_count = 1 } },
+    );
+
+    try vs.doubleLockouts();
+
+    try std.testing.expectEqual(@as(u32, 2), vs.votes.items[0].lockout.confirmation_count);
+    try std.testing.expectEqual(@as(u32, 2), vs.votes.items[1].lockout.confirmation_count);
+    try std.testing.expectEqual(@as(u32, 1), vs.votes.items[2].lockout.confirmation_count);
+}

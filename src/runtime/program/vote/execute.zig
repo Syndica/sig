@@ -4725,3 +4725,796 @@ test "vote_program: tower sync switch" {
         .{},
     );
 }
+
+test "vote_program: executeIntializeAccount v4" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const rent = Rent.INIT;
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const vote_account = Pubkey.initRandom(prng.random());
+
+    // When v4 feature is active, initializeAccount uses VoteStateV4.init directly
+    // and serializes as VoteStateVersions.v4
+    var final_vote_state_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock.epoch,
+        vote_account,
+    );
+    defer final_vote_state_v4.deinit(allocator);
+
+    const final_versioned = VoteStateVersions{ .v4 = final_vote_state_v4 };
+
+    var final_vote_state_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_versioned, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .initialize_account = .{
+                .node_pubkey = node_pubkey,
+                .authorized_voter = authorized_voter,
+                .authorized_withdrawer = authorized_withdrawer,
+                .commission = commission,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 3 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = ([_]u8{0} ** 3762)[0..],
+                },
+                .{ .pubkey = Rent.ID },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = node_pubkey },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = rent,
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{
+                    .feature = .vote_state_v4,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = Rent.ID },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = node_pubkey },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+}
+
+test "vote_program: tower sync with v4 feature" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    // Initial state serialized as V3 current
+    var vote_state_init = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock.epoch,
+    );
+
+    try vote_state_init.votes.appendSlice(
+        allocator,
+        &[_]LandedVote{
+            .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 3 } },
+            .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 2 } },
+            .{ .latency = 0, .lockout = .{ .slot = 6, .confirmation_count = 1 } },
+        },
+    );
+
+    var initial_versioned = VoteStateVersions{ .current = vote_state_init };
+    defer initial_versioned.deinit(allocator);
+
+    var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], initial_versioned, .{});
+
+    const vote_slot_hash = sig.core.Hash.initRandom(prng.random());
+
+    var lockouts = [_]Lockout{
+        .{ .slot = 2, .confirmation_count = 4 },
+        .{ .slot = 4, .confirmation_count = 3 },
+        .{ .slot = 6, .confirmation_count = 2 },
+        .{ .slot = 8, .confirmation_count = 1 },
+    };
+    const tower_sync = TowerSync{
+        .lockouts = std.ArrayListUnmanaged(Lockout).fromOwnedSlice(&lockouts),
+        .hash = vote_slot_hash,
+        .root = null,
+        .timestamp = null,
+        .block_id = sig.core.Hash.ZEROES,
+    };
+
+    // Build the expected final V4 state: V3→V4 conversion + tower sync applied
+    var final_v4 = try VoteStateV4.fromVoteStateV3(
+        allocator,
+        vote_state_init,
+        vote_account,
+    );
+    defer final_v4.deinit(allocator);
+
+    final_v4.votes.clearRetainingCapacity();
+    try final_v4.votes.appendSlice(
+        allocator,
+        &[_]LandedVote{
+            .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 4 } },
+            .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 3 } },
+            .{ .latency = 0, .lockout = .{ .slot = 6, .confirmation_count = 2 } },
+            .{ .latency = 0, .lockout = .{ .slot = 8, .confirmation_count = 1 } },
+        },
+    );
+
+    const final_versioned = VoteStateVersions{ .v4 = final_v4 };
+
+    // Start from initial V3 bytes since serializeIntoAccountData only overwrites
+    // the serialized portion, leaving trailing bytes from the original V3 data.
+    var final_vote_state_bytes = initial_state_bytes;
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_versioned, .{});
+
+    const slot_hashes = SlotHashes.initWithEntries(
+        &.{
+            .{ .slot = 8, .hash = vote_slot_hash },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+        },
+    );
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .tower_sync = .{
+                .tower_sync = tower_sync,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = initial_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_voter },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .slot_hashes = slot_hashes,
+            },
+            .feature_set = &.{
+                .{
+                    .feature = .enable_tower_sync_ix,
+                    .slot = 0,
+                },
+                .{
+                    .feature = .vote_state_v4,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_voter },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+}
+
+test "vote_program: update_validator_identity with v4 feature" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const new_node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    // Initial V3 state
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock.epoch,
+    ) };
+    defer initial_vote_state.deinit(allocator);
+
+    var initial_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    // Final V4 state: with v4 feature, updateValidatorIdentity sets
+    // both node_pubkey and block_revenue_collector to new_identity
+    var final_v4 = try VoteStateV4.fromVoteStateV3(
+        allocator,
+        initial_vote_state.current,
+        vote_account,
+    );
+    defer final_v4.deinit(allocator);
+    final_v4.node_pubkey = new_node_pubkey;
+    final_v4.block_revenue_collector = new_node_pubkey;
+
+    const final_versioned = VoteStateVersions{ .v4 = final_v4 };
+
+    // Start from initial V3 bytes since serializeIntoAccountData only overwrites
+    // the serialized portion, leaving trailing bytes from the original V3 data.
+    var final_vote_state_bytes = initial_vote_state_bytes;
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_versioned, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction.update_validator_identity,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = new_node_pubkey },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .feature_set = &.{
+                .{
+                    .feature = .vote_state_v4,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = new_node_pubkey },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+}
+
+test "vote_program: widthdraw all with v4 zeros account data" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+    const rent = Rent.INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const recipient = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+    const lamports: u64 = 27074400;
+
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock.epoch,
+    ) };
+    defer initial_vote_state.deinit(allocator);
+
+    var initial_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    // With V4 feature: full withdrawal zeros account data
+    const final_data = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .withdraw = lamports,
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = lamports,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{
+                    .pubkey = recipient,
+                    .lamports = 0,
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = rent,
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{
+                    .feature = .vote_state_v4,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 0,
+                    .owner = vote_program.ID,
+                    .data = final_data[0..],
+                },
+                .{
+                    .pubkey = recipient,
+                    .lamports = lamports,
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+}
+
+test "vote_program: executeAuthorize withdrawer with v4 feature" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const new_authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+    const vote_account = Pubkey.initRandom(prng.random());
+
+    // Initial V3 state
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock.epoch,
+    ) };
+    defer initial_vote_state.deinit(allocator);
+
+    var initial_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    // Final V4 state with new withdrawer
+    var final_v4 = try VoteStateV4.fromVoteStateV3(
+        allocator,
+        initial_vote_state.current,
+        vote_account,
+    );
+    defer final_v4.deinit(allocator);
+    final_v4.withdrawer = new_authorized_withdrawer;
+
+    const final_versioned = VoteStateVersions{ .v4 = final_v4 };
+
+    // Start from initial V3 bytes since serializeIntoAccountData only overwrites
+    // the serialized portion, leaving trailing bytes from the original V3 data.
+    var final_vote_state_bytes = initial_vote_state_bytes;
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_versioned, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .authorize = .{
+                .new_authority = new_authorized_withdrawer,
+                .vote_authorize = VoteAuthorize.withdrawer,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{
+                    .feature = .vote_state_v4,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+}
+
+test "vote_program: update_commission with v4 feature" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const epoch_schedule = EpochSchedule{
+        .slots_per_epoch = 8192,
+        .leader_schedule_slot_offset = 0,
+        .warmup = false,
+        .first_normal_epoch = 0,
+        .first_normal_slot = 0,
+    };
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const initial_commission: u8 = 10;
+    const final_commission: u8 = 20;
+
+    // Initial V3 state
+    var initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        initial_commission,
+        clock.epoch,
+    ) };
+    defer initial_vote_state.deinit(allocator);
+
+    var initial_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    // Final V4 state with new commission
+    var final_v4 = try VoteStateV4.fromVoteStateV3(
+        allocator,
+        initial_vote_state.current,
+        vote_account,
+    );
+    defer final_v4.deinit(allocator);
+    final_v4.inflation_rewards_commission_bps = @as(u16, final_commission) * 100;
+
+    const final_versioned = VoteStateVersions{ .v4 = final_v4 };
+
+    // Start from initial V3 bytes since serializeIntoAccountData only overwrites
+    // the serialized portion, leaving trailing bytes from the original V3 data.
+    var final_vote_state_bytes = initial_vote_state_bytes;
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_versioned, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .update_commission = final_commission,
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .epoch_schedule = epoch_schedule,
+            },
+            .feature_set = &.{
+                .{
+                    .feature = .vote_state_v4,
+                    .slot = 0,
+                },
+                .{
+                    .feature = .allow_commission_decrease_at_any_time,
+                    .slot = 0,
+                },
+                .{
+                    .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+}
+
+test "vote_program: vote with v4 feature" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    // Initial V3 state
+    const vote_state_v3 = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock.epoch,
+    );
+
+    var initial_versioned = VoteStateVersions{ .current = vote_state_v3 };
+    defer initial_versioned.deinit(allocator);
+
+    var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], initial_versioned, .{});
+
+    var slots = [_]u64{0};
+
+    const vote = Vote{
+        .slots = &slots,
+        .hash = sig.core.Hash.ZEROES,
+        .timestamp = null,
+    };
+
+    const slot_hashes = SlotHashes.initWithEntries(
+        &.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }},
+    );
+
+    // Build expected final V4 state
+    var final_v4 = try VoteStateV4.fromVoteStateV3(allocator, vote_state_v3, vote_account);
+    defer final_v4.deinit(allocator);
+
+    const landed_vote: LandedVote = .{
+        .latency = VoteState.computeVoteLatency(0, 0),
+        .lockout = Lockout{ .confirmation_count = 1, .slot = 0 },
+    };
+    try final_v4.votes.append(allocator, landed_vote);
+    try final_v4.doubleLockouts();
+
+    const final_versioned = VoteStateVersions{ .v4 = final_v4 };
+
+    // Start from initial V3 bytes since serializeIntoAccountData only overwrites
+    // the serialized portion, leaving trailing bytes from the original V3 data.
+    var final_vote_state_bytes = initial_state_bytes;
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_versioned, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .vote = .{ .vote = vote },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 3 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = initial_state_bytes[0..],
+                },
+                .{ .pubkey = SlotHashes.ID },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authorized_voter },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .slot_hashes = slot_hashes,
+            },
+            .feature_set = &.{
+                .{
+                    .feature = .vote_state_v4,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = SlotHashes.ID },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authorized_voter },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+}
