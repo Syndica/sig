@@ -81,7 +81,11 @@ pub const Hooks = struct {
         const cref = try ContextRef.init(allocator, context);
         defer cref.ctx_ref.dec(allocator);
 
-        const Context = @TypeOf(context);
+        const RealContext = @TypeOf(context);
+        const Context = switch (@typeInfo(RealContext)) {
+            .pointer => |ty| ty.child,
+            else => RealContext,
+        };
         inline for (comptime std.meta.declarations(Context)) |decl| {
             const method = if (@hasField(Method, decl.name))
                 @field(Method, decl.name)
