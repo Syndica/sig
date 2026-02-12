@@ -189,7 +189,7 @@ pub fn PointType(encoded: bool, ristretto: bool) type {
 }
 
 /// MSM in variable time with a runtime known (but comptime bounded) number
-/// of points. useful for things such as bulletproofs where we are generic over
+/// of points. Useful for things such as bulletproofs where we are generic over
 /// the bitsize and it can change between being more optimal to use straus or pippenger.
 ///
 /// Generally speaking, `mulMulti` will be more useful as in most cases the number of points

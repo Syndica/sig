@@ -79,10 +79,14 @@ curve25519_ristretto_msm_base_cost: u64,
 /// Number of compute units consumed for a multiscalar multiplication (msm) of ristretto points.
 /// The total cost is calculated as `msm_base_cost + (length - 1) * msm_incremental_cost`.
 curve25519_ristretto_msm_incremental_cost: u64,
-/// Number of compute units consumed to call alt_bn128_addition
-alt_bn128_addition_cost: u64,
-/// Number of compute units consumed to call alt_bn128_multiplication.
-alt_bn128_multiplication_cost: u64,
+/// Number of compute units consumed to call alt_bn128_g1_addition
+alt_bn128_g1_addition_cost: u64,
+/// Number of compute units consumed to call alt_bn128_g2_addition
+alt_bn128_g2_addition_cost: u64,
+/// Number of compute units consumed to call alt_bn128_g1_multiplication.
+alt_bn128_g1_multiplication_cost: u64,
+/// Number of compute units consumed to call alt_bn128_g2_multiplication.
+alt_bn128_g2_multiplication_cost: u64,
 /// Total cost will be alt_bn128_pairing_one_pair_cost_first
 /// + alt_bn128_pairing_one_pair_cost_other * (num_elems - 1)
 alt_bn128_pairing_one_pair_cost_first: u64,
@@ -104,8 +108,8 @@ pub const DEFAULT: ComputeBudget = ComputeBudget.init(1_400_000, false);
 pub fn init(compute_unit_limit: u64, simd_0339_active: bool) ComputeBudget {
     return .{
         .compute_unit_limit = compute_unit_limit,
-        .create_program_address_units = 1500,
         .log_64_units = 100,
+        .create_program_address_units = 1500,
         .max_call_depth = 64,
         .stack_frame_size = 4096,
         .log_pubkey_units = 100,
@@ -138,8 +142,10 @@ pub fn init(compute_unit_limit: u64, simd_0339_active: bool) ComputeBudget {
         .curve25519_ristretto_multiply_cost = 2_208,
         .curve25519_ristretto_msm_base_cost = 2303,
         .curve25519_ristretto_msm_incremental_cost = 788,
-        .alt_bn128_addition_cost = 334,
-        .alt_bn128_multiplication_cost = 3_840,
+        .alt_bn128_g1_addition_cost = 334,
+        .alt_bn128_g2_addition_cost = 535,
+        .alt_bn128_g1_multiplication_cost = 3_840,
+        .alt_bn128_g2_multiplication_cost = 15_670,
         .alt_bn128_pairing_one_pair_cost_first = 36_364,
         .alt_bn128_pairing_one_pair_cost_other = 12_121,
         .alt_bn128_g1_compress = 30,
