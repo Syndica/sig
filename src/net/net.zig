@@ -785,3 +785,151 @@ test "parse IPv6 addreess if IPv4 address fails" {
         );
     }
 }
+
+test "Ipv6Addr.format - IPv4-mapped address" {
+    try testIpv6Format(
+        "[::ffff:192.168.1.1]",
+        .init(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 168, 1, 1 }),
+    );
+    try testIpv6Format(
+        "[::ffff:127.0.0.1]",
+        .init(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 127, 0, 0, 1 }),
+    );
+    try testIpv6Format(
+        "[::ffff:0.0.0.0]",
+        .init(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0 }),
+    );
+    try testIpv6Format(
+        "[::ffff:255.255.255.255]",
+        .init(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 255, 255, 255, 255 }),
+    );
+}
+
+test "Ipv6Addr.format - all zeros (unspecified)" {
+    const addr = Ipv6Addr.init(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+    var buf: [45]u8 = undefined;
+    var w: std.io.Writer = .fixed(&buf);
+    try addr.format(&w);
+    try std.testing.expectEqualStrings("[::]", buf[0..w.end]);
+}
+
+test "Ipv6Addr.format - loopback (::1)" {
+    const addr = Ipv6Addr.init(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 });
+    var buf: [45]u8 = undefined;
+    var w: std.io.Writer = .fixed(&buf);
+    try addr.format(&w);
+    try std.testing.expectEqualStrings("[::1]", buf[0..w.end]);
+}
+
+test "Ipv6Addr.format - leading non-zero then zeros" {
+    try testIpv6Format(
+        "[1::]",
+        .init(.{ 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }),
+    );
+    try testIpv6Format(
+        "[ff00::]",
+        .init(.{ 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }),
+    );
+}
+
+test "Ipv6Addr.format - full address with no zeros" {
+    try testIpv6Format("[fe38:dce3:124c:c1a2:ba03:6745:ef1c:683d]", .init(.{
+        0xFE, 0x38, 0xDC, 0xE3, 0x12, 0x4C, 0xC1, 0xA2,
+        0xBA, 0x03, 0x67, 0x45, 0xEF, 0x1C, 0x68, 0x3D,
+    }));
+    try testIpv6Format(
+        "[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]",
+        .init(.{
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        }),
+    );
+    try testIpv6Format(
+        "[1:2:3:4:5:6:7:8]",
+        .init(.{ 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8 }),
+    );
+}
+
+test "Ipv6Addr.format - zeros in middle" {
+    try testIpv6Format(
+        "[2001:db8::1]",
+        .init(.{ 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }),
+    );
+    try testIpv6Format(
+        "[1::1]",
+        .init(.{ 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }),
+    );
+    try testIpv6Format(
+        "[fe80::1]",
+        .init(.{ 0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }),
+    );
+}
+
+test "Ipv6Addr.format - single zero group" {
+    try testIpv6Format(
+        "[1::2:3:4:5:6:7]",
+        .init(.{ 0, 1, 0, 0, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7 }),
+    );
+    try testIpv6Format(
+        "[1:2:3:4:5:6::8]",
+        .init(.{ 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 0, 0, 8 }),
+    );
+}
+
+test "Ipv6Addr.format - multicast addresses" {
+    try testIpv6Format(
+        "[ff02::1]",
+        .init(.{ 0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }),
+    );
+    try testIpv6Format(
+        "[ff02::2]",
+        .init(.{ 0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2 }),
+    );
+}
+
+test "Ipv6Addr.format - various real-world addresses" {
+    try testIpv6Format(
+        "[2001:4860:4860::8888]",
+        .init(.{ 0x20, 0x01, 0x48, 0x60, 0x48, 0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0x88, 0x88 }),
+    );
+    try testIpv6Format(
+        "[2606:4700:4700::1111]",
+        .init(.{ 0x26, 0x06, 0x47, 0x00, 0x47, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x11, 0x11 }),
+    );
+}
+
+test "Ipv6Addr.format - edge cases with byte boundaries" {
+    try testIpv6Format(
+        "[100::1]",
+        .init(.{ 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }),
+    );
+    try testIpv6Format(
+        "[1:1:1:1:1:1:1:1]",
+        .init(.{ 0, 0x01, 0, 0x01, 0, 0x01, 0, 0x01, 0, 0x01, 0, 0x01, 0, 0x01, 0, 0x01 }),
+    );
+    try testIpv6Format(
+        "[abcd:1::1234:5678]",
+        .init(.{
+            0xab, 0xcd, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x12, 0x34, 0x56, 0x78,
+        }),
+    );
+}
+
+test "Ipv6Addr.format - trailing zeros" {
+    try testIpv6Format(
+        "[1:2:3:4:5:6:7::]",
+        .init(.{ 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 0 }),
+    );
+    try testIpv6Format(
+        "[1:2::]",
+        .init(.{ 0, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }),
+    );
+}
+
+fn testIpv6Format(expected: []const u8, addr: Ipv6Addr) !void {
+    var buf: [45]u8 = undefined;
+    var w: std.io.Writer = .fixed(&buf);
+    try addr.format(&w);
+    try std.testing.expectEqualStrings(expected, buf[0..w.end]);
+}
