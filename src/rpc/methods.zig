@@ -774,6 +774,7 @@ pub const AccountHookContext = struct {
             account.owner,
             account_data_iter.reader(),
             account.data.len(),
+            null,
         )) |parsed| {
             return .{ .jsonParsed = parsed };
         }

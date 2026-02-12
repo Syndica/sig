@@ -10,6 +10,7 @@ const parse_address_lookup_table = @import("parse_account_lookup_table.zig");
 const parse_bpf_upgradeable_loader = @import("parse_bpf_upgradeable_loader.zig");
 const parse_sysvar = @import("parse_sysvar.zig");
 const parse_config = @import("parse_config.zig");
+const parse_token = @import("parse_token.zig");
 
 pub const ParseError = error{
     InvalidAccountData,
@@ -43,6 +44,7 @@ pub const ParsedContent = union(enum) {
     bpf_upgradeable_loader: parse_bpf_upgradeable_loader.BpfUpgradeableLoaderAccountType,
     sysvar: parse_sysvar.SysvarAccountType,
     config: parse_config.ConfigAccountType,
+    token: parse_token.TokenAccountType,
 
     pub fn jsonStringify(self: ParsedContent, jw: anytype) @TypeOf(jw.*).Error!void {
         switch (self) {
@@ -60,6 +62,7 @@ const ParsableProgram = enum {
     bpf_upgradeable_loader,
     sysvar,
     config,
+    token,
 
     pub fn fromProgramId(program_id: Pubkey) ?ParsableProgram {
         if (program_id.equals(&sig.runtime.program.vote.ID)) return .vote;
@@ -73,6 +76,9 @@ const ParsableProgram = enum {
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L48
         if (program_id.equals(&sig.runtime.sysvar.OWNER_ID)) return .sysvar;
         if (program_id.equals(&sig.runtime.program.config.ID)) return .config;
+        if (program_id.equals(&sig.runtime.ids.SPL_TOKEN_PROGRAM_ID)) return .token;
+        // TODO: Token-2022 support
+        // if (program_id.equals(&sig.runtime.ids.SPL_TOKEN_2022_PROGRAM_ID)) return .token;
         return null;
     }
 
@@ -83,12 +89,19 @@ const ParsableProgram = enum {
             .vote => "vote",
             .stake => "stake",
             .nonce => "nonce",
+            // TODO: confirm correct case.
             .address_lookup_table => "addressLookupTable",
             .bpf_upgradeable_loader => "bpfUpgradeableLoader",
             .sysvar => "sysvar",
             .config => "config",
+            .token => "spl-token",
         };
     }
+};
+
+// TODO: document Agave code.
+pub const AdditionalAccountData = struct {
+    spl_token: ?*const parse_token.SplTokenAdditionalData = null,
 };
 
 pub fn parse_account(
@@ -98,6 +111,7 @@ pub fn parse_account(
     // std.io.Reader
     reader: anytype,
     data_len: u32,
+    additional_data: ?AdditionalAccountData,
 ) ParseError!?ParsedAccount {
     const program = ParsableProgram.fromProgramId(program_id) orelse return null;
     const parsed: ParsedContent = switch (program) {
@@ -151,6 +165,28 @@ pub fn parse_account(
                 };
             }
             // Unknown config account - return null to fall back to base64 encoding
+            return null;
+        },
+        .token => {
+            // Token parsing requires the full data slice.
+            const data = try allocator.alloc(u8, data_len);
+            defer allocator.free(data);
+            const bytes_read = reader.readAll(data) catch return ParseError.InvalidAccountData;
+            if (bytes_read != data_len) return ParseError.InvalidAccountData;
+
+            const spl_token_data = if (additional_data) |ad| ad.spl_token else null;
+            const token_parsed = try parse_token.parseToken(
+                data,
+                spl_token_data,
+            );
+            if (token_parsed) |t| {
+                return ParsedAccount{
+                    .program = program.programName(),
+                    .parsed = .{ .token = t },
+                    .space = data_len,
+                };
+            }
+            // Unknown token account - return null to fall back to base64 encoding
             return null;
         },
     };
