@@ -599,11 +599,11 @@ pub const UiScaledUiAmountConfig = struct {
         try jw.objectField("authority");
         if (self.authority) |a| try jw.write(a.slice()) else try jw.write(null);
         try jw.objectField("multiplier");
-        try jw.write(self.multiplier);
+        try jw.print("\"{d}\"", .{self.multiplier});
         try jw.objectField("newMultiplierEffectiveTimestamp");
         try jw.write(self.new_multiplier_effective_timestamp);
         try jw.objectField("newMultiplier");
-        try jw.write(self.new_multiplier);
+        try jw.print("\"{d}\"", .{self.new_multiplier});
         try jw.endObject();
     }
 };

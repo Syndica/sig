@@ -347,7 +347,7 @@ pub const UiTokenAccount = struct {
         if (self.extensions.len > 0) {
             try jw.objectField("extensions");
             try jw.beginArray();
-            for (self.extensions) |ext| {
+            for (self.extensions.constSlice()) |ext| {
                 try ext.jsonStringify(jw);
             }
             try jw.endArray();
@@ -381,7 +381,7 @@ pub const UiMint = struct {
         if (self.extensions.len > 0) {
             try jw.objectField("extensions");
             try jw.beginArray();
-            for (self.extensions) |ext| {
+            for (self.extensions.constSlice()) |ext| {
                 try ext.jsonStringify(jw);
             }
             try jw.endArray();
