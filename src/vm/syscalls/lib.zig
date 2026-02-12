@@ -58,6 +58,9 @@ pub const Syscall = enum {
     sol_alt_bn128_group_op,
     sol_alt_bn128_compression,
 
+    sol_curve_decompress,
+    sol_curve_pairing_map,
+
     sol_get_clock_sysvar,
     sol_get_epoch_schedule_sysvar,
     sol_get_fees_sysvar,
@@ -149,6 +152,9 @@ pub const Syscall = enum {
         .sol_alt_bn128_group_op = ecc.altBn128GroupOp,
         .sol_alt_bn128_compression = ecc.altBn128Compression,
 
+        .sol_curve_decompress = ecc.curveDecompress,
+        .sol_curve_pairing_map = ecc.curvePairingMap,
+
         .sol_get_clock_sysvar = sysvar.getClock,
         .sol_get_epoch_schedule_sysvar = sysvar.getEpochSchedule,
         .sol_get_fees_sysvar = sysvar.getFees,
@@ -192,6 +198,9 @@ pub const Syscall = enum {
         .sol_curve_multiscalar_mul = .{ .feature = .curve25519_syscall_enabled },
         .sol_alt_bn128_group_op = .{ .feature = .enable_alt_bn128_syscall },
         .sol_alt_bn128_compression = .{ .feature = .enable_alt_bn128_compression_syscall },
+
+        .sol_curve_decompress = .{ .feature = .enable_bls12_381_syscall },
+        .sol_curve_pairing_map = .{ .feature = .enable_bls12_381_syscall },
 
         .sol_get_fees_sysvar = .{ .feature = .disable_fees_sysvar, .invert = true },
         .sol_get_last_restart_slot = .{ .feature = .last_restart_slot_sysvar },
