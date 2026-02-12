@@ -95,7 +95,11 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
                 }
 
                 // does *not* take ownership of the account
-                var vote_account = VoteAccount.fromAccountSharedData(allocator, account, pubkey) catch {
+                var vote_account = VoteAccount.fromAccountSharedData(
+                    allocator,
+                    account,
+                    pubkey,
+                ) catch {
                     var stakes: *T, var stakes_guard = self.stakes.writeWithLock();
                     defer stakes_guard.unlock();
                     try stakes.removeVoteAccount(allocator, pubkey);

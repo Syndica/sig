@@ -676,7 +676,11 @@ pub const VoteStateVersions = union(enum(u32)) {
     /// vote_pubkey: when provided, used as inflation_rewards_collector default for old versions.
     ///
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
-    pub fn convertToCurrent(self: VoteStateVersions, allocator: Allocator, vote_pubkey: ?Pubkey) !VoteStateV4 {
+    pub fn convertToCurrent(
+        self: VoteStateVersions,
+        allocator: Allocator,
+        vote_pubkey: ?Pubkey,
+    ) !VoteStateV4 {
         const default_collector = vote_pubkey orelse Pubkey.ZEROES;
         switch (self) {
             .v0_23_5 => |state| {
@@ -1026,7 +1030,11 @@ pub const VoteState = struct {
 
     /// [SIMD-0185] Build VoteState from VoteStateV4 for serializing as .current when feature is off.
     /// If `prior_voters` is provided, it will be used directly; otherwise an empty CircBuf is used.
-    pub fn fromVoteStateV4(allocator: Allocator, v4: VoteStateV4, prior_voters: ?CircBufV1) Allocator.Error!VoteState {
+    pub fn fromVoteStateV4(
+        allocator: Allocator,
+        v4: VoteStateV4,
+        prior_voters: ?CircBufV1,
+    ) Allocator.Error!VoteState {
         var votes = try v4.votes.clone(allocator);
         errdefer votes.deinit(allocator);
 
@@ -2307,7 +2315,11 @@ test "state.VoteState.convertToCurrent" {
         ) };
         defer vote_state_0_23_5.deinit(allocator);
 
-        var vote_state = try VoteStateVersions.convertToCurrent(vote_state_0_23_5, allocator, vote_pubkey);
+        var vote_state = try VoteStateVersions.convertToCurrent(
+            vote_state_0_23_5,
+            allocator,
+            vote_pubkey,
+        );
         defer vote_state.deinit(allocator);
 
         try std.testing.expectEqual(0, vote_state.authorized_voters.count());
@@ -2333,7 +2345,11 @@ test "state.VoteState.convertToCurrent" {
         ) };
         defer vote_state_1_14_1.deinit(allocator);
 
-        var vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator, vote_pubkey);
+        var vote_state = try VoteStateVersions.convertToCurrent(
+            vote_state_1_14_1,
+            allocator,
+            vote_pubkey,
+        );
         defer vote_state.deinit(allocator);
 
         try std.testing.expectEqual(1, vote_state.authorized_voters.count());
@@ -2363,7 +2379,11 @@ test "state.VoteState.convertToCurrent" {
 
         const vote_state_1_14_1: VoteStateVersions = .{ .current = expected };
 
-        var vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator, vote_pubkey);
+        var vote_state = try VoteStateVersions.convertToCurrent(
+            vote_state_1_14_1,
+            allocator,
+            vote_pubkey,
+        );
         defer vote_state.deinit(allocator);
 
         try std.testing.expectEqual(
@@ -2373,7 +2393,9 @@ test "state.VoteState.convertToCurrent" {
         var authorized_voter = vote_state.authorized_voters;
         var expected_authorized_voter = expected.voters;
         try std.testing.expect(
-            authorized_voter.getAuthorizedVoter(0).?.equals(&expected_authorized_voter.getAuthorizedVoter(0).?),
+            authorized_voter.getAuthorizedVoter(0).?.equals(
+                &expected_authorized_voter.getAuthorizedVoter(0).?,
+            ),
         );
         try std.testing.expect(expected.withdrawer.equals(&vote_state.withdrawer));
         try std.testing.expectEqual(expected.commission, vote_state.commission());

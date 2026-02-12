@@ -8,7 +8,6 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
 
-const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateV4 = sig.runtime.program.vote.state.VoteStateV4;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
 

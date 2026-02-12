@@ -1397,7 +1397,9 @@ fn generateVoteTx(
 
     const current_epoch = epoch_schedule.getEpoch(last_voted_slot);
 
-    const authorized_voter_pubkey = vote_state.authorized_voters.getAuthorizedVoter(current_epoch) orelse {
+    const authorized_voter_pubkey = vote_state.authorized_voters.getAuthorizedVoter(
+        current_epoch,
+    ) orelse {
         logger.err().logf("No authorized voter for epoch {}", .{current_epoch});
         return .failed;
     };
