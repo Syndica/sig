@@ -3,11 +3,16 @@ const services = @import("services.zig");
 
 const Config = struct {
     gossip: Gossip,
+    shred_network: ShredNetwork,
 
     const Gossip = struct {
         cluster: Cluster,
         port: u16,
         const Cluster = enum { testnet, devnet, mainnet };
+    };
+
+    const ShredNetwork = struct {
+        recv_port: u16,
     };
 };
 
@@ -16,7 +21,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const config = cfg: {
+    const config: Config = cfg: {
         var args = std.process.args();
         _ = args.next();
         const cfg_path = args.next() orelse return error.ConfigPathMissing;
@@ -41,24 +46,15 @@ pub fn main() !void {
     try services.spawnAndWait(
         allocator,
         &.{
-            .{ .service = .prng },
-            .{ .service = .logger },
+            .{ .service = .shred_receiver },
             .{ .service = .net },
-            .{ .service = .ping },
         },
         &.{
             .{
-                .region = .prng_state,
+                .region = .{ .net_pair = .{ .port = config.shred_network.recv_port } },
                 .shares = &.{
-                    .{ .instance = .{ .service = .prng }, .rw = true },
-                    .{ .instance = .{ .service = .logger } },
-                },
-            },
-            .{
-                .region = .{ .net_pair = .{ .port = 123 } },
-                .shares = &.{
+                    .{ .instance = .{ .service = .shred_receiver }, .rw = true },
                     .{ .instance = .{ .service = .net }, .rw = true },
-                    .{ .instance = .{ .service = .ping }, .rw = true },
                 },
             },
         },

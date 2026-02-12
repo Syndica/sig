@@ -8,5 +8,10 @@
     },
     .minimum_zig_version = "0.15.2",
     .fingerprint = 0xce1f2b0ea0d47009,
-    .dependencies = .{},
+    .dependencies = .{
+        .base58 = .{
+            .url = "git+https://github.com/Syndica/base58-zig#2acfa605d23d4d565a7e5a8ff35ea4a827eaaab9",
+            .hash = "base58-0.2.0-wW0iYMIiAABft2x6NlD5mMmFx7-VWfHJq5EAgVQw068t",
+        },
+    },
 }

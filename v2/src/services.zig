@@ -16,6 +16,7 @@ pub const Service = enum {
     logger,
     net,
     ping,
+    shred_receiver,
 
     pub fn entrypoint(self: Service) ServiceEntrypoint {
         return switch (self) {
@@ -37,10 +38,21 @@ pub const Service = enum {
 
     pub fn requiredRegions(self: Service) []const RequiredRegion {
         return switch (self) {
-            .prng => &.{.{ .region = .prng_state, .rw = true }},
-            .logger => &.{.{ .region = .prng_state }},
-            .net => &.{.{ .region = .net_pair, .rw = true }},
-            .ping => &.{.{ .region = .net_pair, .rw = true }},
+            .prng => &.{
+                .{ .region = .prng_state, .rw = true },
+            },
+            .logger => &.{
+                .{ .region = .prng_state },
+            },
+            .net => &.{
+                .{ .region = .net_pair, .rw = true },
+            },
+            .ping => &.{
+                .{ .region = .net_pair, .rw = true },
+            },
+            .shred_receiver => &.{
+                .{ .region = .net_pair, .rw = true },
+            },
         };
     }
 };
@@ -56,9 +68,9 @@ const SharedRegion = struct {
     requested_location: ?[*]align(page_size_min) u8 = null,
 
     pub fn format(self: SharedRegion, writer: *std.io.Writer) std.io.Writer.Error!void {
-        try writer.print("Region ({s}) shared with [", .{@tagName(self.region)});
+        try writer.print("Region `{s}` shared with [ ", .{@tagName(self.region)});
         for (self.shares) |share| try writer.print(
-            "{f}-{s}",
+            "{f} ({s}), ",
             .{ share.instance, if (share.rw) "rw" else "ro" },
         );
         try writer.print("]", .{});
@@ -134,11 +146,11 @@ const LookupResult = struct {
 fn serviceMap(
     allocator: std.mem.Allocator,
     comptime services: []const ServiceInstance,
-    comptime regions: []const SharedRegion,
+    regions: []const SharedRegion,
     region_memfds: []memfd.RW,
 ) !Map {
     // check all regions reference existing services
-    inline for (regions) |region| {
+    for (regions) |region| {
         for (region.shares) |share| {
             const found_service: bool = for (services) |instance| {
                 const matching =
@@ -194,16 +206,19 @@ fn serviceMap(
 pub fn spawnAndWait(
     allocator: std.mem.Allocator,
     comptime services: []const ServiceInstance,
-    comptime regions: []const SharedRegion,
+    regions: []const SharedRegion,
 ) !void {
     const region_memfds: []memfd.RW = try allocator.alloc(memfd.RW, regions.len);
     defer allocator.free(region_memfds);
     {
         @memset(region_memfds, .empty);
 
-        inline for (region_memfds, regions) |*region_memfd, shared_region| {
+        for (region_memfds, regions) |*region_memfd, shared_region| {
+            var fmt_buf: [100]u8 = undefined;
+            const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{shared_region});
+
             region_memfd.* = try .init(.{
-                .name = std.fmt.comptimePrint("{f}", .{shared_region}),
+                .name = name,
                 .size = shared_region.region.size(),
             });
         }
@@ -229,6 +244,8 @@ pub fn spawnAndWait(
         const buf = try region_memfd.mmap(shared_region.requested_location);
         defer std.posix.munmap(buf);
         shared_region.region.init(buf);
+
+        std.debug.print("Initialised: {f}\n", .{shared_region});
     }
 
     var map = try serviceMap(allocator, services, regions, region_memfds);

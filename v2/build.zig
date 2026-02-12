@@ -1,10 +1,12 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     const common = b.createModule(.{ .root_source_file = b.path("src/common.zig") });
+    common.addImport("base58", b.dependency("base58", .{}).module("base58"));
+
     const start_service = b.createModule(.{ .root_source_file = b.path("src/start_service.zig") });
     start_service.addImport("common", common);
 
@@ -23,6 +25,42 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&sig_init_tests_run.step);
+
+    // build + link services
+    {
+        const services_dir = try b.build_root.handle.openDir("src/services", .{ .iterate = true });
+        var iter = services_dir.iterate();
+        while (try iter.next()) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+
+            const service_name = str: {
+                var splitter = std.mem.splitScalar(u8, entry.name, '.');
+                break :str splitter.next() orelse
+                    std.debug.panic("service {s} has invalid path", .{entry.name});
+            };
+
+            const service_mod = b.createModule(.{
+                .target = target,
+                .optimize = optimize,
+                .root_source_file = b.path("src/services/").path(b, entry.name),
+                .single_threaded = true,
+                .omit_frame_pointer = false,
+            });
+            service_mod.addImport("common", common);
+            service_mod.addImport("start", start_service);
+
+            const svc_logger_lib = b.addLibrary(.{
+                .name = service_name,
+                .root_module = service_mod,
+            });
+            sig_init_exe.linkLibrary(svc_logger_lib);
+
+            const service_tests = b.addTest(.{ .root_module = service_mod, .name = service_name });
+            const service_tests_run = b.addRunArtifact(service_tests);
+            test_step.dependOn(&service_tests_run.step);
+        }
+    }
 
     inline for (&.{
         "svc_logger",

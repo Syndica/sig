@@ -7,9 +7,8 @@ const page_size_min = std.heap.page_size_min;
 pub const RW = extern struct {
     fd: linux.fd_t,
     size: usize,
-    name: [*:0]const u8,
 
-    pub const empty: RW = .{ .fd = -1, .size = 0, .name = "empty-RW" };
+    pub const empty: RW = .{ .fd = -1, .size = 0 };
 
     pub const Args = struct {
         name: [:0]const u8,
@@ -49,7 +48,6 @@ pub const RW = extern struct {
         return .{
             .fd = fd_rw,
             .size = args.size,
-            .name = args.name,
         };
     }
 
@@ -59,9 +57,8 @@ pub const RW = extern struct {
 pub const RO = extern struct {
     fd: linux.fd_t,
     size: usize,
-    name: [*:0]const u8,
 
-    pub const empty: RO = .{ .fd = -1, .size = 0, .name = "empty-RO" };
+    pub const empty: RO = .{ .fd = -1, .size = 0 };
 
     pub fn fromRW(rw: RW) !RO {
         var buf: [100]u8 = undefined;
@@ -71,7 +68,6 @@ pub const RO = extern struct {
         return .{
             .fd = file.handle,
             .size = rw.size,
-            .name = rw.name,
         };
     }
 
