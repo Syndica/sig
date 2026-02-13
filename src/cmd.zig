@@ -2906,30 +2906,30 @@ fn loggingPanic(message: []const u8, first_trace_addr: ?usize) noreturn {
     std.debug.defaultPanic(message, first_trace_addr);
 }
 
-pub const RpcLeaderScheduleService = struct {
+/// NOTE: This only populates the leader schedule, and leaves the epoch stake & features empty (ie ALL_DISABLED).
+const RpcLeaderScheduleService = struct {
     allocator: std.mem.Allocator,
     logger: RpcLeaderScheduleServiceLogger,
     rpc_client: sig.rpc.Client,
     epoch_tracker: *sig.core.EpochTracker,
 
-    const Self = @This();
-    const RpcLeaderScheduleServiceLogger = sig.trace.Logger(@typeName(Self));
+    const RpcLeaderScheduleServiceLogger = sig.trace.Logger(@typeName(RpcLeaderScheduleService));
 
-    pub fn init(
+    fn init(
         allocator: std.mem.Allocator,
         logger: RpcLeaderScheduleServiceLogger,
         epoch_tracker: *sig.core.EpochTracker,
         rpc_client: sig.rpc.Client,
-    ) Self {
+    ) RpcLeaderScheduleService {
         return .{
             .allocator = allocator,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger.withScope(@typeName(RpcLeaderScheduleService)),
             .rpc_client = rpc_client,
             .epoch_tracker = epoch_tracker,
         };
     }
 
-    pub fn run(self: *Self, exit: *std.atomic.Value(bool)) void {
+    fn run(self: *RpcLeaderScheduleService, exit: *std.atomic.Value(bool)) void {
         var i: usize = 0;
         while (!exit.load(.monotonic)) {
             if (i % 1000 == 0) {
@@ -2946,7 +2946,7 @@ pub const RpcLeaderScheduleService = struct {
         }
     }
 
-    fn refresh(self: *Self) !void {
+    fn refresh(self: *RpcLeaderScheduleService) !void {
         const response = try self.rpc_client.getSlot(.{});
         defer response.deinit();
         const slot = try response.result();
@@ -2973,10 +2973,13 @@ pub const RpcLeaderScheduleService = struct {
                     &self.epoch_tracker.epoch_schedule,
                 );
 
-                var entry = try self.allocator.create(sig.core.EpochInfo);
+                const entry = try self.allocator.create(sig.core.EpochInfo);
                 entry.* = .{
                     .leaders = leaders,
                     .stakes = .EMPTY,
+                    // TODO: if you need features here for whatever reason, you'll have to implement
+                    // some way to forward them from replay, or source them by some other means.
+                    .feature_set = .ALL_DISABLED,
                 };
                 entry.stakes.stakes.epoch = e;
                 errdefer {
@@ -2990,7 +2993,7 @@ pub const RpcLeaderScheduleService = struct {
     }
 
     fn getLeaderSchedule(
-        self: *Self,
+        self: *RpcLeaderScheduleService,
         slot: sig.core.Slot,
         epoch_schedule: *const sig.core.EpochSchedule,
     ) !LeaderSchedule {
