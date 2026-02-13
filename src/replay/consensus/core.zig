@@ -81,6 +81,8 @@ const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHas
 
 const collectClusterVoteState = sig.consensus.replay_tower.collectClusterVoteState;
 const isDuplicateSlotConfirmed = sig.consensus.replay_tower.isDuplicateSlotConfirmed;
+const collectRootedStake = sig.consensus.replay_tower.collectRootedStake;
+const getHighestSuperMajorityRoot = sig.consensus.replay_tower.getHighestSuperMajorityRoot;
 const check_slot_agrees_with_cluster =
     sig.replay.consensus.cluster_sync.check_slot_agrees_with_cluster;
 
@@ -970,7 +972,32 @@ fn handleVotableBank(
         );
     }
 
-    // TODO update_commitment_cache
+    // Update highest super majority root (cluster-aggregated finalized slot)
+    // Analogous to update_commitment_cache in Agave
+    // TODO: check if guards are properly unlocked on error paths.
+    // NOTE: this does this is quite a bit of work done on every voteable bank,
+    // agave does this on a dedicated thread. Measure the performance impact.
+    // Possibly move this after vote generation and sending.
+    if (slot_tracker.get(vote_slot)) |slot_info| {
+        var stakes_guard = slot_info.state.stakes_cache.stakes.read();
+        defer stakes_guard.unlock();
+
+        const vote_accounts = &stakes_guard.get().vote_accounts.vote_accounts;
+        const result = collectRootedStake(allocator, vote_accounts) catch |err| {
+            logger.warn().logf("failed to collect rooted stake: {}", .{err});
+            return;
+        };
+        defer allocator.free(result.rooted_stakes);
+
+        const highest_root = getHighestSuperMajorityRoot(
+            result.rooted_stakes,
+            result.total_stake,
+        );
+
+        if (highest_root > 0) {
+            slot_tracker.highest_super_majority_root.update(highest_root);
+        }
+    }
 
     // Skip vote generation and sending if not configured to vote
     // Note: When voting is disabled, `authorized_voter_keypairs` is set to an empty slice
