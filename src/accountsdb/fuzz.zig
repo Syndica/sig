@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../sig.zig");
 const cli = @import("cli");
 
@@ -173,7 +174,7 @@ pub fn run(
     }
 
     var reader_exit: std.atomic.Value(bool) = .init(true);
-    var threads: std.BoundedArray(std.Thread, N_RANDOM_THREADS) = .{};
+    var threads: std14.BoundedArray(std.Thread, N_RANDOM_THREADS) = .{};
     defer {
         reader_exit.store(true, .seq_cst);
         for (threads.constSlice()) |thread| thread.join();
@@ -300,7 +301,7 @@ pub fn run(
                 const account =
                     try account_reader_for_slot.get(allocator, pubkey) orelse {
                         logger.err().logf(
-                            "accounts_db missing tracked account '{}': {}",
+                            "accounts_db missing tracked account '{f}': {any}",
                             .{ pubkey, tracked_account },
                         );
                         return error.MissingAccount;
@@ -309,7 +310,7 @@ pub fn run(
 
                 if (!account.data.eqlSlice(&tracked_account.data)) {
                     logger.err().logf(
-                        "found account {} with different data: " ++
+                        "found account {f} with different data: " ++
                             "tracked: {any} vs found: {any}\n",
                         .{ pubkey, tracked_account.data, account.data },
                     );

@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../../sig.zig");
 
 const ed25519 = sig.crypto.ed25519;
@@ -41,12 +42,12 @@ pub fn mulMultiRuntime(
     std.debug.assert(scalars.len <= max);
     std.debug.assert(points.len == scalars.len);
 
-    var scalars_in_radix: std.BoundedArray([64]i8, max) = .{};
+    var scalars_in_radix: std14.BoundedArray([64]i8, max) = .{};
     for (scalars) |scalar| {
         scalars_in_radix.appendAssumeCapacity(asRadix16(scalar));
     }
 
-    var lookup_tables: std.BoundedArray(LookupTable, max) = .{};
+    var lookup_tables: std14.BoundedArray(LookupTable, max) = .{};
     for (points) |point| {
         // Translate from whatever the input format is to a decompressed Ed25519 point.
         const decompressed = switch (encoded) {

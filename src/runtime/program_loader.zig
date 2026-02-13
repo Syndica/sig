@@ -20,7 +20,7 @@ const wrapDB = sig.runtime.account_loader.wrapDB;
 
 pub const ProgramMap = struct {
     inner: sig.utils.collections.PubkeyMap(LoadedProgram),
-    lock: std.Thread.RwLock,
+    lock: sig.sync.RwLock,
 
     pub const empty = ProgramMap{
         .inner = .empty,

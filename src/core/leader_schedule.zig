@@ -32,7 +32,7 @@ pub const SlotLeaders = struct {
             .state = state,
             .getFn = struct {
                 fn genericFn(generic_state: *anyopaque, slot: Slot) ?Pubkey {
-                    return getSlotLeader(@alignCast(@ptrCast(generic_state)), slot);
+                    return getSlotLeader(@ptrCast(@alignCast(generic_state)), slot);
                 }
             }.genericFn,
         };
@@ -153,7 +153,7 @@ pub const LeaderSchedule = struct {
             }
         }.nextNonEmpty;
 
-        var slot_leaders = std.ArrayList(Pubkey).init(allocator);
+        var slot_leaders: std.ArrayList(Pubkey) = .{};
         var start_slot: Slot = 0;
         var expect: ?Slot = null;
         var row: [256]u8 = undefined;
@@ -174,12 +174,12 @@ pub const LeaderSchedule = struct {
                 start_slot = slot;
             }
             const node_str = nextNonEmpty(&word_iter) orelse return error.MissingPubkey;
-            try slot_leaders.append(try Pubkey.parseRuntime(node_str));
+            try slot_leaders.append(allocator, try Pubkey.parseRuntime(node_str));
         }
 
         const end_slot = start_slot +| (slot_leaders.items.len -| 1);
         return .{
-            .leaders = try slot_leaders.toOwnedSlice(),
+            .leaders = try slot_leaders.toOwnedSlice(allocator),
             .start = start_slot,
             .end = end_slot,
         };
@@ -189,7 +189,7 @@ pub const LeaderSchedule = struct {
     /// `sig leader-schedule` commands.
     pub fn write(self: *const LeaderSchedule, writer: anytype) !void {
         for (self.leaders, 0..) |leader, i| {
-            try writer.print("  {}       {s}\n", .{ self.start + i, leader });
+            try writer.print("  {}       {f}\n", .{ self.start + i, leader });
         }
     }
 };

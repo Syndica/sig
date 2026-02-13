@@ -33,7 +33,7 @@ pub const SlotMeta = struct {
     parent_slot: ?Slot,
     /// The list of slots, each of which contains a block that derives
     /// from this one.
-    child_slots: std.ArrayList(Slot),
+    child_slots: std.array_list.Managed(Slot),
     /// Connected status flags of this slot
     connected_flags: ConnectedFlags,
     /// Shreds indices which are marked data complete.  That is, those that have the
@@ -57,7 +57,7 @@ pub const SlotMeta = struct {
             .received = 0,
             .first_shred_timestamp_milli = 0,
             .last_index = null,
-            .child_slots = std.ArrayList(Slot).init(allocator),
+            .child_slots = std.array_list.Managed(Slot).init(allocator),
             .completed_data_indexes = SortedSet(u32).init(allocator),
         };
     }
@@ -68,7 +68,7 @@ pub const SlotMeta = struct {
     }
 
     pub fn clone(self: Self, allocator: Allocator) Allocator.Error!Self {
-        var child_slots = try std.ArrayList(Slot).initCapacity(
+        var child_slots = try std.array_list.Managed(Slot).initCapacity(
             allocator,
             self.child_slots.items.len,
         );

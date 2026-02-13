@@ -11,7 +11,7 @@ const snapgen = sig.accounts_db.snapshot.data.generate;
 
 const Resolution = @import("../benchmarks.zig").Resolution;
 
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
@@ -104,7 +104,7 @@ pub const AccountsDB = struct {
     file_map: RwMux(FileMap),
     /// `file_map_fd_rw` is used to ensure files in the file_map are not closed while its held as a read-lock.
     /// NOTE: see accountsdb/readme.md for more details on how these are used
-    file_map_fd_rw: std.Thread.RwLock,
+    file_map_fd_rw: sig.sync.RwLock,
 
     buffer_pool: BufferPool,
 
@@ -393,7 +393,7 @@ pub const AccountsDB = struct {
                 allocator,
                 accounts_per_file_estimate,
             );
-            self.logger.info().logf("loadFromSnapshot: total time: {s}", .{load_timer.read()});
+            self.logger.info().logf("loadFromSnapshot: total time: {f}", .{load_timer.read()});
         }
 
         if (validate) {
@@ -414,8 +414,8 @@ pub const AccountsDB = struct {
                 } else null,
             });
             self.logger.info().logf(
-                "validateLoadFromSnapshot: total time: {s}",
-                .{validate_timer.read()},
+                "validateLoadFromSnapshot: total time: {D}",
+                .{validate_timer.read().ns},
             );
         }
 
@@ -450,7 +450,7 @@ pub const AccountsDB = struct {
                 allocator,
                 accounts_per_file_estimate,
             );
-            self.logger.info().logf("loadFromSnapshot: total time: {s}", .{load_timer.read()});
+            self.logger.info().logf("loadFromSnapshot: total time: {f}", .{load_timer.read()});
         }
 
         {
@@ -467,8 +467,8 @@ pub const AccountsDB = struct {
                 } else null,
             });
             self.logger.info().logf(
-                "validateLoadFromSnapshot: total time: {s}",
-                .{validate_timer.read()},
+                "validateLoadFromSnapshot: total time: {D}",
+                .{validate_timer.read().ns},
             );
         }
 
@@ -546,7 +546,7 @@ pub const AccountsDB = struct {
 
         var merge_timer = sig.time.Timer.start();
         try self.mergeMultipleDBs(loading_threads, n_combine_threads);
-        self.logger.debug().logf("mergeMultipleDBs: total time: {}", .{merge_timer.read()});
+        self.logger.debug().logf("mergeMultipleDBs: total time: {D}", .{merge_timer.read()});
     }
 
     /// Initializes a slice of children `AccountsDB`s, used to divide the work of loading from a snapshot.
@@ -1170,7 +1170,7 @@ pub const AccountsDB = struct {
             break :blk .{ lamports_sum, hash };
         };
 
-        self.logger.debug().logf("collecting hashes from accounts took: {s}", .{timer.read()});
+        self.logger.debug().logf("collecting hashes from accounts took: {D}", .{timer.read().ns});
         timer.reset();
 
         return .{
@@ -1283,7 +1283,7 @@ pub const AccountsDB = struct {
 
         if (!params.expected_full.accounts_hash.eql(accounts_hash)) {
             self.logger.err().logf(
-                "incorrect accounts hash: expected vs calculated: {d} vs {d}",
+                "incorrect accounts hash: expected vs calculated: {f} vs {f}",
                 .{ params.expected_full.accounts_hash, accounts_hash },
             );
             return error.IncorrectAccountsHash;
@@ -1330,7 +1330,7 @@ pub const AccountsDB = struct {
 
             if (!expected_incremental.accounts_hash.eql(accounts_delta_hash)) {
                 self.logger.err().logf(
-                    "incorrect accounts delta hash: expected vs calculated: {} vs {}",
+                    "incorrect accounts delta hash: expected vs calculated: {f} vs {f}",
                     .{
                         expected_incremental.accounts_hash.checksum(),
                         accounts_delta_hash.checksum(),
@@ -1551,7 +1551,7 @@ pub const AccountsDB = struct {
         unrooted_map: Account,
     };
     pub const AccountInCacheOrFileLock = union(AccountInCacheOrFileTag) {
-        file: *std.Thread.RwLock,
+        file: *sig.sync.RwLock,
         unrooted_map: RwMux(SlotPubkeyAccounts).RLockGuard,
 
         pub fn unlock(lock: *AccountInCacheOrFileLock) void {
@@ -3006,7 +3006,7 @@ pub const AccountsDB = struct {
                                     switch (err) {
                                         error.FileNotFound => {
                                             this.accountsdb.logger.err().logf(
-                                                "not found: {s}\n",
+                                                "not found: {f}\n",
                                                 .{sig.utils.fmt.tryRealPath(
                                                     this.accountsdb.snapshot_dir,
                                                     archive_name,
@@ -3064,10 +3064,10 @@ pub const AccountsDB = struct {
                         break :blk .{ full_info, inc_info };
                     };
 
-                    accounts_db.logger.debug().logf("Available full: {?s}", .{
+                    accounts_db.logger.debug().logf("Available full: {s}", .{
                         full_info.snapshotArchiveName().constSlice(),
                     });
-                    accounts_db.logger.debug().logf("Available inc: {?s}", .{
+                    accounts_db.logger.debug().logf("Available inc: {any}", .{
                         if (inc_info) |info| info.snapshotArchiveName().constSlice() else null,
                     });
 
@@ -3340,8 +3340,13 @@ pub fn writeSnapshotTarWithFields(
         try snapgen.writeAccountFileHeader(archive_writer_counted, file_slot, file_info);
 
         try account_file.file.seekTo(0);
-        var fifo = std.fifo.LinearFifo(u8, .{ .Static = std.heap.page_size_min }).init();
-        try fifo.pump(account_file.file.reader(), archive_writer_counted);
+        var buf: [std.heap.page_size_min]u8 = undefined;
+        const file_reader = account_file.file.reader();
+        while (true) {
+            const bytes_read = try file_reader.read(&buf);
+            if (bytes_read == 0) break;
+            try archive_writer_counted.writeAll(buf[0..bytes_read]);
+        }
 
         try snapgen.writeAccountFilePadding(archive_writer_counted, account_file.file_size);
     }
@@ -4039,7 +4044,7 @@ test "load sysvars" {
 
 //     // mock gossip service
 //     var push_msg_queue_mux = sig.gossip.GossipService.PushMessageQueue.init(.{
-//         .queue = std.ArrayList(sig.gossip.data.GossipData).init(allocator),
+//         .queue = std.array_list.Managed(sig.gossip.data.GossipData).init(allocator),
 //         .data_allocator = allocator,
 //     });
 //     defer push_msg_queue_mux.private.v.queue.deinit();
@@ -4784,7 +4789,7 @@ test "insert multiple accounts on multiple slots" {
 
         const pubkey = Pubkey.initRandom(random);
         errdefer std.log.err(
-            "Failed to insert and load account: i={}, slot={}, ancestors={any} pubkey={}\n",
+            "Failed to insert and load account: i={}, slot={}, ancestors={any} pubkey={f}\n",
             .{ i, slot, ancestors.ancestors.keys(), pubkey },
         );
 
@@ -4834,7 +4839,7 @@ test "insert account on multiple slots" {
                 \\    j:         {}/{}
                 \\    slot:      {}
                 \\    ancestors: {any}
-                \\    pubkey:    {}
+                \\    pubkey:    {f}
                 \\
             ,
                 .{ i, j, num_slots_to_insert, slot, ancestors.ancestors.keys(), pubkey },

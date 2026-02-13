@@ -3,7 +3,7 @@ const sig = @import("../sig.zig");
 const table = @import("reed_solomon_table.zig");
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 
 pub const ReedSolomon = struct {
     allocator: Allocator,
@@ -669,7 +669,7 @@ test "ReedSolomon.reconstruct lorem ipsum with any missing combination" {
 test "ReedSolomon.reconstruct shards constructed from mainnet shreds" {
     const input = @import("test_shreds.zig").mainnet_recovery_shards;
     const expected = @import("test_shreds.zig").mainnet_expected_recovered_shards;
-    var actual = std.ArrayList(?[]const u8).init(std.testing.allocator);
+    var actual = std.array_list.Managed(?[]const u8).init(std.testing.allocator);
     defer actual.deinit();
     for (input) |i| try actual.append(i);
     var rs = try ReedSolomon.init(std.testing.allocator, 7, 21);

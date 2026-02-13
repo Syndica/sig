@@ -147,7 +147,7 @@ fn createLookupTable(
     };
     if (!table_key.equals(&derived_table_key)) {
         try ic.tc.log(
-            "Table address must mach derived address: {}",
+            "Table address must mach derived address: {f}",
             .{derived_table_key},
         );
         return error.InvalidArgument;

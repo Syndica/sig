@@ -156,7 +156,7 @@ pub fn newInstruction(
         .s = s.toBytes(.big),
     };
 
-    var instruction_data = try std.ArrayList(u8).initCapacity(
+    var instruction_data = try std.array_list.Managed(u8).initCapacity(
         allocator,
         message_data_offset + message.len,
     );
@@ -182,7 +182,7 @@ pub fn newInstruction(
 
 test "invalid offsets" {
     const allocator = std.testing.allocator;
-    var instruction_data = try std.ArrayList(u8).initCapacity(
+    var instruction_data = try std.array_list.Managed(u8).initCapacity(
         allocator,
         DATA_START,
     );

@@ -34,7 +34,7 @@ pub fn run() !void {
     var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();
 
-    var bytes_buffer = std.ArrayList(u8).init(allocator);
+    var bytes_buffer = std.array_list.Managed(u8).init(allocator);
     defer bytes_buffer.deinit();
 
     var i: u64 = 0;

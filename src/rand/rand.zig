@@ -529,9 +529,9 @@ pub const WeightedAliasSampler = struct {
         errdefer allocator.free(alias);
         @memset(alias, 0);
 
-        var small = std.ArrayList(usize).init(allocator);
+        var small = std.array_list.Managed(usize).init(allocator);
         errdefer small.deinit();
-        var large = std.ArrayList(usize).init(allocator);
+        var large = std.array_list.Managed(usize).init(allocator);
         errdefer large.deinit();
 
         for (weights, 0..) |w, i| {

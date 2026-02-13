@@ -95,7 +95,7 @@ pub fn main() !void {
     defer std.process.argsFree(gpa, argv);
     const args = argv[1..];
 
-    const stderr = std.io.getStdErr();
+    const stderr = std.fs.File.stderr();
     const stderr_tty = std.io.tty.detectConfig(stderr);
     const cmd: Cmd = cmd: {
         std.debug.lockStdErr();
@@ -104,7 +104,7 @@ pub fn main() !void {
             gpa,
             "fuzz",
             stderr_tty,
-            stderr.writer(),
+            stderr.deprecatedWriter(),
             args,
         ) orelse return;
     };
@@ -134,7 +134,7 @@ pub fn main() !void {
         defer seed_file.close();
         try seed_file.seekFromEnd(0);
         const now: u64 = @intCast(std.time.timestamp());
-        try seed_file.writer().print(
+        try seed_file.deprecatedWriter().print(
             "{s}: time: {d}, seed: {d}\n",
             .{ @tagName(fuzzer), now, seed },
         );

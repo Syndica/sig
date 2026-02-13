@@ -54,6 +54,8 @@ pub fn build(b: *Build) void {
             .imports = &common_imports,
         }),
     });
+    // the self-hosted backend causes a lot of issues when running in python test suite
+    solfuzz_sig_lib.use_llvm = true;
     solfuzz_sig_step.dependOn(&solfuzz_sig_lib.step);
     install_step.dependOn(&solfuzz_sig_lib.step);
 
@@ -86,7 +88,7 @@ pub fn build(b: *Build) void {
         test_step.dependOn(&test_run.step);
     }
 
-    const protoc_run = pb.RunProtocStep.create(b, pb_dep.builder, target, .{
+    const protoc_run = pb.RunProtocStep.create(pb_dep.builder, target, .{
         .destination_directory = b.path("src/proto"),
         .source_files = &.{
             "protosol/proto/elf.proto",

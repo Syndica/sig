@@ -129,7 +129,7 @@ pub const LeaderInfo = struct {
         defer current_slot_response.deinit();
         const current_slot = try current_slot_response.result();
 
-        var leader_addresses = std.ArrayList(SocketAddr).init(allocator);
+        var leader_addresses = std.array_list.Managed(SocketAddr).init(allocator);
         for (0..self.config.max_leaders_to_send_to) |position| {
             const slot = current_slot + position * self.config.number_of_consecutive_leader_slots;
             const leader = try self.getSlotLeader(slot) orelse continue;

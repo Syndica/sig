@@ -1,5 +1,6 @@
 //! Hashing syscalls
 const std = @import("std");
+const std14 = @import("std14");
 const phash = @import("poseidon");
 const sig = @import("../../sig.zig");
 
@@ -56,7 +57,7 @@ pub fn poseidon(
 
     // We need to translateSlice all of the inputs before checking the length for zero.
     // We already know the top bound of the length is 12, so a BoundedArray works just fine.
-    var slices: std.BoundedArray([]const u8, 12) = .{};
+    var slices: std14.BoundedArray([]const u8, 12) = .{};
     for (inputs) |input| {
         slices.appendAssumeCapacity(try memory_map.translateSlice(
             u8,

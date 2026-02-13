@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 
 pub fn PubkeyMap(T: type) type {
     // TODO: benchmark true vs false?
