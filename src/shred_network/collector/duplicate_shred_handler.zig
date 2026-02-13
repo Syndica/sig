@@ -23,6 +23,7 @@ const MAX_DUPLICATE_SHREDS: usize = sig.gossip.data.MAX_DUPLICATE_SHREDS;
 pub const DuplicateShredHandler = struct {
     ledger_reader: sig.ledger.Reader,
     result_writer: sig.ledger.ResultWriter,
+    epoch_tracker: ?*const sig.core.EpochTracker,
     duplicate_slots_sender: ?*Channel(Slot),
     push_msg_queue_mux: ?*sig.gossip.GossipService.PushMessageQueue,
     keypair: *const KeyPair,
@@ -84,9 +85,18 @@ pub const DuplicateShredHandler = struct {
                 .ChainedMerkleRootConflict => |conflict| {
                     const shred_slot = conflict.original.commonHeader().slot;
 
-                    // TODO: Check feature flag for chained_merkle_conflict_duplicate_proofs
-                    // For now, we'll store it unconditionally. When feature checking is implemented,
-                    // this should check: if (!chained_merkle_conflict_duplicate_proofs) continue;
+                    const chained_merkle_conflict_duplicate_proofs: bool = feature: {
+                        const epoch_tracker = self.epoch_tracker orelse break :feature false;
+                        const epoch_info = epoch_tracker.getEpochInfo(shred_slot) catch
+                            break :feature false;
+                        const feature_slot = epoch_info.feature_set.get(
+                            .chained_merkle_conflict_duplicate_proofs,
+                        ) orelse break :feature false;
+                        const feat_epoch = epoch_tracker.epoch_schedule.getEpoch(feature_slot);
+                        const shred_epoch = epoch_tracker.epoch_schedule.getEpoch(shred_slot);
+                        break :feature feat_epoch < shred_epoch;
+                    };
+                    if (!chained_merkle_conflict_duplicate_proofs) continue;
 
                     // Although this proof can be immediately stored on detection, we wait until
                     // here in order to check the feature flag, as storage in ledger can
@@ -373,6 +383,7 @@ test "handleDuplicateSlots: no sender configured" {
     var handler: DuplicateShredHandler = .{
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
+        .epoch_tracker = null,
         .duplicate_slots_sender = null, // No sender configured
         .push_msg_queue_mux = null,
         .keypair = &keypair,
@@ -408,6 +419,7 @@ test "handleDuplicateSlots: no duplicate shreds" {
     var handler: DuplicateShredHandler = .{
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
+        .epoch_tracker = null,
         .duplicate_slots_sender = &duplicate_slots_channel,
         .push_msg_queue_mux = null,
         .keypair = &keypair,
@@ -440,6 +452,7 @@ test "handleDuplicateSlots: single duplicate shred" {
     var handler: DuplicateShredHandler = .{
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
+        .epoch_tracker = null,
         .duplicate_slots_sender = &duplicate_slots_channel,
         .push_msg_queue_mux = null,
         .keypair = &keypair,
@@ -502,6 +515,7 @@ test "handleDuplicateSlots: multiple duplicates same slot" {
     var handler: DuplicateShredHandler = .{
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
+        .epoch_tracker = null,
         .duplicate_slots_sender = &duplicate_slots_channel,
         .push_msg_queue_mux = null,
         .keypair = &keypair,
@@ -576,6 +590,7 @@ test "handleDuplicateSlots: Exists but slot already duplicate" {
     var handler: DuplicateShredHandler = .{
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
+        .epoch_tracker = null,
         .duplicate_slots_sender = &duplicate_slots_channel,
         .push_msg_queue_mux = null,
         .keypair = &keypair,
@@ -624,6 +639,7 @@ test "handleDuplicateSlots: emits and stores via handleDuplicateSlot" {
     var handler: DuplicateShredHandler = .{
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
+        .epoch_tracker = null,
         .duplicate_slots_sender = &duplicate_slots_channel,
         .push_msg_queue_mux = null,
         .keypair = &keypair,
@@ -674,6 +690,7 @@ test "pushDuplicateShredToGossip: enqueues chunks and ring indices" {
     var handler: DuplicateShredHandler = .{
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
+        .epoch_tracker = null,
         .duplicate_slots_sender = null,
         .push_msg_queue_mux = &gossip_state.push_msg_queue,
         .keypair = &keypair,
@@ -763,6 +780,7 @@ test "pushDuplicateShredToGossip: no-op when duplicate for slot exists" {
     var handler: DuplicateShredHandler = .{
         .ledger_reader = ledger.reader(),
         .result_writer = ledger.resultWriter(),
+        .epoch_tracker = null,
         .duplicate_slots_sender = null,
         .push_msg_queue_mux = &gossip_state.push_msg_queue,
         .keypair = &keypair,

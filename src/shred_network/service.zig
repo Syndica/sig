@@ -117,6 +117,7 @@ pub fn start(
     const duplicate_handler = DuplicateShredHandler{
         .ledger_reader = deps.ledger.reader(),
         .result_writer = deps.ledger.resultWriter(),
+        .epoch_tracker = deps.epoch_tracker,
         .duplicate_slots_sender = if (deps.duplicate) |dupe| dupe.slots_sender else null,
         .push_msg_queue_mux = deps.push_msg_queue_mux,
         .keypair = deps.my_keypair,
