@@ -22,3 +22,11 @@ pub const FEATURE_PROGRAM_SOURCE_ID: Pubkey =
 pub const ZK_TOKEN_PROOF_PROGRAM_ID: Pubkey = .parse("ZkTokenProof1111111111111111111111111111111");
 
 pub const INCINERATOR: Pubkey = .parse("1nc1nerator11111111111111111111111111111111");
+
+/// SPL Token Program ID
+/// NOTE: Defined here solely for use in account decoders. perhaps move it?
+pub const SPL_TOKEN_PROGRAM_ID: Pubkey = .parse("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+
+/// SPL Token 2022 Program ID
+/// NOTE: Defined here solely for use in account decoders. perhaps move it?
+pub const SPL_TOKEN_2022_PROGRAM_ID: Pubkey = .parse("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");

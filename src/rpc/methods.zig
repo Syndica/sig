@@ -11,6 +11,8 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const rpc = @import("lib.zig");
+const base58 = @import("base58");
+const zstd = @import("zstd");
 
 const Allocator = std.mem.Allocator;
 const ParseOptions = std.json.ParseOptions;
@@ -18,6 +20,10 @@ const ParseOptions = std.json.ParseOptions;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
+const account_decoder = sig.rpc.account_decoder;
+
+const MAX_BASE58_INPUT_LEN = 128;
+const MAX_BASE58_OUTPUT_LEN = base58.encodedMaxSize(MAX_BASE58_INPUT_LEN);
 
 pub fn Result(comptime method: MethodAndParams.Tag) type {
     return union(enum) {
@@ -177,17 +183,10 @@ pub const GetAccountInfo = struct {
     pubkey: Pubkey,
     config: ?Config = null,
 
-    pub const Encoding = enum {
-        base58,
-        base64,
-        @"base64+zstd",
-        jsonParsed,
-    };
-
     pub const Config = struct {
         commitment: ?common.Commitment = null,
         minContextSlot: ?u64 = null,
-        encoding: ?Encoding = null,
+        encoding: ?common.AccountEncoding = null,
         dataSlice: ?common.DataSlice = null,
     };
 
@@ -204,9 +203,8 @@ pub const GetAccountInfo = struct {
             space: u64,
 
             pub const Data = union(enum) {
-                encoded: struct { []const u8, Encoding },
-                // TODO: this should be a json value/map, test cases can't compare that though
-                jsonParsed: noreturn,
+                encoded: struct { []const u8, common.AccountEncoding },
+                jsonParsed: account_decoder.ParsedAccount,
 
                 /// This field is only set when the request object asked for `jsonParsed` encoding,
                 /// and the server couldn't find a parser, therefore falling back to simply returning
@@ -239,7 +237,7 @@ pub const GetAccountInfo = struct {
                 ) std.json.ParseError(@TypeOf(source.*))!Data {
                     return switch (try source.peekNextTokenType()) {
                         .array_begin => .{ .encoded = try std.json.innerParse(
-                            struct { []const u8, Encoding },
+                            struct { []const u8, common.AccountEncoding },
                             allocator,
                             source,
                             options,
@@ -654,6 +652,13 @@ pub const common = struct {
         apiVersion: []const u8,
     };
 
+    pub const AccountEncoding = enum {
+        base58,
+        base64,
+        @"base64+zstd",
+        jsonParsed,
+    };
+
     // TODO field types
     pub const RpcContactInfo = struct {
         /// Pubkey of the node as a base-58 string
@@ -696,5 +701,223 @@ pub const SlotHookContext = struct {
         const slot = self.slot_tracker.getSlotForCommitment(commitment);
         const min_slot = config.minContextSlot orelse return slot;
         return if (slot >= min_slot) slot else error.RpcMinContextSlotNotMet;
+    }
+};
+
+pub const AccountHookContext = struct {
+    slot_tracker: *const sig.replay.trackers.SlotTracker,
+    account_reader: sig.accounts_db.AccountReader,
+
+    pub fn getAccountInfo(
+        self: AccountHookContext,
+        allocator: std.mem.Allocator,
+        params: GetAccountInfo,
+    ) !GetAccountInfo.Response {
+        const config = params.config orelse GetAccountInfo.Config{};
+        // TODO: check if finalized is the corrent default here.
+        const commitment = config.commitment orelse .finalized;
+        // TODO: check if base64 is the corrent default here.
+        const encoding = config.encoding orelse common.AccountEncoding.base64;
+
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+        }
+
+        // TODO: is this the best way to get the right slot to use?
+        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotFound;
+        const slot_reader = self.account_reader.forSlot(&ref.constants.ancestors);
+        const maybe_account = try slot_reader.get(allocator, params.pubkey);
+
+        if (maybe_account) |account| {
+            defer account.deinit(allocator);
+
+            const data: GetAccountInfo.Response.Value.Data = if (encoding == .jsonParsed)
+                try encodeJsonParsed(allocator, params.pubkey, account, slot_reader)
+            else
+                try encodeStandard(allocator, account, encoding, config.dataSlice);
+
+            return GetAccountInfo.Response{
+                // TODO: Thread through the Sig version const to be used as the apiVersion here.
+                .context = .{ .slot = slot, .apiVersion = "TODO" },
+                .value = .{
+                    .data = data,
+                    .executable = account.executable,
+                    .lamports = account.lamports,
+                    .owner = account.owner,
+                    .rentEpoch = account.rent_epoch,
+                    .space = account.data.len(),
+                },
+            };
+        } else {
+            return .{
+                // TODO: Check if this is the correct thing to return in this case.
+                // TODO: Thread through the Sig version const to be used as the apiVersion here.
+                .context = .{ .slot = slot, .apiVersion = "TODO" },
+                .value = null,
+            };
+        }
+    }
+
+    /// Handles jsonParsed encoding with fallback to base64
+    fn encodeJsonParsed(
+        allocator: std.mem.Allocator,
+        pubkey: sig.core.Pubkey,
+        account: sig.core.Account,
+        slot_reader: sig.accounts_db.SlotAccountReader,
+    ) !GetAccountInfo.Response.Value.Data {
+        // Build additional data for token accounts, fetch mint and clock for Token-2022 responses.
+        const additional_data = account_decoder.buildTokenAdditionalData(
+            allocator,
+            account,
+            slot_reader,
+        );
+
+        var account_data_iter = account.data.iterator();
+        // Try to parse based on owner program
+        if (try account_decoder.parse_account(
+            allocator,
+            pubkey,
+            account.owner,
+            account_data_iter.reader(),
+            account.data.len(),
+            if (additional_data.spl_token != null) additional_data else null,
+        )) |parsed| {
+            return .{ .jsonParsed = parsed };
+        }
+        // Fallback: encode as base64 string
+        // TODO: document Agave line of code for this logic. It does match.
+        var encoded = try std.ArrayListUnmanaged(u8).initCapacity(
+            allocator,
+            // NOTE: If jsonPased fails, we fallback to base64 encoding, so we need to make sure to allocate
+            // enough capacity for the encoded string here. It's a bit difficult to estimate the exact
+            // size for jsonParsed up front.
+            std.base64.standard.Encoder.calcSize(account.data.len()),
+        );
+        errdefer encoded.deinit(allocator);
+        try encodeAccountData(allocator, account, .base64, null, encoded.writer(allocator));
+        return .{ .json_parsed_base64_fallback = try encoded.toOwnedSlice(allocator) };
+    }
+
+    fn estimateEncodedSize(
+        account: sig.core.Account,
+        encoding: common.AccountEncoding,
+        data_slice: ?common.DataSlice,
+    ) usize {
+        const start, const end = calculateSliceRange(account, data_slice);
+        const data_len = end - start;
+        return switch (encoding) {
+            .base58 => base58.encodedMaxSize(data_len),
+            .base64 => std.base64.standard.Encoder.calcSize(data_len),
+            // NOTE: we just use base64 size as a catch-all.
+            .@"base64+zstd" => std.base64.standard.Encoder.calcSize(data_len),
+            .jsonParsed => unreachable, // should be handled in encodeJsonParsed
+        };
+    }
+
+    /// Handles base58, base64, base64+zstd encodings
+    fn encodeStandard(
+        allocator: std.mem.Allocator,
+        account: sig.core.Account,
+        encoding: common.AccountEncoding,
+        data_slice: ?common.DataSlice,
+    ) !GetAccountInfo.Response.Value.Data {
+        const estimated_size = estimateEncodedSize(account, encoding, data_slice);
+        var encoded_data = try std.ArrayListUnmanaged(u8).initCapacity(allocator, estimated_size);
+        errdefer encoded_data.deinit(allocator);
+        try encodeAccountData(
+            allocator,
+            account,
+            encoding,
+            data_slice,
+            encoded_data.writer(allocator),
+        );
+        return .{
+            .encoded = .{
+                try encoded_data.toOwnedSlice(allocator),
+                encoding,
+            },
+        };
+    }
+
+    fn encodeAccountData(
+        allocator: std.mem.Allocator,
+        account: sig.core.Account,
+        encoding: common.AccountEncoding,
+        data_slice: ?common.DataSlice,
+        // std.io.Writer
+        writer: anytype,
+    ) !void {
+        const start, const end = calculateSliceRange(account, data_slice);
+        return switch (encoding) {
+            .base58 => {
+                const data_len = end - start;
+
+                if (data_len > MAX_BASE58_INPUT_LEN) {
+                    return error.Base58DataTooLarge;
+                }
+
+                var input_buf: [MAX_BASE58_INPUT_LEN]u8 = undefined;
+                var output_buf: [MAX_BASE58_OUTPUT_LEN]u8 = undefined;
+                _ = account.data.read(start, input_buf[0..data_len]);
+                const encoded_len = base58.Table.BITCOIN.encode(&output_buf, input_buf[0..data_len]);
+
+                try writer.writeAll(output_buf[0..encoded_len]);
+            },
+            .base64 => {
+                var stream = sig.utils.base64.EncodingStream.init(std.base64.standard.Encoder);
+                const base64_ctx = stream.writerCtx(writer);
+                var iter = account.data.iteratorRanged(start, end);
+
+                while (iter.nextFrame()) |frame_slice| {
+                    try base64_ctx.writer().writeAll(frame_slice);
+                }
+                try base64_ctx.flush();
+            },
+            .@"base64+zstd" => {
+                var stream = sig.utils.base64.EncodingStream.init(std.base64.standard.Encoder);
+                const base64_ctx = stream.writerCtx(writer);
+                // TODO: propagate more specifi errors.
+                const compressor = zstd.Compressor.init(.{}) catch return error.OutOfMemory;
+                defer compressor.deinit();
+
+                // TODO: recommOutSize is usually 128KiB. We could stack allocate this or re-use
+                // buffer set in AccountHookContext instead of allocating it on each call
+                // since the server is single-threaded. Unfortunately, the zstd lib's doesn't give us a
+                // comptime-known size to use for stack allocation. Instead of assuming, just allocate for now.
+                const zstd_out_buf = try allocator.alloc(
+                    u8,
+                    zstd.Compressor.recommOutSize(),
+                );
+                defer allocator.free(zstd_out_buf);
+                var zstd_ctx = zstd.writerCtx(
+                    base64_ctx.writer(),
+                    &compressor,
+                    zstd_out_buf,
+                );
+                var iter = account.data.iteratorRanged(start, end);
+
+                while (iter.nextFrame()) |frame_slice| {
+                    try zstd_ctx.writer().writeAll(frame_slice);
+                }
+                try zstd_ctx.finish();
+                try base64_ctx.flush();
+            },
+            .jsonParsed => unreachable, // handled in encodeJsonParsed
+        };
+    }
+
+    fn calculateSliceRange(
+        account: sig.core.Account,
+        data_slice: ?common.DataSlice,
+    ) struct { u32, u32 } {
+        const len = account.data.len();
+        const slice_start, const slice_end = blk: {
+            const ds = data_slice orelse break :blk .{ 0, len };
+            const start = @min(ds.offset, len);
+            const end = @min(ds.offset + ds.length, len);
+            break :blk .{ start, end };
+        };
+        return .{ slice_start, slice_end };
     }
 };
