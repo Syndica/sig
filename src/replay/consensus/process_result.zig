@@ -305,10 +305,8 @@ const TestReplayStateResources = struct {
         self.duplicate_slots_to_repair = DuplicateSlotsToRepair.empty;
         self.purge_repair_slot_counter = PurgeRepairSlotCounters.empty;
 
-        self.slot_tracker = SlotTracker{
-            .slots = .empty,
-            .root = 0,
-        };
+        self.slot_tracker = try SlotTracker.initEmpty(allocator, 0);
+        errdefer self.slot_tracker.deinit(allocator);
 
         self.ancestor_hashes_replay_update_channel = try sig
             .sync
