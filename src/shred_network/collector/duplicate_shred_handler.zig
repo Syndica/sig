@@ -294,6 +294,7 @@ pub fn serializeDuplicateProof(
     other_payload: []const u8,
 ) ![]const u8 {
     // TODO validate the shreds. Implement check_shreds in Agave
+    // https://github.com/Syndica/sig/issues/1225
     const proof = sig.ledger.meta.DuplicateSlotProof{
         .shred1 = shred_payload,
         .shred2 = other_payload,
