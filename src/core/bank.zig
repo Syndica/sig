@@ -51,7 +51,7 @@ const EpochStakesMap = core.EpochStakesMap;
 const Stakes = core.Stakes;
 
 const StakeStateV2 = sig.runtime.program.stake.StakeStateV2;
-const VoteState = sig.runtime.program.vote.state.VoteState;
+const VoteStateV3 = sig.runtime.program.vote.state.VoteStateV3;
 const EpochRewardStatus = sig.replay.rewards.EpochRewardStatus;
 
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
@@ -384,14 +384,14 @@ pub fn parseStakes(
                 const data = try vote_account.data.readAllAllocate(allocator);
                 defer allocator.free(data);
 
-                if (VoteState.isCorrectSizeAndInitialized(data)) {
+                if (VoteStateV3.isCorrectSizeAndInitialized(data)) {
                     const deserialize_result = VoteAccount.fromAccountSharedData(allocator, .{
                         .lamports = vote_account.lamports,
                         .data = data,
                         .owner = vote_account.owner,
                         .executable = vote_account.executable,
                         .rent_epoch = vote_account.rent_epoch,
-                    });
+                    }, voter_pubkey);
                     if (deserialize_result == error.OutOfMemory) {
                         return error.OutOfMemory;
                     } else if (!std.meta.isError(deserialize_result)) {
@@ -425,7 +425,7 @@ pub fn parseStakes(
     // NOTE: Validate vote accounts currently only performs partial verification. It does not fully
     // verify that the account in accounts db matches the account in the snapshot stakes cache because
     // our internal VoteAccount representation does not contain the full account info or data. Instead
-    // we verify that the VoteState, account lamports, and account owner are valid. We do not verify
+    // we verify that the VoteStateV3, account lamports, and account owner are valid. We do not verify
     // that the account rent_epoch, executable flag are consistent, or that the serialised data is
     // identical (potential for trailing bytes...).
     //
@@ -443,7 +443,7 @@ pub fn parseStakes(
         if (minimal_account.lamports != db_account.lamports or
             !minimal_account.owner.equals(&db_account.owner)) return error.InvalidVoteAccount;
 
-        // Validate VoteState
+        // Validate VoteStateV3
         const cached_vote_state = account.account.state;
         const db_account_data = try db_account.data.readAllAllocate(allocator);
         defer allocator.free(db_account_data);
@@ -456,7 +456,7 @@ pub fn parseStakes(
         );
         defer db_versioned_vote_state.deinit(allocator);
 
-        var db_vote_state = try db_versioned_vote_state.convertToCurrent(allocator);
+        var db_vote_state = try db_versioned_vote_state.convertToV4(allocator, null);
         defer db_vote_state.deinit(allocator);
 
         if (!db_vote_state.equals(&cached_vote_state)) return error.InvalidVoteAccount;

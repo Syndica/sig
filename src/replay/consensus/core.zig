@@ -883,7 +883,7 @@ fn loadTower(
         .{},
     ) catch return error.BincodeError;
 
-    var vote_state = try versioned_state.convertToCurrent(allocator);
+    var vote_state = try versioned_state.convertToV4(allocator, null);
     defer vote_state.deinit(allocator);
 
     return try Tower.fromAccount(&vote_state);
@@ -1384,7 +1384,7 @@ fn generateVoteTx(
     };
     defer vote_state_versions.deinit(allocator);
 
-    var vote_state = vote_state_versions.convertToCurrent(allocator) catch |err| {
+    var vote_state = vote_state_versions.convertToV4(allocator, null) catch |err| {
         logger.err().logf("Failed to convert vote state to current: {}", .{err});
         return .failed;
     };
@@ -1397,7 +1397,9 @@ fn generateVoteTx(
 
     const current_epoch = epoch_schedule.getEpoch(last_voted_slot);
 
-    const authorized_voter_pubkey = vote_state.voters.getAuthorizedVoter(current_epoch) orelse {
+    const authorized_voter_pubkey = vote_state.authorized_voters.getAuthorizedVoter(
+        current_epoch,
+    ) orelse {
         logger.err().logf("No authorized voter for epoch {}", .{current_epoch});
         return .failed;
     };
@@ -3298,7 +3300,7 @@ test "generateVoteTx - success with tower_sync vote" {
     defer test_state.deinit();
     const db = &test_state.db;
 
-    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
         allocator,
         Pubkey.fromPublicKey(&node_kp.public_key),
         Pubkey.fromPublicKey(&auth_voter_kp.public_key),
@@ -3309,12 +3311,12 @@ test "generateVoteTx - success with tower_sync vote" {
 
     const vote_account_data_buf = try allocator.alloc(
         u8,
-        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+        sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
     defer allocator.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .v3 = vote_state },
         .{},
     );
     const vote_account = sig.runtime.AccountSharedData{
@@ -3392,7 +3394,7 @@ test "generateVoteTx - success with vote_state_update compacted" {
     defer test_state.deinit();
     const db = &test_state.db;
 
-    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
         allocator,
         Pubkey.fromPublicKey(&node_kp.public_key),
         Pubkey.fromPublicKey(&auth_voter_kp.public_key),
@@ -3403,12 +3405,12 @@ test "generateVoteTx - success with vote_state_update compacted" {
 
     const vote_account_data_buf = try allocator.alloc(
         u8,
-        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+        sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
     defer allocator.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .v3 = vote_state },
         .{},
     );
 
@@ -3486,7 +3488,7 @@ test "generateVoteTx - success with switch proof" {
     defer test_state.deinit();
     const db = &test_state.db;
 
-    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
         allocator,
         Pubkey.fromPublicKey(&node_kp.public_key),
         Pubkey.fromPublicKey(&auth_voter_kp.public_key),
@@ -3497,12 +3499,12 @@ test "generateVoteTx - success with switch proof" {
 
     const vote_account_data_buf = try allocator.alloc(
         u8,
-        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+        sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
     defer allocator.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .v3 = vote_state },
         .{},
     );
 
@@ -3582,7 +3584,7 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
     defer test_state.deinit();
     const db = &test_state.db;
 
-    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
         allocator,
         Pubkey.fromPublicKey(&different_node_kp.public_key),
         Pubkey.fromPublicKey(&auth_voter_kp.public_key),
@@ -3593,12 +3595,12 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
 
     const vote_account_data_buf = try allocator.alloc(
         u8,
-        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+        sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
     defer allocator.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .v3 = vote_state },
         .{},
     );
 
@@ -3670,7 +3672,7 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
     defer test_state.deinit();
     const db = &test_state.db;
 
-    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
         allocator,
         Pubkey.fromPublicKey(&node_kp.public_key),
         Pubkey.fromPublicKey(&actual_auth_voter_kp.public_key),
@@ -3681,12 +3683,12 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
 
     const vote_account_data_buf = try allocator.alloc(
         u8,
-        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+        sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
     defer allocator.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .v3 = vote_state },
         .{},
     );
 
