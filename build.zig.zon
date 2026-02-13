@@ -26,8 +26,8 @@
             .hash = "lsquic-0.1.0-oZGGDdOZHQFsyhwdJq9eAB2GFIPzpNm90y4-8ncaYNku",
         },
         .xev = .{
-            .url = "git+https://github.com/Syndica/libxev#11a00ee9c97e09c80a075af73599be4e1f549efa",
-            .hash = "libxev-0.0.0-86vtc9IbEwBz7sjfmLPH8S3EMopSuBz87NFQetU6HVs4",
+            .url = "git+https://github.com/Syndica/libxev#c16162f0f9047f27d6230c548e1e25070b9be163",
+            .hash = "libxev-0.0.0-86vtcyQcEwAxRuv5vgdyq8LCRKHNGLgtKfS4KNHdic2V",
         },
         .prettytable = .{
             .url = "git+https://github.com/dying-will-bullet/prettytable-zig#46b6ad9b5970def35fa43c9613cd244f28862fa9",
