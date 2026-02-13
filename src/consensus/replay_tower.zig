@@ -1878,6 +1878,90 @@ pub fn isDuplicateSlotConfirmed(
     }
 }
 
+/// A slot with its associated rooted stake, used for computing the highest
+/// super majority root.
+pub const RootedStake = struct {
+    slot: Slot,
+    stake: u64,
+};
+
+/// Collects (root_slot, stake) pairs from all vote accounts.
+/// Returns a slice of RootedStake and the total stake.
+/// Caller owns returned slice.
+///
+/// Analogous to the loop in [aggregate_commitment]
+/// (https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/commitment_service.rs#L190-L224)
+// TODO: Can likely combine the two below?
+pub fn collectRootedStake(
+    allocator: std.mem.Allocator,
+    vote_accounts: *const StakeAndVoteAccountsMap,
+) std.mem.Allocator.Error!struct { rooted_stakes: []RootedStake, total_stake: u64 } {
+    var rooted_stakes = std.ArrayListUnmanaged(RootedStake).empty;
+    errdefer rooted_stakes.deinit(allocator);
+
+    var total_stake: u64 = 0;
+
+    for (vote_accounts.values()) |vote_and_stake| {
+        const stake = vote_and_stake.stake;
+        if (stake == 0) continue;
+
+        total_stake += stake;
+
+        // Get root_slot from the vote account's state
+        const root_slot = vote_and_stake.account.state.root_slot orelse continue;
+
+        try rooted_stakes.append(allocator, .{
+            .slot = root_slot,
+            .stake = stake,
+        });
+    }
+
+    return .{
+        .rooted_stakes = try rooted_stakes.toOwnedSlice(allocator),
+        .total_stake = total_stake,
+    };
+}
+
+/// Computes the highest slot that has been rooted by >2/3 of total stake.
+/// Returns 0 if no slot meets the threshold (e.g., empty input or insufficient stake).
+///
+/// Algorithm:
+/// 1. Sort rooted_stakes by slot descending
+/// 2. Accumulate stake from highest to lowest slot
+/// 3. Return the first slot where cumulative stake > 2/3 of total
+///
+/// Analogous to [get_highest_super_majority_root]
+/// (https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/commitment_service.rs#L50-L60)
+pub fn getHighestSuperMajorityRoot(
+    rooted_stakes: []RootedStake,
+    total_stake: u64,
+) Slot {
+    if (rooted_stakes.len == 0 or total_stake == 0) {
+        return 0;
+    }
+
+    // Sort by slot descending
+    std.mem.sort(RootedStake, rooted_stakes, {}, struct {
+        fn lessThan(_: void, a: RootedStake, b: RootedStake) bool {
+            return a.slot > b.slot; // descending
+        }
+    }.lessThan);
+
+    // Accumulate stake until we exceed 2/3 threshold
+    var cumulative_stake: u64 = 0;
+    const threshold = total_stake * 2 / 3;
+
+    for (rooted_stakes) |entry| {
+        cumulative_stake += entry.stake;
+        if (cumulative_stake > threshold) {
+            return entry.slot;
+        }
+    }
+
+    // No slot met the threshold
+    return 0;
+}
+
 test "is slot duplicate confirmed not enough stake failure" {
     var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);

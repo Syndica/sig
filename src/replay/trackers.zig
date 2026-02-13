@@ -36,6 +36,34 @@ pub const OptimisticallyConfirmedSlot = struct {
     }
 };
 
+/// Tracks the highest slot that has been rooted by a supermajority (>2/3) of stake.
+/// This is computed by aggregating root_slot values from all vote accounts, weighted
+/// by stake, and finding the highest slot where cumulative stake exceeds 2/3 of total.
+///
+/// This differs from the local tower root, which reflects only this validator's view.
+/// The cluster-aggregated root is used for RPC `getSlot` with finalized commitment.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/commitment_service.rs#L50-L60
+pub const HighestSuperMajorityRoot = struct {
+    slot: std.atomic.Value(Slot) = .init(0),
+
+    /// Update the highest super majority root if the new slot is higher.
+    /// Uses fetchMax because this value should only ever increase.
+    /// TODO: document this.
+    pub fn update(self: *HighestSuperMajorityRoot, new_slot: Slot) void {
+        _ = self.slot.fetchMax(new_slot, .monotonic);
+    }
+
+    pub fn get(self: *const HighestSuperMajorityRoot) Slot {
+        return self.slot.load(.monotonic);
+    }
+
+    /// Initialize to a specific slot (used at startup to set initial root).
+    pub fn init(initial_slot: Slot) HighestSuperMajorityRoot {
+        return .{ .slot = .init(initial_slot) };
+    }
+};
+
 /// Central registry that tracks high-level info about slots and how they fork.
 ///
 /// This is a lean version of `BankForks` from agave, focused on storing the
@@ -50,7 +78,13 @@ pub const SlotTracker = struct {
     slots: std.AutoArrayHashMapUnmanaged(Slot, *Element),
     latest_processed_slot: ForkChoiceProcessedSlot,
     latest_confirmed_slot: OptimisticallyConfirmedSlot,
+    /// This validator's current root slot.
     root: std.atomic.Value(Slot),
+
+    /// The highest slot that has been rooted by a supermajority (>2/3) of cluster stake.
+    /// Used for RPC `getSlot` with finalized commitment. This is computed by aggregating
+    /// root_slot values from all vote accounts weighted by stake.
+    highest_super_majority_root: HighestSuperMajorityRoot,
 
     pub const Element = struct {
         constants: SlotConstants,
@@ -80,6 +114,9 @@ pub const SlotTracker = struct {
             .slots = .empty,
             .latest_processed_slot = .{},
             .latest_confirmed_slot = .{},
+            // Initialize to root_slot, matching Agave's initialize_slots() behavior
+            // TODO: document this.
+            .highest_super_majority_root = .init(root_slot),
         };
         errdefer self.deinit(allocator);
 
@@ -122,7 +159,7 @@ pub const SlotTracker = struct {
         return switch (commitment) {
             .processed => self.latest_processed_slot.get(),
             .confirmed => self.latest_confirmed_slot.get(),
-            .finalized => self.root.load(.monotonic),
+            .finalized => self.highest_super_majority_root.get(),
         };
     }
 
