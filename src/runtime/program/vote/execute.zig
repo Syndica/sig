@@ -6,7 +6,6 @@ const vote_program = sig.runtime.program.vote;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const vote_instruction = vote_program.vote_instruction;
 
-const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteStateV3 = vote_program.state.VoteStateV3;
@@ -330,7 +329,7 @@ fn executeAuthorize(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_state/mod.rs#L678
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/programs/vote/src/vote_state/mod.rs#L716
 ///
 /// Authorize the given pubkey to withdraw or sign votes. This may be called multiple times,
 /// but will implicitly withdraw authorization from the previously authorized
@@ -344,26 +343,18 @@ fn authorize(
     clock: Clock,
     signers: []const Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    var versioned_state = try vote_account.deserializeFromAccountData(
-        allocator,
-        VoteStateVersions,
-    );
-    defer versioned_state.deinit(allocator);
-
     const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
+    const target_version: VoteVersion = if (use_v4) .v4 else .v3;
 
-    // [agave] V4 path always checks uninitialized; V0_23_5 is rejected as uninitialized.
-    if (use_v4) {
-        if (versioned_state == .v0_23_5 or versioned_state.isUninitialized()) {
-            return InstructionError.UninitializedAccount;
-        }
-    }
-
-    // Extract prior_voters from v3 state before converting to v4 (which drops it)
-    var prior_voters: ?CircBufV1 = extractPriorVoters(&versioned_state);
-
-    var vote_state = try versioned_state.convertToV4(allocator, vote_account.pubkey);
+    const checked = try getVoteStateChecked(
+        allocator,
+        vote_account,
+        target_version,
+        false,
+    );
+    var vote_state = checked.vote_state;
     defer vote_state.deinit(allocator);
+    var prior_voters = checked.prior_voters;
 
     switch (vote_authorize) {
         .voter => {
@@ -598,7 +589,7 @@ fn executeUpdateValidatorIdentity(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/24e62248d7a91c090790e7b812e23321fa1f53b1/programs/vote/src/vote_state/mod.rs#L722
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/programs/vote/src/vote_state/mod.rs#L762
 ///
 /// Update the node_pubkey, requires signature of the authorized voter
 fn updateValidatorIdentity(
@@ -607,24 +598,16 @@ fn updateValidatorIdentity(
     vote_account: *BorrowedAccount,
     new_identity: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    var versioned_state = try vote_account.deserializeFromAccountData(
-        allocator,
-        VoteStateVersions,
-    );
-    defer versioned_state.deinit(allocator);
-
     const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
+    const target_version: VoteVersion = if (use_v4) .v4 else .v3;
 
-    // [agave] V4 path always checks uninitialized; V0_23_5 is rejected as uninitialized.
-    if (use_v4) {
-        if (versioned_state == .v0_23_5 or versioned_state.isUninitialized()) {
-            return InstructionError.UninitializedAccount;
-        }
-    }
-
-    const prior_voters = extractPriorVoters(&versioned_state);
-
-    var vote_state = try versioned_state.convertToV4(allocator, vote_account.pubkey);
+    const checked = try getVoteStateChecked(
+        allocator,
+        vote_account,
+        target_version,
+        false,
+    );
+    var vote_state = checked.vote_state;
     defer vote_state.deinit(allocator);
 
     // Both the current authorized withdrawer and new identity must sign.
@@ -644,7 +627,7 @@ fn updateValidatorIdentity(
         &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
         use_v4,
-        prior_voters,
+        checked.prior_voters,
     );
 }
 
@@ -665,7 +648,7 @@ fn executeUpdateCommission(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/69edb584ac17df2f5d8b5e817d7afede7877eded/vote-interface/src/instruction.rs#L415
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/programs/vote/src/vote_state/mod.rs#L788
 ///
 /// Update the vote account's commission
 fn updateCommission(
@@ -677,68 +660,32 @@ fn updateCommission(
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!void {
     const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
+    const target_version: VoteVersion = if (use_v4) .v4 else .v3;
 
-    // Decode vote state only once, and only if needed
-    var maybe_vote_state: ?VoteStateV4 = null;
-    var prior_voters: ?CircBufV1 = null;
-
-    const enforce_commission_update_rule = blk: {
-        if (ic.tc.feature_set.active(.allow_commission_decrease_at_any_time, ic.tc.slot)) {
-            var versioned_state = vote_account.deserializeFromAccountData(
-                allocator,
-                VoteStateVersions,
-            ) catch break :blk true;
-            defer versioned_state.deinit(allocator);
-
-            // [agave] V4 path always checks uninitialized; V0_23_5 is rejected as uninitialized.
-            if (use_v4) {
-                if (versioned_state == .v0_23_5 or versioned_state.isUninitialized()) {
-                    break :blk true;
-                }
-            }
-
-            prior_voters = extractPriorVoters(&versioned_state);
-
-            const vote_state = try versioned_state.convertToV4(allocator, vote_account.pubkey);
-            maybe_vote_state = vote_state;
-            // [agave] https://github.com/anza-xyz/agave/blob/9806724b6d49dec06a9d50396adf26565d6b7745/programs/vote/src/vote_state/mod.rs#L792
-            // [SIMD-0185] New commission value multiplied by 100 for bps; compare with current bps.
-            break :blk @as(u16, commission) * 100 > vote_state.inflation_rewards_commission_bps;
-        } else break :blk true;
-    };
-
-    if (enforce_commission_update_rule and ic.tc.feature_set.active(
-        .commission_updates_only_allowed_in_first_half_of_epoch,
-        ic.tc.slot,
-    )) {
+    const checked = getVoteStateChecked(
+        allocator,
+        vote_account,
+        target_version,
+        false,
+    ) catch |err| {
+        // Deserialization failed - enforce the commission update rule
         if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
-            if (maybe_vote_state) |*vote_state| vote_state.deinit(allocator);
             ic.tc.custom_error = @intFromEnum(VoteError.commission_update_too_late);
             return InstructionError.Custom;
         }
-    }
-
-    var vote_state = maybe_vote_state orelse state: {
-        var versioned_state = try vote_account.deserializeFromAccountData(
-            allocator,
-            VoteStateVersions,
-        );
-        defer versioned_state.deinit(allocator);
-
-        // [agave] V4 path always checks uninitialized; V0_23_5 is rejected as uninitialized.
-        if (use_v4) {
-            if (versioned_state == .v0_23_5 or versioned_state.isUninitialized()) {
-                return InstructionError.UninitializedAccount;
-            }
-        }
-
-        prior_voters = extractPriorVoters(&versioned_state);
-
-        break :state versioned_state.convertToV4(allocator, vote_account.pubkey) catch {
-            return InstructionError.InvalidAccountData;
-        };
+        return err;
     };
+    var vote_state = checked.vote_state;
     defer vote_state.deinit(allocator);
+
+    // [SIMD-0185] New commission value multiplied by 100 for bps; compare with current bps.
+    const enforce_commission_update_rule =
+        @as(u16, commission) * 100 > vote_state.inflation_rewards_commission_bps;
+
+    if (enforce_commission_update_rule and !isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
+        ic.tc.custom_error = @intFromEnum(VoteError.commission_update_too_late);
+        return InstructionError.Custom;
+    }
 
     // Current authorized withdrawer must sign transaction.
     if (!ic.ixn_info.isPubkeySigner(vote_state.withdrawer)) {
@@ -755,7 +702,7 @@ fn updateCommission(
         &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
         use_v4,
-        prior_voters,
+        checked.prior_voters,
     );
 }
 
@@ -802,7 +749,7 @@ fn executeWithdraw(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/e363f52b5bb4bfb131c647d4dbd6043d23575c78/programs/vote/src/vote_state/mod.rs#L824
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/programs/vote/src/vote_state/mod.rs#L848
 fn widthraw(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -815,22 +762,16 @@ fn widthraw(
     var vote_account = try ic.borrowInstructionAccount(vote_account_index);
     defer vote_account.release();
 
-    var versioned_state = try vote_account.deserializeFromAccountData(
-        allocator,
-        VoteStateVersions,
-    );
-    defer versioned_state.deinit(allocator);
-
     const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
+    const target_version: VoteVersion = if (use_v4) .v4 else .v3;
 
-    // [agave] V4 path always checks uninitialized; V0_23_5 is rejected as uninitialized.
-    if (use_v4) {
-        if (versioned_state == .v0_23_5 or versioned_state.isUninitialized()) {
-            return InstructionError.UninitializedAccount;
-        }
-    }
-
-    var vote_state = try versioned_state.convertToV4(allocator, vote_account.pubkey);
+    const checked = try getVoteStateChecked(
+        allocator,
+        &vote_account,
+        target_version,
+        false,
+    );
+    var vote_state = checked.vote_state;
     defer vote_state.deinit(allocator);
 
     if (!ic.ixn_info.isPubkeySigner(vote_state.withdrawer)) {
@@ -935,7 +876,7 @@ fn executeProcessVoteWithAccount(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/e17340519f792d97cf4af7b9eb81056d475c70f9/programs/vote/src/vote_state/mod.rs#L923
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/programs/vote/src/vote_state/mod.rs#L928
 fn processVoteWithAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -944,14 +885,26 @@ fn processVoteWithAccount(
     slot_hashes: SlotHashes,
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const verified = try verifyAndGetVoteState(
+    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
+    const target_version: VoteVersion = if (use_v4) .v4 else .v3;
+
+    const checked = try getVoteStateChecked(
         allocator,
-        ic,
         vote_account,
-        clock.epoch,
+        target_version,
+        true,
     );
-    var vote_state = verified.vote_state;
+    var vote_state = checked.vote_state;
     defer vote_state.deinit(allocator);
+
+    const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
+        allocator,
+        clock.epoch,
+        use_v4,
+    );
+    if (!ic.ixn_info.isPubkeySigner(authorized_voter)) {
+        return InstructionError.MissingRequiredSignature;
+    }
 
     const maybe_err = try vote_state.processVote(
         allocator,
@@ -983,7 +936,6 @@ fn processVoteWithAccount(
         }
     }
 
-    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
     try setVoteState(
         allocator,
         vote_account,
@@ -991,7 +943,7 @@ fn processVoteWithAccount(
         &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
         use_v4,
-        verified.prior_voters,
+        checked.prior_voters,
     );
 }
 
@@ -1022,7 +974,7 @@ fn executeUpdateVoteState(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L944
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/programs/vote/src/vote_state/mod.rs#L955
 fn voteStateUpdate(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -1031,14 +983,26 @@ fn voteStateUpdate(
     clock: Clock,
     vote_state_update: *VoteStateUpdate,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const verified = try verifyAndGetVoteState(
+    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
+    const target_version: VoteVersion = if (use_v4) .v4 else .v3;
+
+    const checked = try getVoteStateChecked(
         allocator,
-        ic,
         vote_account,
-        clock.epoch,
+        target_version,
+        true,
     );
-    var vote_state = verified.vote_state;
+    var vote_state = checked.vote_state;
     defer vote_state.deinit(allocator);
+
+    const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
+        allocator,
+        clock.epoch,
+        use_v4,
+    );
+    if (!ic.ixn_info.isPubkeySigner(authorized_voter)) {
+        return InstructionError.MissingRequiredSignature;
+    }
 
     const maybe_err = try vote_state.processVoteStateUpdate(
         allocator,
@@ -1053,7 +1017,6 @@ fn voteStateUpdate(
         return InstructionError.Custom;
     }
 
-    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
     try setVoteState(
         allocator,
         vote_account,
@@ -1061,7 +1024,7 @@ fn voteStateUpdate(
         &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
         use_v4,
-        verified.prior_voters,
+        checked.prior_voters,
     );
 }
 
@@ -1090,7 +1053,7 @@ fn executeTowerSync(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L994
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/programs/vote/src/vote_state/mod.rs#L1009
 fn towerSync(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -1099,14 +1062,26 @@ fn towerSync(
     clock: Clock,
     tower_sync: *TowerSync,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const verified = try verifyAndGetVoteState(
+    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
+    const target_version: VoteVersion = if (use_v4) .v4 else .v3;
+
+    const checked = try getVoteStateChecked(
         allocator,
-        ic,
         vote_account,
-        clock.epoch,
+        target_version,
+        true,
     );
-    var vote_state = verified.vote_state;
+    var vote_state = checked.vote_state;
     defer vote_state.deinit(allocator);
+
+    const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
+        allocator,
+        clock.epoch,
+        use_v4,
+    );
+    if (!ic.ixn_info.isPubkeySigner(authorized_voter)) {
+        return InstructionError.MissingRequiredSignature;
+    }
 
     const maybe_err = try vote_state.processTowerSync(
         allocator,
@@ -1121,7 +1096,6 @@ fn towerSync(
         return InstructionError.Custom;
     }
 
-    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
     try setVoteState(
         allocator,
         vote_account,
@@ -1129,7 +1103,7 @@ fn towerSync(
         &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
         use_v4,
-        verified.prior_voters,
+        checked.prior_voters,
     );
 }
 
@@ -1138,35 +1112,44 @@ const VerifiedVoteState = struct {
     prior_voters: ?CircBufV1,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/e17340519f792d97cf4af7b9eb81056d475c70f9/programs/vote/src/vote_state/mod.rs#L905
-fn verifyAndGetVoteState(
+/// Deserialize and validate the vote state from an account.
+/// Matches `get_vote_state_handler_checked` in agave v3.1.8.
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/programs/vote/src/vote_state/mod.rs#L45-L77
+fn getVoteStateChecked(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
     vote_account: *BorrowedAccount,
-    epoch: Epoch,
+    target_version: VoteVersion,
+    check_initialized: bool,
 ) (error{OutOfMemory} || InstructionError)!VerifiedVoteState {
     var versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
-    // we either clone it in `convertToV4` or don't use at all
     defer versioned_state.deinit(allocator);
 
-    const use_v4 = ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot);
-
-    // [agave] V4 path rejects V0_23_5 at deserialization; V3 path converts it.
-    // Both paths check is_uninitialized when check_initialized=true.
-    if (use_v4 and versioned_state == .v0_23_5) return InstructionError.UninitializedAccount;
-    if (versioned_state.isUninitialized()) return InstructionError.UninitializedAccount;
+    switch (target_version) {
+        .v3 => {
+            // Existing flow before v4 feature gate activation:
+            // Deserialize as VoteStateVersions (converting during deserialization).
+            // Some callsites deserialize without checking initialization status.
+            if (check_initialized and versioned_state.isUninitialized()) {
+                return InstructionError.UninitializedAccount;
+            }
+        },
+        .v4 => {
+            // New flow after v4 feature gate activation:
+            // V4 path rejects V0_23_5 at deserialization in agave;
+            // check explicitly here. Always checks uninitialized.
+            if (versioned_state == .v0_23_5 or versioned_state.isUninitialized()) {
+                return InstructionError.UninitializedAccount;
+            }
+        },
+    }
 
     const prior_voters = extractPriorVoters(&versioned_state);
 
     var vote_state = try versioned_state.convertToV4(allocator, vote_account.pubkey);
     errdefer vote_state.deinit(allocator);
-    const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, epoch, use_v4);
-    if (!ic.ixn_info.isPubkeySigner(authorized_voter)) {
-        return InstructionError.MissingRequiredSignature;
-    }
 
     return .{ .vote_state = vote_state, .prior_voters = prior_voters };
 }
@@ -2533,7 +2516,7 @@ test "vote_program: update_commission decreasing commission" {
     );
 }
 
-test "vote_program: update_commission commission update too late passes with feature set off" {
+test "vote_program: update_commission commission update too late is always enforced" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
@@ -2574,23 +2557,13 @@ test "vote_program: update_commission commission update too late passes with fea
     ) };
     defer initial_vote_state.deinit(allocator);
 
-    var final_vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
-        allocator,
-        node_pubkey,
-        authorized_voter,
-        authorized_withdrawer,
-        final_commission,
-        clock.epoch,
-    ) };
-    defer final_vote_state.deinit(allocator);
-
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-    var final_vote_state_bytes = ([_]u8{0} ** 3762);
-    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
-
-    try testing.expectProgramExecuteResult(
+    // [agave v3.1.8] Commission timing check is always enforced (features baked in).
+    // A commission increase at a too-late slot should fail even without feature flags.
+    try testing.expectProgramExecuteError(
+        InstructionError.Custom,
         std.testing.allocator,
         vote_program.ID,
         VoteProgramInstruction{
@@ -2616,20 +2589,7 @@ test "vote_program: update_commission commission update too late passes with fea
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{}, // None of the required feature_set is set,
-        },
-        .{
-            .accounts = &.{
-                .{
-                    .pubkey = vote_account,
-                    .lamports = 27074400,
-                    .owner = vote_program.ID,
-                    .data = final_vote_state_bytes[0..],
-                },
-                .{ .pubkey = authorized_withdrawer },
-                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
-            },
-            .compute_meter = 0,
+            .feature_set = &.{}, // No feature flags needed - timing check is always enforced
         },
         .{},
     );
