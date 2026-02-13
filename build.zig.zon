@@ -57,5 +57,9 @@
             .url = "git+https://github.com/supranational/blst#806515251de5cfb9761ad12eb2f2f151b1ad0277",
             .hash = "blst-0.3.16-fvxk1c82MABYUm65ch0-wpo2CSs1x5TCuBLvgQng0uRC",
         },
+        .bzip2 = .{
+            .url = "https://github.com/libarchive/bzip2/archive/refs/tags/bzip2-1.0.8.zip",
+            .hash = "N-V-__8AANChDwAITDmkzIqB-9m_iaOXSquhghM2-AqDFcX8",
+        },
     },
 }

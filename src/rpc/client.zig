@@ -126,6 +126,13 @@ pub const Client = struct {
         return self.fetch(.null, .getEpochSchedule, request);
     }
 
+    pub fn getGenesisHash(
+        self: *Client,
+        request: rpc.methods.GetGenesisHash,
+    ) Error!Response(rpc.methods.GetGenesisHash.Response) {
+        return self.fetch(.null, .getGenesisHash, request);
+    }
+
     pub fn getLatestBlockhash(
         self: *Client,
         request: rpc.methods.GetLatestBlockhash,

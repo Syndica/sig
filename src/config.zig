@@ -15,6 +15,7 @@ pub const Cmd = struct {
 
     test_transaction_sender: TestTransactionSender = .{},
 
+    validator_dir: []const u8 = sig.VALIDATOR_DIR,
     max_shreds: u64 = 5_000_000,
     leader_schedule_path: ?[]const u8 = null,
     genesis_file_path: ?[]const u8 = null,
@@ -32,14 +33,41 @@ pub const Cmd = struct {
     stop_at_slot: ?sig.core.Slot = null,
 
     pub fn genesisFilePath(self: Cmd) error{UnknownCluster}!?[]const u8 {
-        return if (self.genesis_file_path) |provided_path|
-            provided_path
-        else if (try self.gossip.getCluster()) |n| switch (n) {
+        if (self.genesis_file_path) |provided_path|
+            return provided_path;
+
+        const local_path = if (try self.gossip.getCluster()) |n| switch (n) {
             .mainnet => "data/genesis-files/mainnet_genesis.bin",
             .devnet => "data/genesis-files/devnet_genesis.bin",
             .testnet => "data/genesis-files/testnet_genesis.bin",
-            .localnet => null, // no default genesis file for localhost
-        } else null;
+            .localnet => return error.MustProvideGenesisFileForLocalHost,
+        } else return null;
+
+        const genesis_file = std.fs.cwd().openFile(local_path, .{}) catch {
+            return null;
+        };
+        genesis_file.close();
+
+        return local_path;
+    }
+
+    /// Derives a path relative to validator_dir if the param equals the default value.
+    /// This is used to allow paths like snapshot_dir and geyser.pipe_path to be relative
+    /// to validator_dir when using their default values, while still allowing explicit
+    /// overrides.
+    /// TODO:
+    ///     - remove alloc by using fixed-size buffers for paths
+    ///     - https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=156092227)
+    pub fn derivePathFromValidatorDir(
+        self: Cmd,
+        allocator: std.mem.Allocator,
+        param_value: []const u8,
+        comptime default_suffix: []const u8,
+    ) ![]const u8 {
+        if (std.mem.eql(u8, param_value, sig.VALIDATOR_DIR ++ default_suffix)) {
+            return try std.fs.path.join(allocator, &.{ self.validator_dir, default_suffix });
+        }
+        return try allocator.dupe(u8, param_value);
     }
 };
 
@@ -70,6 +98,7 @@ pub const ShredNetwork = struct {
     turbine_recv_port: u16 = 8002,
     no_retransmit: bool = true,
     dump_shred_tracker: bool = false,
+    log_finished_slots: bool = false,
 
     /// Converts from the CLI args into the `shred_network.start` parameters
     pub fn toConfig(self: ShredNetwork, fallback_slot: sig.core.Slot) ShredNetworkConfig {
@@ -79,6 +108,7 @@ pub const ShredNetwork = struct {
             .turbine_recv_port = self.turbine_recv_port,
             .retransmit = !self.no_retransmit,
             .dump_shred_tracker = self.dump_shred_tracker,
+            .log_finished_slots = self.log_finished_slots,
         };
     }
 };

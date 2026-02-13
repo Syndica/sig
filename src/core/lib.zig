@@ -7,6 +7,7 @@ pub const epoch_schedule = @import("epoch_schedule.zig");
 pub const epoch_stakes = @import("epoch_stakes.zig");
 pub const features = @import("features.zig");
 pub const genesis_config = @import("genesis_config.zig");
+pub const genesis_download = @import("genesis_download.zig");
 pub const hard_forks = @import("hard_forks.zig");
 pub const hash = @import("hash.zig");
 pub const instruction = @import("instruction.zig");
