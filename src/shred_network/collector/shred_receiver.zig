@@ -335,6 +335,7 @@ test "handleBatch/handlePacket" {
         .duplicate_handler = .{
             .ledger_reader = ledger.reader(),
             .result_writer = ledger.resultWriter(),
+            .epoch_tracker = &epoch_tracker,
             .duplicate_slots_sender = null,
             .push_msg_queue_mux = null,
             .keypair = &keypair,
