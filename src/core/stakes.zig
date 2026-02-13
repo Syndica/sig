@@ -21,7 +21,7 @@ const StakeFlags = StakeStateV2.StakeFlags;
 const Delegation = StakeStateV2.Delegation;
 const Stake = StakeStateV2.Stake;
 const Meta = StakeStateV2.Meta;
-const VoteState = sig.runtime.program.vote.state.VoteState;
+const VoteStateV3 = sig.runtime.program.vote.state.VoteStateV3;
 const VoteStateV4 = sig.runtime.program.vote.state.VoteStateV4;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
 
@@ -818,9 +818,9 @@ pub const VoteAccount = struct {
             account.data,
             .{},
         );
-        defer versioned_vote_state.deinit(allocator); // `convertToCurrent` clones
+        defer versioned_vote_state.deinit(allocator); // `convertToV4` clones
 
-        var vote_state = try versioned_vote_state.convertToCurrent(allocator, vote_pubkey);
+        var vote_state = try versioned_vote_state.convertToV4(allocator, vote_pubkey);
         errdefer vote_state.deinit(allocator);
 
         return .init(
@@ -852,7 +852,7 @@ pub const VoteAccount = struct {
         @compileError("can't serialize VoteAccount with current representation");
     }
 
-    /// Deserialize the `AccountSharedData`, and attempt to deserialize `VoteState` from the account data.
+    /// Deserialize the `AccountSharedData`, and attempt to deserialize `VoteStateV3` from the account data.
     fn deserialize(
         limit_allocator: *bincode.LimitAllocator,
         reader: anytype,
@@ -969,7 +969,7 @@ fn createStakeAccount(
     );
     defer versioned_vote_state.deinit(allocator);
 
-    var vote_state = try versioned_vote_state.convertToCurrent(allocator, null);
+    var vote_state = try versioned_vote_state.convertToV4(allocator, null);
     defer vote_state.deinit(allocator);
 
     const minimum_rent = rent.minimumBalance(StakeStateV2.SIZE);
@@ -1068,7 +1068,7 @@ pub fn randomStakes(
     for (voters) |*voter| voter.* = Pubkey.initRandom(random);
 
     for (0..options.num_voters) |i| {
-        var vote_state = try VoteState.init(
+        var vote_state = try VoteStateV3.init(
             allocator,
             nodes[random.uintLessThan(usize, options.max_nodes)],
             Pubkey.initRandom(random),
@@ -1530,14 +1530,14 @@ test "stakes vote account disappear reappear" {
         }
 
         // Uninitialized vote account removes vote account
-        var vote_state: VoteState = .DEFAULT;
+        var vote_state: VoteStateV3 = .DEFAULT;
         errdefer vote_state.deinit(allocator);
 
         try std.testing.expect(vote_state.isUninitialized());
 
         _ = try bincode.writeToSlice(
             accs.vote_account.data,
-            VersionedVoteState{ .current = vote_state },
+            VersionedVoteState{ .v3 = vote_state },
             .{},
         );
 

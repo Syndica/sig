@@ -23,7 +23,7 @@ const StakesCache = sig.core.stakes.StakesCacheGeneric(.stake);
 const AccountSharedData = sig.runtime.AccountSharedData;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
 const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
-const VoteState = sig.runtime.program.vote.state.VoteState;
+const VoteStateV3 = sig.runtime.program.vote.state.VoteStateV3;
 
 const PreviousEpochInflationRewards = sig.replay.rewards.PreviousEpochInflationRewards;
 const VoteRewards = sig.replay.rewards.VoteRewards;
@@ -612,7 +612,7 @@ fn newVoteAccountForTest(
     voter_epoch: Epoch,
 ) !VoteAccount {
     const vote_pubkey = Pubkey.initRandom(random);
-    var vote_state = try VoteState.init(
+    var vote_state = try VoteStateV3.init(
         allocator,
         Pubkey.initRandom(random),
         Pubkey.initRandom(random),

@@ -21,7 +21,7 @@ const LandedVote = state.LandedVote;
 const Lockout = state.Lockout;
 const TowerSync = state.TowerSync;
 const Vote = state.Vote;
-const VoteState = state.VoteState;
+const VoteStateV3 = state.VoteStateV3;
 const VoteStateUpdate = state.VoteStateUpdate;
 const VoteStateVersions = state.VoteStateVersions;
 
@@ -95,10 +95,10 @@ pub const VoteStateV4 = struct {
         return @intCast(self.inflation_rewards_commission_bps / 100);
     }
 
-    /// [SIMD-0185] Build VoteStateV4 from VoteState (e.g. for v3 InitializeAccount path).
+    /// [SIMD-0185] Build VoteStateV4 from VoteStateV3 (e.g. for v3 InitializeAccount path).
     pub fn fromVoteStateV3(
         allocator: Allocator,
-        v3: VoteState,
+        v3: VoteStateV3,
         vote_pubkey: Pubkey,
     ) Allocator.Error!VoteStateV4 {
         var votes = try v3.votes.clone(allocator);
@@ -210,7 +210,7 @@ pub const VoteStateV4 = struct {
             std.meta.eql(self.last_timestamp, other.last_timestamp);
     }
 
-    /// Same as getCredits(); provided for compatibility with VoteState API.
+    /// Same as getCredits(); provided for compatibility with VoteStateV3 API.
     pub fn epochCredits(self: *const VoteStateV4) u64 {
         return self.getCredits();
     }
@@ -454,7 +454,7 @@ pub const VoteStateV4 = struct {
         self.popExpiredVotes(next_vote_slot);
 
         const landed_vote: LandedVote = .{
-            .latency = VoteState.computeVoteLatency(next_vote_slot, current_slot),
+            .latency = VoteStateV3.computeVoteLatency(next_vote_slot, current_slot),
             .lockout = Lockout{ .confirmation_count = 1, .slot = next_vote_slot },
         };
 
@@ -934,7 +934,7 @@ pub const VoteStateV4 = struct {
 
         for (new_state) |*new_vote| {
             if (new_vote.latency == 0) {
-                new_vote.latency = VoteState.computeVoteLatency(
+                new_vote.latency = VoteStateV3.computeVoteLatency(
                     new_vote.lockout.slot,
                     current_slot,
                 );
@@ -1113,7 +1113,7 @@ test "state_v4.VoteStateV4.init" {
 
 test "state_v4.VoteStateV4.fromVoteStateV3" {
     const allocator = std.testing.allocator;
-    var v3 = try VoteState.init(allocator, Pubkey.ZEROES, Pubkey.ZEROES, Pubkey.ZEROES, 25, 0);
+    var v3 = try VoteStateV3.init(allocator, Pubkey.ZEROES, Pubkey.ZEROES, Pubkey.ZEROES, 25, 0);
     defer v3.deinit(allocator);
 
     const vote_pubkey = Pubkey{ .data = [_]u8{0xAB} ** 32 };

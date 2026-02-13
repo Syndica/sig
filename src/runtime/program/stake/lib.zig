@@ -16,7 +16,7 @@ const FeatureSet = sig.core.FeatureSet;
 
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteStateVersions = runtime.program.vote.state.VoteStateVersions;
-const VoteState = runtime.program.vote.state.VoteState;
+const VoteStateV3 = runtime.program.vote.state.VoteStateV3;
 const VoteStateV4 = runtime.program.vote.state.VoteStateV4;
 const ExecuteContextsParams = runtime.testing.ExecuteContextsParams;
 
@@ -694,7 +694,7 @@ fn delegate(
             const stake_amount = validated.stake_amount;
 
             const payload = try vote_state;
-            var current_vote_state = try payload.convertToCurrent(allocator, vote_pubkey);
+            var current_vote_state = try payload.convertToV4(allocator, vote_pubkey);
             defer current_vote_state.deinit(allocator);
 
             const new_stake = newStake(
@@ -719,7 +719,7 @@ fn delegate(
             const stake_amount = validated.stake_amount;
 
             const payload = try vote_state;
-            var current_vote_state = try payload.convertToCurrent(allocator, vote_pubkey);
+            var current_vote_state = try payload.convertToV4(allocator, vote_pubkey);
             defer current_vote_state.deinit(allocator);
             if (redelegateStake(
                 ic,
@@ -1412,7 +1412,7 @@ fn deactivateDelinquent(
     );
     defer delinquent_vote_state_raw.deinit(allocator);
 
-    var delinquent_vote_state = try delinquent_vote_state_raw.convertToCurrent(allocator, null);
+    var delinquent_vote_state = try delinquent_vote_state_raw.convertToV4(allocator, null);
     defer delinquent_vote_state.deinit(allocator);
 
     const reference_vote_account = try ic.borrowInstructionAccount(reference_vote_account_index);
@@ -1426,7 +1426,7 @@ fn deactivateDelinquent(
     );
     defer reference_vote_state_raw.deinit(allocator);
 
-    var reference_vote_state = try reference_vote_state_raw.convertToCurrent(allocator, null);
+    var reference_vote_state = try reference_vote_state_raw.convertToV4(allocator, null);
     defer reference_vote_state.deinit(allocator);
 
     if (!acceptableReferenceEpochCredits(reference_vote_state.epoch_credits.items, current_epoch)) {
@@ -1992,7 +1992,7 @@ test "stake.delegate_stake" {
     var vote_buf: [@sizeOf(VoteStateVersions)]u8 = @splat(0);
     _ = try sig.bincode.writeToSlice(
         &vote_buf,
-        VoteStateVersions{ .current = .DEFAULT },
+        VoteStateVersions{ .v3 = .DEFAULT },
         .{},
     );
 
@@ -3182,10 +3182,10 @@ test "stake.deactivate_delinquent" {
         .rent = runtime.sysvar.Rent.INIT,
     };
 
-    var reference_vote_state: VoteState = .DEFAULT;
+    var reference_vote_state: VoteStateV3 = .DEFAULT;
     defer reference_vote_state.deinit(allocator);
 
-    var delinquent_vote_state: VoteState = .DEFAULT;
+    var delinquent_vote_state: VoteStateV3 = .DEFAULT;
     defer delinquent_vote_state.deinit(allocator);
 
     for (0..MINIMUM_DELINQUENT_EPOCHS_FOR_DEACTIVATION) |i| {
@@ -3210,12 +3210,12 @@ test "stake.deactivate_delinquent" {
 
     var reference_vote_buf: [@sizeOf(VoteStateVersions)]u8 = @splat(0);
     _ = try sig.bincode.writeToSlice(&reference_vote_buf, VoteStateVersions{
-        .current = reference_vote_state,
+        .v3 = reference_vote_state,
     }, .{});
 
     var delinquent_vote_buf: [@sizeOf(VoteStateVersions)]u8 = @splat(0);
     _ = try sig.bincode.writeToSlice(&delinquent_vote_buf, VoteStateVersions{
-        .current = delinquent_vote_state,
+        .v3 = delinquent_vote_state,
     }, .{});
 
     const delinquent_account = Pubkey.initRandom(prng.random());

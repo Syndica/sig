@@ -636,7 +636,7 @@ pub const CircBufV1 = struct {
 pub const VoteStateVersions = union(enum(u32)) {
     v0_23_5: VoteState0_23_5,
     v1_14_11: VoteState1_14_11,
-    current: VoteState,
+    v3: VoteStateV3,
     v4: VoteStateV4,
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L80
@@ -661,13 +661,13 @@ pub const VoteStateVersions = union(enum(u32)) {
         switch (self.*) {
             .v0_23_5 => |*vote_state| vote_state.deinit(allocator),
             .v1_14_11 => |*vote_state| vote_state.deinit(allocator),
-            .current => |*vote_state| vote_state.deinit(allocator),
+            .v3 => |*vote_state| vote_state.deinit(allocator),
             .v4 => |*vote_state| vote_state.deinit(allocator),
         }
     }
 
     pub fn isCorrectSizeAndInitialized(data: []const u8) bool {
-        return VoteState.isCorrectSizeAndInitialized(data) or
+        return VoteStateV3.isCorrectSizeAndInitialized(data) or
             VoteState1_14_11.isCorrectSizeAndInitialized(data) or
             VoteStateV4.isCorrectSizeAndInitialized(data);
     }
@@ -677,7 +677,7 @@ pub const VoteStateVersions = union(enum(u32)) {
     /// vote_pubkey: when provided, used as inflation_rewards_collector default for old versions.
     ///
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
-    pub fn convertToCurrent(
+    pub fn convertToV4(
         self: VoteStateVersions,
         allocator: Allocator,
         vote_pubkey: ?Pubkey,
@@ -749,7 +749,7 @@ pub const VoteStateVersions = union(enum(u32)) {
                     .last_timestamp = state.last_timestamp,
                 };
             },
-            .current => |state| {
+            .v3 => |state| {
                 var authorized_voters = try state.voters.clone(allocator);
                 errdefer authorized_voters.deinit(allocator);
 
@@ -785,7 +785,7 @@ pub const VoteStateVersions = union(enum(u32)) {
         switch (self) {
             .v0_23_5 => |state| return state.voter.equals(&Pubkey.ZEROES),
             .v1_14_11 => |state| return state.voters.count() == 0,
-            .current => |state| return state.voters.count() == 0,
+            .v3 => |state| return state.voters.count() == 0,
             .v4 => |_| return false,
         }
     }
@@ -933,7 +933,7 @@ pub const VoteState1_14_11 = struct {
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L422
-pub const VoteState = struct {
+pub const VoteStateV3 = struct {
     /// The node that votes in this account.
     node_pubkey: Pubkey,
     /// The signer for withdrawals.
@@ -960,10 +960,10 @@ pub const VoteState = struct {
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
     pub const MAX_VOTE_STATE_SIZE: usize = 3762;
 
-    // Offset of VoteState::prior_voters, for determining initialization status without deserialization
+    // Offset of VoteStateV3::prior_voters, for determining initialization status without deserialization
     const DEFAULT_PRIOR_VOTERS_OFFSET: usize = 114;
 
-    pub const DEFAULT: VoteState = .{
+    pub const DEFAULT: VoteStateV3 = .{
         .node_pubkey = Pubkey.ZEROES,
         .withdrawer = Pubkey.ZEROES,
         .commission = 0,
@@ -982,7 +982,7 @@ pub const VoteState = struct {
         withdrawer: Pubkey,
         commission: u8,
         voter_epoch: Epoch,
-    ) Allocator.Error!VoteState {
+    ) Allocator.Error!VoteStateV3 {
         const authorized_voters = try AuthorizedVoters.init(
             allocator,
             voter_epoch,
@@ -1003,13 +1003,13 @@ pub const VoteState = struct {
         };
     }
 
-    pub fn deinit(self: *VoteState, allocator: Allocator) void {
+    pub fn deinit(self: *VoteStateV3, allocator: Allocator) void {
         self.votes.deinit(allocator);
         self.voters.deinit(allocator);
         self.epoch_credits.deinit(allocator);
     }
 
-    pub fn clone(self: VoteState, allocator: Allocator) Allocator.Error!VoteState {
+    pub fn clone(self: VoteStateV3, allocator: Allocator) Allocator.Error!VoteStateV3 {
         var votes = try self.votes.clone(allocator);
         errdefer votes.deinit(allocator);
 
@@ -1029,13 +1029,13 @@ pub const VoteState = struct {
         };
     }
 
-    /// [SIMD-0185] Build VoteState from VoteStateV4 for serializing as .current when feature is off.
+    /// [SIMD-0185] Build VoteStateV3 from VoteStateV4 for serializing as .v3 when feature is off.
     /// If `prior_voters` is provided, it will be used directly; otherwise an empty CircBuf is used.
     pub fn fromVoteStateV4(
         allocator: Allocator,
         v4: VoteStateV4,
         prior_voters: ?CircBufV1,
-    ) Allocator.Error!VoteState {
+    ) Allocator.Error!VoteStateV3 {
         var votes = try v4.votes.clone(allocator);
         errdefer votes.deinit(allocator);
 
@@ -1055,7 +1055,7 @@ pub const VoteState = struct {
         };
     }
 
-    pub fn equals(self: *const VoteState, other: *const VoteState) bool {
+    pub fn equals(self: *const VoteStateV3, other: *const VoteStateV3) bool {
         if (self.votes.items.len != other.votes.items.len) return false;
         for (self.votes.items, other.votes.items) |a, b|
             if (!std.meta.eql(a, b)) return false;
@@ -1075,7 +1075,7 @@ pub const VoteState = struct {
             std.meta.eql(self.last_timestamp, other.last_timestamp);
     }
 
-    pub fn epochCredits(self: *const VoteState) u64 {
+    pub fn epochCredits(self: *const VoteStateV3) u64 {
         return if (self.epoch_credits.getLastOrNull()) |epoch_credit|
             epoch_credit.credits
         else
@@ -1083,7 +1083,7 @@ pub const VoteState = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
-    pub fn isUninitialized(self: VoteState) bool {
+    pub fn isUninitialized(self: VoteStateV3) bool {
         return self.voters.count() == 0;
     }
 
@@ -1094,7 +1094,7 @@ pub const VoteState = struct {
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L862
     pub fn setNewAuthorizedVoter(
-        self: *VoteState,
+        self: *VoteStateV3,
         allocator: Allocator,
         new_authorized_voter: Pubkey,
         target_epoch: Epoch,
@@ -1137,7 +1137,7 @@ pub const VoteState = struct {
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L922
     pub fn getAndUpdateAuthorizedVoter(
-        self: *VoteState,
+        self: *VoteStateV3,
         allocator: Allocator,
         current_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!Pubkey {
@@ -1152,14 +1152,14 @@ pub const VoteState = struct {
         return pubkey;
     }
 
-    pub fn lastLockout(self: *const VoteState) ?Lockout {
+    pub fn lastLockout(self: *const VoteStateV3) ?Lockout {
         if (self.votes.getLastOrNull()) |vote| {
             return vote.lockout;
         }
         return null;
     }
 
-    pub fn lastVotedSlot(self: *const VoteState) ?Slot {
+    pub fn lastVotedSlot(self: *const VoteStateV3) ?Slot {
         if (self.lastLockout()) |lock_out| {
             return lock_out.slot;
         }
@@ -1169,7 +1169,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L777
     ///
     /// Returns the credits to award for a vote at the given lockout slot index
-    pub fn creditsForVoteAtIndex(self: *const VoteState, index: usize) u64 {
+    pub fn creditsForVoteAtIndex(self: *const VoteStateV3, index: usize) u64 {
         const latency = if (index < self.votes.items.len)
             self.votes.items[index].latency
         else
@@ -1201,8 +1201,8 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L845
     ///
     /// Number of "credits" owed to this account from the mining pool. Submit this
-    /// VoteState to the Rewards program to trade credits for lamports.
-    pub fn getCredits(self: *const VoteState) u64 {
+    /// VoteStateV3 to the Rewards program to trade credits for lamports.
+    pub fn getCredits(self: *const VoteStateV3) u64 {
         return if (self.epoch_credits.items.len == 0)
             0
         else
@@ -1213,7 +1213,7 @@ pub const VoteState = struct {
     ///
     /// increment credits, record credits for last epoch if new epoch
     pub fn incrementCredits(
-        self: *VoteState,
+        self: *VoteStateV3,
         allocator: Allocator,
         epoch: Epoch,
         credits: u64,
@@ -1265,7 +1265,7 @@ pub const VoteState = struct {
     ///
     // The goal is to check if each slot in vote_slots appears in slot_hashes with the correct hash.
     pub fn checkSlotsAreValid(
-        self: *const VoteState,
+        self: *const VoteStateV3,
         vote: *const Vote,
         recent_vote_slots: []const Slot,
         slot_hashes: *const SlotHashes,
@@ -1351,7 +1351,7 @@ pub const VoteState = struct {
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L709
     pub fn processNextVoteSlot(
-        self: *VoteState,
+        self: *VoteStateV3,
         allocator: Allocator,
         next_vote_slot: Slot,
         epoch: Epoch,
@@ -1367,7 +1367,7 @@ pub const VoteState = struct {
         self.popExpiredVotes(next_vote_slot);
 
         const landed_vote: LandedVote = .{
-            .latency = VoteState.computeVoteLatency(next_vote_slot, current_slot),
+            .latency = VoteStateV3.computeVoteLatency(next_vote_slot, current_slot),
             .lockout = Lockout{ .confirmation_count = 1, .slot = next_vote_slot },
         };
 
@@ -1390,7 +1390,7 @@ pub const VoteState = struct {
     /// expired. This also allows validators to continue voting on recent blocks in
     /// the same fork without increasing lockouts.
     pub fn popExpiredVotes(
-        self: *VoteState,
+        self: *VoteStateV3,
         next_vote_slot: Slot,
     ) void {
         while (self.lastLockout()) |vote| {
@@ -1403,7 +1403,7 @@ pub const VoteState = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L949
-    pub fn doubleLockouts(self: *VoteState) !void {
+    pub fn doubleLockouts(self: *VoteStateV3) !void {
         const stack_depth = self.votes.items.len;
 
         for (self.votes.items, 0..) |*vote, i| {
@@ -1420,7 +1420,7 @@ pub const VoteState = struct {
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L963
     pub fn processTimestamp(
-        self: *VoteState,
+        self: *VoteStateV3,
         slot: Slot,
         timestamp: i64,
     ) ?VoteError {
@@ -1440,7 +1440,7 @@ pub const VoteState = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/a0717a15d349dc5e0c30384bee6d039377b92167/programs/vote/src/vote_state/mod.rs#L618
     pub fn processVote(
-        self: *VoteState,
+        self: *VoteStateV3,
         allocator: Allocator,
         vote: *const Vote,
         slot_hashes: SlotHashes,
@@ -1482,7 +1482,7 @@ pub const VoteState = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/a0717a15d349dc5e0c30384bee6d039377b92167/programs/vote/src/vote_state/mod.rs#L603
     pub fn processVoteUnfiltered(
-        self: *VoteState,
+        self: *VoteStateV3,
         allocator: Allocator,
         recent_vote_slots: []const Slot,
         vote: *const Vote,
@@ -1524,7 +1524,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L690
     ///
     /// Returns if the vote state contains a slot `candidate_slot`
-    pub fn containsSlot(self: *const VoteState, candidate_slot: Slot) bool {
+    pub fn containsSlot(self: *const VoteStateV3, candidate_slot: Slot) bool {
         return std.sort.binarySearch(
             LandedVote,
             self.votes.items,
@@ -1535,7 +1535,7 @@ pub const VoteState = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L1014
     pub fn processTowerSync(
-        self: *VoteState,
+        self: *VoteStateV3,
         allocator: Allocator,
         slot_hashes: *const SlotHashes,
         epoch: Epoch,
@@ -1569,7 +1569,7 @@ pub const VoteState = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L964
     pub fn processVoteStateUpdate(
-        self: *VoteState,
+        self: *VoteStateV3,
         allocator: Allocator,
         slot_hashes: *const SlotHashes,
         epoch: Epoch,
@@ -1607,7 +1607,7 @@ pub const VoteState = struct {
     /// slot hashes, making adjustments to the root / filtering
     /// votes as needed.
     pub fn checkAndFilterProposedVoteState(
-        self: *VoteState,
+        self: *VoteStateV3,
         proposed_lockouts: *std.ArrayListUnmanaged(Lockout),
         proposed_root: *?Slot,
         proposed_hash: Hash,
@@ -1856,7 +1856,7 @@ pub const VoteState = struct {
     /// have to have at least one other slot on top of it, even if the first 30 votes were all
     /// popped off.
     pub fn processNewVoteState(
-        self: *VoteState,
+        self: *VoteStateV3,
         allocator: Allocator,
         new_state: []LandedVote,
         new_root: ?Slot,
@@ -2023,7 +2023,7 @@ pub const VoteState = struct {
         // have had their latency initialized to 0 by the above loop.  Those will now be updated to their actual latency.
         for (new_state) |*new_vote| {
             if (new_vote.latency == 0) {
-                new_vote.latency = VoteState.computeVoteLatency(
+                new_vote.latency = VoteStateV3.computeVoteLatency(
                     new_vote.lockout.slot,
                     current_slot,
                 );
@@ -2055,15 +2055,15 @@ pub const VoteState = struct {
 /// Re-export of the `VoteAuthorize` enum.
 pub const VoteAuthorize = vote_program.vote_instruction.VoteAuthorize;
 
-pub fn createTestVoteState(
+pub fn createTestVoteStateV3(
     allocator: Allocator,
     node_pubkey: Pubkey,
     maybe_authorized_voter: ?Pubkey,
     withdrawer: Pubkey,
     commission: u8,
-) !VoteState {
+) !VoteStateV3 {
     if (!builtin.is_test) {
-        @compileError("createTestVoteState should only be called in test mode");
+        @compileError("createTestVoteStateV3 should only be called in test mode");
     }
 
     return .{
@@ -2114,7 +2114,7 @@ pub fn createTestVoteAccountWithAuthorized(
 ) Allocator.Error!AccountSharedData {
     if (!builtin.is_test) @compileError("only for test");
 
-    var vote_state = try VoteState.init(
+    var vote_state = try VoteStateV3.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -2124,13 +2124,13 @@ pub fn createTestVoteAccountWithAuthorized(
     );
     defer vote_state.deinit(allocator);
 
-    const vote_state_data = try allocator.alloc(u8, VoteState.MAX_VOTE_STATE_SIZE);
+    const vote_state_data = try allocator.alloc(u8, VoteStateV3.MAX_VOTE_STATE_SIZE);
     errdefer allocator.free(vote_state_data);
     @memset(vote_state_data, 0);
 
     _ = sig.bincode.writeToSlice(
         vote_state_data,
-        VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .v3 = vote_state },
         .{},
     ) catch unreachable;
 
@@ -2302,7 +2302,7 @@ test "state.Lockout.isLockedOutAtSlot" {
     }
 }
 
-test "state.VoteState.convertToCurrent" {
+test "state.VoteStateV3.convertToV4" {
     const allocator = std.testing.allocator;
     const vote_pubkey = Pubkey.ZEROES;
     // VoteState0_23_5 -> V4
@@ -2316,7 +2316,7 @@ test "state.VoteState.convertToCurrent" {
         ) };
         defer vote_state_0_23_5.deinit(allocator);
 
-        var vote_state = try VoteStateVersions.convertToCurrent(
+        var vote_state = try VoteStateVersions.convertToV4(
             vote_state_0_23_5,
             allocator,
             vote_pubkey,
@@ -2346,7 +2346,7 @@ test "state.VoteState.convertToCurrent" {
         ) };
         defer vote_state_1_14_1.deinit(allocator);
 
-        var vote_state = try VoteStateVersions.convertToCurrent(
+        var vote_state = try VoteStateVersions.convertToV4(
             vote_state_1_14_1,
             allocator,
             vote_pubkey,
@@ -2368,7 +2368,7 @@ test "state.VoteState.convertToCurrent" {
 
     // Current -> V4
     {
-        var expected = try VoteState.init(
+        var expected = try VoteStateV3.init(
             allocator,
             Pubkey.ZEROES,
             Pubkey.ZEROES,
@@ -2378,9 +2378,9 @@ test "state.VoteState.convertToCurrent" {
         );
         defer expected.deinit(allocator);
 
-        const vote_state_1_14_1: VoteStateVersions = .{ .current = expected };
+        const vote_state_1_14_1: VoteStateVersions = .{ .v3 = expected };
 
-        var vote_state = try VoteStateVersions.convertToCurrent(
+        var vote_state = try VoteStateVersions.convertToV4(
             vote_state_1_14_1,
             allocator,
             vote_pubkey,
@@ -2414,7 +2414,7 @@ test "state.VoteState.convertToCurrent" {
     }
 }
 
-test "state.VoteState.setNewAuthorizedVoter: success" {
+test "state.VoteStateV3.setNewAuthorizedVoter: success" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const node_publey = Pubkey.initRandom(prng.random());
@@ -2424,7 +2424,7 @@ test "state.VoteState.setNewAuthorizedVoter: success" {
     const commission: u8 = 10;
     const epoch = 0;
 
-    var vote_state = try VoteState.init(
+    var vote_state = try VoteStateV3.init(
         allocator,
         node_publey,
         authorized_voter,
@@ -2441,7 +2441,7 @@ test "state.VoteState.setNewAuthorizedVoter: success" {
     try std.testing.expectEqual(new_voter, retrived_voter);
 }
 
-test "state.VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
+test "state.VoteStateV3.setNewAuthorizedVoter: too soon to reauthorize" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const node_publey = Pubkey.initRandom(prng.random());
@@ -2451,7 +2451,7 @@ test "state.VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
     const commission: u8 = 10;
     const epoch = 0;
 
-    var vote_state = try VoteState.init(
+    var vote_state = try VoteStateV3.init(
         allocator,
         node_publey,
         authorized_voter,
@@ -2470,7 +2470,7 @@ test "state.VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
     );
 }
 
-test "state.VoteState.setNewAuthorizedVoter: invalid account data" {
+test "state.VoteStateV3.setNewAuthorizedVoter: invalid account data" {
     // Test attempt to set a voter with an invalid target epoch
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -2481,7 +2481,7 @@ test "state.VoteState.setNewAuthorizedVoter: invalid account data" {
     const commission: u8 = 10;
     const epoch = 2; // epoch of current authorized voter
 
-    var vote_state = try VoteState.init(
+    var vote_state = try VoteStateV3.init(
         allocator,
         node_publey,
         authorized_voter,
@@ -2498,7 +2498,7 @@ test "state.VoteState.setNewAuthorizedVoter: invalid account data" {
     );
 }
 
-test "state.VoteState.isUninitialized: VoteState0_23_5 invalid account data" {
+test "state.VoteStateV3.isUninitialized: VoteState0_23_5 invalid account data" {
     // Test attempt to set a voter with an invalid target epoch
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -2520,7 +2520,7 @@ test "state.VoteState.isUninitialized: VoteState0_23_5 invalid account data" {
     try std.testing.expect(!vote_state.isUninitialized());
 
     const uninitialized_state = VoteStateVersions{
-        .current = try createTestVoteState(
+        .v3 = try createTestVoteStateV3(
             allocator,
             node_publey,
             null, // Authorized voters not set
@@ -2532,7 +2532,7 @@ test "state.VoteState.isUninitialized: VoteState0_23_5 invalid account data" {
     try std.testing.expect(uninitialized_state.isUninitialized());
 }
 
-test "state.VoteState.isUninitialized: VoteStatev1_14_11 invalid account data" {
+test "state.VoteStateV3.isUninitialized: VoteStatev1_14_11 invalid account data" {
     // Test attempt to set a voter with an invalid target epoch
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -2555,7 +2555,7 @@ test "state.VoteState.isUninitialized: VoteStatev1_14_11 invalid account data" {
     try std.testing.expect(!vote_state.isUninitialized());
 
     const uninitialized_state = VoteStateVersions{
-        .current = try createTestVoteState(
+        .v3 = try createTestVoteStateV3(
             allocator,
             node_publey,
             null, // Authorized voters not set
@@ -2567,7 +2567,7 @@ test "state.VoteState.isUninitialized: VoteStatev1_14_11 invalid account data" {
     try std.testing.expect(uninitialized_state.isUninitialized());
 }
 
-test "state.VoteState.isUninitialized: current invalid account data" {
+test "state.VoteStateV3.isUninitialized: current invalid account data" {
     // Test attempt to set a voter with an invalid target epoch
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -2577,7 +2577,7 @@ test "state.VoteState.isUninitialized: current invalid account data" {
     const commission: u8 = 10;
     const epoch = 2; // epoch of current authorized voter
 
-    var vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
         allocator,
         node_publey,
         authorized_voter,
@@ -2590,7 +2590,7 @@ test "state.VoteState.isUninitialized: current invalid account data" {
     try std.testing.expect(!vote_state.isUninitialized());
 
     const uninitialized_state = VoteStateVersions{
-        .current = try createTestVoteState(
+        .v3 = try createTestVoteStateV3(
             allocator,
             node_publey,
             null, // Authorized voters not set
@@ -2725,12 +2725,12 @@ test "state.AuthorizedVoters.contains" {
     try std.testing.expect(!authorized_voters.contains(15));
 }
 
-test "state.VoteState.lastLockout" {
+test "state.VoteStateV3.lastLockout" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const epoch = 2; // epoch of current authorized voter
 
-    var vote_state = try VoteState.init(
+    var vote_state = try VoteStateV3.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
@@ -2775,12 +2775,12 @@ test "state.VoteState.lastLockout" {
     }
 }
 
-test "state.VoteState.lastVotedSlot" {
+test "state.VoteStateV3.lastVotedSlot" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const epoch = 2; // epoch of current authorized voter
 
-    var vote_state = try VoteState.init(
+    var vote_state = try VoteStateV3.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
@@ -2818,12 +2818,12 @@ test "state.VoteState.lastVotedSlot" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1275
-test "state.VoteState.lastLockout extended" {
+test "state.VoteStateV3.lastLockout extended" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const epoch = 2; // epoch of current authorized voter
 
-    var vote_state = try VoteState.init(
+    var vote_state = try VoteStateV3.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
@@ -2853,11 +2853,11 @@ test "state.VoteState.lastLockout extended" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1499
-test "state.VoteState.lockout double lockout after expiration" {
+test "state.VoteStateV3.lockout double lockout after expiration" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    var vote_state = try VoteState.init(
+    var vote_state = try VoteStateV3.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
@@ -2890,11 +2890,11 @@ test "state.VoteState.lockout double lockout after expiration" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1527
-test "state.VoteState.lockout expire multiple votes" {
+test "state.VoteStateV3.lockout expire multiple votes" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    var vote_state = try VoteState.init(
+    var vote_state = try VoteStateV3.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
@@ -2934,11 +2934,11 @@ test "state.VoteState.lockout expire multiple votes" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1558
-test "state.VoteState.getCredits" {
+test "state.VoteStateV3.getCredits" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    var vote_state = try VoteState.init(
+    var vote_state = try VoteStateV3.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
@@ -2963,11 +2963,11 @@ test "state.VoteState.getCredits" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1577
-test "state.VoteState duplicate vote" {
+test "state.VoteStateV3 duplicate vote" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    var vote_state = try VoteState.init(
+    var vote_state = try VoteStateV3.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
@@ -2987,11 +2987,11 @@ test "state.VoteState duplicate vote" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1589
-test "state.VoteState nth recent lockout" {
+test "state.VoteStateV3 nth recent lockout" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    var vote_state = try VoteState.init(
+    var vote_state = try VoteStateV3.init(
         allocator,
         Pubkey.initRandom(prng.random()),
         Pubkey.initRandom(prng.random()),
@@ -3018,12 +3018,12 @@ test "state.VoteState nth recent lockout" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L1632
-test "state.VoteState.processVote process missed votes" {
+test "state.VoteStateV3.processVote process missed votes" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const account_a = Pubkey.initRandom(prng.random());
-    var vote_state_a = try createTestVoteState(
+    var vote_state_a = try createTestVoteStateV3(
         allocator,
         Pubkey.initRandom(prng.random()),
         account_a,
@@ -3033,7 +3033,7 @@ test "state.VoteState.processVote process missed votes" {
     defer vote_state_a.deinit(allocator);
 
     const account_b = Pubkey.initRandom(prng.random());
-    var vote_state_b = try createTestVoteState(
+    var vote_state_b = try createTestVoteStateV3(
         allocator,
         Pubkey.initRandom(prng.random()),
         account_b,
@@ -3109,10 +3109,10 @@ test "state.VoteState.processVote process missed votes" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1659
-test "state.VoteState.processVote skips old vote" {
+test "state.VoteStateV3.processVote skips old vote" {
     const allocator = std.testing.allocator;
 
-    var vote_state: VoteState = .DEFAULT;
+    var vote_state: VoteStateV3 = .DEFAULT;
     defer vote_state.deinit(allocator);
 
     var slots = [_]u64{0};
@@ -3134,14 +3134,14 @@ test "state.VoteState.processVote skips old vote" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L2856
-test "state.VoteState filter old votes" {
+test "state.VoteStateV3 filter old votes" {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const allocator = std.testing.allocator;
     const old_vote_slot = 1;
 
-    var vote_state: VoteState = .DEFAULT;
+    var vote_state: VoteStateV3 = .DEFAULT;
     defer vote_state.deinit(allocator);
 
     var slots = [_]u64{old_vote_slot};
@@ -3187,10 +3187,10 @@ test "state.VoteState filter old votes" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1677
-test "state.VoteState.processVote empty slot hashes" {
+test "state.VoteStateV3.processVote empty slot hashes" {
     const allocator = std.testing.allocator;
 
-    var vote_state: VoteState = .DEFAULT;
+    var vote_state: VoteStateV3 = .DEFAULT;
     defer vote_state.deinit(allocator);
 
     var slots = [_]u64{0};
@@ -3206,10 +3206,10 @@ test "state.VoteState.processVote empty slot hashes" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1688
-test "state.VoteState.checkSlotsAreValid new vote" {
+test "state.VoteStateV3.checkSlotsAreValid new vote" {
     const allocator = std.testing.allocator;
 
-    var vote_state: VoteState = .DEFAULT;
+    var vote_state: VoteStateV3 = .DEFAULT;
     defer vote_state.deinit(allocator);
 
     var slots = [_]u64{0};
@@ -3230,10 +3230,10 @@ test "state.VoteState.checkSlotsAreValid new vote" {
     );
 }
 
-test "state.VoteState.checkSlotsAreValid bad timestamp" {
+test "state.VoteStateV3.checkSlotsAreValid bad timestamp" {
     const allocator = std.testing.allocator;
 
-    var vote_state: VoteState = .DEFAULT;
+    var vote_state: VoteStateV3 = .DEFAULT;
     defer vote_state.deinit(allocator);
 
     var slots = [_]u64{0};
@@ -3255,10 +3255,10 @@ test "state.VoteState.checkSlotsAreValid bad timestamp" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1700
-test "state.VoteState.checkSlotsAreValid bad hash" {
+test "state.VoteStateV3.checkSlotsAreValid bad hash" {
     const allocator = std.testing.allocator;
 
-    var vote_state: VoteState = .DEFAULT;
+    var vote_state: VoteStateV3 = .DEFAULT;
     defer vote_state.deinit(allocator);
 
     var slots = [_]u64{0};
@@ -3279,10 +3279,10 @@ test "state.VoteState.checkSlotsAreValid bad hash" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1712
-test "state.VoteState.checkSlotsAreValid bad slot" {
+test "state.VoteStateV3.checkSlotsAreValid bad slot" {
     const allocator = std.testing.allocator;
 
-    var vote_state: VoteState = .DEFAULT;
+    var vote_state: VoteStateV3 = .DEFAULT;
     defer vote_state.deinit(allocator);
 
     var slots = [_]u64{1};
@@ -3299,10 +3299,10 @@ test "state.VoteState.checkSlotsAreValid bad slot" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1724
-test "state.VoteState.checkSlotsAreValid duplicate vote" {
+test "state.VoteStateV3.checkSlotsAreValid duplicate vote" {
     const allocator = std.testing.allocator;
 
-    var vote_state: VoteState = .DEFAULT;
+    var vote_state: VoteStateV3 = .DEFAULT;
     defer vote_state.deinit(allocator);
 
     var slots = [_]u64{0};
@@ -3322,10 +3322,10 @@ test "state.VoteState.checkSlotsAreValid duplicate vote" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1740
-test "state.VoteState.checkSlotsAreValid next vote" {
+test "state.VoteStateV3.checkSlotsAreValid next vote" {
     const allocator = std.testing.allocator;
 
-    var vote_state: VoteState = .DEFAULT;
+    var vote_state: VoteStateV3 = .DEFAULT;
     defer vote_state.deinit(allocator);
 
     var slots = [_]u64{0};
@@ -3363,10 +3363,10 @@ test "state.VoteState.checkSlotsAreValid next vote" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1759
-test "state.VoteState.checkSlotsAreValid next vote only" {
+test "state.VoteStateV3.checkSlotsAreValid next vote only" {
     const allocator = std.testing.allocator;
 
-    var vote_state: VoteState = .DEFAULT;
+    var vote_state: VoteStateV3 = .DEFAULT;
     defer vote_state.deinit(allocator);
 
     var slots = [_]u64{0};
@@ -3404,10 +3404,10 @@ test "state.VoteState.checkSlotsAreValid next vote only" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1777
-test "state.VoteState.processVote empty slots" {
+test "state.VoteStateV3.processVote empty slots" {
     const allocator = std.testing.allocator;
 
-    var vote_state: VoteState = .DEFAULT;
+    var vote_state: VoteStateV3 = .DEFAULT;
     defer vote_state.deinit(allocator);
 
     const vote = Vote{
@@ -3426,20 +3426,20 @@ test "state.VoteState.processVote empty slots" {
     try std.testing.expectEqual(VoteError.empty_slots, maybe_error);
 }
 
-test "state.VoteState.computeVoteLatency" {
-    try std.testing.expectEqual(0, VoteState.computeVoteLatency(10, 10));
-    try std.testing.expectEqual(0, VoteState.computeVoteLatency(10, 5));
-    try std.testing.expectEqual(5, VoteState.computeVoteLatency(5, 10));
+test "state.VoteStateV3.computeVoteLatency" {
+    try std.testing.expectEqual(0, VoteStateV3.computeVoteLatency(10, 10));
+    try std.testing.expectEqual(0, VoteStateV3.computeVoteLatency(10, 5));
+    try std.testing.expectEqual(5, VoteStateV3.computeVoteLatency(5, 10));
     try std.testing.expectEqual(
         std.math.maxInt(u8),
-        VoteState.computeVoteLatency(0, std.math.maxInt(u16)),
+        VoteStateV3.computeVoteLatency(0, std.math.maxInt(u16)),
     );
 }
 
-test "state.VoteState.contains_slot" {
+test "state.VoteStateV3.contains_slot" {
     const allocator = std.testing.allocator;
 
-    var vote_state: VoteState = .DEFAULT;
+    var vote_state: VoteStateV3 = .DEFAULT;
     defer vote_state.deinit(allocator);
 
     try vote_state.votes.append(allocator, .{
@@ -3458,10 +3458,10 @@ test "state.VoteState.contains_slot" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2223
-test "state.VoteState process new vote too many votes" {
+test "state.VoteStateV3 process new vote too many votes" {
     const allocator = std.testing.allocator;
 
-    var vote_state: VoteState = .DEFAULT;
+    var vote_state: VoteStateV3 = .DEFAULT;
     defer vote_state.deinit(allocator);
 
     var bad_votes = std.ArrayList(Lockout).init(allocator);
@@ -3488,10 +3488,10 @@ test "state.VoteState process new vote too many votes" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2249
-test "state.VoteState process new vote state root rollback" {
+test "state.VoteStateV3 process new vote state root rollback" {
     const allocator = std.testing.allocator;
 
-    var vote_state1: VoteState = .DEFAULT;
+    var vote_state1: VoteStateV3 = .DEFAULT;
     defer vote_state1.deinit(allocator);
 
     for (0..MAX_LOCKOUT_HISTORY + 2) |i| {
@@ -3522,9 +3522,9 @@ test "state.VoteState process new vote state root rollback" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2295
-test "state.VoteState process new vote state zero confirmations" {
+test "state.VoteStateV3 process new vote state zero confirmations" {
     const allocator = std.testing.allocator;
-    var vote_state1: VoteState = .DEFAULT;
+    var vote_state1: VoteStateV3 = .DEFAULT;
     defer vote_state1.deinit(allocator);
 
     const current_epoch = currentEpoch(&vote_state1);
@@ -3563,9 +3563,9 @@ test "state.VoteState process new vote state zero confirmations" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2337
-test "state.VoteState process new vote state confirmations too large" {
+test "state.VoteStateV3 process new vote state confirmations too large" {
     const allocator = std.testing.allocator;
-    var vote_state1: VoteState = .DEFAULT;
+    var vote_state1: VoteStateV3 = .DEFAULT;
     defer vote_state1.deinit(allocator);
     const current_epoch = currentEpoch(&vote_state1);
 
@@ -3584,7 +3584,7 @@ test "state.VoteState process new vote state confirmations too large" {
 
     try std.testing.expectEqual(null, maybe_error);
 
-    var another_vote_state1: VoteState = .DEFAULT;
+    var another_vote_state1: VoteStateV3 = .DEFAULT;
     var bad_votes = [_]Lockout{
         Lockout{
             .slot = 0,
@@ -3605,9 +3605,9 @@ test "state.VoteState process new vote state confirmations too large" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2379
-test "state.VoteState process new vote state slot smaller than root" {
+test "state.VoteStateV3 process new vote state slot smaller than root" {
     const allocator = std.testing.allocator;
-    var vote_state1: VoteState = .DEFAULT;
+    var vote_state1: VoteStateV3 = .DEFAULT;
     const current_epoch = currentEpoch(&vote_state1);
 
     const root_slot: u64 = 5;
@@ -3646,9 +3646,9 @@ test "state.VoteState process new vote state slot smaller than root" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2422
-test "state.VoteState process new vote state slots not ordered" {
+test "state.VoteStateV3 process new vote state slots not ordered" {
     const allocator = std.testing.allocator;
-    var vote_state1: VoteState = .DEFAULT;
+    var vote_state1: VoteStateV3 = .DEFAULT;
     const current_epoch = currentEpoch(&vote_state1);
 
     var bad_votes = [_]Lockout{
@@ -3685,9 +3685,9 @@ test "state.VoteState process new vote state slots not ordered" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2464
-test "state.VoteState process new vote state confirmations not ordered" {
+test "state.VoteStateV3 process new vote state confirmations not ordered" {
     const allocator = std.testing.allocator;
-    var vote_state1: VoteState = .DEFAULT;
+    var vote_state1: VoteStateV3 = .DEFAULT;
     const current_epoch = currentEpoch(&vote_state1);
 
     var bad_votes = [_]Lockout{
@@ -3730,9 +3730,9 @@ test "state.VoteState process new vote state confirmations not ordered" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2506
-test "state.VoteState process new vote state lockout mismatch" {
+test "state.VoteStateV3 process new vote state lockout mismatch" {
     const allocator = std.testing.allocator;
-    var vote_state1: VoteState = .DEFAULT;
+    var vote_state1: VoteStateV3 = .DEFAULT;
     const current_epoch = currentEpoch(&vote_state1);
 
     var bad_votes = [_]Lockout{
@@ -3757,9 +3757,9 @@ test "state.VoteState process new vote state lockout mismatch" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2532
-test "state.VoteState process new vote state confirmation rollback" {
+test "state.VoteStateV3 process new vote state confirmation rollback" {
     const allocator = std.testing.allocator;
-    var vote_state1: VoteState = .DEFAULT;
+    var vote_state1: VoteStateV3 = .DEFAULT;
     defer vote_state1.deinit(allocator);
     const current_epoch = currentEpoch(&vote_state1);
 
@@ -3802,9 +3802,9 @@ test "state.VoteState process new vote state confirmation rollback" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2575
-test "state.VoteState process new vote state root progress" {
+test "state.VoteStateV3 process new vote state root progress" {
     const allocator = std.testing.allocator;
-    var vote_state1: VoteState = .DEFAULT;
+    var vote_state1: VoteStateV3 = .DEFAULT;
     defer vote_state1.deinit(allocator);
 
     for (0..MAX_LOCKOUT_HISTORY) |i| {
@@ -3843,7 +3843,7 @@ test "state.VoteState process new vote state root progress" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2610
-test "state.VoteState process new vote state same slot but not common ancestor" {
+test "state.VoteStateV3 process new vote state same slot but not common ancestor" {
     // It might be possible that during the switch from old vote instructions
     // to new vote instructions, new_state contains votes for slots LESS
     // than the current state, for instance:
@@ -3863,7 +3863,7 @@ test "state.VoteState process new vote state same slot but not common ancestor" 
 
     // Construct on-chain vote state
     const allocator = std.testing.allocator;
-    var vote_state1: VoteState = .DEFAULT;
+    var vote_state1: VoteStateV3 = .DEFAULT;
     defer vote_state1.deinit(allocator);
     var slots = [_]Slot{ 1, 2, 5 };
     try processSlotVotesUnchecked(allocator, &vote_state1, slots[0..]);
@@ -3876,7 +3876,7 @@ test "state.VoteState process new vote state same slot but not common ancestor" 
     try std.testing.expect(std.mem.eql(u64, &expected_slots, &actual_slots));
 
     // Construct local tower state
-    var vote_state2: VoteState = .DEFAULT;
+    var vote_state2: VoteStateV3 = .DEFAULT;
     defer vote_state2.deinit(allocator);
 
     var another_slots = [_]Slot{ 1, 2, 3, 5, 7 };
@@ -3907,10 +3907,10 @@ test "state.VoteState process new vote state same slot but not common ancestor" 
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2668
-test "state.VoteState process new vote state lockout violation" {
+test "state.VoteStateV3 process new vote state lockout violation" {
     // Construct on-chain vote state
     const allocator = std.testing.allocator;
-    var vote_state1: VoteState = .DEFAULT;
+    var vote_state1: VoteStateV3 = .DEFAULT;
     defer vote_state1.deinit(allocator);
 
     {
@@ -3926,7 +3926,7 @@ test "state.VoteState process new vote state lockout violation" {
 
     // Construct conflicting tower state. Vote 4 is missing,
     // but 5 should not have popped off vote 4.
-    var vote_state2: VoteState = .DEFAULT;
+    var vote_state2: VoteStateV3 = .DEFAULT;
     defer vote_state2.deinit(allocator);
     {
         var slots = [_]Slot{ 1, 2, 3, 5, 7 };
@@ -3955,10 +3955,10 @@ test "state.VoteState process new vote state lockout violation" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2710
-test "state.VoteState process new vote state lockout violation2" {
+test "state.VoteStateV3 process new vote state lockout violation2" {
     // Construct on-chain vote state
     const allocator = std.testing.allocator;
-    var vote_state1: VoteState = .DEFAULT;
+    var vote_state1: VoteStateV3 = .DEFAULT;
     defer vote_state1.deinit(allocator);
 
     {
@@ -3975,7 +3975,7 @@ test "state.VoteState process new vote state lockout violation2" {
 
     // Construct a new vote state. Violates on-chain state because 8
     // should not have popped off 7
-    var vote_state2: VoteState = .DEFAULT;
+    var vote_state2: VoteStateV3 = .DEFAULT;
     defer vote_state2.deinit(allocator);
     {
         var slots = [_]Slot{ 1, 2, 3, 5, 6, 8 };
@@ -4006,10 +4006,10 @@ test "state.VoteState process new vote state lockout violation2" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2753
-test "state.VoteState process new vote state expired ancestor not removed" {
+test "state.VoteStateV3 process new vote state expired ancestor not removed" {
     // Construct on-chain vote state
     const allocator = std.testing.allocator;
-    var vote_state1: VoteState = .DEFAULT;
+    var vote_state1: VoteStateV3 = .DEFAULT;
     defer vote_state1.deinit(allocator);
 
     {
@@ -4063,9 +4063,9 @@ test "state.VoteState process new vote state expired ancestor not removed" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2799
-test "state.VoteState process new vote current state contains bigger slots" {
+test "state.VoteStateV3 process new vote current state contains bigger slots" {
     const allocator = std.testing.allocator;
-    var vote_state1: VoteState = .DEFAULT;
+    var vote_state1: VoteStateV3 = .DEFAULT;
     defer vote_state1.deinit(allocator);
 
     {
@@ -4133,7 +4133,7 @@ test "state.VoteState process new vote current state contains bigger slots" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2916
-test "state.VoteState.checkAndFilterProposedVoteState empty" {
+test "state.VoteStateV3.checkAndFilterProposedVoteState empty" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -4184,7 +4184,7 @@ test "state.VoteState.checkAndFilterProposedVoteState empty" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2948
-test "state.VoteState.checkAndFilterProposedVoteState too old" {
+test "state.VoteStateV3.checkAndFilterProposedVoteState too old" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -4248,7 +4248,7 @@ test "state.VoteState.checkAndFilterProposedVoteState too old" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3063
-test "state.VoteState.checkAndFilterProposedVoteState older than history root" {
+test "state.VoteStateV3.checkAndFilterProposedVoteState older than history root" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -4426,7 +4426,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history root" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3188
-test "state.VoteState.checkAndFilterProposedVoteState slots not ordered" {
+test "state.VoteStateV3.checkAndFilterProposedVoteState slots not ordered" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -4496,7 +4496,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slots not ordered" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3228
-test "state.VoteState.checkAndFilterProposedVoteState older than history slots filtered" {
+test "state.VoteStateV3.checkAndFilterProposedVoteState older than history slots filtered" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -4572,7 +4572,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots f
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3284
-test "state.VoteState.checkAndFilterProposedVoteState older than history slots not filtered" {
+test "state.VoteStateV3.checkAndFilterProposedVoteState older than history slots not filtered" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -4649,7 +4649,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots n
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3337
-test "state.VoteState.checkAndFilterProposedVoteState older history slots filtered/not filtered" {
+test "state.VoteStateV3.checkAndFilterProposedVoteState older history slots filtered/not filtered" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -4734,7 +4734,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older history slots filter
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3404
-test "state.VoteState.checkAndFilterProposedVoteState slot not on fork" {
+test "state.VoteStateV3.checkAndFilterProposedVoteState slot not on fork" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -4810,7 +4810,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot not on fork" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3459
-test "state.VoteState.checkAndFilterProposedVoteState root on different fork" {
+test "state.VoteStateV3.checkAndFilterProposedVoteState root on different fork" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -4863,7 +4863,7 @@ test "state.VoteState.checkAndFilterProposedVoteState root on different fork" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3495
-test "state.VoteState.checkAndFilterProposedVoteState slot newer than slot history" {
+test "state.VoteStateV3.checkAndFilterProposedVoteState slot newer than slot history" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -4905,7 +4905,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot newer than slot histo
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3521
-test "state.VoteState.checkAndFilterProposedVoteState slot all slot hases in update ok" {
+test "state.VoteStateV3.checkAndFilterProposedVoteState slot all slot hases in update ok" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -4978,7 +4978,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot all slot hases in upd
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3574
-test "state.VoteState.checkAndFilterProposedVoteState some slot hashes in update ok" {
+test "state.VoteStateV3.checkAndFilterProposedVoteState some slot hashes in update ok" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -5036,7 +5036,7 @@ test "state.VoteState.checkAndFilterProposedVoteState some slot hashes in update
     }
     try std.testing.expectEqualDeep(&expected_lockouts, &actual_lockouts);
 
-    // Because 6 from the original VoteState
+    // Because 6 from the original VoteStateV3
     // should not have been popped off in the proposed state,
     // we should get a lockout conflict
     const another_maybe_error = try vote_state.processTowerSync(
@@ -5050,7 +5050,7 @@ test "state.VoteState.checkAndFilterProposedVoteState some slot hashes in update
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3630
-test "state.VoteState.checkAndFilterProposedVoteState slot hashes mismatch" {
+test "state.VoteStateV3.checkAndFilterProposedVoteState slot hashes mismatch" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -5094,7 +5094,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot hashes mismatch" {
 
 pub fn processSlotVoteUnchecked(
     allocator: Allocator,
-    vote_state: *VoteState,
+    vote_state: *VoteStateV3,
     slot: Slot,
 ) !void {
     if (!builtin.is_test) @compileError("processSlotVoteUnchecked only intended for tests");
@@ -5164,7 +5164,7 @@ pub fn processSlotVoteUncheckedV4(
 
 fn processSlotVotesUnchecked(
     allocator: Allocator,
-    vote_state: *VoteState,
+    vote_state: *VoteStateV3,
     slots: []Slot,
 ) !void {
     if (!builtin.is_test) @compileError("processSlotsVoteUnchecked only intended for tests");
@@ -5180,7 +5180,7 @@ fn processSlotVotesUnchecked(
 
 fn processNewVoteStateFromLockouts(
     allocator: Allocator,
-    vote_state: *VoteState,
+    vote_state: *VoteStateV3,
     new_state: []const Lockout,
     new_root: ?Slot,
     timestamp: ?i64,
@@ -5201,7 +5201,7 @@ fn processNewVoteStateFromLockouts(
     );
 }
 
-fn checkLockouts(vote_state: *const VoteState) !void {
+fn checkLockouts(vote_state: *const VoteStateV3) !void {
     if (!builtin.is_test) @compileError("checkLockouts should only be called in test mode");
 
     for (vote_state.votes.items, 0..) |*vote, i| {
@@ -5212,7 +5212,7 @@ fn checkLockouts(vote_state: *const VoteState) !void {
     }
 }
 
-fn nthRecentLockout(vote_state: *const VoteState, position: usize) ?Lockout {
+fn nthRecentLockout(vote_state: *const VoteStateV3, position: usize) ?Lockout {
     if (!builtin.is_test) {
         @panic("nthRecentLockout should only be called in test mode");
     }
@@ -5224,7 +5224,7 @@ fn nthRecentLockout(vote_state: *const VoteState, position: usize) ?Lockout {
     return null;
 }
 
-fn currentEpoch(self: *const VoteState) u64 {
+fn currentEpoch(self: *const VoteStateV3) u64 {
     if (!builtin.is_test) {
         @panic("currentEpoch should only be called in test mode");
     }
@@ -5252,10 +5252,10 @@ fn buildVoteState(
     allocator: Allocator,
     vote_slots: []const Slot,
     slot_hashes: SlotHashes,
-) !VoteState {
+) !VoteStateV3 {
     if (!builtin.is_test) @compileError("buildVoteState should only be called in test mode");
 
-    var vote_state: VoteState = .DEFAULT;
+    var vote_state: VoteStateV3 = .DEFAULT;
 
     if (vote_slots.len > 0) {
         const last_vote_slot = vote_slots[vote_slots.len - 1];
@@ -5435,7 +5435,7 @@ fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
 const MAX_RECENT_VOTES: usize = 16;
 fn recentVotes(
     allocator: Allocator,
-    vote_state: *const VoteState,
+    vote_state: *const VoteStateV3,
 ) ![]const Vote {
     if (!builtin.is_test) {
         @panic("recentVotes should only in test");
