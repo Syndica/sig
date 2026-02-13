@@ -589,3 +589,14 @@ test "hello and world hash correctly" {
     );
     // sig fmt: on
 }
+
+test "Hash format" {
+    const d: Hash = .init("hello world");
+    var buf: [100]u8 = undefined;
+    var w: std.io.Writer = .fixed(&buf);
+    try d.format(&w);
+    try std.testing.expectEqualStrings(
+        "DULfJyE3WQqNxy3ymuhAChyNR3yufT88pmqvAazKFMG4",
+        buf[0..w.end],
+    );
+}

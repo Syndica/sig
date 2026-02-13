@@ -599,11 +599,11 @@ pub const Duration = struct {
         return .{ .ns = self.ns * factor };
     }
 
-    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
-        return writer.print("{D}", .{self.ns});
+    pub fn format(self: Duration, writer: *std.io.Writer) std.io.Writer.Error!void {
+        return self.formatDuration(writer);
     }
 
-    pub fn formatDuration(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn formatDuration(self: Duration, writer: *std.io.Writer) std.io.Writer.Error!void {
         return writer.print("{D}", .{self.ns});
     }
 };
@@ -673,3 +673,11 @@ pub const Timer = struct {
         return self.inner.sample();
     }
 };
+
+test "Duration format" {
+    const d: Duration = .fromMillis(1500);
+    var buf: [100]u8 = undefined;
+    var w: std.io.Writer = .fixed(&buf);
+    try d.format(&w);
+    try std.testing.expectEqualStrings("1.5s", buf[0..w.end]);
+}
