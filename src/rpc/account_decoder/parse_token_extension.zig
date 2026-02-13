@@ -5,9 +5,7 @@ const sig = @import("../../sig.zig");
 const account_decoder = @import("lib.zig");
 const base64 = std.base64.standard;
 
-const Allocator = std.mem.Allocator;
 const Pubkey = sig.core.Pubkey;
-const ParseError = account_decoder.ParseError;
 const AccountState = account_decoder.AccountState;
 
 /// TLV parsing constants for Token-2022 extensions.

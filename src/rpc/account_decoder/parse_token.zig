@@ -5,7 +5,6 @@ const sig = @import("../../sig.zig");
 const account_decoder = @import("lib.zig");
 const parse_token_extension = @import("parse_token_extension.zig");
 
-const Allocator = std.mem.Allocator;
 const Pubkey = sig.core.Pubkey;
 const ParseError = account_decoder.ParseError;
 const AccountState = account_decoder.AccountState;

@@ -10,7 +10,6 @@ const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const sysvar = sig.runtime.sysvar;
-const slot_history_sysvar = @import("../../runtime/sysvar/slot_history.zig");
 const bincode = sig.bincode;
 const ParseError = account_decoder.ParseError;
 
@@ -370,7 +369,8 @@ pub const UiSlotHistory = struct {
         // We stream-write this to avoid allocating 1MB+ string.
         try jw.beginWriteRaw();
         try jw.stream.writeByte('"');
-        for (0..slot_history_sysvar.MAX_ENTRIES) |i| {
+        // TODO: should be able to optimize/remove this.
+        for (0..sig.runtime.sysvar.SlotHistory.MAX_ENTRIES) |i| {
             if (self.bits.isSet(i)) {
                 try jw.stream.writeByte('1');
             } else {

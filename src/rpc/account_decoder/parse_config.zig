@@ -8,7 +8,6 @@ const Pubkey = sig.core.Pubkey;
 const bincode = sig.bincode;
 const shortvec = bincode.shortvec;
 const ParseError = account_decoder.ParseError;
-const config_program = sig.runtime.program.config;
 const ids = sig.runtime.ids;
 
 /// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/validator_info.rs#L7
