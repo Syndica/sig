@@ -492,30 +492,39 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
 test "SlotTracker.prune removes all slots less than root" {
     const allocator = std.testing.allocator;
     const root_slot: Slot = 4;
-    var tracker: SlotTracker = try .init(allocator, root_slot, .{
-        .constants = testDummySlotConstants(root_slot),
-        .state = .GENESIS,
-    });
-    defer tracker.deinit(allocator);
 
-    // Add slots 1, 2, 3, 4, 5
-    for (1..6) |slot| {
-        const gop = try tracker.getOrPut(allocator, slot, .{
-            .constants = testDummySlotConstants(slot),
-            .state = .GENESIS,
-        });
-        if (gop.found_existing) std.debug.assert(slot == root_slot);
+    var pool = ThreadPool.init(.{ .max_threads = 1 });
+    defer {
+        pool.shutdown();
+        pool.deinit();
     }
 
-    // Prune slots less than root (4)
-    tracker.pruneNonRooted(allocator, null);
+    for ([_]?*ThreadPool{ null, &pool }) |maybe_thread_pool| {
+        var tracker: SlotTracker = try .init(allocator, root_slot, .{
+            .constants = testDummySlotConstants(root_slot),
+            .state = .GENESIS,
+        });
+        defer tracker.deinit(allocator);
 
-    // Only slots 4 and 5 should remain
-    try std.testing.expect(tracker.contains(4));
-    try std.testing.expect(tracker.contains(5));
-    try std.testing.expect(!tracker.contains(1));
-    try std.testing.expect(!tracker.contains(2));
-    try std.testing.expect(!tracker.contains(3));
+        // Add slots 1, 2, 3, 4, 5
+        for (1..6) |slot| {
+            const gop = try tracker.getOrPut(allocator, slot, .{
+                .constants = testDummySlotConstants(slot),
+                .state = .GENESIS,
+            });
+            if (gop.found_existing) std.debug.assert(slot == root_slot);
+        }
+
+        // Prune slots less than root (4)
+        tracker.pruneNonRooted(allocator, maybe_thread_pool);
+
+        // Only slots 4 and 5 should remain
+        try std.testing.expect(tracker.contains(4));
+        try std.testing.expect(tracker.contains(5));
+        try std.testing.expect(!tracker.contains(1));
+        try std.testing.expect(!tracker.contains(2));
+        try std.testing.expect(!tracker.contains(3));
+    }
 }
 
 test "SlotTree: if no forks, root follows 32 behind latest" {
