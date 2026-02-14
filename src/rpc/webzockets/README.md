@@ -208,6 +208,9 @@ fn onOpen(self: *Handler, conn: *Conn) void
 fn onPing(self: *Handler, conn: *Conn, data: []const u8) void
 fn onPong(self: *Handler, conn: *Conn, data: []const u8) void
 
+// Optional
+fn onBytesRead(self: *Handler, conn: *Conn, bytes_read: usize) void
+
 // Optional (client-only)
 fn onSocketClose(self: *Handler) void
 
@@ -221,16 +224,21 @@ fn init(request: http.Request, context: if (Context == void) void else *Context)
 
 If `onPing` is not declared, auto-pong replies with latest-wins semantics. If declared, auto-pong is disabled — handler must call `conn.sendPong()`.
 
+`onBytesRead` fires on every TCP read completion regardless of whether reads are paused. Combine with `peekBufferedBytes()` to observe raw data arrival (e.g. for byte-counting or deciding when to pause).
+
 Server `init` runs before 101. Return error to reject. `onHandshakeFailed` fires if the handshake fails after `init` succeeds (pool exhaustion, write error, shutdown); use it to clean up `init`-allocated resources.
 
 ### Connection Methods
 
 ```zig
-fn sendText(data) !void    // server: []const u8 (zero-copy), client: []u8 (zero-copy, masked in-place)
-fn sendBinary(data) !void  // same as above
-fn sendPing(data) !void    // copies internally, max 125 bytes
-fn sendPong(data) !void    // copies internally, max 125 bytes
+fn sendText(data) !void          // server: []const u8 (zero-copy), client: []u8 (zero-copy, masked in-place)
+fn sendBinary(data) !void        // same as above
+fn sendPing(data) !void          // copies internally, max 125 bytes
+fn sendPong(data) !void          // copies internally, max 125 bytes
 fn close(code: CloseCode, reason: []const u8) void
+fn pauseReads() void             // pause frame dispatch; TCP reads continue until buffer full
+fn resumeReads() void            // resume dispatch; drains buffered frames
+fn peekBufferedBytes() []const u8 // raw bytes in read buffer (transient slice)
 ```
 
 ## Tests
