@@ -26,8 +26,8 @@
             .hash = "lsquic-0.1.0-oZGGDdOZHQFsyhwdJq9eAB2GFIPzpNm90y4-8ncaYNku",
         },
         .xev = .{
-            .url = "git+https://github.com/Syndica/libxev#bfb37ec5ad81a92f3fdc41f0d36e605a0490374d",
-            .hash = "libxev-0.0.0-86vtc5XGEwDhneYf_GapeLISR0pVPeBA5tSlqRS__1d-",
+            .url = "git+https://github.com/Syndica/libxev#c16162f0f9047f27d6230c548e1e25070b9be163",
+            .hash = "libxev-0.0.0-86vtcyQcEwAxRuv5vgdyq8LCRKHNGLgtKfS4KNHdic2V",
         },
         .prettytable = .{
             .url = "git+https://github.com/dying-will-bullet/prettytable-zig#46b6ad9b5970def35fa43c9613cd244f28862fa9",
@@ -48,6 +48,9 @@
         .tracy = .{
             .url = "git+https://github.com/Syndica/tracy-zig#fd2576ccbe1b2eff5557ad6d91f2834311c8009c",
             .hash = "zig_tracy-0.13.0-4TLLRxFkAADP0fRkT2yR8jDk-2I4xg12GbfAF8Pgln_m",
+        },
+        .webzockets = .{
+            .path = "src/rpc/webzockets",
         },
         .sqlite = .{
             .url = "https://www.sqlite.org/2025/sqlite-amalgamation-3490200.zip",
