@@ -6,8 +6,6 @@ pub const http = @import("http.zig");
 pub const frame = @import("frame.zig");
 pub const reader = @import("reader.zig");
 pub const server = @import("server/server.zig");
-pub const buffer = @import("buffer.zig");
-
 // Client modules
 pub const client = @import("client/client.zig");
 pub const client_handshake = @import("client/handshake.zig");

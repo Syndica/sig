@@ -153,7 +153,6 @@ test "e2e protocol error: message exceeding max_message_size → 1009" {
 const SmallMaxServer = ws.Server(
     servers.EchoHandler,
     servers.default_read_buf_size,
-    servers.default_pool_buf_size,
 );
 const SmallMaxTestServer = servers.ServerRunner(SmallMaxServer);
 

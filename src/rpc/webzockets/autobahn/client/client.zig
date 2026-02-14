@@ -35,7 +35,6 @@ const AutobahnRunner = struct {
     handler: AutobahnClientHandler,
     phase: Phase,
     path_buf: [256]u8 = undefined,
-    buffer_pool: ws.buffer.BufferPool,
     csprng: ws.ClientMaskPRNG,
     retry_count: usize = 0,
     retry_timer: xev.Timer = .{},
@@ -56,7 +55,6 @@ const AutobahnRunner = struct {
             .client = undefined,
             .handler = undefined,
             .phase = .get_case_count,
-            .buffer_pool = ws.buffer.BufferPool.init(allocator, 64 * 1024),
             .csprng = ws.ClientMaskPRNG.init(seed),
         };
     }
@@ -78,9 +76,7 @@ const AutobahnRunner = struct {
         return .disarm;
     }
 
-    fn deinit(self: *AutobahnRunner) void {
-        self.buffer_pool.deinit();
-    }
+    fn deinit(_: *AutobahnRunner) void {}
 
     /// First step: connect to /getCaseCount to discover how many cases there are.
     fn getCaseCount(self: *AutobahnRunner) !void {
@@ -92,7 +88,6 @@ const AutobahnRunner = struct {
             self.loop,
             &self.handler,
             &self.conn,
-            &self.buffer_pool,
             &self.csprng,
             .{
                 .address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001),
@@ -135,7 +130,6 @@ const AutobahnRunner = struct {
             self.loop,
             &self.handler,
             &self.conn,
-            &self.buffer_pool,
             &self.csprng,
             .{
                 .address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001),
@@ -156,7 +150,6 @@ const AutobahnRunner = struct {
             self.loop,
             &self.handler,
             &self.conn,
-            &self.buffer_pool,
             &self.csprng,
             .{
                 .address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001),

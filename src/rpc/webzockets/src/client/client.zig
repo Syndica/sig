@@ -2,7 +2,6 @@ const std = @import("std");
 const xev = @import("xev");
 
 const types = @import("../types.zig");
-const buffer = @import("../buffer.zig");
 const client_connection = @import("connection.zig");
 const client_handshake = @import("handshake.zig");
 
@@ -87,7 +86,6 @@ pub fn Client(comptime Handler: type, comptime read_buf_size: usize) type {
         handler: *Handler,
         allocator: std.mem.Allocator,
         config: Config,
-        buffer_pool: *buffer.BufferPool,
         loop: *xev.Loop,
 
         /// Randomness source used for the client handshake (`Sec-WebSocket-Key`)
@@ -134,7 +132,6 @@ pub fn Client(comptime Handler: type, comptime read_buf_size: usize) type {
             loop: *xev.Loop,
             handler: *Handler,
             conn: *Conn,
-            pool: *buffer.BufferPool,
             csprng: *types.ClientMaskPRNG,
             config: Config,
         ) ClientSelf {
@@ -150,7 +147,6 @@ pub fn Client(comptime Handler: type, comptime read_buf_size: usize) type {
                 .handler = handler,
                 .conn = conn,
                 .config = config,
-                .buffer_pool = pool,
                 .csprng = csprng,
                 .hs = undefined,
                 .connect_completion = .{},
@@ -244,7 +240,6 @@ pub fn Client(comptime Handler: type, comptime read_buf_size: usize) type {
             self.conn.init(
                 hs.socket,
                 self.loop,
-                self.buffer_pool,
                 self.handler,
                 self.allocator,
                 .{

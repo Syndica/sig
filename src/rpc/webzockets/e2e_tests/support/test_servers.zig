@@ -10,9 +10,6 @@ pub const localhost = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
 /// Default read buffer size used by the test servers.
 pub const default_read_buf_size: usize = 4096;
 
-/// Default pool buffer size used by the test servers.
-pub const default_pool_buf_size: usize = 64 * 1024;
-
 /// Server-side handler that echoes any text/binary message back to the client.
 pub const EchoHandler = server_handlers.EchoHandler;
 
@@ -20,7 +17,7 @@ pub const EchoHandler = server_handlers.EchoHandler;
 pub const ServerRunner = server_runner.ServerRunner;
 
 /// WebSocket server type used by most e2e tests (echo server).
-pub const EchoServer = ws.Server(EchoHandler, default_read_buf_size, default_pool_buf_size);
+pub const EchoServer = ws.Server(EchoHandler, default_read_buf_size);
 
 /// In-process echo server runner used by most e2e tests.
 pub const TestServer = server_runner.ServerRunner(EchoServer);
@@ -30,11 +27,7 @@ pub fn startTestServer(allocator: std.mem.Allocator) !*TestServer {
 }
 
 /// Server that closes every connection immediately on open.
-pub const CloseOnOpenServer = ws.Server(
-    server_handlers.CloseOnOpenHandler,
-    default_read_buf_size,
-    default_pool_buf_size,
-);
+pub const CloseOnOpenServer = ws.Server(server_handlers.CloseOnOpenHandler, default_read_buf_size);
 pub const CloseOnOpenTestServer = server_runner.ServerRunner(CloseOnOpenServer);
 
 pub fn startCloseOnOpenServer(allocator: std.mem.Allocator) !*CloseOnOpenTestServer {
@@ -45,11 +38,7 @@ pub fn startCloseOnOpenServer(allocator: std.mem.Allocator) !*CloseOnOpenTestSer
 }
 
 /// Server that sends a ping to every connection immediately on open.
-pub const PingOnOpenServer = ws.Server(
-    server_handlers.PingOnOpenHandler,
-    default_read_buf_size,
-    default_pool_buf_size,
-);
+pub const PingOnOpenServer = ws.Server(server_handlers.PingOnOpenHandler, default_read_buf_size);
 pub const PingOnOpenTestServer = server_runner.ServerRunner(PingOnOpenServer);
 
 pub fn startPingOnOpenServer(allocator: std.mem.Allocator) !*PingOnOpenTestServer {
@@ -60,11 +49,7 @@ pub fn startPingOnOpenServer(allocator: std.mem.Allocator) !*PingOnOpenTestServe
 }
 
 /// Server that sends an unsolicited pong to every connection immediately on open.
-pub const PongOnOpenServer = ws.Server(
-    server_handlers.PongOnOpenHandler,
-    default_read_buf_size,
-    default_pool_buf_size,
-);
+pub const PongOnOpenServer = ws.Server(server_handlers.PongOnOpenHandler, default_read_buf_size);
 pub const PongOnOpenTestServer = server_runner.ServerRunner(PongOnOpenServer);
 
 pub fn startPongOnOpenServer(allocator: std.mem.Allocator) !*PongOnOpenTestServer {
@@ -78,7 +63,6 @@ pub fn startPongOnOpenServer(allocator: std.mem.Allocator) !*PongOnOpenTestServe
 pub const OversizedServer = ws.Server(
     server_handlers.SendOversizedOnOpenHandler,
     default_read_buf_size,
-    default_pool_buf_size,
 );
 pub const OversizedTestServer = server_runner.ServerRunner(OversizedServer);
 
@@ -90,11 +74,7 @@ pub fn startOversizedServer(allocator: std.mem.Allocator) !*OversizedTestServer 
 }
 
 /// Server that rejects every connection at init time (HTTP 403).
-pub const RejectServer = ws.Server(
-    server_handlers.RejectOnInitHandler,
-    default_read_buf_size,
-    default_pool_buf_size,
-);
+pub const RejectServer = ws.Server(server_handlers.RejectOnInitHandler, default_read_buf_size);
 pub const RejectTestServer = server_runner.ServerRunner(RejectServer);
 
 pub fn startRejectServer(allocator: std.mem.Allocator) !*RejectTestServer {
@@ -136,7 +116,6 @@ pub fn startEchoServerWithTimeouts(
 pub const CloseAfterFirstMessageServer = ws.Server(
     server_handlers.CloseAfterFirstMessageHandler,
     default_read_buf_size,
-    default_pool_buf_size,
 );
 pub const CloseAfterFirstMessageTestServer = server_runner.ServerRunner(
     CloseAfterFirstMessageServer,
@@ -157,7 +136,6 @@ pub fn startCloseAfterFirstMessageServer(
 pub const PauseUntilBufferedEchoServer = ws.Server(
     server_handlers.PauseUntilBufferedEchoHandler,
     default_read_buf_size,
-    default_pool_buf_size,
 );
 pub const PauseUntilBufferedEchoTestServer =
     server_runner.ServerRunner(PauseUntilBufferedEchoServer);
@@ -166,7 +144,6 @@ pub const PauseUntilBufferedEchoTestServer =
 pub const PauseUntilBufferedEchoSmallBufServer = ws.Server(
     server_handlers.PauseUntilBufferedEchoHandler,
     256,
-    default_pool_buf_size,
 );
 pub const PauseUntilBufferedEchoSmallBufTestServer =
     server_runner.ServerRunner(PauseUntilBufferedEchoSmallBufServer);
@@ -196,7 +173,6 @@ pub fn startPauseUntilBufferedEchoSmallBufServer(
 pub const PauseMidStreamEchoServer = ws.Server(
     server_handlers.PauseMidStreamEchoHandler,
     default_read_buf_size,
-    default_pool_buf_size,
 );
 pub const PauseMidStreamEchoTestServer = server_runner.ServerRunner(PauseMidStreamEchoServer);
 
@@ -214,7 +190,6 @@ pub fn startPauseMidStreamEchoServer(
 pub const SendMessagesOnOpenServer = ws.Server(
     server_handlers.SendMessagesOnOpenHandler,
     default_read_buf_size,
-    default_pool_buf_size,
 );
 pub const SendMessagesOnOpenTestServer = server_runner.ServerRunner(SendMessagesOnOpenServer);
 
@@ -255,7 +230,6 @@ fn makeSmallBufSlices() [small_buf_msg_count][]const u8 {
 pub const ReentrancyDetectServer = ws.Server(
     server_handlers.ReentrancyDetectHandler,
     default_read_buf_size,
-    default_pool_buf_size,
 );
 pub const ReentrancyDetectTestServer = server_runner.ServerRunner(ReentrancyDetectServer);
 

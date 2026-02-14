@@ -424,14 +424,12 @@ const HandshakeFailTrackingHandler = struct {
 const HandshakeFailTrackingServer = ws.Server(
     HandshakeFailTrackingHandler,
     servers.default_read_buf_size,
-    servers.default_pool_buf_size,
 );
 const HandshakeFailTrackingTestServer = servers.ServerRunner(HandshakeFailTrackingServer);
 
 const LimitedEchoServer = ws.Server(
     servers.EchoHandler,
     servers.default_read_buf_size,
-    servers.default_pool_buf_size,
 );
 const LimitedEchoTestServer = servers.ServerRunner(LimitedEchoServer);
 

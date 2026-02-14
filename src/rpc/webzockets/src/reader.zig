@@ -2,15 +2,12 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const frame = @import("frame.zig");
 const types = @import("types.zig");
-const buffer = @import("buffer.zig");
-
-const BufferPool = buffer.BufferPool;
 
 /// WebSocket frame reader with automatic buffer tier escalation.
 ///
 /// Manages read buffer state with automatic tier escalation:
 /// - Starts with an embedded buffer for small messages
-/// - Upgrades to pooled or dynamic buffer when needed
+/// - Upgrades to dynamic buffer when needed
 /// - Retains larger buffer for subsequent messages (performance optimization)
 /// - Restores to embedded only on explicit reset()
 ///
@@ -42,13 +39,11 @@ const BufferPool = buffer.BufferPool;
 /// - `.client`: validates that frames are unmasked (server-to-client)
 pub fn Reader(comptime role: types.Role) type {
     return struct {
+        /// Current buffer for reading frames, starts as embedded and may upgrade to dynamic.
         buf: []u8,
-        buf_type: BufferType,
-        /// Saved reference to embedded buffer for reset() to restore after tier upgrade.
+        /// Saved reference to embedded buffer.
         embedded_buf: []u8,
-        /// Shared pool reference (server-level).
-        pool: *BufferPool,
-        /// Allocator for dynamic fallback.
+        /// Allocator for dynamic buffer allocation.
         allocator: Allocator,
         /// Position within buf that we've read into (end of data).
         pos: usize,
@@ -62,28 +57,15 @@ pub fn Reader(comptime role: types.Role) type {
 
         const ReaderSelf = @This();
 
-        /// Buffer ownership/origin type for proper cleanup.
-        const BufferType = enum {
-            /// Fixed embedded buffer (owned by connection slot, never freed by Reader)
-            embedded,
-            /// From shared BufferPool (return to pool on release)
-            pooled,
-            /// Heap-allocated (free with allocator on release)
-            dynamic,
-        };
-
         /// Initialize reader with embedded buffer.
         pub fn init(
             embedded_buf: []u8,
-            pool: *BufferPool,
             allocator: Allocator,
             max_message_size: usize,
         ) ReaderSelf {
             return .{
                 .buf = embedded_buf,
-                .buf_type = .embedded,
                 .embedded_buf = embedded_buf,
-                .pool = pool,
                 .allocator = allocator,
                 .pos = 0,
                 .start = 0,
@@ -104,7 +86,6 @@ pub fn Reader(comptime role: types.Role) type {
             self.cleanupFragments();
             self.releaseCurrentBuffer();
             self.buf = self.embedded_buf;
-            self.buf_type = .embedded;
             self.pos = 0;
             self.start = 0;
         }
@@ -125,7 +106,7 @@ pub fn Reader(comptime role: types.Role) type {
                 // Hybrid reclaim heuristic: compact early when tail free space is
                 // small (to avoid a tiny read), but only if shifting is
                 // amortized-cheap (`start >= live_len`).
-                const compact_threshold = @max(1, self.capacity() / 16);
+                const compact_threshold = @max(1, self.buf.len / 16);
                 if (tail_free > 0 and
                     tail_free <= compact_threshold and
                     self.start >= self.dataLen())
@@ -143,7 +124,7 @@ pub fn Reader(comptime role: types.Role) type {
             // readSlice repeatedly without calling nextMessage then we must grow the buffer
             // to avoid returning an empty slice.
             if (self.availableSpace() == 0) {
-                self.requireCapacity(self.capacity() * 2) catch return error.OutOfMemory;
+                self.requireCapacity(self.buf.len * 2) catch return error.OutOfMemory;
             }
             return self.buf[self.pos..];
         }
@@ -286,24 +267,14 @@ pub fn Reader(comptime role: types.Role) type {
             }
         }
 
-        /// Total size of the current buffer.
-        fn capacity(self: *const ReaderSelf) usize {
-            return self.buf.len;
-        }
-
-        /// Check if buffer is full (no room for more reads).
-        fn isFull(self: *const ReaderSelf) bool {
-            return self.pos >= self.capacity();
-        }
-
         /// Ensure buffer has total capacity for at least `required` bytes.
         /// Compacts if that alone satisfies the requirement, otherwise upgrades
-        /// to pooled or dynamic buffer.
+        /// to dynamic buffer.
         fn requireCapacity(self: *ReaderSelf, required: usize) !void {
             // If current capacity is sufficient, compact to make free space
             // contiguous at the end. No heuristic here since we've already
             // determined the capacity required.
-            if (required <= self.capacity()) {
+            if (required <= self.buf.len) {
                 self.compact();
                 return;
             }
@@ -311,23 +282,7 @@ pub fn Reader(comptime role: types.Role) type {
             // Compaction won't be enough — need to upgrade buffer
             const current_data_len = self.dataLen();
 
-            // Try pooled buffer first (if message fits)
-            if (required <= self.pool.buffer_size) {
-                if (self.pool.acquire()) |new_buf| {
-                    // Copy existing data to new buffer
-                    if (current_data_len > 0) {
-                        @memcpy(new_buf[0..current_data_len], self.data());
-                    }
-                    self.releaseCurrentBuffer();
-                    self.buf = new_buf;
-                    self.buf_type = .pooled;
-                    self.pos = current_data_len;
-                    self.start = 0;
-                    return;
-                }
-            }
-
-            // Fall back to dynamic allocation - round up to next power of 2
+            // Dynamic allocation - round up to next power of 2
             // to avoid repeated reallocations for incrementally growing messages
             const alloc_size = std.math.ceilPowerOfTwo(usize, required) catch required;
             const new_buf = try self.allocator.alloc(u8, alloc_size);
@@ -336,7 +291,6 @@ pub fn Reader(comptime role: types.Role) type {
             }
             self.releaseCurrentBuffer();
             self.buf = new_buf;
-            self.buf_type = .dynamic;
             self.pos = current_data_len;
             self.start = 0;
         }
@@ -352,9 +306,7 @@ pub fn Reader(comptime role: types.Role) type {
             self.start = 0;
         }
 
-        /// After processing a message, update start position.
-        /// Keeps the current buffer tier (assumption: if client sent a large
-        /// message, they're likely to send more).
+        /// After processing a message, advance the start position.
         fn consume(self: *ReaderSelf, bytes: usize) void {
             self.start += bytes;
 
@@ -365,12 +317,10 @@ pub fn Reader(comptime role: types.Role) type {
             }
         }
 
-        /// Release current buffer if it's not embedded.
+        /// Free the current buffer if it's not embedded.
         fn releaseCurrentBuffer(self: *ReaderSelf) void {
-            switch (self.buf_type) {
-                .embedded => {},
-                .pooled => self.pool.release(self.buf),
-                .dynamic => self.allocator.free(self.buf),
+            if (self.buf.ptr != self.embedded_buf.ptr) {
+                self.allocator.free(self.buf);
             }
         }
     };
@@ -381,35 +331,26 @@ const testing = std.testing;
 const ServerReader = Reader(.server);
 
 test "Reader: init with embedded buffer" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [64]u8 = undefined;
-    var reader = ServerReader.init(&embedded_buf, &pool, testing.allocator, 1024);
+    var reader = ServerReader.init(&embedded_buf, testing.allocator, 1024);
     defer reader.deinit();
 
-    try testing.expectEqual(ServerReader.BufferType.embedded, reader.buf_type);
+    try testing.expectEqual(reader.embedded_buf.ptr, reader.buf.ptr);
     try testing.expectEqual(@as(usize, 0), reader.pos);
     try testing.expectEqual(@as(usize, 64), (try reader.readSlice()).len);
 }
 
 test "Reader: availableSpace after init" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [64]u8 = undefined;
-    var reader = ServerReader.init(&embedded_buf, &pool, testing.allocator, 1024);
+    var reader = ServerReader.init(&embedded_buf, testing.allocator, 1024);
     defer reader.deinit();
 
     try testing.expectEqual(@as(usize, embedded_buf.len), reader.availableSpace());
 }
 
 test "Reader: availableSpace after advancePos" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [64]u8 = undefined;
-    var reader = ServerReader.init(&embedded_buf, &pool, testing.allocator, 1024);
+    var reader = ServerReader.init(&embedded_buf, testing.allocator, 1024);
     defer reader.deinit();
 
     reader.advancePos(10);
@@ -417,11 +358,8 @@ test "Reader: availableSpace after advancePos" {
 }
 
 test "Reader: availableSpace when full" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [64]u8 = undefined;
-    var reader = ServerReader.init(&embedded_buf, &pool, testing.allocator, 1024);
+    var reader = ServerReader.init(&embedded_buf, testing.allocator, 1024);
     defer reader.deinit();
 
     reader.pos = embedded_buf.len;
@@ -429,11 +367,8 @@ test "Reader: availableSpace when full" {
 }
 
 test "Reader: compactIfFull reclaims consumed bytes" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [16]u8 = undefined;
-    var reader = ServerReader.init(&embedded_buf, &pool, testing.allocator, 1024);
+    var reader = ServerReader.init(&embedded_buf, testing.allocator, 1024);
     defer reader.deinit();
 
     // Simulate full buffer with 6 bytes already consumed.
@@ -447,11 +382,8 @@ test "Reader: compactIfFull reclaims consumed bytes" {
 }
 
 test "Reader: compactIfFull does nothing when not full" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [16]u8 = undefined;
-    var reader = ServerReader.init(&embedded_buf, &pool, testing.allocator, 1024);
+    var reader = ServerReader.init(&embedded_buf, testing.allocator, 1024);
     defer reader.deinit();
 
     // Buffer has consumed bytes but is not full — should not compact.
@@ -463,56 +395,32 @@ test "Reader: compactIfFull does nothing when not full" {
     try testing.expectEqual(@as(usize, 10), reader.pos);
 }
 
-test "Reader: requireCapacity upgrades to pooled" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-    try pool.preheat(1);
-
+test "Reader: requireCapacity upgrades to dynamic" {
     var embedded_buf: [64]u8 = undefined;
     @memcpy(embedded_buf[0..5], "hello");
 
-    var reader = ServerReader.init(&embedded_buf, &pool, testing.allocator, 1024);
+    var reader = ServerReader.init(&embedded_buf, testing.allocator, 1024);
     defer reader.deinit();
     reader.pos = 5;
 
-    // Require more than embedded size
+    // Require more than embedded size — escalates to dynamic
     try reader.requireCapacity(128);
 
-    try testing.expectEqual(ServerReader.BufferType.pooled, reader.buf_type);
-    try testing.expectEqual(@as(usize, 256), reader.buf.len);
+    try testing.expect(reader.buf.ptr != reader.embedded_buf.ptr);
+    try testing.expectEqual(@as(usize, 128), reader.buf.len);
     try testing.expectEqual(@as(usize, 5), reader.pos);
     try testing.expectEqual(@as(usize, 0), reader.start);
     try testing.expectEqualStrings("hello", reader.data());
 }
 
-test "Reader: requireCapacity upgrades to pooled (no preheat)" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-    // Don't preheat - pool will grow on demand
-
-    var embedded_buf: [64]u8 = undefined;
-    var reader = ServerReader.init(&embedded_buf, &pool, testing.allocator, 1024);
-    defer reader.deinit();
-
-    // Require more than embedded, pool grows -> pooled
-    try reader.requireCapacity(128);
-
-    try testing.expectEqual(ServerReader.BufferType.pooled, reader.buf_type);
-    try testing.expectEqual(@as(usize, 256), reader.buf.len);
-}
-
 test "Reader: consume keeps larger buffer" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-    try pool.preheat(1);
-
     var embedded_buf: [64]u8 = undefined;
-    var reader = ServerReader.init(&embedded_buf, &pool, testing.allocator, 1024);
+    var reader = ServerReader.init(&embedded_buf, testing.allocator, 1024);
     defer reader.deinit();
 
-    // Upgrade to pooled
+    // Upgrade to dynamic
     try reader.requireCapacity(128);
-    try testing.expectEqual(ServerReader.BufferType.pooled, reader.buf_type);
+    try testing.expect(reader.buf.ptr != reader.embedded_buf.ptr);
 
     // Simulate reading 100 bytes
     reader.pos = 100;
@@ -520,25 +428,21 @@ test "Reader: consume keeps larger buffer" {
     // Consume all data
     reader.consume(100);
 
-    // Should stay at pooled (not restore to embedded)
-    try testing.expectEqual(ServerReader.BufferType.pooled, reader.buf_type);
+    // Should stay at dynamic (not restore to embedded)
+    try testing.expect(reader.buf.ptr != reader.embedded_buf.ptr);
     try testing.expectEqual(@as(usize, 0), reader.pos);
     try testing.expectEqual(@as(usize, 0), reader.start);
 }
 
-test "Reader: requireCapacity uses dynamic for messages larger than pool size" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-    try pool.preheat(1);
-
+test "Reader: requireCapacity uses power-of-2 rounding" {
     var embedded_buf: [64]u8 = undefined;
-    var reader = ServerReader.init(&embedded_buf, &pool, testing.allocator, 1024);
+    var reader = ServerReader.init(&embedded_buf, testing.allocator, 1024);
     defer reader.deinit();
 
-    // Require more than pool size -> dynamic
-    try reader.requireCapacity(512);
+    // Require non-power-of-2 size — should round up
+    try reader.requireCapacity(300);
 
-    try testing.expectEqual(ServerReader.BufferType.dynamic, reader.buf_type);
+    try testing.expect(reader.buf.ptr != reader.embedded_buf.ptr);
     try testing.expectEqual(@as(usize, 512), reader.buf.len);
 }
 
@@ -600,18 +504,15 @@ fn buildMaskedFrame(
 }
 
 /// Create a server reader with data pre-loaded.
-fn testReader(embedded_buf: []u8, pool: *BufferPool, max_msg: usize) ServerReader {
-    return ServerReader.init(embedded_buf, pool, testing.allocator, max_msg);
+fn testReader(embedded_buf: []u8, max_msg: usize) ServerReader {
+    return ServerReader.init(embedded_buf, testing.allocator, max_msg);
 }
 
 // --- nextMessage tests ---
 
 test "Reader.nextMessage: single text frame" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [128]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     // Build a masked text frame with "Hello"
@@ -629,11 +530,8 @@ test "Reader.nextMessage: single text frame" {
 }
 
 test "Reader.nextMessage: single binary frame" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [128]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     const payload = [_]u8{ 0xDE, 0xAD, 0xBE, 0xEF };
@@ -648,11 +546,8 @@ test "Reader.nextMessage: single binary frame" {
 }
 
 test "Reader.nextMessage: partial frame returns null" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [128]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     // Build a frame but only give partial data
@@ -667,11 +562,8 @@ test "Reader.nextMessage: partial frame returns null" {
 }
 
 test "Reader.nextMessage: control frame (ping)" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [128]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     var frame_buf: [64]u8 = undefined;
@@ -685,11 +577,8 @@ test "Reader.nextMessage: control frame (ping)" {
 }
 
 test "Reader.nextMessage: control frame (close)" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [128]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     // Close with status code 1000
@@ -711,11 +600,8 @@ test "Reader.nextMessage: control frame (close)" {
 }
 
 test "Reader.nextMessage: fragment reassembly (text)" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [256]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     const mask_key = [_]u8{ 0x12, 0x34, 0x56, 0x78 };
@@ -740,11 +626,8 @@ test "Reader.nextMessage: fragment reassembly (text)" {
 }
 
 test "Reader.nextMessage: interleaved control during fragmentation" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [256]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     const mask_key = [_]u8{ 0x12, 0x34, 0x56, 0x78 };
@@ -783,12 +666,10 @@ test "Reader.nextMessage: interleaved control during fragmentation" {
 }
 
 test "Reader.nextMessage: readSlice grows when full" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
 
     // Tiny inline buffer that will fill up
     var embedded_buf: [16]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     // Fill the buffer completely
@@ -800,11 +681,8 @@ test "Reader.nextMessage: readSlice grows when full" {
 }
 
 test "Reader.nextMessage: readSlice compacts early when tail is tiny" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [64]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     // Remaining tail = 2 bytes, reclaimable consumed prefix = 40 bytes.
@@ -819,11 +697,8 @@ test "Reader.nextMessage: readSlice compacts early when tail is tiny" {
 }
 
 test "Reader.nextMessage: readSlice does not compact early when tail is ample" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [64]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     // start >= live_len holds (40 >= 10), but tail (14 bytes) is not tiny,
@@ -838,11 +713,8 @@ test "Reader.nextMessage: readSlice does not compact early when tail is ample" {
 }
 
 test "Reader.nextMessage: readSlice compacts before growing" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [16]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     // Consume half the buffer so start > 0, then fill to end
@@ -858,11 +730,8 @@ test "Reader.nextMessage: readSlice compacts before growing" {
 }
 
 test "Reader.nextMessage: protocol error on nested fragments" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [256]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     const mask_key = [_]u8{ 0x12, 0x34, 0x56, 0x78 };
@@ -886,11 +755,8 @@ test "Reader.nextMessage: protocol error on nested fragments" {
 }
 
 test "Reader.nextMessage: protocol error on unexpected continuation" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [128]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     const mask_key = [_]u8{ 0x12, 0x34, 0x56, 0x78 };
@@ -905,11 +771,8 @@ test "Reader.nextMessage: protocol error on unexpected continuation" {
 }
 
 test "Reader.nextMessage: protocol error on unmasked frame" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [128]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     // Build an unmasked text frame manually
@@ -922,12 +785,9 @@ test "Reader.nextMessage: protocol error on unmasked frame" {
 }
 
 test "Reader.nextMessage: message too large" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [128]u8 = undefined;
     // Very small max message size
-    var reader = testReader(&embedded_buf, &pool, 10);
+    var reader = testReader(&embedded_buf, 10);
     defer reader.deinit();
 
     const mask_key = [_]u8{ 0x12, 0x34, 0x56, 0x78 };
@@ -942,11 +802,8 @@ test "Reader.nextMessage: message too large" {
 }
 
 test "Reader.nextMessage: multiple frames in buffer" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [256]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     const mask_key = [_]u8{ 0xAA, 0xBB, 0xCC, 0xDD };
@@ -978,11 +835,8 @@ test "Reader.nextMessage: multiple frames in buffer" {
 }
 
 test "Reader.nextMessage: pong control frame" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [128]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     var frame_buf: [64]u8 = undefined;
@@ -996,22 +850,16 @@ test "Reader.nextMessage: pong control frame" {
 }
 
 test "Reader.nextMessage: empty buffer returns null" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [128]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     try testing.expect((try reader.nextMessage()) == null);
 }
 
 test "Reader.nextMessage: fragment reassembly (binary)" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [256]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     const mask_key = [_]u8{ 0x12, 0x34, 0x56, 0x78 };
@@ -1039,11 +887,8 @@ test "Reader.nextMessage: fragment reassembly (binary)" {
 }
 
 test "Reader.nextMessage: three-fragment reassembly" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [256]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     const mask_key = [_]u8{ 0x12, 0x34, 0x56, 0x78 };
@@ -1075,12 +920,9 @@ test "Reader.nextMessage: three-fragment reassembly" {
 }
 
 test "Reader.nextMessage: fragmented message exceeds max size" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [256]u8 = undefined;
     // max_message_size = 8, so fragments totalling more than 8 should fail
-    var reader = testReader(&embedded_buf, &pool, 8);
+    var reader = testReader(&embedded_buf, 8);
     defer reader.deinit();
 
     const mask_key = [_]u8{ 0x12, 0x34, 0x56, 0x78 };
@@ -1103,11 +945,8 @@ test "Reader.nextMessage: fragmented message exceeds max size" {
 }
 
 test "Reader.nextMessage: multiple fragmented messages in sequence" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [512]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     const mask_key = [_]u8{ 0x12, 0x34, 0x56, 0x78 };
@@ -1148,11 +987,8 @@ test "Reader.nextMessage: multiple fragmented messages in sequence" {
 }
 
 test "Reader.nextMessage: reset cleans up active fragments" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [256]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     const mask_key = [_]u8{ 0x12, 0x34, 0x56, 0x78 };
@@ -1172,17 +1008,14 @@ test "Reader.nextMessage: reset cleans up active fragments" {
 
     try testing.expectEqual(@as(?types.Opcode, null), reader.fragment_opcode);
     try testing.expectEqual(@as(usize, 0), reader.fragment_buf.items.len);
-    try testing.expectEqual(ServerReader.BufferType.embedded, reader.buf_type);
+    try testing.expectEqual(reader.embedded_buf.ptr, reader.buf.ptr);
     try testing.expectEqual(@as(usize, 0), reader.pos);
     try testing.expectEqual(@as(usize, 0), reader.start);
 }
 
 test "Reader.nextMessage: interleaved close during fragmentation" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [256]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     const mask_key = [_]u8{ 0x12, 0x34, 0x56, 0x78 };
@@ -1221,12 +1054,9 @@ test "Reader.nextMessage: interleaved close during fragmentation" {
 }
 
 test "Reader: set pos for pre-loaded data" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [128]u8 = undefined;
     @memcpy(embedded_buf[0..5], "hello");
-    var reader = testReader(&embedded_buf, &pool, 1024);
+    var reader = testReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     reader.pos = 5;
@@ -1245,16 +1075,13 @@ fn buildUnmaskedFrame(out: []u8, opcode: types.Opcode, fin: bool, payload: []con
     return out[0 .. header_len + payload.len];
 }
 
-fn testClientReader(embedded_buf: []u8, pool: *BufferPool, max_msg: usize) ClientReader {
-    return ClientReader.init(embedded_buf, pool, testing.allocator, max_msg);
+fn testClientReader(embedded_buf: []u8, max_msg: usize) ClientReader {
+    return ClientReader.init(embedded_buf, testing.allocator, max_msg);
 }
 
 test "Reader(.client): single unmasked text frame" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [128]u8 = undefined;
-    var reader = testClientReader(&embedded_buf, &pool, 1024);
+    var reader = testClientReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     var frame_buf: [64]u8 = undefined;
@@ -1269,11 +1096,8 @@ test "Reader(.client): single unmasked text frame" {
 }
 
 test "Reader(.client): rejects masked frame from server" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [128]u8 = undefined;
-    var reader = testClientReader(&embedded_buf, &pool, 1024);
+    var reader = testClientReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     // Build a masked frame — invalid for server-to-client
@@ -1286,11 +1110,8 @@ test "Reader(.client): rejects masked frame from server" {
 }
 
 test "Reader(.client): fragment reassembly with unmasked frames" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     var embedded_buf: [256]u8 = undefined;
-    var reader = testClientReader(&embedded_buf, &pool, 1024);
+    var reader = testClientReader(&embedded_buf, 1024);
     defer reader.deinit();
 
     var frame_buf: [64]u8 = undefined;
@@ -1314,9 +1135,6 @@ test "Reader(.client): fragment reassembly with unmasked frames" {
 }
 
 test "Reader: payload exactly at max_message_size via read loop" {
-    var pool = BufferPool.init(testing.allocator, 256);
-    defer pool.deinit();
-
     const max_msg_size = 100;
     const payload = "A" ** max_msg_size;
     const mask_key = [_]u8{ 0x37, 0xFA, 0x21, 0x3D };
@@ -1329,7 +1147,7 @@ test "Reader: payload exactly at max_message_size via read loop" {
 
     // Small embedded buffer forces growth during the read loop
     var embedded_buf: [32]u8 = undefined;
-    var reader = testReader(&embedded_buf, &pool, max_msg_size);
+    var reader = testReader(&embedded_buf, max_msg_size);
     defer reader.deinit();
 
     // Simulate the real read loop: readSlice → copy chunk → advancePos → nextMessage

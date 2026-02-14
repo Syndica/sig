@@ -11,13 +11,10 @@ const log = std.log.scoped(.autobahn_server);
 /// Embedded read buffer size per connection.
 const read_buf_size: usize = 4096;
 
-/// Pool buffer size for medium/large messages.
-const pool_buf_size: usize = 65536;
-
 /// Maximum reassembled message size — Autobahn sends up to ~16MB.
 const max_message_size: usize = 20 * 1024 * 1024;
 
-const AutobahnServer = ws.Server(AutobahnHandler, read_buf_size, pool_buf_size);
+const AutobahnServer = ws.Server(AutobahnHandler, read_buf_size);
 
 /// Echo handler for the Autobahn testsuite.
 ///

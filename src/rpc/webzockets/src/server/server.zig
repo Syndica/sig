@@ -4,7 +4,6 @@ const xev = @import("xev");
 const slot_pool = @import("slot_pool.zig");
 const server_hs = @import("handshake.zig");
 const server_conn = @import("connection.zig");
-const buffer = @import("../buffer.zig");
 
 /// TCP listener wrapping a libxev accept loop with memory-pooled connections.
 ///
@@ -17,7 +16,6 @@ const buffer = @import("../buffer.zig");
 ///   - `Handler`: User handler type for protocol events (see below).
 ///   - `read_buf_size`: Size of per-connection embedded read buffer
 ///     (fast path for small messages).
-///   - `pool_buf_size`: Size of pooled buffers for medium/large messages.
 ///
 /// **Required handler declarations** (comptime-enforced):
 ///   - `pub const Context = T` — the handler's context *pointee* type (`void` for none).
@@ -67,7 +65,6 @@ const buffer = @import("../buffer.zig");
 pub fn Server(
     comptime Handler: type,
     comptime read_buf_size: usize,
-    comptime pool_buf_size: usize,
 ) type {
     comptime {
         if (!@hasDecl(Handler, "Context"))
@@ -90,7 +87,6 @@ pub fn Server(
         accept_completion: xev.Completion,
         handshake_pool: HandshakePool,
         connection_pool: ConnectionPool,
-        buffer_pool: BufPool,
         shutting_down: bool,
         listen_socket_closed: bool,
         /// Connections in WebSocket phase; walked during shutdown to issue close frames.
@@ -115,7 +111,6 @@ pub fn Server(
         const ConnectionList = ConnImpl.List;
         const HandshakePool = slot_pool.SlotPool(HsImpl);
         const ConnectionPool = slot_pool.SlotPool(ConnImpl);
-        const BufPool = buffer.BufferPool;
 
         pub const ShutdownResult = enum { clean, timed_out };
 
@@ -141,8 +136,6 @@ pub fn Server(
             max_handshakes: ?usize = null,
             /// Maximum number of concurrent connections. Null means unlimited.
             max_connections: ?usize = null,
-            /// Number of pool buffers to pre-allocate.
-            buffer_pool_preheat: usize = 8,
             /// Idle timeout in ms. Server sends close (going_away) if no data
             /// received for this long. null = disabled (default).
             idle_timeout_ms: ?u32 = null,
@@ -176,11 +169,6 @@ pub fn Server(
             errdefer conn_pool.deinit();
             try conn_pool.preheat(config.initial_connection_pool_size);
 
-            // Create buffer pool for medium/large messages
-            var buf_pool = BufPool.init(allocator, pool_buf_size);
-            errdefer buf_pool.deinit();
-            try buf_pool.preheat(config.buffer_pool_preheat);
-
             return .{
                 .allocator = allocator,
                 .loop = loop,
@@ -189,7 +177,6 @@ pub fn Server(
                 .accept_completion = .{},
                 .handshake_pool = hs_pool,
                 .connection_pool = conn_pool,
-                .buffer_pool = buf_pool,
                 .shutting_down = false,
                 .listen_socket_closed = false,
                 .active_connections = .{},
@@ -209,7 +196,6 @@ pub fn Server(
             }
             self.handshake_pool.deinit();
             self.connection_pool.deinit();
-            self.buffer_pool.deinit();
         }
 
         /// Start the asynchronous accept loop. Each accepted connection goes through

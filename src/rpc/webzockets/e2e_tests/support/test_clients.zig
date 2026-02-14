@@ -85,11 +85,7 @@ pub const TestPauseMidStreamClient = ws.Client(PauseMidStreamClientHandler, 4096
 /// WebSocket client type for re-entrancy detection tests.
 pub const TestReentrancyDetectClient = ws.Client(ReentrancyDetectClientHandler, 4096);
 
-/// Default buffer pool config used across all e2e tests.
-const default_pool_buf_size: usize = 64 * 1024;
-const default_pool_preheat: usize = 2;
-
-/// Bundles the thread pool, event loop, buffer pool, and CSPRNG needed by
+/// Bundles the thread pool, event loop, and CSPRNG needed by
 /// client-side e2e tests. Uses pointer-stable init via `start()` on an
 /// existing instance. Must not be moved or copied after `start()`.
 ///
@@ -105,7 +101,6 @@ const default_pool_preheat: usize = 2;
 pub const TestEnv = struct {
     tp: xev.ThreadPool,
     loop: xev.Loop,
-    buf_pool: ws.buffer.BufferPool,
     csprng: ws.ClientMaskPRNG,
 
     /// Initialize in place. The loop stores a pointer to `self.tp`, so the
@@ -119,10 +114,6 @@ pub const TestEnv = struct {
 
         self.loop = try xev.Loop.init(.{ .thread_pool = &self.tp });
         errdefer self.loop.deinit();
-
-        self.buf_pool = ws.buffer.BufferPool.init(std.testing.allocator, default_pool_buf_size);
-        errdefer self.buf_pool.deinit();
-        try self.buf_pool.preheat(default_pool_preheat);
 
         var seed: [ws.ClientMaskPRNG.secret_seed_length]u8 = undefined;
         std.crypto.random.bytes(&seed);
@@ -142,14 +133,12 @@ pub const TestEnv = struct {
             &self.loop,
             handler,
             conn,
-            &self.buf_pool,
             &self.csprng,
             config,
         );
     }
 
     pub fn deinit(self: *TestEnv) void {
-        self.buf_pool.deinit();
         self.loop.deinit();
         self.tp.shutdown();
         self.tp.deinit();

@@ -217,7 +217,6 @@ pub fn Handshake(
                 self.server,
                 self.user_handler.?,
                 self.server.allocator,
-                &self.server.buffer_pool,
                 .{
                     .max_message_size = self.server.config.max_message_size,
                     .idle_timeout_ms = self.server.config.idle_timeout_ms,

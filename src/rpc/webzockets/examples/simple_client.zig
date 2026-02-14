@@ -99,16 +99,12 @@ pub fn main() !void {
     var loop = try xev.Loop.init(.{ .thread_pool = &thread_pool });
     defer loop.deinit();
 
-    var buf_pool = ws.buffer.BufferPool.init(allocator, 64 * 1024);
-    defer buf_pool.deinit();
-    try buf_pool.preheat(2);
-
     var seed: [ws.ClientMaskPRNG.secret_seed_length]u8 = undefined;
     std.crypto.random.bytes(&seed);
     var csprng = ws.ClientMaskPRNG.init(seed);
 
     var conn: SimpleClient.Conn = undefined;
-    var client = SimpleClient.init(allocator, &loop, &handler, &conn, &buf_pool, &csprng, .{
+    var client = SimpleClient.init(allocator, &loop, &handler, &conn, &csprng, .{
         .address = address,
         .path = "/",
         .max_message_size = 16 * 1024 * 1024,

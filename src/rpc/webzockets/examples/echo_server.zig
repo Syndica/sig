@@ -5,9 +5,6 @@ const ws = @import("webzockets_lib");
 /// Default read buffer size for the echo server.
 const default_read_buf_size: usize = 4096;
 
-/// Default pool buffer size for medium/large messages.
-const default_pool_buf_size: usize = 64 * 1024;
-
 /// Echo handler: sends back every text/binary message it receives.
 /// Messages are copied into owned allocations and queued so that
 /// back-to-back arrivals are echoed in order (only one write can
@@ -117,7 +114,7 @@ const EchoHandler = struct {
     }
 };
 
-const EchoServer = ws.Server(EchoHandler, default_read_buf_size, default_pool_buf_size);
+const EchoServer = ws.Server(EchoHandler, default_read_buf_size);
 
 pub fn main() !void {
     const address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 8080);
@@ -141,7 +138,6 @@ pub fn main() !void {
             .initial_connection_pool_size = 64,
             .max_handshakes = null,
             .max_connections = null,
-            .buffer_pool_preheat = 8,
             .idle_timeout_ms = null,
             .close_timeout_ms = 5_000,
         },

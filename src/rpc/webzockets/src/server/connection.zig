@@ -3,7 +3,6 @@ const xev = @import("xev");
 
 const types = @import("../types.zig");
 const frame = @import("../frame.zig");
-const buffer = @import("../buffer.zig");
 const Reader = @import("../reader.zig").Reader(.server);
 const ControlQueue = @import("../control_queue.zig").ControlQueue;
 
@@ -197,7 +196,6 @@ pub fn Connection(
             server: *ServerType,
             user_handler: Handler,
             allocator: std.mem.Allocator,
-            pool: *buffer.BufferPool,
             config: Config,
         ) void {
             self.socket = socket;
@@ -207,7 +205,6 @@ pub fn Connection(
             self.config = config;
             self.reader = Reader.init(
                 &self.read_buf,
-                pool,
                 allocator,
                 config.max_message_size,
             );

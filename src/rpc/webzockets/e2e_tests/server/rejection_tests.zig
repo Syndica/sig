@@ -93,7 +93,6 @@ const RejectingHandler = struct {
 const RejectingServer = ws.Server(
     RejectingHandler,
     servers.default_read_buf_size,
-    servers.default_pool_buf_size,
 );
 const RejectingTestServer = servers.ServerRunner(RejectingServer);
 

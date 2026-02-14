@@ -70,7 +70,6 @@ test "e2e: connection pool exhaustion" {
 const LimitedServer = ws.Server(
     servers.EchoHandler,
     servers.default_read_buf_size,
-    servers.default_pool_buf_size,
 );
 const LimitedTestServer = servers.ServerRunner(LimitedServer);
 
