@@ -2317,9 +2317,10 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         defer manifest.deinit(allocator);
     }
 
+    const snapshot_slot = if (snap_files.incremental_info) |inc| inc.slot else snap_files.full.slot;
     var rpc_hooks = sig.rpc.Hooks{};
     defer rpc_hooks.deinit(allocator);
-    try accountsdb.registerRPCHooks(&rpc_hooks);
+    try accountsdb.registerRPCHooks(&rpc_hooks, null, snapshot_slot);
 
     var server_ctx = try sig.rpc.server.Context.init(.{
         .allocator = allocator,

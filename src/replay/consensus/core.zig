@@ -136,7 +136,7 @@ pub const TowerConsensus = struct {
             signing: sig.identity.SigningKeys,
             account_reader: AccountReader,
             ledger: *sig.ledger.Ledger,
-            slot_tracker: *const SlotTracker,
+            slot_tracker: *SlotTracker,
             /// Usually `.now()`.
             now: sig.time.Instant,
             registry: *sig.prometheus.Registry(.{}),
