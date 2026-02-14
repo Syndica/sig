@@ -152,3 +152,119 @@ pub fn startCloseAfterFirstMessageServer(
         .close_timeout_ms = close_timeout_ms,
     });
 }
+
+/// Server that pauses on open, waits for byte threshold, resumes, echoes messages.
+pub const PauseUntilBufferedEchoServer = ws.Server(
+    server_handlers.PauseUntilBufferedEchoHandler,
+    default_read_buf_size,
+    default_pool_buf_size,
+);
+pub const PauseUntilBufferedEchoTestServer =
+    server_runner.ServerRunner(PauseUntilBufferedEchoServer);
+
+/// PauseUntilBufferedEcho variant with a small 256-byte read buffer.
+pub const PauseUntilBufferedEchoSmallBufServer = ws.Server(
+    server_handlers.PauseUntilBufferedEchoHandler,
+    256,
+    default_pool_buf_size,
+);
+pub const PauseUntilBufferedEchoSmallBufTestServer =
+    server_runner.ServerRunner(PauseUntilBufferedEchoSmallBufServer);
+
+pub fn startPauseUntilBufferedEchoServer(
+    allocator: std.mem.Allocator,
+    ctx: *server_handlers.PauseUntilBufferedEchoHandler.Context,
+) !*PauseUntilBufferedEchoTestServer {
+    return try PauseUntilBufferedEchoTestServer.start(allocator, .{
+        .address = localhost,
+        .handler_context = ctx,
+    });
+}
+
+pub fn startPauseUntilBufferedEchoSmallBufServer(
+    allocator: std.mem.Allocator,
+    ctx: *server_handlers.PauseUntilBufferedEchoHandler.Context,
+) !*PauseUntilBufferedEchoSmallBufTestServer {
+    return try PauseUntilBufferedEchoSmallBufTestServer.start(allocator, .{
+        .address = localhost,
+        .handler_context = ctx,
+    });
+}
+
+/// Server that pauses on open, threshold resumes, then pauses per-message
+/// with echo and resume in onWriteComplete.
+pub const PauseMidStreamEchoServer = ws.Server(
+    server_handlers.PauseMidStreamEchoHandler,
+    default_read_buf_size,
+    default_pool_buf_size,
+);
+pub const PauseMidStreamEchoTestServer = server_runner.ServerRunner(PauseMidStreamEchoServer);
+
+pub fn startPauseMidStreamEchoServer(
+    allocator: std.mem.Allocator,
+    ctx: *server_handlers.PauseMidStreamEchoHandler.Context,
+) !*PauseMidStreamEchoTestServer {
+    return try PauseMidStreamEchoTestServer.start(allocator, .{
+        .address = localhost,
+        .handler_context = ctx,
+    });
+}
+
+/// Server that sends configured messages on open, then closes.
+pub const SendMessagesOnOpenServer = ws.Server(
+    server_handlers.SendMessagesOnOpenHandler,
+    default_read_buf_size,
+    default_pool_buf_size,
+);
+pub const SendMessagesOnOpenTestServer = server_runner.ServerRunner(SendMessagesOnOpenServer);
+
+pub fn startSendMessagesOnOpenServer(
+    allocator: std.mem.Allocator,
+    ctx: *server_handlers.SendMessagesOnOpenHandler.Context,
+) !*SendMessagesOnOpenTestServer {
+    return try SendMessagesOnOpenTestServer.start(allocator, .{
+        .address = localhost,
+        .handler_context = ctx,
+    });
+}
+
+// 12 messages of 20 bytes each for small-buffer tests.
+pub const small_buf_msg_len = 20;
+pub const small_buf_msg_count = 12;
+
+fn makeSmallBufBufs() [small_buf_msg_count][small_buf_msg_len]u8 {
+    var bufs: [small_buf_msg_count][small_buf_msg_len]u8 = undefined;
+    for (0..small_buf_msg_count) |i| {
+        @memset(&bufs[i], @as(u8, @truncate('A' + i)));
+    }
+    return bufs;
+}
+
+const small_buf_bufs = makeSmallBufBufs();
+pub const small_buf_slices = makeSmallBufSlices();
+
+fn makeSmallBufSlices() [small_buf_msg_count][]const u8 {
+    var slices: [small_buf_msg_count][]const u8 = undefined;
+    for (0..small_buf_msg_count) |i| {
+        slices[i] = &small_buf_bufs[i];
+    }
+    return slices;
+}
+
+/// Server that detects re-entrant onMessage dispatch via pauseReads/resumeReads.
+pub const ReentrancyDetectServer = ws.Server(
+    server_handlers.ReentrancyDetectHandler,
+    default_read_buf_size,
+    default_pool_buf_size,
+);
+pub const ReentrancyDetectTestServer = server_runner.ServerRunner(ReentrancyDetectServer);
+
+pub fn startReentrancyDetectServer(
+    allocator: std.mem.Allocator,
+    ctx: *server_handlers.ReentrancyDetectHandler.Context,
+) !*ReentrancyDetectTestServer {
+    return try ReentrancyDetectTestServer.start(allocator, .{
+        .address = localhost,
+        .handler_context = ctx,
+    });
+}

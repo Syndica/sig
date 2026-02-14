@@ -27,7 +27,7 @@ const BufferPool = buffer.BufferPool;
 ///                   │                      │                 │
 ///                   ├── data() ────────────┤                 │
 ///                   │  (start..pos)        │                 │
-///                                          ├─ readSlice() ──┤
+///                                          ├─ readSlice() ───┤
 ///                                          │  (pos..buf.len) │
 /// ```
 ///
@@ -119,14 +119,31 @@ pub fn Reader(comptime role: types.Role) type {
 
         /// Writable slice for xev TCP read, returns a slice with len > 0.
         pub fn readSlice(self: *ReaderSelf) error{OutOfMemory}![]u8 {
-            // In normal operation the buffer is never full here — nextMessage()
-            // ensures capacity after parsing each frame header. The isFull()
-            // check is purely defensive.
-            if (self.isFull()) {
-                self.compact();
-                if (self.isFull()) {
-                    self.requireCapacity(self.capacity() * 2) catch return error.OutOfMemory;
+            const tail_free = self.availableSpace();
+
+            if (self.start > 0) {
+                // Hybrid reclaim heuristic: compact early when tail free space is
+                // small (to avoid a tiny read), but only if shifting is
+                // amortized-cheap (`start >= live_len`).
+                const compact_threshold = @max(1, self.capacity() / 16);
+                if (tail_free > 0 and
+                    tail_free <= compact_threshold and
+                    self.start >= self.dataLen())
+                {
+                    self.compact();
+                } else if (tail_free == 0) {
+                    // Buffer full but has consumed bytes at front — reclaim them.
+                    self.compact();
                 }
+            }
+
+            // Ensure a writable tail exists (len > 0).
+            // This is an unusual case because nextMessage will be consuming data and advancing
+            // start/pos and calling requireCapacity as needed. But if the caller just calls
+            // readSlice repeatedly without calling nextMessage then we must grow the buffer
+            // to avoid returning an empty slice.
+            if (self.availableSpace() == 0) {
+                self.requireCapacity(self.capacity() * 2) catch return error.OutOfMemory;
             }
             return self.buf[self.pos..];
         }
@@ -256,6 +273,19 @@ pub fn Reader(comptime role: types.Role) type {
             return self.pos - self.start;
         }
 
+        /// Number of writable bytes at the tail of the buffer.
+        pub fn availableSpace(self: *const ReaderSelf) usize {
+            return self.buf.len - self.pos;
+        }
+
+        /// Reclaim consumed bytes at the front of the buffer by compacting,
+        /// but only when the buffer is completely full. Does not allocate.
+        pub fn compactIfFull(self: *ReaderSelf) void {
+            if (self.pos >= self.buf.len and self.start > 0) {
+                self.compact();
+            }
+        }
+
         /// Total size of the current buffer.
         fn capacity(self: *const ReaderSelf) usize {
             return self.buf.len;
@@ -271,9 +301,8 @@ pub fn Reader(comptime role: types.Role) type {
         /// to pooled or dynamic buffer.
         fn requireCapacity(self: *ReaderSelf, required: usize) !void {
             // If current capacity is sufficient, compact to make free space
-            // contiguous at the end. No half-buffer heuristic here — the only
-            // caller (nextMessage) has already consumed previous frames, so
-            // start is always large enough that compaction is worthwhile.
+            // contiguous at the end. No heuristic here since we've already
+            // determined the capacity required.
             if (required <= self.capacity()) {
                 self.compact();
                 return;
@@ -362,6 +391,76 @@ test "Reader: init with embedded buffer" {
     try testing.expectEqual(ServerReader.BufferType.embedded, reader.buf_type);
     try testing.expectEqual(@as(usize, 0), reader.pos);
     try testing.expectEqual(@as(usize, 64), (try reader.readSlice()).len);
+}
+
+test "Reader: availableSpace after init" {
+    var pool = BufferPool.init(testing.allocator, 256);
+    defer pool.deinit();
+
+    var embedded_buf: [64]u8 = undefined;
+    var reader = ServerReader.init(&embedded_buf, &pool, testing.allocator, 1024);
+    defer reader.deinit();
+
+    try testing.expectEqual(@as(usize, embedded_buf.len), reader.availableSpace());
+}
+
+test "Reader: availableSpace after advancePos" {
+    var pool = BufferPool.init(testing.allocator, 256);
+    defer pool.deinit();
+
+    var embedded_buf: [64]u8 = undefined;
+    var reader = ServerReader.init(&embedded_buf, &pool, testing.allocator, 1024);
+    defer reader.deinit();
+
+    reader.advancePos(10);
+    try testing.expectEqual(@as(usize, embedded_buf.len - 10), reader.availableSpace());
+}
+
+test "Reader: availableSpace when full" {
+    var pool = BufferPool.init(testing.allocator, 256);
+    defer pool.deinit();
+
+    var embedded_buf: [64]u8 = undefined;
+    var reader = ServerReader.init(&embedded_buf, &pool, testing.allocator, 1024);
+    defer reader.deinit();
+
+    reader.pos = embedded_buf.len;
+    try testing.expectEqual(@as(usize, 0), reader.availableSpace());
+}
+
+test "Reader: compactIfFull reclaims consumed bytes" {
+    var pool = BufferPool.init(testing.allocator, 256);
+    defer pool.deinit();
+
+    var embedded_buf: [16]u8 = undefined;
+    var reader = ServerReader.init(&embedded_buf, &pool, testing.allocator, 1024);
+    defer reader.deinit();
+
+    // Simulate full buffer with 6 bytes already consumed.
+    reader.start = 6;
+    reader.pos = embedded_buf.len;
+
+    reader.compactIfFull();
+    try testing.expectEqual(@as(usize, 6), reader.availableSpace());
+    try testing.expectEqual(@as(usize, 0), reader.start);
+    try testing.expectEqual(@as(usize, 10), reader.pos);
+}
+
+test "Reader: compactIfFull does nothing when not full" {
+    var pool = BufferPool.init(testing.allocator, 256);
+    defer pool.deinit();
+
+    var embedded_buf: [16]u8 = undefined;
+    var reader = ServerReader.init(&embedded_buf, &pool, testing.allocator, 1024);
+    defer reader.deinit();
+
+    // Buffer has consumed bytes but is not full — should not compact.
+    reader.start = 4;
+    reader.pos = 10;
+
+    reader.compactIfFull();
+    try testing.expectEqual(@as(usize, 4), reader.start);
+    try testing.expectEqual(@as(usize, 10), reader.pos);
 }
 
 test "Reader: requireCapacity upgrades to pooled" {
@@ -698,6 +797,44 @@ test "Reader.nextMessage: readSlice grows when full" {
     // readSlice should compact/grow instead of failing
     const slice = try reader.readSlice();
     try testing.expect(slice.len > 0);
+}
+
+test "Reader.nextMessage: readSlice compacts early when tail is tiny" {
+    var pool = BufferPool.init(testing.allocator, 256);
+    defer pool.deinit();
+
+    var embedded_buf: [64]u8 = undefined;
+    var reader = testReader(&embedded_buf, &pool, 1024);
+    defer reader.deinit();
+
+    // Remaining tail = 2 bytes, reclaimable consumed prefix = 40 bytes.
+    // Heuristic should compact before we hit a full buffer.
+    reader.start = 40;
+    reader.pos = 62;
+
+    const slice = try reader.readSlice();
+    try testing.expectEqual(@as(usize, 0), reader.start);
+    try testing.expectEqual(@as(usize, 22), reader.pos);
+    try testing.expectEqual(@as(usize, 42), slice.len);
+}
+
+test "Reader.nextMessage: readSlice does not compact early when tail is ample" {
+    var pool = BufferPool.init(testing.allocator, 256);
+    defer pool.deinit();
+
+    var embedded_buf: [64]u8 = undefined;
+    var reader = testReader(&embedded_buf, &pool, 1024);
+    defer reader.deinit();
+
+    // start >= live_len holds (40 >= 10), but tail (14 bytes) is not tiny,
+    // so early compaction should not run.
+    reader.start = 40;
+    reader.pos = 50;
+
+    const slice = try reader.readSlice();
+    try testing.expectEqual(@as(usize, 40), reader.start);
+    try testing.expectEqual(@as(usize, 50), reader.pos);
+    try testing.expectEqual(@as(usize, 14), slice.len);
 }
 
 test "Reader.nextMessage: readSlice compacts before growing" {

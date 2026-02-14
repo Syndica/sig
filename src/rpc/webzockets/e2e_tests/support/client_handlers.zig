@@ -347,3 +347,241 @@ pub const SequenceHandler = struct {
         }
     }
 };
+
+/// Client-side handler that pauses reads on open and waits for enough data
+/// to accumulate in the read buffer before resuming. Uses `onBytesRead` to
+/// observe raw TCP data arrival while paused. This makes burst-processing
+/// tests deterministic by ensuring all expected messages are buffered before
+/// dispatch begins.
+pub const PauseUntilBufferedClientHandler = struct {
+    pub const RecvResult = struct {
+        data: []const u8,
+    };
+
+    allocator: std.mem.Allocator,
+    /// Number of messages expected before closing. 0 = don't auto-close.
+    expected_messages: usize = 0,
+    /// Minimum bytes that must be buffered before reads are resumed.
+    resume_threshold: usize = 0,
+    results: std.ArrayList(RecvResult),
+    open_called: bool = false,
+    close_called: bool = false,
+
+    pub fn deinit(self: *PauseUntilBufferedClientHandler) void {
+        for (self.results.items) |item| {
+            self.allocator.free(item.data);
+        }
+        self.results.deinit();
+    }
+
+    pub fn onOpen(self: *PauseUntilBufferedClientHandler, conn: anytype) void {
+        self.open_called = true;
+        conn.pauseReads();
+    }
+
+    pub fn onBytesRead(self: *PauseUntilBufferedClientHandler, conn: anytype, _: usize) void {
+        if (conn.peekBufferedBytes().len >= self.resume_threshold) {
+            conn.resumeReads();
+        }
+    }
+
+    pub fn onMessage(
+        self: *PauseUntilBufferedClientHandler,
+        conn: anytype,
+        message: ws.Message,
+    ) void {
+        switch (message.type) {
+            .text, .binary => {},
+            else => return,
+        }
+
+        const copy = self.allocator.dupe(u8, message.data) catch return;
+        self.results.append(.{ .data = copy }) catch {
+            self.allocator.free(copy);
+            return;
+        };
+
+        if (self.expected_messages != 0 and self.results.items.len >= self.expected_messages) {
+            conn.close(.normal, "done");
+        }
+    }
+
+    pub fn onWriteComplete(_: *PauseUntilBufferedClientHandler, _: anytype) void {}
+
+    pub fn onClose(self: *PauseUntilBufferedClientHandler, _: anytype) void {
+        self.close_called = true;
+    }
+};
+
+/// Client-side handler that pauses on open, waits for a byte threshold, then
+/// resumes. After the initial resume, each onMessage pauses reads, records the
+/// message, sends an echo/ack, and resumes in onWriteComplete. This tests the
+/// processMessages loop breaking when read_paused is set mid-loop, and
+/// re-entering from onWriteComplete via resumeReads.
+pub const PauseMidStreamClientHandler = struct {
+    pub const RecvResult = struct {
+        data: []const u8,
+    };
+
+    allocator: std.mem.Allocator,
+    expected_messages: usize = 0,
+    resume_threshold: usize = 0,
+    results: std.ArrayList(RecvResult),
+    sent_data: ?[]u8 = null,
+    initial_resumed: bool = false,
+    open_called: bool = false,
+    close_called: bool = false,
+
+    pub fn deinit(self: *PauseMidStreamClientHandler) void {
+        for (self.results.items) |item| {
+            self.allocator.free(item.data);
+        }
+        self.results.deinit();
+
+        if (self.sent_data) |data| {
+            self.allocator.free(data);
+            self.sent_data = null;
+        }
+    }
+
+    pub fn onOpen(self: *PauseMidStreamClientHandler, conn: anytype) void {
+        self.open_called = true;
+        conn.pauseReads();
+    }
+
+    pub fn onBytesRead(self: *PauseMidStreamClientHandler, conn: anytype, _: usize) void {
+        if (!self.initial_resumed and conn.peekBufferedBytes().len >= self.resume_threshold) {
+            self.initial_resumed = true;
+            conn.resumeReads();
+        }
+    }
+
+    pub fn onMessage(self: *PauseMidStreamClientHandler, conn: anytype, message: ws.Message) void {
+        switch (message.type) {
+            .text, .binary => {},
+            else => return,
+        }
+
+        conn.pauseReads();
+
+        const copy = self.allocator.dupe(u8, message.data) catch {
+            conn.resumeReads();
+            return;
+        };
+        self.results.append(.{ .data = copy }) catch {
+            self.allocator.free(copy);
+            conn.resumeReads();
+            return;
+        };
+
+        // Send an ack to trigger onWriteComplete where we resume reads.
+        const ack = self.allocator.dupe(u8, message.data) catch {
+            conn.resumeReads();
+            return;
+        };
+
+        conn.sendText(ack) catch {
+            self.allocator.free(ack);
+            conn.resumeReads();
+            return;
+        };
+
+        self.sent_data = ack;
+    }
+
+    pub fn onWriteComplete(self: *PauseMidStreamClientHandler, conn: anytype) void {
+        if (self.sent_data) |data| {
+            self.allocator.free(data);
+            self.sent_data = null;
+        }
+
+        if (self.expected_messages != 0 and self.results.items.len >= self.expected_messages) {
+            conn.close(.normal, "done");
+            return;
+        }
+
+        conn.resumeReads();
+    }
+
+    pub fn onClose(self: *PauseMidStreamClientHandler, _: anytype) void {
+        self.close_called = true;
+        if (self.sent_data) |data| {
+            self.allocator.free(data);
+            self.sent_data = null;
+        }
+    }
+};
+
+/// Client-side handler that detects re-entrant onMessage dispatch.
+///
+/// Pauses reads in onOpen and waits (via onBytesRead + peekBufferedBytes)
+/// until all expected messages are buffered. Once resumed, all messages
+/// dispatch synchronously. In each onMessage the handler calls
+/// pauseReads() then resumeReads() — without the re-entrancy guard this
+/// would recursively dispatch the next buffered message while still inside
+/// onMessage. Closes with policy_violation if re-entrancy is detected.
+pub const ReentrancyDetectClientHandler = struct {
+    pub const RecvResult = struct {
+        data: []const u8,
+    };
+
+    allocator: std.mem.Allocator,
+    /// Minimum bytes that must be buffered before reads are resumed.
+    resume_threshold: usize = 0,
+    results: std.ArrayList(RecvResult),
+    in_on_message: bool = false,
+    reentrant_detected: bool = false,
+    open_called: bool = false,
+    close_called: bool = false,
+
+    pub fn deinit(self: *ReentrancyDetectClientHandler) void {
+        for (self.results.items) |item| {
+            self.allocator.free(item.data);
+        }
+        self.results.deinit();
+    }
+
+    pub fn onOpen(self: *ReentrancyDetectClientHandler, conn: anytype) void {
+        self.open_called = true;
+        conn.pauseReads();
+    }
+
+    pub fn onBytesRead(self: *ReentrancyDetectClientHandler, conn: anytype, _: usize) void {
+        if (conn.peekBufferedBytes().len >= self.resume_threshold) {
+            conn.resumeReads();
+        }
+    }
+
+    pub fn onMessage(self: *ReentrancyDetectClientHandler, conn: anytype, message: ws.Message) void {
+        switch (message.type) {
+            .text, .binary => {},
+            else => return,
+        }
+
+        if (self.in_on_message) {
+            self.reentrant_detected = true;
+            conn.close(.policy_violation, "reentrant");
+            return;
+        }
+        self.in_on_message = true;
+        defer self.in_on_message = false;
+
+        const copy = self.allocator.dupe(u8, message.data) catch return;
+        self.results.append(.{ .data = copy }) catch {
+            self.allocator.free(copy);
+            return;
+        };
+
+        // Exercise the re-entrancy guard: without it, resumeReads() would
+        // recursively call processMessages() and dispatch the next buffered
+        // message before we return.
+        conn.pauseReads();
+        conn.resumeReads();
+    }
+
+    pub fn onWriteComplete(_: *ReentrancyDetectClientHandler, _: anytype) void {}
+
+    pub fn onClose(self: *ReentrancyDetectClientHandler, _: anytype) void {
+        self.close_called = true;
+    }
+};

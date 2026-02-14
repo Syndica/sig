@@ -34,6 +34,18 @@ pub const ConnectFailHandler = client_handlers.ConnectFailHandler;
 /// Client-side handler that explicitly manages pong responses via onPing.
 pub const ExplicitPongHandler = client_handlers.ExplicitPongHandler;
 
+/// Client-side handler that pauses reads on open and waits for enough data
+/// to buffer before resuming. Used for deterministic burst-processing tests.
+pub const PauseUntilBufferedClientHandler = client_handlers.PauseUntilBufferedClientHandler;
+
+/// Client-side handler that pauses on open, threshold-resumes, then pauses
+/// per-message with resume in onWriteComplete.
+pub const PauseMidStreamClientHandler = client_handlers.PauseMidStreamClientHandler;
+
+/// Client-side handler that detects re-entrant onMessage dispatch via
+/// pauseReads/resumeReads while messages are buffered.
+pub const ReentrancyDetectClientHandler = client_handlers.ReentrancyDetectClientHandler;
+
 /// WebSocket client type paired with `EchoTestHandler`.
 pub const TestEchoClient = ws.Client(EchoTestHandler, 4096);
 
@@ -60,6 +72,18 @@ pub const TestConnectFailClient = ws.Client(ConnectFailHandler, 4096);
 
 /// WebSocket client type for explicit pong handler tests.
 pub const TestExplicitPongClient = ws.Client(ExplicitPongHandler, 4096);
+
+/// WebSocket client type for deterministic pause-until-buffered tests.
+pub const TestPauseUntilBufferedClient = ws.Client(PauseUntilBufferedClientHandler, 4096);
+
+/// WebSocket client type for deterministic pause-until-buffered tests with small read buffer.
+pub const TestPauseUntilBufferedSmallBufClient = ws.Client(PauseUntilBufferedClientHandler, 256);
+
+/// WebSocket client type for pause-mid-stream tests.
+pub const TestPauseMidStreamClient = ws.Client(PauseMidStreamClientHandler, 4096);
+
+/// WebSocket client type for re-entrancy detection tests.
+pub const TestReentrancyDetectClient = ws.Client(ReentrancyDetectClientHandler, 4096);
 
 /// Default buffer pool config used across all e2e tests.
 const default_pool_buf_size: usize = 64 * 1024;

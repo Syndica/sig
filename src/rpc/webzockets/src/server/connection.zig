@@ -33,6 +33,10 @@ const ControlQueue = @import("../control_queue.zig").ControlQueue;
 ///     payload is used (permitted by RFC 6455 §5.5.3). Implement `onPing`
 ///     if you need to respond to every ping.
 ///   - `onPong(*Handler, *Conn, []const u8)` — pong received.
+///   - `onBytesRead(*Handler, *Conn, usize)` — raw TCP data received.
+///     Fires on every read completion regardless of whether reads are paused.
+///     `usize` parameter is the number of bytes received. Combine with
+///     `peekBufferedBytes()` to inspect raw data as it arrives.
 ///
 /// All data slices passed to read callbacks point into internal buffers and are
 /// only valid for the duration of that callback.
@@ -59,6 +63,12 @@ pub fn Connection(
         socket: xev.TCP,
         allocator: std.mem.Allocator,
         config: Config,
+        /// When true all message bytes received are buffered (up to current reader capacity)
+        /// but onMessage/onPing/onPong/close-frame handling is deferred until reads
+        /// are resumed.
+        read_paused: bool,
+        /// Re-entrancy guard: true while processMessages is on the call stack.
+        in_process_messages: bool,
 
         // -- Tiered read buffer management --
         reader: Reader,
@@ -98,6 +108,7 @@ pub fn Connection(
             const on_open = @hasDecl(Handler, "onOpen");
             const on_ping = @hasDecl(Handler, "onPing");
             const on_pong = @hasDecl(Handler, "onPong");
+            const on_bytes_read = @hasDecl(Handler, "onBytesRead");
         };
 
         pub const List = std.DoublyLinkedList(*ConnectionSelf);
@@ -232,6 +243,8 @@ pub fn Connection(
             self.close_timer_completion = .{};
             self.close_timer_cancel_completion = .{};
             self.received_data = false;
+            self.read_paused = false;
+            self.in_process_messages = false;
         }
 
         /// Begin the WebSocket protocol phase. Sets the reader position to
@@ -324,6 +337,29 @@ pub fn Connection(
             self.cancelTimer(&self.idle_timer_completion, &self.idle_timer_cancel_completion);
         }
 
+        /// Pause frame dispatch. While paused, onMessage/onPing/onPong/close-frame
+        /// handling stops until `resumeReads()` is called. TCP reads continue until
+        /// read buffer is full, but will not grow the buffer while paused.
+        pub fn pauseReads(self: *ConnectionSelf) void {
+            self.read_paused = true;
+        }
+
+        /// Resume frame dispatch and drain any already-buffered frames, this will
+        /// cause onMessage/onPing/onPong/close-frame handling to resume.
+        pub fn resumeReads(self: *ConnectionSelf) void {
+            if (self.state == .closed or !self.read_paused) return;
+            self.read_paused = false;
+            self.processMessages();
+        }
+
+        /// Peek at the raw bytes currently buffered in the reader (received
+        /// from TCP but not yet consumed as websocket frames). The returned
+        /// slice points into an internal buffer and may be invalidated as soon
+        /// as the xev loop ticks again.
+        pub fn peekBufferedBytes(self: *ConnectionSelf) []const u8 {
+            return self.reader.buf[self.reader.start..self.reader.pos];
+        }
+
         /// Perform the state transition and close frame enqueue.
         /// Ensures the close-handshake timer is running.
         fn initiateClose(self: *ConnectionSelf, code: types.CloseCode, reason: []const u8) void {
@@ -357,6 +393,21 @@ pub fn Connection(
         // ====================================================================
         // Read path
         // ====================================================================
+
+        /// Arm another socket read when legal; while paused this continues
+        /// filling the read buffer until it has no free space.
+        fn maybeReadMore(self: *ConnectionSelf) void {
+            if (self.state == .closed or self.write.peer_caused_close) return;
+            if (self.read_completion.state() == .active) return;
+            if (self.read_paused) {
+                // Reclaim consumed bytes if buffer is full so we can buffer as much as
+                // possible without growing the read buffer.
+                self.reader.compactIfFull();
+                // If still full then just return to avoid growing the buffer
+                if (self.reader.availableSpace() == 0) return;
+            }
+            self.startRead();
+        }
 
         fn startRead(self: *ConnectionSelf) void {
             const slice = self.reader.readSlice() catch |err| {
@@ -403,6 +454,15 @@ pub fn Connection(
             self.received_data = true;
             self.reader.advancePos(bytes_read);
 
+            if (comptime has.on_bytes_read) {
+                self.user_handler.onBytesRead(self, bytes_read);
+            }
+
+            if (self.read_paused) {
+                self.maybeReadMore();
+                return .disarm;
+            }
+
             switch (self.state) {
                 .open, .closing => self.processMessages(),
                 .closed => {},
@@ -416,6 +476,18 @@ pub fn Connection(
         // ====================================================================
 
         fn processMessages(self: *ConnectionSelf) void {
+            // Re-entrancy guard: prevents recursion into processMessages() when a handler
+            // calls resumeReads()
+            if (self.in_process_messages) return;
+
+            if (self.read_paused) {
+                self.maybeReadMore();
+                return;
+            }
+
+            self.in_process_messages = true;
+            defer self.in_process_messages = false;
+
             while (true) {
                 const maybe_msg = self.reader.nextMessage() catch |err| {
                     log.debug("nextMessage failed: {}", .{err});
@@ -452,14 +524,12 @@ pub fn Connection(
                         if (self.state == .closed) return;
                     },
                 }
-                if (self.state == .closed) return;
+                if (self.state == .closed or self.read_paused) break;
             }
             // Only start a new read if we're still active.
             // When peer_caused_close is set, we're echoing the peer's close frame
             // and will disconnect as soon as the write completes — no need to read more.
-            if ((self.state == .open or self.state == .closing) and !self.write.peer_caused_close) {
-                self.startRead();
-            }
+            self.maybeReadMore();
         }
 
         /// Send a close frame with the given code and disconnect.

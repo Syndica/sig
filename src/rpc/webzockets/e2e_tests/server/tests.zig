@@ -10,6 +10,7 @@ comptime {
 
     // Messaging
     _ = @import("echo_tests.zig");
+    _ = @import("pause_resume_tests.zig");
     _ = @import("buffer_tier_tests.zig");
 
     // Resources
