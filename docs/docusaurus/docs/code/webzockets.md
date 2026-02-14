@@ -119,7 +119,6 @@ src/
 ├── frame.zig             Frame parsing/encoding (RFC 6455 §5)
 ├── http.zig              HTTP parsing/encoding
 ├── reader.zig            Frame reader with buffer management
-├── buffer.zig            Buffer pool for large messages
 ├── control_queue.zig     Ring buffer for outbound control frames
 ├── server/
 │   ├── server.zig        TCP listener, accept loop, graceful shutdown
@@ -144,9 +143,8 @@ autobahn/                 Autobahn conformance suite runners
 ### Server Config
 
 ```zig
-const EchoServer = ws.Server(EchoHandler, 4096, 64 * 1024);
-//                           Handler     ^read  ^pool buffer
-//                                       buf sz  size
+const EchoServer = ws.Server(EchoHandler, 4096);
+//                           Handler     ^read buf sz
 
 const Config = struct {
     address: std.net.Address,
@@ -156,7 +154,6 @@ const Config = struct {
     initial_connection_pool_size: usize = 64,
     max_handshakes: ?usize = null,
     max_connections: ?usize = null,
-    buffer_pool_preheat: usize = 8,
     idle_timeout_ms: ?u32 = null,
     close_timeout_ms: u32 = 5_000,
     handler_context: …,  // if Handler.Context != void: *Handler.Context, else: void ({})
@@ -177,7 +174,7 @@ const Config = struct {
 };
 ```
 
-The client is a transient value type. `init` doesn't allocate. Caller provides a `*ClientConnection`, allocator, `*BufferPool`, and `*ClientMaskPRNG`:
+The client is a transient value type. `init` doesn't allocate. Caller provides a `*ClientConnection`, allocator, and `*ClientMaskPRNG`:
 
 ```zig
 var seed: [ws.ClientMaskPRNG.secret_seed_length]u8 = undefined;
@@ -185,7 +182,7 @@ std.crypto.random.bytes(&seed);
 var csprng = ws.ClientMaskPRNG.init(seed);
 
 var conn: SimpleClient.Conn = undefined;
-var client = SimpleClient.init(allocator, &loop, &handler, &conn, &buf_pool, &csprng, .{
+var client = SimpleClient.init(allocator, &loop, &handler, &conn, &csprng, .{
     .address = std.net.Address.parseIp4("127.0.0.1", 8080) catch unreachable,
     .path = "/",
     .max_message_size = 16 * 1024 * 1024,
@@ -208,6 +205,9 @@ fn onOpen(self: *Handler, conn: *Conn) void
 fn onPing(self: *Handler, conn: *Conn, data: []const u8) void
 fn onPong(self: *Handler, conn: *Conn, data: []const u8) void
 
+// Optional
+fn onBytesRead(self: *Handler, conn: *Conn, bytes_read: usize) void
+
 // Optional (client-only)
 fn onSocketClose(self: *Handler) void
 
@@ -221,16 +221,21 @@ fn init(request: http.Request, context: if (Context == void) void else *Context)
 
 If `onPing` is not declared, auto-pong replies with latest-wins semantics. If declared, auto-pong is disabled — handler must call `conn.sendPong()`.
 
+`onBytesRead` fires on every TCP read completion regardless of whether reads are paused. Combine with `peekBufferedBytes()` to observe raw data arrival (e.g. for byte-counting or deciding when to pause).
+
 Server `init` runs before 101. Return error to reject. `onHandshakeFailed` fires if the handshake fails after `init` succeeds (pool exhaustion, write error, shutdown); use it to clean up `init`-allocated resources.
 
 ### Connection Methods
 
 ```zig
-fn sendText(data) !void    // server: []const u8 (zero-copy), client: []u8 (zero-copy, masked in-place)
-fn sendBinary(data) !void  // same as above
-fn sendPing(data) !void    // copies internally, max 125 bytes
-fn sendPong(data) !void    // copies internally, max 125 bytes
+fn sendText(data) !void          // server: []const u8 (zero-copy), client: []u8 (zero-copy, masked in-place)
+fn sendBinary(data) !void        // same as above
+fn sendPing(data) !void          // copies internally, max 125 bytes
+fn sendPong(data) !void          // copies internally, max 125 bytes
 fn close(code: CloseCode, reason: []const u8) void
+fn pauseReads() void             // pause frame dispatch; TCP reads continue until buffer full
+fn resumeReads() void            // resume dispatch; drains buffered frames
+fn peekBufferedBytes() []const u8 // raw bytes in read buffer (transient slice)
 ```
 
 ## Tests
