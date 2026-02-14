@@ -1,24 +1,28 @@
 //! [fd](https://github.com/firedancer-io/firedancer/blob/33538d35a623675e66f38f77d7dc86c1ba43c935/src/flamenco/runtime/program/zksdk/instructions/fd_zksdk_pubkey_validity.c)
-//! [agave](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/zk-sdk/src/sigma_proofs/pubkey.rs)
+//! [agave](https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/pubkey_validity.rs)
 
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
+const ed25519 = sig.crypto.ed25519;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
-const pedersen = sig.zksdk.pedersen;
 const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
 const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
+const pedersen = sig.zksdk.pedersen;
+const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
-const ed25519 = sig.crypto.ed25519;
-const ProofType = sig.runtime.program.zk_elgamal.ProofType;
+const DomainSeperator = Transcript.DomainSeperator;
 
 pub const Proof = struct {
     Y: Ristretto255,
     z: Scalar,
 
     const contract: Transcript.Contract = &.{
+        .{ .label = "pubkey", .type = .validate_pubkey },
+        .domain(.@"pubkey-proof"),
+
         .{ .label = "Y", .type = .validate_point },
         .{ .label = "c", .type = .challenge },
     };
@@ -27,7 +31,11 @@ pub const Proof = struct {
         kp: *const ElGamalKeypair,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendDomSep(.@"pubkey-proof");
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
+
+        transcript.appendNoValidate(&session, .pubkey, "pubkey", kp.public);
+        transcript.appendDomSep(&session, .@"pubkey-proof");
 
         const s = kp.secret.scalar;
         std.debug.assert(!s.isZero());
@@ -37,14 +45,12 @@ pub const Proof = struct {
         var y = Scalar.random();
         defer std.crypto.secureZero(u64, &y.limbs);
 
-        // Scalar.random() cannot return zero, and H isn't an identity
         const Y = ed25519.straus.mulByKnown(pedersen.H, y.toBytes());
 
-        comptime var session = Transcript.getSession(contract);
-        defer session.finish();
-
-        transcript.appendNoValidate(&session, "Y", Y);
+        transcript.appendNoValidate(&session, .point, "Y", Y);
         const c = transcript.challengeScalar(&session, "c");
+
+        // Compute the masked secret key
         const z = c.mul(s_inv).add(y);
 
         return .{
@@ -58,14 +64,15 @@ pub const Proof = struct {
         pubkey: *const ElGamalPubkey,
         transcript: *Transcript,
     ) !void {
-        transcript.appendDomSep(.@"pubkey-proof");
-
-        // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/8c84822593d393c2305eea917fdffd1ec2525aa7/zk-sdk/src/sigma_proofs/pubkey_validity.rs#L107-L109
-        try pubkey.point.rejectIdentity();
-
         comptime var session = Transcript.getSession(contract);
         defer session.finish();
 
+        // Setup
+        // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/pubkey_validity.rs#L102-L104
+        try transcript.append(&session, .validate_pubkey, "pubkey", pubkey.*);
+        transcript.appendDomSep(&session, .@"pubkey-proof");
+
+        // Retrieve the challenge scalar.
         try transcript.append(&session, .validate_point, "Y", self.Y);
         const c = transcript.challengeScalar(&session, "c");
 
@@ -75,13 +82,15 @@ pub const Proof = struct {
         // ----------------------- MSM
         //     Y
 
+        // zig fmt: off
         const check = ed25519.mulMulti(2, .{
             pedersen.H,
             pubkey.point,
         }, .{
-            self.z.toBytes(),
-            Edwards25519.scalar.neg(c.toBytes()),
+            self.z.toBytes(),                     //  z
+            Edwards25519.scalar.neg(c.toBytes()), // -c
         });
+        // zig fmt: on
 
         if (!self.Y.equivalent(check)) {
             return error.AlgebraicRelation;
@@ -120,6 +129,7 @@ pub const Data = struct {
 
     pub const TYPE: ProofType = .pubkey_validity;
     pub const BYTE_LEN = 96;
+    const DOMAIN: DomainSeperator = .@"pubkey-validity-instruction";
 
     pub const Context = struct {
         pubkey: ElGamalPubkey,
@@ -133,17 +143,11 @@ pub const Data = struct {
         pub fn toBytes(self: Context) [32]u8 {
             return self.pubkey.toBytes();
         }
-
-        fn newTranscript(self: Context) Transcript {
-            return .init(.@"pubkey-validity-instruction", &.{
-                .{ .label = "pubkey", .message = .{ .pubkey = self.pubkey } },
-            });
-        }
     };
 
     pub fn init(kp: *const ElGamalKeypair) Data {
         const context: Context = .{ .pubkey = kp.public };
-        var transcript = context.newTranscript();
+        var transcript = Transcript.init(DOMAIN);
         const proof = Proof.init(kp, &transcript);
         return .{ .context = context, .proof = proof };
     }
@@ -161,11 +165,8 @@ pub const Data = struct {
     }
 
     pub fn verify(self: Data) !void {
-        var transcript = self.context.newTranscript();
-        try self.proof.verify(
-            &self.context.pubkey,
-            &transcript,
-        );
+        var transcript = Transcript.init(DOMAIN);
+        try self.proof.verify(&self.context.pubkey, &transcript);
     }
 
     test "correctness" {
@@ -201,13 +202,13 @@ test "incorrect pubkey" {
 }
 
 test "proof string" {
-    const pubkey_string = "XKF3GnFDX4HBoBEj04yDTr6Lqx+0qp9pQyPzFjyVmXY=";
+    const pubkey_string = "lhKgvZ+xRsKTR7wfKNlpltvPZk0Pc5MfpyVlqRmDcAk=";
     const pubkey = try ElGamalPubkey.fromBase64(pubkey_string);
 
-    // zig fmt: off
-    const proof_string = "5hmM4uVtfJ2JfCcjWpo2dEbg22n4CdzHYQF4oBgWSGeYAh5d91z4emkjeXq9ihtmqAR+7BYCv44TqQWoMQrECA==";
+    // sig fmt: off
+    const proof_string = "utgoLBANuVRtvN7YyZrUwz0dZL+ObsDlRpJdb6erXiQZWCtkvRbSJ8mSBKPvkahHunah80JooQWqhFQXkOCWBw==";
     const proof = try Proof.fromBase64(proof_string);
-    // zig fmt: on
+    // sig fmt: on
 
     var verifier_transcript = Transcript.initTest("test");
     try proof.verify(&pubkey, &verifier_transcript);
