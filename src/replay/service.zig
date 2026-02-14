@@ -208,10 +208,11 @@ pub const ReplayState = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "ReplayState init" });
         defer zone.deinit();
 
-        var slot_tracker: SlotTracker = try .init(deps.allocator, deps.root.slot, .{
-            .constants = deps.root.constants,
-            .state = deps.root.state,
-        });
+        var slot_tracker: SlotTracker = try .init(
+            deps.allocator,
+            deps.root.slot,
+            .{ .constants = deps.root.constants, .state = deps.root.state },
+        );
         errdefer slot_tracker.deinit(deps.allocator);
         errdefer {
             // do not free the root slot data parameter, we don't own it unless the function returns successfully
@@ -324,7 +325,7 @@ pub fn trackNewSlots(
     var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
     defer zone.deinit();
 
-    const root = slot_tracker.root;
+    const root = slot_tracker.root.load(.monotonic);
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
 
@@ -584,11 +585,25 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
 
 /// bypass the tower bft consensus protocol, simply rooting slots with SlotTree.reRoot
 fn bypassConsensus(state: *ReplayState) !void {
+    // NOTE: Processed slot semantics differ from Agave when Sig is in bypass-consensus mode.
+    // In bypass mode, `latest_processed_slot` is set to the highest slot among all fork
+    // leaves (SlotTree.tip()).
+    //
+    // This differs from Agave's behavior: the processed slot is only updated
+    // when `vote_bank.is_some()` (i.e., when the validator has selected a bank
+    // to vote on after passing all consensus checks like lockout, threshold, and
+    // switch proof). If the validator is locked out or fails
+    // threshold checks, the processed slot is NOT updated and can go stale.
+    // See: https://github.com/anza-xyz/agave/blob/5e900421520a10933642d5e9a21e191a70f9b125/core/src/replay_stage.rs#L2683
+    //
+    // TowerConsensus implements Agave's processed slot semantics when consensus is enabled.
+    state.slot_tracker.latest_processed_slot.set(state.slot_tree.tip());
+
     if (state.slot_tree.reRoot(state.allocator)) |new_root| {
         const slot_tracker = &state.slot_tracker;
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
-        slot_tracker.root = new_root;
+        slot_tracker.root.store(new_root, .monotonic);
         slot_tracker.pruneNonRooted(state.allocator);
 
         try state.status_cache.addRoot(state.allocator, new_root);
@@ -793,6 +808,9 @@ test trackNewSlots {
         &.{ .{ 0, 0 }, .{ 1, 0 }, .{ 2, 1 }, .{ 4, 1 }, .{ 6, 4 } },
         &.{ 3, 5 },
     );
+
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.processed));
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 fn expectSlotTracker(
@@ -916,7 +934,7 @@ test "advance calls consensus.process with empty replay results" {
     try advanceReplay(&replay_state, try registry.initStruct(Metrics), null);
 
     // No slots were replayed
-    try std.testing.expectEqual(0, replay_state.slot_tracker.root);
+    try std.testing.expectEqual(0, replay_state.slot_tracker.root.load(.monotonic));
 }
 
 test "Execute testnet block single threaded" {

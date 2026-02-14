@@ -117,7 +117,7 @@ fn markDeadSlot(
         params.allocator,
         .from(params.logger),
         dead_slot,
-        params.slot_tracker.root,
+        params.slot_tracker.root.load(.monotonic),
         params.duplicate_slots_to_repair,
         ancestor_hashes_replay_update_sender,
         dead_state,
@@ -148,7 +148,7 @@ fn markDeadSlot(
             params.allocator,
             .from(params.logger),
             dead_slot,
-            params.slot_tracker.root,
+            params.slot_tracker.root.load(.monotonic),
             params.duplicate_slots_tracker,
             params.fork_choice,
             duplicate_state,
@@ -194,7 +194,7 @@ fn updateConsensusForFrozenSlot(params: ProcessResultParams, slot: Slot) !void {
         params.allocator,
         .from(params.logger),
         slot,
-        params.slot_tracker.root,
+        params.slot_tracker.root.load(.monotonic),
         params.ledger.resultWriter(),
         params.fork_choice,
         params.duplicate_slots_to_repair,
@@ -307,7 +307,9 @@ const TestReplayStateResources = struct {
 
         self.slot_tracker = SlotTracker{
             .slots = .empty,
-            .root = 0,
+            .latest_processed_slot = .{},
+            .latest_confirmed_slot = .{},
+            .root = .init(0),
         };
 
         self.ancestor_hashes_replay_update_channel = try sig

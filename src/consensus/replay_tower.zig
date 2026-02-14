@@ -5448,10 +5448,11 @@ pub const TestFixture = struct {
             errdefer state.deinit(allocator);
             state.hash = .init(root.hash);
 
-            break :blk try .init(allocator, root.slot, .{
-                .constants = constants,
-                .state = state,
-            });
+            break :blk try .init(
+                allocator,
+                root.slot,
+                .{ .constants = constants, .state = state },
+            );
         };
         errdefer slot_tracker.deinit(allocator);
 
