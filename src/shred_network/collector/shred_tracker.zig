@@ -635,7 +635,7 @@ test "slots are not skipped when the current fork is developed" {
     try tracker.init(allocator, 1, .noop, &registry, false);
     defer tracker.deinit();
 
-    const start = Instant.EPOCH_ZERO;
+    const start: Instant = .EPOCH_ZERO;
 
     // complete slots 1 and 3, where 3 skips 2.
     try tracker.registerShred(1, 0, 0, true, start);
@@ -651,4 +651,29 @@ test "slots are not skipped when the current fork is developed" {
         _ = try tracker.identifyMissing(&msr, start.plus(.fromSecs(11)));
         try std.testing.expectEqual(2, msr.items()[0].slot);
     }
+}
+
+test "no duplicate notification when parents match" {
+    const allocator = std.testing.allocator;
+
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    const duplicate_slots_channel = try sig.sync.Channel(Slot).create(allocator);
+    defer duplicate_slots_channel.destroy();
+
+    const tracker = try allocator.create(BasicShredTracker);
+    defer allocator.destroy(tracker);
+    try tracker.init(allocator, 100, .noop, &registry, false);
+    defer tracker.deinit();
+
+    const start: Instant = .EPOCH_ZERO;
+
+    // Register multiple shreds for slot 105, all with the same parent 104
+    try tracker.registerShred(105, 0, 104, false, start);
+    try tracker.registerShred(105, 1, 104, false, start);
+    try tracker.registerShred(105, 2, 104, false, start);
+
+    // Channel should remain empty because we did not have conflicting parents
+    try std.testing.expectEqual(null, duplicate_slots_channel.tryReceive());
 }

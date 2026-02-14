@@ -29,6 +29,12 @@ const VariantCounter = sig.prometheus.VariantCounter;
 const Logger = sig.trace.Logger("shred_receiver");
 const VerifiedMerkleRoots = sig.utils.lru.LruCache(.non_locking, sig.core.Hash, void);
 
+const DuplicateShredHandler = shred_network.duplicate_shred_handler.DuplicateShredHandler;
+const DUPLICATE_SHRED_MAX_PAYLOAD_SIZE =
+    shred_network.duplicate_shred_handler.DUPLICATE_SHRED_MAX_PAYLOAD_SIZE;
+const DUPLICATE_SHRED_HEADER_SIZE =
+    shred_network.duplicate_shred_handler.DUPLICATE_SHRED_HEADER_SIZE;
+
 /// Analogous to [ShredFetchStage](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/shred_fetch_stage.rs#L34)
 pub const ShredReceiver = struct {
     params: Params,
@@ -60,6 +66,9 @@ pub const ShredReceiver = struct {
         /// shared with repair
         tracker: *BasicShredTracker,
         inserter: ShredInserter,
+
+        /// Handler for duplicate slot detection and reporting
+        duplicate_handler: DuplicateShredHandler,
     };
 
     pub fn init(
@@ -149,6 +158,8 @@ pub const ShredReceiver = struct {
         }
     }
 
+    const MAX_SHREDS_PER_ITER = 1024;
+
     fn handleBatch(self: *ShredReceiver, allocator: Allocator) !void {
         defer {
             for (self.shred_batch.items(.shred)) |shred| shred.deinit();
@@ -184,12 +195,13 @@ pub const ShredReceiver = struct {
             },
         );
         self.metrics.passed_to_inserter_count.add(self.shred_batch.len);
+
+        try self.params.duplicate_handler.handleDuplicateSlots(allocator, &result);
+
         result.deinit();
 
         self.metrics.batch_size.observe(self.shred_batch.len);
     }
-
-    const MAX_SHREDS_PER_ITER = 1024;
 
     /// Handle a single packet and return a shred if it's a valid shred.
     fn handlePacket(
@@ -303,13 +315,12 @@ test "handleBatch/handlePacket" {
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();
 
-    const shred_tracker = try allocator.create(BasicShredTracker);
-    defer allocator.destroy(shred_tracker);
+    var shred_tracker: BasicShredTracker = undefined;
     try shred_tracker.init(allocator, root_slot + 1, .noop, &registry, false);
     defer shred_tracker.deinit();
 
-    var exit = Atomic(bool).init(false);
-    const shred_version = Atomic(u16).init(0);
+    var exit: Atomic(bool) = .init(false);
+    const shred_version: Atomic(u16) = .init(0);
 
     var shred_receiver = try ShredReceiver.init(allocator, .noop, &registry, .{
         .keypair = &keypair,
@@ -319,8 +330,17 @@ test "handleBatch/handlePacket" {
         .shred_version = &shred_version,
         .maybe_retransmit_shred_sender = null,
         .epoch_tracker = &epoch_tracker,
-        .tracker = shred_tracker,
+        .tracker = &shred_tracker,
         .inserter = ledger.shredInserter(),
+        .duplicate_handler = .{
+            .ledger_reader = ledger.reader(),
+            .result_writer = ledger.resultWriter(),
+            .epoch_tracker = &epoch_tracker,
+            .duplicate_slots_sender = null,
+            .push_msg_queue_mux = null,
+            .keypair = &keypair,
+            .logger = .noop,
+        },
     });
     defer shred_receiver.deinit(allocator);
 

@@ -284,7 +284,7 @@ pub fn computeFromStakedNodes(
     const stakes = try allocator.alloc(u64, nodes.len);
     defer allocator.free(stakes);
     for (nodes, 0..) |entry, i| stakes[i] = entry.value_ptr.*;
-    var sampler = try WeightedRandomSampler(u64).init(allocator, random, stakes);
+    const sampler = try WeightedRandomSampler(u64).init(allocator, random, stakes);
     defer sampler.deinit();
 
     // calculate leader schedule
