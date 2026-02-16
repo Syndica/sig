@@ -348,6 +348,16 @@ pub fn eqlCustom(a: anytype, b: @TypeOf(a), comptime config_: EqlConfig) bool {
     if (@TypeOf(a) == std.mem.Allocator) {
         return true;
     }
+    if (T == std.json.Value) {
+        // std.json.Value contains ObjectMap with many-item pointers that
+        // generic eql cannot recurse into. Fall back to JSON string comparison.
+        const stringify = std.json.stringifyAlloc;
+        const a_str = stringify(std.heap.page_allocator, a, .{}) catch return false;
+        defer std.heap.page_allocator.free(a_str);
+        const b_str = stringify(std.heap.page_allocator, b, .{}) catch return false;
+        defer std.heap.page_allocator.free(b_str);
+        return std.mem.eql(u8, a_str, b_str);
+    }
     if (arrayListInfo(@TypeOf(a))) |_| {
         return eqlCustom(a.items, b.items, config);
     }

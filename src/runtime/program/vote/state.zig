@@ -21,6 +21,10 @@ const SlotHashes = sig.runtime.sysvar.SlotHashes;
 pub const VoteStateV4 = state_v4.VoteStateV4;
 pub const createTestVoteStateV4 = state_v4.createTestVoteStateV4;
 
+/// Size of a BLS public key in a compressed point representation
+/// https://github.com/anza-xyz/solana-sdk/blob/00d056c4ce9def466ad5475533588713feebcb2c/vote-interface/src/state/mod.rs#L33
+pub const BLS_PUBLIC_KEY_COMPRESSED_SIZE: usize = 48;
+
 pub const MAX_PRIOR_VOTERS: usize = 32;
 pub const MAX_LOCKOUT_HISTORY: usize = 31;
 pub const INITIAL_LOCKOUT: usize = 2;

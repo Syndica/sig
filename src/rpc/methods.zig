@@ -18,7 +18,9 @@ const ParseOptions = std.json.ParseOptions;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
-const Commitment = common.Commitment;
+const ClientVersion = sig.version.ClientVersion;
+
+const account_codec = sig.rpc.account_codec;
 
 pub fn Result(comptime method: MethodAndParams.Tag) type {
     return union(enum) {
@@ -178,17 +180,10 @@ pub const GetAccountInfo = struct {
     pubkey: Pubkey,
     config: ?Config = null,
 
-    pub const Encoding = enum {
-        base58,
-        base64,
-        @"base64+zstd",
-        jsonParsed,
-    };
-
     pub const Config = struct {
         commitment: ?common.Commitment = null,
         minContextSlot: ?u64 = null,
-        encoding: ?Encoding = null,
+        encoding: ?common.AccountEncoding = null,
         dataSlice: ?common.DataSlice = null,
     };
 
@@ -204,70 +199,7 @@ pub const GetAccountInfo = struct {
             rentEpoch: u64,
             space: u64,
 
-            pub const Data = union(enum) {
-                encoded: struct { []const u8, Encoding },
-                // TODO: this should be a json value/map, test cases can't compare that though
-                jsonParsed: noreturn,
-
-                /// This field is only set when the request object asked for `jsonParsed` encoding,
-                /// and the server couldn't find a parser, therefore falling back to simply returning
-                /// the account data in base64 encoding directly as a string.
-                ///
-                /// [Solana documentation REF](https://solana.com/docs/rpc/http/getaccountinfo):
-                /// In the drop-down documentation for the encoding field:
-                /// > * `jsonParsed` encoding attempts to use program-specific state parsers to
-                /// return more human-readable and explicit account state data.
-                /// > * If `jsonParsed` is requested but a parser cannot be found, the field falls
-                /// back to base64 encoding, detectable when the data field is type string.
-                json_parsed_base64_fallback: []const u8,
-
-                pub fn jsonStringify(
-                    self: Data,
-                    /// `*std.json.WriteStream(...)`
-                    jw: anytype,
-                ) @TypeOf(jw.*).Error!void {
-                    switch (self) {
-                        .encoded => |pair| try jw.write(pair),
-                        .jsonParsed => |map| try jw.write(map),
-                        .json_parsed_base64_fallback => |str| try jw.write(str),
-                    }
-                }
-
-                pub fn jsonParse(
-                    allocator: std.mem.Allocator,
-                    source: anytype,
-                    options: std.json.ParseOptions,
-                ) std.json.ParseError(@TypeOf(source.*))!Data {
-                    return switch (try source.peekNextTokenType()) {
-                        .array_begin => .{ .encoded = try std.json.innerParse(
-                            struct { []const u8, Encoding },
-                            allocator,
-                            source,
-                            options,
-                        ) },
-                        .object_begin => if (true)
-                            std.debug.panic("TODO: implement jsonParsed for GetAccountInfo", .{})
-                        else
-                            .{ .jsonParsed = try std.json.innerParse(
-                                std.json.ArrayHashMap(std.json.Value),
-                                allocator,
-                                source,
-                                options,
-                            ) },
-                        .string => .{ .json_parsed_base64_fallback = try std.json.innerParse(
-                            []const u8,
-                            allocator,
-                            source,
-                            options,
-                        ) },
-                        .array_end, .object_end => error.UnexpectedToken,
-                        else => {
-                            try source.skipValue();
-                            return error.UnexpectedToken;
-                        },
-                    };
-                }
-            };
+            pub const Data = account_codec.AccountData;
         };
     };
 };
@@ -660,10 +592,7 @@ pub const SendTransaction = struct {
 
 /// Types that are used in multiple RPC methods.
 pub const common = struct {
-    pub const DataSlice = struct {
-        offset: usize,
-        length: usize,
-    };
+    pub const DataSlice = account_codec.DataSlice;
 
     pub const Commitment = enum {
         finalized,
@@ -679,8 +608,10 @@ pub const common = struct {
 
     pub const Context = struct {
         slot: u64,
-        apiVersion: []const u8,
+        apiVersion: []const u8 = ClientVersion.API_VERSION,
     };
+
+    pub const AccountEncoding = account_codec.AccountEncoding;
 
     // TODO field types
     pub const RpcContactInfo = struct {
@@ -862,5 +793,56 @@ pub const StaticHookContext = struct {
         _: GetGenesisHash,
     ) !GetGenesisHash.Response {
         return .{ .hash = self.genesis_hash };
+    }
+};
+
+pub const AccountHookContext = struct {
+    slot_tracker: *const sig.replay.trackers.SlotTracker,
+    account_reader: sig.accounts_db.AccountReader,
+
+    pub fn getAccountInfo(
+        self: AccountHookContext,
+        allocator: std.mem.Allocator,
+        params: GetAccountInfo,
+    ) !GetAccountInfo.Response {
+        const config = params.config orelse GetAccountInfo.Config{};
+        // [agave] Default commitment is finalized:
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
+        const commitment = config.commitment orelse .finalized;
+        // [agave] Default encoding in AGave is `Binary` (legacy base58):
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L545
+        // However, `Binary` is deprecated and `Base64` is preferred for performance.
+        // We default to base64 as it's more efficient and the recommended encoding.
+        const encoding = config.encoding orelse common.AccountEncoding.base64;
+
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+        }
+
+        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotFound;
+        const slot_reader = self.account_reader.forSlot(&ref.constants.ancestors);
+        const account = try slot_reader.get(allocator, params.pubkey) orelse return .{
+            .context = .{ .slot = slot },
+            .value = null,
+        };
+        defer account.deinit(allocator);
+
+        const data: GetAccountInfo.Response.Value.Data = if (encoding == .jsonParsed)
+            try account_codec.encodeJsonParsed(allocator, params.pubkey, account, slot_reader)
+        else
+            try account_codec.encodeStandard(allocator, account, encoding, config.dataSlice);
+
+        return .{
+            .context = .{ .slot = slot },
+            .value = .{
+                .data = data,
+                .executable = account.executable,
+                .lamports = account.lamports,
+                .owner = account.owner,
+                .rentEpoch = account.rent_epoch,
+                .space = account.data.len(),
+            },
+        };
     }
 };
