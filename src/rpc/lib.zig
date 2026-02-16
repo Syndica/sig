@@ -1,6 +1,7 @@
 pub const client = @import("client.zig");
 pub const http = @import("http.zig");
 pub const methods = @import("methods.zig");
+pub const account_decoder = @import("account_decoder/lib.zig");
 pub const request = @import("request.zig");
 pub const response = @import("response.zig");
 pub const server = @import("server/lib.zig");

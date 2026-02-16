@@ -1666,6 +1666,17 @@ fn validator(
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
     });
 
+    const account_store = sig.accounts_db.AccountStore{
+        .accounts_db_two = &new_db,
+    };
+    try app_base.rpc_hooks.set(
+        allocator,
+        sig.rpc.methods.AccountHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .account_reader = account_store.reader(),
+        },
+    );
+
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
         if (maybe_vote_sockets) |*vs| vs else null,
