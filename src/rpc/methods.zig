@@ -1350,6 +1350,8 @@ pub const common = struct {
         apiVersion: []const u8 = ClientVersion.API_VERSION,
     };
 
+    pub const AccountEncoding = account_codec.AccountEncoding;
+
     // TODO field types
     pub const RpcContactInfo = struct {
         /// Pubkey of the node as a base-58 string
