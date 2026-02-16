@@ -24,8 +24,9 @@ const Slot = sig.core.Slot;
 const ClientVersion = sig.version.ClientVersion;
 const BlockhashQueue = sig.core.blockhash_queue.BlockhashQueue;
 
-const account_codec = sig.rpc.account_codec;
 const SlotRef = sig.replay.trackers.SlotTracker.Reference;
+
+const account_codec = sig.rpc.account_codec;
 
 pub fn Result(comptime method: MethodAndParams.Tag) type {
     return union(enum) {
@@ -1349,6 +1350,8 @@ pub const common = struct {
         slot: u64,
         apiVersion: []const u8 = ClientVersion.API_VERSION,
     };
+
+    pub const AccountEncoding = account_codec.AccountEncoding;
 
     // TODO field types
     pub const RpcContactInfo = struct {
