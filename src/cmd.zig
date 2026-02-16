@@ -1704,10 +1704,13 @@ fn validator(
         .account_reader = account_store.reader(),
     });
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.Ledger{
-        .ledger = &ledger,
-        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-    });
+    try app_base.rpc_hooks.set(
+        allocator,
+        sig.rpc.methods.AccountHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .account_reader = replay_service_state.replay_state.account_store.reader(),
+        },
+    );
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,

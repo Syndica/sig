@@ -4,6 +4,7 @@ pub const hook_contexts = @import("hook_contexts/lib.zig");
 pub const http = @import("http.zig");
 pub const methods = @import("methods.zig");
 pub const parse_instruction = @import("parse_instruction/lib.zig");
+pub const account_codec = @import("account_codec/lib.zig");
 pub const request = @import("request.zig");
 pub const response = @import("response.zig");
 pub const server = @import("server/lib.zig");
