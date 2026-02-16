@@ -30,6 +30,7 @@ const MAX_LOCKOUT_HISTORY = state.MAX_LOCKOUT_HISTORY;
 const MAX_EPOCH_CREDITS_HISTORY = state.MAX_EPOCH_CREDITS_HISTORY;
 const VOTE_CREDITS_GRACE_SLOTS = state.VOTE_CREDITS_GRACE_SLOTS;
 const VOTE_CREDITS_MAXIMUM_PER_SLOT = state.VOTE_CREDITS_MAXIMUM_PER_SLOT;
+const BLS_PUBLIC_KEY_COMPRESSED_SIZE = state.BLS_PUBLIC_KEY_COMPRESSED_SIZE;
 
 /// SIMD-0185: https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0185-vote-account-v4.md
 pub const VoteStateV4 = struct {
@@ -54,7 +55,7 @@ pub const VoteStateV4 = struct {
     pending_delegator_rewards: u64,
 
     /// compressed bls pubkey for alpenglow
-    bls_pubkey_compressed: ?[48]u8,
+    bls_pubkey_compressed: ?[BLS_PUBLIC_KEY_COMPRESSED_SIZE]u8,
 
     votes: std.ArrayListUnmanaged(LandedVote),
     root_slot: ?Slot,
