@@ -1327,6 +1327,13 @@ pub const common = struct {
         apiVersion: []const u8 = ClientVersion.API_VERSION,
     };
 
+    pub const AccountEncoding = enum {
+        base58,
+        base64,
+        @"base64+zstd",
+        jsonParsed,
+    };
+
     // TODO field types
     pub const RpcContactInfo = struct {
         /// Pubkey of the node as a base-58 string
