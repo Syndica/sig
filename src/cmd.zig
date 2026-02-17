@@ -1472,8 +1472,11 @@ fn validator(
     });
     defer snapshot_dir.close();
 
-    var gossip_votes = try sig.sync.Channel(sig.gossip.data.Vote).init(allocator);
+    var gossip_votes: sig.sync.Channel(sig.gossip.data.Vote) = try .init(allocator);
     defer gossip_votes.deinit();
+
+    var duplicate_shreds: sig.sync.Channel(sig.gossip.data.DuplicateShred) = try .init(allocator);
+    defer duplicate_shreds.deinit();
 
     var gossip_service = try startGossip(
         allocator,
@@ -1484,7 +1487,10 @@ fn validator(
             .{ .tag = .repair, .port = repair_port },
             .{ .tag = .turbine_recv, .port = turbine_recv_port },
         },
-        .{ .vote_collector = &gossip_votes },
+        .{
+            .vote_collector = &gossip_votes,
+            .duplicate_shred_listener = &duplicate_shreds,
+        },
     );
     defer {
         gossip_service.shutdown();
@@ -1610,27 +1616,6 @@ fn validator(
 
     const turbine_config = cfg.turbine;
 
-    // shred network
-    var shred_network_manager = try sig.shred_network.start(
-        cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
-        .{
-            .allocator = allocator,
-            .logger = .from(app_base.logger),
-            .registry = app_base.metrics_registry,
-            .random = prng.random(),
-            .ledger = &ledger,
-            .my_keypair = &app_base.my_keypair,
-            .exit = app_base.exit,
-            .gossip_table_rw = &gossip_service.gossip_table_rw,
-            .my_shred_version = &gossip_service.my_shred_version,
-            .epoch_tracker = &epoch_tracker,
-            .my_contact_info = my_contact_info,
-            .n_retransmit_threads = turbine_config.num_retransmit_threads,
-            .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
-        },
-    );
-    defer shred_network_manager.deinit();
-
     // Vote account. if not provided, disable voting
     const maybe_vote_pubkey: ?Pubkey = if (cfg.voting_enabled) blk: {
         const vote_keypair_path = cfg.vote_account orelse default_path: {
@@ -1686,6 +1671,33 @@ fn validator(
         if (maybe_vote_sockets) |*vs| vs else null,
         &gossip_votes,
     );
+
+    // shred network
+    var shred_network_manager = try sig.shred_network.start(
+        cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
+        .{
+            .allocator = allocator,
+            .logger = .from(app_base.logger),
+            .registry = app_base.metrics_registry,
+            .random = prng.random(),
+            .ledger = &ledger,
+            .my_keypair = &app_base.my_keypair,
+            .exit = app_base.exit,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+            .my_shred_version = &gossip_service.my_shred_version,
+            .epoch_tracker = &epoch_tracker,
+            .my_contact_info = my_contact_info,
+            .n_retransmit_threads = turbine_config.num_retransmit_threads,
+            .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
+            .rpc_hooks = null,
+            .duplicate = if (replay_service_state.consensus) |consensus| .{
+                .shred_receiver = &duplicate_shreds,
+                .slots_sender = consensus.receivers.duplicate_slots,
+            } else null,
+            .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
+        },
+    );
+    defer shred_network_manager.deinit();
 
     const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
         try std.Thread.spawn(.{}, runRPCServer, .{
@@ -1959,10 +1971,10 @@ fn shredNetwork(
         app_base.exit,
     });
 
-    var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
+    var prng: std.Random.DefaultPrng = .init(@bitCast(std.time.timestamp()));
 
-    const my_contact_info =
-        sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
+    const my_contact_info: sig.gossip.data.ThreadSafeContactInfo =
+        .fromContactInfo(gossip_service.my_contact_info);
 
     // shred networking
     var shred_network_manager = try sig.shred_network.start(shred_network_conf, .{
@@ -1971,14 +1983,18 @@ fn shredNetwork(
         .registry = app_base.metrics_registry,
         .random = prng.random(),
         .ledger = &ledger,
-        .my_keypair = &app_base.my_keypair,
         .exit = app_base.exit,
+        .my_keypair = &app_base.my_keypair,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .my_shred_version = &gossip_service.my_shred_version,
         .epoch_tracker = &epoch_tracker,
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,
+        .rpc_hooks = null,
+        // No consensus in the standalone mode, so duplicate slots are not reported.
+        .duplicate = null,
+        .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
     });
     defer shred_network_manager.deinit();
 
@@ -2890,30 +2906,30 @@ fn loggingPanic(message: []const u8, first_trace_addr: ?usize) noreturn {
     std.debug.defaultPanic(message, first_trace_addr);
 }
 
-pub const RpcLeaderScheduleService = struct {
+/// NOTE: This only populates the leader schedule, and leaves the epoch stake & features empty (ie ALL_DISABLED).
+const RpcLeaderScheduleService = struct {
     allocator: std.mem.Allocator,
     logger: RpcLeaderScheduleServiceLogger,
     rpc_client: sig.rpc.Client,
     epoch_tracker: *sig.core.EpochTracker,
 
-    const Self = @This();
-    const RpcLeaderScheduleServiceLogger = sig.trace.Logger(@typeName(Self));
+    const RpcLeaderScheduleServiceLogger = sig.trace.Logger(@typeName(RpcLeaderScheduleService));
 
-    pub fn init(
+    fn init(
         allocator: std.mem.Allocator,
         logger: RpcLeaderScheduleServiceLogger,
         epoch_tracker: *sig.core.EpochTracker,
         rpc_client: sig.rpc.Client,
-    ) Self {
+    ) RpcLeaderScheduleService {
         return .{
             .allocator = allocator,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger.withScope(@typeName(RpcLeaderScheduleService)),
             .rpc_client = rpc_client,
             .epoch_tracker = epoch_tracker,
         };
     }
 
-    pub fn run(self: *Self, exit: *std.atomic.Value(bool)) void {
+    fn run(self: *RpcLeaderScheduleService, exit: *std.atomic.Value(bool)) void {
         var i: usize = 0;
         while (!exit.load(.monotonic)) {
             if (i % 1000 == 0) {
@@ -2930,7 +2946,7 @@ pub const RpcLeaderScheduleService = struct {
         }
     }
 
-    fn refresh(self: *Self) !void {
+    fn refresh(self: *RpcLeaderScheduleService) !void {
         const response = try self.rpc_client.getSlot(.{});
         defer response.deinit();
         const slot = try response.result();
@@ -2957,10 +2973,13 @@ pub const RpcLeaderScheduleService = struct {
                     &self.epoch_tracker.epoch_schedule,
                 );
 
-                var entry = try self.allocator.create(sig.core.EpochInfo);
+                const entry = try self.allocator.create(sig.core.EpochInfo);
                 entry.* = .{
                     .leaders = leaders,
                     .stakes = .EMPTY,
+                    // TODO: if you need features here for whatever reason, you'll have to implement
+                    // some way to forward them from replay, or source them by some other means.
+                    .feature_set = .ALL_DISABLED,
                 };
                 entry.stakes.stakes.epoch = e;
                 errdefer {
@@ -2974,7 +2993,7 @@ pub const RpcLeaderScheduleService = struct {
     }
 
     fn getLeaderSchedule(
-        self: *Self,
+        self: *RpcLeaderScheduleService,
         slot: sig.core.Slot,
         epoch_schedule: *const sig.core.EpochSchedule,
     ) !LeaderSchedule {

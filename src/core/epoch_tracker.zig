@@ -253,6 +253,7 @@ pub const EpochTracker = struct {
         epoch_info_ptr.* = .{
             .leaders = leaders,
             .stakes = epoch_stakes,
+            .feature_set = feature_set.*,
         };
 
         try self.rooted_epochs.insert(allocator, epoch_info_ptr);
@@ -287,6 +288,7 @@ pub const EpochTracker = struct {
             .{
                 .leaders = leaders,
                 .stakes = epoch_stakes,
+                .feature_set = feature_set.*,
             },
         );
     }
@@ -338,6 +340,7 @@ pub const EpochTracker = struct {
                     .end = 0,
                 },
                 .stakes = stakes,
+                .feature_set = .ALL_DISABLED,
             };
             errdefer epoch_info_ptr.deinit(allocator);
 
@@ -351,16 +354,22 @@ pub const EpochTracker = struct {
 pub const EpochInfo = struct {
     leaders: LeaderSchedule,
     stakes: EpochStakes,
+    feature_set: sig.core.FeatureSet,
 
     pub fn deinit(self: *const EpochInfo, allocator: Allocator) void {
         self.leaders.deinit(allocator);
         self.stakes.deinit(allocator);
     }
 
-    fn init(leaders: LeaderSchedule, stakes: EpochStakes) !EpochInfo {
+    fn init(
+        leaders: LeaderSchedule,
+        stakes: EpochStakes,
+        feature_set: sig.core.FeatureSet,
+    ) EpochInfo {
         return .{
             .leaders = leaders,
             .stakes = stakes,
+            .feature_set = feature_set,
         };
     }
 
@@ -383,7 +392,7 @@ pub const EpochInfo = struct {
         });
         errdefer leaders.deinit(allocator);
 
-        return .init(leaders, stakes);
+        return .init(leaders, stakes, .ALL_DISABLED);
     }
 };
 
@@ -647,13 +656,14 @@ test RootedEpochBuffer {
     }
     for (epoch - 2..epoch + 1, 0..) |epoch_i, i| {
         const info = try buffer.get(epoch_i);
-        expected[i] = EpochInfo{
+        expected[i] = .{
             .leaders = .{
                 .leaders = try allocator.dupe(Pubkey, info.leaders.leaders),
                 .start = info.leaders.start,
                 .end = info.leaders.end,
             },
             .stakes = try info.stakes.clone(allocator),
+            .feature_set = .ALL_DISABLED,
         };
     }
 
