@@ -595,7 +595,10 @@ pub const GetBlock = struct {
                     &.{};
 
                 // Convert loaded addresses
-                const loaded_addresses = try BlockHookContext.convertLoadedAddresses(allocator, meta.loaded_addresses);
+                const loaded_addresses = try BlockHookContext.convertLoadedAddresses(
+                    allocator,
+                    meta.loaded_addresses,
+                );
 
                 // Convert return data
                 const return_data = if (meta.return_data) |rd|
@@ -1527,7 +1530,9 @@ pub const BlockHookContext = struct {
             const version = tx_with_meta.transaction.version;
             if (max_supported_version) |max_version| switch (version) {
                 .legacy => break :ver .legacy,
-                .v0 => if (max_version >= 0) break :ver .v0 else return error.UnsupportedTransactionVersion,
+                .v0 => if (max_version >= 0) {
+                    break :ver .v0;
+                } else return error.UnsupportedTransactionVersion,
             } else switch (version) {
                 .legacy => break :ver null,
                 .v0 => return error.UnsupportedTransactionVersion,
@@ -1747,7 +1752,10 @@ pub const BlockHookContext = struct {
         allocator: std.mem.Allocator,
         balances: []const sig.ledger.transaction_status.TransactionTokenBalance,
     ) ![]const GetBlock.Response.UiTransactionTokenBalance {
-        const result = try allocator.alloc(GetBlock.Response.UiTransactionTokenBalance, balances.len);
+        const result = try allocator.alloc(
+            GetBlock.Response.UiTransactionTokenBalance,
+            balances.len,
+        );
         errdefer allocator.free(result);
 
         for (balances, 0..) |b, i| {
