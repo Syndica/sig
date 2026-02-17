@@ -439,7 +439,7 @@ pub fn executeTransaction(
     var zone = tracy.Zone.init(@src(), .{ .name = "executeTransaction" });
     defer zone.deinit();
 
-    const compute_budget = compute_budget_limits.intoComputeBudget();
+    const compute_budget = compute_budget_limits.intoComputeBudget(environment.feature_set, environment.slot);
 
     const log_collector = if (config.log)
         try LogCollector.init(allocator, config.log_messages_byte_limit)

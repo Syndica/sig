@@ -188,21 +188,11 @@ pub fn resolveTokenBalances(
         const ui_token_amount = formatTokenAmount(allocator, raw.amount, decimals) catch return null;
         errdefer ui_token_amount.deinit(allocator);
 
-        // Create the token balance entry
-        const mint_str = allocator.dupe(u8, &raw.mint.data) catch return null;
-        errdefer allocator.free(mint_str);
-
-        const owner_str = allocator.dupe(u8, &raw.owner.data) catch return null;
-        errdefer allocator.free(owner_str);
-
-        const program_id_str = allocator.dupe(u8, &raw.program_id.data) catch return null;
-        errdefer allocator.free(program_id_str);
-
         result.append(.{
             .account_index = raw.account_index,
-            .mint = mint_str,
-            .owner = owner_str,
-            .program_id = program_id_str,
+            .mint = raw.mint,
+            .owner = raw.owner,
+            .program_id = raw.program_id,
             .ui_token_amount = ui_token_amount,
         }) catch return null;
     }
@@ -249,8 +239,8 @@ pub fn formatTokenAmount(
     const divisor = std.math.pow(f64, 10.0, @floatFromInt(decimals));
     const ui_amount: f64 = @as(f64, @floatFromInt(amount)) / divisor;
 
-    // Format UI amount string with proper decimal places
-    const ui_amount_string = try formatUiAmountString(allocator, ui_amount, decimals);
+    // Format UI amount string with proper decimal places (using integer math for full precision)
+    const ui_amount_string = try realNumberStringTrimmed(allocator, amount, decimals);
     errdefer allocator.free(ui_amount_string);
 
     return UiTokenAmount{
@@ -261,36 +251,70 @@ pub fn formatTokenAmount(
     };
 }
 
-/// Format the UI amount string with the correct number of decimal places.
-fn formatUiAmountString(
-    allocator: Allocator,
-    ui_amount: f64,
-    decimals: u8,
-) error{OutOfMemory}![]const u8 {
-    // For integer amounts (decimals == 0), don't show decimal point
+/// Format an integer token amount as a decimal string with full precision.
+/// Matches Agave's `real_number_string` from account-decoder-client-types/src/token.rs.
+///
+/// Examples (amount, decimals) -> result:
+///   (1_000_000_000, 9) -> "1.000000000"
+///   (1_234_567_890, 3) -> "1234567.890"
+///   (42, 0) -> "42"
+fn realNumberString(allocator: Allocator, amount: u64, decimals: u8) error{OutOfMemory}![]const u8 {
     if (decimals == 0) {
-        return try std.fmt.allocPrint(allocator, "{d}", .{@as(u64, @intFromFloat(ui_amount))});
+        return try std.fmt.allocPrint(allocator, "{d}", .{amount});
     }
 
-    // Format with all decimal places, then trim trailing zeros but keep at least one
-    var buf: [64]u8 = undefined;
-    const formatted = std.fmt.bufPrint(&buf, "{d:.9}", .{ui_amount}) catch {
-        // Fallback for very large numbers
-        return try std.fmt.allocPrint(allocator, "{d}", .{ui_amount});
-    };
+    // Format amount as string, left-padded with zeros to at least decimals+1 digits
+    const dec: usize = @intCast(decimals);
+    const raw = try std.fmt.allocPrint(allocator, "{d}", .{amount});
+    defer allocator.free(raw);
 
-    // Find the decimal point
-    const dot_pos = std.mem.indexOf(u8, formatted, ".") orelse {
-        return try allocator.dupe(u8, formatted);
-    };
+    // Pad with leading zeros if needed so we have at least decimals+1 chars
+    const min_len = dec + 1;
+    const padded = if (raw.len < min_len) blk: {
+        const buf = try allocator.alloc(u8, min_len);
+        const pad_count = min_len - raw.len;
+        @memset(buf[0..pad_count], '0');
+        @memcpy(buf[pad_count..], raw);
+        break :blk buf;
+    } else try allocator.dupe(u8, raw);
+    defer allocator.free(padded);
 
-    // Trim trailing zeros, but keep at least one decimal place
-    var end = formatted.len;
-    while (end > dot_pos + 2 and formatted[end - 1] == '0') {
+    // Insert decimal point at position len - decimals
+    const dot_pos = padded.len - dec;
+    const result = try allocator.alloc(u8, padded.len + 1);
+    @memcpy(result[0..dot_pos], padded[0..dot_pos]);
+    result[dot_pos] = '.';
+    @memcpy(result[dot_pos + 1 ..], padded[dot_pos..]);
+
+    return result;
+}
+
+/// Format an integer token amount as a trimmed decimal string with full precision.
+/// Matches Agave's `real_number_string_trimmed` from account-decoder-client-types/src/token.rs.
+///
+/// Examples (amount, decimals) -> result:
+///   (1_000_000_000, 9) -> "1"
+///   (1_234_567_890, 3) -> "1234567.89"
+///   (600010892365405206, 9) -> "600010892.365405206"
+fn realNumberStringTrimmed(allocator: Allocator, amount: u64, decimals: u8) error{OutOfMemory}![]const u8 {
+    const s = try realNumberString(allocator, amount, decimals);
+
+    if (decimals == 0) return s;
+
+    // Trim trailing zeros, then trailing dot
+    var end = s.len;
+    while (end > 0 and s[end - 1] == '0') {
+        end -= 1;
+    }
+    if (end > 0 and s[end - 1] == '.') {
         end -= 1;
     }
 
-    return try allocator.dupe(u8, formatted[0..end]);
+    if (end == s.len) return s;
+
+    const trimmed = try allocator.dupe(u8, s[0..end]);
+    allocator.free(s);
+    return trimmed;
 }
 
 /// Collect token balances from a list of loaded accounts.

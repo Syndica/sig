@@ -17,6 +17,7 @@ const parse_instruction = @import("parse_instruction/lib.zig");
 const Allocator = std.mem.Allocator;
 const ParseOptions = std.json.ParseOptions;
 
+const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
@@ -315,7 +316,7 @@ pub const GetBlock = struct {
     };
 
     /// Transaction encoding format
-    pub const Encoding = enum { json, jsonParsed, base58, base64 };
+    pub const Encoding = enum { binary, base58, base64, json, jsonParsed };
 
     pub const Config = struct {
         /// Only `confirmed` and `finalized` are supported. `processed` is rejected.
@@ -329,16 +330,16 @@ pub const GetBlock = struct {
     /// Response for getBlock RPC method (UiConfirmedBlock equivalent)
     pub const Response = struct {
         /// The blockhash of the previous block
-        previousBlockhash: []const u8,
+        previousBlockhash: Hash,
         /// The blockhash of this block
-        blockhash: []const u8,
+        blockhash: Hash,
         /// The slot of the parent block
         parentSlot: u64,
         /// Transactions in the block (present when transactionDetails is full or accounts)
         /// TODO: Phase 2 - implement EncodedTransactionWithStatusMeta
         transactions: ?[]const EncodedTransactionWithStatusMeta = null,
         /// Transaction signatures (present when transactionDetails is signatures)
-        signatures: ?[]const []const u8 = null,
+        signatures: ?[]const Signature = null,
         /// Block rewards (present when rewards=true, which is the default)
         rewards: ?[]const UiReward = null,
         /// Number of reward partitions (if applicable)
@@ -420,26 +421,28 @@ pub const GetBlock = struct {
         /// For base64/base58: serializes as [data, encoding] array
         /// For JSON: serializes as object with signatures and message
         pub const EncodedTransaction = union(enum) {
+            legacy_binary: []const u8,
             /// Binary encoding: [base64_data, "base64"] or [base58_data, "base58"]
             binary: struct {
                 data: []const u8,
-                encoding: []const u8,
+                encoding: enum { base58, base64 },
 
                 pub fn jsonStringify(self: @This(), jw: anytype) !void {
                     try jw.beginArray();
                     try jw.write(self.data);
-                    try jw.write(self.encoding);
+                    try jw.write(@tagName(self.encoding));
                     try jw.endArray();
                 }
             },
             /// JSON encoding: object with signatures and message
             json: struct {
-                signatures: []const []const u8,
+                signatures: []const Signature,
                 message: EncodedMessage,
             },
 
             pub fn jsonStringify(self: @This(), jw: anytype) !void {
                 switch (self) {
+                    .legacy_binary => |b| try jw.write(b),
                     .binary => |b| try b.jsonStringify(jw),
                     .json => |j| try jw.write(j),
                 }
@@ -448,9 +451,9 @@ pub const GetBlock = struct {
 
         /// JSON-encoded message
         pub const EncodedMessage = struct {
-            accountKeys: []const []const u8,
+            accountKeys: []const Pubkey,
             header: MessageHeader,
-            recentBlockhash: []const u8,
+            recentBlockhash: Hash,
             instructions: []const EncodedInstruction,
             addressTableLookups: ?[]const AddressTableLookup = null,
 
@@ -501,7 +504,7 @@ pub const GetBlock = struct {
         };
 
         pub const AddressTableLookup = struct {
-            accountKey: []const u8,
+            accountKey: Pubkey,
             writableIndexes: []const u8,
             readonlyIndexes: []const u8,
         };
@@ -513,22 +516,14 @@ pub const GetBlock = struct {
             fee: u64,
             preBalances: []const u64,
             postBalances: []const u64,
-            // should NOT SKIP
             innerInstructions: []const parse_instruction.UiInnerInstructions = &.{},
-            // should NOT SKIP
             logMessages: []const []const u8 = &.{},
-            // should NOT SKIP
-            preTokenBalances: []const UiTokenBalance = &.{},
-            // should NOT SKIP
-            postTokenBalances: []const UiTokenBalance = &.{},
-            // should NOT skip
+            preTokenBalances: []const UiTransactionTokenBalance = &.{},
+            postTokenBalances: []const UiTransactionTokenBalance = &.{},
             rewards: []const UiReward = &.{},
-            // should skip
             loadedAddresses: ?UiLoadedAddresses = null,
-            // should skip
-            returnData: ?UiReturnData = null,
+            returnData: ?UiTransactionReturnData = null,
             computeUnitsConsumed: ?u64 = null,
-            // should skip
             costUnits: ?u64 = null,
 
             pub fn jsonStringify(self: @This(), jw: anytype) !void {
@@ -571,6 +566,76 @@ pub const GetBlock = struct {
                 try jw.write(self.status);
                 try jw.endObject();
             }
+
+            pub fn from(
+                allocator: Allocator,
+                meta: sig.ledger.meta.TransactionStatusMeta,
+            ) !UiTransactionStatusMeta {
+                // Build status field
+                const status: UiTransactionResultStatus = if (meta.status) |err|
+                    .{ .Ok = null, .Err = err }
+                else
+                    .{ .Ok = .{}, .Err = null };
+
+                // Convert inner instructions
+                const inner_instructions = if (meta.inner_instructions) |iis|
+                    try BlockHookContext.convertInnerInstructions(allocator, iis)
+                else
+                    &.{};
+
+                // Convert token balances
+                const pre_token_balances = if (meta.pre_token_balances) |balances|
+                    try BlockHookContext.convertTokenBalances(allocator, balances)
+                else
+                    &.{};
+
+                const post_token_balances = if (meta.post_token_balances) |balances|
+                    try BlockHookContext.convertTokenBalances(allocator, balances)
+                else
+                    &.{};
+
+                // Convert loaded addresses
+                const loaded_addresses = try BlockHookContext.convertLoadedAddresses(allocator, meta.loaded_addresses);
+
+                // Convert return data
+                const return_data = if (meta.return_data) |rd|
+                    try BlockHookContext.convertReturnData(allocator, rd)
+                else
+                    null;
+
+                // Duplicate log messages (original memory will be freed with block.deinit)
+                const log_messages = if (meta.log_messages) |logs|
+                    try allocator.dupe([]const u8, logs)
+                else
+                    &.{};
+
+                const rewards = rewards: {
+                    if (meta.rewards) |rewards| {
+                        const converted = try allocator.alloc(UiReward, rewards.len);
+                        for (rewards, 0..) |reward, i| {
+                            converted[i] = try UiReward.fromLedgerReward(reward);
+                        }
+                        break :rewards converted;
+                    } else break :rewards &.{};
+                };
+
+                return .{
+                    .err = meta.status,
+                    .status = status,
+                    .fee = meta.fee,
+                    .preBalances = try allocator.dupe(u64, meta.pre_balances),
+                    .postBalances = try allocator.dupe(u64, meta.post_balances),
+                    .innerInstructions = inner_instructions,
+                    .logMessages = log_messages,
+                    .preTokenBalances = pre_token_balances,
+                    .postTokenBalances = post_token_balances,
+                    .rewards = rewards,
+                    .loadedAddresses = loaded_addresses,
+                    .returnData = return_data,
+                    .computeUnitsConsumed = meta.compute_units_consumed,
+                    .costUnits = meta.cost_units,
+                };
+            }
         };
 
         /// Transaction result status for RPC compatibility.
@@ -593,11 +658,11 @@ pub const GetBlock = struct {
         };
 
         /// Token balance for RPC response (placeholder)
-        pub const UiTokenBalance = struct {
+        pub const UiTransactionTokenBalance = struct {
             accountIndex: u8,
-            mint: []const u8,
-            owner: ?[]const u8 = null,
-            programId: ?[]const u8 = null,
+            mint: Pubkey,
+            owner: ?Pubkey = null,
+            programId: ?Pubkey = null,
             uiTokenAmount: UiTokenAmount,
 
             pub fn jsonStringify(self: @This(), jw: anytype) !void {
@@ -643,18 +708,30 @@ pub const GetBlock = struct {
         };
 
         pub const UiLoadedAddresses = struct {
-            writable: []const []const u8,
-            readonly: []const []const u8,
+            readonly: []const Pubkey,
+            writable: []const Pubkey,
         };
 
-        pub const UiReturnData = struct {
-            programId: []const u8,
-            data: [2][]const u8, // [data, encoding]
+        pub const UiTransactionReturnData = struct {
+            programId: Pubkey,
+            data: struct { []const u8, enum { base64 } },
+
+            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("programId");
+                try jw.write(self.programId);
+                try jw.objectField("data");
+                try jw.beginArray();
+                try jw.write(self.data.@"0");
+                try jw.write(@tagName(self.data.@"1"));
+                try jw.endArray();
+                try jw.endObject();
+            }
         };
 
         pub const UiReward = struct {
             /// The public key of the account that received the reward (base-58 encoded)
-            pubkey: []const u8,
+            pubkey: Pubkey,
             /// Number of lamports credited or debited
             lamports: i64,
             /// Account balance in lamports after the reward was applied
@@ -691,11 +768,10 @@ pub const GetBlock = struct {
             }
 
             pub fn fromLedgerReward(
-                allocator: Allocator,
                 reward: sig.ledger.meta.Reward,
             ) !UiReward {
                 return .{
-                    .pubkey = try allocator.dupe(u8, reward.pubkey),
+                    .pubkey = reward.pubkey,
                     .lamports = reward.lamports,
                     .postBalance = reward.post_balance,
                     .rewardType = if (reward.reward_type) |rt| switch (rt) {
@@ -1329,14 +1405,10 @@ pub const BlockHookContext = struct {
         );
         defer block.deinit(allocator);
 
-        // Encode blockhashes as base58
-        const blockhash = try allocator.dupe(u8, block.blockhash.base58String().constSlice());
-        errdefer allocator.free(blockhash);
-        const previous_blockhash = try allocator.dupe(
-            u8,
-            block.previous_blockhash.base58String().constSlice(),
-        );
-        errdefer allocator.free(previous_blockhash);
+        const blockhash = block.blockhash;
+        const previous_blockhash = block.previous_blockhash;
+        const parent_slot = block.parent_slot;
+        const num_partitions = block.num_partitions;
 
         // Resolve block_time and block_height:
         // - If the SlotTracker has the slot, use its values (authoritative).
@@ -1370,16 +1442,9 @@ pub const BlockHookContext = struct {
             }
         } else null;
 
-        return try encodeWithOptions(
+        const transactions, const signatures = try encodeWithOptionsV2(
             allocator,
-            blockhash,
-            previous_blockhash,
-            block.parent_slot,
             block,
-            rewards,
-            block.num_partitions,
-            block_time,
-            block_height,
             encoding,
             .{
                 .tx_details = transaction_details,
@@ -1387,73 +1452,6 @@ pub const BlockHookContext = struct {
                 .max_supported_version = max_supported_version,
             },
         );
-    }
-
-    fn encodeWithOptions(
-        allocator: Allocator,
-        blockhash: []const u8,
-        previous_blockhash: []const u8,
-        parent_slot: u64,
-        block: sig.ledger.Reader.VersionedConfirmedBlock,
-        rewards: ?[]const GetBlock.Response.UiReward,
-        num_reward_partitions: ?u64,
-        block_time: ?i64,
-        block_height: ?u64,
-        encoding: GetBlock.Encoding,
-        options: struct {
-            tx_details: GetBlock.TransactionDetails,
-            show_rewards: bool,
-            max_supported_version: ?u8,
-        },
-    ) !GetBlock.Response {
-        const transactions, const signatures = txs: {
-            switch (options.tx_details) {
-                .none => break :txs .{ null, null },
-                .full => {
-                    const transactions = try allocator.alloc(
-                        GetBlock.Response.EncodedTransactionWithStatusMeta,
-                        block.transactions.len,
-                    );
-                    errdefer allocator.free(transactions);
-
-                    for (block.transactions, 0..) |tx_with_meta, i| {
-                        const tx_version = tx_with_meta.transaction.version;
-                        // Check version compatibility
-                        if (options.max_supported_version == null and tx_version != .legacy) {
-                            return error.UnsupportedTransactionVersion;
-                        }
-
-                        transactions[i] = try encodeTransactionWithMeta(
-                            allocator,
-                            tx_with_meta,
-                            encoding,
-                            options.max_supported_version,
-                            options.show_rewards,
-                        );
-                    }
-
-                    break :txs .{ transactions, null };
-                },
-                .signatures => {
-                    const sigs = try allocator.alloc([]const u8, block.transactions.len);
-                    errdefer allocator.free(sigs);
-
-                    for (block.transactions, 0..) |tx_with_meta, i| {
-                        if (tx_with_meta.transaction.signatures.len == 0) {
-                            return error.InvalidTransaction;
-                        }
-                        sigs[i] = try allocator.dupe(
-                            u8,
-                            tx_with_meta.transaction.signatures[0].base58String().constSlice(),
-                        );
-                    }
-
-                    break :txs .{ null, sigs };
-                },
-                // TODO: implement json parsing
-                .accounts => return error.NotImplemented,
-            }
-        };
 
         return .{
             .blockhash = blockhash,
@@ -1462,10 +1460,59 @@ pub const BlockHookContext = struct {
             .transactions = transactions,
             .signatures = signatures,
             .rewards = rewards,
-            .numRewardPartitions = num_reward_partitions,
+            .numRewardPartitions = num_partitions,
             .blockTime = block_time,
             .blockHeight = block_height,
         };
+    }
+
+    fn encodeWithOptionsV2(
+        allocator: Allocator,
+        block: sig.ledger.Reader.VersionedConfirmedBlock,
+        encoding: GetBlock.Encoding,
+        options: struct {
+            tx_details: GetBlock.TransactionDetails,
+            show_rewards: bool,
+            max_supported_version: ?u8,
+        },
+    ) !struct { ?[]const GetBlock.Response.EncodedTransactionWithStatusMeta, ?[]const Signature } {
+        switch (options.tx_details) {
+            .none => return .{ null, null },
+            .full => {
+                const transactions = try allocator.alloc(
+                    GetBlock.Response.EncodedTransactionWithStatusMeta,
+                    block.transactions.len,
+                );
+                errdefer allocator.free(transactions);
+
+                for (block.transactions, 0..) |tx_with_meta, i| {
+                    transactions[i] = try encodeTransactionWithMeta(
+                        allocator,
+                        tx_with_meta,
+                        encoding,
+                        options.max_supported_version,
+                        options.show_rewards,
+                    );
+                }
+
+                return .{ transactions, null };
+            },
+            .signatures => {
+                const sigs = try allocator.alloc(Signature, block.transactions.len);
+                errdefer allocator.free(sigs);
+
+                for (block.transactions, 0..) |tx_with_meta, i| {
+                    if (tx_with_meta.transaction.signatures.len == 0) {
+                        return error.InvalidTransaction;
+                    }
+                    sigs[i] = tx_with_meta.transaction.signatures[0];
+                }
+
+                return .{ null, sigs };
+            },
+            // TODO: implement json parsing
+            .accounts => return error.NotImplemented,
+        }
     }
 
     /// Encode a transaction with its metadata for the RPC response.
@@ -1480,7 +1527,7 @@ pub const BlockHookContext = struct {
             const version = tx_with_meta.transaction.version;
             if (max_supported_version) |max_version| switch (version) {
                 .legacy => break :ver .legacy,
-                .v0 => if (max_version < 0) .v0 else return error.UnsupportedTransactionVersion,
+                .v0 => if (max_version >= 0) break :ver .v0 else return error.UnsupportedTransactionVersion,
             } else switch (version) {
                 .legacy => break :ver null,
                 .v0 => return error.UnsupportedTransactionVersion,
@@ -1492,12 +1539,15 @@ pub const BlockHookContext = struct {
             tx_with_meta.transaction,
             encoding,
         );
-        const meta = try encodeTransactionStatusMeta(
-            allocator,
-            tx_with_meta.meta,
-            tx_with_meta.transaction.msg.account_keys,
-            show_rewards,
-        );
+        const meta: GetBlock.Response.UiTransactionStatusMeta = switch (encoding) {
+            .jsonParsed => try encodeTransactionStatusMeta(
+                allocator,
+                tx_with_meta.meta,
+                tx_with_meta.transaction.msg.account_keys,
+                show_rewards,
+            ),
+            else => try GetBlock.Response.UiTransactionStatusMeta.from(allocator, tx_with_meta.meta),
+        };
 
         return .{
             .transaction = encoded_tx,
@@ -1516,6 +1566,18 @@ pub const BlockHookContext = struct {
         encoding: GetBlock.Encoding,
     ) !GetBlock.Response.EncodedTransaction {
         switch (encoding) {
+            .binary => {
+                // Serialize transaction to bincode
+                const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
+                defer allocator.free(bincode_bytes);
+
+                // Base58 encode
+                const base58_str = base58.Table.BITCOIN.encodeAlloc(allocator, bincode_bytes) catch {
+                    return error.EncodingError;
+                };
+
+                return .{ .legacy_binary = base58_str };
+            },
             .base58 => {
                 // Serialize transaction to bincode
                 const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
@@ -1528,7 +1590,7 @@ pub const BlockHookContext = struct {
 
                 return .{ .binary = .{
                     .data = base58_str,
-                    .encoding = "base58",
+                    .encoding = .base58,
                 } };
             },
             .base64 => {
@@ -1543,7 +1605,7 @@ pub const BlockHookContext = struct {
 
                 return .{ .binary = .{
                     .data = base64_buf,
-                    .encoding = "base64",
+                    .encoding = .base64,
                 } };
             },
             // TODO: implement json and jsonParsed encoding
@@ -1596,7 +1658,7 @@ pub const BlockHookContext = struct {
             &.{};
 
         // Convert loaded addresses
-        const loaded_addresses = null;
+        const loaded_addresses = try convertLoadedAddresses(allocator, meta.loaded_addresses);
 
         // Convert return data
         const return_data = if (meta.return_data) |rd|
@@ -1640,36 +1702,35 @@ pub const BlockHookContext = struct {
     fn convertInnerInstructions(
         allocator: std.mem.Allocator,
         inner_instructions: []const sig.ledger.transaction_status.InnerInstructions,
-    ) ![]const GetBlock.Response.UiInnerInstructions {
+    ) ![]const parse_instruction.UiInnerInstructions {
         const result = try allocator.alloc(
-            GetBlock.Response.UiInnerInstructions,
+            parse_instruction.UiInnerInstructions,
             inner_instructions.len,
         );
         errdefer allocator.free(result);
 
         for (inner_instructions, 0..) |ii, i| {
             const instructions = try allocator.alloc(
-                GetBlock.Response.UiInstruction,
+                parse_instruction.UiInstruction,
                 ii.instructions.len,
             );
             errdefer allocator.free(instructions);
 
             for (ii.instructions, 0..) |inner_ix, j| {
                 // Base58 encode the instruction data
-                const base58_encoder = base58.Table.BITCOIN;
-                const data_str = base58_encoder.encodeAlloc(
+                const data_str = base58.Table.BITCOIN.encodeAlloc(
                     allocator,
                     inner_ix.instruction.data,
                 ) catch {
                     return error.EncodingError;
                 };
 
-                instructions[j] = .{
+                instructions[j] = .{ .compiled = .{
                     .programIdIndex = inner_ix.instruction.program_id_index,
                     .accounts = try allocator.dupe(u8, inner_ix.instruction.accounts),
                     .data = data_str,
                     .stackHeight = inner_ix.stack_height,
-                };
+                } };
             }
 
             result[i] = .{
@@ -1685,31 +1746,16 @@ pub const BlockHookContext = struct {
     fn convertTokenBalances(
         allocator: std.mem.Allocator,
         balances: []const sig.ledger.transaction_status.TransactionTokenBalance,
-    ) ![]const GetBlock.Response.UiTokenBalance {
-        const result = try allocator.alloc(GetBlock.Response.UiTokenBalance, balances.len);
+    ) ![]const GetBlock.Response.UiTransactionTokenBalance {
+        const result = try allocator.alloc(GetBlock.Response.UiTransactionTokenBalance, balances.len);
         errdefer allocator.free(result);
 
         for (balances, 0..) |b, i| {
-            const mint = try allocator.dupe(u8, b.mint);
-            const owner = blk: {
-                if (b.owner.len > 0) {
-                    break :blk try allocator.dupe(u8, b.owner);
-                } else {
-                    break :blk null;
-                }
-            };
-            const program_id = blk: {
-                if (b.program_id.len > 0) {
-                    break :blk try allocator.dupe(u8, b.program_id);
-                } else {
-                    break :blk null;
-                }
-            };
             result[i] = .{
                 .accountIndex = b.account_index,
-                .mint = mint,
-                .owner = owner,
-                .programId = program_id,
+                .mint = b.mint,
+                .owner = b.owner,
+                .programId = b.program_id,
                 .uiTokenAmount = .{
                     .amount = try allocator.dupe(u8, b.ui_token_amount.amount),
                     .decimals = b.ui_token_amount.decimals,
@@ -1727,21 +1773,9 @@ pub const BlockHookContext = struct {
         allocator: std.mem.Allocator,
         loaded: sig.ledger.transaction_status.LoadedAddresses,
     ) !GetBlock.Response.UiLoadedAddresses {
-        const writable = try allocator.alloc([]const u8, loaded.writable.len);
-        errdefer allocator.free(writable);
-        for (loaded.writable, 0..) |pk, i| {
-            writable[i] = try allocator.dupe(u8, pk.base58String().constSlice());
-        }
-
-        const readonly = try allocator.alloc([]const u8, loaded.readonly.len);
-        errdefer allocator.free(readonly);
-        for (loaded.readonly, 0..) |pk, i| {
-            readonly[i] = try allocator.dupe(u8, pk.base58String().constSlice());
-        }
-
         return .{
-            .writable = writable,
-            .readonly = readonly,
+            .writable = try allocator.dupe(Pubkey, loaded.writable),
+            .readonly = try allocator.dupe(Pubkey, loaded.readonly),
         };
     }
 
@@ -1749,15 +1783,15 @@ pub const BlockHookContext = struct {
     fn convertReturnData(
         allocator: std.mem.Allocator,
         return_data: sig.ledger.transaction_status.TransactionReturnData,
-    ) !GetBlock.Response.UiReturnData {
+    ) !GetBlock.Response.UiTransactionReturnData {
         // Base64 encode the return data
         const encoded_len = std.base64.standard.Encoder.calcSize(return_data.data.len);
         const base64_data = try allocator.alloc(u8, encoded_len);
         _ = std.base64.standard.Encoder.encode(base64_data, return_data.data);
 
         return .{
-            .programId = try allocator.dupe(u8, return_data.program_id.base58String().constSlice()),
-            .data = .{ base64_data, "base64" },
+            .programId = return_data.program_id,
+            .data = .{ base64_data, .base64 },
         };
     }
 
@@ -1772,7 +1806,7 @@ pub const BlockHookContext = struct {
         errdefer allocator.free(rewards);
 
         for (rewards_value, 0..) |r, i| {
-            rewards[i] = try GetBlock.Response.UiReward.fromLedgerReward(allocator, r);
+            rewards[i] = try GetBlock.Response.UiReward.fromLedgerReward(r);
         }
         return rewards;
     }
@@ -1787,7 +1821,7 @@ pub const BlockHookContext = struct {
 
         for (items, 0..) |r, i| {
             rewards[i] = .{
-                .pubkey = try allocator.dupe(u8, r.pubkey.base58String().constSlice()),
+                .pubkey = r.pubkey,
                 .lamports = r.reward_info.lamports,
                 .postBalance = r.reward_info.post_balance,
                 .rewardType = switch (r.reward_info.reward_type) {
