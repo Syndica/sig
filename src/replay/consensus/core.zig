@@ -2826,7 +2826,7 @@ test "checkAndHandleNewRoot - success" {
 }
 
 test "computeBankStats - child bank heavier" {
-    const allocator = std.testing.allocator;
+    const gpa = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
@@ -2835,10 +2835,10 @@ test "computeBankStats - child bank heavier" {
     const hash1 = SlotAndHash{ .slot = 1, .hash = Hash.initRandom(random) };
     const hash2 = SlotAndHash{ .slot = 2, .hash = Hash.initRandom(random) };
 
-    var fixture = try TestFixture.init(allocator, root);
-    defer fixture.deinit(allocator);
+    var fixture = try TestFixture.init(gpa, root);
+    defer fixture.deinit(gpa);
 
-    try fixture.fill_keys(allocator, random, 1);
+    try fixture.fill_keys(gpa, random, 1);
 
     // Create the tree of banks in a BankForks object
     var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
@@ -2847,7 +2847,7 @@ test "computeBankStats - child bank heavier" {
         .{ hash2, hash1 },
     });
     try fixture.fillFork(
-        allocator,
+        gpa,
         .{ .root = root, .data = trees1 },
         .active,
     );
@@ -2860,37 +2860,32 @@ test "computeBankStats - child bank heavier" {
         // try testing.expectEqual(@as(usize, 0), result.len);
     }
 
-    var frozen_slots = try fixture.slot_tracker.frozenSlots(
-        allocator,
-    );
-    defer frozen_slots.deinit(allocator);
-    errdefer frozen_slots.deinit(allocator);
+    var frozen_slots = try fixture.slot_tracker.frozenSlots(gpa);
+    defer frozen_slots.deinit(gpa);
+    errdefer frozen_slots.deinit(gpa);
 
-    // TODO move this into fixture?
-    const versioned_stakes = try testEpochStakes(
-        allocator,
-        fixture.vote_pubkeys.items,
-        10000,
-        random,
-    );
-
-    const keys = versioned_stakes.stakes.vote_accounts.vote_accounts.keys();
-    for (keys) |key| {
-        var vote_account = versioned_stakes.stakes.vote_accounts.vote_accounts.getPtr(key).?;
-        try vote_account.account.state.votes.append(allocator, .{
-            .latency = 0,
-            .lockout = .{
-                .slot = 1,
-                .confirmation_count = 4,
-            },
-        });
-    }
-
-    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
-        allocator,
-        &.{versioned_stakes},
-    );
-    defer epoch_tracker.deinit(allocator);
+    var epoch_tracker: sig.core.EpochTracker = blk: {
+        const versioned_stakes = try testEpochStakes(
+            gpa,
+            fixture.vote_pubkeys.items,
+            10000,
+            random,
+        );
+        {
+            errdefer versioned_stakes.deinit(gpa);
+            for (versioned_stakes.stakes.vote_accounts.vote_accounts.values()) |*vote_account| {
+                try vote_account.account.state.votes.append(gpa, .{
+                    .latency = 0,
+                    .lockout = .{
+                        .slot = 1,
+                        .confirmation_count = 4,
+                    },
+                });
+            }
+        }
+        break :blk try .initWithEpochStakesOnlyForTest(gpa, &.{versioned_stakes});
+    };
+    defer epoch_tracker.deinit(gpa);
 
     var replay_tower = try createTestReplayTower(
         1,
@@ -2900,7 +2895,7 @@ test "computeBankStats - child bank heavier" {
     const slot_tracker_rw1_ptr, var slot_tracker_rw1_lg = slot_tracker_rw1.writeWithLock();
     defer slot_tracker_rw1_lg.unlock();
     const newly_computed_consensus_slots = try computeConsensusInputs(
-        allocator,
+        gpa,
         .noop,
         my_node_pubkey,
         &fixture.ancestors,
@@ -2911,11 +2906,11 @@ test "computeBankStats - child bank heavier" {
         &replay_tower,
         &fixture.latest_validator_votes_for_frozen_banks,
     );
-    defer allocator.free(newly_computed_consensus_slots);
+    defer gpa.free(newly_computed_consensus_slots);
 
     // Sort frozen slots by slot number
-    const slot_list = try allocator.alloc(u64, frozen_slots.count());
-    defer allocator.free(slot_list);
+    const slot_list = try gpa.alloc(u64, frozen_slots.count());
+    defer gpa.free(slot_list);
     var i: usize = 0;
     for (frozen_slots.keys()) |slot| {
         slot_list[i] = slot;

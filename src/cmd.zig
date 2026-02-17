@@ -2988,7 +2988,7 @@ const RpcLeaderScheduleService = struct {
                     self.allocator.destroy(entry);
                 }
 
-                try self.epoch_tracker.rooted_epochs.insert(self.allocator, entry);
+                try self.epoch_tracker.rooted_epochs.insert(self.allocator, e, entry);
             }
         }
     }
