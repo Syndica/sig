@@ -275,6 +275,133 @@ pub const PreviousEpochInflationRewards = struct {
     foundation_rate: f64,
 };
 
+test "BlockRewards - init and push" {
+    const allocator = std.testing.allocator;
+    var rewards = BlockRewards.init(allocator);
+    defer rewards.deinit();
+
+    try std.testing.expect(rewards.isEmpty());
+    try std.testing.expectEqual(@as(usize, 0), rewards.len());
+
+    try rewards.push(.{
+        .pubkey = Pubkey{ .data = [_]u8{1} ** 32 },
+        .reward_info = .{
+            .reward_type = .fee,
+            .lamports = 5000,
+            .post_balance = 1_000_000_000,
+            .commission = null,
+        },
+    });
+
+    try std.testing.expect(!rewards.isEmpty());
+    try std.testing.expectEqual(@as(usize, 1), rewards.len());
+    try std.testing.expectEqual(@as(i64, 5000), rewards.items()[0].reward_info.lamports);
+}
+
+test "BlockRewards - multiple rewards" {
+    const allocator = std.testing.allocator;
+    var rewards = BlockRewards.init(allocator);
+    defer rewards.deinit();
+
+    try rewards.push(.{
+        .pubkey = Pubkey{ .data = [_]u8{1} ** 32 },
+        .reward_info = .{
+            .reward_type = .fee,
+            .lamports = 5000,
+            .post_balance = 100,
+            .commission = null,
+        },
+    });
+    try rewards.push(.{
+        .pubkey = Pubkey{ .data = [_]u8{2} ** 32 },
+        .reward_info = .{
+            .reward_type = .staking,
+            .lamports = 10000,
+            .post_balance = 200,
+            .commission = 5,
+        },
+    });
+
+    try std.testing.expectEqual(@as(usize, 2), rewards.len());
+    try std.testing.expectEqual(RewardType.fee, rewards.items()[0].reward_info.reward_type);
+    try std.testing.expectEqual(RewardType.staking, rewards.items()[1].reward_info.reward_type);
+    try std.testing.expectEqual(@as(?u8, 5), rewards.items()[1].reward_info.commission);
+}
+
+test "KeyedRewardInfo.toLedgerReward" {
+    const keyed = KeyedRewardInfo{
+        .pubkey = Pubkey{ .data = [_]u8{1} ** 32 },
+        .reward_info = .{
+            .reward_type = .voting,
+            .lamports = -500,
+            .post_balance = 999_500,
+            .commission = 10,
+        },
+    };
+    const ledger_reward = keyed.toLedgerReward();
+    try std.testing.expectEqual(keyed.pubkey, ledger_reward.pubkey);
+    try std.testing.expectEqual(@as(i64, -500), ledger_reward.lamports);
+    try std.testing.expectEqual(@as(u64, 999_500), ledger_reward.post_balance);
+    try std.testing.expectEqual(RewardType.voting, ledger_reward.reward_type.?);
+    try std.testing.expectEqual(@as(?u8, 10), ledger_reward.commission);
+}
+
+test "BlockRewards.toLedgerRewards" {
+    const allocator = std.testing.allocator;
+    var rewards = BlockRewards.init(allocator);
+    defer rewards.deinit();
+
+    try rewards.push(.{
+        .pubkey = Pubkey{ .data = [_]u8{1} ** 32 },
+        .reward_info = .{
+            .reward_type = .fee,
+            .lamports = 5000,
+            .post_balance = 100,
+            .commission = null,
+        },
+    });
+    try rewards.push(.{
+        .pubkey = Pubkey{ .data = [_]u8{2} ** 32 },
+        .reward_info = .{
+            .reward_type = .rent,
+            .lamports = 200,
+            .post_balance = 300,
+            .commission = null,
+        },
+    });
+
+    const ledger_rewards = try rewards.toLedgerRewards(allocator);
+    defer allocator.free(ledger_rewards);
+
+    try std.testing.expectEqual(@as(usize, 2), ledger_rewards.len);
+    try std.testing.expectEqual(RewardType.fee, ledger_rewards[0].reward_type.?);
+    try std.testing.expectEqual(RewardType.rent, ledger_rewards[1].reward_type.?);
+    try std.testing.expectEqual(@as(i64, 5000), ledger_rewards[0].lamports);
+    try std.testing.expectEqual(@as(i64, 200), ledger_rewards[1].lamports);
+}
+
+test "BlockRewards.reserve" {
+    const allocator = std.testing.allocator;
+    var rewards = BlockRewards.init(allocator);
+    defer rewards.deinit();
+
+    // Reserve should not fail
+    try rewards.reserve(100);
+    try std.testing.expect(rewards.isEmpty());
+
+    // After reserve, pushes should succeed
+    try rewards.push(.{
+        .pubkey = Pubkey.ZEROES,
+        .reward_info = .{
+            .reward_type = .fee,
+            .lamports = 1,
+            .post_balance = 1,
+            .commission = null,
+        },
+    });
+    try std.testing.expectEqual(@as(usize, 1), rewards.len());
+}
+
 pub const EpochRewardStatus = union(enum) {
     active: struct {
         distribution_start_block_height: u64,

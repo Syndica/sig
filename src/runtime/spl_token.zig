@@ -538,3 +538,142 @@ test "isTokenProgram" {
     try testing.expect(!isTokenProgram(Pubkey.ZEROES));
     try testing.expect(!isTokenProgram(sig.runtime.program.system.ID));
 }
+
+test "realNumberString - zero decimals" {
+    const allocator = std.testing.allocator;
+    const result = try realNumberString(allocator, 42, 0);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("42", result);
+}
+
+test "realNumberString - 9 decimals with exact SOL" {
+    const allocator = std.testing.allocator;
+    const result = try realNumberString(allocator, 1_000_000_000, 9);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("1.000000000", result);
+}
+
+test "realNumberString - 3 decimals" {
+    const allocator = std.testing.allocator;
+    const result = try realNumberString(allocator, 1_234_567_890, 3);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("1234567.890", result);
+}
+
+test "realNumberString - amount smaller than decimals requires padding" {
+    const allocator = std.testing.allocator;
+    // amount=42, decimals=6 -> "0.000042"
+    const result = try realNumberString(allocator, 42, 6);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("0.000042", result);
+}
+
+test "realNumberString - zero amount with decimals" {
+    const allocator = std.testing.allocator;
+    const result = try realNumberString(allocator, 0, 9);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("0.000000000", result);
+}
+
+test "realNumberStringTrimmed - trims trailing zeros" {
+    const allocator = std.testing.allocator;
+    // 1 SOL = 1_000_000_000 with 9 decimals -> "1" (all trailing zeros trimmed including dot)
+    const result = try realNumberStringTrimmed(allocator, 1_000_000_000, 9);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("1", result);
+}
+
+test "realNumberStringTrimmed - partial trailing zeros" {
+    const allocator = std.testing.allocator;
+    // 1_234_567_890 with 3 decimals -> "1234567.89" (one trailing zero trimmed)
+    const result = try realNumberStringTrimmed(allocator, 1_234_567_890, 3);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("1234567.89", result);
+}
+
+test "realNumberStringTrimmed - no trailing zeros" {
+    const allocator = std.testing.allocator;
+    // Agave example: 600010892365405206, 9 -> "600010892.365405206"
+    const result = try realNumberStringTrimmed(allocator, 600010892365405206, 9);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("600010892.365405206", result);
+}
+
+test "realNumberStringTrimmed - zero decimals" {
+    const allocator = std.testing.allocator;
+    const result = try realNumberStringTrimmed(allocator, 42, 0);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("42", result);
+}
+
+test "realNumberStringTrimmed - zero amount" {
+    const allocator = std.testing.allocator;
+    const result = try realNumberStringTrimmed(allocator, 0, 6);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("0", result);
+}
+
+test "formatTokenAmount - ui_amount_string uses trimmed format" {
+    const allocator = std.testing.allocator;
+    // 1.5 SOL -> ui_amount_string should be "1.5", not "1.500000000"
+    const result = try formatTokenAmount(allocator, 1_500_000_000, 9);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqualStrings("1500000000", result.amount);
+    try std.testing.expectEqualStrings("1.5", result.ui_amount_string);
+    try std.testing.expectEqual(@as(u8, 9), result.decimals);
+}
+
+test "formatTokenAmount - small fractional amount" {
+    const allocator = std.testing.allocator;
+    // 1 lamport = 0.000000001 SOL -> trimmed to "0.000000001"
+    const result = try formatTokenAmount(allocator, 1, 9);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqualStrings("1", result.amount);
+    try std.testing.expectEqualStrings("0.000000001", result.ui_amount_string);
+}
+
+test "ParsedMint.parse - uninitialized returns null" {
+    var data: [MINT_ACCOUNT_SIZE]u8 = undefined;
+    @memset(&data, 0);
+    data[MINT_DECIMALS_OFFSET] = 6;
+    data[MINT_IS_INITIALIZED_OFFSET] = 0; // uninitialized
+
+    try std.testing.expect(ParsedMint.parse(&data) == null);
+}
+
+test "ParsedMint.parse - short data returns null" {
+    var data: [50]u8 = undefined;
+    @memset(&data, 0);
+    try std.testing.expect(ParsedMint.parse(&data) == null);
+}
+
+test "ParsedTokenAccount.parse - frozen state" {
+    var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
+    @memset(&data, 0);
+
+    const mint = Pubkey{ .data = [_]u8{1} ** 32 };
+    @memcpy(data[MINT_OFFSET..][0..32], &mint.data);
+    const owner = Pubkey{ .data = [_]u8{2} ** 32 };
+    @memcpy(data[OWNER_OFFSET..][0..32], &owner.data);
+    std.mem.writeInt(u64, data[AMOUNT_OFFSET..][0..8], 500, .little);
+    data[STATE_OFFSET] = 2; // frozen
+
+    const parsed = ParsedTokenAccount.parse(&data);
+    try std.testing.expect(parsed != null);
+    try std.testing.expectEqual(TokenAccountState.frozen, parsed.?.state);
+    try std.testing.expectEqual(@as(u64, 500), parsed.?.amount);
+}
+
+test "MintDecimalsCache - basic usage" {
+    const allocator = std.testing.allocator;
+    var cache = MintDecimalsCache.init(allocator);
+    defer cache.deinit();
+
+    const mint = Pubkey{ .data = [_]u8{1} ** 32 };
+    try std.testing.expectEqual(@as(?u8, null), cache.get(mint));
+
+    try cache.put(mint, 6);
+    try std.testing.expectEqual(@as(?u8, 6), cache.get(mint));
+}
