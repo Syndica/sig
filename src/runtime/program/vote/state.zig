@@ -6039,3 +6039,490 @@ fn recentVotes(
 
     return votes.toOwnedSlice();
 }
+
+// ── VoteState union tests ──────────────────────────────────────────────
+
+test "state.VoteState.initV3 and field accessors" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const node_pk = Pubkey.initRandom(random);
+    const voter_pk = Pubkey.initRandom(random);
+    const withdrawer_pk = Pubkey.initRandom(random);
+    const commission_val: u8 = 50;
+    const epoch: Epoch = 7;
+
+    var vs = try VoteState.initV3(
+        allocator,
+        node_pk,
+        voter_pk,
+        withdrawer_pk,
+        commission_val,
+        epoch,
+    );
+    defer vs.deinit(allocator);
+
+    // Version queries
+    try std.testing.expect(vs.isV3());
+    try std.testing.expect(!vs.isV4());
+
+    // Field accessors
+    try std.testing.expect(vs.nodePubkey().equals(&node_pk));
+    try std.testing.expect(vs.withdrawerKey().equals(&withdrawer_pk));
+    try std.testing.expectEqual(commission_val, vs.commission());
+
+    // Root slot
+    try std.testing.expectEqual(null, vs.rootSlot());
+    vs.rootSlotMut().* = 42;
+    try std.testing.expectEqual(42, vs.rootSlot());
+
+    // Last timestamp
+    try std.testing.expectEqual(0, vs.lastTimestamp().slot);
+
+    // isUninitialized
+    try std.testing.expect(!vs.isUninitialized());
+
+    // Votes
+    try std.testing.expectEqual(0, vs.votes().items.len);
+
+    // Epoch credits
+    try std.testing.expectEqual(0, vs.epochCreditsList().items.len);
+
+    // V4-specific accessors should return null for v3
+    try std.testing.expectEqual(null, vs.inflationRewardsCommissionBps());
+    try std.testing.expectEqual(null, vs.blockRevenueCollector());
+    try std.testing.expectEqual(null, vs.blockRevenueCollectorMut());
+    try std.testing.expectEqual(null, vs.inflationRewardsCollector());
+
+    // setInflationRewardsCommissionBps is a no-op on v3
+    vs.setInflationRewardsCommissionBps(5000);
+    try std.testing.expectEqual(null, vs.inflationRewardsCommissionBps());
+
+    // Mutable accessors
+    vs.nodePubkeyMut().* = Pubkey.ZEROES;
+    try std.testing.expect(vs.nodePubkey().equals(&Pubkey.ZEROES));
+
+    vs.withdrawerMut().* = Pubkey.ZEROES;
+    try std.testing.expect(vs.withdrawerKey().equals(&Pubkey.ZEROES));
+
+    // setCommission on v3
+    vs.setCommission(75);
+    try std.testing.expectEqual(75, vs.commission());
+
+    // asV3 / asV4
+    try std.testing.expect(vs.asV3() != null);
+    try std.testing.expectEqual(null, vs.asV4());
+    try std.testing.expect(vs.asV3Const() != null);
+    try std.testing.expectEqual(null, vs.asV4Const());
+}
+
+test "state.VoteState.initV4 and field accessors" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const node_pk = Pubkey.initRandom(random);
+    const voter_pk = Pubkey.initRandom(random);
+    const withdrawer_pk = Pubkey.initRandom(random);
+    const vote_pk = Pubkey.initRandom(random);
+    const commission_pct: u8 = 50;
+    const epoch: Epoch = 7;
+
+    var vs = try VoteState.initV4(
+        allocator,
+        node_pk,
+        voter_pk,
+        withdrawer_pk,
+        commission_pct,
+        epoch,
+        vote_pk,
+    );
+    defer vs.deinit(allocator);
+
+    // Version queries
+    try std.testing.expect(vs.isV4());
+    try std.testing.expect(!vs.isV3());
+
+    // Field accessors
+    try std.testing.expect(vs.nodePubkey().equals(&node_pk));
+    try std.testing.expect(vs.withdrawerKey().equals(&withdrawer_pk));
+    try std.testing.expectEqual(commission_pct, vs.commission());
+
+    // Root slot
+    try std.testing.expectEqual(null, vs.rootSlot());
+    vs.rootSlotMut().* = 99;
+    try std.testing.expectEqual(99, vs.rootSlot());
+
+    // Last timestamp
+    try std.testing.expectEqual(0, vs.lastTimestamp().slot);
+
+    // isUninitialized: v4 is always initialized
+    try std.testing.expect(!vs.isUninitialized());
+
+    // Votes
+    try std.testing.expectEqual(0, vs.votes().items.len);
+
+    // Epoch credits
+    try std.testing.expectEqual(0, vs.epochCreditsList().items.len);
+
+    // V4-specific accessors
+    // commission_pct=50 => inflation_rewards_commission_bps=5000
+    try std.testing.expectEqual(5000, vs.inflationRewardsCommissionBps());
+    try std.testing.expect(vs.blockRevenueCollector() != null);
+    try std.testing.expect(vs.blockRevenueCollectorMut() != null);
+    try std.testing.expect(vs.inflationRewardsCollector() != null);
+    try std.testing.expect(vs.inflationRewardsCollector().?.equals(&vote_pk));
+
+    // setInflationRewardsCommissionBps on v4
+    vs.setInflationRewardsCommissionBps(1234);
+    try std.testing.expectEqual(1234, vs.inflationRewardsCommissionBps());
+    // commission() returns bps / 100 = 12
+    try std.testing.expectEqual(12, vs.commission());
+
+    // setCommission on v4: sets bps = pct * 100
+    vs.setCommission(25);
+    try std.testing.expectEqual(2500, vs.inflationRewardsCommissionBps());
+    try std.testing.expectEqual(25, vs.commission());
+
+    // Mutable accessors
+    vs.nodePubkeyMut().* = Pubkey.ZEROES;
+    try std.testing.expect(vs.nodePubkey().equals(&Pubkey.ZEROES));
+
+    vs.withdrawerMut().* = Pubkey.ZEROES;
+    try std.testing.expect(vs.withdrawerKey().equals(&Pubkey.ZEROES));
+
+    // blockRevenueCollectorMut
+    vs.blockRevenueCollectorMut().?.* = Pubkey.ZEROES;
+    try std.testing.expect(vs.blockRevenueCollector().?.equals(&Pubkey.ZEROES));
+
+    // asV3 / asV4
+    try std.testing.expectEqual(null, vs.asV3());
+    try std.testing.expect(vs.asV4() != null);
+    try std.testing.expectEqual(null, vs.asV3Const());
+    try std.testing.expect(vs.asV4Const() != null);
+}
+
+test "state.VoteState.clone and equals" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const node_pk = Pubkey.initRandom(random);
+    const voter_pk = Pubkey.initRandom(random);
+    const withdrawer_pk = Pubkey.initRandom(random);
+    const vote_pk = Pubkey.initRandom(random);
+
+    // Test clone and equals for V3
+    {
+        var vs3 = try VoteState.initV3(allocator, node_pk, voter_pk, withdrawer_pk, 10, 0);
+        defer vs3.deinit(allocator);
+
+        var clone3 = try vs3.clone(allocator);
+        defer clone3.deinit(allocator);
+
+        try std.testing.expect(vs3.equals(&clone3));
+        try std.testing.expect(clone3.equals(&vs3));
+    }
+
+    // Test clone and equals for V4
+    {
+        var vs4 = try VoteState.initV4(allocator, node_pk, voter_pk, withdrawer_pk, 10, 0, vote_pk);
+        defer vs4.deinit(allocator);
+
+        var clone4 = try vs4.clone(allocator);
+        defer clone4.deinit(allocator);
+
+        try std.testing.expect(vs4.equals(&clone4));
+        try std.testing.expect(clone4.equals(&vs4));
+    }
+
+    // Test cross-version equals returns false
+    {
+        var vs3 = try VoteState.initV3(allocator, node_pk, voter_pk, withdrawer_pk, 10, 0);
+        defer vs3.deinit(allocator);
+
+        var vs4 = try VoteState.initV4(allocator, node_pk, voter_pk, withdrawer_pk, 10, 0, vote_pk);
+        defer vs4.deinit(allocator);
+
+        try std.testing.expect(!vs3.equals(&vs4));
+        try std.testing.expect(!vs4.equals(&vs3));
+    }
+}
+
+test "state.VoteState.authorizedVoters v3 vs v4" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const voter_pk = Pubkey.initRandom(random);
+
+    // V3: authorized_voters stored as `voters`
+    {
+        var vs3 = try VoteState.initV3(allocator, Pubkey.ZEROES, voter_pk, Pubkey.ZEROES, 0, 5);
+        defer vs3.deinit(allocator);
+
+        var av = vs3.authorizedVotersMut();
+        try std.testing.expectEqual(1, av.count());
+        try std.testing.expect(av.getAuthorizedVoter(5).?.equals(&voter_pk));
+    }
+
+    // V4: authorized_voters stored as `authorized_voters`
+    {
+        var vs4 = try VoteState.initV4(
+            allocator,
+            Pubkey.ZEROES,
+            voter_pk,
+            Pubkey.ZEROES,
+            0,
+            5,
+            Pubkey.ZEROES,
+        );
+        defer vs4.deinit(allocator);
+
+        var av = vs4.authorizedVotersMut();
+        try std.testing.expectEqual(1, av.count());
+        try std.testing.expect(av.getAuthorizedVoter(5).?.equals(&voter_pk));
+    }
+}
+
+test "state.VoteState.votesMut and epochCreditsListMut" {
+    const allocator = std.testing.allocator;
+
+    // V3
+    {
+        var vs3 = try VoteState.initV3(allocator, Pubkey.ZEROES, Pubkey.ZEROES, Pubkey.ZEROES, 0, 0);
+        defer vs3.deinit(allocator);
+
+        try vs3.votesMut().append(allocator, .{
+            .latency = 0,
+            .lockout = .{ .slot = 42, .confirmation_count = 1 },
+        });
+        try std.testing.expectEqual(1, vs3.votes().items.len);
+        try std.testing.expectEqual(42, vs3.votes().items[0].lockout.slot);
+
+        try vs3.epochCreditsListMut().append(allocator, .{
+            .epoch = 1,
+            .credits = 100,
+            .prev_credits = 0,
+        });
+        try std.testing.expectEqual(1, vs3.epochCreditsList().items.len);
+    }
+
+    // V4
+    {
+        var vs4 = try VoteState.initV4(
+            allocator,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            0,
+            0,
+            Pubkey.ZEROES,
+        );
+        defer vs4.deinit(allocator);
+
+        try vs4.votesMut().append(allocator, .{
+            .latency = 0,
+            .lockout = .{ .slot = 99, .confirmation_count = 1 },
+        });
+        try std.testing.expectEqual(1, vs4.votes().items.len);
+        try std.testing.expectEqual(99, vs4.votes().items[0].lockout.slot);
+
+        try vs4.epochCreditsListMut().append(allocator, .{
+            .epoch = 2,
+            .credits = 200,
+            .prev_credits = 0,
+        });
+        try std.testing.expectEqual(1, vs4.epochCreditsList().items.len);
+    }
+}
+
+test "state.VoteState.delegating methods" {
+    const allocator = std.testing.allocator;
+
+    // V3
+    {
+        var vs3 = try VoteState.initV3(allocator, Pubkey.ZEROES, Pubkey.ZEROES, Pubkey.ZEROES, 0, 0);
+        defer vs3.deinit(allocator);
+
+        // Empty state
+        try std.testing.expectEqual(null, vs3.lastVotedSlot());
+        try std.testing.expectEqual(null, vs3.lastLockout());
+        try std.testing.expect(!vs3.containsSlot(0));
+        try std.testing.expectEqual(0, vs3.epochCredits());
+        try std.testing.expectEqual(0, vs3.getCredits());
+
+        // Add a vote
+        try vs3.votesMut().append(allocator, .{
+            .latency = 0,
+            .lockout = .{ .slot = 10, .confirmation_count = 1 },
+        });
+        try std.testing.expectEqual(10, vs3.lastVotedSlot());
+        try std.testing.expectEqual(10, vs3.lastLockout().?.slot);
+        try std.testing.expect(vs3.containsSlot(10));
+        try std.testing.expect(!vs3.containsSlot(11));
+
+        // creditsForVoteAtIndex: latency=0 means legacy vote, returns 1 credit
+        try std.testing.expectEqual(1, vs3.creditsForVoteAtIndex(0));
+
+        // incrementCredits
+        try vs3.incrementCredits(allocator, 1, 5);
+        try std.testing.expectEqual(5, vs3.getCredits());
+    }
+
+    // V4
+    {
+        var vs4 = try VoteState.initV4(
+            allocator,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            0,
+            0,
+            Pubkey.ZEROES,
+        );
+        defer vs4.deinit(allocator);
+
+        try std.testing.expectEqual(null, vs4.lastVotedSlot());
+        try std.testing.expectEqual(null, vs4.lastLockout());
+        try std.testing.expect(!vs4.containsSlot(0));
+        try std.testing.expectEqual(0, vs4.getCredits());
+
+        try vs4.votesMut().append(allocator, .{
+            .latency = 0,
+            .lockout = .{ .slot = 20, .confirmation_count = 1 },
+        });
+        try std.testing.expectEqual(20, vs4.lastVotedSlot());
+        try std.testing.expectEqual(20, vs4.lastLockout().?.slot);
+        try std.testing.expect(vs4.containsSlot(20));
+
+        try vs4.incrementCredits(allocator, 1, 10);
+        try std.testing.expectEqual(10, vs4.getCredits());
+    }
+}
+
+test "state.VoteStateVersions.convertToVoteState: v0_23_5 to v3" {
+    const allocator = std.testing.allocator;
+    const node_pk = Pubkey.ZEROES;
+    const voter_pk = Pubkey.ZEROES;
+    const withdrawer_pk = Pubkey.ZEROES;
+
+    var versions: VoteStateVersions = .{ .v0_23_5 = try VoteState0_23_5.init(
+        node_pk,
+        voter_pk,
+        withdrawer_pk,
+        10,
+        0,
+    ) };
+    defer versions.deinit(allocator);
+
+    var vs = try versions.convertToVoteState(allocator, null, false);
+    defer vs.deinit(allocator);
+
+    try std.testing.expect(vs.isV3());
+    try std.testing.expect(!vs.isV4());
+    try std.testing.expect(vs.nodePubkey().equals(&node_pk));
+    try std.testing.expect(vs.withdrawerKey().equals(&withdrawer_pk));
+    try std.testing.expectEqual(10, vs.commission());
+    try std.testing.expectEqual(null, vs.rootSlot());
+    try std.testing.expectEqual(0, vs.votes().items.len);
+    try std.testing.expectEqual(0, vs.epochCreditsList().items.len);
+    // v0_23_5 with ZEROES voter → authorized_voters count is 0
+    try std.testing.expectEqual(0, vs.authorizedVoters().count());
+}
+
+test "state.VoteStateVersions.convertToVoteState: v1_14_11 to v3" {
+    const allocator = std.testing.allocator;
+    const node_pk = Pubkey.ZEROES;
+    const voter_pk = Pubkey.ZEROES;
+    const withdrawer_pk = Pubkey.ZEROES;
+
+    var versions: VoteStateVersions = .{ .v1_14_11 = try VoteState1_14_11.init(
+        allocator,
+        node_pk,
+        voter_pk,
+        withdrawer_pk,
+        20,
+        5,
+    ) };
+    defer versions.deinit(allocator);
+
+    var vs = try versions.convertToVoteState(allocator, null, false);
+    defer vs.deinit(allocator);
+
+    try std.testing.expect(vs.isV3());
+    try std.testing.expect(!vs.isV4());
+    try std.testing.expect(vs.nodePubkey().equals(&node_pk));
+    try std.testing.expect(vs.withdrawerKey().equals(&withdrawer_pk));
+    try std.testing.expectEqual(20, vs.commission());
+    try std.testing.expectEqual(null, vs.rootSlot());
+    try std.testing.expectEqual(0, vs.votes().items.len);
+    try std.testing.expectEqual(0, vs.epochCreditsList().items.len);
+    try std.testing.expectEqual(1, vs.authorizedVoters().count());
+}
+
+test "state.VoteStateVersions.convertToVoteState: v3 stays v3" {
+    const allocator = std.testing.allocator;
+
+    var versions: VoteStateVersions = .{ .v3 = try VoteStateV3.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        30,
+        0,
+    ) };
+    defer versions.deinit(allocator);
+
+    var vs = try versions.convertToVoteState(allocator, null, false);
+    defer vs.deinit(allocator);
+
+    try std.testing.expect(vs.isV3());
+    try std.testing.expectEqual(30, vs.commission());
+}
+
+test "state.VoteStateVersions.convertToVoteState: v4 stays v4 even with target_v4=false" {
+    const allocator = std.testing.allocator;
+    const vote_pk = Pubkey.ZEROES;
+
+    var versions: VoteStateVersions = .{ .v4 = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        40,
+        0,
+        vote_pk,
+    ) };
+    defer versions.deinit(allocator);
+
+    var vs = try versions.convertToVoteState(allocator, vote_pk, false);
+    defer vs.deinit(allocator);
+
+    // v4 input stays v4 regardless of target_v4 flag
+    try std.testing.expect(vs.isV4());
+    try std.testing.expectEqual(40, vs.commission());
+}
+
+test "state.VoteStateVersions.convertToVoteState: target_v4=true converts to v4" {
+    const allocator = std.testing.allocator;
+    const vote_pk = Pubkey.ZEROES;
+
+    // v3 -> v4 via target_v4=true
+    var versions: VoteStateVersions = .{ .v3 = try VoteStateV3.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        50,
+        0,
+    ) };
+    defer versions.deinit(allocator);
+
+    var vs = try versions.convertToVoteState(allocator, vote_pk, true);
+    defer vs.deinit(allocator);
+
+    try std.testing.expect(vs.isV4());
+    try std.testing.expectEqual(50, vs.commission());
+}
