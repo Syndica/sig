@@ -765,5 +765,41 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
             try std.testing.expectEqual(null, try db.get(allocator, cf1, 30));
             try std.testing.expect(null != try db.get(allocator, cf1, 40));
         }
+
+        test "iterator nextKey and nextValue" {
+            // Since keys use big-endian and values use little-endian serialization,
+            // this would produce incorrect results when the key and value types differ.
+            const allocator = std.testing.allocator;
+            const path = test_dir ++ @src().fn_name;
+            try ledger.tests.freshDir(path);
+            var db = try DB.open(allocator, .noop, path, false);
+            defer db.deinit();
+
+            try db.put(cf1, 1, .{ .hello = 111 });
+            try db.put(cf1, 2, .{ .hello = 222 });
+            try db.put(cf1, 3, .{ .hello = 333 });
+
+            // Test nextKey
+            {
+                var iter = try db.iterator(cf1, .forward, null);
+                defer iter.deinit();
+
+                try std.testing.expectEqual(@as(u64, 1), try iter.nextKey());
+                try std.testing.expectEqual(@as(u64, 2), try iter.nextKey());
+                try std.testing.expectEqual(@as(u64, 3), try iter.nextKey());
+                try std.testing.expectEqual(null, try iter.nextKey());
+            }
+
+            // Test nextValue
+            {
+                var iter = try db.iterator(cf1, .forward, null);
+                defer iter.deinit();
+
+                try std.testing.expectEqual(Value1{ .hello = 111 }, try iter.nextValue());
+                try std.testing.expectEqual(Value1{ .hello = 222 }, try iter.nextValue());
+                try std.testing.expectEqual(Value1{ .hello = 333 }, try iter.nextValue());
+                try std.testing.expectEqual(null, try iter.nextValue());
+            }
+        }
     };
 }
