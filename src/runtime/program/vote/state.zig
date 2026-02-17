@@ -780,6 +780,83 @@ pub const VoteStateVersions = union(enum(u32)) {
         }
     }
 
+    /// Convert to the unified VoteState union. Old versions (v0, v1) are upgraded:
+    /// if target is v4, they convert to VoteStateV4; if target is v3, they convert to VoteStateV3.
+    /// The `target_version` determines which union variant the result will be when converting
+    /// from old formats. Already-v3/v4 states map directly to their respective union variant.
+    pub fn convertToVoteState(
+        self: VoteStateVersions,
+        allocator: Allocator,
+        vote_pubkey: ?Pubkey,
+        target_v4: bool,
+    ) !VoteState {
+        if (target_v4) {
+            return .{ .v4 = try self.convertToV4(allocator, vote_pubkey) };
+        }
+        // target is v3: convert old versions to v3, v4 stays v4
+        switch (self) {
+            .v3 => |state| return .{ .v3 = try state.clone(allocator) },
+            .v4 => |state| return .{ .v4 = try state.clone(allocator) },
+            .v0_23_5 => |state| {
+                const authorized_voters: AuthorizedVoters = if (state.voter.isZeroed())
+                    .EMPTY
+                else
+                    try AuthorizedVoters.init(
+                        allocator,
+                        state.voter_epoch,
+                        state.voter,
+                    );
+                errdefer authorized_voters.deinit(allocator);
+
+                const votes_slice = try VoteStateVersions.landedVotesFromLockouts(
+                    allocator,
+                    state.votes.items,
+                );
+                errdefer allocator.free(votes_slice);
+
+                const epoch_credits = try state.epoch_credits.clone(allocator);
+                errdefer epoch_credits.deinit(allocator);
+
+                return .{ .v3 = .{
+                    .node_pubkey = state.node_pubkey,
+                    .withdrawer = state.withdrawer,
+                    .commission = state.commission,
+                    .votes = .fromOwnedSlice(votes_slice),
+                    .root_slot = state.root_slot,
+                    .voters = authorized_voters,
+                    .prior_voters = CircBufV1.init(),
+                    .epoch_credits = epoch_credits,
+                    .last_timestamp = state.last_timestamp,
+                } };
+            },
+            .v1_14_11 => |state| {
+                const authorized_voters = try state.voters.clone(allocator);
+                errdefer authorized_voters.deinit(allocator);
+
+                const votes_slice = try VoteStateVersions.landedVotesFromLockouts(
+                    allocator,
+                    state.votes.items,
+                );
+                errdefer allocator.free(votes_slice);
+
+                const epoch_credits = try state.epoch_credits.clone(allocator);
+                errdefer epoch_credits.deinit(allocator);
+
+                return .{ .v3 = .{
+                    .node_pubkey = state.node_pubkey,
+                    .withdrawer = state.withdrawer,
+                    .commission = state.commission,
+                    .votes = .fromOwnedSlice(votes_slice),
+                    .root_slot = state.root_slot,
+                    .voters = authorized_voters,
+                    .prior_voters = state.prior_voters,
+                    .epoch_credits = epoch_credits,
+                    .last_timestamp = state.last_timestamp,
+                } };
+            },
+        }
+    }
+
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
     /// [SIMD-0185] v4 is never uninitialized.
     pub fn isUninitialized(self: VoteStateVersions) bool {
@@ -789,6 +866,449 @@ pub const VoteStateVersions = union(enum(u32)) {
             .v3 => |state| return state.voters.count() == 0,
             .v4 => |_| return false,
         }
+    }
+};
+
+/// Unified vote state that wraps either VoteStateV3 or VoteStateV4, centralizing
+/// version-dependent dispatch so callers don't need to track `use_v4` / `target_version`.
+pub const VoteState = union(enum(u32)) {
+    v3: VoteStateV3 = 2,
+    v4: VoteStateV4 = 3,
+
+    // ── Construction / lifecycle ──────────────────────────────────────
+
+    pub fn initV3(
+        allocator: Allocator,
+        node_pubkey: Pubkey,
+        authorized_voter: Pubkey,
+        withdrawer: Pubkey,
+        commission_val: u8,
+        voter_epoch: Epoch,
+    ) Allocator.Error!VoteState {
+        return .{ .v3 = try VoteStateV3.init(allocator, node_pubkey, authorized_voter, withdrawer, commission_val, voter_epoch) };
+    }
+
+    pub fn initV4(
+        allocator: Allocator,
+        node_pubkey: Pubkey,
+        authorized_voter: Pubkey,
+        withdrawer: Pubkey,
+        commission_pct: u8,
+        voter_epoch: Epoch,
+        vote_pubkey: Pubkey,
+    ) Allocator.Error!VoteState {
+        return .{ .v4 = try VoteStateV4.init(allocator, node_pubkey, authorized_voter, withdrawer, commission_pct, voter_epoch, vote_pubkey) };
+    }
+
+    pub fn deinit(self: *VoteState, allocator: Allocator) void {
+        switch (self.*) {
+            inline else => |*s| s.deinit(allocator),
+        }
+    }
+
+    pub fn clone(self: VoteState, allocator: Allocator) Allocator.Error!VoteState {
+        return switch (self) {
+            .v3 => |s| .{ .v3 = try s.clone(allocator) },
+            .v4 => |s| .{ .v4 = try s.clone(allocator) },
+        };
+    }
+
+    pub fn equals(self: *const VoteState, other: *const VoteState) bool {
+        return switch (self.*) {
+            .v3 => |*s| switch (other.*) {
+                .v3 => |*o| s.equals(o),
+                .v4 => false,
+            },
+            .v4 => |*s| switch (other.*) {
+                .v4 => |*o| s.equals(o),
+                .v3 => false,
+            },
+        };
+    }
+
+    // ── Field accessors ──────────────────────────────────────────────
+    // These provide uniform access to fields that exist on both V3 and V4,
+    // even if they have different names (e.g. V3 `voters` vs V4 `authorized_voters`).
+
+    pub fn nodePubkey(self: *const VoteState) *const Pubkey {
+        return switch (self.*) {
+            .v3 => |*s| &s.node_pubkey,
+            .v4 => |*s| &s.node_pubkey,
+        };
+    }
+
+    pub fn nodePubkeyMut(self: *VoteState) *Pubkey {
+        return switch (self.*) {
+            .v3 => |*s| &s.node_pubkey,
+            .v4 => |*s| &s.node_pubkey,
+        };
+    }
+
+    pub fn withdrawerKey(self: *const VoteState) *const Pubkey {
+        return switch (self.*) {
+            .v3 => |*s| &s.withdrawer,
+            .v4 => |*s| &s.withdrawer,
+        };
+    }
+
+    pub fn withdrawerMut(self: *VoteState) *Pubkey {
+        return switch (self.*) {
+            .v3 => |*s| &s.withdrawer,
+            .v4 => |*s| &s.withdrawer,
+        };
+    }
+
+    pub fn commission(self: *const VoteState) u8 {
+        return switch (self.*) {
+            .v3 => |s| s.commission,
+            .v4 => |*s| s.commission(),
+        };
+    }
+
+    /// Set commission. V3: sets field directly. V4: sets inflation_rewards_commission_bps.
+    pub fn setCommission(self: *VoteState, commission_pct: u8) void {
+        switch (self.*) {
+            .v3 => |*s| s.commission = commission_pct,
+            .v4 => |*s| s.inflation_rewards_commission_bps = @as(u16, commission_pct) * 100,
+        }
+    }
+
+    pub fn votes(self: *const VoteState) *const std.ArrayListUnmanaged(LandedVote) {
+        return switch (self.*) {
+            .v3 => |*s| &s.votes,
+            .v4 => |*s| &s.votes,
+        };
+    }
+
+    pub fn votesMut(self: *VoteState) *std.ArrayListUnmanaged(LandedVote) {
+        return switch (self.*) {
+            .v3 => |*s| &s.votes,
+            .v4 => |*s| &s.votes,
+        };
+    }
+
+    pub fn rootSlot(self: *const VoteState) ?Slot {
+        return switch (self.*) {
+            .v3 => |s| s.root_slot,
+            .v4 => |s| s.root_slot,
+        };
+    }
+
+    pub fn rootSlotMut(self: *VoteState) *?Slot {
+        return switch (self.*) {
+            .v3 => |*s| &s.root_slot,
+            .v4 => |*s| &s.root_slot,
+        };
+    }
+
+    pub fn authorizedVoters(self: *const VoteState) *const AuthorizedVoters {
+        return switch (self.*) {
+            .v3 => |*s| &s.voters,
+            .v4 => |*s| &s.authorized_voters,
+        };
+    }
+
+    pub fn authorizedVotersMut(self: *VoteState) *AuthorizedVoters {
+        return switch (self.*) {
+            .v3 => |*s| &s.voters,
+            .v4 => |*s| &s.authorized_voters,
+        };
+    }
+
+    pub fn epochCreditsList(self: *const VoteState) *const std.ArrayListUnmanaged(EpochCredit) {
+        return switch (self.*) {
+            .v3 => |*s| &s.epoch_credits,
+            .v4 => |*s| &s.epoch_credits,
+        };
+    }
+
+    pub fn epochCreditsListMut(self: *VoteState) *std.ArrayListUnmanaged(EpochCredit) {
+        return switch (self.*) {
+            .v3 => |*s| &s.epoch_credits,
+            .v4 => |*s| &s.epoch_credits,
+        };
+    }
+
+    pub fn lastTimestamp(self: *const VoteState) BlockTimestamp {
+        return switch (self.*) {
+            .v3 => |s| s.last_timestamp,
+            .v4 => |s| s.last_timestamp,
+        };
+    }
+
+    // ── V4-specific field accessors ──────────────────────────────────
+
+    pub fn inflationRewardsCommissionBps(self: *const VoteState) ?u16 {
+        return switch (self.*) {
+            .v3 => null,
+            .v4 => |s| s.inflation_rewards_commission_bps,
+        };
+    }
+
+    pub fn setInflationRewardsCommissionBps(self: *VoteState, bps: u16) void {
+        switch (self.*) {
+            .v3 => {},
+            .v4 => |*s| s.inflation_rewards_commission_bps = bps,
+        }
+    }
+
+    pub fn blockRevenueCollector(self: *const VoteState) ?*const Pubkey {
+        return switch (self.*) {
+            .v3 => null,
+            .v4 => |*s| &s.block_revenue_collector,
+        };
+    }
+
+    pub fn blockRevenueCollectorMut(self: *VoteState) ?*Pubkey {
+        return switch (self.*) {
+            .v3 => null,
+            .v4 => |*s| &s.block_revenue_collector,
+        };
+    }
+
+    pub fn inflationRewardsCollector(self: *const VoteState) ?*const Pubkey {
+        return switch (self.*) {
+            .v3 => null,
+            .v4 => |*s| &s.inflation_rewards_collector,
+        };
+    }
+
+    // ── Delegating methods (same interface on both V3 and V4) ────────
+
+    pub fn isUninitialized(self: VoteState) bool {
+        return switch (self) {
+            .v3 => |s| s.isUninitialized(),
+            .v4 => |s| s.isUninitialized(),
+        };
+    }
+
+    pub fn epochCredits(self: *const VoteState) u64 {
+        return switch (self.*) {
+            inline else => |*s| s.epochCredits(),
+        };
+    }
+
+    pub fn lastLockout(self: *const VoteState) ?Lockout {
+        return switch (self.*) {
+            inline else => |*s| s.lastLockout(),
+        };
+    }
+
+    pub fn lastVotedSlot(self: *const VoteState) ?Slot {
+        return switch (self.*) {
+            inline else => |*s| s.lastVotedSlot(),
+        };
+    }
+
+    pub fn creditsForVoteAtIndex(self: *const VoteState, index: usize) u64 {
+        return switch (self.*) {
+            inline else => |*s| s.creditsForVoteAtIndex(index),
+        };
+    }
+
+    pub fn getCredits(self: *const VoteState) u64 {
+        return switch (self.*) {
+            inline else => |*s| s.getCredits(),
+        };
+    }
+
+    pub fn incrementCredits(self: *VoteState, allocator: Allocator, epoch: Epoch, credits: u64) error{OutOfMemory}!void {
+        switch (self.*) {
+            inline else => |*s| try s.incrementCredits(allocator, epoch, credits),
+        }
+    }
+
+    pub fn containsSlot(self: *const VoteState, candidate_slot: Slot) bool {
+        return switch (self.*) {
+            inline else => |*s| s.containsSlot(candidate_slot),
+        };
+    }
+
+    pub fn processTimestamp(self: *VoteState, slot: Slot, timestamp: i64) ?VoteError {
+        return switch (self.*) {
+            inline else => |*s| s.processTimestamp(slot, timestamp),
+        };
+    }
+
+    pub fn popExpiredVotes(self: *VoteState, next_vote_slot: Slot) void {
+        switch (self.*) {
+            inline else => |*s| s.popExpiredVotes(next_vote_slot),
+        }
+    }
+
+    pub fn doubleLockouts(self: *VoteState) !void {
+        switch (self.*) {
+            inline else => |*s| try s.doubleLockouts(),
+        }
+    }
+
+    pub fn processNextVoteSlot(
+        self: *VoteState,
+        allocator: Allocator,
+        next_vote_slot: Slot,
+        epoch: Epoch,
+        current_slot: Slot,
+    ) !void {
+        switch (self.*) {
+            inline else => |*s| try s.processNextVoteSlot(allocator, next_vote_slot, epoch, current_slot),
+        }
+    }
+
+    pub fn setNewAuthorizedVoter(
+        self: *VoteState,
+        allocator: Allocator,
+        new_authorized_voter: Pubkey,
+        target_epoch: Epoch,
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
+        return switch (self.*) {
+            inline else => |*s| try s.setNewAuthorizedVoter(allocator, new_authorized_voter, target_epoch),
+        };
+    }
+
+    /// Dispatch getAndUpdateAuthorizedVoter. V3 always uses V3 purge; V4 always uses V4 purge.
+    pub fn getAndUpdateAuthorizedVoter(
+        self: *VoteState,
+        allocator: Allocator,
+        current_epoch: Epoch,
+    ) (error{OutOfMemory} || InstructionError)!Pubkey {
+        return switch (self.*) {
+            .v3 => |*s| try s.getAndUpdateAuthorizedVoter(allocator, current_epoch),
+            .v4 => |*s| try s.getAndUpdateAuthorizedVoter(allocator, current_epoch, true),
+        };
+    }
+
+    pub fn checkSlotsAreValid(
+        self: *const VoteState,
+        vote: *const Vote,
+        recent_vote_slots: []const Slot,
+        slot_hashes: *const SlotHashes,
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
+        return switch (self.*) {
+            inline else => |*s| try s.checkSlotsAreValid(vote, recent_vote_slots, slot_hashes),
+        };
+    }
+
+    pub fn processVote(
+        self: *VoteState,
+        allocator: Allocator,
+        vote: *const Vote,
+        slot_hashes: SlotHashes,
+        epoch: Epoch,
+        current_slot: Slot,
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
+        return switch (self.*) {
+            inline else => |*s| try s.processVote(allocator, vote, slot_hashes, epoch, current_slot),
+        };
+    }
+
+    pub fn processVoteUnfiltered(
+        self: *VoteState,
+        allocator: Allocator,
+        recent_vote_slots: []const Slot,
+        vote: *const Vote,
+        slot_hashes: *const SlotHashes,
+        epoch: Epoch,
+        current_slot: Slot,
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
+        return switch (self.*) {
+            inline else => |*s| try s.processVoteUnfiltered(allocator, recent_vote_slots, vote, slot_hashes, epoch, current_slot),
+        };
+    }
+
+    pub fn processVoteStateUpdate(
+        self: *VoteState,
+        allocator: Allocator,
+        slot_hashes: *const SlotHashes,
+        epoch: Epoch,
+        slot: Slot,
+        vote_state_update: *VoteStateUpdate,
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
+        return switch (self.*) {
+            inline else => |*s| try s.processVoteStateUpdate(allocator, slot_hashes, epoch, slot, vote_state_update),
+        };
+    }
+
+    pub fn processTowerSync(
+        self: *VoteState,
+        allocator: Allocator,
+        slot_hashes: *const SlotHashes,
+        epoch: Epoch,
+        slot: Slot,
+        tower_sync: *TowerSync,
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
+        return switch (self.*) {
+            inline else => |*s| try s.processTowerSync(allocator, slot_hashes, epoch, slot, tower_sync),
+        };
+    }
+
+    pub fn checkAndFilterProposedVoteState(
+        self: *VoteState,
+        proposed_lockouts: *std.ArrayListUnmanaged(Lockout),
+        proposed_root: *?Slot,
+        proposed_hash: Hash,
+        slot_hashes: *const SlotHashes,
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
+        return switch (self.*) {
+            inline else => |*s| try s.checkAndFilterProposedVoteState(proposed_lockouts, proposed_root, proposed_hash, slot_hashes),
+        };
+    }
+
+    pub fn processNewVoteState(
+        self: *VoteState,
+        allocator: Allocator,
+        new_state: []LandedVote,
+        new_root: ?Slot,
+        timestamp: ?i64,
+        epoch: Epoch,
+        current_slot: Slot,
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
+        return switch (self.*) {
+            inline else => |*s| try s.processNewVoteState(allocator, new_state, new_root, timestamp, epoch, current_slot),
+        };
+    }
+
+    pub fn computeVoteLatency(voted_for_slot: Slot, current_slot: Slot) u8 {
+        return VoteStateV3.computeVoteLatency(voted_for_slot, current_slot);
+    }
+
+    // ── Version queries ──────────────────────────────────────────────
+
+    pub fn isV4(self: VoteState) bool {
+        return self == .v4;
+    }
+
+    pub fn isV3(self: VoteState) bool {
+        return self == .v3;
+    }
+
+    /// Access the underlying VoteStateV3, if this is a V3 state.
+    pub fn asV3(self: *VoteState) ?*VoteStateV3 {
+        return switch (self.*) {
+            .v3 => |*s| s,
+            .v4 => null,
+        };
+    }
+
+    /// Access the underlying VoteStateV4, if this is a V4 state.
+    pub fn asV4(self: *VoteState) ?*VoteStateV4 {
+        return switch (self.*) {
+            .v3 => null,
+            .v4 => |*s| s,
+        };
+    }
+
+    pub fn asV3Const(self: *const VoteState) ?*const VoteStateV3 {
+        return switch (self.*) {
+            .v3 => |*s| s,
+            .v4 => null,
+        };
+    }
+
+    pub fn asV4Const(self: *const VoteState) ?*const VoteStateV4 {
+        return switch (self.*) {
+            .v3 => null,
+            .v4 => |*s| s,
+        };
     }
 };
 

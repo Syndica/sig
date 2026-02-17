@@ -68,16 +68,16 @@ pub const Tower = struct {
     root: ?Slot,
     votes: std14.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},
 
-    pub fn fromAccount(account_state: *const sig.runtime.program.vote.state.VoteStateV4) !Tower {
+    pub fn fromAccount(account_state: *const sig.runtime.program.vote.state.VoteState) !Tower {
         var lockouts: std14.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{};
-        for (account_state.votes.items) |landed| {
+        for (account_state.votes().items) |landed| {
             try lockouts.append(.{
                 .slot = landed.lockout.slot,
                 .confirmation_count = landed.lockout.confirmation_count,
             });
         }
         return .{
-            .root = account_state.root_slot,
+            .root = account_state.rootSlot(),
             .votes = lockouts,
         };
     }

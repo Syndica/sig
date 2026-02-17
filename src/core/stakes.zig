@@ -21,6 +21,7 @@ const StakeFlags = StakeStateV2.StakeFlags;
 const Delegation = StakeStateV2.Delegation;
 const Stake = StakeStateV2.Stake;
 const Meta = StakeStateV2.Meta;
+const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateV3 = sig.runtime.program.vote.state.VoteStateV3;
 const VoteStateV4 = sig.runtime.program.vote.state.VoteStateV4;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
@@ -568,7 +569,7 @@ pub const VoteAccounts = struct {
     ) Allocator.Error!void {
         const entry = self.vote_accounts.getPtr(pubkey) orelse return;
         entry.stake += delta;
-        try self.addNodeStake(allocator, entry.account.state.node_pubkey, delta);
+        try self.addNodeStake(allocator, entry.account.state.nodePubkey().*, delta);
     }
 
     /// Subtracts `delta` from the stake of the vote account identified by
@@ -578,7 +579,7 @@ pub const VoteAccounts = struct {
         const entry = self.vote_accounts.getPtr(pubkey) orelse return;
         if (entry.stake < delta) return error.SubStakeOverflow;
         entry.stake -= delta;
-        try self.subNodeStake(entry.account.state.node_pubkey, delta);
+        try self.subNodeStake(entry.account.state.nodePubkey().*, delta);
     }
 
     /// Adds `stake` to an entry in `staked_nodes`. If the entry does not exist,
@@ -749,7 +750,7 @@ pub const StakeAccount = struct {
 
 pub const VoteAccount = struct {
     account: MinimalAccount,
-    state: VoteStateV4,
+    state: VoteState,
     rc: *sig.sync.ReferenceCounter,
 
     /// Represents the minimal amount of information needed from the account data.
@@ -762,12 +763,12 @@ pub const VoteAccount = struct {
         .serializer = serialize,
         .deserializer = deserialize,
     };
-    pub const @"!bincode-config:state" = bincode.FieldConfig(VoteStateV4){ .skip = true };
+    pub const @"!bincode-config:state" = bincode.FieldConfig(VoteState){ .skip = true };
 
     pub fn init(
         allocator: Allocator,
         account: MinimalAccount,
-        state: VoteStateV4,
+        state: VoteState,
     ) Allocator.Error!VoteAccount {
         const rc = try allocator.create(sig.sync.ReferenceCounter);
         errdefer allocator.destroy(rc);
@@ -801,7 +802,7 @@ pub const VoteAccount = struct {
     }
 
     pub fn getNodePubkey(self: *const VoteAccount) Pubkey {
-        return self.state.node_pubkey;
+        return self.state.nodePubkey().*;
     }
 
     /// Does not take ownership of `account`. vote_pubkey is the account's address when known (e.g. from checkAndStore).
@@ -818,9 +819,9 @@ pub const VoteAccount = struct {
             account.data,
             .{},
         );
-        defer versioned_vote_state.deinit(allocator); // `convertToV4` clones
+        defer versioned_vote_state.deinit(allocator); // `convertToVoteState` clones
 
-        var vote_state = try versioned_vote_state.convertToV4(allocator, vote_pubkey);
+        var vote_state = try versioned_vote_state.convertToVoteState(allocator, vote_pubkey, false);
         errdefer vote_state.deinit(allocator);
 
         return .init(
@@ -835,7 +836,10 @@ pub const VoteAccount = struct {
         allocator: std.mem.Allocator,
     ) !AccountSharedData {
         if (!builtin.is_test) @compileError("only for tests");
-        const versioned_state = VoteStateVersions{ .v4 = self.state };
+        const versioned_state: VoteStateVersions = switch (self.state) {
+            .v3 => |s| .{ .v3 = s },
+            .v4 => |s| .{ .v4 = s },
+        };
         const data = try sig.bincode.writeAlloc(allocator, versioned_state, .{});
         return .{
             .lamports = self.account.lamports,
@@ -969,7 +973,7 @@ fn createStakeAccount(
     );
     defer versioned_vote_state.deinit(allocator);
 
-    var vote_state = try versioned_vote_state.convertToV4(allocator, null);
+    var vote_state = try versioned_vote_state.convertToVoteState(allocator, null, false);
     defer vote_state.deinit(allocator);
 
     const minimum_rent = rent.minimumBalance(StakeStateV2.SIZE);
@@ -1068,7 +1072,7 @@ pub fn randomStakes(
     for (voters) |*voter| voter.* = Pubkey.initRandom(random);
 
     for (0..options.num_voters) |i| {
-        var vote_state = try VoteStateV3.init(
+        var vote_state = try VoteState.initV3(
             allocator,
             nodes[random.uintLessThan(usize, options.max_nodes)],
             Pubkey.initRandom(random),
@@ -1080,18 +1084,12 @@ pub fn randomStakes(
             ),
             options.epoch + 1,
         );
-        defer vote_state.deinit(allocator);
-        var vote_state_v4 = try VoteStateV4.fromVoteStateV3(
-            allocator,
-            vote_state,
-            voters[i],
-        );
-        errdefer vote_state_v4.deinit(allocator);
+        errdefer vote_state.deinit(allocator);
         var vote_account = VoteAccount.init(allocator, .{
             .lamports = 1_000_000_000,
             .owner = vote_program.ID,
-        }, vote_state_v4) catch |err| {
-            vote_state_v4.deinit(allocator);
+        }, vote_state) catch |err| {
+            vote_state.deinit(allocator);
             return err;
         };
         errdefer vote_account.deinit(allocator);
