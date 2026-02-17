@@ -3340,3 +3340,269 @@ fn formatUiAmount(allocator: Allocator, value: f64, decimals: u8) ![]const u8 {
 
     return try output.toOwnedSlice();
 }
+
+test "ParsableProgram.fromID - known programs" {
+    try std.testing.expectEqual(
+        ParsableProgram.system,
+        ParsableProgram.fromID(sig.runtime.program.system.ID).?,
+    );
+    try std.testing.expectEqual(
+        ParsableProgram.vote,
+        ParsableProgram.fromID(sig.runtime.program.vote.ID).?,
+    );
+    try std.testing.expectEqual(
+        ParsableProgram.stake,
+        ParsableProgram.fromID(sig.runtime.program.stake.ID).?,
+    );
+    try std.testing.expectEqual(
+        ParsableProgram.bpfUpgradeableLoader,
+        ParsableProgram.fromID(sig.runtime.program.bpf_loader.v3.ID).?,
+    );
+    try std.testing.expectEqual(
+        ParsableProgram.bpfLoader,
+        ParsableProgram.fromID(sig.runtime.program.bpf_loader.v2.ID).?,
+    );
+    try std.testing.expectEqual(
+        ParsableProgram.splToken,
+        ParsableProgram.fromID(sig.runtime.ids.TOKEN_PROGRAM_ID).?,
+    );
+    try std.testing.expectEqual(
+        ParsableProgram.splToken,
+        ParsableProgram.fromID(sig.runtime.ids.TOKEN_2022_PROGRAM_ID).?,
+    );
+    try std.testing.expectEqual(
+        ParsableProgram.addressLookupTable,
+        ParsableProgram.fromID(sig.runtime.program.address_lookup_table.ID).?,
+    );
+}
+
+test "ParsableProgram.fromID - unknown program returns null" {
+    // Note: Pubkey.ZEROES matches the system program, so use different values
+    try std.testing.expectEqual(
+        @as(?ParsableProgram, null),
+        ParsableProgram.fromID(Pubkey{ .data = [_]u8{0xAB} ** 32 }),
+    );
+    try std.testing.expectEqual(
+        @as(?ParsableProgram, null),
+        ParsableProgram.fromID(Pubkey{ .data = [_]u8{0xFF} ** 32 }),
+    );
+}
+
+test "ParsableProgram.fromID - spl-memo programs" {
+    try std.testing.expectEqual(
+        ParsableProgram.splMemo,
+        ParsableProgram.fromID(SPL_MEMO_V1_ID).?,
+    );
+    try std.testing.expectEqual(
+        ParsableProgram.splMemo,
+        ParsableProgram.fromID(SPL_MEMO_V3_ID).?,
+    );
+}
+
+test "ParsableProgram.fromID - spl-associated-token-account" {
+    try std.testing.expectEqual(
+        ParsableProgram.splAssociatedTokenAccount,
+        ParsableProgram.fromID(SPL_ASSOCIATED_TOKEN_ACC_ID).?,
+    );
+}
+
+test "parseMemoInstruction - valid UTF-8" {
+    const allocator = std.testing.allocator;
+    const result = try parseMemoInstruction(allocator, "hello world");
+    defer switch (result) {
+        .string => |s| allocator.free(s),
+        else => {},
+    };
+    try std.testing.expectEqualStrings("hello world", result.string);
+}
+
+test "parseMemoInstruction - empty data" {
+    const allocator = std.testing.allocator;
+    const result = try parseMemoInstruction(allocator, "");
+    defer switch (result) {
+        .string => |s| allocator.free(s),
+        else => {},
+    };
+    try std.testing.expectEqualStrings("", result.string);
+}
+
+test "makeUiPartiallyDecodedInstruction" {
+    const allocator = std.testing.allocator;
+    const key0 = Pubkey{ .data = [_]u8{1} ** 32 };
+    const key1 = Pubkey{ .data = [_]u8{2} ** 32 };
+    const key2 = Pubkey{ .data = [_]u8{3} ** 32 };
+    const static_keys = [_]Pubkey{ key0, key1, key2 };
+    const account_keys = AccountKeys.init(&static_keys, null);
+
+    const instruction = sig.ledger.transaction_status.CompiledInstruction{
+        .program_id_index = 2,
+        .accounts = &.{ 0, 1 },
+        .data = &.{ 1, 2, 3 },
+    };
+
+    const result = try makeUiPartiallyDecodedInstruction(
+        allocator,
+        instruction,
+        &account_keys,
+        3,
+    );
+    defer {
+        allocator.free(result.programId);
+        for (result.accounts) |a| allocator.free(a);
+        allocator.free(result.accounts);
+        allocator.free(result.data);
+    }
+
+    // Verify program ID is base58 of key2
+    try std.testing.expectEqualStrings(
+        key2.base58String().constSlice(),
+        result.programId,
+    );
+    // Verify accounts are resolved to base58 strings
+    try std.testing.expectEqual(@as(usize, 2), result.accounts.len);
+    try std.testing.expectEqualStrings(
+        key0.base58String().constSlice(),
+        result.accounts[0],
+    );
+    try std.testing.expectEqualStrings(
+        key1.base58String().constSlice(),
+        result.accounts[1],
+    );
+    // stackHeight preserved
+    try std.testing.expectEqual(@as(?u32, 3), result.stackHeight);
+}
+
+test "parseUiInstruction - unknown program falls back to partially decoded" {
+    // Use arena allocator since parse functions allocate many small objects
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // Use a random pubkey that's not a known program
+    const unknown_program = Pubkey{ .data = [_]u8{0xFF} ** 32 };
+    const key0 = Pubkey{ .data = [_]u8{1} ** 32 };
+    const static_keys = [_]Pubkey{ key0, unknown_program };
+    const account_keys = AccountKeys.init(&static_keys, null);
+
+    const instruction = sig.ledger.transaction_status.CompiledInstruction{
+        .program_id_index = 1, // unknown_program
+        .accounts = &.{0},
+        .data = &.{42},
+    };
+
+    const result = try parseUiInstruction(
+        allocator,
+        instruction,
+        &account_keys,
+        null,
+    );
+
+    // Should be a parsed variant (partially decoded)
+    switch (result) {
+        .parsed => |p| {
+            switch (p.*) {
+                .partially_decoded => |pd| {
+                    try std.testing.expectEqualStrings(
+                        unknown_program.base58String().constSlice(),
+                        pd.programId,
+                    );
+                    try std.testing.expectEqual(@as(usize, 1), pd.accounts.len);
+                },
+                .parsed => return error.UnexpectedResult,
+            }
+        },
+        .compiled => return error.UnexpectedResult,
+    }
+}
+
+test "parseInstruction - system transfer" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const system_id = sig.runtime.program.system.ID;
+    const sender = Pubkey{ .data = [_]u8{1} ** 32 };
+    const receiver = Pubkey{ .data = [_]u8{2} ** 32 };
+    const static_keys = [_]Pubkey{ sender, receiver, system_id };
+    const account_keys = AccountKeys.init(&static_keys, null);
+
+    // Build a system transfer instruction (bincode encoded)
+    // SystemInstruction::Transfer { lamports: u64 } is tag 2 (u32) + lamports (u64)
+    var data: [12]u8 = undefined;
+    std.mem.writeInt(u32, data[0..4], 2, .little); // transfer variant
+    std.mem.writeInt(u64, data[4..12], 1_000_000, .little); // 1M lamports
+
+    const instruction = sig.ledger.transaction_status.CompiledInstruction{
+        .program_id_index = 2,
+        .accounts = &.{ 0, 1 },
+        .data = &data,
+    };
+
+    const result = try parseInstruction(
+        allocator,
+        system_id,
+        instruction,
+        &account_keys,
+        null,
+    );
+
+    // Verify it's a parsed instruction
+    switch (result) {
+        .parsed => |p| {
+            switch (p.*) {
+                .parsed => |pi| {
+                    try std.testing.expectEqualStrings("system", pi.program);
+                    // Verify the parsed JSON contains "transfer" type
+                    const type_val = pi.parsed.object.get("type").?;
+                    try std.testing.expectEqualStrings("transfer", type_val.string);
+                    // Verify the info contains lamports
+                    const info_val = pi.parsed.object.get("info").?;
+                    const lamports = info_val.object.get("lamports").?;
+                    try std.testing.expectEqual(@as(i64, 1_000_000), lamports.integer);
+                },
+                .partially_decoded => return error.UnexpectedResult,
+            }
+        },
+        .compiled => return error.UnexpectedResult,
+    }
+}
+
+test "parseInstruction - spl-memo" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const memo_id = SPL_MEMO_V3_ID;
+    const signer = Pubkey{ .data = [_]u8{1} ** 32 };
+    const static_keys = [_]Pubkey{ signer, memo_id };
+    const account_keys = AccountKeys.init(&static_keys, null);
+
+    const memo_text = "Hello, Solana!";
+    const instruction = sig.ledger.transaction_status.CompiledInstruction{
+        .program_id_index = 1,
+        .accounts = &.{0},
+        .data = memo_text,
+    };
+
+    const result = try parseInstruction(
+        allocator,
+        memo_id,
+        instruction,
+        &account_keys,
+        null,
+    );
+
+    switch (result) {
+        .parsed => |p| {
+            switch (p.*) {
+                .parsed => |pi| {
+                    try std.testing.expectEqualStrings("spl-memo", pi.program);
+                    // Memo parsed value is a JSON string
+                    try std.testing.expectEqualStrings("Hello, Solana!", pi.parsed.string);
+                },
+                .partially_decoded => return error.UnexpectedResult,
+            }
+        },
+        .compiled => return error.UnexpectedResult,
+    }
+}
