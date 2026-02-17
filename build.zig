@@ -24,6 +24,7 @@ pub const Config = struct {
     no_network_tests: bool,
     has_side_effects: bool,
     enable_tracy: bool,
+    tracy_on_demand: bool,
     use_llvm: bool,
     error_tracing: ?bool,
     long_tests: bool,
@@ -104,6 +105,11 @@ pub const Config = struct {
                 bool,
                 "enable-tracy",
                 "Enables tracy",
+            ) orelse false,
+            .tracy_on_demand = b.option(
+                bool,
+                "tracy-on-demand",
+                "Enables tracy on-demand mode (allows reconnecting). Only has an effect if tracy is enabled via enable-tracy.",
             ) orelse false,
             .use_llvm = b.option(
                 bool,
@@ -267,6 +273,7 @@ pub fn build(b: *Build) !void {
         .target = config.target,
         .optimize = config.optimize,
         .tracy_enable = config.enable_tracy,
+        .tracy_on_demand = config.tracy_on_demand,
         .tracy_no_system_tracing = false,
         .tracy_callstack = 6,
     }).module("tracy");
