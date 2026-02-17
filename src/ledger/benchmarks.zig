@@ -19,7 +19,7 @@ fn createRewards(allocator: std.mem.Allocator, count: usize) !Rewards {
     var rewards: Rewards = Rewards.init(allocator);
     for (0..count) |i| {
         try rewards.append(Reward{
-            .pubkey = &Pubkey.initRandom(rand).data,
+            .pubkey = Pubkey.initRandom(rand),
             .lamports = @intCast(42 + i),
             .post_balance = std.math.maxInt(u64),
             .reward_type = RewardType.fee,
