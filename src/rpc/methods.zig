@@ -1791,10 +1791,10 @@ pub const BlockHookContext = struct {
                 .lamports = r.reward_info.lamports,
                 .postBalance = r.reward_info.post_balance,
                 .rewardType = switch (r.reward_info.reward_type) {
-                    .fee => .fee,
-                    .rent => .rent,
-                    .staking => .staking,
-                    .voting => .voting,
+                    .fee => .Fee,
+                    .rent => .Rent,
+                    .staking => .Staking,
+                    .voting => .Voting,
                 },
                 .commission = r.reward_info.commission,
             };
