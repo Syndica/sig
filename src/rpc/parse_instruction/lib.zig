@@ -30,7 +30,7 @@ const StakeLockupArgs = stake_program.LockupArgs;
 const BpfUpgradeableLoaderInstruction = bpf_loader.v3.Instruction;
 
 /// SPL Associated Token Account program ID
-const SPL_ASSOCIATED_TOKEN_ACCOUNT_ID: Pubkey = .parse("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+const SPL_ASSOCIATED_TOKEN_ACC_ID: Pubkey = .parse("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
 /// SPL Memo v1 program ID
 const SPL_MEMO_V1_ID: Pubkey = .parse("Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo");
@@ -90,7 +90,7 @@ pub const ParsableProgram = enum {
             .addressLookupTable,
         },
         .{
-            SPL_ASSOCIATED_TOKEN_ACCOUNT_ID,
+            SPL_ASSOCIATED_TOKEN_ACC_ID,
             .splAssociatedTokenAccount,
         },
         .{ SPL_MEMO_V1_ID, .splMemo },
@@ -108,7 +108,7 @@ pub const ParsableProgram = enum {
         if (program_id.equals(&sig.runtime.program.address_lookup_table.ID)) {
             return .addressLookupTable;
         }
-        if (program_id.equals(&SPL_ASSOCIATED_TOKEN_ACCOUNT_ID)) {
+        if (program_id.equals(&SPL_ASSOCIATED_TOKEN_ACC_ID)) {
             return .splAssociatedTokenAccount;
         }
         if (program_id.equals(&SPL_MEMO_V1_ID) or program_id.equals(&SPL_MEMO_V3_ID)) {
@@ -232,6 +232,9 @@ pub const UiPartiallyDecodedInstruction = struct {
     }
 };
 
+/// A parsed or partially-decoded instruction for jsonParsed mode.
+/// In jsonParsed mode, known programs produce structured parsed output,
+/// while unknown programs fall back to partially decoded representation.
 pub const ParsedInstruction = struct {
     /// Program name: "vote", "system", "spl-memo"
     program: []const u8,
@@ -262,70 +265,6 @@ pub const ParsedInstruction = struct {
         try jw.endObject();
     }
 };
-
-// /// A parsed or partially-decoded instruction for jsonParsed mode.
-// /// In jsonParsed mode, known programs produce structured parsed output,
-// /// while unknown programs fall back to partially decoded representation.
-// pub const ParsedInstruction = union(enum) {
-//     /// Fully parsed instruction from a known program
-//     parsed: struct {
-//         /// Program name: "vote", "system", "spl-memo"
-//         program: []const u8,
-//         /// Program ID as base58 string
-//         program_id: []const u8,
-//         /// Pre-serialized JSON for the "parsed" field.
-//         /// For vote/system: `{"type":"...", "info":{...}}`
-//         /// For spl-memo: `"<memo text>"`
-//         parsed_json: []const u8,
-//         /// Stack height
-//         stack_height: ?u32 = null,
-//     },
-//     /// Partially decoded instruction (unknown program or parse failure)
-//     partially_decoded: struct {
-//         programId: []const u8,
-//         accounts: []const []const u8,
-//         data: []const u8,
-//         stackHeight: ?u32 = null,
-
-//         pub fn jsonStringify(self: @This(), jw: anytype) !void {
-//             try jw.beginObject();
-//             try jw.objectField("accounts");
-//             try jw.write(self.accounts);
-//             try jw.objectField("data");
-//             try jw.write(self.data);
-//             try jw.objectField("programId");
-//             try jw.write(self.programId);
-//             if (self.stackHeight) |sh| {
-//                 try jw.objectField("stackHeight");
-//                 try jw.write(sh);
-//             }
-//             try jw.endObject();
-//         }
-//     },
-
-//     pub fn jsonStringify(self: @This(), jw: anytype) !void {
-//         switch (self) {
-//             .parsed => |p| {
-//                 try jw.beginObject();
-//                 try jw.objectField("parsed");
-//                 // Write pre-serialized JSON raw
-//                 try jw.beginWriteRaw();
-//                 try jw.stream.writeAll(p.parsed_json);
-//                 jw.endWriteRaw();
-//                 try jw.objectField("program");
-//                 try jw.write(p.program);
-//                 try jw.objectField("programId");
-//                 try jw.write(p.program_id);
-//                 if (p.stack_height) |sh| {
-//                     try jw.objectField("stackHeight");
-//                     try jw.write(sh);
-//                 }
-//                 try jw.endObject();
-//             },
-//             .partially_decoded => |pd| try pd.jsonStringify(jw),
-//         }
-//     }
-// };
 
 pub fn parseUiInstruction(
     allocator: Allocator,
@@ -588,12 +527,30 @@ fn parseVoteInstruction(
         .initialize_account => |init_acct| {
             try checkNumVoteAccounts(instruction.accounts, 4);
             var info = ObjectMap.init(allocator);
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("rentSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try info.put("node", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
-            try info.put("authorizedVoter", try pubkeyToValue(allocator, init_acct.authorized_voter));
-            try info.put("authorizedWithdrawer", try pubkeyToValue(allocator, init_acct.authorized_withdrawer));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("rentSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("clockSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("node", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
+            try info.put("authorizedVoter", try pubkeyToValue(
+                allocator,
+                init_acct.authorized_voter,
+            ));
+            try info.put("authorizedWithdrawer", try pubkeyToValue(
+                allocator,
+                init_acct.authorized_withdrawer,
+            ));
             try info.put("commission", .{ .integer = @intCast(init_acct.commission) });
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initialize" });
@@ -601,9 +558,18 @@ fn parseVoteInstruction(
         .authorize => |auth| {
             try checkNumVoteAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("authority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("clockSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("authority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try info.put("newAuthority", try pubkeyToValue(allocator, auth.new_authority));
             try info.put("authorityType", voteAuthorizeToValue(auth.vote_authorize));
             try result.put("info", .{ .object = info });
@@ -612,36 +578,75 @@ fn parseVoteInstruction(
         .authorize_with_seed => |aws| {
             try checkNumVoteAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("authorityBaseKey", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try info.put("authorityOwner", try pubkeyToValue(allocator, aws.current_authority_derived_key_owner));
+            try info.put("authorityBaseKey", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("authorityOwner", try pubkeyToValue(
+                allocator,
+                aws.current_authority_derived_key_owner,
+            ));
             try info.put("authoritySeed", .{ .string = aws.current_authority_derived_key_seed });
             try info.put("authorityType", voteAuthorizeToValue(aws.authorization_type));
-            try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("clockSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("newAuthority", try pubkeyToValue(allocator, aws.new_authority));
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "authorizeWithSeed" });
         },
         .authorize_checked_with_seed => |acws| {
             try checkNumVoteAccounts(instruction.accounts, 4);
             var info = ObjectMap.init(allocator);
-            try info.put("authorityBaseKey", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try info.put("authorityOwner", try pubkeyToValue(allocator, acws.current_authority_derived_key_owner));
+            try info.put("authorityBaseKey", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("authorityOwner", try pubkeyToValue(
+                allocator,
+                acws.current_authority_derived_key_owner,
+            ));
             try info.put("authoritySeed", .{ .string = acws.current_authority_derived_key_seed });
             try info.put("authorityType", voteAuthorizeToValue(acws.authorization_type));
-            try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("newAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("clockSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("newAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "authorizeCheckedWithSeed" });
         },
         .vote => |v| {
             try checkNumVoteAccounts(instruction.accounts, 4);
             var info = ObjectMap.init(allocator);
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("slotHashesSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try info.put("voteAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("slotHashesSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("clockSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("voteAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
             try info.put("vote", try voteToValue(allocator, v.vote));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "vote" });
@@ -649,9 +654,18 @@ fn parseVoteInstruction(
         .update_vote_state => |vsu| {
             try checkNumVoteAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("voteAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("voteStateUpdate", try voteStateUpdateToValue(allocator, vsu.vote_state_update));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("voteAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("voteStateUpdate", try voteStateUpdateToValue(
+                allocator,
+                vsu.vote_state_update,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updatevotestate" });
         },
@@ -659,18 +673,36 @@ fn parseVoteInstruction(
             try checkNumVoteAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
             try info.put("hash", try hashToValue(allocator, vsus.hash));
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("voteAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("voteStateUpdate", try voteStateUpdateToValue(allocator, vsus.vote_state_update));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("voteAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("voteStateUpdate", try voteStateUpdateToValue(
+                allocator,
+                vsus.vote_state_update,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updatevotestateswitch" });
         },
         .compact_update_vote_state => |cvsu| {
             try checkNumVoteAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("voteAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("voteStateUpdate", try voteStateUpdateToValue(allocator, cvsu.vote_state_update));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("voteAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("voteStateUpdate", try voteStateUpdateToValue(
+                allocator,
+                cvsu.vote_state_update,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "compactupdatevotestate" });
         },
@@ -678,9 +710,18 @@ fn parseVoteInstruction(
             try checkNumVoteAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
             try info.put("hash", try hashToValue(allocator, cvsus.hash));
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("voteAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("voteStateUpdate", try voteStateUpdateToValue(allocator, cvsus.vote_state_update));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("voteAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("voteStateUpdate", try voteStateUpdateToValue(
+                allocator,
+                cvsus.vote_state_update,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "compactupdatevotestateswitch" });
         },
@@ -688,8 +729,14 @@ fn parseVoteInstruction(
             try checkNumVoteAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
             try info.put("towerSync", try towerSyncToValue(allocator, ts.tower_sync));
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("voteAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("voteAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "towersync" });
         },
@@ -698,27 +745,51 @@ fn parseVoteInstruction(
             var info = ObjectMap.init(allocator);
             try info.put("hash", try hashToValue(allocator, tss.hash));
             try info.put("towerSync", try towerSyncToValue(allocator, tss.tower_sync));
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("voteAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("voteAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "towersyncswitch" });
         },
         .withdraw => |lamports| {
             try checkNumVoteAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("destination", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("destination", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("lamports", .{ .integer = @intCast(lamports) });
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("withdrawAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("withdrawAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "withdraw" });
         },
         .update_validator_identity => {
             try checkNumVoteAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("newValidatorIdentity", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("withdrawAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("newValidatorIdentity", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("withdrawAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updateValidatorIdentity" });
         },
@@ -726,31 +797,61 @@ fn parseVoteInstruction(
             try checkNumVoteAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
             try info.put("commission", .{ .integer = @intCast(commission) });
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("withdrawAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("withdrawAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updateCommission" });
         },
         .vote_switch => |vs| {
             try checkNumVoteAccounts(instruction.accounts, 4);
             var info = ObjectMap.init(allocator);
-            try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("clockSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try info.put("hash", try hashToValue(allocator, vs.hash));
-            try info.put("slotHashesSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("slotHashesSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("vote", try voteToValue(allocator, vs.vote));
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("voteAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("voteAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "voteSwitch" });
         },
         .authorize_checked => |auth_type| {
             try checkNumVoteAccounts(instruction.accounts, 4);
             var info = ObjectMap.init(allocator);
-            try info.put("authority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("authority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try info.put("authorityType", voteAuthorizeToValue(auth_type));
-            try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("newAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("clockSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("newAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "authorizeChecked" });
         },
@@ -836,7 +937,10 @@ fn lockoutsToValue(allocator: Allocator, lockouts: []const vote_program.state.Lo
 
     for (lockouts) |lockout| {
         var lockout_obj = ObjectMap.init(allocator);
-        try lockout_obj.put("confirmation_count", .{ .integer = @intCast(lockout.confirmation_count) });
+        try lockout_obj.put(
+            "confirmation_count",
+            .{ .integer = @intCast(lockout.confirmation_count) },
+        );
         try lockout_obj.put("slot", .{ .integer = @intCast(lockout.slot) });
         try arr.append(.{ .object = lockout_obj });
     }
@@ -854,7 +958,12 @@ fn parseSystemInstruction(
     instruction: sig.ledger.transaction_status.CompiledInstruction,
     account_keys: *const AccountKeys,
 ) !JsonValue {
-    const ix = sig.bincode.readFromSlice(allocator, SystemInstruction, instruction.data, .{}) catch {
+    const ix = sig.bincode.readFromSlice(
+        allocator,
+        SystemInstruction,
+        instruction.data,
+        .{},
+    ) catch {
         return error.DeserializationFailed;
     };
     defer ix.deinit(allocator);
@@ -871,9 +980,15 @@ fn parseSystemInstruction(
             try checkNumSystemAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
             try info.put("lamports", .{ .integer = @intCast(ca.lamports) });
-            try info.put("newAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("newAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("owner", try pubkeyToValue(allocator, ca.owner));
-            try info.put("source", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("source", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try info.put("space", .{ .integer = @intCast(ca.space) });
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "createAccount" });
@@ -881,7 +996,10 @@ fn parseSystemInstruction(
         .assign => |a| {
             try checkNumSystemAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try info.put("owner", try pubkeyToValue(allocator, a.owner));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "assign" });
@@ -889,9 +1007,15 @@ fn parseSystemInstruction(
         .transfer => |t| {
             try checkNumSystemAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
-            try info.put("destination", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("destination", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("lamports", .{ .integer = @intCast(t.lamports) });
-            try info.put("source", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("source", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "transfer" });
         },
@@ -900,10 +1024,16 @@ fn parseSystemInstruction(
             var info = ObjectMap.init(allocator);
             try info.put("base", try pubkeyToValue(allocator, cas.base));
             try info.put("lamports", .{ .integer = @intCast(cas.lamports) });
-            try info.put("newAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("newAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("owner", try pubkeyToValue(allocator, cas.owner));
             try info.put("seed", .{ .string = cas.seed });
-            try info.put("source", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("source", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try info.put("space", .{ .integer = @intCast(cas.space) });
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "createAccountWithSeed" });
@@ -911,31 +1041,64 @@ fn parseSystemInstruction(
         .advance_nonce_account => {
             try checkNumSystemAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("nonceAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("nonceAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try info.put("recentBlockhashesSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("nonceAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("nonceAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("recentBlockhashesSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "advanceNonce" });
         },
         .withdraw_nonce_account => |lamports| {
             try checkNumSystemAccounts(instruction.accounts, 5);
             var info = ObjectMap.init(allocator);
-            try info.put("destination", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("destination", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("lamports", .{ .integer = @intCast(lamports) });
-            try info.put("nonceAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("nonceAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[4])).?));
-            try info.put("recentBlockhashesSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try info.put("rentSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
+            try info.put("nonceAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("nonceAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[4])).?,
+            ));
+            try info.put("recentBlockhashesSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("rentSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "withdrawFromNonce" });
         },
         .initialize_nonce_account => |authority| {
             try checkNumSystemAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("nonceAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("nonceAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try info.put("nonceAuthority", try pubkeyToValue(allocator, authority));
-            try info.put("recentBlockhashesSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("rentSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("recentBlockhashesSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("rentSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeNonce" });
         },
@@ -943,15 +1106,24 @@ fn parseSystemInstruction(
             try checkNumSystemAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
             try info.put("newAuthorized", try pubkeyToValue(allocator, new_authority));
-            try info.put("nonceAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("nonceAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("nonceAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("nonceAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "authorizeNonce" });
         },
         .allocate => |a| {
             try checkNumSystemAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try info.put("space", .{ .integer = @intCast(a.space) });
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "allocate" });
@@ -959,7 +1131,10 @@ fn parseSystemInstruction(
         .allocate_with_seed => |aws| {
             try checkNumSystemAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try info.put("base", try pubkeyToValue(allocator, aws.base));
             try info.put("owner", try pubkeyToValue(allocator, aws.owner));
             try info.put("seed", .{ .string = aws.seed });
@@ -970,7 +1145,10 @@ fn parseSystemInstruction(
         .assign_with_seed => |aws| {
             try checkNumSystemAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try info.put("base", try pubkeyToValue(allocator, aws.base));
             try info.put("owner", try pubkeyToValue(allocator, aws.owner));
             try info.put("seed", .{ .string = aws.seed });
@@ -980,10 +1158,19 @@ fn parseSystemInstruction(
         .transfer_with_seed => |tws| {
             try checkNumSystemAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("destination", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("destination", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try info.put("lamports", .{ .integer = @intCast(tws.lamports) });
-            try info.put("source", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("sourceBase", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("source", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("sourceBase", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("sourceOwner", try pubkeyToValue(allocator, tws.from_owner));
             try info.put("sourceSeed", .{ .string = tws.from_seed });
             try result.put("info", .{ .object = info });
@@ -992,7 +1179,10 @@ fn parseSystemInstruction(
         .upgrade_nonce_account => {
             try checkNumSystemAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
-            try info.put("nonceAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("nonceAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "upgradeNonce" });
         },
@@ -1015,7 +1205,12 @@ fn parseAddressLookupTableInstruction(
     instruction: sig.ledger.transaction_status.CompiledInstruction,
     account_keys: *const AccountKeys,
 ) !JsonValue {
-    const ix = sig.bincode.readFromSlice(allocator, AddressLookupTableInstruction, instruction.data, .{}) catch {
+    const ix = sig.bincode.readFromSlice(
+        allocator,
+        AddressLookupTableInstruction,
+        instruction.data,
+        .{},
+    ) catch {
         return error.DeserializationFailed;
     };
     defer {
@@ -1038,27 +1233,51 @@ fn parseAddressLookupTableInstruction(
             try checkNumAddressLookupTableAccounts(instruction.accounts, 4);
             var info = ObjectMap.init(allocator);
             try info.put("bumpSeed", .{ .integer = @intCast(create.bump_seed) });
-            try info.put("lookupTableAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("lookupTableAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("payerAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("lookupTableAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("lookupTableAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("payerAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try info.put("recentSlot", .{ .integer = @intCast(create.recent_slot) });
-            try info.put("systemProgram", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
+            try info.put("systemProgram", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "createLookupTable" });
         },
         .FreezeLookupTable => {
             try checkNumAddressLookupTableAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
-            try info.put("lookupTableAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("lookupTableAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("lookupTableAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("lookupTableAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "freezeLookupTable" });
         },
         .ExtendLookupTable => |extend| {
             try checkNumAddressLookupTableAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
-            try info.put("lookupTableAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("lookupTableAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("lookupTableAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("lookupTableAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             // Build newAddresses array
             var new_addresses_array = std.ArrayList(JsonValue).init(allocator);
             for (extend.new_addresses) |addr| {
@@ -1067,8 +1286,14 @@ fn parseAddressLookupTableInstruction(
             try info.put("newAddresses", .{ .array = new_addresses_array });
             // Optional payer and system program (only if >= 4 accounts)
             if (instruction.accounts.len >= 4) {
-                try info.put("payerAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-                try info.put("systemProgram", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
+                try info.put("payerAccount", try pubkeyToValue(
+                    allocator,
+                    account_keys.get(@intCast(instruction.accounts[2])).?,
+                ));
+                try info.put("systemProgram", try pubkeyToValue(
+                    allocator,
+                    account_keys.get(@intCast(instruction.accounts[3])).?,
+                ));
             }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "extendLookupTable" });
@@ -1076,17 +1301,32 @@ fn parseAddressLookupTableInstruction(
         .DeactivateLookupTable => {
             try checkNumAddressLookupTableAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
-            try info.put("lookupTableAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("lookupTableAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("lookupTableAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("lookupTableAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "deactivateLookupTable" });
         },
         .CloseLookupTable => {
             try checkNumAddressLookupTableAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("lookupTableAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("lookupTableAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("recipient", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("lookupTableAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("lookupTableAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("recipient", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "closeLookupTable" });
         },
@@ -1127,7 +1367,10 @@ fn parseStakeInstruction(
             // authorized object
             var authorized_obj = ObjectMap.init(allocator);
             try authorized_obj.put("staker", try pubkeyToValue(allocator, authorized.staker));
-            try authorized_obj.put("withdrawer", try pubkeyToValue(allocator, authorized.withdrawer));
+            try authorized_obj.put("withdrawer", try pubkeyToValue(
+                allocator,
+                authorized.withdrawer,
+            ));
             try info.put("authorized", .{ .object = authorized_obj });
             // lockup object
             var lockup_obj = ObjectMap.init(allocator);
@@ -1135,8 +1378,14 @@ fn parseStakeInstruction(
             try lockup_obj.put("epoch", .{ .integer = @intCast(lockup.epoch) });
             try lockup_obj.put("unixTimestamp", .{ .integer = lockup.unix_timestamp });
             try info.put("lockup", .{ .object = lockup_obj });
-            try info.put("rentSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("stakeAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("rentSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("stakeAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initialize" });
         },
@@ -1144,27 +1393,57 @@ fn parseStakeInstruction(
             try checkNumStakeAccounts(instruction.accounts, 3);
             const new_authorized, const authority_type = auth;
             var info = ObjectMap.init(allocator);
-            try info.put("authority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("authority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try info.put("authorityType", stakeAuthorizeToValue(authority_type));
-            try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("clockSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             // Optional custodian
             if (instruction.accounts.len >= 4) {
-                try info.put("custodian", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
+                try info.put("custodian", try pubkeyToValue(
+                    allocator,
+                    account_keys.get(@intCast(instruction.accounts[3])).?,
+                ));
             }
             try info.put("newAuthority", try pubkeyToValue(allocator, new_authorized));
-            try info.put("stakeAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("stakeAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "authorize" });
         },
         .delegate_stake => {
             try checkNumStakeAccounts(instruction.accounts, 6);
             var info = ObjectMap.init(allocator);
-            try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try info.put("stakeAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("stakeAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[5])).?));
-            try info.put("stakeConfigAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[4])).?));
-            try info.put("stakeHistorySysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("clockSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("stakeAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("stakeAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[5])).?,
+            ));
+            try info.put("stakeConfigAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[4])).?,
+            ));
+            try info.put("stakeHistorySysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "delegate" });
         },
@@ -1172,123 +1451,237 @@ fn parseStakeInstruction(
             try checkNumStakeAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
             try info.put("lamports", .{ .integer = @intCast(lamports) });
-            try info.put("newSplitAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("stakeAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("stakeAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("newSplitAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("stakeAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("stakeAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "split" });
         },
         .withdraw => |lamports| {
             try checkNumStakeAccounts(instruction.accounts, 5);
             var info = ObjectMap.init(allocator);
-            try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("clockSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             // Optional custodian
             if (instruction.accounts.len >= 6) {
-                try info.put("custodian", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[5])).?));
+                try info.put("custodian", try pubkeyToValue(
+                    allocator,
+                    account_keys.get(@intCast(instruction.accounts[5])).?,
+                ));
             }
-            try info.put("destination", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("destination", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("lamports", .{ .integer = @intCast(lamports) });
-            try info.put("stakeAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("stakeHistorySysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
-            try info.put("withdrawAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[4])).?));
+            try info.put("stakeAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("stakeHistorySysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
+            try info.put("withdrawAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[4])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "withdraw" });
         },
         .deactivate => {
             try checkNumStakeAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("stakeAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("stakeAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("clockSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("stakeAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("stakeAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "deactivate" });
         },
         .set_lockup => |lockup_args| {
             try checkNumStakeAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
-            try info.put("custodian", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("custodian", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("lockup", try lockupArgsToValue(allocator, lockup_args));
-            try info.put("stakeAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("stakeAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "setLockup" });
         },
         .merge => {
             try checkNumStakeAccounts(instruction.accounts, 5);
             var info = ObjectMap.init(allocator);
-            try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try info.put("destination", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("source", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("stakeAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[4])).?));
-            try info.put("stakeHistorySysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
+            try info.put("clockSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("destination", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("source", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("stakeAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[4])).?,
+            ));
+            try info.put("stakeHistorySysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "merge" });
         },
         .authorize_with_seed => |aws| {
             try checkNumStakeAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
-            try info.put("authorityBase", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("authorityBase", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("authorityOwner", try pubkeyToValue(allocator, aws.authority_owner));
             try info.put("authoritySeed", .{ .string = aws.authority_seed });
             try info.put("authorityType", stakeAuthorizeToValue(aws.stake_authorize));
             // Optional clockSysvar
             if (instruction.accounts.len >= 3) {
-                try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+                try info.put("clockSysvar", try pubkeyToValue(
+                    allocator,
+                    account_keys.get(@intCast(instruction.accounts[2])).?,
+                ));
             }
             // Optional custodian
             if (instruction.accounts.len >= 4) {
-                try info.put("custodian", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
+                try info.put("custodian", try pubkeyToValue(
+                    allocator,
+                    account_keys.get(@intCast(instruction.accounts[3])).?,
+                ));
             }
             try info.put("newAuthorized", try pubkeyToValue(allocator, aws.new_authorized_pubkey));
-            try info.put("stakeAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("stakeAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "authorizeWithSeed" });
         },
         .initialize_checked => {
             try checkNumStakeAccounts(instruction.accounts, 4);
             var info = ObjectMap.init(allocator);
-            try info.put("rentSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("stakeAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("staker", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try info.put("withdrawer", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
+            try info.put("rentSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("stakeAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("staker", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("withdrawer", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeChecked" });
         },
         .authorize_checked => |authority_type| {
             try checkNumStakeAccounts(instruction.accounts, 4);
             var info = ObjectMap.init(allocator);
-            try info.put("authority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("authority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try info.put("authorityType", stakeAuthorizeToValue(authority_type));
-            try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("clockSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             // Optional custodian
             if (instruction.accounts.len >= 5) {
-                try info.put("custodian", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[4])).?));
+                try info.put("custodian", try pubkeyToValue(
+                    allocator,
+                    account_keys.get(@intCast(instruction.accounts[4])).?,
+                ));
             }
-            try info.put("newAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
-            try info.put("stakeAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("newAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
+            try info.put("stakeAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "authorizeChecked" });
         },
         .authorize_checked_with_seed => |acws| {
             try checkNumStakeAccounts(instruction.accounts, 4);
             var info = ObjectMap.init(allocator);
-            try info.put("authorityBase", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("authorityBase", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("authorityOwner", try pubkeyToValue(allocator, acws.authority_owner));
             try info.put("authoritySeed", .{ .string = acws.authority_seed });
             try info.put("authorityType", stakeAuthorizeToValue(acws.stake_authorize));
-            try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("clockSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             // Optional custodian
             if (instruction.accounts.len >= 5) {
-                try info.put("custodian", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[4])).?));
+                try info.put("custodian", try pubkeyToValue(
+                    allocator,
+                    account_keys.get(@intCast(instruction.accounts[4])).?,
+                ));
             }
-            try info.put("newAuthorized", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
-            try info.put("stakeAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("newAuthorized", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
+            try info.put("stakeAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "authorizeCheckedWithSeed" });
         },
         .set_lockup_checked => |lockup_args| {
             try checkNumStakeAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
-            try info.put("custodian", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("custodian", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             var lockup_obj = ObjectMap.init(allocator);
             if (lockup_args.epoch) |epoch| {
                 try lockup_obj.put("epoch", .{ .integer = @intCast(epoch) });
@@ -1298,10 +1691,16 @@ fn parseStakeInstruction(
             }
             // Optional new custodian from account
             if (instruction.accounts.len >= 3) {
-                try lockup_obj.put("custodian", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+                try lockup_obj.put("custodian", try pubkeyToValue(
+                    allocator,
+                    account_keys.get(@intCast(instruction.accounts[2])).?,
+                ));
             }
             try info.put("lockup", .{ .object = lockup_obj });
-            try info.put("stakeAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("stakeAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "setLockupChecked" });
         },
@@ -1313,40 +1712,82 @@ fn parseStakeInstruction(
         .deactivate_delinquent => {
             try checkNumStakeAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("referenceVoteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try info.put("stakeAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("referenceVoteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("stakeAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "deactivateDelinquent" });
         },
         ._redelegate => {
             try checkNumStakeAccounts(instruction.accounts, 5);
             var info = ObjectMap.init(allocator);
-            try info.put("newStakeAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("stakeAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("stakeAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[4])).?));
-            try info.put("stakeConfigAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
-            try info.put("voteAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("newStakeAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("stakeAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("stakeAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[4])).?,
+            ));
+            try info.put("stakeConfigAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
+            try info.put("voteAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "redelegate" });
         },
         .move_stake => |lamports| {
             try checkNumStakeAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("destination", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("destination", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("lamports", .{ .integer = @intCast(lamports) });
-            try info.put("source", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("stakeAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("source", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("stakeAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "moveStake" });
         },
         .move_lamports => |lamports| {
             try checkNumStakeAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("destination", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("destination", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("lamports", .{ .integer = @intCast(lamports) });
-            try info.put("source", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("stakeAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("source", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("stakeAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "moveLamports" });
         },
@@ -1395,7 +1836,12 @@ fn parseBpfUpgradeableLoaderInstruction(
     instruction: sig.ledger.transaction_status.CompiledInstruction,
     account_keys: *const AccountKeys,
 ) !JsonValue {
-    const ix = sig.bincode.readFromSlice(allocator, BpfUpgradeableLoaderInstruction, instruction.data, .{}) catch {
+    const ix = sig.bincode.readFromSlice(
+        allocator,
+        BpfUpgradeableLoaderInstruction,
+        instruction.data,
+        .{},
+    ) catch {
         return error.DeserializationFailed;
     };
     defer {
@@ -1412,10 +1858,16 @@ fn parseBpfUpgradeableLoaderInstruction(
         .initialize_buffer => {
             try checkNumBpfLoaderAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             // Optional authority
             if (instruction.accounts.len > 1) {
-                try info.put("authority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+                try info.put("authority", try pubkeyToValue(
+                    allocator,
+                    account_keys.get(@intCast(instruction.accounts[1])).?,
+                ));
             }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeBuffer" });
@@ -1423,8 +1875,14 @@ fn parseBpfUpgradeableLoaderInstruction(
         .write => |w| {
             try checkNumBpfLoaderAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("authority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("authority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             // Base64 encode the bytes
             const base64_encoder = std.base64.standard;
             const encoded_len = base64_encoder.Encoder.calcSize(w.bytes.len);
@@ -1439,35 +1897,86 @@ fn parseBpfUpgradeableLoaderInstruction(
             try checkNumBpfLoaderAccounts(instruction.accounts, 8);
             var info = ObjectMap.init(allocator);
             try info.put("maxDataLen", .{ .integer = @intCast(deploy.max_data_len) });
-            try info.put("payerAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("programDataAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("programAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try info.put("bufferAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
-            try info.put("rentSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[4])).?));
-            try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[5])).?));
-            try info.put("systemProgram", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[6])).?));
-            try info.put("authority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[7])).?));
+            try info.put("payerAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("programDataAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("programAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("bufferAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
+            try info.put("rentSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[4])).?,
+            ));
+            try info.put("clockSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[5])).?,
+            ));
+            try info.put("systemProgram", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[6])).?,
+            ));
+            try info.put("authority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[7])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "deployWithMaxDataLen" });
         },
         .upgrade => {
             try checkNumBpfLoaderAccounts(instruction.accounts, 7);
             var info = ObjectMap.init(allocator);
-            try info.put("programDataAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("programAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("bufferAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try info.put("spillAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
-            try info.put("rentSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[4])).?));
-            try info.put("clockSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[5])).?));
-            try info.put("authority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[6])).?));
+            try info.put("programDataAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("programAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("bufferAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("spillAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
+            try info.put("rentSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[4])).?,
+            ));
+            try info.put("clockSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[5])).?,
+            ));
+            try info.put("authority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[6])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "upgrade" });
         },
         .set_authority => {
             try checkNumBpfLoaderAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("authority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("authority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             // Optional new authority
             if (instruction.accounts.len > 2) {
                 if (account_keys.get(@intCast(instruction.accounts[2]))) |new_auth| {
@@ -1484,18 +1993,36 @@ fn parseBpfUpgradeableLoaderInstruction(
         .set_authority_checked => {
             try checkNumBpfLoaderAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("authority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("newAuthority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("authority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("newAuthority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "setAuthorityChecked" });
         },
         .close => {
             try checkNumBpfLoaderAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("recipient", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("authority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("recipient", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("authority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             // Optional program account
             if (instruction.accounts.len > 3) {
                 if (account_keys.get(@intCast(instruction.accounts[3]))) |prog| {
@@ -1513,8 +2040,14 @@ fn parseBpfUpgradeableLoaderInstruction(
             try checkNumBpfLoaderAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
             try info.put("additionalBytes", .{ .integer = @intCast(ext.additional_bytes) });
-            try info.put("programDataAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("programAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("programDataAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("programAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             // Optional system program
             if (instruction.accounts.len > 2) {
                 if (account_keys.get(@intCast(instruction.accounts[2]))) |sys| {
@@ -1541,9 +2074,18 @@ fn parseBpfUpgradeableLoaderInstruction(
         .migrate => {
             try checkNumBpfLoaderAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("programDataAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("programAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("authority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("programDataAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("programAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("authority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "migrate" });
         },
@@ -1551,9 +2093,18 @@ fn parseBpfUpgradeableLoaderInstruction(
             try checkNumBpfLoaderAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
             try info.put("additionalBytes", .{ .integer = @intCast(ext.additional_bytes) });
-            try info.put("programDataAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("programAccount", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("authority", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("programDataAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("programAccount", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("authority", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             // Optional system program
             if (instruction.accounts.len > 3) {
                 if (account_keys.get(@intCast(instruction.accounts[3]))) |sys| {
@@ -1637,7 +2188,12 @@ fn parseBpfLoaderInstruction(
     instruction: sig.ledger.transaction_status.CompiledInstruction,
     account_keys: *const AccountKeys,
 ) !JsonValue {
-    const ix = sig.bincode.readFromSlice(allocator, BpfLoaderInstruction, instruction.data, .{}) catch {
+    const ix = sig.bincode.readFromSlice(
+        allocator,
+        BpfLoaderInstruction,
+        instruction.data,
+        .{},
+    ) catch {
         return error.DeserializationFailed;
     };
     defer {
@@ -1666,14 +2222,20 @@ fn parseBpfLoaderInstruction(
             const encoded = try allocator.alloc(u8, encoded_len);
             _ = base64_encoder.Encoder.encode(encoded, w.bytes);
             try info.put("bytes", .{ .string = encoded });
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "write" });
         },
         .finalize => {
             try checkNumBpfLoaderAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "finalize" });
         },
@@ -1716,37 +2278,94 @@ fn parseAssociatedTokenInstruction(
         .create => {
             try checkNumAssociatedTokenAccounts(instruction.accounts, 6);
             var info = ObjectMap.init(allocator);
-            try info.put("source", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("wallet", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
-            try info.put("systemProgram", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[4])).?));
-            try info.put("tokenProgram", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[5])).?));
+            try info.put("source", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("wallet", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
+            try info.put("systemProgram", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[4])).?,
+            ));
+            try info.put("tokenProgram", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[5])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "create" });
         },
         .create_idempotent => {
             try checkNumAssociatedTokenAccounts(instruction.accounts, 6);
             var info = ObjectMap.init(allocator);
-            try info.put("source", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("wallet", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
-            try info.put("systemProgram", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[4])).?));
-            try info.put("tokenProgram", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[5])).?));
+            try info.put("source", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("wallet", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
+            try info.put("systemProgram", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[4])).?,
+            ));
+            try info.put("tokenProgram", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[5])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "createIdempotent" });
         },
         .recover_nested => {
             try checkNumAssociatedTokenAccounts(instruction.accounts, 7);
             var info = ObjectMap.init(allocator);
-            try info.put("nestedSource", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("nestedMint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("destination", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try info.put("nestedOwner", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
-            try info.put("ownerMint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[4])).?));
-            try info.put("wallet", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[5])).?));
-            try info.put("tokenProgram", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[6])).?));
+            try info.put("nestedSource", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("nestedMint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("destination", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("nestedOwner", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
+            try info.put("ownerMint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[4])).?,
+            ));
+            try info.put("wallet", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[5])).?,
+            ));
+            try info.put("tokenProgram", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[6])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "recoverNested" });
         },
@@ -1914,10 +2533,16 @@ fn parseTokenInstruction(
             const mint_authority = Pubkey{ .data = instruction.data[2..34].* };
             // freeze_authority is optional: 1 byte tag + 32 bytes pubkey
             var info = ObjectMap.init(allocator);
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try info.put("decimals", .{ .integer = @intCast(decimals) });
             try info.put("mintAuthority", try pubkeyToValue(allocator, mint_authority));
-            try info.put("rentSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("rentSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             if (instruction.data.len >= 67 and instruction.data[34] == 1) {
                 const freeze_authority = Pubkey{ .data = instruction.data[35..67].* };
                 try info.put("freezeAuthority", try pubkeyToValue(allocator, freeze_authority));
@@ -1931,7 +2556,10 @@ fn parseTokenInstruction(
             const decimals = instruction.data[1];
             const mint_authority = Pubkey{ .data = instruction.data[2..34].* };
             var info = ObjectMap.init(allocator);
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try info.put("decimals", .{ .integer = @intCast(decimals) });
             try info.put("mintAuthority", try pubkeyToValue(allocator, mint_authority));
             if (instruction.data.len >= 67 and instruction.data[34] == 1) {
@@ -1944,10 +2572,22 @@ fn parseTokenInstruction(
         .InitializeAccount => {
             try checkNumTokenAccounts(instruction.accounts, 4);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("owner", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try info.put("rentSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[3])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("owner", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("rentSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[3])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeAccount" });
         },
@@ -1956,10 +2596,19 @@ fn parseTokenInstruction(
             if (instruction.data.len < 33) return error.DeserializationFailed;
             const owner = Pubkey{ .data = instruction.data[1..33].* };
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("owner", try pubkeyToValue(allocator, owner));
-            try info.put("rentSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("rentSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeAccount2" });
         },
@@ -1968,8 +2617,14 @@ fn parseTokenInstruction(
             if (instruction.data.len < 33) return error.DeserializationFailed;
             const owner = Pubkey{ .data = instruction.data[1..33].* };
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("owner", try pubkeyToValue(allocator, owner));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeAccount3" });
@@ -1979,11 +2634,20 @@ fn parseTokenInstruction(
             if (instruction.data.len < 2) return error.DeserializationFailed;
             const m = instruction.data[1];
             var info = ObjectMap.init(allocator);
-            try info.put("multisig", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("rentSysvar", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("multisig", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("rentSysvar", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             var signers = std.ArrayList(JsonValue).init(allocator);
             for (instruction.accounts[2..]) |signer_idx| {
-                try signers.append(try pubkeyToValue(allocator, account_keys.get(@intCast(signer_idx)).?));
+                try signers.append(try pubkeyToValue(
+                    allocator,
+                    account_keys.get(@intCast(signer_idx)).?,
+                ));
             }
             try info.put("signers", .{ .array = signers });
             try info.put("m", .{ .integer = @intCast(m) });
@@ -1995,10 +2659,16 @@ fn parseTokenInstruction(
             if (instruction.data.len < 2) return error.DeserializationFailed;
             const m = instruction.data[1];
             var info = ObjectMap.init(allocator);
-            try info.put("multisig", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("multisig", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             var signers = std.ArrayList(JsonValue).init(allocator);
             for (instruction.accounts[1..]) |signer_idx| {
-                try signers.append(try pubkeyToValue(allocator, account_keys.get(@intCast(signer_idx)).?));
+                try signers.append(try pubkeyToValue(
+                    allocator,
+                    account_keys.get(@intCast(signer_idx)).?,
+                ));
             }
             try info.put("signers", .{ .array = signers });
             try info.put("m", .{ .integer = @intCast(m) });
@@ -2010,10 +2680,28 @@ fn parseTokenInstruction(
             if (instruction.data.len < 9) return error.DeserializationFailed;
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
             var info = ObjectMap.init(allocator);
-            try info.put("source", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("destination", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("amount", .{ .string = try std.fmt.allocPrint(allocator, "{d}", .{amount}) });
-            try parseSigners(allocator, &info, 2, account_keys, instruction.accounts, "authority", "multisigAuthority");
+            try info.put("source", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("destination", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("amount", .{ .string = try std.fmt.allocPrint(
+                allocator,
+                "{d}",
+                .{amount},
+            ) });
+            try parseSigners(
+                allocator,
+                &info,
+                2,
+                account_keys,
+                instruction.accounts,
+                "authority",
+                "multisigAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "transfer" });
         },
@@ -2022,28 +2710,63 @@ fn parseTokenInstruction(
             if (instruction.data.len < 9) return error.DeserializationFailed;
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
             var info = ObjectMap.init(allocator);
-            try info.put("source", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("delegate", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("amount", .{ .string = try std.fmt.allocPrint(allocator, "{d}", .{amount}) });
-            try parseSigners(allocator, &info, 2, account_keys, instruction.accounts, "owner", "multisigOwner");
+            try info.put("source", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("delegate", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("amount", .{ .string = try std.fmt.allocPrint(
+                allocator,
+                "{d}",
+                .{amount},
+            ) });
+            try parseSigners(
+                allocator,
+                &info,
+                2,
+                account_keys,
+                instruction.accounts,
+                "owner",
+                "multisigOwner",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "approve" });
         },
         .Revoke => {
             try checkNumTokenAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
-            try info.put("source", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try parseSigners(allocator, &info, 1, account_keys, instruction.accounts, "owner", "multisigOwner");
+            try info.put("source", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try parseSigners(
+                allocator,
+                &info,
+                1,
+                account_keys,
+                instruction.accounts,
+                "owner",
+                "multisigOwner",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "revoke" });
         },
         .SetAuthority => {
             try checkNumTokenAccounts(instruction.accounts, 2);
             if (instruction.data.len < 3) return error.DeserializationFailed;
-            const authority_type = std.meta.intToEnum(TokenAuthorityType, instruction.data[1]) catch TokenAuthorityType.MintTokens;
+            const authority_type = std.meta.intToEnum(
+                TokenAuthorityType,
+                instruction.data[1],
+            ) catch TokenAuthorityType.MintTokens;
             const owned_field = authority_type.getOwnedField();
             var info = ObjectMap.init(allocator);
-            try info.put(owned_field, try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put(owned_field, try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try info.put("authorityType", .{ .string = authority_type.toString() });
             // new_authority: COption<Pubkey> - 1 byte tag + 32 bytes pubkey
             if (instruction.data.len >= 35 and instruction.data[2] == 1) {
@@ -2052,7 +2775,15 @@ fn parseTokenInstruction(
             } else {
                 try info.put("newAuthority", .null);
             }
-            try parseSigners(allocator, &info, 1, account_keys, instruction.accounts, "authority", "multisigAuthority");
+            try parseSigners(
+                allocator,
+                &info,
+                1,
+                account_keys,
+                instruction.accounts,
+                "authority",
+                "multisigAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "setAuthority" });
         },
@@ -2061,10 +2792,28 @@ fn parseTokenInstruction(
             if (instruction.data.len < 9) return error.DeserializationFailed;
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
             var info = ObjectMap.init(allocator);
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("amount", .{ .string = try std.fmt.allocPrint(allocator, "{d}", .{amount}) });
-            try parseSigners(allocator, &info, 2, account_keys, instruction.accounts, "mintAuthority", "multisigMintAuthority");
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("amount", .{ .string = try std.fmt.allocPrint(
+                allocator,
+                "{d}",
+                .{amount},
+            ) });
+            try parseSigners(
+                allocator,
+                &info,
+                2,
+                account_keys,
+                instruction.accounts,
+                "mintAuthority",
+                "multisigMintAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "mintTo" });
         },
@@ -2073,37 +2822,97 @@ fn parseTokenInstruction(
             if (instruction.data.len < 9) return error.DeserializationFailed;
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("amount", .{ .string = try std.fmt.allocPrint(allocator, "{d}", .{amount}) });
-            try parseSigners(allocator, &info, 2, account_keys, instruction.accounts, "authority", "multisigAuthority");
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("amount", .{ .string = try std.fmt.allocPrint(
+                allocator,
+                "{d}",
+                .{amount},
+            ) });
+            try parseSigners(
+                allocator,
+                &info,
+                2,
+                account_keys,
+                instruction.accounts,
+                "authority",
+                "multisigAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "burn" });
         },
         .CloseAccount => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("destination", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try parseSigners(allocator, &info, 2, account_keys, instruction.accounts, "owner", "multisigOwner");
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("destination", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try parseSigners(
+                allocator,
+                &info,
+                2,
+                account_keys,
+                instruction.accounts,
+                "owner",
+                "multisigOwner",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "closeAccount" });
         },
         .FreezeAccount => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try parseSigners(allocator, &info, 2, account_keys, instruction.accounts, "freezeAuthority", "multisigFreezeAuthority");
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try parseSigners(
+                allocator,
+                &info,
+                2,
+                account_keys,
+                instruction.accounts,
+                "freezeAuthority",
+                "multisigFreezeAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "freezeAccount" });
         },
         .ThawAccount => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try parseSigners(allocator, &info, 2, account_keys, instruction.accounts, "freezeAuthority", "multisigFreezeAuthority");
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try parseSigners(
+                allocator,
+                &info,
+                2,
+                account_keys,
+                instruction.accounts,
+                "freezeAuthority",
+                "multisigFreezeAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "thawAccount" });
         },
@@ -2113,11 +2922,28 @@ fn parseTokenInstruction(
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
             const decimals = instruction.data[9];
             var info = ObjectMap.init(allocator);
-            try info.put("source", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("destination", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("source", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("destination", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try info.put("tokenAmount", try tokenAmountToUiAmount(allocator, amount, decimals));
-            try parseSigners(allocator, &info, 3, account_keys, instruction.accounts, "authority", "multisigAuthority");
+            try parseSigners(
+                allocator,
+                &info,
+                3,
+                account_keys,
+                instruction.accounts,
+                "authority",
+                "multisigAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "transferChecked" });
         },
@@ -2127,11 +2953,28 @@ fn parseTokenInstruction(
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
             const decimals = instruction.data[9];
             var info = ObjectMap.init(allocator);
-            try info.put("source", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("delegate", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("source", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("delegate", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try info.put("tokenAmount", try tokenAmountToUiAmount(allocator, amount, decimals));
-            try parseSigners(allocator, &info, 3, account_keys, instruction.accounts, "owner", "multisigOwner");
+            try parseSigners(
+                allocator,
+                &info,
+                3,
+                account_keys,
+                instruction.accounts,
+                "owner",
+                "multisigOwner",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "approveChecked" });
         },
@@ -2141,10 +2984,24 @@ fn parseTokenInstruction(
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
             const decimals = instruction.data[9];
             var info = ObjectMap.init(allocator);
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("tokenAmount", try tokenAmountToUiAmount(allocator, amount, decimals));
-            try parseSigners(allocator, &info, 2, account_keys, instruction.accounts, "mintAuthority", "multisigMintAuthority");
+            try parseSigners(
+                allocator,
+                &info,
+                2,
+                account_keys,
+                instruction.accounts,
+                "mintAuthority",
+                "multisigMintAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "mintToChecked" });
         },
@@ -2154,24 +3011,44 @@ fn parseTokenInstruction(
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
             const decimals = instruction.data[9];
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
             try info.put("tokenAmount", try tokenAmountToUiAmount(allocator, amount, decimals));
-            try parseSigners(allocator, &info, 2, account_keys, instruction.accounts, "authority", "multisigAuthority");
+            try parseSigners(
+                allocator,
+                &info,
+                2,
+                account_keys,
+                instruction.accounts,
+                "authority",
+                "multisigAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "burnChecked" });
         },
         .SyncNative => {
             try checkNumTokenAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "syncNative" });
         },
         .GetAccountDataSize => {
             try checkNumTokenAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             // Extension types are in remaining data, but we'll skip detailed parsing for now
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "getAccountDataSize" });
@@ -2179,7 +3056,10 @@ fn parseTokenInstruction(
         .InitializeImmutableOwner => {
             try checkNumTokenAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeImmutableOwner" });
         },
@@ -2188,8 +3068,15 @@ fn parseTokenInstruction(
             if (instruction.data.len < 9) return error.DeserializationFailed;
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
             var info = ObjectMap.init(allocator);
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("amount", .{ .string = try std.fmt.allocPrint(allocator, "{d}", .{amount}) });
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("amount", .{ .string = try std.fmt.allocPrint(
+                allocator,
+                "{d}",
+                .{amount},
+            ) });
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "amountToUiAmount" });
         },
@@ -2197,7 +3084,10 @@ fn parseTokenInstruction(
             try checkNumTokenAccounts(instruction.accounts, 1);
             // ui_amount is a string in remaining bytes
             var info = ObjectMap.init(allocator);
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             if (instruction.data.len > 1) {
                 try info.put("uiAmount", .{ .string = instruction.data[1..] });
             }
@@ -2207,7 +3097,10 @@ fn parseTokenInstruction(
         .InitializeMintCloseAuthority => {
             try checkNumTokenAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             // close_authority: COption<Pubkey>
             if (instruction.data.len >= 34 and instruction.data[1] == 1) {
                 const close_authority = Pubkey{ .data = instruction.data[2..34].* };
@@ -2221,23 +3114,38 @@ fn parseTokenInstruction(
         .CreateNativeMint => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("payer", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("nativeMint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("systemProgram", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
+            try info.put("payer", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("nativeMint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("systemProgram", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "createNativeMint" });
         },
         .InitializeNonTransferableMint => {
             try checkNumTokenAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeNonTransferableMint" });
         },
         .InitializePermanentDelegate => {
             try checkNumTokenAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
-            try info.put("mint", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
             if (instruction.data.len >= 33) {
                 const delegate = Pubkey{ .data = instruction.data[1..33].* };
                 try info.put("delegate", try pubkeyToValue(allocator, delegate));
@@ -2248,19 +3156,50 @@ fn parseTokenInstruction(
         .WithdrawExcessLamports => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
-            try info.put("source", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("destination", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try parseSigners(allocator, &info, 2, account_keys, instruction.accounts, "authority", "multisigAuthority");
+            try info.put("source", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("destination", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try parseSigners(
+                allocator,
+                &info,
+                2,
+                account_keys,
+                instruction.accounts,
+                "authority",
+                "multisigAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "withdrawExcessLamports" });
         },
         .Reallocate => {
             try checkNumTokenAccounts(instruction.accounts, 4);
             var info = ObjectMap.init(allocator);
-            try info.put("account", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[0])).?));
-            try info.put("payer", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[1])).?));
-            try info.put("systemProgram", try pubkeyToValue(allocator, account_keys.get(@intCast(instruction.accounts[2])).?));
-            try parseSigners(allocator, &info, 3, account_keys, instruction.accounts, "owner", "multisigOwner");
+            try info.put("account", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("payer", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("systemProgram", try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try parseSigners(
+                allocator,
+                &info,
+                3,
+                account_keys,
+                instruction.accounts,
+                "owner",
+                "multisigOwner",
+            );
             // extension_types in remaining data - skip for now
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "reallocate" });
@@ -2310,13 +3249,22 @@ fn parseSigners(
         // Multisig case
         var signers = std.ArrayList(JsonValue).init(allocator);
         for (accounts[last_nonsigner_index + 1 ..]) |signer_idx| {
-            try signers.append(try pubkeyToValue(allocator, account_keys.get(@intCast(signer_idx)).?));
+            try signers.append(try pubkeyToValue(
+                allocator,
+                account_keys.get(@intCast(signer_idx)).?,
+            ));
         }
-        try info.put(multisig_field_name, try pubkeyToValue(allocator, account_keys.get(@intCast(accounts[last_nonsigner_index])).?));
+        try info.put(multisig_field_name, try pubkeyToValue(
+            allocator,
+            account_keys.get(@intCast(accounts[last_nonsigner_index])).?,
+        ));
         try info.put("signers", .{ .array = signers });
     } else {
         // Single signer case
-        try info.put(owner_field_name, try pubkeyToValue(allocator, account_keys.get(@intCast(accounts[last_nonsigner_index])).?));
+        try info.put(owner_field_name, try pubkeyToValue(
+            allocator,
+            account_keys.get(@intCast(accounts[last_nonsigner_index])).?,
+        ));
     }
 }
 

@@ -1514,12 +1514,15 @@ pub const BlockHookContext = struct {
         max_supported_version: ?u8,
         show_rewards: bool,
     ) !GetBlock.Response.EncodedTransactionWithStatusMeta {
-        const version: ?sig.core.transaction.Version = if (max_supported_version) |max_version| switch (tx_with_meta.transaction.version) {
-            .legacy => .legacy,
-            .v0 => if (max_version < 0) .v0 else return error.UnsupportedTransactionVersion,
-        } else switch (tx_with_meta.transaction.version) {
-            .legacy => null,
-            .v0 => return error.UnsupportedTransactionVersion,
+        const version: ?sig.core.transaction.Version = ver: {
+            const version = tx_with_meta.transaction.version;
+            if (max_supported_version) |max_version| switch (version) {
+                .legacy => break :ver .legacy,
+                .v0 => if (max_version < 0) .v0 else return error.UnsupportedTransactionVersion,
+            } else switch (version) {
+                .legacy => break :ver null,
+                .v0 => return error.UnsupportedTransactionVersion,
+            }
         };
 
         const encoded_tx = try encodeTransaction(
