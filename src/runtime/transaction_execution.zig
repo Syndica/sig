@@ -361,12 +361,14 @@ pub fn loadAndExecuteTransaction(
 
     for (writes.slice()) |*acct| try wrapDB(account_store.put(acct.pubkey, acct.account));
 
-    // Calculate cost units for executed transaction using actual consumed CUs
-    // Actual consumed = compute_limit - compute_meter (remaining)
-    const actual_programs_execution_cost = executed_transaction.total_cost();
+    // Calculate cost units for executed transaction using actual consumed CUs.
+    // Pass only the raw executed compute units (compute_limit - compute_meter remaining).
+    // Signature costs (transaction + precompile) are computed inside the cost model,
+    // matching Agave's architecture.
+    // [agave] https://github.com/anza-xyz/agave/blob/main/cost-model/src/cost_model.rs#L61
     const tx_cost = cost_model.calculateCostForExecutedTransaction(
         transaction,
-        actual_programs_execution_cost,
+        executed_transaction.total_cost(),
         loaded_accounts.loaded_accounts_data_size,
     );
 

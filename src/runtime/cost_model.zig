@@ -137,6 +137,40 @@ pub fn calculateCostForExecutedTransaction(
     );
 }
 
+/// Calculate the total signature verification cost for a transaction.
+/// Includes transaction signatures AND precompile instruction signatures.
+/// Mirrors Agave's `CostModel::get_signature_cost()`.
+/// See: https://github.com/anza-xyz/agave/blob/eb30856ca804831f30d96f034a1cabd65c96184a/cost-model/src/cost_model.rs#L148
+fn getSignatureCost(transaction: *const RuntimeTransaction) u64 {
+    const precompiles = sig.runtime.program.precompiles;
+
+    var n_secp256k1_instruction_signatures: u64 = 0;
+    var n_ed25519_instruction_signatures: u64 = 0;
+    // TODO: add secp256r1 when enable_secp256r1_precompile feature is active
+    // var n_secp256r1_instruction_signatures: u64 = 0;
+
+    for (transaction.instructions) |instruction| {
+        if (instruction.instruction_data.len == 0) continue;
+
+        const program_id = instruction.program_meta.pubkey;
+        if (program_id.equals(&precompiles.secp256k1.ID)) {
+            n_secp256k1_instruction_signatures +|= instruction.instruction_data[0];
+        }
+        if (program_id.equals(&precompiles.ed25519.ID)) {
+            n_ed25519_instruction_signatures +|= instruction.instruction_data[0];
+        }
+        // TODO: uncomment when secp256r1 feature is active
+        // if (program_id.equals(&precompiles.secp256r1.ID)) {
+        //     n_secp256r1_instruction_signatures +|= instruction.instruction_data[0];
+        // }
+    }
+
+    return transaction.signature_count *| precompiles.SIGNATURE_COST +|
+        n_secp256k1_instruction_signatures *| precompiles.SECP256K1_VERIFY_COST +|
+        n_ed25519_instruction_signatures *| precompiles.ED25519_VERIFY_COST;
+    // TODO: +| n_secp256r1_instruction_signatures *| precompiles.SECP256R1_VERIFY_COST
+}
+
 /// Internal calculation function used by both pre-execution and post-execution cost calculation.
 fn calculateTransactionCostInternal(
     transaction: *const RuntimeTransaction,
@@ -157,8 +191,8 @@ fn calculateTransactionCostInternal(
     }
 
     // Dynamic calculation
-    // 1. Signature cost: 720 CU per signature
-    const signature_cost = transaction.signature_count * SIGNATURE_COST;
+    // 1. Signature cost: includes transaction sigs + precompile sigs (ed25519, secp256k1, secp256r1)
+    const signature_cost = getSignatureCost(transaction);
 
     // 2. Write lock cost: 300 CU per writable account
     var write_lock_count: u64 = 0;
