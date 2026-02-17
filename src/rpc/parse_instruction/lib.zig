@@ -158,7 +158,7 @@ pub const UiInnerInstructions = struct {
 
 pub const UiInstruction = union(enum) {
     compiled: UiCompiledInstruction,
-    parsed: UiParsedInstruction,
+    parsed: *const UiParsedInstruction,
 
     pub fn jsonStringify(self: @This(), jw: anytype) !void {
         switch (self) {
@@ -266,6 +266,15 @@ pub const ParsedInstruction = struct {
     }
 };
 
+fn allocParsed(
+    allocator: Allocator,
+    value: UiParsedInstruction,
+) !UiInstruction {
+    const ptr = try allocator.create(UiParsedInstruction);
+    ptr.* = value;
+    return .{ .parsed = ptr };
+}
+
 pub fn parseUiInstruction(
     allocator: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -281,12 +290,12 @@ pub fn parseUiInstruction(
         account_keys,
         stack_height,
     ) catch {
-        return .{ .parsed = .{ .partially_decoded = try makeUiPartiallyDecodedInstruction(
+        return allocParsed(allocator, .{ .partially_decoded = try makeUiPartiallyDecodedInstruction(
             allocator,
             instruction,
             account_keys,
             stack_height,
-        ) } };
+        ) });
     };
 }
 
@@ -323,7 +332,7 @@ pub fn parseInstruction(
 
     switch (program_name) {
         .addressLookupTable => {
-            return .{ .parsed = .{ .parsed = .{
+            return allocParsed(allocator, .{ .parsed = .{
                 .program = "address-lookup-table",
                 .program_id = try allocator.dupe(u8, program_id.base58String().constSlice()),
                 .parsed = try parseAddressLookupTableInstruction(
@@ -332,10 +341,10 @@ pub fn parseInstruction(
                     account_keys,
                 ),
                 .stack_height = stack_height,
-            } } };
+            } });
         },
         .splAssociatedTokenAccount => {
-            return .{ .parsed = .{ .parsed = .{
+            return allocParsed(allocator, .{ .parsed = .{
                 .program = "spl-associated-token-account",
                 .program_id = try allocator.dupe(u8, program_id.base58String().constSlice()),
                 .parsed = try parseAssociatedTokenInstruction(
@@ -344,18 +353,18 @@ pub fn parseInstruction(
                     account_keys,
                 ),
                 .stack_height = stack_height,
-            } } };
+            } });
         },
         .splMemo => {
-            return .{ .parsed = .{ .parsed = .{
+            return allocParsed(allocator, .{ .parsed = .{
                 .program = "spl-memo",
                 .program_id = try allocator.dupe(u8, program_id.base58String().constSlice()),
                 .parsed = try parseMemoInstruction(allocator, instruction.data),
                 .stack_height = stack_height,
-            } } };
+            } });
         },
         .splToken => {
-            return .{ .parsed = .{ .parsed = .{
+            return allocParsed(allocator, .{ .parsed = .{
                 .program = "spl-token",
                 .program_id = try allocator.dupe(u8, program_id.base58String().constSlice()),
                 .parsed = try parseTokenInstruction(
@@ -364,10 +373,10 @@ pub fn parseInstruction(
                     account_keys,
                 ),
                 .stack_height = stack_height,
-            } } };
+            } });
         },
         .bpfLoader => {
-            return .{ .parsed = .{ .parsed = .{
+            return allocParsed(allocator, .{ .parsed = .{
                 .program = "bpf-loader",
                 .program_id = try allocator.dupe(u8, program_id.base58String().constSlice()),
                 .parsed = try parseBpfLoaderInstruction(
@@ -376,10 +385,10 @@ pub fn parseInstruction(
                     account_keys,
                 ),
                 .stack_height = stack_height,
-            } } };
+            } });
         },
         .bpfUpgradeableLoader => {
-            return .{ .parsed = .{ .parsed = .{
+            return allocParsed(allocator, .{ .parsed = .{
                 .program = "bpf-upgradeable-loader",
                 .program_id = try allocator.dupe(u8, program_id.base58String().constSlice()),
                 .parsed = try parseBpfUpgradeableLoaderInstruction(
@@ -388,10 +397,10 @@ pub fn parseInstruction(
                     account_keys,
                 ),
                 .stack_height = stack_height,
-            } } };
+            } });
         },
         .stake => {
-            return .{ .parsed = .{ .parsed = .{
+            return allocParsed(allocator, .{ .parsed = .{
                 .program = @tagName(program_name),
                 .program_id = try allocator.dupe(u8, program_id.base58String().constSlice()),
                 .parsed = try parseStakeInstruction(
@@ -400,10 +409,10 @@ pub fn parseInstruction(
                     account_keys,
                 ),
                 .stack_height = stack_height,
-            } } };
+            } });
         },
         .system => {
-            return .{ .parsed = .{ .parsed = .{
+            return allocParsed(allocator, .{ .parsed = .{
                 .program = @tagName(program_name),
                 .program_id = try allocator.dupe(u8, program_id.base58String().constSlice()),
                 .parsed = try parseSystemInstruction(
@@ -412,10 +421,10 @@ pub fn parseInstruction(
                     account_keys,
                 ),
                 .stack_height = stack_height,
-            } } };
+            } });
         },
         .vote => {
-            return .{ .parsed = .{ .parsed = .{
+            return allocParsed(allocator, .{ .parsed = .{
                 .program = @tagName(program_name),
                 .program_id = try allocator.dupe(u8, program_id.base58String().constSlice()),
                 .parsed = try parseVoteInstruction(
@@ -424,7 +433,7 @@ pub fn parseInstruction(
                     account_keys,
                 ),
                 .stack_height = stack_height,
-            } } };
+            } });
         },
     }
 }
