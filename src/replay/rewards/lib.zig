@@ -42,10 +42,9 @@ pub const KeyedRewardInfo = struct {
     reward_info: RewardInfo,
 
     /// Convert to the ledger Reward format for storage.
-    pub fn toLedgerReward(self: KeyedRewardInfo, allocator: Allocator) !sig.ledger.meta.Reward {
-        const pubkey_bytes = try allocator.dupe(u8, &self.pubkey.data);
+    pub fn toLedgerReward(self: KeyedRewardInfo) sig.ledger.meta.Reward {
         return .{
-            .pubkey = pubkey_bytes,
+            .pubkey = self.pubkey,
             .lamports = self.reward_info.lamports,
             .post_balance = self.reward_info.post_balance,
             .reward_type = self.reward_info.reward_type,
@@ -116,7 +115,7 @@ pub const BlockRewards = struct {
         errdefer allocator.free(ledger_rewards);
 
         for (self.rewards.items, 0..) |keyed_reward, i| {
-            ledger_rewards[i] = try keyed_reward.toLedgerReward(allocator);
+            ledger_rewards[i] = keyed_reward.toLedgerReward();
         }
         return ledger_rewards;
     }

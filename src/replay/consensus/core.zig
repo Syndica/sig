@@ -1624,10 +1624,7 @@ fn checkAndHandleNewRoot(
                 if (!block_rewards.isEmpty()) {
                     // Convert all rewards to ledger format
                     const ledger_rewards = try block_rewards.toLedgerRewards(allocator);
-                    defer {
-                        for (ledger_rewards) |r| allocator.free(r.pubkey);
-                        allocator.free(ledger_rewards);
-                    }
+                    defer allocator.free(ledger_rewards);
 
                     // Get block time and height from slot constants
                     const block_height = slot_ref.constants.block_height;

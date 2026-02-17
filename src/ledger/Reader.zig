@@ -1519,7 +1519,6 @@ pub const VersionedConfirmedBlock = struct {
 
     pub fn deinit(self: @This(), allocator: Allocator) void {
         for (self.transactions) |it| it.deinit(allocator);
-        for (self.rewards) |it| it.deinit(allocator);
         allocator.free(self.transactions);
         allocator.free(self.rewards);
     }

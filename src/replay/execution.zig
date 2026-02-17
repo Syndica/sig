@@ -543,6 +543,7 @@ fn prepareSlot(
         .new_rate_activation_epoch = new_rate_activation_epoch,
         .replay_votes_sender = state.replay_votes_channel,
         .ledger = state.ledger,
+        .account_store = svm_gateway.params.account_store,
     };
 
     const verify_ticks_params = replay.execution.VerifyTicksParams{
@@ -1114,6 +1115,7 @@ pub const TestState = struct {
             .new_rate_activation_epoch = null,
             .replay_votes_sender = self.replay_votes_channel,
             .ledger = null,
+            .account_store = null,
         };
     }
 

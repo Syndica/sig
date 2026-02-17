@@ -274,7 +274,7 @@ pub fn parseUiInstruction(
 ) !UiInstruction {
     const ixn_idx: usize = @intCast(instruction.program_id_index);
     const program_id = account_keys.get(ixn_idx).?;
-    return parseInstructionV2(
+    return parseInstruction(
         allocator,
         program_id,
         instruction,
@@ -312,7 +312,7 @@ pub fn parseUiInnerInstructions(
 
 /// Try to parse a compiled instruction into a structured parsed instruction.
 /// Falls back to partially decoded representation on failure.
-pub fn parseInstructionV2(
+pub fn parseInstruction(
     allocator: Allocator,
     program_id: Pubkey,
     instruction: sig.ledger.transaction_status.CompiledInstruction,

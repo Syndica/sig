@@ -3,6 +3,7 @@ const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
+const Pubkey = sig.core.Pubkey;
 const RewardType = sig.replay.rewards.RewardType;
 
 pub const TransactionStatusMeta = struct {
@@ -62,7 +63,6 @@ pub const TransactionStatusMeta = struct {
             self.rewards,
         }) |maybe_slice| {
             if (maybe_slice) |slice| {
-                for (slice) |item| item.deinit(allocator);
                 allocator.free(slice);
             }
         }
@@ -110,16 +110,13 @@ pub const CompiledInstruction = struct {
 
 pub const TransactionTokenBalance = struct {
     account_index: u8,
-    mint: []const u8,
+    mint: Pubkey,
     ui_token_amount: UiTokenAmount,
-    owner: []const u8,
-    program_id: []const u8,
+    owner: Pubkey,
+    program_id: Pubkey,
 
     pub fn deinit(self: @This(), allocator: Allocator) void {
         self.ui_token_amount.deinit(allocator);
-        allocator.free(self.mint);
-        allocator.free(self.owner);
-        allocator.free(self.program_id);
     }
 };
 
@@ -138,24 +135,20 @@ pub const UiTokenAmount = struct {
 pub const Rewards = std.array_list.Managed(Reward);
 
 pub const Reward = struct {
-    pubkey: []const u8,
+    pubkey: Pubkey,
     lamports: i64,
     /// Account balance in lamports after `lamports` was applied
     post_balance: u64,
     reward_type: ?RewardType,
     /// Vote account commission when the reward was credited, only present for voting and staking rewards
     commission: ?u8,
-
-    pub fn deinit(self: @This(), allocator: Allocator) void {
-        allocator.free(self.pubkey);
-    }
 };
 
 pub const LoadedAddresses = struct {
     /// List of addresses for writable loaded accounts
-    writable: []const sig.core.Pubkey = &.{},
+    writable: []const Pubkey = &.{},
     /// List of addresses for read-only loaded accounts
-    readonly: []const sig.core.Pubkey = &.{},
+    readonly: []const Pubkey = &.{},
 
     pub fn deinit(self: @This(), allocator: Allocator) void {
         allocator.free(self.writable);
@@ -164,7 +157,7 @@ pub const LoadedAddresses = struct {
 };
 
 pub const TransactionReturnData = struct {
-    program_id: sig.core.Pubkey = sig.core.Pubkey.ZEROES,
+    program_id: Pubkey = Pubkey.ZEROES,
     data: []const u8 = &.{},
 
     pub fn deinit(self: @This(), allocator: Allocator) void {
@@ -520,4 +513,90 @@ pub const TransactionError = union(enum(u32)) {
             else => {},
         }
     }
+
+    /// Serialize to JSON matching Agave's serde format for UiTransactionError.
+    /// - Unit variants: "VariantName"
+    /// - Tuple variants: {"VariantName": value}
+    /// - Struct variants: {"VariantName": {"field": value}}
+    /// - InstructionError: {"InstructionError": [index, error]}
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        switch (self) {
+            .InstructionError => |payload| {
+                try jw.beginObject();
+                try jw.objectField("InstructionError");
+                try jw.beginArray();
+                try jw.write(payload.@"0");
+                switch (payload.@"1") {
+                    .BorshIoError => try jw.write("BorshIoError"),
+                    inline else => |inner_payload, tag| {
+                        if (@TypeOf(inner_payload) == void) {
+                            try jw.write(@tagName(tag));
+                        } else {
+                            try jw.beginObject();
+                            try jw.objectField(@tagName(tag));
+                            try jw.write(inner_payload);
+                            try jw.endObject();
+                        }
+                    },
+                }
+                try jw.endArray();
+                try jw.endObject();
+            },
+            inline else => |payload, tag| {
+                if (@TypeOf(payload) == void) {
+                    try jw.write(@tagName(tag));
+                } else {
+                    try jw.beginObject();
+                    try jw.objectField(@tagName(tag));
+                    try jw.write(payload);
+                    try jw.endObject();
+                }
+            },
+        }
+    }
 };
+
+test "TransactionError jsonStringify" {
+    const expectJsonStringify = struct {
+        fn run(expected: []const u8, value: TransactionError) !void {
+            const actual = try std.json.stringifyAlloc(std.testing.allocator, value, .{});
+            defer std.testing.allocator.free(actual);
+            try std.testing.expectEqualStrings(expected, actual);
+        }
+    }.run;
+
+    // InstructionError with Custom inner error (matches Agave test)
+    try expectJsonStringify(
+        \\{"InstructionError":[42,{"Custom":3735928559}]}
+    ,
+        .{ .InstructionError = .{ 42, .{ .Custom = 0xdeadbeef } } },
+    );
+
+    // Struct variant: InsufficientFundsForRent (matches Agave test)
+    try expectJsonStringify(
+        \\{"InsufficientFundsForRent":{"account_index":42}}
+    ,
+        .{ .InsufficientFundsForRent = .{ .account_index = 42 } },
+    );
+
+    // Single-value tuple variant: DuplicateInstruction (matches Agave test)
+    try expectJsonStringify(
+        \\{"DuplicateInstruction":42}
+    ,
+        .{ .DuplicateInstruction = 42 },
+    );
+
+    // Unit variant (matches Agave test)
+    try expectJsonStringify(
+        \\"InsufficientFundsForFee"
+    ,
+        .InsufficientFundsForFee,
+    );
+
+    // InstructionError with BorshIoError (serialized as unit variant per Agave v3)
+    try expectJsonStringify(
+        \\{"InstructionError":[0,"BorshIoError"]}
+    ,
+        .{ .InstructionError = .{ 0, .{ .BorshIoError = @constCast("Unknown") } } },
+    );
+}

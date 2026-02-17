@@ -16,12 +16,14 @@ const Transaction = sig.core.Transaction;
 
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 
+const Account = sig.core.Account;
 const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 const TransactionStatusMeta = sig.ledger.transaction_status.TransactionStatusMeta;
 const TransactionStatusMetaBuilder = sig.ledger.transaction_status.TransactionStatusMetaBuilder;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
 const Ledger = sig.ledger.Ledger;
+const SlotAccountStore = sig.accounts_db.SlotAccountStore;
 const spl_token = sig.runtime.spl_token;
 
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
@@ -38,6 +40,8 @@ new_rate_activation_epoch: ?sig.core.Epoch,
 replay_votes_sender: ?*Channel(ParsedVote),
 /// Ledger for persisting transaction status metadata (optional for backwards compatibility)
 ledger: ?*Ledger,
+/// Account store for looking up accounts (e.g. mint accounts for token balance resolution)
+account_store: ?SlotAccountStore,
 
 pub fn commitTransactions(
     self: Committer,
@@ -140,6 +144,7 @@ pub fn commitTransactions(
                 transaction,
                 tx_result.*,
                 transaction_index,
+                self.account_store,
             );
         }
     }
@@ -168,6 +173,7 @@ fn writeTransactionStatus(
     transaction: ResolvedTransaction,
     tx_result: ProcessedTransaction,
     transaction_index: usize,
+    account_store: ?SlotAccountStore,
 ) !void {
     const status_write_zone = tracy.Zone.init(@src(), .{ .name = "writeTransactionStatus" });
     defer status_write_zone.deinit();
@@ -226,16 +232,17 @@ fn writeTransactionStatus(
         }
     }
 
-    // Resolve pre-token balances using WritesAccountReader
-    const writes_reader = WritesAccountReader{
+    // Resolve pre-token balances using FallbackAccountReader (writes first, then account store)
+    const mint_reader = FallbackAccountReader{
         .writes = tx_result.writes.constSlice(),
+        .account_store_reader = if (account_store) |store| store.reader() else null,
     };
     const pre_token_balances = spl_token.resolveTokenBalances(
         allocator,
         tx_result.pre_token_balances,
         &mint_cache,
-        WritesAccountReader,
-        writes_reader,
+        FallbackAccountReader,
+        mint_reader,
     );
     defer if (pre_token_balances) |balances| {
         for (balances) |b| b.deinit(allocator);
@@ -248,8 +255,8 @@ fn writeTransactionStatus(
         allocator,
         post_raw_token_balances,
         &mint_cache,
-        WritesAccountReader,
-        writes_reader,
+        FallbackAccountReader,
+        mint_reader,
     );
     defer if (post_token_balances) |balances| {
         for (balances) |b| b.deinit(allocator);
@@ -339,10 +346,13 @@ fn collectPostTokenBalances(
     return result;
 }
 
-/// Account reader that looks up accounts from transaction writes.
-/// Used for resolving mint decimals when full account store access isn't available.
-const WritesAccountReader = struct {
+/// Account reader that checks transaction writes first, then falls back to the
+/// account store. This ensures mint accounts can be found even when they weren't
+/// modified by the transaction (the common case for token transfers).
+/// [agave] Agave uses account_loader.load_account() which has full store access.
+const FallbackAccountReader = struct {
     writes: []const LoadedAccount,
+    account_store_reader: ?sig.accounts_db.SlotAccountReader,
 
     /// Stub account type returned by this reader.
     /// Allocates and owns the data buffer.
@@ -358,15 +368,14 @@ const WritesAccountReader = struct {
         };
 
         pub fn deinit(self: StubAccount, _: Allocator) void {
-            // Free the allocated data buffer
             self.allocator.free(self.data.slice);
         }
     };
 
-    pub fn get(self: WritesAccountReader, pubkey: Pubkey, alloc: Allocator) !?StubAccount {
+    pub fn get(self: FallbackAccountReader, pubkey: Pubkey, alloc: Allocator) !?StubAccount {
+        // Check transaction writes first
         for (self.writes) |*account| {
             if (account.pubkey.equals(&pubkey)) {
-                // Duplicate the account data slice
                 const data_copy = try alloc.dupe(u8, account.account.data);
                 return StubAccount{
                     .data = .{ .slice = data_copy },
@@ -374,6 +383,18 @@ const WritesAccountReader = struct {
                 };
             }
         }
+
+        // Fall back to account store (e.g. for mint accounts not modified in this tx)
+        if (self.account_store_reader) |reader| {
+            const account = try reader.get(alloc, pubkey) orelse return null;
+            defer account.deinit(alloc);
+            const data_copy = try account.data.readAllAllocate(alloc);
+            return StubAccount{
+                .data = .{ .slice = data_copy },
+                .allocator = alloc,
+            };
+        }
+
         return null;
     }
 };

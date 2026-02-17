@@ -349,6 +349,13 @@ pub fn prepareCpiInstructionInfo(
         break :blk program_account_meta.index_in_transaction;
     };
 
+    // Clone instruction data so the trace preserves each CPI's data independently.
+    // Without this, multiple CPI trace entries can alias the same VM memory region,
+    // causing all entries to reflect the last CPI's data.
+    // [agave] Uses Cow::Owned(instruction.data) for CPI instructions.
+    const owned_data = try tc.allocator.dupe(u8, callee.data);
+    errdefer tc.allocator.free(owned_data);
+
     return .{
         .program_meta = .{
             .pubkey = callee.program_id,
@@ -356,8 +363,8 @@ pub fn prepareCpiInstructionInfo(
         },
         .account_metas = deduped_account_metas,
         .dedupe_map = dedupe_map,
-        .instruction_data = callee.data,
-        .owned_instruction_data = false,
+        .instruction_data = owned_data,
+        .owned_instruction_data = true,
         .initial_account_lamports = 0,
     };
 }
