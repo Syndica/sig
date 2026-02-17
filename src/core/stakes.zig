@@ -23,7 +23,6 @@ const Stake = StakeStateV2.Stake;
 const Meta = StakeStateV2.Meta;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateV3 = sig.runtime.program.vote.state.VoteStateV3;
-const VoteStateV4 = sig.runtime.program.vote.state.VoteStateV4;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
 
 const RwMux = sig.sync.RwMux;

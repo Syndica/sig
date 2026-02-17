@@ -885,7 +885,14 @@ pub const VoteState = union(enum(u32)) {
         commission_val: u8,
         voter_epoch: Epoch,
     ) Allocator.Error!VoteState {
-        return .{ .v3 = try VoteStateV3.init(allocator, node_pubkey, authorized_voter, withdrawer, commission_val, voter_epoch) };
+        return .{ .v3 = try VoteStateV3.init(
+            allocator,
+            node_pubkey,
+            authorized_voter,
+            withdrawer,
+            commission_val,
+            voter_epoch,
+        ) };
     }
 
     pub fn initV4(
@@ -897,7 +904,15 @@ pub const VoteState = union(enum(u32)) {
         voter_epoch: Epoch,
         vote_pubkey: Pubkey,
     ) Allocator.Error!VoteState {
-        return .{ .v4 = try VoteStateV4.init(allocator, node_pubkey, authorized_voter, withdrawer, commission_pct, voter_epoch, vote_pubkey) };
+        return .{ .v4 = try VoteStateV4.init(
+            allocator,
+            node_pubkey,
+            authorized_voter,
+            withdrawer,
+            commission_pct,
+            voter_epoch,
+            vote_pubkey,
+        ) };
     }
 
     pub fn deinit(self: *VoteState, allocator: Allocator) void {
@@ -1112,7 +1127,12 @@ pub const VoteState = union(enum(u32)) {
         };
     }
 
-    pub fn incrementCredits(self: *VoteState, allocator: Allocator, epoch: Epoch, credits: u64) error{OutOfMemory}!void {
+    pub fn incrementCredits(
+        self: *VoteState,
+        allocator: Allocator,
+        epoch: Epoch,
+        credits: u64,
+    ) error{OutOfMemory}!void {
         switch (self.*) {
             inline else => |*s| try s.incrementCredits(allocator, epoch, credits),
         }
@@ -1150,7 +1170,12 @@ pub const VoteState = union(enum(u32)) {
         current_slot: Slot,
     ) !void {
         switch (self.*) {
-            inline else => |*s| try s.processNextVoteSlot(allocator, next_vote_slot, epoch, current_slot),
+            inline else => |*s| try s.processNextVoteSlot(
+                allocator,
+                next_vote_slot,
+                epoch,
+                current_slot,
+            ),
         }
     }
 
@@ -1161,7 +1186,11 @@ pub const VoteState = union(enum(u32)) {
         target_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline else => |*s| try s.setNewAuthorizedVoter(allocator, new_authorized_voter, target_epoch),
+            inline else => |*s| try s.setNewAuthorizedVoter(
+                allocator,
+                new_authorized_voter,
+                target_epoch,
+            ),
         };
     }
 
@@ -1211,7 +1240,14 @@ pub const VoteState = union(enum(u32)) {
         current_slot: Slot,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline else => |*s| try s.processVoteUnfiltered(allocator, recent_vote_slots, vote, slot_hashes, epoch, current_slot),
+            inline else => |*s| try s.processVoteUnfiltered(
+                allocator,
+                recent_vote_slots,
+                vote,
+                slot_hashes,
+                epoch,
+                current_slot,
+            ),
         };
     }
 
@@ -1224,7 +1260,13 @@ pub const VoteState = union(enum(u32)) {
         vote_state_update: *VoteStateUpdate,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline else => |*s| try s.processVoteStateUpdate(allocator, slot_hashes, epoch, slot, vote_state_update),
+            inline else => |*s| try s.processVoteStateUpdate(
+                allocator,
+                slot_hashes,
+                epoch,
+                slot,
+                vote_state_update,
+            ),
         };
     }
 
@@ -1237,7 +1279,13 @@ pub const VoteState = union(enum(u32)) {
         tower_sync: *TowerSync,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline else => |*s| try s.processTowerSync(allocator, slot_hashes, epoch, slot, tower_sync),
+            inline else => |*s| try s.processTowerSync(
+                allocator,
+                slot_hashes,
+                epoch,
+                slot,
+                tower_sync,
+            ),
         };
     }
 
@@ -1249,7 +1297,12 @@ pub const VoteState = union(enum(u32)) {
         slot_hashes: *const SlotHashes,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline else => |*s| try s.checkAndFilterProposedVoteState(proposed_lockouts, proposed_root, proposed_hash, slot_hashes),
+            inline else => |*s| try s.checkAndFilterProposedVoteState(
+                proposed_lockouts,
+                proposed_root,
+                proposed_hash,
+                slot_hashes,
+            ),
         };
     }
 
@@ -1263,7 +1316,14 @@ pub const VoteState = union(enum(u32)) {
         current_slot: Slot,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline else => |*s| try s.processNewVoteState(allocator, new_state, new_root, timestamp, epoch, current_slot),
+            inline else => |*s| try s.processNewVoteState(
+                allocator,
+                new_state,
+                new_root,
+                timestamp,
+                epoch,
+                current_slot,
+            ),
         };
     }
 

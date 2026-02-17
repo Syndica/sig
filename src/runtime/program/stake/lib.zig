@@ -1414,7 +1414,11 @@ fn deactivateDelinquent(
     );
     defer delinquent_vote_state_raw.deinit(allocator);
 
-    var delinquent_vote_state = try delinquent_vote_state_raw.convertToVoteState(allocator, null, false);
+    var delinquent_vote_state = try delinquent_vote_state_raw.convertToVoteState(
+        allocator,
+        null,
+        false,
+    );
     defer delinquent_vote_state.deinit(allocator);
 
     const reference_vote_account = try ic.borrowInstructionAccount(reference_vote_account_index);
@@ -1428,10 +1432,17 @@ fn deactivateDelinquent(
     );
     defer reference_vote_state_raw.deinit(allocator);
 
-    var reference_vote_state = try reference_vote_state_raw.convertToVoteState(allocator, null, false);
+    var reference_vote_state = try reference_vote_state_raw.convertToVoteState(
+        allocator,
+        null,
+        false,
+    );
     defer reference_vote_state.deinit(allocator);
 
-    if (!acceptableReferenceEpochCredits(reference_vote_state.epochCreditsList().items, current_epoch)) {
+    if (!acceptableReferenceEpochCredits(
+        reference_vote_state.epochCreditsList().items,
+        current_epoch,
+    )) {
         ic.tc.custom_error = @intFromEnum(StakeError.insufficient_reference_votes);
         return error.Custom;
     }
@@ -1452,7 +1463,10 @@ fn deactivateDelinquent(
         return error.Custom;
     }
 
-    if (!eligibleForAccountDelinquent(delinquent_vote_state.epochCreditsList().items, current_epoch)) {
+    if (!eligibleForAccountDelinquent(
+        delinquent_vote_state.epochCreditsList().items,
+        current_epoch,
+    )) {
         ic.tc.custom_error = @intFromEnum(
             StakeError.minimum_delinquent_epochs_for_deactivation_not_met,
         );

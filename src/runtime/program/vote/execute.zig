@@ -18,7 +18,6 @@ const VoteStateUpdate = vote_program.state.VoteStateUpdate;
 const TowerSync = vote_program.state.TowerSync;
 const VoteStateVersions = vote_program.state.VoteStateVersions;
 const VoteAuthorize = vote_program.state.VoteAuthorize;
-const CircBufV1 = vote_program.state.CircBufV1;
 const VoteError = vote_program.VoteError;
 
 const InstructionContext = sig.runtime.InstructionContext;
@@ -322,7 +321,10 @@ fn authorize(
     clock: Clock,
     signers: []const Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot)) .v4 else .v3;
+    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot))
+        .v4
+    else
+        .v3;
 
     const checked = try getVoteStateChecked(
         allocator,
@@ -545,7 +547,10 @@ fn updateValidatorIdentity(
     vote_account: *BorrowedAccount,
     new_identity: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot)) .v4 else .v3;
+    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot))
+        .v4
+    else
+        .v3;
 
     const checked = try getVoteStateChecked(
         allocator,
@@ -605,7 +610,10 @@ fn updateCommission(
     epoch_schedule: EpochSchedule,
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot)) .v4 else .v3;
+    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot))
+        .v4
+    else
+        .v3;
 
     const checked = getVoteStateChecked(
         allocator,
@@ -624,7 +632,8 @@ fn updateCommission(
     defer vote_state.deinit(allocator);
 
     // [SIMD-0185] New commission value multiplied by 100 for bps; compare with current bps.
-    const current_bps = vote_state.inflationRewardsCommissionBps() orelse (@as(u16, vote_state.commission()) * 100);
+    const current_bps = vote_state.inflationRewardsCommissionBps() orelse
+        (@as(u16, vote_state.commission()) * 100);
     const enforce_commission_update_rule =
         @as(u16, commission) * 100 > current_bps;
 
@@ -706,7 +715,10 @@ fn widthraw(
     var vote_account = try ic.borrowInstructionAccount(vote_account_index);
     defer vote_account.release();
 
-    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot)) .v4 else .v3;
+    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot))
+        .v4
+    else
+        .v3;
 
     const checked = try getVoteStateChecked(
         allocator,
@@ -820,7 +832,10 @@ fn processVoteWithAccount(
     slot_hashes: SlotHashes,
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot)) .v4 else .v3;
+    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot))
+        .v4
+    else
+        .v3;
 
     const checked = try getVoteStateChecked(
         allocator,
@@ -914,7 +929,10 @@ fn voteStateUpdate(
     clock: Clock,
     vote_state_update: *VoteStateUpdate,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot)) .v4 else .v3;
+    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot))
+        .v4
+    else
+        .v3;
 
     const checked = try getVoteStateChecked(
         allocator,
@@ -989,7 +1007,10 @@ fn towerSync(
     clock: Clock,
     tower_sync: *TowerSync,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot)) .v4 else .v3;
+    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot))
+        .v4
+    else
+        .v3;
 
     const checked = try getVoteStateChecked(
         allocator,
@@ -1070,7 +1091,11 @@ fn getVoteStateChecked(
         },
     }
 
-    var vote_state = try versioned_state.convertToVoteState(allocator, vote_account.pubkey, target_v4);
+    var vote_state = try versioned_state.convertToVoteState(
+        allocator,
+        vote_account.pubkey,
+        target_v4,
+    );
     errdefer vote_state.deinit(allocator);
 
     return .{ .vote_state = vote_state };
