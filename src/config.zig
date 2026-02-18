@@ -132,8 +132,6 @@ pub const AccountsDB = struct {
     num_threads_snapshot_load: u32 = 0,
     /// number of threads to unpack snapshot from .tar.zstd
     num_threads_snapshot_unpack: u16 = 0,
-    /// number of shards to use across the index (legacy v1 option, kept for CLI compatibility)
-    number_of_index_shards: u64 = sig.accounts_db.Two.ACCOUNT_INDEX_SHARDS,
     /// use disk based index for accounts index
     use_disk_index: bool = false,
     /// force unpacking a fresh snapshot even if an accounts/ dir exists
@@ -142,10 +140,6 @@ pub const AccountsDB = struct {
     min_snapshot_download_speed_mbs: u64 = 20,
     /// force download of new snapshot, even if one exists (usually to get a more up-to-date snapshot
     force_new_snapshot_download: bool = false,
-    /// estimate of the number of accounts per file (used for preallocation, legacy v1 option)
-    accounts_per_file_estimate: u64 =
-        sig.accounts_db.Two.getAccountPerFileEstimateFromCluster(.testnet) catch
-            @compileError("account_per_file_estimate missing for default cluster"),
     /// only load snapshot metadata when starting up
     snapshot_metadata_only: bool = false,
     /// maximum number of snapshot download attempts before failing

@@ -5,21 +5,6 @@ const sig = @import("../../sig.zig");
 pub const Rooted = @import("Rooted.zig");
 pub const Unrooted = @import("Unrooted.zig");
 
-pub const DB_LOG_RATE = sig.time.Duration.fromSecs(5);
-pub const MERKLE_FANOUT: usize = 16;
-pub const ACCOUNT_INDEX_SHARDS: usize = 8192;
-pub const DELETE_ACCOUNT_FILES_MIN = 100;
-
-/// Legacy v1 option: estimate of accounts per file for preallocation, by cluster.
-pub fn getAccountPerFileEstimateFromCluster(
-    cluster: sig.core.Cluster,
-) error{NotImplementedYet}!u64 {
-    return switch (cluster) {
-        .testnet => 500,
-        else => error.NotImplementedYet,
-    };
-}
-
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Ancestors = sig.core.Ancestors;

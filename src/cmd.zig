@@ -600,8 +600,6 @@ const Cmd = struct {
         n_threads_snapshot_load: u32,
         n_threads_snapshot_unpack: u16,
         force_unpack_snapshot: bool,
-        number_of_index_shards: u64,
-        accounts_per_file_estimate: u64,
         skip_snapshot_validation: bool,
         dbg_db_init: bool,
 
@@ -638,26 +636,6 @@ const Cmd = struct {
                 .config = {},
                 .help = "unpacks a snapshot (even if it exists)",
             },
-            .number_of_index_shards = .{
-                .kind = .named,
-                .name_override = null,
-                .alias = .none,
-                .default_value = sig.accounts_db.Two.ACCOUNT_INDEX_SHARDS, // Legacy v1 option, kept for CLI compatibility
-                .config = {},
-                .help = "number of shards for the account index's pubkey_ref_map",
-            },
-            .accounts_per_file_estimate = .{
-                .kind = .named,
-                .name_override = null,
-                .alias = .a,
-                // Legacy v1 option
-                .default_value = sig.accounts_db.Two
-                    .getAccountPerFileEstimateFromCluster(.testnet) catch
-                    @compileError("account_per_file_estimate missing for default cluster"),
-                .config = {},
-                .help = "number of accounts to estimate inside of account files" ++
-                    " (used for pre-allocation)",
-            },
             .skip_snapshot_validation = .{
                 .kind = .named,
                 .name_override = null,
@@ -685,8 +663,6 @@ const Cmd = struct {
             cfg.accounts_db.num_threads_snapshot_load = args.n_threads_snapshot_load;
             cfg.accounts_db.num_threads_snapshot_unpack = args.n_threads_snapshot_unpack;
             cfg.accounts_db.force_unpack_snapshot = args.force_unpack_snapshot;
-            cfg.accounts_db.number_of_index_shards = args.number_of_index_shards;
-            cfg.accounts_db.accounts_per_file_estimate = args.accounts_per_file_estimate;
             cfg.accounts_db.skip_snapshot_validation = args.skip_snapshot_validation;
             cfg.accounts_db.dbg_db_init = args.dbg_db_init;
         }
@@ -2401,7 +2377,6 @@ fn testTransactionSenderService(
 //     //     .geyser_writer = null,
 //     //     .gossip_view = null,
 //     //     .index_allocation = .ram,
-//     //     .number_of_index_shards = 1,
 //     // });
 //     // defer accountsdb.deinit();
 //

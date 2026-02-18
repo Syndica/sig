@@ -5,8 +5,8 @@ const tracy = @import("tracy");
 const ScopedThreadPool = sig.utils.thread.ScopedThreadPool;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;
 
-/// Progress update rate for tar unpacking (reuse accountsdb log rate)
-const TAR_PROGRESS_UPDATES = sig.accounts_db.Two.DB_LOG_RATE;
+/// Progress update rate for tar unpacking
+const TAR_PROGRESS_UPDATES = sig.time.Duration.fromSecs(5);
 
 // The identifier for the scoped logger used in this file.
 const Logger = sig.trace.Logger("utils.tar");
