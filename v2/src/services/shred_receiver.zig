@@ -11,7 +11,6 @@ const layout = shred.layout;
 const Pair = common.net.Pair;
 const Packet = common.net.Packet;
 const Slot = common.solana.Slot;
-const Pubkey = common.solana.Pubkey;
 const Atomic = std.atomic.Value;
 
 comptime {

@@ -1,4 +1,9 @@
 const std = @import("std");
+
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 const Atomic = std.atomic.Value;
 
 /// The ring that holds the packet buffers.

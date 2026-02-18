@@ -1,5 +1,9 @@
 const std = @import("std");
 
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 const SECCOMP = std.os.linux.SECCOMP;
 const syscalls = std.os.linux.syscalls.X64;
 

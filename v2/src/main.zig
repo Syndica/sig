@@ -1,4 +1,9 @@
 const std = @import("std");
+
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 const services = @import("services.zig");
 
 const Config = struct {

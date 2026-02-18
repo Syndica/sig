@@ -1,3 +1,9 @@
+const std = @import("std");
+
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 pub const Hash = @import("solana/hash.zig").Hash;
 pub const Pubkey = @import("solana/pubkey.zig").Pubkey;
 pub const Signature = @import("solana/signature.zig").Signature;

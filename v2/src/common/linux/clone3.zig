@@ -1,5 +1,9 @@
 const std = @import("std");
 
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 // zig fmt: off
 pub const Flags = packed struct(u64) { 
     _unused_0_6    :u7   = 0    , // 0..=6

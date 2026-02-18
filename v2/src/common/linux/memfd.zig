@@ -1,4 +1,9 @@
 const std = @import("std");
+
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 const linux = std.os.linux;
 const E = linux.E;
 const e = E.init;

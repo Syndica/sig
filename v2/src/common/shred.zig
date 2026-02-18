@@ -1,4 +1,9 @@
 const std = @import("std");
+
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 const common = @import("../common.zig");
 const binkode = @import("binkode");
 
@@ -7,7 +12,6 @@ const ShredConstants = @import("shred/ShredConstants.zig");
 
 const Allocator = std.mem.Allocator;
 
-const BitFlags = common.collections.BitFlags;
 const Packet = common.net.Packet;
 const Hash = common.solana.Hash;
 const Nonce = common.solana.Nonce;
@@ -689,7 +693,7 @@ pub const MERKLE_HASH_PREFIX_LEAF: *const [26]u8 = "\x00SOLANA_MERKLE_SHREDS_LEA
 pub const MERKLE_HASH_PREFIX_NODE: *const [26]u8 = "\x01SOLANA_MERKLE_SHREDS_NODE";
 
 /// agave: make_merkle_tree
-pub fn makeMerkleTree(nodes: *std.ArrayList(Hash)) !void {
+pub fn makeMerkleTree(allocator: std.mem.Allocator, nodes: *std.ArrayList(Hash)) !void {
     var size = nodes.items.len;
     while (size > 1) {
         const offset = nodes.items.len - size;
@@ -699,7 +703,7 @@ pub fn makeMerkleTree(nodes: *std.ArrayList(Hash)) !void {
             const node = &nodes.items[index];
             const other = &nodes.items[@min(index + 1, offset + size - 1)];
             const parent = joinNodes(&node.data, &other.data);
-            try nodes.append(parent);
+            try nodes.append(allocator, parent);
         }
         size = nodes.items.len - offset - size;
     }

@@ -11,6 +11,11 @@
 const root = @import("root");
 
 const std = @import("std");
+
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 const builtin = @import("builtin");
 
 const common = @import("common");

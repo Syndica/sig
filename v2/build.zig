@@ -4,9 +4,19 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const common = b.createModule(.{ .root_source_file = b.path("src/common.zig") });
+    const test_step = b.step("test", "Run unit tests");
+
+    const common = b.createModule(.{
+        .root_source_file = b.path("src/common.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     common.addImport("base58", b.dependency("base58", .{}).module("base58"));
     common.addImport("binkode", b.dependency("binkode", .{}).module("binkode"));
+
+    const common_tests = b.addTest(.{ .root_module = common, .name = "common" });
+    const common_tests_run = b.addRunArtifact(common_tests);
+    test_step.dependOn(&common_tests_run.step);
 
     const start_service = b.createModule(.{ .root_source_file = b.path("src/start_service.zig") });
     start_service.addImport("common", common);
@@ -23,8 +33,6 @@ pub fn build(b: *std.Build) !void {
 
     const sig_init_tests = b.addTest(.{ .root_module = sig_init, .name = "sig_init" });
     const sig_init_tests_run = b.addRunArtifact(sig_init_tests);
-
-    const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&sig_init_tests_run.step);
 
     // build + link services

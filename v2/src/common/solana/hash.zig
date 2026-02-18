@@ -5,7 +5,6 @@ const base58 = @import("base58");
 
 const BASE58_ENDEC = base58.Table.BITCOIN;
 const Sha256 = std.crypto.hash.sha2.Sha256;
-const Slot = common.solana.Slot;
 
 pub const Hash = extern struct {
     data: [SIZE]u8,

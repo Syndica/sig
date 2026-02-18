@@ -1,4 +1,9 @@
 const std = @import("std");
+
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 const Ring = @import("ring.zig").Ring;
 
 const MAX_PACKETS = 1 << 14;

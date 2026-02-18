@@ -8,6 +8,10 @@
 
 const std = @import("std");
 
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 const page_size_min = std.heap.page_size_min;
 
 const common = @import("common");

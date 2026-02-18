@@ -1,13 +1,15 @@
 const std = @import("std");
 
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 pub const linux = @import("common/linux.zig");
 pub const Ring = @import("common/ring.zig").Ring;
 pub const net = @import("common/net.zig");
 pub const crypto = @import("common/crypto.zig");
 pub const solana = @import("common/solana.zig");
 pub const shred = @import("common/shred.zig");
-
-const page_size_min = std.heap.page_size_min;
 
 pub const ResolvedArgs = extern struct {
     stderr: std.os.linux.fd_t,
@@ -19,6 +21,7 @@ pub const ResolvedArgs = extern struct {
     ro_len: [max_regions]usize,
 
     pub const max_regions = 4; // chosen arbitrarily
+    const page_size_min = std.heap.page_size_min;
 };
 
 pub const ServiceFn = *const fn (ResolvedArgs) callconv(.c) noreturn;
