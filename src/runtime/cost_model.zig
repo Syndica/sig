@@ -42,7 +42,15 @@ pub const ACCOUNT_DATA_COST_PAGE_SIZE: u64 = 32 * 1024;
 
 /// Static cost for simple vote transactions (when feature is inactive).
 /// Breakdown: 2100 (vote CUs) + 720 (1 sig) + 600 (2 write locks) + 8 (loaded data)
-pub const SIMPLE_VOTE_USAGE_COST: u64 = 3428;
+pub const SIMPLE_VOTE_USAGE_COST: u64 = sig.runtime.program.vote.COMPUTE_UNITS +
+    SIGNATURE_COST +
+    2 * WRITE_LOCK_UNITS +
+    LOADED_ACCOUNTS_DATA_SIZE_COST_PER_32K;
+comptime {
+    if (SIMPLE_VOTE_USAGE_COST != 3428) @compileError(
+        "SIMPLE_VOTE_USAGE_COST must be 3428 to match Agave's cost model",
+    );
+}
 
 /// Represents the calculated cost units for a transaction.
 /// Can be either a static simple vote cost or dynamically calculated.
@@ -62,7 +70,7 @@ pub const TransactionCost = union(enum) {
 
     pub fn programsExecutionCost(self: TransactionCost) u64 {
         return switch (self) {
-            .simple_vote => 2100, // Vote program default
+            .simple_vote => sig.runtime.program.vote.COMPUTE_UNITS,
             .transaction => |details| details.programs_execution_cost,
         };
     }
@@ -258,29 +266,52 @@ test "calculateLoadedAccountsDataSizeCost" {
 
 test "UsageCostDetails.total" {
     const cost = UsageCostDetails{
-        .signature_cost = 720,
-        .write_lock_cost = 600,
+        .signature_cost = SIGNATURE_COST,
+        .write_lock_cost = 2 * WRITE_LOCK_UNITS,
         .data_bytes_cost = 10,
         .programs_execution_cost = 200_000,
-        .loaded_accounts_data_size_cost = 8,
+        .loaded_accounts_data_size_cost = LOADED_ACCOUNTS_DATA_SIZE_COST_PER_32K,
     };
     try std.testing.expectEqual(@as(u64, 201_338), cost.total());
 }
 
 test "TransactionCost.total for simple_vote" {
     const cost = TransactionCost{ .simple_vote = {} };
-    try std.testing.expectEqual(@as(u64, 3428), cost.total());
+    try std.testing.expectEqual(@as(u64, SIMPLE_VOTE_USAGE_COST), cost.total());
 }
 
 test "TransactionCost.total for transaction" {
     const cost = TransactionCost{
         .transaction = .{
-            .signature_cost = 720,
-            .write_lock_cost = 600,
+            .signature_cost = SIGNATURE_COST,
+            .write_lock_cost = 2 * WRITE_LOCK_UNITS,
             .data_bytes_cost = 10,
             .programs_execution_cost = 200_000,
-            .loaded_accounts_data_size_cost = 8,
+            .loaded_accounts_data_size_cost = LOADED_ACCOUNTS_DATA_SIZE_COST_PER_32K,
         },
     };
     try std.testing.expectEqual(@as(u64, 201_338), cost.total());
+}
+
+test "TransactionCost.programsExecutionCost for simple_vote" {
+    const cost = TransactionCost{ .simple_vote = {} };
+    // Simple vote transactions use a static execution cost of 2100 CU (vote program default)
+    try std.testing.expectEqual(
+        @as(u64, sig.runtime.program.vote.COMPUTE_UNITS),
+        cost.programsExecutionCost(),
+    );
+}
+
+test "TransactionCost.programsExecutionCost for transaction" {
+    const cost = TransactionCost{
+        .transaction = .{
+            .signature_cost = SIGNATURE_COST,
+            .write_lock_cost = 2 * WRITE_LOCK_UNITS,
+            .data_bytes_cost = 10,
+            .programs_execution_cost = 150_000,
+            .loaded_accounts_data_size_cost = LOADED_ACCOUNTS_DATA_SIZE_COST_PER_32K,
+        },
+    };
+    // Should return the actual programs_execution_cost from the details
+    try std.testing.expectEqual(@as(u64, 150_000), cost.programsExecutionCost());
 }

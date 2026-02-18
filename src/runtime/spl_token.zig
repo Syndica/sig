@@ -677,3 +677,742 @@ test "MintDecimalsCache - basic usage" {
     try cache.put(mint, 6);
     try std.testing.expectEqual(@as(?u8, 6), cache.get(mint));
 }
+
+test "ParsedTokenAccount.parse - invalid state byte rejects" {
+    // State byte = 3 is not a valid TokenAccountState variant
+    var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
+    @memset(&data, 0);
+    data[STATE_OFFSET] = 3;
+    try std.testing.expect(ParsedTokenAccount.parse(&data) == null);
+
+    // State byte = 255 is also invalid
+    data[STATE_OFFSET] = 255;
+    try std.testing.expect(ParsedTokenAccount.parse(&data) == null);
+}
+
+test "ParsedTokenAccount.parse - max amount (u64 max)" {
+    var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
+    @memset(&data, 0);
+
+    const mint = Pubkey{ .data = [_]u8{0xAA} ** 32 };
+    @memcpy(data[MINT_OFFSET..][0..32], &mint.data);
+    const owner = Pubkey{ .data = [_]u8{0xBB} ** 32 };
+    @memcpy(data[OWNER_OFFSET..][0..32], &owner.data);
+    std.mem.writeInt(u64, data[AMOUNT_OFFSET..][0..8], std.math.maxInt(u64), .little);
+    data[STATE_OFFSET] = 1; // initialized
+
+    const parsed = ParsedTokenAccount.parse(&data).?;
+    try std.testing.expectEqual(std.math.maxInt(u64), parsed.amount);
+    try std.testing.expectEqual(mint, parsed.mint);
+    try std.testing.expectEqual(owner, parsed.owner);
+}
+
+test "ParsedTokenAccount.parse - data exactly TOKEN_ACCOUNT_SIZE" {
+    var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
+    @memset(&data, 0);
+    data[STATE_OFFSET] = 1;
+    try std.testing.expect(ParsedTokenAccount.parse(&data) != null);
+}
+
+test "ParsedTokenAccount.parse - data larger than TOKEN_ACCOUNT_SIZE (Token-2022 with extensions)" {
+    // Token-2022 accounts can be larger than 165 bytes with extensions
+    var data: [TOKEN_ACCOUNT_SIZE + 100]u8 = undefined;
+    @memset(&data, 0);
+
+    const mint = Pubkey{ .data = [_]u8{0xCC} ** 32 };
+    @memcpy(data[MINT_OFFSET..][0..32], &mint.data);
+    const owner = Pubkey{ .data = [_]u8{0xDD} ** 32 };
+    @memcpy(data[OWNER_OFFSET..][0..32], &owner.data);
+    std.mem.writeInt(u64, data[AMOUNT_OFFSET..][0..8], 42, .little);
+    data[STATE_OFFSET] = 1;
+
+    const parsed = ParsedTokenAccount.parse(&data).?;
+    try std.testing.expectEqual(@as(u64, 42), parsed.amount);
+    try std.testing.expectEqual(mint, parsed.mint);
+}
+
+test "ParsedTokenAccount.parse - data one byte too short" {
+    var data: [TOKEN_ACCOUNT_SIZE - 1]u8 = undefined;
+    @memset(&data, 0);
+    data[STATE_OFFSET] = 1;
+    try std.testing.expect(ParsedTokenAccount.parse(&data) == null);
+}
+
+test "ParsedTokenAccount.parse - zero amount initialized" {
+    var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
+    @memset(&data, 0);
+    data[STATE_OFFSET] = 1;
+    // Amount is already 0 from @memset
+
+    const parsed = ParsedTokenAccount.parse(&data).?;
+    try std.testing.expectEqual(@as(u64, 0), parsed.amount);
+    try std.testing.expectEqual(TokenAccountState.initialized, parsed.state);
+}
+
+test "ParsedMint.parse - various decimal values" {
+    const test_decimals = [_]u8{ 0, 1, 6, 9, 18, 255 };
+    for (test_decimals) |dec| {
+        var data: [MINT_ACCOUNT_SIZE]u8 = undefined;
+        @memset(&data, 0);
+        data[MINT_DECIMALS_OFFSET] = dec;
+        data[MINT_IS_INITIALIZED_OFFSET] = 1;
+
+        const parsed = ParsedMint.parse(&data).?;
+        try std.testing.expectEqual(dec, parsed.decimals);
+    }
+}
+
+test "ParsedMint.parse - data exactly MINT_ACCOUNT_SIZE" {
+    var data: [MINT_ACCOUNT_SIZE]u8 = undefined;
+    @memset(&data, 0);
+    data[MINT_DECIMALS_OFFSET] = 9;
+    data[MINT_IS_INITIALIZED_OFFSET] = 1;
+    try std.testing.expect(ParsedMint.parse(&data) != null);
+}
+
+test "ParsedMint.parse - data larger than MINT_ACCOUNT_SIZE (Token-2022 mint with extensions)" {
+    var data: [MINT_ACCOUNT_SIZE + 200]u8 = undefined;
+    @memset(&data, 0);
+    data[MINT_DECIMALS_OFFSET] = 18;
+    data[MINT_IS_INITIALIZED_OFFSET] = 1;
+
+    const parsed = ParsedMint.parse(&data).?;
+    try std.testing.expectEqual(@as(u8, 18), parsed.decimals);
+}
+
+test "ParsedMint.parse - data one byte too short" {
+    var data: [MINT_ACCOUNT_SIZE - 1]u8 = undefined;
+    @memset(&data, 0);
+    data[MINT_DECIMALS_OFFSET] = 6;
+    data[MINT_IS_INITIALIZED_OFFSET] = 1;
+    try std.testing.expect(ParsedMint.parse(&data) == null);
+}
+
+test "ParsedMint.parse - non-zero is_initialized byte" {
+    // Any non-zero value should count as initialized (Agave uses bool)
+    var data: [MINT_ACCOUNT_SIZE]u8 = undefined;
+    @memset(&data, 0);
+    data[MINT_DECIMALS_OFFSET] = 6;
+    data[MINT_IS_INITIALIZED_OFFSET] = 255; // any non-zero
+
+    const parsed = ParsedMint.parse(&data);
+    try std.testing.expect(parsed != null);
+}
+
+test "realNumberString - single digit amount with many decimals" {
+    const allocator = std.testing.allocator;
+    // Agave test case: amount=1, decimals=9 -> "0.000000001"
+    const result = try realNumberString(allocator, 1, 9);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("0.000000001", result);
+}
+
+test "realNumberString - large amount (u64 max)" {
+    const allocator = std.testing.allocator;
+    const result = try realNumberString(allocator, std.math.maxInt(u64), 0);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("18446744073709551615", result);
+}
+
+test "realNumberString - large amount with decimals" {
+    const allocator = std.testing.allocator;
+    const result = try realNumberString(allocator, std.math.maxInt(u64), 9);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("18446744073.709551615", result);
+}
+
+test "realNumberString - 1 decimal" {
+    const allocator = std.testing.allocator;
+    const result = try realNumberString(allocator, 15, 1);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("1.5", result);
+}
+
+test "realNumberString - amount exactly equals decimals digits" {
+    const allocator = std.testing.allocator;
+    // amount=123, decimals=3 -> "0.123"
+    const result = try realNumberString(allocator, 123, 3);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("0.123", result);
+}
+
+test "realNumberStringTrimmed - single lamport (Agave test)" {
+    const allocator = std.testing.allocator;
+    // Agave test: amount=1, decimals=9 -> "0.000000001"
+    const result = try realNumberStringTrimmed(allocator, 1, 9);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("0.000000001", result);
+}
+
+test "realNumberStringTrimmed - exact round number (Agave test)" {
+    const allocator = std.testing.allocator;
+    // Agave test: amount=1_000_000_000, decimals=9 -> "1"
+    const result = try realNumberStringTrimmed(allocator, 1_000_000_000, 9);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("1", result);
+}
+
+test "realNumberStringTrimmed - large amount with high precision (Agave test)" {
+    const allocator = std.testing.allocator;
+    // Agave test: 1_234_567_890 with 3 decimals -> "1234567.89"
+    const result = try realNumberStringTrimmed(allocator, 1_234_567_890, 3);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("1234567.89", result);
+}
+
+test "realNumberStringTrimmed - u64 max with 9 decimals" {
+    const allocator = std.testing.allocator;
+    const result = try realNumberStringTrimmed(allocator, std.math.maxInt(u64), 9);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("18446744073.709551615", result);
+}
+
+test "formatTokenAmount - zero amount zero decimals" {
+    const allocator = std.testing.allocator;
+    const result = try formatTokenAmount(allocator, 0, 0);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqualStrings("0", result.amount);
+    try std.testing.expectEqualStrings("0", result.ui_amount_string);
+    try std.testing.expectEqual(@as(u8, 0), result.decimals);
+    try std.testing.expectApproxEqRel(@as(f64, 0.0), result.ui_amount.?, 0.0001);
+}
+
+test "formatTokenAmount - zero amount 9 decimals" {
+    const allocator = std.testing.allocator;
+    const result = try formatTokenAmount(allocator, 0, 9);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqualStrings("0", result.amount);
+    try std.testing.expectEqualStrings("0", result.ui_amount_string);
+    try std.testing.expectEqual(@as(u8, 9), result.decimals);
+}
+
+test "formatTokenAmount - USDC style (6 decimals, 1 million)" {
+    const allocator = std.testing.allocator;
+    // 1 USDC = 1_000_000 with 6 decimals
+    const result = try formatTokenAmount(allocator, 1_000_000, 6);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqualStrings("1000000", result.amount);
+    try std.testing.expectEqualStrings("1", result.ui_amount_string);
+    try std.testing.expectApproxEqRel(@as(f64, 1.0), result.ui_amount.?, 0.0001);
+}
+
+test "formatTokenAmount - max u64 amount" {
+    const allocator = std.testing.allocator;
+    const result = try formatTokenAmount(allocator, std.math.maxInt(u64), 0);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqualStrings("18446744073709551615", result.amount);
+    try std.testing.expectEqualStrings("18446744073709551615", result.ui_amount_string);
+}
+
+test "formatTokenAmount - ui_amount precision (Agave pattern)" {
+    const allocator = std.testing.allocator;
+    // 1.234567890 SOL
+    const result = try formatTokenAmount(allocator, 1_234_567_890, 9);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqualStrings("1234567890", result.amount);
+    try std.testing.expectApproxEqRel(@as(f64, 1.23456789), result.ui_amount.?, 0.0001);
+    // Trimmed string should not have trailing zero
+    try std.testing.expectEqualStrings("1.23456789", result.ui_amount_string);
+}
+
+test "MintDecimalsCache - multiple mints" {
+    const allocator = std.testing.allocator;
+    var cache = MintDecimalsCache.init(allocator);
+    defer cache.deinit();
+
+    const mint1 = Pubkey{ .data = [_]u8{1} ** 32 };
+    const mint2 = Pubkey{ .data = [_]u8{2} ** 32 };
+    const mint3 = Pubkey{ .data = [_]u8{3} ** 32 };
+
+    try cache.put(mint1, 6);
+    try cache.put(mint2, 9);
+    try cache.put(mint3, 0);
+
+    try std.testing.expectEqual(@as(?u8, 6), cache.get(mint1));
+    try std.testing.expectEqual(@as(?u8, 9), cache.get(mint2));
+    try std.testing.expectEqual(@as(?u8, 0), cache.get(mint3));
+}
+
+test "MintDecimalsCache - overwrite existing entry" {
+    const allocator = std.testing.allocator;
+    var cache = MintDecimalsCache.init(allocator);
+    defer cache.deinit();
+
+    const mint = Pubkey{ .data = [_]u8{1} ** 32 };
+    try cache.put(mint, 6);
+    try std.testing.expectEqual(@as(?u8, 6), cache.get(mint));
+
+    // Overwrite with new value
+    try cache.put(mint, 9);
+    try std.testing.expectEqual(@as(?u8, 9), cache.get(mint));
+}
+
+test "MintDecimalsCache - unknown mint returns null" {
+    const allocator = std.testing.allocator;
+    var cache = MintDecimalsCache.init(allocator);
+    defer cache.deinit();
+
+    const unknown = Pubkey{ .data = [_]u8{0xFF} ** 32 };
+    try std.testing.expectEqual(@as(?u8, null), cache.get(unknown));
+}
+
+test "TokenAccountState - all enum values" {
+    try std.testing.expectEqual(@as(u8, 0), @intFromEnum(TokenAccountState.uninitialized));
+    try std.testing.expectEqual(@as(u8, 1), @intFromEnum(TokenAccountState.initialized));
+    try std.testing.expectEqual(@as(u8, 2), @intFromEnum(TokenAccountState.frozen));
+}
+
+test "collectRawTokenBalances - empty accounts" {
+    const accounts: []const account_loader.LoadedAccount = &.{};
+    const result = collectRawTokenBalances(accounts);
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+}
+
+test "collectRawTokenBalances - non-token accounts skipped" {
+    // Create accounts owned by the system program (not a token program)
+    var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
+    @memset(&data, 0);
+    data[STATE_OFFSET] = 1;
+
+    const accounts = [_]account_loader.LoadedAccount{.{
+        .pubkey = Pubkey.ZEROES,
+        .account = .{
+            .lamports = 1_000_000,
+            .data = &data,
+            .owner = sig.runtime.program.system.ID, // not a token program
+            .executable = false,
+            .rent_epoch = 0,
+        },
+    }};
+    const result = collectRawTokenBalances(&accounts);
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+}
+
+test "collectRawTokenBalances - token account collected" {
+    var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
+    @memset(&data, 0);
+
+    const mint = Pubkey{ .data = [_]u8{0xAA} ** 32 };
+    @memcpy(data[MINT_OFFSET..][0..32], &mint.data);
+    const owner = Pubkey{ .data = [_]u8{0xBB} ** 32 };
+    @memcpy(data[OWNER_OFFSET..][0..32], &owner.data);
+    std.mem.writeInt(u64, data[AMOUNT_OFFSET..][0..8], 5_000_000, .little);
+    data[STATE_OFFSET] = 1;
+
+    const accounts = [_]account_loader.LoadedAccount{.{
+        .pubkey = Pubkey.ZEROES,
+        .account = .{
+            .lamports = 1_000_000,
+            .data = &data,
+            .owner = ids.TOKEN_PROGRAM_ID,
+            .executable = false,
+            .rent_epoch = 0,
+        },
+    }};
+    const result = collectRawTokenBalances(&accounts);
+    try std.testing.expectEqual(@as(usize, 1), result.len);
+    try std.testing.expectEqual(@as(u8, 0), result.constSlice()[0].account_index);
+    try std.testing.expectEqual(mint, result.constSlice()[0].mint);
+    try std.testing.expectEqual(owner, result.constSlice()[0].owner);
+    try std.testing.expectEqual(@as(u64, 5_000_000), result.constSlice()[0].amount);
+    try std.testing.expectEqual(ids.TOKEN_PROGRAM_ID, result.constSlice()[0].program_id);
+}
+
+test "collectRawTokenBalances - Token-2022 account collected" {
+    var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
+    @memset(&data, 0);
+
+    const mint = Pubkey{ .data = [_]u8{0x11} ** 32 };
+    @memcpy(data[MINT_OFFSET..][0..32], &mint.data);
+    const owner = Pubkey{ .data = [_]u8{0x22} ** 32 };
+    @memcpy(data[OWNER_OFFSET..][0..32], &owner.data);
+    std.mem.writeInt(u64, data[AMOUNT_OFFSET..][0..8], 100, .little);
+    data[STATE_OFFSET] = 1;
+
+    const accounts = [_]account_loader.LoadedAccount{.{
+        .pubkey = Pubkey.ZEROES,
+        .account = .{
+            .lamports = 1_000_000,
+            .data = &data,
+            .owner = ids.TOKEN_2022_PROGRAM_ID,
+            .executable = false,
+            .rent_epoch = 0,
+        },
+    }};
+    const result = collectRawTokenBalances(&accounts);
+    try std.testing.expectEqual(@as(usize, 1), result.len);
+    try std.testing.expectEqual(ids.TOKEN_2022_PROGRAM_ID, result.constSlice()[0].program_id);
+}
+
+test "collectRawTokenBalances - mixed token and non-token accounts" {
+    // Account 0: system program (not token) - should be skipped
+    var system_data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
+    @memset(&system_data, 0);
+    system_data[STATE_OFFSET] = 1;
+
+    // Account 1: SPL Token account - should be collected
+    var token_data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
+    @memset(&token_data, 0);
+    const mint1 = Pubkey{ .data = [_]u8{0xAA} ** 32 };
+    @memcpy(token_data[MINT_OFFSET..][0..32], &mint1.data);
+    const owner1 = Pubkey{ .data = [_]u8{0xBB} ** 32 };
+    @memcpy(token_data[OWNER_OFFSET..][0..32], &owner1.data);
+    std.mem.writeInt(u64, token_data[AMOUNT_OFFSET..][0..8], 1000, .little);
+    token_data[STATE_OFFSET] = 1;
+
+    // Account 2: Token-2022 account - should be collected
+    var token2022_data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
+    @memset(&token2022_data, 0);
+    const mint2 = Pubkey{ .data = [_]u8{0xCC} ** 32 };
+    @memcpy(token2022_data[MINT_OFFSET..][0..32], &mint2.data);
+    const owner2 = Pubkey{ .data = [_]u8{0xDD} ** 32 };
+    @memcpy(token2022_data[OWNER_OFFSET..][0..32], &owner2.data);
+    std.mem.writeInt(u64, token2022_data[AMOUNT_OFFSET..][0..8], 2000, .little);
+    token2022_data[STATE_OFFSET] = 2; // frozen
+
+    // Account 3: uninitialized token account - should be skipped
+    var uninit_data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
+    @memset(&uninit_data, 0);
+    uninit_data[STATE_OFFSET] = 0; // uninitialized
+
+    const accounts = [_]account_loader.LoadedAccount{
+        .{
+            .pubkey = Pubkey.ZEROES,
+            .account = .{
+                .lamports = 1_000_000,
+                .data = &system_data,
+                .owner = sig.runtime.program.system.ID,
+                .executable = false,
+                .rent_epoch = 0,
+            },
+        },
+        .{
+            .pubkey = Pubkey.ZEROES,
+            .account = .{
+                .lamports = 1_000_000,
+                .data = &token_data,
+                .owner = ids.TOKEN_PROGRAM_ID,
+                .executable = false,
+                .rent_epoch = 0,
+            },
+        },
+        .{
+            .pubkey = Pubkey.ZEROES,
+            .account = .{
+                .lamports = 1_000_000,
+                .data = &token2022_data,
+                .owner = ids.TOKEN_2022_PROGRAM_ID,
+                .executable = false,
+                .rent_epoch = 0,
+            },
+        },
+        .{
+            .pubkey = Pubkey.ZEROES,
+            .account = .{
+                .lamports = 1_000_000,
+                .data = &uninit_data,
+                .owner = ids.TOKEN_PROGRAM_ID,
+                .executable = false,
+                .rent_epoch = 0,
+            },
+        },
+    };
+
+    const result = collectRawTokenBalances(&accounts);
+    // Only accounts 1 and 2 should be collected (system skipped, uninitialized skipped)
+    try std.testing.expectEqual(@as(usize, 2), result.len);
+    try std.testing.expectEqual(@as(u8, 1), result.constSlice()[0].account_index);
+    try std.testing.expectEqual(@as(u8, 2), result.constSlice()[1].account_index);
+    try std.testing.expectEqual(@as(u64, 1000), result.constSlice()[0].amount);
+    try std.testing.expectEqual(@as(u64, 2000), result.constSlice()[1].amount);
+    try std.testing.expectEqual(ids.TOKEN_PROGRAM_ID, result.constSlice()[0].program_id);
+    try std.testing.expectEqual(ids.TOKEN_2022_PROGRAM_ID, result.constSlice()[1].program_id);
+}
+
+test "collectRawTokenBalances - short data account skipped" {
+    // Token program owner but data too short
+    var short_data: [100]u8 = undefined;
+    @memset(&short_data, 0);
+
+    const accounts = [_]account_loader.LoadedAccount{.{
+        .pubkey = Pubkey.ZEROES,
+        .account = .{
+            .lamports = 1_000_000,
+            .data = &short_data,
+            .owner = ids.TOKEN_PROGRAM_ID,
+            .executable = false,
+            .rent_epoch = 0,
+        },
+    }};
+    const result = collectRawTokenBalances(&accounts);
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+}
+
+test "isTokenProgram - distinct pubkeys" {
+    // Verify TOKEN_PROGRAM_ID and TOKEN_2022_PROGRAM_ID are different
+    try std.testing.expect(!ids.TOKEN_PROGRAM_ID.equals(&ids.TOKEN_2022_PROGRAM_ID));
+
+    // Random pubkeys should not be token programs
+    const random_key = Pubkey{ .data = [_]u8{0xDE} ** 32 };
+    try std.testing.expect(!isTokenProgram(random_key));
+}
+
+test "RawTokenBalance struct layout" {
+    // Verify RawTokenBalance fields are properly accessible
+    const balance = RawTokenBalance{
+        .account_index = 5,
+        .mint = Pubkey{ .data = [_]u8{1} ** 32 },
+        .owner = Pubkey{ .data = [_]u8{2} ** 32 },
+        .amount = 999_999,
+        .program_id = ids.TOKEN_PROGRAM_ID,
+    };
+    try std.testing.expectEqual(@as(u8, 5), balance.account_index);
+    try std.testing.expectEqual(@as(u64, 999_999), balance.amount);
+}
+
+test "realNumberString - 2 decimals (Agave USDC-like)" {
+    const allocator = std.testing.allocator;
+    // Agave tests token amounts with 2 decimals
+    const result = try realNumberString(allocator, 4200, 2);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("42.00", result);
+}
+
+test "realNumberString - 18 decimals (high precision token)" {
+    const allocator = std.testing.allocator;
+    // Some tokens use 18 decimals (like ETH-bridged tokens)
+    const result = try realNumberString(allocator, 1_000_000_000_000_000_000, 18);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("1.000000000000000000", result);
+}
+
+test "realNumberStringTrimmed - 2 decimals trims" {
+    const allocator = std.testing.allocator;
+    const result = try realNumberStringTrimmed(allocator, 4200, 2);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("42", result);
+}
+
+test "realNumberStringTrimmed - 18 decimals large amount" {
+    const allocator = std.testing.allocator;
+    const result = try realNumberStringTrimmed(allocator, 1_000_000_000_000_000_000, 18);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("1", result);
+}
+
+test "realNumberStringTrimmed - 18 decimals with fractional" {
+    const allocator = std.testing.allocator;
+    // 1.5 in 18 decimals
+    const result = try realNumberStringTrimmed(allocator, 1_500_000_000_000_000_000, 18);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("1.5", result);
+}
+
+test "formatTokenAmount - all fields consistent" {
+    const allocator = std.testing.allocator;
+    // 42.5 USDC (6 decimals)
+    const result = try formatTokenAmount(allocator, 42_500_000, 6);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqualStrings("42500000", result.amount);
+    try std.testing.expectEqual(@as(u8, 6), result.decimals);
+    try std.testing.expectApproxEqRel(@as(f64, 42.5), result.ui_amount.?, 0.0001);
+    try std.testing.expectEqualStrings("42.5", result.ui_amount_string);
+}
+
+/// Mock account reader for testing getMintDecimals and resolveTokenBalances.
+/// Mimics the interface of FallbackAccountReader used in production.
+const MockAccountReader = struct {
+    mint_data: std.AutoHashMap(Pubkey, [MINT_ACCOUNT_SIZE]u8),
+
+    const MockAccount = struct {
+        data: DataHandle,
+
+        const DataHandle = struct {
+            slice: []const u8,
+            pub fn constSlice(self: DataHandle) []const u8 {
+                return self.slice;
+            }
+        };
+
+        pub fn deinit(self: MockAccount, allocator: Allocator) void {
+            allocator.free(self.data.slice);
+        }
+    };
+
+    fn init(allocator: Allocator) MockAccountReader {
+        return .{ .mint_data = std.AutoHashMap(Pubkey, [MINT_ACCOUNT_SIZE]u8).init(allocator) };
+    }
+
+    fn deinit(self: *MockAccountReader) void {
+        self.mint_data.deinit();
+    }
+
+    /// Register a mint with the given decimals.
+    fn addMint(self: *MockAccountReader, mint: Pubkey, decimals: u8) !void {
+        var data: [MINT_ACCOUNT_SIZE]u8 = undefined;
+        @memset(&data, 0);
+        data[MINT_DECIMALS_OFFSET] = decimals;
+        data[MINT_IS_INITIALIZED_OFFSET] = 1;
+        try self.mint_data.put(mint, data);
+    }
+
+    pub fn get(self: MockAccountReader, pubkey: Pubkey, allocator: Allocator) !?MockAccount {
+        const data = self.mint_data.get(pubkey) orelse return null;
+        return MockAccount{
+            .data = .{ .slice = try allocator.dupe(u8, &data) },
+        };
+    }
+};
+
+test "getMintDecimals - cache hit" {
+    const allocator = std.testing.allocator;
+    var cache = MintDecimalsCache.init(allocator);
+    defer cache.deinit();
+    var reader = MockAccountReader.init(allocator);
+    defer reader.deinit();
+
+    const mint = Pubkey{ .data = [_]u8{0x01} ** 32 };
+    try cache.put(mint, 9);
+
+    // Should return cached value without hitting the reader
+    const decimals = try getMintDecimals(allocator, &cache, MockAccountReader, reader, mint);
+    try std.testing.expectEqual(@as(u8, 9), decimals);
+}
+
+test "getMintDecimals - cache miss fetches from reader" {
+    const allocator = std.testing.allocator;
+    var cache = MintDecimalsCache.init(allocator);
+    defer cache.deinit();
+    var reader = MockAccountReader.init(allocator);
+    defer reader.deinit();
+
+    const mint = Pubkey{ .data = [_]u8{0x02} ** 32 };
+    try reader.addMint(mint, 6);
+
+    const decimals = try getMintDecimals(allocator, &cache, MockAccountReader, reader, mint);
+    try std.testing.expectEqual(@as(u8, 6), decimals);
+
+    // Should now be cached
+    try std.testing.expectEqual(@as(?u8, 6), cache.get(mint));
+}
+
+test "getMintDecimals - unknown mint returns MintNotFound" {
+    const allocator = std.testing.allocator;
+    var cache = MintDecimalsCache.init(allocator);
+    defer cache.deinit();
+    var reader = MockAccountReader.init(allocator);
+    defer reader.deinit();
+
+    const unknown_mint = Pubkey{ .data = [_]u8{0xFF} ** 32 };
+    const result = getMintDecimals(allocator, &cache, MockAccountReader, reader, unknown_mint);
+    try std.testing.expectError(error.MintNotFound, result);
+}
+
+test "resolveTokenBalances - empty raw balances returns null" {
+    const allocator = std.testing.allocator;
+    var cache = MintDecimalsCache.init(allocator);
+    defer cache.deinit();
+    var reader = MockAccountReader.init(allocator);
+    defer reader.deinit();
+
+    const raw = RawTokenBalances{};
+    const result = resolveTokenBalances(allocator, raw, &cache, MockAccountReader, reader);
+    try std.testing.expectEqual(@as(?[]TransactionTokenBalance, null), result);
+}
+
+test "resolveTokenBalances - resolves token balances with mint lookup" {
+    const allocator = std.testing.allocator;
+    var cache = MintDecimalsCache.init(allocator);
+    defer cache.deinit();
+    var reader = MockAccountReader.init(allocator);
+    defer reader.deinit();
+
+    const mint1 = Pubkey{ .data = [_]u8{0xAA} ** 32 };
+    const mint2 = Pubkey{ .data = [_]u8{0xBB} ** 32 };
+    try reader.addMint(mint1, 6);
+    try reader.addMint(mint2, 9);
+
+    var raw = RawTokenBalances{};
+    raw.appendAssumeCapacity(.{
+        .account_index = 1,
+        .mint = mint1,
+        .owner = Pubkey{ .data = [_]u8{0x11} ** 32 },
+        .amount = 1_000_000, // 1.0 with 6 decimals
+        .program_id = ids.TOKEN_PROGRAM_ID,
+    });
+    raw.appendAssumeCapacity(.{
+        .account_index = 3,
+        .mint = mint2,
+        .owner = Pubkey{ .data = [_]u8{0x22} ** 32 },
+        .amount = 1_500_000_000, // 1.5 with 9 decimals
+        .program_id = ids.TOKEN_2022_PROGRAM_ID,
+    });
+
+    const result = resolveTokenBalances(allocator, raw, &cache, MockAccountReader, reader).?;
+    defer {
+        for (result) |item| item.deinit(allocator);
+        allocator.free(result);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), result.len);
+
+    // First token balance
+    try std.testing.expectEqual(@as(u8, 1), result[0].account_index);
+    try std.testing.expectEqual(mint1, result[0].mint);
+    try std.testing.expectEqual(@as(u8, 6), result[0].ui_token_amount.decimals);
+    try std.testing.expectEqualStrings("1000000", result[0].ui_token_amount.amount);
+    try std.testing.expectEqualStrings("1", result[0].ui_token_amount.ui_amount_string);
+
+    // Second token balance
+    try std.testing.expectEqual(@as(u8, 3), result[1].account_index);
+    try std.testing.expectEqual(mint2, result[1].mint);
+    try std.testing.expectEqual(@as(u8, 9), result[1].ui_token_amount.decimals);
+    try std.testing.expectEqualStrings("1500000000", result[1].ui_token_amount.amount);
+    try std.testing.expectEqualStrings("1.5", result[1].ui_token_amount.ui_amount_string);
+}
+
+test "resolveTokenBalances - skips tokens with missing mints" {
+    const allocator = std.testing.allocator;
+    var cache = MintDecimalsCache.init(allocator);
+    defer cache.deinit();
+    var reader = MockAccountReader.init(allocator);
+    defer reader.deinit();
+
+    const known_mint = Pubkey{ .data = [_]u8{0xAA} ** 32 };
+    const unknown_mint = Pubkey{ .data = [_]u8{0xFF} ** 32 };
+    try reader.addMint(known_mint, 6);
+    // unknown_mint is NOT added to reader
+
+    var raw = RawTokenBalances{};
+    raw.appendAssumeCapacity(.{
+        .account_index = 0,
+        .mint = unknown_mint, // This one will be skipped
+        .owner = Pubkey{ .data = [_]u8{0x11} ** 32 },
+        .amount = 100,
+        .program_id = ids.TOKEN_PROGRAM_ID,
+    });
+    raw.appendAssumeCapacity(.{
+        .account_index = 2,
+        .mint = known_mint, // This one will succeed
+        .owner = Pubkey{ .data = [_]u8{0x22} ** 32 },
+        .amount = 500_000,
+        .program_id = ids.TOKEN_PROGRAM_ID,
+    });
+
+    const result = resolveTokenBalances(allocator, raw, &cache, MockAccountReader, reader).?;
+    defer {
+        for (result) |item| item.deinit(allocator);
+        allocator.free(result);
+    }
+
+    // Only the known mint should be in the result (unknown is skipped via catch continue)
+    try std.testing.expectEqual(@as(usize, 1), result.len);
+    try std.testing.expectEqual(@as(u8, 2), result[0].account_index);
+    try std.testing.expectEqual(known_mint, result[0].mint);
+}

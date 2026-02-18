@@ -599,4 +599,343 @@ test "TransactionError jsonStringify" {
     ,
         .{ .InstructionError = .{ 0, .{ .BorshIoError = @constCast("Unknown") } } },
     );
+
+    // Additional unit variants (Agave compatibility)
+    try expectJsonStringify(
+        \\"AccountInUse"
+    ,
+        .AccountInUse,
+    );
+    try expectJsonStringify(
+        \\"AccountNotFound"
+    ,
+        .AccountNotFound,
+    );
+    try expectJsonStringify(
+        \\"ProgramAccountNotFound"
+    ,
+        .ProgramAccountNotFound,
+    );
+
+    // Struct variant: ProgramExecutionTemporarilyRestricted (matches Agave format)
+    try expectJsonStringify(
+        \\{"ProgramExecutionTemporarilyRestricted":{"account_index":7}}
+    ,
+        .{ .ProgramExecutionTemporarilyRestricted = .{ .account_index = 7 } },
+    );
+
+    // InstructionError with void inner error (e.g. GenericError has no payload)
+    try expectJsonStringify(
+        \\{"InstructionError":[1,"GenericError"]}
+    ,
+        .{ .InstructionError = .{ 1, .GenericError } },
+    );
+
+    // InstructionError with ComputationalBudgetExceeded (void inner)
+    try expectJsonStringify(
+        \\{"InstructionError":[0,"ComputationalBudgetExceeded"]}
+    ,
+        .{ .InstructionError = .{ 0, .ComputationalBudgetExceeded } },
+    );
+}
+
+test "TransactionStatusMetaBuilder.extractLogMessages" {
+    const allocator = std.testing.allocator;
+    const LogCollector = sig.runtime.LogCollector;
+
+    // Test with messages
+    {
+        var log_collector = try LogCollector.init(allocator, 10_000);
+        defer log_collector.deinit(allocator);
+
+        try log_collector.log(allocator, "Program log: Hello", .{});
+        try log_collector.log(allocator, "Program consumed {d} CUs", .{@as(u64, 5000)});
+
+        const messages = try TransactionStatusMetaBuilder.extractLogMessages(
+            allocator,
+            log_collector,
+        );
+        defer allocator.free(messages);
+
+        try std.testing.expectEqual(@as(usize, 2), messages.len);
+        try std.testing.expectEqualStrings("Program log: Hello", messages[0]);
+        try std.testing.expectEqualStrings("Program consumed 5000 CUs", messages[1]);
+    }
+
+    // Test with empty log collector
+    {
+        var log_collector = try LogCollector.init(allocator, 10_000);
+        defer log_collector.deinit(allocator);
+
+        const messages = try TransactionStatusMetaBuilder.extractLogMessages(
+            allocator,
+            log_collector,
+        );
+        // Empty returns a static empty slice, no need to free
+        try std.testing.expectEqual(@as(usize, 0), messages.len);
+    }
+}
+
+test "TransactionStatusMetaBuilder.convertReturnData" {
+    const allocator = std.testing.allocator;
+    const RuntimeReturnData = sig.runtime.transaction_context.TransactionReturnData;
+
+    const program_id = Pubkey{ .data = [_]u8{0xAB} ** 32 };
+    var rt_return_data = RuntimeReturnData{
+        .program_id = program_id,
+    };
+    // Add some data to the bounded array
+    rt_return_data.data.appendSliceAssumeCapacity("hello world");
+
+    const result = try TransactionStatusMetaBuilder.convertReturnData(allocator, rt_return_data);
+    defer result.deinit(allocator);
+
+    try std.testing.expect(result.program_id.equals(&program_id));
+    try std.testing.expectEqualStrings("hello world", result.data);
+}
+
+test "TransactionStatusMetaBuilder.convertToInnerInstruction" {
+    const allocator = std.testing.allocator;
+    const InstructionInfo = sig.runtime.InstructionInfo;
+
+    // Build a mock InstructionInfo
+    var account_metas: InstructionInfo.AccountMetas = .{};
+    try account_metas.append(allocator, .{
+        .pubkey = Pubkey{ .data = [_]u8{0x11} ** 32 },
+        .index_in_transaction = 3,
+        .is_signer = true,
+        .is_writable = true,
+    });
+    try account_metas.append(allocator, .{
+        .pubkey = Pubkey{ .data = [_]u8{0x22} ** 32 },
+        .index_in_transaction = 7,
+        .is_signer = false,
+        .is_writable = false,
+    });
+    defer account_metas.deinit(allocator);
+
+    const ixn_info = InstructionInfo{
+        .program_meta = .{
+            .pubkey = Pubkey{ .data = [_]u8{0xFF} ** 32 },
+            .index_in_transaction = 5,
+        },
+        .account_metas = account_metas,
+        .dedupe_map = @splat(0xff),
+        .instruction_data = &[_]u8{ 0x01, 0x02, 0x03 },
+        .owned_instruction_data = false,
+    };
+
+    const inner = try TransactionStatusMetaBuilder.convertToInnerInstruction(allocator, ixn_info, 2);
+    defer inner.deinit(allocator);
+
+    // Check program_id_index maps to the program's index_in_transaction
+    try std.testing.expectEqual(@as(u8, 5), inner.instruction.program_id_index);
+    // Check account indices
+    try std.testing.expectEqual(@as(usize, 2), inner.instruction.accounts.len);
+    try std.testing.expectEqual(@as(u8, 3), inner.instruction.accounts[0]);
+    try std.testing.expectEqual(@as(u8, 7), inner.instruction.accounts[1]);
+    // Check instruction data is copied
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x01, 0x02, 0x03 }, inner.instruction.data);
+    // Check stack height
+    try std.testing.expectEqual(@as(?u32, 2), inner.stack_height);
+}
+
+test "TransactionStatusMetaBuilder.convertInstructionTrace" {
+    const allocator = std.testing.allocator;
+    const InstructionInfo = sig.runtime.InstructionInfo;
+    const TransactionContext = sig.runtime.transaction_context.TransactionContext;
+    const InstructionTrace = TransactionContext.InstructionTrace;
+
+    // Create a trace with 2 top-level instructions, where the second has a CPI
+    var trace = InstructionTrace{};
+
+    // Top-level instruction 0 (no inner instructions)
+    const metas0: InstructionInfo.AccountMetas = .{};
+    trace.appendAssumeCapacity(.{
+        .depth = 1,
+        .ixn_info = .{
+            .program_meta = .{ .pubkey = Pubkey.ZEROES, .index_in_transaction = 0 },
+            .account_metas = metas0,
+            .dedupe_map = @splat(0xff),
+            .instruction_data = &.{},
+            .owned_instruction_data = false,
+        },
+    });
+
+    // Top-level instruction 1
+    const metas1: InstructionInfo.AccountMetas = .{};
+    trace.appendAssumeCapacity(.{
+        .depth = 1,
+        .ixn_info = .{
+            .program_meta = .{ .pubkey = Pubkey.ZEROES, .index_in_transaction = 1 },
+            .account_metas = metas1,
+            .dedupe_map = @splat(0xff),
+            .instruction_data = &.{},
+            .owned_instruction_data = false,
+        },
+    });
+
+    // CPI from instruction 1 (depth=2)
+    var metas2: InstructionInfo.AccountMetas = .{};
+    try metas2.append(allocator, .{
+        .pubkey = Pubkey{ .data = [_]u8{0xAA} ** 32 },
+        .index_in_transaction = 4,
+        .is_signer = false,
+        .is_writable = true,
+    });
+    defer metas2.deinit(allocator);
+
+    trace.appendAssumeCapacity(.{
+        .depth = 2,
+        .ixn_info = .{
+            .program_meta = .{ .pubkey = Pubkey.ZEROES, .index_in_transaction = 2 },
+            .account_metas = metas2,
+            .dedupe_map = @splat(0xff),
+            .instruction_data = &[_]u8{0x42},
+            .owned_instruction_data = false,
+        },
+    });
+
+    const result = try TransactionStatusMetaBuilder.convertInstructionTrace(allocator, trace);
+    defer {
+        for (result) |item| item.deinit(allocator);
+        allocator.free(result);
+    }
+
+    // Only the second top-level has inner instructions (the CPI).
+    // The index is result.items.len at flush time (0, since first top-level had no CPIs to flush).
+    try std.testing.expectEqual(@as(usize, 1), result.len);
+    try std.testing.expectEqual(@as(u8, 0), result[0].index);
+    try std.testing.expectEqual(@as(usize, 1), result[0].instructions.len);
+    try std.testing.expectEqual(@as(u8, 2), result[0].instructions[0].instruction.program_id_index);
+    try std.testing.expectEqual(@as(?u32, 2), result[0].instructions[0].stack_height);
+    try std.testing.expectEqualSlices(u8, &[_]u8{0x42}, result[0].instructions[0].instruction.data);
+}
+
+test "TransactionStatusMetaBuilder.convertInstructionTrace - empty trace" {
+    const allocator = std.testing.allocator;
+    const TransactionContext = sig.runtime.transaction_context.TransactionContext;
+    const InstructionTrace = TransactionContext.InstructionTrace;
+
+    const trace = InstructionTrace{};
+    const result = try TransactionStatusMetaBuilder.convertInstructionTrace(allocator, trace);
+    // Empty trace returns static empty slice
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+}
+
+test "TransactionStatusMetaBuilder.build - successful transaction" {
+    const allocator = std.testing.allocator;
+    const LogCollector = sig.runtime.LogCollector;
+    const TransactionContext = sig.runtime.transaction_context.TransactionContext;
+    const RuntimeReturnData = sig.runtime.transaction_context.TransactionReturnData;
+    const ExecutedTransaction = sig.runtime.transaction_execution.ExecutedTransaction;
+    const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
+
+    // Create LogCollector - defer must come before status defer so log_collector
+    // outlives the status (log messages point into the collector's pool).
+    var log_collector = try LogCollector.init(allocator, 10_000);
+    defer log_collector.deinit(allocator);
+    try log_collector.log(allocator, "Program log: success", .{});
+
+    // Create return data
+    var return_data = RuntimeReturnData{ .program_id = Pubkey{ .data = [_]u8{0xDD} ** 32 } };
+    return_data.data.appendSliceAssumeCapacity("result");
+
+    const processed = ProcessedTransaction{
+        .fees = .{ .transaction_fee = 5_000, .prioritization_fee = 1_000 },
+        .rent = 0,
+        .writes = .{},
+        .err = null,
+        .loaded_accounts_data_size = 0,
+        .outputs = ExecutedTransaction{
+            .err = null,
+            .log_collector = log_collector,
+            .instruction_trace = TransactionContext.InstructionTrace{},
+            .return_data = return_data,
+            .compute_limit = 200_000,
+            .compute_meter = 150_000,
+            .accounts_data_len_delta = 0,
+        },
+        .pre_balances = .{},
+        .pre_token_balances = .{},
+        .cost_units = 42_000,
+    };
+
+    const pre_balances = [_]u64{ 1_000_000, 500_000 };
+    const post_balances = [_]u64{ 995_000, 505_000 };
+
+    const status = try TransactionStatusMetaBuilder.build(
+        allocator,
+        processed,
+        &pre_balances,
+        &post_balances,
+        .{},
+        null,
+        null,
+    );
+    defer status.deinit(allocator);
+
+    // Verify fee (5000 + 1000 = 6000)
+    try std.testing.expectEqual(@as(u64, 6_000), status.fee);
+    // Verify no error
+    try std.testing.expectEqual(@as(?TransactionError, null), status.status);
+    // Verify balances were copied
+    try std.testing.expectEqual(@as(usize, 2), status.pre_balances.len);
+    try std.testing.expectEqual(@as(u64, 1_000_000), status.pre_balances[0]);
+    try std.testing.expectEqual(@as(usize, 2), status.post_balances.len);
+    try std.testing.expectEqual(@as(u64, 505_000), status.post_balances[1]);
+    // Verify log messages were extracted
+    try std.testing.expect(status.log_messages != null);
+    try std.testing.expectEqual(@as(usize, 1), status.log_messages.?.len);
+    try std.testing.expectEqualStrings("Program log: success", status.log_messages.?[0]);
+    // Verify return data was converted
+    try std.testing.expect(status.return_data != null);
+    try std.testing.expectEqualStrings("result", status.return_data.?.data);
+    try std.testing.expect(
+        status.return_data.?.program_id.equals(&Pubkey{ .data = [_]u8{0xDD} ** 32 }),
+    );
+    // Verify compute units consumed (200_000 - 150_000 = 50_000)
+    try std.testing.expectEqual(@as(?u64, 50_000), status.compute_units_consumed);
+    // Verify cost_units
+    try std.testing.expectEqual(@as(?u64, 42_000), status.cost_units);
+}
+
+test "TransactionStatusMetaBuilder.build - transaction with no outputs" {
+    const allocator = std.testing.allocator;
+    const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
+
+    // A transaction that failed before execution (no outputs)
+    const processed = ProcessedTransaction{
+        .fees = .{ .transaction_fee = 5_000, .prioritization_fee = 0 },
+        .rent = 0,
+        .writes = .{},
+        .err = .AccountNotFound,
+        .loaded_accounts_data_size = 0,
+        .outputs = null,
+        .pre_balances = .{},
+        .pre_token_balances = .{},
+        .cost_units = 0,
+    };
+
+    const pre_balances = [_]u64{1_000_000};
+    const post_balances = [_]u64{1_000_000};
+
+    const status = try TransactionStatusMetaBuilder.build(
+        allocator,
+        processed,
+        &pre_balances,
+        &post_balances,
+        .{},
+        null,
+        null,
+    );
+    defer status.deinit(allocator);
+
+    // Error should be set
+    try std.testing.expect(status.status != null);
+    // No log messages, inner instructions, return data, or compute units when outputs is null
+    try std.testing.expectEqual(@as(?[]const []const u8, null), status.log_messages);
+    try std.testing.expectEqual(@as(?[]const InnerInstructions, null), status.inner_instructions);
+    try std.testing.expectEqual(@as(?TransactionReturnData, null), status.return_data);
+    try std.testing.expectEqual(@as(?u64, null), status.compute_units_consumed);
 }
