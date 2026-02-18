@@ -1881,4 +1881,1267 @@ pub const BlockHookContext = struct {
         }
         return rewards;
     }
+
+    test "convertReturnData - base64 encodes data" {
+        const allocator = std.testing.allocator;
+
+        const program_id = Pubkey{ .data = [_]u8{0xAA} ** 32 };
+        const raw_data: []const u8 = "hello world";
+
+        const result = try BlockHookContext.convertReturnData(allocator, .{
+            .program_id = program_id,
+            .data = raw_data,
+        });
+        defer {
+            allocator.free(result.data.@"0");
+        }
+
+        try std.testing.expectEqual(program_id, result.programId);
+        try std.testing.expectEqualStrings("aGVsbG8gd29ybGQ=", result.data.@"0");
+    }
+
+    test "convertReturnData - empty data" {
+        const allocator = std.testing.allocator;
+
+        const result = try BlockHookContext.convertReturnData(allocator, .{
+            .program_id = Pubkey.ZEROES,
+            .data = &.{},
+        });
+        defer {
+            allocator.free(result.data.@"0");
+        }
+
+        try std.testing.expectEqualStrings("", result.data.@"0");
+    }
+
+    test "convertReturnData - binary data" {
+        const allocator = std.testing.allocator;
+
+        const binary_data = [_]u8{ 0x00, 0xFF, 0x42, 0x01 };
+        const result = try BlockHookContext.convertReturnData(allocator, .{
+            .program_id = Pubkey.ZEROES,
+            .data = &binary_data,
+        });
+        defer {
+            allocator.free(result.data.@"0");
+        }
+
+        // Base64 of [0x00, 0xFF, 0x42, 0x01] = "AP9CAQ=="
+        try std.testing.expectEqualStrings("AP9CAQ==", result.data.@"0");
+    }
+
+    test "convertLoadedAddresses - empty" {
+        const allocator = std.testing.allocator;
+
+        const result = try BlockHookContext.convertLoadedAddresses(allocator, .{
+            .writable = &.{},
+            .readonly = &.{},
+        });
+        defer {
+            allocator.free(result.writable);
+            allocator.free(result.readonly);
+        }
+
+        try std.testing.expectEqual(@as(usize, 0), result.writable.len);
+        try std.testing.expectEqual(@as(usize, 0), result.readonly.len);
+    }
+
+    test "convertLoadedAddresses - with pubkeys" {
+        const allocator = std.testing.allocator;
+
+        const writable_key = Pubkey{ .data = [_]u8{1} ** 32 };
+        const readonly_key1 = Pubkey{ .data = [_]u8{2} ** 32 };
+        const readonly_key2 = Pubkey{ .data = [_]u8{3} ** 32 };
+
+        const writable_keys = [_]Pubkey{writable_key};
+        const readonly_keys = [_]Pubkey{ readonly_key1, readonly_key2 };
+
+        const result = try BlockHookContext.convertLoadedAddresses(allocator, .{
+            .writable = &writable_keys,
+            .readonly = &readonly_keys,
+        });
+        defer {
+            allocator.free(result.writable);
+            allocator.free(result.readonly);
+        }
+
+        try std.testing.expectEqual(@as(usize, 1), result.writable.len);
+        try std.testing.expectEqual(@as(usize, 2), result.readonly.len);
+        try std.testing.expectEqual(writable_key, result.writable[0]);
+        try std.testing.expectEqual(readonly_key1, result.readonly[0]);
+        try std.testing.expectEqual(readonly_key2, result.readonly[1]);
+    }
+
+    test "convertTokenBalances - empty" {
+        const allocator = std.testing.allocator;
+
+        const result = try BlockHookContext.convertTokenBalances(allocator, &.{});
+        defer allocator.free(result);
+
+        try std.testing.expectEqual(@as(usize, 0), result.len);
+    }
+
+    test "convertTokenBalances - single balance" {
+        const allocator = std.testing.allocator;
+
+        const mint = Pubkey{ .data = [_]u8{0x10} ** 32 };
+        const owner = Pubkey{ .data = [_]u8{0x20} ** 32 };
+        const program_id = Pubkey{ .data = [_]u8{0x30} ** 32 };
+
+        const input = [_]sig.ledger.transaction_status.TransactionTokenBalance{.{
+            .account_index = 3,
+            .mint = mint,
+            .ui_token_amount = .{
+                .ui_amount = 1.5,
+                .decimals = 9,
+                .amount = "1500000000",
+                .ui_amount_string = "1.5",
+            },
+            .owner = owner,
+            .program_id = program_id,
+        }};
+
+        const result = try BlockHookContext.convertTokenBalances(allocator, &input);
+        defer {
+            for (result) |r| {
+                allocator.free(r.uiTokenAmount.amount);
+                allocator.free(r.uiTokenAmount.uiAmountString);
+            }
+            allocator.free(result);
+        }
+
+        try std.testing.expectEqual(@as(usize, 1), result.len);
+        try std.testing.expectEqual(@as(u8, 3), result[0].accountIndex);
+        try std.testing.expectEqual(mint, result[0].mint);
+        try std.testing.expectEqual(owner, result[0].owner);
+        try std.testing.expectEqual(program_id, result[0].programId);
+        try std.testing.expectEqual(@as(u8, 9), result[0].uiTokenAmount.decimals);
+        try std.testing.expectEqualStrings("1500000000", result[0].uiTokenAmount.amount);
+        try std.testing.expectEqualStrings("1.5", result[0].uiTokenAmount.uiAmountString);
+        try std.testing.expect(result[0].uiTokenAmount.uiAmount != null);
+    }
+
+    test "convertTokenBalances - multiple balances" {
+        const allocator = std.testing.allocator;
+
+        const input = [_]sig.ledger.transaction_status.TransactionTokenBalance{
+            .{
+                .account_index = 0,
+                .mint = Pubkey{ .data = [_]u8{0xAA} ** 32 },
+                .ui_token_amount = .{
+                    .ui_amount = null,
+                    .decimals = 6,
+                    .amount = "0",
+                    .ui_amount_string = "0",
+                },
+                .owner = Pubkey{ .data = [_]u8{0xBB} ** 32 },
+                .program_id = Pubkey{ .data = [_]u8{0xCC} ** 32 },
+            },
+            .{
+                .account_index = 2,
+                .mint = Pubkey{ .data = [_]u8{0xDD} ** 32 },
+                .ui_token_amount = .{
+                    .ui_amount = 42.0,
+                    .decimals = 0,
+                    .amount = "42",
+                    .ui_amount_string = "42",
+                },
+                .owner = Pubkey{ .data = [_]u8{0xEE} ** 32 },
+                .program_id = Pubkey{ .data = [_]u8{0xFF} ** 32 },
+            },
+        };
+
+        const result = try BlockHookContext.convertTokenBalances(allocator, &input);
+        defer {
+            for (result) |r| {
+                allocator.free(r.uiTokenAmount.amount);
+                allocator.free(r.uiTokenAmount.uiAmountString);
+            }
+            allocator.free(result);
+        }
+
+        try std.testing.expectEqual(@as(usize, 2), result.len);
+        try std.testing.expectEqual(@as(u8, 0), result[0].accountIndex);
+        try std.testing.expectEqual(@as(u8, 2), result[1].accountIndex);
+        try std.testing.expect(result[0].uiTokenAmount.uiAmount == null);
+        try std.testing.expect(result[1].uiTokenAmount.uiAmount != null);
+    }
+
+    test "convertInnerInstructions - empty" {
+        const allocator = std.testing.allocator;
+
+        const result = try BlockHookContext.convertInnerInstructions(allocator, &.{});
+        defer allocator.free(result);
+
+        try std.testing.expectEqual(@as(usize, 0), result.len);
+    }
+
+    test "convertInnerInstructions - single instruction" {
+        const allocator = std.testing.allocator;
+
+        const inner_ix = sig.ledger.transaction_status.InnerInstruction{
+            .instruction = .{
+                .program_id_index = 2,
+                .accounts = &[_]u8{ 0, 1 },
+                .data = &[_]u8{ 0xDE, 0xAD },
+            },
+            .stack_height = 2,
+        };
+
+        const inner_instructions = [_]sig.ledger.transaction_status.InnerInstructions{.{
+            .index = 0,
+            .instructions = &[_]sig.ledger.transaction_status.InnerInstruction{inner_ix},
+        }};
+
+        const result = try BlockHookContext.convertInnerInstructions(allocator, &inner_instructions);
+        defer {
+            for (result) |ii| {
+                for (ii.instructions) |ix| {
+                    switch (ix) {
+                        .compiled => |c| {
+                            allocator.free(c.accounts);
+                            allocator.free(c.data);
+                        },
+                        .parsed => {},
+                    }
+                }
+                allocator.free(ii.instructions);
+            }
+            allocator.free(result);
+        }
+
+        try std.testing.expectEqual(@as(usize, 1), result.len);
+        try std.testing.expectEqual(@as(u8, 0), result[0].index);
+        try std.testing.expectEqual(@as(usize, 1), result[0].instructions.len);
+
+        const compiled = result[0].instructions[0].compiled;
+        try std.testing.expectEqual(@as(u8, 2), compiled.programIdIndex);
+        try std.testing.expectEqual(@as(?u32, 2), compiled.stackHeight);
+        // Data should be base58-encoded
+        try std.testing.expect(compiled.data.len > 0);
+    }
+
+    test "convertInnerInstructions - multiple inner groups" {
+        const allocator = std.testing.allocator;
+
+        const ix1 = sig.ledger.transaction_status.InnerInstruction{
+            .instruction = .{
+                .program_id_index = 1,
+                .accounts = &[_]u8{0},
+                .data = &[_]u8{0x01},
+            },
+            .stack_height = 2,
+        };
+        const ix2 = sig.ledger.transaction_status.InnerInstruction{
+            .instruction = .{
+                .program_id_index = 3,
+                .accounts = &[_]u8{ 0, 2 },
+                .data = &[_]u8{ 0x02, 0x03 },
+            },
+            .stack_height = 3,
+        };
+
+        const inner_instructions = [_]sig.ledger.transaction_status.InnerInstructions{
+            .{
+                .index = 0,
+                .instructions = &[_]sig.ledger.transaction_status.InnerInstruction{ix1},
+            },
+            .{
+                .index = 1,
+                .instructions = &[_]sig.ledger.transaction_status.InnerInstruction{ix2},
+            },
+        };
+
+        const result = try BlockHookContext.convertInnerInstructions(allocator, &inner_instructions);
+        defer {
+            for (result) |ii| {
+                for (ii.instructions) |ix| {
+                    switch (ix) {
+                        .compiled => |c| {
+                            allocator.free(c.accounts);
+                            allocator.free(c.data);
+                        },
+                        .parsed => {},
+                    }
+                }
+                allocator.free(ii.instructions);
+            }
+            allocator.free(result);
+        }
+
+        try std.testing.expectEqual(@as(usize, 2), result.len);
+        try std.testing.expectEqual(@as(u8, 0), result[0].index);
+        try std.testing.expectEqual(@as(u8, 1), result[1].index);
+        try std.testing.expectEqual(@as(usize, 1), result[0].instructions.len);
+        try std.testing.expectEqual(@as(usize, 1), result[1].instructions.len);
+
+        try std.testing.expectEqual(@as(?u32, 2), result[0].instructions[0].compiled.stackHeight);
+        try std.testing.expectEqual(@as(?u32, 3), result[1].instructions[0].compiled.stackHeight);
+    }
+
+    test "convertInnerInstructions - null stack height" {
+        const allocator = std.testing.allocator;
+
+        const inner_ix = sig.ledger.transaction_status.InnerInstruction{
+            .instruction = .{
+                .program_id_index = 0,
+                .accounts = &[_]u8{},
+                .data = &[_]u8{},
+            },
+            .stack_height = null,
+        };
+
+        const inner_instructions = [_]sig.ledger.transaction_status.InnerInstructions{.{
+            .index = 5,
+            .instructions = &[_]sig.ledger.transaction_status.InnerInstruction{inner_ix},
+        }};
+
+        const result = try BlockHookContext.convertInnerInstructions(allocator, &inner_instructions);
+        defer {
+            for (result) |ii| {
+                for (ii.instructions) |ix| {
+                    switch (ix) {
+                        .compiled => |c| {
+                            allocator.free(c.accounts);
+                            allocator.free(c.data);
+                        },
+                        .parsed => {},
+                    }
+                }
+                allocator.free(ii.instructions);
+            }
+            allocator.free(result);
+        }
+
+        try std.testing.expectEqual(@as(?u32, null), result[0].instructions[0].compiled.stackHeight);
+        try std.testing.expectEqual(@as(u8, 5), result[0].index);
+    }
+
+    test "convertRewards - null rewards" {
+        const allocator = std.testing.allocator;
+
+        const result = try BlockHookContext.convertRewards(allocator, null);
+
+        try std.testing.expectEqual(@as(usize, 0), result.len);
+    }
+
+    test "convertRewards - empty rewards" {
+        const allocator = std.testing.allocator;
+
+        const empty: []const sig.ledger.meta.Reward = &.{};
+        const result = try BlockHookContext.convertRewards(allocator, empty);
+        defer allocator.free(result);
+
+        try std.testing.expectEqual(@as(usize, 0), result.len);
+    }
+
+    test "convertRewards - multiple reward types" {
+        const allocator = std.testing.allocator;
+
+        const rewards = [_]sig.ledger.meta.Reward{
+            .{
+                .pubkey = Pubkey{ .data = [_]u8{1} ** 32 },
+                .lamports = 5000,
+                .post_balance = 1_000_000,
+                .reward_type = .fee,
+                .commission = null,
+            },
+            .{
+                .pubkey = Pubkey{ .data = [_]u8{2} ** 32 },
+                .lamports = 10000,
+                .post_balance = 2_000_000,
+                .reward_type = .staking,
+                .commission = 8,
+            },
+            .{
+                .pubkey = Pubkey{ .data = [_]u8{3} ** 32 },
+                .lamports = -200,
+                .post_balance = 500_000,
+                .reward_type = .rent,
+                .commission = null,
+            },
+            .{
+                .pubkey = Pubkey{ .data = [_]u8{4} ** 32 },
+                .lamports = 7500,
+                .post_balance = 3_000_000,
+                .reward_type = .voting,
+                .commission = 10,
+            },
+        };
+
+        const result = try BlockHookContext.convertRewards(allocator, &rewards);
+        defer allocator.free(result);
+
+        try std.testing.expectEqual(@as(usize, 4), result.len);
+
+        // Fee reward
+        try std.testing.expectEqual(Pubkey{ .data = [_]u8{1} ** 32 }, result[0].pubkey);
+        try std.testing.expectEqual(@as(i64, 5000), result[0].lamports);
+        try std.testing.expectEqual(@as(u64, 1_000_000), result[0].postBalance);
+        try std.testing.expectEqual(.Fee, result[0].rewardType.?);
+        try std.testing.expectEqual(@as(?u8, null), result[0].commission);
+
+        // Staking reward
+        try std.testing.expectEqual(.Staking, result[1].rewardType.?);
+        try std.testing.expectEqual(@as(?u8, 8), result[1].commission);
+
+        // Rent reward (negative lamports)
+        try std.testing.expectEqual(@as(i64, -200), result[2].lamports);
+        try std.testing.expectEqual(.Rent, result[2].rewardType.?);
+
+        // Voting reward
+        try std.testing.expectEqual(.Voting, result[3].rewardType.?);
+        try std.testing.expectEqual(@as(?u8, 10), result[3].commission);
+    }
+
+    test "convertRewards - null reward type" {
+        const allocator = std.testing.allocator;
+
+        const rewards = [_]sig.ledger.meta.Reward{.{
+            .pubkey = Pubkey{ .data = [_]u8{0xAB} ** 32 },
+            .lamports = 100,
+            .post_balance = 999,
+            .reward_type = null,
+            .commission = null,
+        }};
+
+        const result = try BlockHookContext.convertRewards(allocator, &rewards);
+        defer allocator.free(result);
+
+        try std.testing.expectEqual(@as(usize, 1), result.len);
+        try std.testing.expectEqual(
+            @as(?GetBlock.Response.UiReward.RewardType, null),
+            result[0].rewardType,
+        );
+    }
+
+    test "convertBlockRewards - empty" {
+        const allocator = std.testing.allocator;
+
+        var block_rewards = sig.replay.rewards.BlockRewards.init(allocator);
+        defer block_rewards.deinit();
+
+        const result = try BlockHookContext.convertBlockRewards(allocator, &block_rewards);
+        defer allocator.free(result);
+
+        try std.testing.expectEqual(@as(usize, 0), result.len);
+    }
+
+    test "convertBlockRewards - with rewards" {
+        const allocator = std.testing.allocator;
+
+        var block_rewards = sig.replay.rewards.BlockRewards.init(allocator);
+        defer block_rewards.deinit();
+
+        try block_rewards.push(.{
+            .pubkey = Pubkey{ .data = [_]u8{0x11} ** 32 },
+            .reward_info = .{
+                .reward_type = .fee,
+                .lamports = 5000,
+                .post_balance = 100_000,
+                .commission = null,
+            },
+        });
+        try block_rewards.push(.{
+            .pubkey = Pubkey{ .data = [_]u8{0x22} ** 32 },
+            .reward_info = .{
+                .reward_type = .voting,
+                .lamports = 8000,
+                .post_balance = 200_000,
+                .commission = 5,
+            },
+        });
+
+        const result = try BlockHookContext.convertBlockRewards(allocator, &block_rewards);
+        defer allocator.free(result);
+
+        try std.testing.expectEqual(@as(usize, 2), result.len);
+
+        try std.testing.expectEqual(Pubkey{ .data = [_]u8{0x11} ** 32 }, result[0].pubkey);
+        try std.testing.expectEqual(@as(i64, 5000), result[0].lamports);
+        try std.testing.expectEqual(@as(u64, 100_000), result[0].postBalance);
+        try std.testing.expectEqual(.Fee, result[0].rewardType.?);
+        try std.testing.expectEqual(@as(?u8, null), result[0].commission);
+
+        try std.testing.expectEqual(Pubkey{ .data = [_]u8{0x22} ** 32 }, result[1].pubkey);
+        try std.testing.expectEqual(@as(i64, 8000), result[1].lamports);
+        try std.testing.expectEqual(.Voting, result[1].rewardType.?);
+        try std.testing.expectEqual(@as(?u8, 5), result[1].commission);
+    }
+
+    test "convertBlockRewards - all reward types" {
+        const allocator = std.testing.allocator;
+
+        var block_rewards = sig.replay.rewards.BlockRewards.init(allocator);
+        defer block_rewards.deinit();
+
+        try block_rewards.push(.{
+            .pubkey = Pubkey.ZEROES,
+            .reward_info = .{
+                .reward_type = .fee,
+                .lamports = 1,
+                .post_balance = 1,
+                .commission = null,
+            },
+        });
+        try block_rewards.push(.{
+            .pubkey = Pubkey.ZEROES,
+            .reward_info = .{
+                .reward_type = .rent,
+                .lamports = 2,
+                .post_balance = 2,
+                .commission = null,
+            },
+        });
+        try block_rewards.push(.{
+            .pubkey = Pubkey.ZEROES,
+            .reward_info = .{
+                .reward_type = .staking,
+                .lamports = 3,
+                .post_balance = 3,
+                .commission = 10,
+            },
+        });
+        try block_rewards.push(.{
+            .pubkey = Pubkey.ZEROES,
+            .reward_info = .{
+                .reward_type = .voting,
+                .lamports = 4,
+                .post_balance = 4,
+                .commission = 20,
+            },
+        });
+
+        const result = try BlockHookContext.convertBlockRewards(allocator, &block_rewards);
+        defer allocator.free(result);
+
+        try std.testing.expectEqual(@as(usize, 4), result.len);
+        try std.testing.expectEqual(.Fee, result[0].rewardType.?);
+        try std.testing.expectEqual(.Rent, result[1].rewardType.?);
+        try std.testing.expectEqual(.Staking, result[2].rewardType.?);
+        try std.testing.expectEqual(.Voting, result[3].rewardType.?);
+    }
+
+    test "encodeTransaction - base64 encoding" {
+        const allocator = std.testing.allocator;
+
+        const tx = sig.core.Transaction.EMPTY;
+
+        const result = try BlockHookContext.encodeTransaction(allocator, tx, .base64);
+        defer {
+            switch (result) {
+                .binary => |b| allocator.free(b.data),
+                .legacy_binary => |s| allocator.free(s),
+                else => {},
+            }
+        }
+
+        switch (result) {
+            .binary => |b| {
+                try std.testing.expect(b.data.len > 0);
+            },
+            else => return error.UnexpectedResult,
+        }
+    }
+
+    test "encodeTransaction - base58 encoding" {
+        const allocator = std.testing.allocator;
+
+        const tx = sig.core.Transaction.EMPTY;
+
+        const result = try BlockHookContext.encodeTransaction(allocator, tx, .base58);
+        defer {
+            switch (result) {
+                .binary => |b| allocator.free(b.data),
+                .legacy_binary => |s| allocator.free(s),
+                else => {},
+            }
+        }
+
+        switch (result) {
+            .binary => |b| {
+                try std.testing.expect(b.data.len > 0);
+            },
+            else => return error.UnexpectedResult,
+        }
+    }
+
+    test "encodeTransaction - binary (legacy base58) encoding" {
+        const allocator = std.testing.allocator;
+
+        const tx = sig.core.Transaction.EMPTY;
+
+        const result = try BlockHookContext.encodeTransaction(allocator, tx, .binary);
+        defer {
+            switch (result) {
+                .binary => |b| allocator.free(b.data),
+                .legacy_binary => |s| allocator.free(s),
+                else => {},
+            }
+        }
+
+        switch (result) {
+            .legacy_binary => |s| {
+                try std.testing.expect(s.len > 0);
+            },
+            else => return error.UnexpectedResult,
+        }
+    }
+
+    test "encodeTransaction - json returns NotImplemented" {
+        const allocator = std.testing.allocator;
+        const tx = sig.core.Transaction.EMPTY;
+
+        const result = BlockHookContext.encodeTransaction(allocator, tx, .json);
+        try std.testing.expectError(error.NotImplemented, result);
+    }
+
+    test "encodeTransaction - jsonParsed returns NotImplemented" {
+        const allocator = std.testing.allocator;
+        const tx = sig.core.Transaction.EMPTY;
+
+        const result = BlockHookContext.encodeTransaction(allocator, tx, .jsonParsed);
+        try std.testing.expectError(error.NotImplemented, result);
+    }
+
+    test "encodeTransactionWithMeta - legacy without maxSupportedVersion has null version" {
+        const allocator = std.testing.allocator;
+
+        const tx_with_meta = sig.ledger.Reader.VersionedTransactionWithStatusMeta{
+            .transaction = sig.core.Transaction.EMPTY,
+            .meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST,
+        };
+
+        const result = try BlockHookContext.encodeTransactionWithMeta(
+            allocator,
+            tx_with_meta,
+            .base64,
+            null, // no maxSupportedVersion
+            true,
+        );
+        defer {
+            switch (result.transaction) {
+                .binary => |b| allocator.free(b.data),
+                .legacy_binary => |s| allocator.free(s),
+                else => {},
+            }
+            // Free meta allocations
+            allocator.free(result.meta.?.preBalances);
+            allocator.free(result.meta.?.postBalances);
+        }
+
+        // Legacy without maxSupportedVersion => version is null
+        try std.testing.expectEqual(
+            @as(?GetBlock.Response.EncodedTransactionWithStatusMeta.TransactionVersion, null),
+            result.version,
+        );
+    }
+
+    test "encodeTransactionWithMeta - legacy with maxSupportedVersion has legacy version" {
+        const allocator = std.testing.allocator;
+
+        const tx_with_meta = sig.ledger.Reader.VersionedTransactionWithStatusMeta{
+            .transaction = sig.core.Transaction.EMPTY,
+            .meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST,
+        };
+
+        const result = try BlockHookContext.encodeTransactionWithMeta(
+            allocator,
+            tx_with_meta,
+            .base64,
+            0, // maxSupportedVersion = 0
+            true,
+        );
+        defer {
+            switch (result.transaction) {
+                .binary => |b| allocator.free(b.data),
+                .legacy_binary => |s| allocator.free(s),
+                else => {},
+            }
+            allocator.free(result.meta.?.preBalances);
+            allocator.free(result.meta.?.postBalances);
+        }
+
+        // Legacy with maxSupportedVersion => version is .legacy
+        try std.testing.expectEqual(
+            GetBlock.Response.EncodedTransactionWithStatusMeta.TransactionVersion.legacy,
+            result.version.?,
+        );
+    }
+
+    test "encodeTransactionWithMeta - v0 without maxSupportedVersion returns error" {
+        const allocator = std.testing.allocator;
+
+        var tx = sig.core.Transaction.EMPTY;
+        tx.version = .v0;
+
+        const tx_with_meta = sig.ledger.Reader.VersionedTransactionWithStatusMeta{
+            .transaction = tx,
+            .meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST,
+        };
+
+        const result = BlockHookContext.encodeTransactionWithMeta(
+            allocator,
+            tx_with_meta,
+            .base64,
+            null, // no maxSupportedVersion
+            true,
+        );
+
+        try std.testing.expectError(error.UnsupportedTransactionVersion, result);
+    }
+
+    test "encodeTransactionWithMeta - v0 with maxSupportedVersion 0 succeeds" {
+        const allocator = std.testing.allocator;
+
+        var tx = sig.core.Transaction.EMPTY;
+        tx.version = .v0;
+
+        const tx_with_meta = sig.ledger.Reader.VersionedTransactionWithStatusMeta{
+            .transaction = tx,
+            .meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST,
+        };
+
+        const result = try BlockHookContext.encodeTransactionWithMeta(
+            allocator,
+            tx_with_meta,
+            .base64,
+            0, // maxSupportedVersion = 0
+            true,
+        );
+        defer {
+            switch (result.transaction) {
+                .binary => |b| allocator.free(b.data),
+                .legacy_binary => |s| allocator.free(s),
+                else => {},
+            }
+            allocator.free(result.meta.?.preBalances);
+            allocator.free(result.meta.?.postBalances);
+        }
+
+        // v0 with maxSupportedVersion 0 => version is { .number = 0 }
+        try std.testing.expect(result.version != null);
+        switch (result.version.?) {
+            .number => |n| try std.testing.expectEqual(@as(u8, 0), n),
+            .legacy => return error.UnexpectedResult,
+        }
+    }
+
+    test "encodeWithOptionsV2 - none returns null transactions and signatures" {
+        const allocator = std.testing.allocator;
+
+        const block = sig.ledger.Reader.VersionedConfirmedBlock{
+            .allocator = allocator,
+            .previous_blockhash = Hash{ .data = [_]u8{0} ** 32 },
+            .blockhash = Hash{ .data = [_]u8{1} ** 32 },
+            .parent_slot = 0,
+            .transactions = &.{},
+            .rewards = &.{},
+            .num_partitions = null,
+            .block_time = null,
+            .block_height = null,
+        };
+
+        const transactions, const signatures = try BlockHookContext.encodeWithOptionsV2(
+            allocator,
+            block,
+            .base64,
+            .{
+                .tx_details = .none,
+                .show_rewards = true,
+                .max_supported_version = null,
+            },
+        );
+
+        try std.testing.expectEqual(
+            @as(?[]const GetBlock.Response.EncodedTransactionWithStatusMeta, null),
+            transactions,
+        );
+        try std.testing.expectEqual(@as(?[]const Signature, null), signatures);
+    }
+
+    test "encodeWithOptionsV2 - accounts returns NotImplemented" {
+        const allocator = std.testing.allocator;
+
+        const block = sig.ledger.Reader.VersionedConfirmedBlock{
+            .allocator = allocator,
+            .previous_blockhash = Hash{ .data = [_]u8{0} ** 32 },
+            .blockhash = Hash{ .data = [_]u8{1} ** 32 },
+            .parent_slot = 0,
+            .transactions = &.{},
+            .rewards = &.{},
+            .num_partitions = null,
+            .block_time = null,
+            .block_height = null,
+        };
+
+        const result = BlockHookContext.encodeWithOptionsV2(
+            allocator,
+            block,
+            .base64,
+            .{
+                .tx_details = .accounts,
+                .show_rewards = true,
+                .max_supported_version = null,
+            },
+        );
+
+        try std.testing.expectError(error.NotImplemented, result);
+    }
+
+    test "encodeWithOptionsV2 - full with empty transactions" {
+        const allocator = std.testing.allocator;
+
+        const block = sig.ledger.Reader.VersionedConfirmedBlock{
+            .allocator = allocator,
+            .previous_blockhash = Hash{ .data = [_]u8{0} ** 32 },
+            .blockhash = Hash{ .data = [_]u8{1} ** 32 },
+            .parent_slot = 0,
+            .transactions = &.{},
+            .rewards = &.{},
+            .num_partitions = null,
+            .block_time = null,
+            .block_height = null,
+        };
+
+        const transactions, const signatures = try BlockHookContext.encodeWithOptionsV2(
+            allocator,
+            block,
+            .base64,
+            .{
+                .tx_details = .full,
+                .show_rewards = true,
+                .max_supported_version = null,
+            },
+        );
+        defer {
+            if (transactions) |txs| allocator.free(txs);
+        }
+
+        try std.testing.expect(transactions != null);
+        try std.testing.expectEqual(@as(usize, 0), transactions.?.len);
+        try std.testing.expectEqual(@as(?[]const Signature, null), signatures);
+    }
+
+    test "encodeWithOptionsV2 - signatures with empty transactions" {
+        const allocator = std.testing.allocator;
+
+        const block = sig.ledger.Reader.VersionedConfirmedBlock{
+            .allocator = allocator,
+            .previous_blockhash = Hash{ .data = [_]u8{0} ** 32 },
+            .blockhash = Hash{ .data = [_]u8{1} ** 32 },
+            .parent_slot = 0,
+            .transactions = &.{},
+            .rewards = &.{},
+            .num_partitions = null,
+            .block_time = null,
+            .block_height = null,
+        };
+
+        const transactions, const signatures = try BlockHookContext.encodeWithOptionsV2(
+            allocator,
+            block,
+            .base64,
+            .{
+                .tx_details = .signatures,
+                .show_rewards = true,
+                .max_supported_version = null,
+            },
+        );
+        defer {
+            if (signatures) |sigs| allocator.free(sigs);
+        }
+
+        try std.testing.expectEqual(
+            @as(?[]const GetBlock.Response.EncodedTransactionWithStatusMeta, null),
+            transactions,
+        );
+        try std.testing.expect(signatures != null);
+        try std.testing.expectEqual(@as(usize, 0), signatures.?.len);
+    }
+
+    test "UiTransactionStatusMeta.from - minimal meta (all nulls)" {
+        const allocator = std.testing.allocator;
+
+        const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
+
+        const result = try GetBlock.Response.UiTransactionStatusMeta.from(allocator, meta);
+        defer {
+            allocator.free(result.preBalances);
+            allocator.free(result.postBalances);
+        }
+
+        // Successful transaction
+        try std.testing.expect(result.err == null);
+        try std.testing.expect(result.status.Ok != null);
+        try std.testing.expect(result.status.Err == null);
+        try std.testing.expectEqual(@as(u64, 0), result.fee);
+        try std.testing.expectEqual(@as(usize, 0), result.preBalances.len);
+        try std.testing.expectEqual(@as(usize, 0), result.postBalances.len);
+        try std.testing.expectEqual(@as(usize, 0), result.innerInstructions.len);
+        try std.testing.expectEqual(@as(usize, 0), result.logMessages.len);
+        try std.testing.expectEqual(@as(usize, 0), result.preTokenBalances.len);
+        try std.testing.expectEqual(@as(usize, 0), result.postTokenBalances.len);
+        try std.testing.expectEqual(@as(usize, 0), result.rewards.len);
+        try std.testing.expect(result.returnData == null);
+        try std.testing.expect(result.computeUnitsConsumed == null);
+    }
+
+    test "UiTransactionStatusMeta.from - with balances and fee" {
+        const allocator = std.testing.allocator;
+
+        const pre_balances = [_]u64{ 1_000_000, 500_000 };
+        const post_balances = [_]u64{ 995_000, 505_000 };
+
+        const meta = sig.ledger.transaction_status.TransactionStatusMeta{
+            .status = null,
+            .fee = 5000,
+            .pre_balances = &pre_balances,
+            .post_balances = &post_balances,
+            .inner_instructions = null,
+            .log_messages = null,
+            .pre_token_balances = null,
+            .post_token_balances = null,
+            .rewards = null,
+            .loaded_addresses = .{},
+            .return_data = null,
+            .compute_units_consumed = 200_000,
+            .cost_units = 300_000,
+        };
+
+        const result = try GetBlock.Response.UiTransactionStatusMeta.from(allocator, meta);
+        defer {
+            allocator.free(result.preBalances);
+            allocator.free(result.postBalances);
+        }
+
+        try std.testing.expectEqual(@as(u64, 5000), result.fee);
+        try std.testing.expectEqual(@as(usize, 2), result.preBalances.len);
+        try std.testing.expectEqual(@as(u64, 1_000_000), result.preBalances[0]);
+        try std.testing.expectEqual(@as(u64, 500_000), result.preBalances[1]);
+        try std.testing.expectEqual(@as(u64, 995_000), result.postBalances[0]);
+        try std.testing.expectEqual(@as(u64, 505_000), result.postBalances[1]);
+        try std.testing.expectEqual(@as(?u64, 200_000), result.computeUnitsConsumed);
+        try std.testing.expectEqual(@as(?u64, 300_000), result.costUnits);
+    }
+
+    test "UiTransactionStatusMeta.from - with return data" {
+        const allocator = std.testing.allocator;
+
+        const program_id = Pubkey{ .data = [_]u8{0xBB} ** 32 };
+        const return_bytes = [_]u8{ 0x01, 0x02, 0x03 };
+
+        const meta = sig.ledger.transaction_status.TransactionStatusMeta{
+            .status = null,
+            .fee = 0,
+            .pre_balances = &.{},
+            .post_balances = &.{},
+            .inner_instructions = null,
+            .log_messages = null,
+            .pre_token_balances = null,
+            .post_token_balances = null,
+            .rewards = null,
+            .loaded_addresses = .{},
+            .return_data = .{
+                .program_id = program_id,
+                .data = &return_bytes,
+            },
+            .compute_units_consumed = null,
+            .cost_units = null,
+        };
+
+        const result = try GetBlock.Response.UiTransactionStatusMeta.from(allocator, meta);
+        defer {
+            allocator.free(result.preBalances);
+            allocator.free(result.postBalances);
+            if (result.returnData) |rd| allocator.free(rd.data.@"0");
+        }
+
+        try std.testing.expect(result.returnData != null);
+        try std.testing.expectEqual(program_id, result.returnData.?.programId);
+        // Base64 of [0x01, 0x02, 0x03] = "AQID"
+        try std.testing.expectEqualStrings("AQID", result.returnData.?.data.@"0");
+    }
+
+    test "UiTransactionStatusMeta.from - with rewards" {
+        const allocator = std.testing.allocator;
+
+        const rewards = [_]sig.ledger.meta.Reward{
+            .{
+                .pubkey = Pubkey{ .data = [_]u8{0x01} ** 32 },
+                .lamports = 1000,
+                .post_balance = 50_000,
+                .reward_type = .fee,
+                .commission = null,
+            },
+            .{
+                .pubkey = Pubkey{ .data = [_]u8{0x02} ** 32 },
+                .lamports = 2000,
+                .post_balance = 60_000,
+                .reward_type = .staking,
+                .commission = 5,
+            },
+        };
+
+        const meta = sig.ledger.transaction_status.TransactionStatusMeta{
+            .status = null,
+            .fee = 0,
+            .pre_balances = &.{},
+            .post_balances = &.{},
+            .inner_instructions = null,
+            .log_messages = null,
+            .pre_token_balances = null,
+            .post_token_balances = null,
+            .rewards = &rewards,
+            .loaded_addresses = .{},
+            .return_data = null,
+            .compute_units_consumed = null,
+            .cost_units = null,
+        };
+
+        const result = try GetBlock.Response.UiTransactionStatusMeta.from(allocator, meta);
+        defer {
+            allocator.free(result.preBalances);
+            allocator.free(result.postBalances);
+            allocator.free(result.rewards);
+        }
+
+        try std.testing.expectEqual(@as(usize, 2), result.rewards.len);
+        try std.testing.expectEqual(
+            GetBlock.Response.UiReward.RewardType.Fee,
+            result.rewards[0].rewardType.?,
+        );
+        try std.testing.expectEqual(
+            GetBlock.Response.UiReward.RewardType.Staking,
+            result.rewards[1].rewardType.?,
+        );
+        try std.testing.expectEqual(@as(?u8, 5), result.rewards[1].commission);
+    }
+
+    test "UiTransactionStatusMeta.from - with loaded addresses" {
+        const allocator = std.testing.allocator;
+
+        const writable_key = Pubkey{ .data = [_]u8{0xAA} ** 32 };
+        const readonly_key = Pubkey{ .data = [_]u8{0xBB} ** 32 };
+        const writable_keys = [_]Pubkey{writable_key};
+        const readonly_keys = [_]Pubkey{readonly_key};
+
+        const meta = sig.ledger.transaction_status.TransactionStatusMeta{
+            .status = null,
+            .fee = 0,
+            .pre_balances = &.{},
+            .post_balances = &.{},
+            .inner_instructions = null,
+            .log_messages = null,
+            .pre_token_balances = null,
+            .post_token_balances = null,
+            .rewards = null,
+            .loaded_addresses = .{
+                .writable = &writable_keys,
+                .readonly = &readonly_keys,
+            },
+            .return_data = null,
+            .compute_units_consumed = null,
+            .cost_units = null,
+        };
+
+        const result = try GetBlock.Response.UiTransactionStatusMeta.from(allocator, meta);
+        defer {
+            allocator.free(result.preBalances);
+            allocator.free(result.postBalances);
+            allocator.free(result.loadedAddresses.?.writable);
+            allocator.free(result.loadedAddresses.?.readonly);
+        }
+
+        try std.testing.expectEqual(@as(usize, 1), result.loadedAddresses.?.writable.len);
+        try std.testing.expectEqual(@as(usize, 1), result.loadedAddresses.?.readonly.len);
+        try std.testing.expectEqual(writable_key, result.loadedAddresses.?.writable[0]);
+        try std.testing.expectEqual(readonly_key, result.loadedAddresses.?.readonly[0]);
+    }
+
+    test "UiTransactionStatusMeta.from - with inner instructions" {
+        const allocator = std.testing.allocator;
+
+        const inner_ix = sig.ledger.transaction_status.InnerInstruction{
+            .instruction = .{
+                .program_id_index = 1,
+                .accounts = &[_]u8{ 0, 2 },
+                .data = &[_]u8{ 0xCA, 0xFE },
+            },
+            .stack_height = 2,
+        };
+
+        const inner_instructions = [_]sig.ledger.transaction_status.InnerInstructions{.{
+            .index = 0,
+            .instructions = &[_]sig.ledger.transaction_status.InnerInstruction{inner_ix},
+        }};
+
+        const meta = sig.ledger.transaction_status.TransactionStatusMeta{
+            .status = null,
+            .fee = 0,
+            .pre_balances = &.{},
+            .post_balances = &.{},
+            .inner_instructions = &inner_instructions,
+            .log_messages = null,
+            .pre_token_balances = null,
+            .post_token_balances = null,
+            .rewards = null,
+            .loaded_addresses = .{},
+            .return_data = null,
+            .compute_units_consumed = null,
+            .cost_units = null,
+        };
+
+        const result = try GetBlock.Response.UiTransactionStatusMeta.from(allocator, meta);
+        defer {
+            allocator.free(result.preBalances);
+            allocator.free(result.postBalances);
+            for (result.innerInstructions) |ii| {
+                for (ii.instructions) |ix| {
+                    switch (ix) {
+                        .compiled => |c| {
+                            allocator.free(c.accounts);
+                            allocator.free(c.data);
+                        },
+                        .parsed => {},
+                    }
+                }
+                allocator.free(ii.instructions);
+            }
+            allocator.free(result.innerInstructions);
+        }
+
+        try std.testing.expectEqual(@as(usize, 1), result.innerInstructions.len);
+        try std.testing.expectEqual(@as(u8, 0), result.innerInstructions[0].index);
+        try std.testing.expectEqual(@as(usize, 1), result.innerInstructions[0].instructions.len);
+
+        const compiled = result.innerInstructions[0].instructions[0].compiled;
+        try std.testing.expectEqual(@as(u8, 1), compiled.programIdIndex);
+        try std.testing.expectEqual(@as(?u32, 2), compiled.stackHeight);
+    }
+
+    test "UiTransactionStatusMeta.from - with token balances" {
+        const allocator = std.testing.allocator;
+
+        const mint = Pubkey{ .data = [_]u8{0x10} ** 32 };
+        const owner = Pubkey{ .data = [_]u8{0x20} ** 32 };
+        const program_id = Pubkey{ .data = [_]u8{0x30} ** 32 };
+
+        const pre_token_balances = [_]sig.ledger.transaction_status.TransactionTokenBalance{.{
+            .account_index = 1,
+            .mint = mint,
+            .ui_token_amount = .{
+                .ui_amount = 100.5,
+                .decimals = 6,
+                .amount = "100500000",
+                .ui_amount_string = "100.5",
+            },
+            .owner = owner,
+            .program_id = program_id,
+        }};
+
+        const post_token_balances = [_]sig.ledger.transaction_status.TransactionTokenBalance{.{
+            .account_index = 1,
+            .mint = mint,
+            .ui_token_amount = .{
+                .ui_amount = 90.0,
+                .decimals = 6,
+                .amount = "90000000",
+                .ui_amount_string = "90",
+            },
+            .owner = owner,
+            .program_id = program_id,
+        }};
+
+        const meta = sig.ledger.transaction_status.TransactionStatusMeta{
+            .status = null,
+            .fee = 0,
+            .pre_balances = &.{},
+            .post_balances = &.{},
+            .inner_instructions = null,
+            .log_messages = null,
+            .pre_token_balances = &pre_token_balances,
+            .post_token_balances = &post_token_balances,
+            .rewards = null,
+            .loaded_addresses = .{},
+            .return_data = null,
+            .compute_units_consumed = null,
+            .cost_units = null,
+        };
+
+        const result = try GetBlock.Response.UiTransactionStatusMeta.from(allocator, meta);
+        defer {
+            allocator.free(result.preBalances);
+            allocator.free(result.postBalances);
+            for (result.preTokenBalances) |b| {
+                allocator.free(b.uiTokenAmount.amount);
+                allocator.free(b.uiTokenAmount.uiAmountString);
+            }
+            allocator.free(result.preTokenBalances);
+            for (result.postTokenBalances) |b| {
+                allocator.free(b.uiTokenAmount.amount);
+                allocator.free(b.uiTokenAmount.uiAmountString);
+            }
+            allocator.free(result.postTokenBalances);
+        }
+
+        try std.testing.expectEqual(@as(usize, 1), result.preTokenBalances.len);
+        try std.testing.expectEqual(@as(usize, 1), result.postTokenBalances.len);
+        try std.testing.expectEqualStrings(
+            "100500000",
+            result.preTokenBalances[0].uiTokenAmount.amount,
+        );
+        try std.testing.expectEqualStrings(
+            "100.5",
+            result.preTokenBalances[0].uiTokenAmount.uiAmountString,
+        );
+        try std.testing.expectEqualStrings(
+            "90000000",
+            result.postTokenBalances[0].uiTokenAmount.amount,
+        );
+        try std.testing.expectEqual(mint, result.preTokenBalances[0].mint);
+        try std.testing.expectEqual(owner, result.preTokenBalances[0].owner);
+    }
+
+    test "UiTransactionStatusMeta.from - with log messages" {
+        const allocator = std.testing.allocator;
+
+        const logs = [_][]const u8{
+            "Program 11111111111111111111111111111111 invoke [1]",
+            "Program 11111111111111111111111111111111 success",
+        };
+
+        const meta = sig.ledger.transaction_status.TransactionStatusMeta{
+            .status = null,
+            .fee = 0,
+            .pre_balances = &.{},
+            .post_balances = &.{},
+            .inner_instructions = null,
+            .log_messages = &logs,
+            .pre_token_balances = null,
+            .post_token_balances = null,
+            .rewards = null,
+            .loaded_addresses = .{},
+            .return_data = null,
+            .compute_units_consumed = null,
+            .cost_units = null,
+        };
+
+        const result = try GetBlock.Response.UiTransactionStatusMeta.from(allocator, meta);
+        defer {
+            allocator.free(result.preBalances);
+            allocator.free(result.postBalances);
+            allocator.free(result.logMessages);
+        }
+
+        try std.testing.expectEqual(@as(usize, 2), result.logMessages.len);
+        try std.testing.expectEqualStrings(
+            "Program 11111111111111111111111111111111 invoke [1]",
+            result.logMessages[0],
+        );
+        try std.testing.expectEqualStrings(
+            "Program 11111111111111111111111111111111 success",
+            result.logMessages[1],
+        );
+    }
 };
