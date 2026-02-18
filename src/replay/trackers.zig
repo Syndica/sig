@@ -8,6 +8,34 @@ const Slot = sig.core.Slot;
 const SlotConstants = sig.core.SlotConstants;
 const SlotState = sig.core.SlotState;
 const ThreadPool = sig.sync.ThreadPool;
+const Commitment = sig.rpc.methods.common.Commitment;
+
+pub const ForkChoiceProcessedSlot = struct {
+    slot: std.atomic.Value(Slot) = .init(0),
+
+    /// Set the current processed slot (heaviest fork tip).
+    /// Uses store() because this can decrease when the fork choice
+    /// switches to a different fork with a lower slot.
+    pub fn set(self: *ForkChoiceProcessedSlot, new_slot: Slot) void {
+        self.slot.store(new_slot, .monotonic);
+    }
+
+    pub fn get(self: *const ForkChoiceProcessedSlot) Slot {
+        return self.slot.load(.monotonic);
+    }
+};
+
+pub const OptimisticallyConfirmedSlot = struct {
+    slot: std.atomic.Value(Slot) = .init(0),
+
+    pub fn update(self: *OptimisticallyConfirmedSlot, new_slot: Slot) void {
+        _ = self.slot.fetchMax(new_slot, .monotonic);
+    }
+
+    pub fn get(self: *const OptimisticallyConfirmedSlot) Slot {
+        return self.slot.load(.monotonic);
+    }
+};
 
 /// Central registry that tracks high-level info about slots and how they fork.
 ///
@@ -21,7 +49,9 @@ const ThreadPool = sig.sync.ThreadPool;
 /// will end as soon as the items are removed.
 pub const SlotTracker = struct {
     slots: std.AutoArrayHashMapUnmanaged(Slot, *Element),
-    root: Slot,
+    latest_processed_slot: ForkChoiceProcessedSlot,
+    latest_confirmed_slot: OptimisticallyConfirmedSlot,
+    root: std.atomic.Value(Slot),
     wg: *std.Thread.WaitGroup,
 
     pub const Element = struct {
@@ -66,8 +96,10 @@ pub const SlotTracker = struct {
         const wg = try allocator.create(std.Thread.WaitGroup);
         wg.* = .{};
         return .{
-            .root = root_slot,
+            .root = .init(root_slot),
             .slots = .empty,
+            .latest_processed_slot = .{},
+            .latest_confirmed_slot = .{},
             .wg = wg,
         };
     }
@@ -115,6 +147,14 @@ pub const SlotTracker = struct {
         return elem.toRef();
     }
 
+    pub fn getSlotForCommitment(self: *const SlotTracker, commitment: Commitment) Slot {
+        return switch (commitment) {
+            .processed => self.latest_processed_slot.get(),
+            .confirmed => self.latest_confirmed_slot.get(),
+            .finalized => self.root.load(.monotonic),
+        };
+    }
+
     pub const GetOrPutResult = struct {
         found_existing: bool,
         reference: Reference,
@@ -143,7 +183,7 @@ pub const SlotTracker = struct {
     }
 
     pub fn getRoot(self: *const SlotTracker) Reference {
-        return self.get(self.root).?; // root slot's bank must exist
+        return self.get(self.root.load(.monotonic)).?; // root slot's bank must exist
     }
 
     pub fn contains(self: *const SlotTracker, slot: Slot) bool {
@@ -229,8 +269,9 @@ pub const SlotTracker = struct {
 
         var slice = self.slots.entries.slice();
         var index: usize = 0;
+        const root = self.root.load(.monotonic);
         while (index < slice.len) {
-            if (slice.items(.key)[index] < self.root) {
+            if (slice.items(.key)[index] < root) {
                 const element = slice.items(.value)[index];
                 self.slots.swapRemoveAt(index);
                 slice = self.slots.entries.slice();
@@ -258,6 +299,16 @@ pub const SlotTree = struct {
 
     const List = std.ArrayListUnmanaged;
     const min_age = 32;
+
+    /// Returns the highest slot among all fork tips (leaves).
+    /// In bypass mode (without ForkChoice), this represents the "processed" slot.
+    pub fn tip(self: *const SlotTree) Slot {
+        var max_slot: Slot = self.root.slot;
+        for (self.leaves.items) |leaf| {
+            max_slot = @max(max_slot, leaf.slot);
+        }
+        return max_slot;
+    }
 
     pub fn deinit(const_self: SlotTree, allocator: Allocator) void {
         var self = const_self;
@@ -524,6 +575,10 @@ test "SlotTracker.prune removes all slots less than root" {
         try std.testing.expect(!tracker.contains(1));
         try std.testing.expect(!tracker.contains(2));
         try std.testing.expect(!tracker.contains(3));
+
+        try std.testing.expectEqual(0, tracker.getSlotForCommitment(Commitment.processed));
+        try std.testing.expectEqual(0, tracker.getSlotForCommitment(Commitment.confirmed));
+        try std.testing.expectEqual(4, tracker.getSlotForCommitment(Commitment.finalized));
     }
 }
 

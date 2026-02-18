@@ -155,7 +155,8 @@ pub const TowerConsensus = struct {
         );
         errdefer fork_choice.deinit(allocator);
 
-        const root_ref = deps.slot_tracker.get(deps.slot_tracker.root).?;
+        const root = deps.slot_tracker.root.load(.monotonic);
+        const root_ref = deps.slot_tracker.get(root).?;
         const root_ancestors = &root_ref.constants.ancestors;
 
         var tower: Tower = if (deps.identity.vote_account) |vote_account_address|
@@ -166,8 +167,8 @@ pub const TowerConsensus = struct {
                 vote_account_address,
             )
         else
-            .{ .root = deps.slot_tracker.root };
-        tower.setRoot(deps.slot_tracker.root);
+            .{ .root = root };
+        tower.setRoot(root);
 
         const replay_tower: ReplayTower = try .init(
             .from(deps.logger),
@@ -178,7 +179,7 @@ pub const TowerConsensus = struct {
         errdefer replay_tower.deinit(allocator);
 
         var vote_collector: sig.consensus.VoteCollector =
-            try .init(deps.now, deps.slot_tracker.root, deps.registry);
+            try .init(deps.now, root, deps.registry);
         errdefer vote_collector.deinit(allocator);
 
         return .{
@@ -207,7 +208,7 @@ pub const TowerConsensus = struct {
     ) !HeaviestSubtreeForkChoice {
         const root_slot, const root_hash = blk: {
             const root = slot_tracker.getRoot();
-            const root_slot = slot_tracker.root;
+            const root_slot = slot_tracker.root.load(.monotonic);
             const root_hash = root.state.hash.readCopy();
             break :blk .{ root_slot, root_hash.? };
         };
@@ -576,7 +577,7 @@ pub const TowerConsensus = struct {
             }
             // Update cluster with the duplicate confirmation status.
             // Analogous to [ReplayStage::mark_slots_duplicate_confirmed](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3876)
-            const root_slot = slot_tracker.root;
+            const root_slot = slot_tracker.root.load(.monotonic);
             for (duplicate_confirmed_forks.items) |duplicate_confirmed_fork| {
                 const slot, const frozen_hash = duplicate_confirmed_fork.tuple();
                 try self.handleDuplicateConfirmedFork(
@@ -663,6 +664,12 @@ pub const TowerConsensus = struct {
                 vote_sockets,
                 maybe_thread_pool,
             );
+
+            // Update the latest processed slot to the bank being voted on.
+            // This matches Agave's behavior: the processed slot is updated inside
+            // handle_votable_bank(), which is only called when vote_bank.is_some().
+            // See: https://github.com/anza-xyz/agave/blob/5e900421520a10933642d5e9a21e191a70f9b125/core/src/replay_stage.rs#L2683
+            slot_tracker.latest_processed_slot.set(voted.slot);
         }
 
         // Reset onto a fork
@@ -889,7 +896,7 @@ fn loadTower(
         .{},
     ) catch return error.BincodeError;
 
-    var vote_state = try versioned_state.convertToCurrent(allocator);
+    var vote_state = try versioned_state.convertToV4(allocator, null);
     defer vote_state.deinit(allocator);
 
     return try Tower.fromAccount(&vote_state);
@@ -1392,7 +1399,7 @@ fn generateVoteTx(
     };
     defer vote_state_versions.deinit(allocator);
 
-    var vote_state = vote_state_versions.convertToCurrent(allocator) catch |err| {
+    var vote_state = vote_state_versions.convertToV4(allocator, null) catch |err| {
         logger.err().logf("Failed to convert vote state to current: {}", .{err});
         return .failed;
     };
@@ -1405,7 +1412,9 @@ fn generateVoteTx(
 
     const current_epoch = epoch_schedule.getEpoch(last_voted_slot);
 
-    const authorized_voter_pubkey = vote_state.voters.getAuthorizedVoter(current_epoch) orelse {
+    const authorized_voter_pubkey = vote_state.authorized_voters.getAuthorizedVoter(
+        current_epoch,
+    ) orelse {
         logger.err().logf("No authorized voter for epoch {}", .{current_epoch});
         return .failed;
     };
@@ -1607,7 +1616,7 @@ fn checkAndHandleNewRoot(
     // Audit: The rest of the code maps to Self::handle_new_root in Agave.
     // Update the slot tracker.
     // Set new root.
-    slot_tracker.root = new_root;
+    slot_tracker.root.store(new_root, .monotonic);
     // Prune non rooted slots
     slot_tracker.pruneNonRooted(allocator, maybe_thread_pool);
 
@@ -2506,22 +2515,26 @@ test "checkAndHandleNewRoot - missing slot" {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    const root = SlotAndHash{
+    const root_slot_and_hash = SlotAndHash{
         .slot = 0,
         .hash = Hash.initRandom(random),
     };
 
-    var fixture = try TestFixture.init(allocator, root);
+    // NOTE: TestFixture has its own SlotTracker as well. Unclear if that matters.
+    var fixture = try TestFixture.init(
+        allocator,
+        root_slot_and_hash,
+    );
     defer fixture.deinit(allocator);
 
     // Build a tracked slot set wrapped in RwMux
-    var slot_tracker: SlotTracker = try .initEmpty(testing.allocator, root.slot);
+    var slot_tracker: SlotTracker = try .initEmpty(testing.allocator, root_slot_and_hash.slot);
     defer slot_tracker.deinit(testing.allocator);
 
     {
         const constants: SlotConstants = try .genesis(allocator, .initRandom(random));
         errdefer constants.deinit(allocator);
-        try slot_tracker.put(testing.allocator, root.slot, .{
+        try slot_tracker.put(testing.allocator, root_slot_and_hash.slot, .{
             .constants = constants,
             .state = .GENESIS,
         });
@@ -2556,6 +2569,10 @@ test "checkAndHandleNewRoot - missing slot" {
     );
 
     try testing.expectError(error.MissingSlot, result);
+
+    // Verify slot trackers remain at initial state after failure
+    try testing.expectEqual(0, slot_tracker.getSlotForCommitment(.processed));
+    try testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 test "checkAndHandleNewRoot - missing hash" {
@@ -2571,12 +2588,9 @@ test "checkAndHandleNewRoot - missing hash" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    var slot_tracker2 = RwMux(SlotTracker).init(try .initEmpty(allocator, root.slot));
-    defer {
-        const ptr, var lg = slot_tracker2.writeWithLock();
-        defer lg.unlock();
-        ptr.deinit(allocator);
-    }
+    var slot_tracker2: SlotTracker = try .initEmpty(allocator, root.slot);
+    defer slot_tracker2.deinit(allocator);
+
     {
         const constants = try SlotConstants.genesis(allocator, .initRandom(random));
         errdefer constants.deinit(allocator);
@@ -2584,9 +2598,7 @@ test "checkAndHandleNewRoot - missing hash" {
         var state: SlotState = .GENESIS;
         errdefer state.deinit(allocator);
 
-        const ptr, var lg = slot_tracker2.writeWithLock();
-        defer lg.unlock();
-        try ptr.put(allocator, root.slot, .{
+        try slot_tracker2.put(allocator, root.slot, .{
             .constants = constants,
             .state = state,
         });
@@ -2607,12 +2619,10 @@ test "checkAndHandleNewRoot - missing hash" {
     defer epoch_tracker.deinit(allocator);
 
     // Try to check a slot that doesn't exist in the tracker
-    const slot_tracker2_ptr, var slot_tracker2_lg = slot_tracker2.writeWithLock();
-    defer slot_tracker2_lg.unlock();
     const result = checkAndHandleNewRoot(
         allocator,
         test_state.resultWriter(),
-        slot_tracker2_ptr,
+        &slot_tracker2,
         &fixture.progress,
         &fixture.fork_choice,
         &epoch_tracker,
@@ -2623,6 +2633,10 @@ test "checkAndHandleNewRoot - missing hash" {
     );
 
     try testing.expectError(error.MissingHash, result);
+
+    // Verify slot trackers remain at initial state after failure
+    try testing.expectEqual(0, slot_tracker2.getSlotForCommitment(.processed));
+    try testing.expectEqual(0, slot_tracker2.getSlotForCommitment(.confirmed));
 }
 
 test "checkAndHandleNewRoot - empty slot tracker" {
@@ -2639,13 +2653,9 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    const slot_tracker_val3: SlotTracker = try .initEmpty(testing.allocator, root.slot);
-    var slot_tracker3 = RwMux(SlotTracker).init(slot_tracker_val3);
-    defer {
-        const ptr, var lg = slot_tracker3.writeWithLock();
-        defer lg.unlock();
-        ptr.deinit(testing.allocator);
-    }
+    var slot_tracker3: SlotTracker = try .initEmpty(allocator, root.slot);
+    defer slot_tracker3.deinit(testing.allocator);
+
     var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
     defer registry.deinit();
 
@@ -2661,12 +2671,10 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     defer epoch_tracker.deinit(allocator);
 
     // Try to check a slot that doesn't exist in the tracker
-    const slot_tracker3_ptr, var slot_tracker3_lg = slot_tracker3.writeWithLock();
-    defer slot_tracker3_lg.unlock();
     const result = checkAndHandleNewRoot(
         testing.allocator,
         test_state.resultWriter(),
-        slot_tracker3_ptr,
+        &slot_tracker3,
         &fixture.progress,
         &fixture.fork_choice,
         &epoch_tracker,
@@ -2677,6 +2685,10 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     );
 
     try testing.expectError(error.EmptySlotTracker, result);
+
+    // Verify slot trackers remain at initial state after failure
+    try testing.expectEqual(0, slot_tracker3.getSlotForCommitment(.processed));
+    try testing.expectEqual(0, slot_tracker3.getSlotForCommitment(.confirmed));
 }
 
 test "checkAndHandleNewRoot - success" {
@@ -3308,7 +3320,7 @@ test "generateVoteTx - success with tower_sync vote" {
     defer test_state.deinit();
     const db = &test_state.db;
 
-    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
         allocator,
         Pubkey.fromPublicKey(&node_kp.public_key),
         Pubkey.fromPublicKey(&auth_voter_kp.public_key),
@@ -3319,12 +3331,12 @@ test "generateVoteTx - success with tower_sync vote" {
 
     const vote_account_data_buf = try allocator.alloc(
         u8,
-        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+        sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
     defer allocator.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .v3 = vote_state },
         .{},
     );
     const vote_account = sig.runtime.AccountSharedData{
@@ -3402,7 +3414,7 @@ test "generateVoteTx - success with vote_state_update compacted" {
     defer test_state.deinit();
     const db = &test_state.db;
 
-    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
         allocator,
         Pubkey.fromPublicKey(&node_kp.public_key),
         Pubkey.fromPublicKey(&auth_voter_kp.public_key),
@@ -3413,12 +3425,12 @@ test "generateVoteTx - success with vote_state_update compacted" {
 
     const vote_account_data_buf = try allocator.alloc(
         u8,
-        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+        sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
     defer allocator.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .v3 = vote_state },
         .{},
     );
 
@@ -3496,7 +3508,7 @@ test "generateVoteTx - success with switch proof" {
     defer test_state.deinit();
     const db = &test_state.db;
 
-    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
         allocator,
         Pubkey.fromPublicKey(&node_kp.public_key),
         Pubkey.fromPublicKey(&auth_voter_kp.public_key),
@@ -3507,12 +3519,12 @@ test "generateVoteTx - success with switch proof" {
 
     const vote_account_data_buf = try allocator.alloc(
         u8,
-        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+        sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
     defer allocator.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .v3 = vote_state },
         .{},
     );
 
@@ -3592,7 +3604,7 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
     defer test_state.deinit();
     const db = &test_state.db;
 
-    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
         allocator,
         Pubkey.fromPublicKey(&different_node_kp.public_key),
         Pubkey.fromPublicKey(&auth_voter_kp.public_key),
@@ -3603,12 +3615,12 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
 
     const vote_account_data_buf = try allocator.alloc(
         u8,
-        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+        sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
     defer allocator.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .v3 = vote_state },
         .{},
     );
 
@@ -3680,7 +3692,7 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
     defer test_state.deinit();
     const db = &test_state.db;
 
-    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
         allocator,
         Pubkey.fromPublicKey(&node_kp.public_key),
         Pubkey.fromPublicKey(&actual_auth_voter_kp.public_key),
@@ -3691,12 +3703,12 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
 
     const vote_account_data_buf = try allocator.alloc(
         u8,
-        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+        sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
     defer allocator.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .v3 = vote_state },
         .{},
     );
 
@@ -4733,12 +4745,10 @@ test "edge cases - duplicate slot" {
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
-    std.debug.assert(slot_tracker.root == 0);
+    const root_slot0 = slot_tracker.root.load(.monotonic);
+    std.debug.assert(root_slot0 == 0);
 
-    const root_slot0 = slot_tracker.root;
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
-
-    std.debug.assert(root_slot0 == 0); // assert initial root value
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
@@ -4904,12 +4914,10 @@ test "edge cases - duplicate confirmed slot" {
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
-    std.debug.assert(slot_tracker.root == 0);
+    const root_slot0 = slot_tracker.root.load(.monotonic);
+    std.debug.assert(root_slot0 == 0);
 
-    const root_slot0 = slot_tracker.root;
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
-
-    std.debug.assert(root_slot0 == 0); // assert initial root value
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
@@ -5076,16 +5084,14 @@ test "edge cases - gossip verified vote hashes" {
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
-    std.debug.assert(slot_tracker.root == 0);
+    const root_slot0 = slot_tracker.root.load(.monotonic);
+    std.debug.assert(root_slot0 == 0); // assert initial root value
 
     var vote_collector: sig.consensus.vote_listener.VoteCollector =
-        try .init(.EPOCH_ZERO, slot_tracker.root, &registry);
+        try .init(.EPOCH_ZERO, root_slot0, &registry);
     defer vote_collector.deinit(gpa);
 
-    const root_slot0 = slot_tracker.root;
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
-
-    std.debug.assert(root_slot0 == 0); // assert initial root value
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
@@ -5233,6 +5239,9 @@ test "edge cases - gossip verified vote hashes" {
         &.{ pk1, pk2 },
         tower_consensus.latest_validator_votes.max_gossip_frozen_votes.keys(),
     );
+
+    // Optimisic confirmation threshold not reached during this test.
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 // TODO: Re-implement tests for the new consolidated API
@@ -5431,6 +5440,12 @@ test "vote on heaviest frozen descendant with no switch" {
     // 5. Assert forkchoice
     try std.testing.expectEqual(slot_1, consensus.fork_choice.heaviestOverallSlot().slot);
     try std.testing.expectEqual(slot1_hash, consensus.fork_choice.heaviestOverallSlot().hash);
+
+    // 6. Assert trackers
+    // processed slot is updated to slot_1 when the tower votes on it
+    try std.testing.expectEqual(slot_1, slot_tracker.getSlotForCommitment(.processed));
+    // confirmed slot remains at 0 (no optimistic confirmation votes processed)
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 // State setup
@@ -5651,6 +5666,12 @@ test "vote accounts with landed votes populate bank stats" {
     // }
     try std.testing.expectEqual(6, stats1.lockout_intervals.map.get(5).?.items.len);
     try std.testing.expectEqual(slot_1, consensus.fork_choice.heaviestOverallSlot().slot);
+
+    // Assert trackers
+    // processed slot is updated to slot_1 when the tower votes on it
+    try std.testing.expectEqual(slot_1, slot_tracker.getSlotForCommitment(.processed));
+    // confirmed slot remains at 0 (no optimistic confirmation votes processed)
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 // Test case:
@@ -5755,10 +5776,11 @@ test "root advances after vote satisfies lockouts" {
         hashes[i] = Hash{ .data = .{@as(u8, @intCast(i % 256))} ** Hash.SIZE };
     }
 
-    var slot_tracker: SlotTracker = try .init(allocator, initial_root, .{
-        .constants = root_consts,
-        .state = root_state,
-    });
+    var slot_tracker: SlotTracker = try .init(
+        allocator,
+        initial_root,
+        .{ .constants = root_consts, .state = root_state },
+    );
     defer slot_tracker.deinit(allocator);
 
     var prng = std.Random.DefaultPrng.init(12345);
@@ -5996,7 +6018,7 @@ test "root advances after vote satisfies lockouts" {
             consensus.replay_tower.tower.votes.len,
         );
 
-        try std.testing.expectEqual(1, slot_tracker.root);
+        try std.testing.expectEqual(1, slot_tracker.root.load(.monotonic));
         // No longer tracking slot 0
         try std.testing.expect(!slot_tracker.contains(0));
         // Still tracking slot 1
@@ -6083,7 +6105,7 @@ test "root advances after vote satisfies lockouts" {
         const last_voted = consensus.replay_tower.tower.lastVotedSlot();
         try std.testing.expectEqual(33, last_voted);
 
-        try std.testing.expectEqual(2, slot_tracker.root);
+        try std.testing.expectEqual(2, slot_tracker.root.load(.monotonic));
         // No longer tracking slot 0
         try std.testing.expect(!slot_tracker.contains(0));
         // No longer tracking slot 1
@@ -6100,6 +6122,12 @@ test "root advances after vote satisfies lockouts" {
         try std.testing.expect(progress.map.get(2) != null);
         try std.testing.expectEqual(33, consensus.fork_choice.heaviestOverallSlot().slot);
     }
+
+    // Assert trackers
+    // processed slot is updated to slot 33 when the tower votes on it
+    try std.testing.expectEqual(33, slot_tracker.getSlotForCommitment(.processed));
+    // confirmed slot remains at 0 (no optimistic confirmation votes processed)
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 // Test case:
@@ -6161,10 +6189,11 @@ test "vote refresh when no new vote available" {
         try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
     }
 
-    var slot_tracker = try SlotTracker.init(allocator, root_slot, .{
-        .constants = root_consts,
-        .state = root_state,
-    });
+    var slot_tracker = try SlotTracker.init(
+        allocator,
+        root_slot,
+        .{ .constants = root_consts, .state = root_state },
+    );
     defer slot_tracker.deinit(allocator);
 
     const slot1_hash = Hash{ .data = .{1} ** Hash.SIZE };
@@ -6289,6 +6318,12 @@ test "vote refresh when no new vote available" {
     try std.testing.expectEqual(1, consensus.replay_tower.tower.votes.len);
 
     try std.testing.expectEqual(1, consensus.fork_choice.heaviestOverallSlot().slot);
+
+    // Assert trackers
+    // processed slot is updated to slot 1 when the tower votes on it
+    try std.testing.expectEqual(1, slot_tracker.getSlotForCommitment(.processed));
+    // confirmed slot remains at 0 (no optimistic confirmation votes processed)
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 // Test case:
@@ -6354,10 +6389,11 @@ test "detect and mark duplicate confirmed fork" {
         try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
     }
 
-    var slot_tracker = try SlotTracker.init(allocator, root_slot, .{
-        .constants = root_consts,
-        .state = root_state,
-    });
+    var slot_tracker = try SlotTracker.init(
+        allocator,
+        root_slot,
+        .{ .constants = root_consts, .state = root_state },
+    );
     defer slot_tracker.deinit(allocator);
 
     // Add frozen slot 1
@@ -6619,10 +6655,11 @@ test "detect and mark duplicate slot" {
         try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
     }
 
-    var slot_tracker = try SlotTracker.init(allocator, root_slot, .{
-        .constants = root_consts,
-        .state = root_state,
-    });
+    var slot_tracker = try SlotTracker.init(
+        allocator,
+        root_slot,
+        .{ .constants = root_consts, .state = root_state },
+    );
     defer slot_tracker.deinit(allocator);
 
     const slot1_hash = Hash{ .data = .{1} ** Hash.SIZE };

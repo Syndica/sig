@@ -659,7 +659,7 @@ test "RepairService sends repair request to gossip peer" {
     );
 
     var tracker: BasicShredTracker = undefined;
-    try tracker.init(std.testing.allocator, 13579, .noop, &registry);
+    try tracker.init(std.testing.allocator, 13579, .noop, &registry, false);
     defer tracker.deinit();
 
     var service: RepairService = blk: {

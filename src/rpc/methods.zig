@@ -50,7 +50,7 @@ pub const MethodAndParams = union(enum) {
     getFirstAvailableBlock: noreturn,
 
     /// https://github.com/Syndica/sig/issues/557
-    getGenesisHash: noreturn,
+    getGenesisHash: GetGenesisHash,
     /// https://github.com/Syndica/sig/issues/558
     getHealth: GetHealth,
     /// Custom (not standardized) RPC method for "GET /*snapshot*.tar.bz2"
@@ -373,7 +373,15 @@ pub const GetEpochSchedule = struct {
 
 // TODO: getFeeForMessage
 // TODO: getFirstAvailableBlock
-// TODO: getGenesisHash
+
+/// https://solana.com/docs/rpc/http/getgenesishash
+/// Returns the genesis hash as a base-58 encoded string.
+pub const GetGenesisHash = struct {
+    /// Response is a base-58 encoded hash string representing the genesis hash.
+    pub const Response = sig.core.Hash;
+};
+
+// TODO: getGenesisHash - implemented below as GetGenesisHash
 // TODO: getHealth
 // TODO: getHighestSnapshotSlot
 // TODO: getIdentity
@@ -685,4 +693,16 @@ pub const common = struct {
         /// Shred version
         shredVersion: ?u16 = null,
     };
+};
+
+pub const SlotHookContext = struct {
+    slot_tracker: *const sig.replay.trackers.SlotTracker,
+
+    pub fn getSlot(self: SlotHookContext, _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+        const commitment = config.commitment orelse .finalized;
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        const min_slot = config.minContextSlot orelse return slot;
+        return if (slot >= min_slot) slot else error.RpcMinContextSlotNotMet;
+    }
 };

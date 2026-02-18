@@ -32,6 +32,7 @@ const getWallclockMs = sig.time.getWallclockMs;
 const globalRegistry = sig.prometheus.globalRegistry;
 const loadSnapshot = sig.accounts_db.snapshot.load.loadSnapshot;
 const servePrometheus = sig.prometheus.servePrometheus;
+const downloadAndExtractGenesis = sig.core.genesis_download.downloadAndExtractGenesis;
 
 const Logger = sig.trace.Logger("cmd");
 
@@ -103,6 +104,7 @@ pub fn main() !void {
     current_config.metrics_port = cmd.metrics_port;
     current_config.log_file = cmd.log_file;
     current_config.tee_logs = cmd.tee_logs;
+    current_config.validator_dir = try ensureValidatorDir(gpa, cmd.validator_dir);
 
     // If no subcommand was provided, print a friendly header and help information.
     const subcmd = cmd.subcmd orelse {
@@ -127,11 +129,21 @@ pub fn main() !void {
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
             current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            current_config.shred_network.log_finished_slots = params.repair.log_finished_slots;
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
             params.geyser.apply(&current_config);
+            current_config.geyser.pipe_path = try current_config.derivePathFromValidatorDir(
+                gpa,
+                current_config.geyser.pipe_path,
+                "geyser.pipe",
+            );
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.stop_at_slot = params.stop_at_slot;
@@ -145,11 +157,20 @@ pub fn main() !void {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
             params.geyser.apply(&current_config);
+            current_config.geyser.pipe_path = try current_config.derivePathFromValidatorDir(
+                gpa,
+                current_config.geyser.pipe_path,
+                "geyser.pipe",
+            );
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.stop_at_slot = params.stop_at_slot;
@@ -162,6 +183,7 @@ pub fn main() !void {
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
             current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
+            current_config.shred_network.log_finished_slots = params.repair.log_finished_slots;
             current_config.turbine.overwrite_stake_for_testing =
                 params.overwrite_stake_for_testing;
             current_config.shred_network.no_retransmit = params.no_retransmit;
@@ -170,17 +192,30 @@ pub fn main() !void {
         },
         .snapshot_download => |params| {
             current_config.shred_version = params.shred_version;
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
             params.accountsdb_download.apply(&current_config);
             params.gossip_base.apply(&current_config);
             try downloadSnapshot(gpa, gossip_gpa, current_config);
         },
         .snapshot_validate => |params| {
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             current_config.gossip.cluster = params.gossip_cluster;
             params.geyser.apply(&current_config);
+            current_config.geyser.pipe_path = try current_config.derivePathFromValidatorDir(
+                gpa,
+                current_config.geyser.pipe_path,
+                "geyser.pipe",
+            );
             try validateSnapshot(gpa, current_config);
         },
         .snapshot_create => |params| {
@@ -191,7 +226,11 @@ pub fn main() !void {
             @panic("TODO: support snapshot creation");
         },
         .print_manifest => |params| {
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
             try printManifest(gpa, current_config);
         },
         .leader_schedule => |params| {
@@ -199,7 +238,11 @@ pub fn main() !void {
             current_config.leader_schedule_path = params.leader_schedule;
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
@@ -218,7 +261,12 @@ pub fn main() !void {
         .mock_rpc_server => |params| {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
@@ -248,6 +296,13 @@ pub fn main() !void {
                 ),
             }
         },
+        .ledger => |params| {
+            const action = params.action orelse {
+                _ = try parser.parse(gpa, "sig", tty_config, stdout, &.{ "ledger", "--help" });
+                return;
+            };
+            try ledgerTool(gpa, current_config, action);
+        },
     }
 }
 
@@ -256,6 +311,7 @@ const Cmd = struct {
     metrics_port: u16,
     log_file: ?[]const u8,
     tee_logs: bool,
+    validator_dir: []const u8,
     subcmd: ?union(enum) {
         identity,
         gossip: Gossip,
@@ -270,6 +326,7 @@ const Cmd = struct {
         test_transaction_sender: TestTransactionSender,
         mock_rpc_server: MockRpcServer,
         agave_migration_tool: AgaveMigrationTool,
+        ledger: LedgerSubCmd,
     },
 
     const cmd_info: cli.CommandInfo(@This()) = .{
@@ -297,6 +354,7 @@ const Cmd = struct {
                 .test_transaction_sender = TestTransactionSender.cmd_info,
                 .mock_rpc_server = MockRpcServer.cmd_info,
                 .agave_migration_tool = AgaveMigrationTool.cmd_info,
+                .ledger = LedgerSubCmd.cmd_info,
             },
             .log_filters = .{
                 .kind = .named,
@@ -331,6 +389,17 @@ const Cmd = struct {
                 .help =
                 \\If --log-file is set, it disables logging to stderr.
                 \\Enable this flag to reactivate stderr logging when using --log-file.
+                ,
+            },
+            .validator_dir = .{
+                .kind = .named,
+                .name_override = "validator-dir",
+                .alias = .d,
+                .default_value = sig.VALIDATOR_DIR,
+                .config = .string,
+                .help =
+                \\base directory for all validator data (ledger, accounts_db, geyser pipe).
+                \\Subdirectory paths are derived from this base unless explicitly overridden.
                 ,
             },
         },
@@ -369,9 +438,8 @@ const Cmd = struct {
         .alias = .s,
         .default_value = sig.VALIDATOR_DIR ++ "accounts_db",
         .config = .string,
-        .help = "path to snapshot directory" ++
-            " (where snapshots are downloaded and/or unpacked to/from)" ++
-            " - default: {VALIDATOR_DIR}/accounts_db",
+        .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked). " ++
+            "Defaults to <validator-dir>/accounts_db. Overrides --validator-dir for this path.",
     };
 
     const genesis_file_path_arg: cli.ArgumentInfo(?[]const u8) = .{
@@ -637,6 +705,7 @@ const Cmd = struct {
         max_shreds: u64,
         num_retransmit_threads: ?usize,
         dump_shred_tracker: bool,
+        log_finished_slots: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .turbine_port = .{
@@ -693,6 +762,14 @@ const Cmd = struct {
                 .help = "Create shred-tracker.txt" ++
                     " to visually represent the currently tracked slots.",
             },
+            .log_finished_slots = .{
+                .kind = .named,
+                .name_override = "log-finished-slots",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "Log the highest finished slot when it updates.",
+            },
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
@@ -723,7 +800,10 @@ const Cmd = struct {
                 .alias = .none,
                 .default_value = sig.VALIDATOR_DIR ++ "geyser.pipe",
                 .config = .string,
-                .help = "path to the geyser pipe",
+                .help =
+                \\path to the geyser pipe.
+                \\Defaults to <validator-dir>/geyser.pipe. Overrides --validator-dir for this path.
+                ,
             },
             .writer_fba_bytes = .{
                 .kind = .named,
@@ -1130,6 +1210,78 @@ const Cmd = struct {
             },
         };
     };
+
+    const LedgerSubCmd = struct {
+        action: ?union(enum) {
+            bounds,
+            retain: Retain,
+        },
+
+        const Retain = struct {
+            start_slot: ?Slot,
+            end_slot: ?Slot,
+        };
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Ledger utilities for inspecting and modifying the ledger database.",
+                .long =
+                \\Provides utilities for working with the ledger database:
+                \\
+                \\  bounds  - Print the min and max slot in the ledger
+                \\  retain  - Remove all slots from the ledger outside the specified range
+                \\
+                \\Use --validator-dir to specify the validator directory containing the ledger.
+                ,
+            },
+            .sub = .{
+                .action = .{
+                    .bounds = .{
+                        .help = .{
+                            .short = "Print the min and max slot in the ledger.",
+                            .long = null,
+                        },
+                        .sub = .{},
+                    },
+                    .retain = .{
+                        .help = .{
+                            .short = "Remove all slots from the ledger outside the specified range.",
+                            .long =
+                            \\Removes all slots from the ledger that are outside the range
+                            \\[start-slot, end-slot]. If start-slot is not specified, it defaults
+                            \\to the minimum slot in the ledger. If end-slot is not specified,
+                            \\it defaults to the maximum slot in the ledger.
+                            ,
+                        },
+                        .sub = .{
+                            .start_slot = .{
+                                .kind = .named,
+                                .name_override = "start-slot",
+                                .alias = .none,
+                                .default_value = null,
+                                .config = {},
+                                .help =
+                                \\The first slot to retain (inclusive). 
+                                \\Defaults to min slot in ledger.
+                                ,
+                            },
+                            .end_slot = .{
+                                .kind = .named,
+                                .name_override = "end-slot",
+                                .alias = .none,
+                                .default_value = null,
+                                .config = {},
+                                .help =
+                                \\The last slot to retain (inclusive). 
+                                \\Defaults to max slot in ledger.
+                                ,
+                            },
+                        },
+                    },
+                },
+            },
+        };
+    };
 };
 
 const AllocationMetrics = struct {
@@ -1139,6 +1291,100 @@ const AllocationMetrics = struct {
     allocated_bytes_ledger: *Gauge(u64),
     allocated_bytes_sqlite: *Gauge(u64),
 };
+
+/// Ensures the validator directory exists. Create it if it does not.
+fn ensureValidatorDir(allocator: std.mem.Allocator, validator_dir: []const u8) ![]const u8 {
+    std.fs.cwd().access(validator_dir, .{}) catch |access_err| {
+        switch (access_err) {
+            error.FileNotFound => {
+                std.fs.cwd().makePath(validator_dir) catch |create_err| {
+                    std.debug.print(
+                        "Cannot create validator directory '{s}': {}",
+                        .{ validator_dir, create_err },
+                    );
+                    return create_err;
+                };
+            },
+            else => {
+                std.debug.print(
+                    "Cannot access validator directory '{s}': {}",
+                    .{ validator_dir, access_err },
+                );
+                return access_err;
+            },
+        }
+    };
+    return std.fs.realpathAlloc(allocator, validator_dir);
+}
+
+/// Ensures a genesis file is available by either using the provided path
+/// or downloading it from the network for the specified cluster.
+///
+/// Returns the path to the genesis file. If downloaded, the file is stored
+/// in `<validator_dir>/genesis.bin`.
+///
+/// TODO: The hash is NOT verified against the cluster's expected genesis hash.
+fn ensureGenesis(
+    allocator: std.mem.Allocator,
+    cfg: config.Cmd,
+    logger: Logger,
+) ![]const u8 {
+    // If explicit path provided, use it directly
+    if (cfg.genesis_file_path) |provided_path| {
+        logger.info().logf("Using provided genesis file: {s}", .{provided_path});
+        return try allocator.dupe(u8, provided_path);
+    }
+
+    // If genesis already exists in validator dir, use it
+    const existing_path = try std.fs.path.join(
+        allocator,
+        &.{ cfg.validator_dir, "genesis.bin" },
+    );
+    errdefer allocator.free(existing_path);
+    const maybe_genesis_file: ?std.fs.File = std.fs.cwd().openFile(
+        existing_path,
+        .{},
+    ) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    if (maybe_genesis_file != null) {
+        logger.info().logf("Using existing genesis file: {s}", .{existing_path});
+        maybe_genesis_file.?.close();
+        return existing_path;
+    }
+    allocator.free(existing_path);
+
+    // Determine cluster for genesis
+    const cluster = try cfg.gossip.getCluster() orelse {
+        logger.err().log(
+            \\No genesis file path provided and no cluster specified. 
+            \\Use --genesis-file-path or --cluster"
+        );
+        return error.GenesisPathNotProvided;
+    };
+
+    // Otherwise, download genesis from network
+    logger.info().logf("Downloading genesis from {s} cluster...", .{@tagName(cluster)});
+    const cluster_url = switch (cluster) {
+        .mainnet => "https://api.mainnet-beta.solana.com",
+        .testnet => "https://api.testnet.solana.com",
+        .devnet => "https://api.devnet.solana.com",
+        .localnet => unreachable,
+    };
+    const genesis_path = downloadAndExtractGenesis(
+        allocator,
+        cluster_url,
+        cfg.validator_dir,
+        .from(logger),
+    ) catch |err| {
+        logger.err().logf("Failed to download genesis: {}", .{err});
+        return error.GenesisDownloadFailed;
+    };
+
+    logger.info().logf("Genesis downloaded to: {s}", .{genesis_path});
+    return genesis_path;
+}
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
@@ -1211,17 +1457,26 @@ fn validator(
 
     const allocator = gpa_metrics.allocator();
 
+    const genesis_file_path = try ensureGenesis(allocator, cfg, app_base.logger);
+    defer allocator.free(genesis_file_path);
+
     const repair_port: u16 = cfg.shred_network.repair_port;
     const turbine_recv_port: u16 = cfg.shred_network.turbine_recv_port;
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
+
+    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    defer allocator.free(ledger_dir);
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{
         .iterate = true,
     });
     defer snapshot_dir.close();
 
-    var gossip_votes = try sig.sync.Channel(sig.gossip.data.Vote).init(allocator);
+    var gossip_votes: sig.sync.Channel(sig.gossip.data.Vote) = try .init(allocator);
     defer gossip_votes.deinit();
+
+    var duplicate_shreds: sig.sync.Channel(sig.gossip.data.DuplicateShred) = try .init(allocator);
+    defer duplicate_shreds.deinit();
 
     var gossip_service = try startGossip(
         allocator,
@@ -1232,7 +1487,10 @@ fn validator(
             .{ .tag = .repair, .port = repair_port },
             .{ .tag = .turbine_recv, .port = turbine_recv_port },
         },
-        .{ .vote_collector = &gossip_votes },
+        .{
+            .vote_collector = &gossip_votes,
+            .duplicate_shred_listener = &duplicate_shreds,
+        },
     );
     defer {
         gossip_service.shutdown();
@@ -1290,9 +1548,7 @@ fn validator(
         snapshot_dir,
         snapshot_files,
         .{
-            .genesis_file_path = try cfg.genesisFilePath() orelse {
-                return error.GenesisPathNotProvided;
-            },
+            .genesis_file_path = genesis_file_path,
             .extract = if (cfg.accounts_db.skip_snapshot_validation)
                 .{ .entire_snapshot = &rooted_db }
             else
@@ -1328,7 +1584,7 @@ fn validator(
     var ledger = try Ledger.init(
         ledger_tracy_metrics.allocator(),
         .from(app_base.logger),
-        sig.VALIDATOR_DIR ++ "ledger",
+        ledger_dir,
         app_base.metrics_registry,
     );
     defer ledger.deinit();
@@ -1359,27 +1615,6 @@ fn validator(
     defer rpc_client.deinit();
 
     const turbine_config = cfg.turbine;
-
-    // shred network
-    var shred_network_manager = try sig.shred_network.start(
-        cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
-        .{
-            .allocator = allocator,
-            .logger = .from(app_base.logger),
-            .registry = app_base.metrics_registry,
-            .random = prng.random(),
-            .ledger = &ledger,
-            .my_keypair = &app_base.my_keypair,
-            .exit = app_base.exit,
-            .gossip_table_rw = &gossip_service.gossip_table_rw,
-            .my_shred_version = &gossip_service.my_shred_version,
-            .epoch_tracker = &epoch_tracker,
-            .my_contact_info = my_contact_info,
-            .n_retransmit_threads = turbine_config.num_retransmit_threads,
-            .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
-        },
-    );
-    defer shred_network_manager.deinit();
 
     // Vote account. if not provided, disable voting
     const maybe_vote_pubkey: ?Pubkey = if (cfg.voting_enabled) blk: {
@@ -1427,11 +1662,42 @@ fn validator(
     });
     defer replay_service_state.deinit(allocator);
 
+    try app_base.rpc_hooks.set(allocator, sig.rpc.methods.SlotHookContext{
+        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+    });
+
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
         if (maybe_vote_sockets) |*vs| vs else null,
         &gossip_votes,
     );
+
+    // shred network
+    var shred_network_manager = try sig.shred_network.start(
+        cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
+        .{
+            .allocator = allocator,
+            .logger = .from(app_base.logger),
+            .registry = app_base.metrics_registry,
+            .random = prng.random(),
+            .ledger = &ledger,
+            .my_keypair = &app_base.my_keypair,
+            .exit = app_base.exit,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+            .my_shred_version = &gossip_service.my_shred_version,
+            .epoch_tracker = &epoch_tracker,
+            .my_contact_info = my_contact_info,
+            .n_retransmit_threads = turbine_config.num_retransmit_threads,
+            .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
+            .rpc_hooks = null,
+            .duplicate = if (replay_service_state.consensus) |consensus| .{
+                .shred_receiver = &duplicate_shreds,
+                .slots_sender = consensus.receivers.duplicate_slots,
+            } else null,
+            .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
+        },
+    );
+    defer shred_network_manager.deinit();
 
     const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
         try std.Thread.spawn(.{}, runRPCServer, .{
@@ -1503,14 +1769,24 @@ fn replayOffline(
 
     const allocator = gpa_metrics.allocator();
 
-    const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
+    const genesis_file_path = try ensureGenesis(allocator, cfg, app_base.logger);
+    defer allocator.free(genesis_file_path);
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(
+        cfg.accounts_db.snapshot_dir,
+        .{ .iterate = true },
+    );
     defer snapshot_dir.close();
+
+    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    defer allocator.free(ledger_dir);
 
     const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
 
-    const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
+    const rooted_file = try std.fs.path.joinZ(
+        allocator,
+        &.{ cfg.accounts_db.snapshot_dir, "accounts.db" },
+    );
     defer allocator.free(rooted_file);
 
     var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
@@ -1533,9 +1809,7 @@ fn replayOffline(
         snapshot_dir,
         snapshot_files,
         .{
-            .genesis_file_path = try cfg.genesisFilePath() orelse {
-                return error.GenesisPathNotProvided;
-            },
+            .genesis_file_path = genesis_file_path,
             .extract = if (cfg.accounts_db.skip_snapshot_validation)
                 .{ .entire_snapshot = &rooted_db }
             else
@@ -1571,7 +1845,7 @@ fn replayOffline(
     var ledger = try Ledger.init(
         ledger_tracy_metrics.allocator(),
         .from(app_base.logger),
-        sig.VALIDATOR_DIR ++ "ledger",
+        ledger_dir,
         app_base.metrics_registry,
     );
     defer ledger.deinit();
@@ -1625,9 +1899,12 @@ fn shredNetwork(
         app_base.deinit();
     }
 
-    const genesis_path = try cfg.genesisFilePath() orelse
-        return error.GenesisPathNotProvided;
-    const genesis_config = try GenesisConfig.init(allocator, genesis_path);
+    const genesis_file_path = try ensureGenesis(allocator, cfg, app_base.logger);
+    defer allocator.free(genesis_file_path);
+    const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
+
+    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    defer allocator.free(ledger_dir);
 
     var rpc_client = try sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
     defer rpc_client.deinit();
@@ -1683,7 +1960,7 @@ fn shredNetwork(
     var ledger = try Ledger.init(
         allocator,
         .from(app_base.logger),
-        sig.VALIDATOR_DIR ++ "ledger",
+        ledger_dir,
         app_base.metrics_registry,
     );
     defer ledger.deinit();
@@ -1694,10 +1971,10 @@ fn shredNetwork(
         app_base.exit,
     });
 
-    var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
+    var prng: std.Random.DefaultPrng = .init(@bitCast(std.time.timestamp()));
 
-    const my_contact_info =
-        sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
+    const my_contact_info: sig.gossip.data.ThreadSafeContactInfo =
+        .fromContactInfo(gossip_service.my_contact_info);
 
     // shred networking
     var shred_network_manager = try sig.shred_network.start(shred_network_conf, .{
@@ -1706,14 +1983,18 @@ fn shredNetwork(
         .registry = app_base.metrics_registry,
         .random = prng.random(),
         .ledger = &ledger,
-        .my_keypair = &app_base.my_keypair,
         .exit = app_base.exit,
+        .my_keypair = &app_base.my_keypair,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .my_shred_version = &gossip_service.my_shred_version,
         .epoch_tracker = &epoch_tracker,
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,
+        .rpc_hooks = null,
+        // No consensus in the standalone mode, so duplicate slots are not reported.
+        .duplicate = null,
+        .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
     });
     defer shred_network_manager.deinit();
 
@@ -1814,6 +2095,9 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         app_base.deinit();
     }
 
+    const genesis_file_path = try ensureGenesis(allocator, cfg, .from(app_base.logger));
+    defer allocator.free(genesis_file_path);
+
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
@@ -1846,9 +2130,7 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         snapshot_dir,
         snapshot_files,
         .{
-            .genesis_file_path = try cfg.genesisFilePath() orelse {
-                return error.GenesisPathNotProvided;
-            },
+            .genesis_file_path = genesis_file_path,
             .extract = .{ .entire_snapshot_and_validate = &rooted_db },
         },
     );
@@ -1928,8 +2210,9 @@ fn testTransactionSenderService(
     }
 
     // read genesis (used for leader schedule)
-    const genesis_file_path = try cfg.genesisFilePath() orelse
-        @panic("No genesis file path found: use -g or -n");
+    const genesis_file_path = try ensureGenesis(allocator, cfg, .from(app_base.logger));
+    defer allocator.free(genesis_file_path);
+
     const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
 
     // start gossip (used to get TPU ports of leaders)
@@ -2074,6 +2357,93 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         &server_ctx,
         .basic, // if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else .basic,
     );
+}
+
+/// Entrypoint for ledger utilities
+fn ledgerTool(
+    allocator: std.mem.Allocator,
+    cfg: config.Cmd,
+    action: std.meta.Child(@TypeOf(@as(Cmd.LedgerSubCmd, undefined).action)),
+) !void {
+    const maybe_file, const logger = try spawnLogger(allocator, cfg);
+    defer if (maybe_file) |file| file.close();
+    defer logger.deinit();
+
+    const stdout = std.io.getStdOut().writer();
+
+    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    defer allocator.free(ledger_dir);
+
+    var ledger_state = Ledger.init(allocator, .from(logger), ledger_dir, null) catch |err| {
+        logger.err().logf("Failed to open ledger at '{s}': {}", .{ ledger_dir, err });
+        return err;
+    };
+    defer ledger_state.deinit();
+
+    const reader = ledger_state.reader();
+
+    switch (action) {
+        .bounds => {
+            const lowest_slot = try reader.lowestSlot();
+            const highest_slot = try reader.highestSlot() orelse lowest_slot;
+            try stdout.print("Ledger bounds: {d} to {d}\n", .{ lowest_slot, highest_slot });
+        },
+        .retain => |retain_params| {
+            const lowest_slot = try reader.lowestSlot();
+            const highest_slot = try reader.highestSlot() orelse lowest_slot;
+
+            const start_slot = retain_params.start_slot orelse lowest_slot;
+            const end_slot = retain_params.end_slot orelse highest_slot;
+
+            if (start_slot > end_slot) {
+                logger.err().logf("Invalid range: start-slot ({d}) > end-slot ({d})", .{
+                    start_slot,
+                    end_slot,
+                });
+                return error.InvalidSlotRange;
+            }
+
+            try stdout.print("Current ledger bounds: [{d}, {d}]\n", .{
+                lowest_slot,
+                highest_slot,
+            });
+            try stdout.print("Retaining slots in range: [{d}, {d}]\n", .{
+                start_slot,
+                end_slot,
+            });
+
+            // Purge slots before start_slot
+            if (start_slot > lowest_slot) {
+                try stdout.print("Purging slots [{d}, {d})...\n", .{ lowest_slot, start_slot });
+                const did_purge = try sig.ledger.cleanup_service.purgeSlots(
+                    &ledger_state.db,
+                    lowest_slot,
+                    start_slot - 1,
+                );
+                if (did_purge) {
+                    try stdout.print("  Purged slots before {d}\n", .{start_slot});
+                }
+            }
+
+            // Purge slots after end_slot
+            if (end_slot < highest_slot) {
+                try stdout.print("Purging slots ({d}, {d}]...\n", .{ end_slot, highest_slot });
+                const did_purge = try sig.ledger.cleanup_service.purgeSlots(
+                    &ledger_state.db,
+                    end_slot + 1,
+                    highest_slot,
+                );
+                if (did_purge) {
+                    try stdout.print("  Purged slots after {d}\n", .{end_slot});
+                }
+            }
+
+            try stdout.print("Done. Retained slots in range [{d}, {d}]\n", .{
+                start_slot,
+                end_slot,
+            });
+        },
+    }
 }
 
 /// State that typically needs to be initialized at the start of the app,
@@ -2536,30 +2906,30 @@ fn loggingPanic(message: []const u8, first_trace_addr: ?usize) noreturn {
     std.debug.defaultPanic(message, first_trace_addr);
 }
 
-pub const RpcLeaderScheduleService = struct {
+/// NOTE: This only populates the leader schedule, and leaves the epoch stake & features empty (ie ALL_DISABLED).
+const RpcLeaderScheduleService = struct {
     allocator: std.mem.Allocator,
     logger: RpcLeaderScheduleServiceLogger,
     rpc_client: sig.rpc.Client,
     epoch_tracker: *sig.core.EpochTracker,
 
-    const Self = @This();
-    const RpcLeaderScheduleServiceLogger = sig.trace.Logger(@typeName(Self));
+    const RpcLeaderScheduleServiceLogger = sig.trace.Logger(@typeName(RpcLeaderScheduleService));
 
-    pub fn init(
+    fn init(
         allocator: std.mem.Allocator,
         logger: RpcLeaderScheduleServiceLogger,
         epoch_tracker: *sig.core.EpochTracker,
         rpc_client: sig.rpc.Client,
-    ) Self {
+    ) RpcLeaderScheduleService {
         return .{
             .allocator = allocator,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger.withScope(@typeName(RpcLeaderScheduleService)),
             .rpc_client = rpc_client,
             .epoch_tracker = epoch_tracker,
         };
     }
 
-    pub fn run(self: *Self, exit: *std.atomic.Value(bool)) void {
+    fn run(self: *RpcLeaderScheduleService, exit: *std.atomic.Value(bool)) void {
         var i: usize = 0;
         while (!exit.load(.monotonic)) {
             if (i % 1000 == 0) {
@@ -2576,7 +2946,7 @@ pub const RpcLeaderScheduleService = struct {
         }
     }
 
-    fn refresh(self: *Self) !void {
+    fn refresh(self: *RpcLeaderScheduleService) !void {
         const response = try self.rpc_client.getSlot(.{});
         defer response.deinit();
         const slot = try response.result();
@@ -2603,10 +2973,13 @@ pub const RpcLeaderScheduleService = struct {
                     &self.epoch_tracker.epoch_schedule,
                 );
 
-                var entry = try self.allocator.create(sig.core.EpochInfo);
+                const entry = try self.allocator.create(sig.core.EpochInfo);
                 entry.* = .{
                     .leaders = leaders,
                     .stakes = .EMPTY,
+                    // TODO: if you need features here for whatever reason, you'll have to implement
+                    // some way to forward them from replay, or source them by some other means.
+                    .feature_set = .ALL_DISABLED,
                 };
                 entry.stakes.stakes.epoch = e;
                 errdefer {
@@ -2620,7 +2993,7 @@ pub const RpcLeaderScheduleService = struct {
     }
 
     fn getLeaderSchedule(
-        self: *Self,
+        self: *RpcLeaderScheduleService,
         slot: sig.core.Slot,
         epoch_schedule: *const sig.core.EpochSchedule,
     ) !LeaderSchedule {

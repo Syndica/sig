@@ -47,6 +47,8 @@ pub const BasicShredTracker = struct {
     /// ring buffer
     slots: [num_slots]MonitoredSlot = @splat(.{}),
     metrics: Metrics,
+    /// Whether to log when finished_slots_through is updated
+    log_finished_slots: bool,
 
     const num_slots: usize = 1024;
 
@@ -65,6 +67,7 @@ pub const BasicShredTracker = struct {
         slot: Slot,
         logger: Logger,
         registry: *Registry(.{}),
+        log_finished_slots: bool,
     ) !void {
         const metrics = try registry.initStruct(Metrics);
         metrics.finished_slots_through.set(slot);
@@ -77,6 +80,7 @@ pub const BasicShredTracker = struct {
             .max_slot_seen = slot,
             .logger = logger,
             .metrics = metrics,
+            .log_finished_slots = log_finished_slots,
         };
     }
 
@@ -282,6 +286,9 @@ pub const BasicShredTracker = struct {
         }
         self.current_bottom_slot = @max(self.current_bottom_slot, slot);
         self.metrics.finished_slots_through.max(slot -| 1);
+        if (self.log_finished_slots) {
+            self.logger.info().logf("tracked to slot: {}", .{slot -| 1});
+        }
     }
 
     /// - Record that a slot has been observed.
@@ -518,7 +525,7 @@ test "trivial happy path" {
 
     const tracker = try allocator.create(BasicShredTracker);
     defer allocator.destroy(tracker);
-    try tracker.init(allocator, 13579, .noop, &registry);
+    try tracker.init(allocator, 13579, .noop, &registry, false);
     defer tracker.deinit();
 
     _ = try tracker.identifyMissing(&msr, Instant.EPOCH_ZERO.plus(Duration.fromSecs(1)));
@@ -542,7 +549,7 @@ test "1 registered shred is identified" {
 
     const tracker = try allocator.create(BasicShredTracker);
     defer allocator.destroy(tracker);
-    try tracker.init(allocator, 13579, .noop, &registry);
+    try tracker.init(allocator, 13579, .noop, &registry, false);
     defer tracker.deinit();
 
     try tracker.registerShred(13579, 123, 13578, false, .EPOCH_ZERO);
@@ -573,7 +580,7 @@ test "slots are only skipped after a competing fork has developed sufficiently" 
 
     const tracker = try allocator.create(BasicShredTracker);
     defer allocator.destroy(tracker);
-    try tracker.init(allocator, 1, .noop, &registry);
+    try tracker.init(allocator, 1, .noop, &registry, false);
     defer tracker.deinit();
 
     const start = Instant.EPOCH_ZERO;
@@ -625,10 +632,10 @@ test "slots are not skipped when the current fork is developed" {
 
     const tracker = try allocator.create(BasicShredTracker);
     defer allocator.destroy(tracker);
-    try tracker.init(allocator, 1, .noop, &registry);
+    try tracker.init(allocator, 1, .noop, &registry, false);
     defer tracker.deinit();
 
-    const start = Instant.EPOCH_ZERO;
+    const start: Instant = .EPOCH_ZERO;
 
     // complete slots 1 and 3, where 3 skips 2.
     try tracker.registerShred(1, 0, 0, true, start);
@@ -644,4 +651,29 @@ test "slots are not skipped when the current fork is developed" {
         _ = try tracker.identifyMissing(&msr, start.plus(.fromSecs(11)));
         try std.testing.expectEqual(2, msr.items()[0].slot);
     }
+}
+
+test "no duplicate notification when parents match" {
+    const allocator = std.testing.allocator;
+
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    const duplicate_slots_channel = try sig.sync.Channel(Slot).create(allocator);
+    defer duplicate_slots_channel.destroy();
+
+    const tracker = try allocator.create(BasicShredTracker);
+    defer allocator.destroy(tracker);
+    try tracker.init(allocator, 100, .noop, &registry, false);
+    defer tracker.deinit();
+
+    const start: Instant = .EPOCH_ZERO;
+
+    // Register multiple shreds for slot 105, all with the same parent 104
+    try tracker.registerShred(105, 0, 104, false, start);
+    try tracker.registerShred(105, 1, 104, false, start);
+    try tracker.registerShred(105, 2, 104, false, start);
+
+    // Channel should remain empty because we did not have conflicting parents
+    try std.testing.expectEqual(null, duplicate_slots_channel.tryReceive());
 }
