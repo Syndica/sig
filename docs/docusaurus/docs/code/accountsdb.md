@@ -74,19 +74,6 @@ Options:
 - `--max-slots <N>`: Exit after N slots (omit for infinite fuzzing)
 - `--non-sequential-slots`: Enable non-sequential slot ordering
 
-## Benchmarking
-
-The accountsdb benchmark tests read/write performance of the v2 database:
-
-```bash
-zig build benchmark -- accounts_db
-```
-
-The benchmark measures:
-- Write performance: Time to store accounts across multiple slots
-- Read performance: Time to query accounts
-- Optional rooting: Performance impact of moving data from unrooted to rooted storage
-
 ## Thread Safety
 
 The v2 AccountsDB is designed for concurrent access:
@@ -131,27 +118,14 @@ There are two types of snapshots:
 - **Full snapshots**: Contain all accounts at a specific slot
 - **Incremental snapshots**: Contain only accounts changed since a full snapshot
 
-To download a snapshot, gossip is started to find other nodes in the network that have:
-- A matching shred version (network version/hard-forks)
-- A valid RPC socket to download from
-- A snapshot hash available
+### Loading Snapshots
 
-When downloading:
-- Snapshots with larger slots are prioritized
-- If 'trusted' validators are specified, only snapshots with matching hashes are downloaded
-
-Snapshot URLs:
-- Full: `snapshot-(slot)-(hash).tar.zstd`
-- Incremental: `incremental-snapshot-(base_slot)-(slot)-(hash).tar.zstd`
+Snapshot loading is handled by the snapshot module. The process involves:
+1. Unpacking the compressed tar archive
+2. Loading account files
+3. Building the account index
 
 ### Decompressing Snapshots
 
 Snapshots are downloaded as `.tar.zstd` and decompressed using `parallelUnpackZstdTarBall`.
-The unarchiving happens in parallel for improved I/O performance (default: 2x CPU count).
-
-### Validating Snapshots
-
-Snapshot validation generates a merkle tree over all accounts and compares the root hash
-with the hash in the metadata. Additional validation includes:
-- `GenesisConfig`: Validated against the bank
-- `StatusCache / SlotHistory Sysvar`: Additional validation in `status_cache.validate`
+The unarchiving happens in parallel for improved I/O performance.
