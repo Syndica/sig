@@ -1,3 +1,11 @@
+//! Our services and how they're started up.
+//!
+//! This code is reponsible for:
+//! - Defining services and their needed shared memory regions
+//! - Initialising shared memory regions
+//! - Starting up services and securing them down
+//! - Dumping stack traces + errors on service exit
+
 const std = @import("std");
 
 const page_size_min = std.heap.page_size_min;
@@ -109,6 +117,7 @@ pub const Region = union(RegionType) {
 
 pub const ServiceInstance = struct {
     service: Service,
+    /// for supporting multiple services of the same kind
     n: u8 = 0,
 
     pub fn format(self: ServiceInstance, writer: *std.io.Writer) std.io.Writer.Error!void {
@@ -131,6 +140,7 @@ const LookupResult = struct {
     memfd: memfd.RW,
 };
 
+/// Pairs services up with their respective required regions and their rw/ro permission
 fn serviceMap(
     allocator: std.mem.Allocator,
     comptime services: []const ServiceInstance,
@@ -191,17 +201,22 @@ fn serviceMap(
     return map;
 }
 
+/// Initialises the shared memory regions with their parameters, then securely starts up services.
+/// Blocks until the first service has exited, before dumping out traces.
 pub fn spawnAndWait(
     allocator: std.mem.Allocator,
     comptime services: []const ServiceInstance,
     regions: []const SharedRegion,
 ) !void {
+    // Create memfds for each shared memory region
     const region_memfds: []memfd.RW = try allocator.alloc(memfd.RW, regions.len);
     defer allocator.free(region_memfds);
     {
         @memset(region_memfds, .empty);
 
         for (region_memfds, regions) |*region_memfd, shared_region| {
+            // Providing a name - this name should be visible from a debugger, but serves no other
+            // purpose.
             var fmt_buf: [100]u8 = undefined;
             const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{shared_region});
 
@@ -212,6 +227,8 @@ pub fn spawnAndWait(
         }
     }
 
+    // Creates a memfd for every service, to be used for storing a common.Exit value, which is used
+    // for reporting traces+errors back to the main process.
     const exit_memfds: []memfd.RW = try allocator.alloc(memfd.RW, services.len);
     defer allocator.free(exit_memfds);
     {
@@ -228,6 +245,8 @@ pub fn spawnAndWait(
         }
     }
 
+    // Creates a mapping for each memfd region, initialising them, and unmapping them. We must unmap
+    // to avoid sharing regions with services that don't need them.
     for (regions, region_memfds) |shared_region, region_memfd| {
         const buf = try region_memfd.mmap(shared_region.requested_location);
         defer std.posix.munmap(buf);
@@ -251,6 +270,7 @@ pub fn spawnAndWait(
     defer exit_meta.deinit(allocator);
     try exit_meta.ensureUnusedCapacity(allocator, services.len);
 
+    // Start up all services, storing their pids
     inline for (services, exit_memfds) |service_instance, exit| {
         const child_pid = try spawnService(
             service_instance,
@@ -262,12 +282,13 @@ pub fn spawnAndWait(
         try exit_meta.append(allocator, .{ .pid = child_pid, .exit = null });
     }
 
-    // only mmap exit after spawning the child processes, we don't want this mapped in children
+    // We only mmap the exit regions after spawning the child processes, as we don't want them
+    // mapped in children
     for (exit_meta.items(.exit), exit_memfds) |*exit, exit_fd| {
         exit.* = @ptrCast(try exit_fd.mmap(null));
     }
 
-    // wait for the first child to exit
+    // Wait for the first child to exit
     var status: u32 = 0;
     const exited_pid: i32 = pid: {
         const ret: usize = linux.waitpid(-1, &status, 0);
@@ -381,6 +402,7 @@ fn spawnService(
     service_instance.service.entrypoint()(resolved_args);
 }
 
+/// Mmap in our memfds, and putting the regions in a type-erased extern struct
 fn resolveArgs(
     exit: memfd.RW,
     stderr: std.fs.File,
@@ -417,6 +439,7 @@ fn resolveArgs(
     return args;
 }
 
+/// Prevents VMAs from being later modified
 fn mseal(address: [*]align(std.heap.page_size_min) const u8, len: usize) void {
     switch (e(std.os.linux.mseal(address, len, 0))) {
         .SUCCESS => {},

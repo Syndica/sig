@@ -1,4 +1,12 @@
 //! Roughly equivalent to std's start.zig, but for our services.
+//!
+//! This code is responsible for:
+//! - Exporting symbols
+//! - Setting a panic handler
+//! - Forwarding parameters
+//! - Handling signals
+//! - Reporting back errors + stack traces
+//! - Exiting the process
 
 const root = @import("root");
 
@@ -57,6 +65,7 @@ fn serviceMain(params: common.ResolvedArgs) callconv(.c) noreturn {
     var writer_buf: [0]u8 = undefined;
     var writer = stderr.writer(&writer_buf);
 
+    // Call main with args specified by ReadWrite/ReadOnly structs
     const ret_val =
         if (!@hasDecl(root, "ReadWrite")) err: {
             var read_only: root.ReadOnly = .{};

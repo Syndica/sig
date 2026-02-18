@@ -1,3 +1,6 @@
+//! This service listens on a ringbuffer of packets, and validates, verifies, and deserialises
+//! shreds.
+
 const std = @import("std");
 const start = @import("start");
 const common = @import("common");

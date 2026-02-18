@@ -1,3 +1,6 @@
+//! This services gives other services access to sockets, sharing a pair of ringbuffers for sending
+//! and receiving packets.
+
 const std = @import("std");
 const start = @import("start");
 const common = @import("common");
