@@ -571,6 +571,7 @@ pub const GetBlock = struct {
             pub fn from(
                 allocator: Allocator,
                 meta: sig.ledger.meta.TransactionStatusMeta,
+                show_rewards: bool,
             ) !UiTransactionStatusMeta {
                 // Build status field
                 const status: UiTransactionResultStatus = if (meta.status) |err|
@@ -613,7 +614,7 @@ pub const GetBlock = struct {
                 else
                     &.{};
 
-                const rewards = rewards: {
+                const rewards: ?[]UiReward = if (show_rewards) rewards: {
                     if (meta.rewards) |rewards| {
                         const converted = try allocator.alloc(UiReward, rewards.len);
                         for (rewards, 0..) |reward, i| {
@@ -621,7 +622,7 @@ pub const GetBlock = struct {
                         }
                         break :rewards converted;
                     } else break :rewards &.{};
-                };
+                } else null;
 
                 return .{
                     .err = meta.status,
