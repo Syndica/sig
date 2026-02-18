@@ -16,21 +16,17 @@ const Slot = sig.core.Slot;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 
-const AccountsDB = accounts_db.AccountsDB;
-
 /// Interface for both reading and writing accounts.
 ///
 /// Do not use this unless you need to *write* into the database generically.
 /// Otherwise use AccountReader if you only need to read accounts.
 pub const AccountStore = union(enum) {
-    accounts_db: *AccountsDB,
     accounts_db_two: *accounts_db.Two,
     thread_safe_map: *ThreadSafeAccountMap,
     noop,
 
     pub fn reader(self: AccountStore) AccountReader {
         return switch (self) {
-            .accounts_db => |db| .{ .accounts_db = db },
             .accounts_db_two => |db| .{ .accounts_db_two = db },
             .thread_safe_map => |map| .{ .thread_safe_map = map },
             .noop => .noop,
@@ -39,7 +35,6 @@ pub const AccountStore = union(enum) {
 
     pub fn forSlot(self: AccountStore, slot: Slot, ancestors: *const Ancestors) SlotAccountStore {
         return switch (self) {
-            .accounts_db => |db| .{ .accounts_db = .{ db, slot, ancestors } },
             .accounts_db_two => |db| .{ .accounts_db_two = .{ db, slot, ancestors } },
             .thread_safe_map => |map| .{ .thread_safe_map = .{ map, slot, ancestors } },
             .noop => .noop,
@@ -51,7 +46,6 @@ pub const AccountStore = union(enum) {
         defer zone.deinit();
 
         return switch (self) {
-            .accounts_db => |db| db.putAccount(slot, address, account),
             .accounts_db_two => |db| try db.put(slot, address, account),
             .thread_safe_map => |map| try map.put(slot, address, account),
             .noop => {},
@@ -69,7 +63,6 @@ pub const AccountStore = union(enum) {
         zone.value(newly_rooted_slot);
 
         switch (self) {
-            .accounts_db => unreachable, // TODO: delete
             .accounts_db_two => |db| db.onSlotRooted(newly_rooted_slot, ancestors),
             .thread_safe_map => |db| try db.onSlotRooted(newly_rooted_slot),
             .noop => {},
@@ -79,14 +72,12 @@ pub const AccountStore = union(enum) {
 
 /// Interface for only reading accounts
 pub const AccountReader = union(enum) {
-    accounts_db: *AccountsDB,
     accounts_db_two: *accounts_db.Two,
     thread_safe_map: *ThreadSafeAccountMap,
     noop,
 
     pub fn forSlot(self: AccountReader, ancestors: *const Ancestors) SlotAccountReader {
         return switch (self) {
-            .accounts_db => |db| .{ .accounts_db = .{ db, ancestors } },
             .accounts_db_two => |db| .{ .accounts_db_two = .{ db, ancestors } },
             .thread_safe_map => |map| .{ .thread_safe_map = .{ map, ancestors } },
             .noop => .noop,
@@ -98,15 +89,6 @@ pub const AccountReader = union(enum) {
     /// Deinit all returned accounts using `account_reader.allocator()`
     pub fn getLatest(self: AccountReader, allocator: std.mem.Allocator, address: Pubkey) !?Account {
         return switch (self) {
-            .accounts_db => |db| {
-                const account = try db.getAccountLatest(allocator, &address) orelse return null;
-                if (account.lamports == 0) {
-                    // TODO: implement this check in accountsdb to avoid the unnecessary allocation
-                    account.deinit(allocator);
-                    return null;
-                }
-                return account;
-            },
             .accounts_db_two => |db| {
                 var latest_known: struct { Slot, ?Account } = .{ 0, null };
                 errdefer if (latest_known[1]) |acc| acc.deinit(allocator);
@@ -118,19 +100,35 @@ pub const AccountReader = union(enum) {
                     for (slot.entries.keys(), slot.entries.values()) |*key, data| {
                         if (address.equals(key)) {
                             const cloned = try data.clone(allocator);
-                            if (slot.slot > latest_known[0]) {
-                                latest_known[1] = cloned.toOwnedAccount();
+                            if (slot.slot >= latest_known[0]) {
+                                if (latest_known[1]) |acc| acc.deinit(allocator);
+                                latest_known = .{ slot.slot, cloned.toOwnedAccount() };
+                            } else {
+                                cloned.deinit(allocator);
                             }
                         }
                     }
                 }
                 // if we found it, return. unrooted storage will always have newer
                 // versions than rooted.
-                if (latest_known[1] != null) return latest_known[1];
+                if (latest_known[1]) |account| {
+                    // Filter out zero-lamport accounts (deleted accounts)
+                    if (account.lamports == 0) {
+                        account.deinit(allocator);
+                        return null;
+                    }
+                    return account;
+                }
 
                 // see if we have that account in rooted storage
                 const account = (try db.rooted.get(allocator, address)) orelse return null;
-                return account.toOwnedAccount();
+                const owned = account.toOwnedAccount();
+                // Filter out zero-lamport accounts (deleted accounts)
+                if (owned.lamports == 0) {
+                    owned.deinit(allocator);
+                    return null;
+                }
+                return owned;
             },
             .thread_safe_map => |map| try map.getLatest(address),
             .noop => null,
@@ -144,7 +142,7 @@ pub const AccountReader = union(enum) {
     /// how long you hold this.
     pub fn slotModifiedIterator(self: AccountReader, slot: Slot) ?SlotModifiedIterator {
         switch (self) {
-            inline .accounts_db, .accounts_db_two, .thread_safe_map => |db, tag| {
+            inline .accounts_db_two, .thread_safe_map => |db, tag| {
                 const iterator = db.slotModifiedIterator(slot) orelse return null;
                 return @unionInit(SlotModifiedIterator, @tagName(tag), iterator);
             },
@@ -155,7 +153,6 @@ pub const AccountReader = union(enum) {
     pub fn getLargestRootedSlot(self: AccountReader) ?Slot {
         if (!builtin.is_test) @compileError("only used in tests");
         return switch (self) {
-            .accounts_db => |db| db.getLargestRootedSlot(),
             .accounts_db_two => |db| db.rooted.getLargestRootedSlot(),
             .thread_safe_map => |tsm| tsm.getLargestRootedSlot(),
             .noop => null,
@@ -164,7 +161,6 @@ pub const AccountReader = union(enum) {
 };
 
 pub const SlotModifiedIterator = union(enum) {
-    accounts_db: AccountsDB.SlotModifiedIterator,
     accounts_db_two: accounts_db.Two.SlotModifiedIterator,
     thread_safe_map: ThreadSafeAccountMap.SlotModifiedIterator,
     noop,
@@ -216,7 +212,6 @@ pub const SlotModifiedIterator = union(enum) {
 /// that's less than or equal to slot 6. If the account was modified in slot 6,
 /// then you'll get the version of the account from slot 6.
 pub const SlotAccountStore = union(enum) {
-    accounts_db: struct { *AccountsDB, Slot, *const Ancestors },
     accounts_db_two: struct { *accounts_db.Two, Slot, *const Ancestors },
     /// Contains many versions of accounts and becomes fork-aware using
     /// ancestors, like accountsdb.
@@ -232,10 +227,6 @@ pub const SlotAccountStore = union(enum) {
         defer zone.deinit();
 
         return switch (self) {
-            .accounts_db => |tuple| {
-                const db, const slot, _ = tuple;
-                try db.putAccount(slot, address, account);
-            },
             .accounts_db_two => |tuple| {
                 const db, const slot, _ = tuple;
                 try db.put(slot, address, account);
@@ -256,7 +247,6 @@ pub const SlotAccountStore = union(enum) {
 
     pub fn reader(self: SlotAccountStore) SlotAccountReader {
         return switch (self) {
-            .accounts_db => |tuple| .{ .accounts_db = .{ tuple[0], tuple[2] } },
             .accounts_db_two => |tuple| .{ .accounts_db_two = .{ tuple[0], tuple[2] } },
             .thread_safe_map => |tuple| .{ .thread_safe_map = .{ tuple[0], tuple[2] } },
             .account_shared_data_map => |tuple| .{ .account_shared_data_map = tuple[1] },
@@ -266,7 +256,6 @@ pub const SlotAccountStore = union(enum) {
 };
 
 pub const SlotAccountReader = union(enum) {
-    accounts_db: struct { *AccountsDB, *const Ancestors },
     accounts_db_two: struct { *accounts_db.Two, *const Ancestors },
     /// Contains many versions of accounts and becomes fork-aware using
     /// ancestors, like accountsdb.
@@ -280,19 +269,6 @@ pub const SlotAccountReader = union(enum) {
 
     pub fn get(self: SlotAccountReader, alloc: std.mem.Allocator, address: Pubkey) !?Account {
         return switch (self) {
-            .accounts_db => |pair| {
-                const db, const ancestors = pair;
-                const account = try db.getAccountWithAncestors(
-                    alloc,
-                    &address,
-                    ancestors,
-                ) orelse return null;
-                if (account.lamports == 0) {
-                    account.deinit(alloc);
-                    return null;
-                }
-                return account;
-            },
             .accounts_db_two => |pair| {
                 const account = try pair[0].get(
                     alloc,
@@ -617,16 +593,14 @@ const ThreadSafeAccountMap = struct {
 test "AccountStore does not return 0-lamport accounts from accountsdb" {
     const allocator = std.testing.allocator;
 
-    var db, var dir = try AccountsDB.initForTest(allocator);
-    defer {
-        db.deinit();
-        dir.cleanup();
-    }
+    var test_state = try accounts_db.Two.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
 
     const zero_lamport_address = Pubkey.ZEROES;
     const one_lamport_address = Pubkey{ .data = @splat(9) };
 
-    try db.putAccount(0, zero_lamport_address, .{
+    try db.put(0, zero_lamport_address, .{
         .lamports = 0,
         .data = &.{},
         .owner = .ZEROES,
@@ -634,7 +608,7 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
         .rent_epoch = 0,
     });
 
-    try db.putAccount(0, one_lamport_address, .{
+    try db.put(0, one_lamport_address, .{
         .lamports = 1,
         .data = &.{},
         .owner = .ZEROES,
@@ -642,7 +616,7 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
         .rent_epoch = 0,
     });
 
-    const reader = db.accountReader();
+    const reader: AccountReader = .{ .accounts_db_two = db };
 
     try std.testing.expectEqual(null, try reader.getLatest(allocator, zero_lamport_address));
     try std.testing.expectEqual(1, (try reader.getLatest(
@@ -653,7 +627,7 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
     var ancestors = Ancestors{};
     defer ancestors.deinit(std.testing.allocator);
     try ancestors.ancestors.put(allocator, 0, {});
-    const slot_reader = db.accountReader().forSlot(&ancestors);
+    const slot_reader = reader.forSlot(&ancestors);
 
     try std.testing.expectEqual(null, try slot_reader.get(allocator, zero_lamport_address));
     try std.testing.expectEqual(1, (try slot_reader.get(

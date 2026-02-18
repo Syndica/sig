@@ -93,9 +93,9 @@ pub const AccountLoadError = error{ OutOfMemory, AccountsDBError };
 
 /// Wraps calls to AccountsDB and convert all errors except OutOfMemory into AccountsDBError.
 pub fn wrapDB(item: anytype) AccountLoadError!@typeInfo(@TypeOf(item)).error_union.payload {
-    return item catch |err| switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        else => error.AccountsDBError,
+    return item catch |err| {
+        if (err == error.OutOfMemory) return error.OutOfMemory;
+        return error.AccountsDBError;
     };
 }
 

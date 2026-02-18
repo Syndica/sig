@@ -371,7 +371,7 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
 
     const hash = try sig.utils.merkle_tree.computeMerkleRoot(
         &.{hashes},
-        sig.accounts_db.db.MERKLE_FANOUT,
+        sig.accounts_db.Two.MERKLE_FANOUT,
     );
 
     return hash;
