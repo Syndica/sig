@@ -5,9 +5,11 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
 
     const test_step = b.step("test", "Run unit tests");
+    const fmt_check_step = b.addFmt(.{ .check = true, .paths = &.{ "src/", "build.zig" } });
     const ci_step = b.step("ci", "Run all checks used for CI");
     ci_step.dependOn(test_step);
     ci_step.dependOn(b.getInstallStep());
+    ci_step.dependOn(&fmt_check_step.step);
 
     const common = mod: {
         const common = b.createModule(.{

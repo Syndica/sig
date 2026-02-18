@@ -82,7 +82,8 @@ jobs:
           command: |
             sudo apt update && sudo apt install wget -y
             ./scripts/proxy_workaround.sh workspace/zig/zig
-            workspace/zig/zig build
+            cd v2/
+            ../workspace/zig/zig build
 
   check_docs:
     executor: python-executor
