@@ -99,8 +99,8 @@ pub fn verifyBatchOverSingleMessage(
 /// but this is that same thing, just for single messages, and with the ability to toggle
 /// between `verify` and `verify_strict` semantics (used in ed25519 precompile).
 pub fn verifySignature(
-    signature: Signature,
-    pubkey: Pubkey,
+    signature: *const Signature,
+    pubkey: *const Pubkey,
     message: []const u8,
     strict: bool,
 ) !void {

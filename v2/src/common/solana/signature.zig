@@ -21,11 +21,8 @@ pub const Signature = extern struct {
         .s = .array(.fixint),
     }));
 
-    pub fn fromBytes(data: [SIZE]u8) Signature {
-        return .{
-            .r = data[0..32].*,
-            .s = data[32..64].*,
-        };
+    pub fn fromBytes(data: *const [SIZE]u8) *const Signature {
+        return @ptrCast(data);
     }
 
     pub fn toBytes(self: Signature) [SIZE]u8 {
@@ -36,7 +33,7 @@ pub const Signature = extern struct {
         return .{ .r = signature.r, .s = signature.s };
     }
 
-    pub fn verify(self: Signature, pubkey: Pubkey, message: []const u8) !void {
+    pub fn verify(self: *const Signature, pubkey: *const Pubkey, message: []const u8) !void {
         try ed25519.verifySignature(self, pubkey, message, true);
     }
 

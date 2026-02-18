@@ -166,6 +166,9 @@ pub fn verifyShred(
     // verified_merkle_roots: *VerifiedMerkleRoots,
     // metrics: Metrics,
 ) ShredVerificationFailure!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "verifyShred" });
+    defer zone.deinit();
+
     const shred_ = layout.getShred(packet, false) orelse return error.InsufficientShredSize;
     const slot = layout.getSlot(shred_) orelse return error.SlotMissing;
     const signature = layout.getLeaderSignature(shred_) orelse return error.SignatureMissing;

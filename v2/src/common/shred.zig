@@ -1239,9 +1239,9 @@ pub const layout = struct {
         return getInt(u32, shred, OFFSET_OF_SHRED_INDEX);
     }
 
-    pub fn getLeaderSignature(shred: []const u8) ?Signature {
+    pub fn getLeaderSignature(shred: []const u8) ?*const Signature {
         if (shred.len < Signature.SIZE) return null;
-        return .fromBytes(shred[0..SIZE_OF_SIGNATURE].*);
+        return .fromBytes(shred[0..SIZE_OF_SIGNATURE]);
     }
 
     pub fn merkleRoot(shred: []const u8) ?Hash {

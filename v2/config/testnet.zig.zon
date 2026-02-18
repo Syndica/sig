@@ -1,5 +1,5 @@
 .{
-    .sandboxing_mode = .threaded,
+    .sandboxing_mode = .sandboxed,
 
     .cluster = .testnet,
     .leader_schedule_file = "schedule.txt",

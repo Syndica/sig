@@ -59,9 +59,6 @@ pub fn main() !void {
 
     std.debug.print("config: {}\n", .{config});
 
-    if (config.sandboxing_mode == .threaded) tracy.startupProfiler();
-    defer if (config.sandboxing_mode == .threaded) tracy.shutdownProfiler();
-
     const schedule_file = try std.fs.cwd().openFile(config.leader_schedule_file, .{});
     defer schedule_file.close();
     var reader_buf: [4096]u8 = undefined;

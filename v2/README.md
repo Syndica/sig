@@ -32,3 +32,9 @@ advertise a turbine receive port.
 3. Start up v2
 
 `zig build run -- config/testnet.zig.zon `
+
+# Running with tracy
+
+1. Build with `-Denable-tracy`
+
+2. Use `.sandboxing_mode = .threaded` in your config

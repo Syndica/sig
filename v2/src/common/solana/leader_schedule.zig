@@ -13,13 +13,13 @@ pub const LeaderSchedule = extern struct {
     base_slot: Slot,
     leaders: [slots_per_epoch]Pubkey,
 
-    pub fn get(self: *const LeaderSchedule, slot: Slot) ?Pubkey {
+    pub fn get(self: *const LeaderSchedule, slot: Slot) ?*const Pubkey {
         if (slot < self.base_slot) return null;
 
         const idx = slot - self.base_slot;
         if (idx >= slots_per_epoch) return null;
 
-        return self.leaders[idx];
+        return &self.leaders[idx];
     }
 
     /// Reads the leader schedule as formatted by the `solana leader-schedule` and

@@ -14,7 +14,7 @@ pub fn build(b: *std.Build) !void {
     const tracy = b.dependency("tracy", .{
         .target = target,
         .optimize = .ReleaseFast,
-        .tracy_enable = true,
+        .tracy_enable = b.option(bool, "enable-tracy", "Enables tracy") orelse false,
         .tracy_no_system_tracing = false,
         .tracy_callstack = 6,
     }).module("tracy");
