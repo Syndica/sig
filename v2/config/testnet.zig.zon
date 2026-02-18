@@ -1,4 +1,6 @@
 .{
+    .sandboxing_mode = .threaded,
+
     .cluster = .testnet,
     .leader_schedule_file = "schedule.txt",
     .gossip = .{

@@ -10,15 +10,14 @@ comptime {
     _ = start;
 }
 
-pub const name: []const u8 = "net";
-pub const _start = {};
+pub const name = "net";
 pub const panic = start.panic;
 
 pub const ReadWrite = struct {
     pair: *Pair,
 };
 
-pub fn main(writer: *std.io.Writer, rw: ReadWrite) !noreturn {
+pub fn serviceMain(writer: *std.io.Writer, rw: ReadWrite) !noreturn {
     try mainInner(writer, &.{rw.pair});
 }
 

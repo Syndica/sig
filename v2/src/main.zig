@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 
 test {
     _ = std.testing.refAllDecls(@This());
@@ -7,6 +8,8 @@ test {
 const services = @import("services.zig");
 
 const Config = struct {
+    sandboxing_mode: SandboxingMode,
+
     cluster: Cluster,
 
     /// path to a file containing the output of `solana leader-schedule`
@@ -14,6 +17,8 @@ const Config = struct {
 
     gossip: Gossip,
     shred_network: ShredNetwork,
+
+    const SandboxingMode = enum { sandboxed, threaded };
 
     const Cluster = enum { testnet, devnet, mainnet };
 
@@ -54,31 +59,37 @@ pub fn main() !void {
 
     std.debug.print("config: {}\n", .{config});
 
+    if (config.sandboxing_mode == .threaded) tracy.startupProfiler();
+    defer if (config.sandboxing_mode == .threaded) tracy.shutdownProfiler();
+
     const schedule_file = try std.fs.cwd().openFile(config.leader_schedule_file, .{});
     defer schedule_file.close();
     var reader_buf: [4096]u8 = undefined;
     var reader = schedule_file.reader(&reader_buf);
 
-    try services.spawnAndWait(
-        allocator,
-        &.{
-            .{ .service = .shred_receiver },
-            .{ .service = .net },
-        },
-        &.{
-            .{
-                .region = .{ .net_pair = .{ .port = config.shred_network.recv_port } },
-                .shares = &.{
-                    .{ .instance = .{ .service = .shred_receiver }, .rw = true },
-                    .{ .instance = .{ .service = .net }, .rw = true },
-                },
-            },
-            .{
-                .region = .{ .leader_schedule = .{ .schedule_string = &reader.interface } },
-                .shares = &.{
-                    .{ .instance = .{ .service = .shred_receiver } },
-                },
+    const service_instances: []const services.ServiceInstance = &.{
+        .{ .service = .shred_receiver },
+        .{ .service = .net },
+    };
+
+    const shared_regions: []const services.SharedRegion = &.{
+        .{
+            .region = .{ .net_pair = .{ .port = config.shred_network.recv_port } },
+            .shares = &.{
+                .{ .instance = .{ .service = .shred_receiver }, .rw = true },
+                .{ .instance = .{ .service = .net }, .rw = true },
             },
         },
-    );
+        .{
+            .region = .{ .leader_schedule = .{ .schedule_string = &reader.interface } },
+            .shares = &.{
+                .{ .instance = .{ .service = .shred_receiver } },
+            },
+        },
+    };
+
+    switch (config.sandboxing_mode) {
+        .sandboxed => try services.spawnAndWait(allocator, service_instances, shared_regions),
+        .threaded => try services.spawnAndWaitNoSandbox(allocator, service_instances, shared_regions),
+    }
 }

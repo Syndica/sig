@@ -63,7 +63,7 @@ const RequiredRegion = struct {
     rw: bool = false,
 };
 
-const SharedRegion = struct {
+pub const SharedRegion = struct {
     region: Region,
     shares: []const Share,
     requested_location: ?[*]align(page_size_min) u8 = null,
@@ -342,18 +342,18 @@ fn spawnService(
     {
         const act: *const std.os.linux.Sigaction = &.{
             .handler = .{ .sigaction = service_instance.service.faultHandler() },
-            .mask = std.posix.sigemptyset(),
+            .mask = std.os.linux.sigemptyset(),
             .flags = (std.posix.SA.SIGINFO | std.posix.SA.RESTART | std.posix.SA.RESETHAND),
         };
 
         // standard signals in std.debug.updateSegfaultHandler
-        std.posix.sigaction(std.posix.SIG.SEGV, act, null);
-        std.posix.sigaction(std.posix.SIG.ILL, act, null);
-        std.posix.sigaction(std.posix.SIG.BUS, act, null);
-        std.posix.sigaction(std.posix.SIG.FPE, act, null);
+        if (e(std.os.linux.sigaction(std.posix.SIG.SEGV, act, null)) != .SUCCESS) @panic("wtf");
+        if (e(std.os.linux.sigaction(std.posix.SIG.ILL, act, null)) != .SUCCESS) @panic("wtf");
+        if (e(std.os.linux.sigaction(std.posix.SIG.BUS, act, null)) != .SUCCESS) @panic("wtf");
+        if (e(std.os.linux.sigaction(std.posix.SIG.FPE, act, null)) != .SUCCESS) @panic("wtf");
 
         // catch seccomp too
-        std.posix.sigaction(std.posix.SIG.SYS, act, null);
+        if (e(std.os.linux.sigaction(std.posix.SIG.SYS, act, null)) != .SUCCESS) @panic("wtf");
     }
 
     // Make sure that the services die when the parent exits
@@ -404,6 +404,7 @@ fn spawnService(
     }
 
     service_instance.service.entrypoint()(resolved_args);
+    std.process.exit(255);
 }
 
 /// Mmap in our memfds, and putting the regions in a type-erased extern struct
@@ -516,4 +517,115 @@ fn dumpOnExit(
         std.debug.print("Fault trace:\n", .{});
         std.debug.dumpStackTrace(trace);
     }
+}
+
+pub fn spawnAndWaitNoSandbox(
+    allocator: std.mem.Allocator,
+    comptime services: []const ServiceInstance,
+    regions: []const SharedRegion,
+) !void {
+    // Create memfds for each shared memory region
+    const region_memfds: []memfd.RW = try allocator.alloc(memfd.RW, regions.len);
+    defer allocator.free(region_memfds);
+    {
+        @memset(region_memfds, .empty);
+
+        for (region_memfds, regions) |*region_memfd, shared_region| {
+            // Providing a name - this name should be visible from a debugger, but serves no other
+            // purpose.
+            var fmt_buf: [100]u8 = undefined;
+            const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{shared_region});
+
+            region_memfd.* = try .init(.{
+                .name = name,
+                .size = shared_region.region.size(),
+            });
+        }
+    }
+
+    // Creates a memfd for every service, to be used for storing a common.Exit value, which is used
+    // for reporting traces+errors back to the main process.
+    const exit_memfds: []memfd.RW = try allocator.alloc(memfd.RW, services.len);
+    defer allocator.free(exit_memfds);
+    {
+        @memset(exit_memfds, .empty);
+
+        inline for (exit_memfds, services) |*exit_memfd, service_instance| {
+            exit_memfd.* = try .init(.{
+                .name = std.fmt.comptimePrint(
+                    "exit_{s}_{}",
+                    .{ @tagName(service_instance.service), service_instance.n },
+                ),
+                .size = @sizeOf(common.Exit),
+            });
+        }
+    }
+
+    // Creates a mapping for each memfd region, initialising them, and unmapping them.
+    for (regions, region_memfds) |shared_region, region_memfd| {
+        const buf = try region_memfd.mmap(shared_region.requested_location);
+        defer std.posix.munmap(buf);
+        try shared_region.region.init(buf);
+
+        std.debug.print("Initialised: {f}\n", .{shared_region});
+    }
+
+    var map = try serviceMap(allocator, services, regions, region_memfds);
+    defer {
+        for (map.values()) |*value| value.deinit(allocator);
+        map.deinit(allocator);
+    }
+
+    var reset_event: std.Thread.ResetEvent = .{};
+    var finished_service_idx: ?u16 = null;
+
+    // Start up all services, storing their pids
+    inline for (services, exit_memfds, 0..) |service_instance, exit, i| {
+        _ = try spawnServiceNoSandbox(
+            service_instance,
+            exit,
+            std.fs.File.stderr(),
+            map.get(service_instance).?.items,
+            i,
+            &finished_service_idx,
+            &reset_event,
+        );
+    }
+
+    // Wait for first service to exit
+    reset_event.wait();
+
+    const exited_idx = finished_service_idx.?;
+
+    dumpOnExit(@ptrCast(try exit_memfds[exited_idx].mmap(null)), services[exited_idx], 0, 0);
+}
+
+fn threadEntry(
+    entry_point: ServiceEntrypoint,
+    args: common.ResolvedArgs,
+    service_idx: u16,
+    finished_idx: *?u16,
+    reset_event: *std.Thread.ResetEvent,
+) void {
+    entry_point(args);
+    finished_idx.* = service_idx;
+    reset_event.set();
+}
+
+fn spawnServiceNoSandbox(
+    service_instance: ServiceInstance,
+    exit: memfd.RW,
+    stderr: std.fs.File,
+    regions: []const LookupResult,
+    service_idx: u16,
+    finished_idx: *?u16,
+    reset_event: *std.Thread.ResetEvent,
+) !std.Thread {
+    const resolved_args = try resolveArgs(exit, stderr, regions);
+
+    return try std.Thread.spawn(
+        .{},
+        threadEntry,
+        .{ service_instance.service.entrypoint(), resolved_args, service_idx, finished_idx, reset_event },
+    );
 }

@@ -24,7 +24,7 @@ pub const ResolvedArgs = extern struct {
     const page_size_min = std.heap.page_size_min;
 };
 
-pub const ServiceFn = *const fn (ResolvedArgs) callconv(.c) noreturn;
+pub const ServiceFn = *const fn (ResolvedArgs) callconv(.c) void;
 
 /// This value should be written to before a service exits. Both fields may be active at once.
 /// Each one is equivalent to an std.builtin.StackTrace.

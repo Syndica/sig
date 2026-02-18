@@ -11,6 +11,14 @@ pub fn build(b: *std.Build) !void {
     ci_step.dependOn(b.getInstallStep());
     ci_step.dependOn(&fmt_check_step.step);
 
+    const tracy = b.dependency("tracy", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+        .tracy_enable = true,
+        .tracy_no_system_tracing = false,
+        .tracy_callstack = 6,
+    }).module("tracy");
+
     const common = mod: {
         const common = b.createModule(.{
             .root_source_file = b.path("src/common.zig"),
@@ -19,6 +27,7 @@ pub fn build(b: *std.Build) !void {
         });
         common.addImport("base58", b.dependency("base58", .{}).module("base58"));
         common.addImport("binkode", b.dependency("binkode", .{}).module("binkode"));
+        common.addImport("tracy", tracy);
 
         const common_tests = b.addTest(.{ .root_module = common, .name = "common" });
         const common_tests_run = b.addRunArtifact(common_tests);
@@ -34,11 +43,12 @@ pub fn build(b: *std.Build) !void {
             .root_source_file = b.path("src/main.zig"),
         });
         sig_init.addImport("common", common);
+        sig_init.addImport("tracy", tracy);
 
         const sig_init_exe = b.addExecutable(.{
             .name = "sig-init",
             .root_module = sig_init,
-            .use_llvm = false,
+            .use_llvm = true,
         });
         b.installArtifact(sig_init_exe);
 
@@ -64,6 +74,7 @@ pub fn build(b: *std.Build) !void {
             .root_source_file = b.path("src/start_service.zig"),
         });
         start_service.addImport("common", common);
+        start_service.addImport("tracy", tracy);
 
         const start_service_tests = b.addTest(.{
             .root_module = start_service,
@@ -98,6 +109,7 @@ pub fn build(b: *std.Build) !void {
             });
             service_mod.addImport("common", common);
             service_mod.addImport("start", start_service);
+            service_mod.addImport("tracy", tracy);
 
             const lib_svc = b.addLibrary(.{
                 .name = service_name,

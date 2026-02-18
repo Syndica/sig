@@ -11,14 +11,13 @@
 const root = @import("root");
 
 const std = @import("std");
+const tracy = @import("tracy");
+const builtin = @import("builtin");
+const common = @import("common");
 
 test {
     _ = std.testing.refAllDecls(@This());
 }
-
-const builtin = @import("builtin");
-
-const common = @import("common");
 
 const posix = std.posix;
 const native_arch = builtin.cpu.arch;
@@ -28,7 +27,7 @@ comptime {
     _ = root;
 
     if (!builtin.is_test) {
-        if (!@hasDecl(root, "main"))
+        if (!@hasDecl(root, "serviceMain"))
             @compileError("Service needs a main function");
 
         if (builtin.output_mode != .Lib)
@@ -37,11 +36,9 @@ comptime {
         if (!@hasDecl(root, "name"))
             @compileError("Missing service name");
 
-        const Return = @typeInfo(@TypeOf(root.main)).@"fn".return_type.?;
-        if (Return != noreturn) {
-            if (@typeInfo(Return).error_union.payload != noreturn)
-                @compileError("Invalid return type");
-        }
+        const Return = @typeInfo(@TypeOf(root.serviceMain)).@"fn".return_type.?;
+        if (@typeInfo(Return) != .error_union) @compileError("Invalid return type");
+        if (@typeInfo(Return).error_union.payload != noreturn) @compileError("Invalid return type");
 
         @export(&serviceMain, .{ .name = "svc_main_" ++ root.name });
         @export(&handleSegfault, .{ .name = "svc_fault_handler_" ++ root.name });
@@ -56,7 +53,9 @@ pub const panic_state = struct {
     var faulted: bool = false;
 };
 
-fn serviceMain(params: common.ResolvedArgs) callconv(.c) noreturn {
+fn serviceMain(params: common.ResolvedArgs) callconv(.c) void {
+    tracy.setThreadName("svc: " ++ root.name);
+
     const exit: *common.Exit = @ptrCast(params.exit);
     exit.* = .{};
 
@@ -83,7 +82,7 @@ fn serviceMain(params: common.ResolvedArgs) callconv(.c) noreturn {
                 @field(read_only, field.name) = @ptrCast(data.?[0..data_len]);
             }
 
-            break :err root.main(&writer.interface, read_only);
+            break :err root.serviceMain(&writer.interface, read_only);
         } else if (!@hasDecl(root, "ReadOnly")) err: {
             var read_write: root.ReadWrite = undefined;
             const root_rw_fields = @typeInfo(root.ReadWrite).@"struct".fields;
@@ -95,7 +94,7 @@ fn serviceMain(params: common.ResolvedArgs) callconv(.c) noreturn {
                 @field(read_write, field.name) = @ptrCast(data.?[0..data_len]);
             }
 
-            break :err root.main(&writer.interface, read_write);
+            break :err root.serviceMain(&writer.interface, read_write);
         } else err: {
             var read_only: root.ReadOnly = undefined;
             const root_ro_fields = @typeInfo(root.ReadOnly).@"struct".fields;
@@ -117,7 +116,7 @@ fn serviceMain(params: common.ResolvedArgs) callconv(.c) noreturn {
                 @field(read_write, field.name) = @ptrCast(data.?[0..data_len]);
             }
 
-            break :err root.main(&writer.interface, read_only, read_write);
+            break :err root.serviceMain(&writer.interface, read_only, read_write);
         };
 
     ret_val catch |err| {
@@ -136,10 +135,7 @@ fn serviceMain(params: common.ResolvedArgs) callconv(.c) noreturn {
         }
 
         writer.interface.flush() catch {};
-        abort();
     };
-
-    unreachable;
 }
 
 // Ported over from std.debug.handleSegfaultPosix
