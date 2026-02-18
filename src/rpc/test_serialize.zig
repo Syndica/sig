@@ -836,21 +836,20 @@ test "UiInstruction serialization - compiled variant" {
 // ============================================================================
 
 test "GetBlock request serialization" {
-    try testRequest(
-        .getBlock,
-        .{ .slot = 430 },
+    try testRequest(.getBlock, .{ .slot = 430 },
         \\{"jsonrpc":"2.0","id":1,"method":"getBlock","params":[430]}
     );
 }
 
 test "GetBlock request serialization - with config" {
-    try testRequest(
-        .getBlock,
-        .{ .slot = 430, .config = .{
+    try testRequest(.getBlock, .{
+        .slot = 430,
+        .config = .{
             .encoding = .json,
             .transactionDetails = .full,
             .rewards = false,
-        } },
+        },
+    },
         \\{"jsonrpc":"2.0","id":1,"method":"getBlock","params":[430,{"commitment":null,"encoding":"json","transactionDetails":"full","maxSupportedTransactionVersion":null,"rewards":false}]}
     );
 }
