@@ -12,19 +12,17 @@ pub const _start = {};
 pub const panic = start.panic;
 
 pub const ReadWrite = struct {
-    ping: *Pair,
+    pair: *Pair,
 };
 
-pub fn main(_: *std.io.Writer, rw: ReadWrite) !noreturn {
-    rw.ping.init(8000);
-
-    try tile(&.{rw.ping});
+pub fn main(writer: *std.io.Writer, rw: ReadWrite) !noreturn {
+    try mainInner(writer, &.{rw.pair});
 }
 
 const MAX_SOCKETS = 10;
 
 /// `ports` is the list of ports it'll listen on.
-fn tile(pairs: []const *Pair) !noreturn {
+fn mainInner(writer: *std.io.Writer, pairs: []const *Pair) !noreturn {
     std.debug.assert(pairs.len <= MAX_SOCKETS);
 
     var sockets: [MAX_SOCKETS]std.posix.fd_t = undefined;
@@ -38,6 +36,8 @@ fn tile(pairs: []const *Pair) !noreturn {
             0,
         );
         errdefer std.posix.close(socket);
+
+        try writer.print("(net)binding 0.0.0.0:{}\n", .{pair.port});
 
         const local: std.net.Address = .initIp4(.{ 0, 0, 0, 0 }, pair.port);
         try std.posix.bind(socket, &local.any, local.getOsSockLen());

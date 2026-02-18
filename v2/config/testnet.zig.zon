@@ -1,0 +1,9 @@
+.{
+    .cluster = .testnet,
+    .gossip = .{
+        .port = 8001,
+    },
+    .shred_network = .{
+        .recv_port = 8002,
+    },
+}
