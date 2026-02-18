@@ -342,17 +342,18 @@ test "serveSpawn getAccountInfo" {
             const raw_data = try account.data.readAllAllocate(alloc);
             defer alloc.free(raw_data);
 
-            const encoded_data: sig.rpc.methods.GetAccountInfo.Response.Value.Data = switch (encoding) {
-                .base64 => blk: {
-                    const encoded_len = std.base64.standard.Encoder.calcSize(raw_data.len);
-                    const encoded_buf = try alloc.alloc(u8, encoded_len);
-                    _ = std.base64.standard.Encoder.encode(encoded_buf, raw_data);
-                    break :blk .{ .encoded = .{ encoded_buf, .base64 } };
-                },
-                .base58 => return error.UnsupportedEncoding,
-                .@"base64+zstd" => return error.UnsupportedEncoding,
-                .jsonParsed => return error.UnsupportedEncoding,
-            };
+            const encoded_data: sig.rpc.methods.GetAccountInfo.Response.Value.Data =
+                switch (encoding) {
+                    .base64 => blk: {
+                        const encoded_len = std.base64.standard.Encoder.calcSize(raw_data.len);
+                        const encoded_buf = try alloc.alloc(u8, encoded_len);
+                        _ = std.base64.standard.Encoder.encode(encoded_buf, raw_data);
+                        break :blk .{ .encoded = .{ encoded_buf, .base64 } };
+                    },
+                    .base58 => return error.UnsupportedEncoding,
+                    .@"base64+zstd" => return error.UnsupportedEncoding,
+                    .jsonParsed => return error.UnsupportedEncoding,
+                };
 
             return .{
                 .context = .{

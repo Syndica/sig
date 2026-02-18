@@ -650,8 +650,10 @@ const Cmd = struct {
                 .kind = .named,
                 .name_override = null,
                 .alias = .a,
-                .default_value = sig.accounts_db.Two.getAccountPerFileEstimateFromCluster(.testnet) catch
-                    @compileError("account_per_file_estimate missing for default cluster"), // Legacy v1 option
+                // Legacy v1 option
+                .default_value = sig.accounts_db.Two
+                    .getAccountPerFileEstimateFromCluster(.testnet) catch
+                    @compileError("account_per_file_estimate missing for default cluster"),
                 .config = {},
                 .help = "number of accounts to estimate inside of account files" ++
                     " (used for pre-allocation)",

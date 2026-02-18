@@ -11,11 +11,8 @@ const Two = @import("Two.zig");
 const Rooted = @import("Rooted.zig");
 const Unrooted = @import("Unrooted.zig");
 const Pubkey = sig.core.Pubkey;
-const Slot = sig.core.Slot;
 const Ancestors = sig.core.Ancestors;
-const Account = sig.core.Account;
 const AccountSharedData = sig.runtime.AccountSharedData;
-const Duration = sig.time.Duration;
 const Resolution = @import("../../benchmarks.zig").Resolution;
 
 pub const BenchmarkAccountsDBTwo = struct {
