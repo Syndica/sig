@@ -11,7 +11,7 @@ const parse_bpf_upgradeable_loader = @import("parse_bpf_upgradeable_loader.zig")
 const parse_sysvar = @import("parse_sysvar.zig");
 const parse_config = @import("parse_config.zig");
 pub const parse_token = @import("parse_token.zig");
-const parse_token_extension = @import("parse_token_extension.zig");
+pub const parse_token_extension = @import("parse_token_extension.zig");
 
 pub const ParseError = error{
     InvalidAccountData,
@@ -338,6 +338,31 @@ pub fn buildTokenAdditionalData(
     return .{ .spl_token = spl_token };
 }
 
+/// Fetches the Clock sysvar and returns the unix_timestamp.
+/// Returns null if the Clock sysvar account cannot be found or parsed.
+pub fn getClockTimestamp(
+    allocator: std.mem.Allocator,
+    slot_reader: sig.accounts_db.SlotAccountReader,
+) ?i64 {
+    const maybe_clock_account = slot_reader.get(
+        allocator,
+        sig.runtime.sysvar.Clock.ID,
+    ) catch return null;
+    const clock_account = maybe_clock_account orelse return null;
+    defer clock_account.deinit(allocator);
+
+    var clock_iter = clock_account.data.iterator();
+    // TODO: it should be possible to remove this allocation.
+    const clock = sig.bincode.read(
+        allocator,
+        sig.runtime.sysvar.Clock,
+        clock_iter.reader(),
+        .{},
+    ) catch return null;
+
+    return clock.unix_timestamp;
+}
+
 /// Fetches a mint account by pubkey and extracts decimals, Token-2022 extension configs,
 /// and the clock timestamp needed for interest-bearing/scaled calculations.
 /// Returns null if the mint account cannot be found or parsed.
@@ -361,18 +386,7 @@ pub fn getMintAdditionalData(
     const mint = parse_token.Mint.unpack(mint_data) catch return null;
 
     // Fetch Clock sysvar for timestamp
-    const clock_id = sig.runtime.sysvar.Clock.ID;
-    const maybe_clock_account = slot_reader.get(allocator, clock_id) catch return null;
-    const clock_account = maybe_clock_account orelse return null;
-    defer clock_account.deinit(allocator);
-
-    var clock_iter = clock_account.data.iterator();
-    const clock = sig.bincode.read(
-        allocator,
-        sig.runtime.sysvar.Clock,
-        clock_iter.reader(),
-        .{},
-    ) catch return null;
+    const unix_timestamp = getClockTimestamp(allocator, slot_reader) orelse return null;
 
     // Extract extension configs from mint data
     const InterestCfg = parse_token_extension.InterestBearingConfigData;
@@ -382,7 +396,7 @@ pub fn getMintAdditionalData(
 
     return .{
         .decimals = mint.decimals,
-        .unix_timestamp = clock.unix_timestamp,
+        .unix_timestamp = unix_timestamp,
         .interest_bearing_config = interest_config,
         .scaled_ui_amount_config = scaled_config,
     };

@@ -14,7 +14,9 @@ const rpc = @import("lib.zig");
 const base58 = @import("base58");
 const zstd = @import("zstd");
 
-const parse_token = sig.rpc.account_decoder.parse_token;
+const account_decoder = sig.rpc.account_decoder;
+const parse_token = account_decoder.parse_token;
+const parse_token_extension = account_decoder.parse_token_extension;
 
 const Allocator = std.mem.Allocator;
 const ParseOptions = std.json.ParseOptions;
@@ -24,7 +26,8 @@ const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 const ClientVersion = sig.version.ClientVersion;
 
-const account_decoder = sig.rpc.account_decoder;
+const InterestBearingConfigData = parse_token_extension.InterestBearingConfigData;
+const ScaledUiAmountConfigData = parse_token_extension.ScaledUiAmountConfigData;
 
 const MAX_BASE58_INPUT_LEN = 128;
 const MAX_BASE58_OUTPUT_LEN = base58.encodedMaxSize(MAX_BASE58_INPUT_LEN);
@@ -92,7 +95,7 @@ pub const MethodAndParams = union(enum) {
     getTokenAccountsByDelegate: noreturn,
     getTokenAccountsByOwner: noreturn,
     getTokenLargestAccounts: noreturn,
-    getTokenSupply: noreturn,
+    getTokenSupply: GetTokenSupply,
     getTransaction: GetTransaction,
     getTransactionCount: noreturn,
     getVersion: GetVersion,
@@ -526,7 +529,21 @@ pub const GetTokenAccountBalance = struct {
 // TODO: getTokenAccountsByDelegate
 // TODO: getTokenAccountsByOwner
 // TODO: getTokenLargestAccounts
-// TODO: getTokenSupply
+
+pub const GetTokenSupply = struct {
+    /// Pubkey of the token Mint to query, as base-58 encoded string
+    mint: Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        value: account_decoder.parse_token.UiTokenAmount,
+    };
+};
 
 pub const GetTransaction = struct {
     /// Transaction signature, as base-58 encoded string
@@ -838,6 +855,81 @@ pub const AccountHookContext = struct {
         const ui_token_amount = account_decoder.parse_token.UiTokenAmount.init(
             token_account.amount,
             spl_token_data,
+        );
+
+        return .{
+            .context = .{ .slot = slot, .apiVersion = ClientVersion.API_VERSION },
+            .value = ui_token_amount,
+        };
+    }
+
+    /// Implements the getTokenSupply RPC method.
+    /// Returns the total supply of an SPL Token mint.
+    ///
+    /// https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1983-L2020
+    pub fn getTokenSupply(
+        self: AccountHookContext,
+        allocator: std.mem.Allocator,
+        params: GetTokenSupply,
+    ) !GetTokenSupply.Response {
+        const config = params.config orelse GetTokenSupply.Config{};
+        const commitment = config.commitment orelse .finalized;
+
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+
+        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotFound;
+        const slot_reader = self.account_reader.forSlot(&ref.constants.ancestors);
+
+        // Fetch mint account
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1988-L1990
+        const maybe_account = try slot_reader.get(allocator, params.mint);
+        const account = maybe_account orelse return error.RpcAccountNotFound;
+        defer account.deinit(allocator);
+
+        // Validate that this is owned by a token program
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1991-L1995
+        const is_token_program = account.owner.equals(&sig.runtime.ids.SPL_TOKEN_PROGRAM_ID) or
+            account.owner.equals(&sig.runtime.ids.SPL_TOKEN_2022_PROGRAM_ID);
+        if (!is_token_program) return error.RpcNotATokenMint;
+
+        // Read account data into contiguous buffer for parsing
+        const data_len = account.data.len();
+        const mint_data = try allocator.alloc(u8, data_len);
+        defer allocator.free(mint_data);
+        var data_iter = account.data.iterator();
+        _ = data_iter.readBytes(mint_data) catch return error.RpcMintUnpackFailed;
+
+        // Parse mint to get supply and decimals
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1996-L1998
+        const mint = parse_token.Mint.unpack(mint_data) catch return error.RpcMintUnpackFailed;
+
+        // Extract Token-2022 extension configs directly from raw mint data.
+        // Extensions are optional — extractFromMint returns null if not present.
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2000-L2008
+        const interest_config = InterestBearingConfigData.extractFromMint(mint_data);
+        const scaled_config = ScaledUiAmountConfigData.extractFromMint(mint_data);
+
+        // Fetch Clock sysvar for timestamp (needed if extensions are present).
+        // In Agave, bank.clock() is infallible on an active bank. We only need timestamp
+        // when extensions are present, but fetch lazily since most mints don't have extensions.
+        const unix_timestamp: i64 = if (interest_config != null or scaled_config != null)
+            account_decoder.getClockTimestamp(
+                allocator,
+                slot_reader,
+            ) orelse return error.RpcClockSysvarNotFound
+        else
+            0;
+
+        // Build SplTokenAdditionalData and convert to UI format
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2010-L2017
+        const ui_token_amount = parse_token.UiTokenAmount.init(
+            mint.supply,
+            .{
+                .decimals = mint.decimals,
+                .unix_timestamp = unix_timestamp,
+                .interest_bearing_config = interest_config,
+                .scaled_ui_amount_config = scaled_config,
+            },
         );
 
         return .{
