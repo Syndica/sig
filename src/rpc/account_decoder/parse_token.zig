@@ -397,7 +397,7 @@ pub const UiTokenAmount = struct {
     /// Create a UiTokenAmount from raw amount and additional data.
     /// Handles interest-bearing and scaled UI amount calculations if configured.
     /// Priority: interest-bearing > scaled > simple
-    fn init(amount: u64, additional_data: SplTokenAdditionalData) UiTokenAmount {
+    pub fn init(amount: u64, additional_data: SplTokenAdditionalData) UiTokenAmount {
         const decimals = additional_data.decimals;
 
         // Priority 1: Interest-bearing config

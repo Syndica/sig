@@ -14,6 +14,8 @@ const rpc = @import("lib.zig");
 const base58 = @import("base58");
 const zstd = @import("zstd");
 
+const parse_token = sig.rpc.account_decoder.parse_token;
+
 const Allocator = std.mem.Allocator;
 const ParseOptions = std.json.ParseOptions;
 
@@ -86,7 +88,7 @@ pub const MethodAndParams = union(enum) {
     getSlotLeaders: noreturn,
     getStakeMinimumDelegation: noreturn,
     getSupply: noreturn,
-    getTokenAccountBalance: noreturn,
+    getTokenAccountBalance: GetTokenAccountBalance,
     getTokenAccountsByDelegate: noreturn,
     getTokenAccountsByOwner: noreturn,
     getTokenLargestAccounts: noreturn,
@@ -507,7 +509,20 @@ pub const GetSlot = struct {
 // TODO: getStakeActivation
 // TODO: getStakeMinimumDelegation
 // TODO: getSupply
-// TODO: getTokenAccountBalance
+pub const GetTokenAccountBalance = struct {
+    pubkey: Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        value: account_decoder.parse_token.UiTokenAmount,
+    };
+};
+
 // TODO: getTokenAccountsByDelegate
 // TODO: getTokenAccountsByOwner
 // TODO: getTokenLargestAccounts
@@ -771,6 +786,64 @@ pub const AccountHookContext = struct {
                 .value = null,
             };
         }
+    }
+
+    pub fn getTokenAccountBalance(
+        self: AccountHookContext,
+        allocator: std.mem.Allocator,
+        params: GetTokenAccountBalance,
+    ) !GetTokenAccountBalance.Response {
+        const config = params.config orelse GetTokenAccountBalance.Config{};
+        const commitment = config.commitment orelse .finalized;
+
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+
+        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotFound;
+        const slot_reader = self.account_reader.forSlot(&ref.constants.ancestors);
+        const maybe_account = try slot_reader.get(allocator, params.pubkey);
+
+        const account = maybe_account orelse return error.RpcAccountNotFound;
+        defer account.deinit(allocator);
+
+        // Validate that this is a token account (owned by SPL Token or Token-2022)
+        const is_token_program = account.owner.equals(&sig.runtime.ids.SPL_TOKEN_PROGRAM_ID) or
+            account.owner.equals(&sig.runtime.ids.SPL_TOKEN_2022_PROGRAM_ID);
+        if (!is_token_program) return error.RpcNotATokenAccount;
+
+        // Read account data and unpack the token account
+        var data_buf: [parse_token.TokenAccount.LEN]u8 = undefined;
+        var data_iter = account.data.iterator();
+        const bytes_read = data_iter.readBytes(&data_buf) catch return error.RpcNotATokenAccount;
+        if (bytes_read < parse_token.TokenAccount.LEN)
+            return error.RpcNotATokenAccount;
+
+        const token_account = parse_token.TokenAccount.unpack(&data_buf) catch
+            return error.RpcNotATokenAccount;
+        if (token_account.state == .uninitialized) return error.RpcNotATokenAccount;
+
+        // Build SplTokenAdditionalData for mint decimals and extension configs
+        const is_native_mint = token_account.mint.equals(&sig.runtime.ids.NATIVE_MINT_ID);
+        const spl_token_data: parse_token.SplTokenAdditionalData = if (is_native_mint)
+            // Native mint (wrapped SOL): decimals=9, no extensions
+            // TODO: document agave conformance.
+            .{ .decimals = 9 }
+        else
+            // Look up the mint account for decimals and extension configs
+            account_decoder.getMintAdditionalData(
+                allocator,
+                token_account.mint,
+                slot_reader,
+            ) orelse return error.RpcMintNotFound;
+
+        const ui_token_amount = account_decoder.parse_token.UiTokenAmount.init(
+            token_account.amount,
+            spl_token_data,
+        );
+
+        return .{
+            .context = .{ .slot = slot, .apiVersion = ClientVersion.API_VERSION },
+            .value = ui_token_amount,
+        };
     }
 
     /// Handles jsonParsed encoding with fallback to base64
