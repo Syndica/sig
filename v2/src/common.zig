@@ -11,6 +11,8 @@ pub const crypto = @import("common/crypto.zig");
 pub const solana = @import("common/solana.zig");
 pub const shred = @import("common/shred.zig");
 
+pub const test_data_dir = "../data/test-data/";
+
 pub const ResolvedArgs = extern struct {
     stderr: std.os.linux.fd_t,
     exit: [*]align(page_size_min) u8,

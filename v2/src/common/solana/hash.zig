@@ -57,16 +57,22 @@ pub const Hash = extern struct {
 
     pub fn parseRuntime(str: []const u8) error{InvalidHash}!Hash {
         if (str.len > BASE58_MAX_SIZE) return error.InvalidHash;
-        var encoded: std.BoundedArray(u8, BASE58_MAX_SIZE) = .{};
-        encoded.appendSliceAssumeCapacity(str);
+
+        var encoded: [BASE58_MAX_SIZE]u8 = undefined;
+        var encoded_len: usize = 0;
+
+        @memcpy(encoded[0..str.len], str);
+        encoded_len += str.len;
 
         if (@inComptime()) @setEvalBranchQuota(str.len * str.len * str.len);
-        const decoded = BASE58_ENDEC.decodeBounded(BASE58_MAX_SIZE, encoded) catch {
-            return error.InvalidHash;
+
+        var decoded_buf: [SIZE + 2]u8 = undefined;
+        const decoded_len = BASE58_ENDEC.decode(&decoded_buf, encoded[0..encoded_len]) catch {
+            return error.InvalidPubkey;
         };
 
-        if (decoded.len != SIZE) return error.InvalidHash;
-        return .{ .data = decoded.constSlice()[0..SIZE].* };
+        if (decoded_len != SIZE) return error.InvalidLength;
+        return .{ .data = decoded_buf[0..SIZE].* };
     }
 
     pub const BASE58_MAX_SIZE = base58.encodedMaxSize(SIZE);
