@@ -1,10 +1,7 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
 const rpc = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
-
-const ClusterType = sig.core.ClusterType;
 
 const MethodAndParams = rpc.methods.MethodAndParams;
 const HttpPostFetcher = rpc.http.HttpPostFetcher;
@@ -20,12 +17,12 @@ pub const Client = struct {
 
     pub fn init(
         allocator: Allocator,
-        cluster_type: ClusterType,
+        rpc_url: []const u8,
         options: HttpPostFetcher.Options,
     ) Allocator.Error!Client {
         return .{ .fetcher = try HttpPostFetcher.init(
             allocator,
-            cluster_type.getRpcUrl(),
+            rpc_url,
             options,
         ) };
     }
@@ -200,7 +197,3 @@ pub const Client = struct {
         return self.fetch(.null, .sendTransaction, request);
     }
 };
-
-pub fn rpcUrl(cluster_type: ClusterType) []const u8 {
-    return cluster_type.getRpcUrl();
-}

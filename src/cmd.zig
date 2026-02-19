@@ -1366,7 +1366,7 @@ fn ensureGenesis(
 
     // Otherwise, download genesis from network
     logger.info().logf("Downloading genesis from {s} cluster...", .{@tagName(cluster)});
-    const cluster_url = cluster.getRpcUrl();
+    const cluster_url = cluster.getRpcUrl() orelse @panic("No RPC Url!");
     const genesis_path = downloadAndExtractGenesis(
         allocator,
         cluster_url,
@@ -1612,7 +1612,8 @@ fn validator(
     defer epoch_tracker.deinit(allocator);
 
     const rpc_cluster_type = loaded_snapshot.genesis_config.cluster_type;
-    var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
+    const rpc_url = rpc_cluster_type.getRpcUrl() orelse @panic("No RPC Url for cluster type!");
+    var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{});
     defer rpc_client.deinit();
 
     const turbine_config = cfg.turbine;
@@ -1907,7 +1908,9 @@ fn shredNetwork(
     const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
     defer allocator.free(ledger_dir);
 
-    var rpc_client = try sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
+    const rpc_url = genesis_config.cluster_type.getRpcUrl() orelse
+        @panic("No RPC Url for cluster type!");
+    var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{});
     defer rpc_client.deinit();
 
     const shred_network_conf = cfg.shred_network.toConfig(
@@ -2151,7 +2154,8 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         const cluster_type = try cfg.getCluster() orelse
             return error.ClusterNotProvided;
 
-        var rpc_client = try sig.rpc.Client.init(allocator, cluster_type, .{});
+        const rpc_url = cluster_type.getRpcUrl() orelse @panic("No RPC Url for cluster type!");
+        var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{});
         defer rpc_client.deinit();
 
         const slot = blk: {
@@ -2254,7 +2258,8 @@ fn testTransactionSenderService(
     );
 
     // rpc is used to get blockhashes and other balance information
-    var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster, .{
+    const rpc_url = rpc_cluster.getRpcUrl() orelse @panic("No RPC Url for cluster type!");
+    var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{
         .logger = .from(app_base.logger),
     });
     defer rpc_client.deinit();

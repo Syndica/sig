@@ -259,7 +259,8 @@ pub const ClusterType = enum(u8) {
     development = 3,
 
     /// Returns entrypoints for public clusters, null for development.
-    /// For development, the caller must provide entrypoints manually.
+    /// For development this returns an empty list, because the caller
+    /// must provide entrypoints manually.
     pub fn getEntrypoints(self: ClusterType) []const []const u8 {
         return switch (self) {
             .mainnet => &.{
@@ -286,12 +287,12 @@ pub const ClusterType = enum(u8) {
     }
 
     /// Returns the RPC URL for this cluster.
-    pub fn getRpcUrl(self: ClusterType) []const u8 {
+    pub fn getRpcUrl(self: ClusterType) ?[]const u8 {
         return switch (self) {
             .mainnet => "https://api.mainnet-beta.solana.com",
             .testnet => "https://api.testnet.solana.com",
             .devnet => "https://api.devnet.solana.com",
-            .development => @panic("Not available for development cluster"),
+            .development => null,
         };
     }
 };
