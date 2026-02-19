@@ -374,14 +374,20 @@ pub const GetEpochSchedule = struct {
 // TODO: getFeeForMessage
 // TODO: getFirstAvailableBlock
 
-/// https://solana.com/docs/rpc/http/getgenesishash
-/// Returns the genesis hash as a base-58 encoded string.
 pub const GetGenesisHash = struct {
-    /// Response is a base-58 encoded hash string representing the genesis hash.
-    pub const Response = sig.core.Hash;
+    pub const Response = struct {
+        hash: sig.core.Hash,
+
+        pub fn jsonStringify(
+            self: Response,
+            /// `*std.json.WriteStream(...)`
+            jw: anytype,
+        ) !void {
+            try jw.write(self.hash.base58String().slice());
+        }
+    };
 };
 
-// TODO: getGenesisHash - implemented below as GetGenesisHash
 // TODO: getHealth
 // TODO: getHighestSnapshotSlot
 // TODO: getIdentity
@@ -706,3 +712,34 @@ pub const SlotHookContext = struct {
         return if (slot >= min_slot) slot else error.RpcMinContextSlotNotMet;
     }
 };
+
+pub const StaticHookContext = struct {
+    genesis_hash: sig.core.Hash,
+
+    pub fn getGenesisHash(
+        self: *const @This(),
+        _: std.mem.Allocator,
+        _: GetGenesisHash,
+    ) !GetGenesisHash.Response {
+        return .{ .hash = self.genesis_hash };
+    }
+};
+
+test "jsonStringify outputs base58 string" {
+    const allocator = std.testing.allocator;
+
+    const slice = "4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZAMdL4VZHirAn";
+    const expected_slice = try std.fmt.allocPrint(allocator, "\"{s}\"", .{slice});
+    defer allocator.free(expected_slice);
+
+    // Use a known hash value for testing
+    const hash = sig.core.Hash.parse(slice);
+    const response: GetGenesisHash.Response = .{ .hash = hash };
+
+    // Serialize the response to JSON
+    const json = try std.json.stringifyAlloc(allocator, response, .{});
+    defer allocator.free(json);
+
+    // The jsonStringify should output the hash as a base58 string (without wrapping object)
+    try std.testing.expectEqualStrings(expected_slice, json);
+}
