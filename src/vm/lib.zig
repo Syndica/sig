@@ -73,8 +73,8 @@ pub const EbpfError = error{
 
 pub const State = struct {
     vm: Vm,
-    stack: []u8,
-    heap: []u8,
+    stack: []align(16) u8,
+    heap: []align(16) u8,
     regions: []memory.Region,
 
     pub fn deinit(self: *State, allocator: std.mem.Allocator) void {
@@ -108,11 +108,11 @@ pub fn init(
     else
         0;
 
-    const heap = try allocator.alloc(u8, heap_size);
+    const heap = try allocator.alignedAlloc(u8, 16, heap_size);
     @memset(heap, 0);
     errdefer allocator.free(heap);
 
-    const stack = try allocator.alloc(u8, stack_size);
+    const stack = try allocator.alignedAlloc(u8, 16, stack_size);
     @memset(stack, 0);
     errdefer allocator.free(stack);
 
