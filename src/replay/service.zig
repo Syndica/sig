@@ -416,8 +416,8 @@ pub fn trackNewSlots(
                 slot,
                 hard_forks,
             );
-            try ledger.db.put(schema.schema.blocktime, slot, clock.unix_timestamp);
-            try ledger.db.put(schema.schema.block_height, slot, constants.block_height);
+            try ledger.db.put(schema.blocktime, slot, clock.unix_timestamp);
+            try ledger.db.put(schema.block_height, slot, constants.block_height);
 
             try slot_tracker.put(allocator, slot, .{ .constants = constants, .state = state });
             try slot_tree.record(allocator, slot, constants.parent_slot);
