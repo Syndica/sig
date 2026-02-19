@@ -714,6 +714,19 @@ pub fn getMintAdditionalData(
     defer arena.free(mint_data);
     _ = mint_iter.readBytes(mint_data) catch return null;
 
+    return parseMintAdditionalData(arena, mint_data, slot_reader);
+}
+
+/// Extracts decimals, Token-2022 extension configs, and the clock timestamp from
+/// already-read raw mint account bytes. Use this when you already have the mint data
+/// in a buffer (e.g. getTokenSupply). Use `getMintAdditionalData` when you only have
+/// the mint pubkey and need it fetched.
+/// Returns null if the mint data cannot be parsed.
+pub fn parseMintAdditionalData(
+    arena: std.mem.Allocator,
+    mint_data: []const u8,
+    slot_reader: sig.accounts_db.SlotAccountReader,
+) ?parse_token.SplTokenAdditionalData {
     // Parse mint to get decimals
     const mint = parse_token.Mint.unpack(mint_data) catch return null;
 

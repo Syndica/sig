@@ -14,8 +14,6 @@ const rpc = @import("lib.zig");
 const base58 = @import("base58");
 const parse_instruction = @import("parse_instruction/lib.zig");
 
-const parse_token = sig.rpc.account_decoder.parse_token;
-
 const Allocator = std.mem.Allocator;
 const ParseOptions = std.json.ParseOptions;
 
@@ -92,7 +90,7 @@ pub const MethodAndParams = union(enum) {
     getTokenAccountsByDelegate: noreturn,
     getTokenAccountsByOwner: noreturn,
     getTokenLargestAccounts: noreturn,
-    getTokenSupply: noreturn,
+    getTokenSupply: GetTokenSupply,
     getTransaction: GetTransaction,
     getTransactionCount: GetTransactionCount,
     getVersion: GetVersion,
@@ -1144,7 +1142,21 @@ pub const GetTokenAccountBalance = struct {
 // TODO: getTokenAccountsByDelegate
 // TODO: getTokenAccountsByOwner
 // TODO: getTokenLargestAccounts
-// TODO: getTokenSupply
+
+pub const GetTokenSupply = struct {
+    /// Pubkey of the token Mint to query, as base-58 encoded string
+    mint: Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        value: account_codec.parse_token.UiTokenAmount,
+    };
+};
 
 pub const GetTransaction = struct {
     /// Transaction signature, as base-58 encoded string
@@ -1327,13 +1339,6 @@ pub const common = struct {
     pub const Context = struct {
         slot: u64,
         apiVersion: []const u8 = ClientVersion.API_VERSION,
-    };
-
-    pub const AccountEncoding = enum {
-        base58,
-        base64,
-        @"base64+zstd",
-        jsonParsed,
     };
 
     // TODO field types
