@@ -16,6 +16,16 @@ pub fn build(b: *std.Build) !void {
         .optimize = .ReleaseFast,
         .tracy_enable = b.option(bool, "enable-tracy", "Enables tracy") orelse false,
         .tracy_no_system_tracing = false,
+        .tracy_no_exit = b.option(
+            bool,
+            "tracy-no-exit",
+            "Delays process exit until Tracy has received data",
+        ) orelse true,
+        .tracy_on_demand = b.option(
+            bool,
+            "tracy-on-demand",
+            "Start capturing profiler data when tracy starts",
+        ) orelse true,
         .tracy_callstack = 6,
     }).module("tracy");
 
