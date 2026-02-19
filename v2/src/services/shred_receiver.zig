@@ -47,6 +47,10 @@ pub fn serviceMain(writer: *std.io.Writer, ro: ReadOnly, rw: ReadWrite) !noretur
 
     while (true) {
         var slice = rw.pair.recv.getReadable() catch continue;
+
+        const zone = tracy.Zone.init(@src(), .{ .name = "shred recv" });
+        defer zone.deinit();
+
         const packet = slice.one();
         defer slice.markUsed(1);
 
@@ -168,9 +172,6 @@ fn validateShred(
     // 7uZBkJXJ1HkuP6R3MJfZs7mLwymBcDbKdqbF51ZWLier
     // https://github.com/solana-labs/solana/pull/34916
     // https://github.com/solana-labs/solana/pull/35076
-
-    _ = layout.getLeaderSignature(packet_shred) orelse return error.signature_missing;
-    _ = layout.merkleRoot(packet_shred) orelse return error.signed_data_missing;
 }
 
 fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
