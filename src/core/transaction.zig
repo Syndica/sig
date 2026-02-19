@@ -148,9 +148,7 @@ pub const Transaction = struct {
         const signatures = try allocator.alloc(Signature, message.signature_count);
         errdefer allocator.free(signatures);
 
-        // TODO: This method can result in us signing the same message for the same keypair more than once.
-        // Should investigate whether a hashmap to amortize the signing is faster. The current only usecase
-        // is when we send votes, and that *does* sign the same message twice.
+        // NOTE: The current only usecase is when we send votes, which *does* sign the same message twice.
         const signing_keys = message.account_keys[0..message.signature_count];
         for (signing_keys, 0..) |key, i| {
             for (keypairs) |kp| {
