@@ -52,6 +52,7 @@ pub fn main() !void {
 
     var tc: TransactionContext = .{
         .allocator = gpa,
+        .programs_allocator = gpa,
         .feature_set = &FeatureSet.ALL_DISABLED,
         .epoch_stakes = &epoch_stakes,
         .sysvar_cache = &SysvarCache{},
