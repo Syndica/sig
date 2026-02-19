@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 const lib = @import("lib.zig");
 
@@ -50,6 +51,21 @@ pub fn init(
             .scan_and_fix_roots = try r.initStruct(ResultWriter.ScanAndFixRootsMetrics),
             .shred_inserter = try r.initStruct(ShredInserter.Metrics),
         } else null,
+    };
+}
+
+pub fn initForTest(
+    allocator: Allocator,
+) !struct { Ledger, std.testing.TmpDir } {
+    if (!builtin.is_test) @compileError("only used in tests");
+    var tmp = std.testing.tmpDir(.{});
+    try tmp.dir.makeDir("ledger");
+    const path = try tmp.dir.realpathAlloc(allocator, "ledger");
+    defer allocator.free(path);
+
+    return .{
+        try Ledger.init(allocator, .FOR_TESTS, path, null),
+        tmp,
     };
 }
 

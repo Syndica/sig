@@ -1434,8 +1434,6 @@ const TestData = struct {
                     .collected_transaction_fees = .init(random.int(u64)),
                     .collected_priority_fees = .init(random.int(u64)),
                     .reward_status = .inactive,
-                    .unix_timestamp = .init(random.int(i64)),
-                    .rewards = .init(.EMPTY),
                 },
             };
         }
