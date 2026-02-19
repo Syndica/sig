@@ -30,3 +30,7 @@ pub const SPL_TOKEN_PROGRAM_ID: Pubkey = .parse("TokenkegQfeZyiNwAJbNbGKPFXCWuBv
 /// SPL Token 2022 Program ID
 /// NOTE: Defined here solely for use in account decoders. perhaps move it?
 pub const SPL_TOKEN_2022_PROGRAM_ID: Pubkey = .parse("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+
+/// SPL Token Native Mint (wrapped SOL) - always has decimals=9
+/// NOTE: Defined here solely for use in account decoders. perhaps move it?
+pub const NATIVE_MINT_ID: Pubkey = .parse("So11111111111111111111111111111111111111112");

@@ -17,6 +17,7 @@ const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSlot = methods.GetSlot;
+const GetTokenAccountBalance = methods.GetTokenAccountBalance;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
 
@@ -255,7 +256,48 @@ test GetSlot {
 // TODO: test getStakeActivation()
 // TODO: test getStakeMinimumDelegation()
 // TODO: test getSupply()
-// TODO: test getTokenAccountBalance()
+
+test GetTokenAccountBalance {
+    const pubkey: Pubkey = .parse("7fUAJdStEuGbc3sM84cKRL6yYaaSstyLSU4ve5oovLS7");
+
+    // Request without config
+    try testRequest(
+        .getTokenAccountBalance,
+        .{ .pubkey = pubkey },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTokenAccountBalance","params":["7fUAJdStEuGbc3sM84cKRL6yYaaSstyLSU4ve5oovLS7"]}
+        ,
+    );
+
+    // Request with commitment config
+    try testRequest(
+        .getTokenAccountBalance,
+        .{ .pubkey = pubkey, .config = .{ .commitment = .finalized } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTokenAccountBalance","params":["7fUAJdStEuGbc3sM84cKRL6yYaaSstyLSU4ve5oovLS7",{"commitment":"finalized"}]}
+        ,
+    );
+
+    // Response serialization: construct a UiTokenAmount and verify JSON output.
+    // UiTokenAmount uses custom jsonStringify (camelCase fields, amount as string),
+    // so we test serialization directly rather than round-trip deserialization.
+    const account_decoder = sig.rpc.account_decoder;
+    const ui_token_amount = account_decoder.parse_token.UiTokenAmount.init(
+        9864,
+        account_decoder.parse_token.SplTokenAdditionalData{ .decimals = 2 },
+    );
+    const response: GetTokenAccountBalance.Response = .{
+        .context = .{ .slot = 1114, .apiVersion = "2.1.6" },
+        .value = ui_token_amount,
+    };
+    const actual_json = try std.json.stringifyAlloc(std.testing.allocator, response, .{});
+    defer std.testing.allocator.free(actual_json);
+    try std.testing.expectEqualSlices(
+        u8,
+        \\{"context":{"slot":1114,"apiVersion":"2.1.6"},"value":{"uiAmount":9.864e1,"decimals":2,"amount":"9864","uiAmountString":"98.64"}}
+    ,
+        actual_json,
+    );
+}
+
 // TODO: test getTokenAccountsByDelegate()
 // TODO: test getTockenAccountsByOwner()
 // TODO: test getTokenLargestAccounts()
