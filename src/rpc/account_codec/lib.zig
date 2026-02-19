@@ -11,7 +11,7 @@ const parse_config = @import("parse_config.zig");
 const parse_nonce = @import("parse_nonce.zig");
 const parse_stake = @import("parse_stake.zig");
 const parse_sysvar = @import("parse_sysvar.zig");
-const parse_token = @import("parse_token.zig");
+pub const parse_token = @import("parse_token.zig");
 const parse_token_extension = @import("parse_token_extension.zig");
 const parse_vote = @import("parse_vote.zig");
 
@@ -412,8 +412,26 @@ pub fn JsonString(comptime max_len: usize) type {
             self.len += n;
         }
 
+        // Note: only used for unit tests
+        pub fn eql(self: *const Self, other: *const Self) bool {
+            return self.len == other.len and
+                std.mem.eql(u8, self.inner[0..self.len], other.inner[0..other.len]);
+        }
+
         pub fn jsonStringify(self: Self, jw: anytype) @TypeOf(jw.*).Error!void {
             try jw.write(self.constSlice());
+        }
+
+        // Note: only used for unit tests
+        pub fn jsonParse(
+            _: std.mem.Allocator,
+            source: anytype,
+            _: std.json.ParseOptions,
+        ) std.json.ParseError(@TypeOf(source.*))!Self {
+            return switch (try source.next()) {
+                .string => |str| Self.fromSlice(str),
+                else => error.UnexpectedToken,
+            };
         }
     };
 }
@@ -668,24 +686,41 @@ pub fn buildTokenAdditionalData(
     // Extract mint pubkey from token account (first 32 bytes)
     const mint_pubkey = parse_token.getTokenAccountMint(data_buf[0..bytes_read]) orelse return .{};
 
+    const spl_token = getMintAdditionalData(
+        allocator,
+        mint_pubkey,
+        slot_reader,
+    ) orelse return .{};
+
+    return .{ .spl_token = spl_token };
+}
+
+/// Fetches a mint account by pubkey and extracts decimals, Token-2022 extension configs,
+/// and the clock timestamp needed for interest-bearing/scaled calculations.
+/// Returns null if the mint account cannot be found or parsed.
+pub fn getMintAdditionalData(
+    allocator: std.mem.Allocator,
+    mint_pubkey: Pubkey,
+    slot_reader: sig.accounts_db.SlotAccountReader,
+) ?parse_token.SplTokenAdditionalData {
     // Fetch the mint account
-    const maybe_mint_account = slot_reader.get(allocator, mint_pubkey) catch return .{};
-    const mint_account = maybe_mint_account orelse return .{};
+    const maybe_mint_account = slot_reader.get(allocator, mint_pubkey) catch return null;
+    const mint_account = maybe_mint_account orelse return null;
     defer mint_account.deinit(allocator);
 
     // Read mint data
     var mint_iter = mint_account.data.iterator();
-    const mint_data = allocator.alloc(u8, mint_account.data.len()) catch return .{};
+    const mint_data = allocator.alloc(u8, mint_account.data.len()) catch return null;
     defer allocator.free(mint_data);
-    _ = mint_iter.readBytes(mint_data) catch return .{};
+    _ = mint_iter.readBytes(mint_data) catch return null;
 
     // Parse mint to get decimals
-    const mint = parse_token.Mint.unpack(mint_data) catch return .{};
+    const mint = parse_token.Mint.unpack(mint_data) catch return null;
 
     // Fetch Clock sysvar for timestamp
     const clock_id = sig.runtime.sysvar.Clock.ID;
-    const maybe_clock_account = slot_reader.get(allocator, clock_id) catch return .{};
-    const clock_account = maybe_clock_account orelse return .{};
+    const maybe_clock_account = slot_reader.get(allocator, clock_id) catch return null;
+    const clock_account = maybe_clock_account orelse return null;
     defer clock_account.deinit(allocator);
 
     var clock_iter = clock_account.data.iterator();
@@ -694,7 +729,7 @@ pub fn buildTokenAdditionalData(
         sig.runtime.sysvar.Clock,
         clock_iter.reader(),
         .{},
-    ) catch return .{};
+    ) catch return null;
 
     // Extract extension configs from mint data
     const InterestCfg = parse_token_extension.InterestBearingConfigData;
@@ -703,12 +738,10 @@ pub fn buildTokenAdditionalData(
     const scaled_config = ScaledCfg.extractFromMint(mint_data);
 
     return .{
-        .spl_token = .{
-            .decimals = mint.decimals,
-            .unix_timestamp = clock.unix_timestamp,
-            .interest_bearing_config = interest_config,
-            .scaled_ui_amount_config = scaled_config,
-        },
+        .decimals = mint.decimals,
+        .unix_timestamp = clock.unix_timestamp,
+        .interest_bearing_config = interest_config,
+        .scaled_ui_amount_config = scaled_config,
     };
 }
 
