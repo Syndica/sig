@@ -8,37 +8,6 @@ const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
 const poll_read_timeout_ms: u32 = 100;
 const close_deadline_ms: u64 = 2_000;
 
-test "close timeout: server disconnects when peer ignores close response" {
-    const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
-
-    // Server echoes first message then closes; close timeout is 200ms
-    const ts = try servers.startCloseAfterFirstMessageServer(testing.allocator, 200);
-    defer ts.stop();
-
-    var client = try RawClient.connectEx(testing.allocator, ts.port, .{
-        .read_timeout_ms = poll_read_timeout_ms,
-    });
-    defer client.deinit();
-
-    // Send a message to trigger echo + server close
-    var msg = "hello".*;
-    try client.write(&msg);
-
-    // Read the echo
-    const echo = try client.waitForMessageType(.text, close_deadline_ms);
-    try testing.expectEqualSlices(u8, "hello", echo.data);
-    client.done(echo);
-
-    // Read the close frame from the server
-    const close_msg = try client.waitForCloseFrame(close_deadline_ms);
-    try testing.expectEqual(.close, close_msg.type);
-    client.done(close_msg);
-
-    // Do NOT echo the close frame — just wait for the server to force disconnect.
-    try client.waitForClosedNoData(close_deadline_ms);
-}
-
 test "idle timeout: server closes idle connection" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
@@ -61,10 +30,7 @@ test "idle timeout: server closes idle connection" {
     const code = std.mem.readInt(u16, close_msg.data[0..2], .big);
     try testing.expectEqual(@as(u16, 1001), code);
 
-    // Echo the close frame to complete the handshake cleanly
-    try client.close(.{ .code = 1001 });
-
-    // Verify TCP connection is closed (distinguish close from transient timeouts).
+    // Server disconnects after writing close.
     try client.waitForClosedNoData(close_deadline_ms);
 }
 
@@ -73,7 +39,7 @@ test "idle timeout: activity resets timer" {
     defer fd_check.assertNoLeaks();
 
     // Worst-case close arrives 2 × idle_timeout after last message.
-    const ts = try servers.startEchoServerWithTimeouts(testing.allocator, 200, 5000);
+    const ts = try servers.startEchoServerWithTimeouts(testing.allocator, 200, 200);
     defer ts.stop();
 
     var client = try RawClient.connectEx(testing.allocator, ts.port, .{
@@ -103,11 +69,11 @@ test "idle timeout: activity resets timer" {
     const code = std.mem.readInt(u16, close_msg.data[0..2], .big);
     try testing.expectEqual(@as(u16, 1001), code);
 
-    // Echo close to complete handshake
-    try client.close(.{ .code = 1001 });
+    // Server disconnects after writing close.
+    try client.waitForClosedNoData(close_deadline_ms);
 }
 
-test "idle timeout into close timeout" {
+test "idle timeout: peer ignoring close still disconnects" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -124,7 +90,7 @@ test "idle timeout into close timeout" {
     defer client.done(close_msg);
     try testing.expectEqual(.close, close_msg.type);
 
-    // Do NOT echo the close frame — let the close timeout fire.
+    // Do NOT echo the close frame — server should still disconnect promptly.
     try client.waitForClosedNoData(close_deadline_ms);
 }
 
@@ -132,9 +98,8 @@ test "close in onOpen with idle timeout configured" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
-    // Server calls close() in onOpen. idle_timeout_ms is configured, which
-    // previously would overwrite the close timer started by close(). The
-    // close timeout (200ms) should apply, not the idle timeout (5000ms).
+    // Server calls close() in onOpen. idle_timeout_ms is configured, but
+    // close in onOpen should still disconnect promptly.
     const ts = try servers.startCloseOnOpenServerWithTimeouts(testing.allocator, 5000, 200);
     defer ts.stop();
 
@@ -151,12 +116,11 @@ test "close in onOpen with idle timeout configured" {
     const code = std.mem.readInt(u16, close_msg.data[0..2], .big);
     try testing.expectEqual(@as(u16, 1000), code);
 
-    // Do NOT echo the close frame — let the close timeout fire.
-    // If idle timeout (5000ms) were used by mistake, this bounded wait would fail.
+    // Do NOT echo the close frame — server should still disconnect promptly.
     try client.waitForClosedNoData(close_deadline_ms);
 }
 
-test "normal close still works with timeouts enabled" {
+test "normal close still works with idle timeout enabled" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 

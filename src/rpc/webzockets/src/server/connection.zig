@@ -118,8 +118,8 @@ pub fn Connection(
             /// Idle timeout in ms. Server sends close (going_away) if no data
             /// received for this long. null = disabled (default).
             idle_timeout_ms: ?u32 = null,
-            /// Close handshake timeout in ms. Force disconnect if peer doesn't
-            /// respond to our close frame within this duration. Default: 5000.
+            /// Maximum time in ms the connection may remain in `.closing`
+            /// before force-disconnecting. Default: 5000.
             close_timeout_ms: u32 = 5_000,
         };
 
@@ -177,10 +177,6 @@ pub fn Connection(
             control_queue: ControlQueue = ControlQueue.init(),
             /// Auto-pong state (only present when Handler lacks onPing).
             auto_pong: AutoPongState = .{},
-            /// True when we should disconnect after sending the current close frame.
-            /// Set when the peer initiates a close (we echo and disconnect) or when
-            /// we detect a protocol error (we send 1002 and disconnect).
-            peer_caused_close: bool = false,
         };
 
         // ====================================================================
@@ -323,7 +319,8 @@ pub fn Connection(
         }
 
         /// Initiate a close handshake with the given status code and optional reason.
-        /// The connection transitions to `.closing` and waits for the peer's close response.
+        /// The connection transitions to `.closing` and disconnects after the close
+        /// frame write completes.
         /// The reason is silently truncated to 123 bytes (the maximum allowed by RFC 6455
         /// after the 2-byte close code in a 125-byte control frame payload).
         pub fn close(self: *ConnectionSelf, code: types.CloseCode, reason: []const u8) void {
@@ -358,7 +355,6 @@ pub fn Connection(
         }
 
         /// Perform the state transition and close frame enqueue.
-        /// Ensures the close-handshake timer is running.
         fn initiateClose(self: *ConnectionSelf, code: types.CloseCode, reason: []const u8) void {
             self.state = .closing;
 
@@ -369,22 +365,22 @@ pub fn Connection(
             @memcpy(payload[2..][0..reason_len], reason[0..reason_len]);
             const total_len: u8 = @intCast(2 + reason_len);
 
-            self.write.peer_caused_close = false;
             self.enqueueClose(payload[0..total_len]);
+            self.armCloseTimer();
+        }
 
-            // Start close-handshake deadline timer.
-            // Uses a dedicated completion so it can't be clobbered by the idle
-            // timer's guaranteed `error.Canceled` callback.
-            if (self.close_timer_completion.state() != .active) {
-                self.timer.run(
-                    self.server.loop,
-                    &self.close_timer_completion,
-                    self.config.close_timeout_ms,
-                    ConnectionSelf,
-                    self,
-                    onCloseTimerCallback,
-                );
+        fn armCloseTimer(self: *ConnectionSelf) void {
+            if (self.close_timer_completion.state() == .active) {
+                return;
             }
+            self.timer.run(
+                self.server.loop,
+                &self.close_timer_completion,
+                self.config.close_timeout_ms,
+                ConnectionSelf,
+                self,
+                onCloseTimerCallback,
+            );
         }
 
         // ====================================================================
@@ -394,7 +390,7 @@ pub fn Connection(
         /// Arm another socket read when legal; while paused this continues
         /// filling the read buffer until it has no free space.
         fn maybeReadMore(self: *ConnectionSelf) void {
-            if (self.state == .closed or self.write.peer_caused_close) return;
+            if (self.state != .open) return;
             if (self.read_completion.state() == .active) return;
             if (self.read_paused) {
                 // Reclaim consumed bytes if buffer is full so we can buffer as much as
@@ -460,11 +456,11 @@ pub fn Connection(
                 return .disarm;
             }
 
-            switch (self.state) {
-                .open, .closing => self.processMessages(),
-                .closed => {},
+            if (self.state != .open) {
+                return .disarm;
             }
 
+            self.processMessages();
             return .disarm;
         }
 
@@ -479,6 +475,10 @@ pub fn Connection(
 
             if (self.read_paused) {
                 self.maybeReadMore();
+                return;
+            }
+
+            if (self.state != .open) {
                 return;
             }
 
@@ -518,14 +518,15 @@ pub fn Connection(
                     },
                     .close => {
                         self.handleCloseFrame(msg.data);
-                        if (self.state == .closed) return;
                     },
                 }
-                if (self.state == .closed or self.read_paused) break;
+                if (self.state != .open or self.read_paused) {
+                    break;
+                }
             }
             // Only start a new read if we're still active.
-            // When peer_caused_close is set, we're echoing the peer's close frame
-            // and will disconnect as soon as the write completes — no need to read more.
+            // While closing, we'll disconnect as soon as the close frame write
+            // completes — no need to read more.
             self.maybeReadMore();
         }
 
@@ -534,34 +535,32 @@ pub fn Connection(
         fn failWithClose(self: *ConnectionSelf, code: types.CloseCode) void {
             if (self.state == .closed) return;
             self.state = .closing;
-            self.write.peer_caused_close = true;
             const close_payload = code.payloadBytes();
             self.enqueueClose(&close_payload);
+            self.cancelTimer(&self.idle_timer_completion, &self.idle_timer_cancel_completion);
+            self.armCloseTimer();
         }
 
         fn handleCloseFrame(self: *ConnectionSelf, payload: []const u8) void {
             if (self.state == .closing) {
-                // Already in closing state. If we're waiting to send our close response
-                // (peer_caused_close), ignore this duplicate. Otherwise, we initiated
-                // the close and this is the peer's response — complete the handshake.
-                if (!self.write.peer_caused_close) {
-                    self.handleDisconnect();
-                }
-                // else: peer sent multiple close frames — ignore per RFC 6455
-            } else {
-                // Peer initiated — validate and echo the close frame, then disconnect
-                self.state = .closing;
-                self.write.peer_caused_close = true;
-
-                const validation = types.validateClosePayload(payload);
-                switch (validation) {
-                    .valid_payload => |vp| self.enqueueClose(vp),
-                    .close_code => |code| {
-                        const close_payload = code.payloadBytes();
-                        self.enqueueClose(&close_payload);
-                    },
-                }
+                // Already closing and waiting to disconnect after our close write.
+                // Ignore extra close frames.
+                return;
             }
+
+            // Peer initiated — validate and echo the close frame, then disconnect
+            self.state = .closing;
+
+            const validation = types.validateClosePayload(payload);
+            switch (validation) {
+                .valid_payload => |vp| self.enqueueClose(vp),
+                .close_code => |code| {
+                    const close_payload = code.payloadBytes();
+                    self.enqueueClose(&close_payload);
+                },
+            }
+            self.cancelTimer(&self.idle_timer_completion, &self.idle_timer_cancel_completion);
+            self.armCloseTimer();
         }
 
         // ====================================================================
@@ -715,11 +714,15 @@ pub fn Connection(
         fn finishControlWrite(self: *ConnectionSelf) void {
             self.write.in_flight = .idle;
 
-            if (self.write.peer_caused_close) {
-                // Close frame sent (peer-initiated echo or protocol error) — tear down
-                self.write.peer_caused_close = false;
-                self.handleDisconnect();
-                return;
+            if (self.state == .closing) {
+                const wrote_close =
+                    (self.write.control_buf[0] & 0x0F) == @intFromEnum(types.Opcode.close);
+                if (wrote_close) {
+                    // Close frame sent, now we can tear down
+                    self.handleDisconnect();
+                    return;
+                }
+                // else we'll submit the close frame next
             }
 
             // Pending controls have priority over pending data writes
@@ -823,8 +826,7 @@ pub fn Connection(
                 },
                 .closing => {
                     // We may be in the middle of a server-initiated close while the
-                    // idle timer is being canceled; never treat an idle timer fire
-                    // as a close timeout.
+                    // idle timer is being canceled.
                 },
                 .closed => self.checkAllDone(),
             }
@@ -842,7 +844,9 @@ pub fn Connection(
 
             result catch |err| switch (err) {
                 error.Canceled => {
-                    if (self.state == .closed) self.checkAllDone();
+                    if (self.state == .closed) {
+                        self.checkAllDone();
+                    }
                     return .disarm;
                 },
                 error.Unexpected => |e| {
@@ -852,18 +856,10 @@ pub fn Connection(
                 },
             };
 
-            switch (self.state) {
-                .closing => {
-                    if (!self.write.peer_caused_close) {
-                        // Close timeout expired (server-initiated) — force disconnect
-                        self.handleDisconnect();
-                    }
-                    // else: peer-initiated close — write path handles disconnect
-                },
-                .open => {
-                    // Shouldn't happen: close timer is only armed for server-initiated closes.
-                },
-                .closed => self.checkAllDone(),
+            if (self.state == .closing) {
+                self.handleDisconnect();
+            } else if (self.state == .closed) {
+                self.checkAllDone();
             }
 
             return .disarm;

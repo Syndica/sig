@@ -55,7 +55,10 @@ test "e2e client pause/resume: pause mid-stream stops dispatch then delivers on 
     defer fd_check.assertNoLeaks();
 
     const messages = [_][]const u8{ "msg-1", "msg-2", "msg-3", "msg-4" };
-    var send_ctx: server_handlers.SendMessagesOnOpenHandler.Context = .{ .messages = &messages };
+    var send_ctx: server_handlers.SendMessagesOnOpenHandler.Context = .{
+        .messages = &messages,
+        .close_reason = null,
+    };
     const ts = try servers.startSendMessagesOnOpenServer(testing.allocator, &send_ctx);
     defer ts.stop();
 

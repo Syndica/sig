@@ -4,5 +4,4 @@ comptime {
     _ = @import("ping_pong_tests.zig");
     _ = @import("max_message_tests.zig");
     _ = @import("pause_resume_tests.zig");
-    _ = @import("timeout_tests.zig");
 }

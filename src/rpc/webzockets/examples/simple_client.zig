@@ -108,7 +108,6 @@ pub fn main() !void {
         .address = address,
         .path = "/",
         .max_message_size = 16 * 1024 * 1024,
-        .close_timeout_ms = 5_000,
     });
 
     try client.connect();

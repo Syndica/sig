@@ -139,7 +139,6 @@ pub fn main() !void {
             .max_handshakes = null,
             .max_connections = null,
             .idle_timeout_ms = null,
-            .close_timeout_ms = 5_000,
         },
     );
     defer server.deinit();

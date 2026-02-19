@@ -25,8 +25,8 @@ See [examples/echo_server.zig](examples/echo_server.zig) and [examples/simple_cl
 - **Sends on non-`.open` connections** return `error.InvalidState`. `close()` no-ops if already closing.
 - **`onClose` fires exactly once.** Server connections are pool-released afterward — don't reference them. Client connections require caller `deinit()`.
 - **`onWriteComplete` fires even on disconnect** (so callers can free buffers).
-- **Idle timeout** (optional, server only) sends `close(.going_away, "")`, following normal close handshake.
-- **Close-handshake timeout** force-disconnects if peer doesn't respond.
+- **Idle timeout** (optional, server only) sends `close(.going_away, "")`.
+- **Close behavior:** disconnects immediately after the close frame write completes, with a closing-state watchdog (`close_timeout_ms`) as a fallback if the write cannot complete.
 
 ### Handler Lifecycle (Server)
 
@@ -42,7 +42,7 @@ See [examples/echo_server.zig](examples/echo_server.zig) and [examples/simple_cl
 ### Timers
 
 - **Idle timeout** (`idle_timeout_ms`, server only, default `null`): sends close on inactivity. Resets on each read.
-- **Close-handshake timeout** (`close_timeout_ms`, default 5000ms): force-disconnects if peer doesn't complete close handshake.
+- **Close timeout** (`close_timeout_ms`, client+server, default `5000`): maximum time allowed in `.closing` before force-disconnect.
 - **libxev tip:** prefer `Timer.cancel()` over raw `.cancel` completions (different behavior across backends). Note: cancellation still delivers the original callback with `error.Canceled`.
 
 ### Event Loop

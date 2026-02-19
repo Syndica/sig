@@ -139,8 +139,8 @@ pub fn Server(
             /// Idle timeout in ms. Server sends close (going_away) if no data
             /// received for this long. null = disabled (default).
             idle_timeout_ms: ?u32 = null,
-            /// Close handshake timeout in ms. Force disconnect if peer doesn't
-            /// respond to our close frame within this duration. Default: 5000.
+            /// Maximum time in ms a connection may remain in `.closing`
+            /// before force-disconnecting. Default: 5000.
             close_timeout_ms: u32 = 5_000,
         };
 

@@ -43,6 +43,26 @@ pub const PingOnOpenHandler = struct {
     pub fn onClose(_: *PingOnOpenHandler, _: anytype) void {}
 };
 
+/// Server-side handler that sends ping on open, then immediately closes.
+/// Used by close_tests.zig to verify close is sent even when another control
+/// frame is already in flight.
+pub const PingThenCloseOnOpenHandler = struct {
+    pub const Context = void;
+
+    pub fn init(_: ws.http.Request, _: void) !PingThenCloseOnOpenHandler {
+        return .{};
+    }
+
+    pub fn onOpen(_: *PingThenCloseOnOpenHandler, conn: anytype) void {
+        conn.sendPing("hello") catch return;
+        conn.close(.normal, "");
+    }
+
+    pub fn onMessage(_: *PingThenCloseOnOpenHandler, _: anytype, _: ws.Message) void {}
+    pub fn onWriteComplete(_: *PingThenCloseOnOpenHandler, _: anytype) void {}
+    pub fn onClose(_: *PingThenCloseOnOpenHandler, _: anytype) void {}
+};
+
 /// Server-side handler that sends an unsolicited pong immediately on open.
 /// Used by client ping_pong_tests.zig to verify client onPong callback.
 /// Does not initiate close — the test client is expected to close after
@@ -103,7 +123,7 @@ pub const SendOversizedOnOpenHandler = struct {
 };
 
 /// Server-side handler that echoes the first message, then closes the connection.
-/// Used by server timeout_tests.zig to test close timeout behavior.
+/// Used by server timeout_tests.zig to test close handling behavior.
 pub const CloseAfterFirstMessageHandler = struct {
     pub const Context = void;
 
@@ -461,15 +481,15 @@ pub const PauseMidStreamEchoHandler = struct {
 };
 
 /// Server-side handler that sends configured messages on open (one per write
-/// completion) and then closes.
+/// completion) and optionally closes.
 pub const SendMessagesOnOpenHandler = struct {
     pub const Context = struct {
         messages: []const []const u8,
-        close_reason: []const u8 = "done",
+        close_reason: ?[]const u8 = "done",
     };
 
     messages: []const []const u8,
-    close_reason: []const u8,
+    close_reason: ?[]const u8,
     next_index: usize = 0,
     sent_data: ?[]const u8 = null,
 
@@ -488,7 +508,9 @@ pub const SendMessagesOnOpenHandler = struct {
         if (self.sent_data != null) return;
 
         if (self.next_index >= self.messages.len) {
-            conn.close(.normal, self.close_reason);
+            if (self.close_reason) |reason| {
+                conn.close(.normal, reason);
+            }
             return;
         }
 

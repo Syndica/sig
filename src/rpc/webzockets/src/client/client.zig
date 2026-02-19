@@ -122,8 +122,8 @@ pub fn Client(comptime Handler: type, comptime read_buf_size: usize) type {
             /// (across all fragments). Messages exceeding this limit
             /// cause the connection to be closed with a message too big error.
             max_message_size: usize = 16 * 1024 * 1024,
-            /// Close handshake timeout in ms. Force disconnect if peer doesn't
-            /// respond to our close frame within this duration. Default: 5000.
+            /// Maximum time in ms the client may remain in `.closing` before
+            /// force-disconnecting. Default: 5000.
             close_timeout_ms: u32 = 5_000,
         };
 

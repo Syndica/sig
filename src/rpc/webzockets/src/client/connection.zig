@@ -90,7 +90,7 @@ pub fn ClientConnection(
         // -- Write state --
         write: WriteState,
 
-        // -- Close-handshake timer state --
+        // -- Close watchdog timer state --
         timer: xev.Timer,
         close_timer_completion: xev.Completion,
         close_timer_cancel_completion: xev.Completion,
@@ -114,8 +114,8 @@ pub fn ClientConnection(
         pub const Config = struct {
             /// Maximum total size of a reassembled fragmented message.
             max_message_size: usize = 16 * 1024 * 1024,
-            /// Close handshake timeout in ms. Force disconnect if peer doesn't
-            /// respond to our close frame within this duration. Default: 5000.
+            /// Maximum time in ms the connection may remain in `.closing`
+            /// before force-disconnecting. Default: 5000.
             close_timeout_ms: u32 = 5_000,
         };
 
@@ -171,10 +171,6 @@ pub fn ClientConnection(
             control_queue: ControlQueue = ControlQueue.init(),
             /// Auto-pong state (only present when Handler lacks onPing).
             auto_pong: AutoPongState = .{},
-            /// Whether to disconnect after sending a close frame.
-            disconnect_after_close: bool = false,
-            /// Whether the peer initiated the close (used to detect duplicate close frames).
-            peer_initiated_close: bool = false,
         };
 
         // ====================================================================
@@ -285,9 +281,6 @@ pub fn ClientConnection(
         }
 
         /// Initiate a close handshake with the given status code and optional reason.
-        /// The connection transitions to `.closing` and waits for the peer's close
-        /// response. Arms a close-handshake timer that force-disconnects if the peer
-        /// doesn't respond within `close_timeout_ms`.
         /// The reason is silently truncated to 123 bytes (the maximum allowed by RFC 6455
         /// after the 2-byte close code in a 125-byte control frame payload).
         pub fn close(self: *ConnectionSelf, code: types.CloseCode, reason: []const u8) void {
@@ -302,18 +295,7 @@ pub fn ClientConnection(
             const total_len: u8 = @intCast(2 + reason_len);
 
             self.enqueueClose(payload[0..total_len]);
-
-            // Start close-handshake deadline timer.
-            if (self.close_timer_completion.state() != .active) {
-                self.timer.run(
-                    self.loop,
-                    &self.close_timer_completion,
-                    self.config.close_timeout_ms,
-                    ConnectionSelf,
-                    self,
-                    onCloseTimerCallback,
-                );
-            }
+            self.armCloseTimer();
         }
 
         /// Pause frame dispatch. While paused, onMessage/onPing/onPong/close-frame
@@ -346,7 +328,7 @@ pub fn ClientConnection(
         /// Arm another socket read when legal; while paused this continues
         /// filling the read buffer until it has no free space.
         fn maybeReadMore(self: *ConnectionSelf) void {
-            if (self.state == .closed or self.write.peer_initiated_close) return;
+            if (self.state != .open) return;
             if (self.read_completion.state() == .active) return;
             if (self.read_paused) {
                 // Reclaim consumed bytes if buffer is full so we can buffer as much as
@@ -411,11 +393,11 @@ pub fn ClientConnection(
                 return .disarm;
             }
 
-            switch (self.state) {
-                .open, .closing => self.processMessages(),
-                .closed => {},
+            if (self.state != .open) {
+                return .disarm;
             }
 
+            self.processMessages();
             return .disarm;
         }
 
@@ -430,6 +412,10 @@ pub fn ClientConnection(
 
             if (self.read_paused) {
                 self.maybeReadMore();
+                return;
+            }
+
+            if (self.state != .open) {
                 return;
             }
 
@@ -470,14 +456,15 @@ pub fn ClientConnection(
                     },
                     .close => {
                         self.handleCloseFrame(msg.data);
-                        if (self.state == .closed) return;
                     },
                 }
-                if (self.state == .closed or self.read_paused) break;
+                if (self.state != .open or self.read_paused) {
+                    break;
+                }
             }
             // Only start a new read if we're still active.
-            // When peer_initiated_close is set, we're echoing the peer's close frame
-            // and will disconnect as soon as the write completes — no need to read more.
+            // While closing, we'll disconnect as soon as the close frame write
+            // completes — no need to read more.
             self.maybeReadMore();
         }
 
@@ -486,35 +473,44 @@ pub fn ClientConnection(
         fn failWithClose(self: *ConnectionSelf, code: types.CloseCode) void {
             if (self.state == .closed) return;
             self.state = .closing;
-            self.write.disconnect_after_close = true;
             const close_payload = code.payloadBytes();
             self.enqueueClose(&close_payload);
+            self.armCloseTimer();
         }
 
         fn handleCloseFrame(self: *ConnectionSelf, payload: []const u8) void {
             if (self.state == .closing) {
-                // Already in closing state. If we're waiting to send our close response
-                // (peer_initiated_close), ignore this duplicate. Otherwise, we initiated
-                // the close and this is the peer's response — complete the handshake.
-                if (!self.write.peer_initiated_close) {
-                    self.handleDisconnect();
-                }
-                // else: peer sent multiple close frames — ignore per RFC 6455
-            } else {
-                // Peer initiated — validate and echo the close frame, then disconnect
-                self.state = .closing;
-                self.write.peer_initiated_close = true;
-                self.write.disconnect_after_close = true;
-
-                const validation = types.validateClosePayload(payload);
-                switch (validation) {
-                    .valid_payload => |vp| self.enqueueClose(vp),
-                    .close_code => |code| {
-                        const close_payload = code.payloadBytes();
-                        self.enqueueClose(&close_payload);
-                    },
-                }
+                // Already closing and waiting to disconnect after our close write.
+                // Ignore extra close frames.
+                return;
             }
+
+            // Peer initiated — validate and echo the close frame, then disconnect
+            self.state = .closing;
+
+            const validation = types.validateClosePayload(payload);
+            switch (validation) {
+                .valid_payload => |vp| self.enqueueClose(vp),
+                .close_code => |code| {
+                    const close_payload = code.payloadBytes();
+                    self.enqueueClose(&close_payload);
+                },
+            }
+            self.armCloseTimer();
+        }
+
+        fn armCloseTimer(self: *ConnectionSelf) void {
+            if (self.close_timer_completion.state() == .active) {
+                return;
+            }
+            self.timer.run(
+                self.loop,
+                &self.close_timer_completion,
+                self.config.close_timeout_ms,
+                ConnectionSelf,
+                self,
+                onCloseTimerCallback,
+            );
         }
 
         // ====================================================================
@@ -686,10 +682,17 @@ pub fn ClientConnection(
         fn finishControlWrite(self: *ConnectionSelf) void {
             self.write.in_flight = .idle;
 
-            if (self.write.disconnect_after_close) {
-                // Close frame sent (peer echo or protocol error) — tear down
-                self.handleDisconnect();
-                return;
+            if (self.state == .closing) {
+                // Must check that control frame written was actually a close frame
+                // as it could be ping/pong that was inflight at time of close.
+                const wrote_close =
+                    (self.write.control_buf[0] & 0x0F) == @intFromEnum(types.Opcode.close);
+                if (wrote_close) {
+                    // Close frame sent, now we can tear down
+                    self.handleDisconnect();
+                    return;
+                }
+                // else we'll submit the close frame next
             }
 
             // Pending controls have priority over pending data writes.
@@ -761,7 +764,9 @@ pub fn ClientConnection(
 
             result catch |err| switch (err) {
                 error.Canceled => {
-                    if (self.state == .closed) self.checkAllDone();
+                    if (self.state == .closed) {
+                        self.checkAllDone();
+                    }
                     return .disarm;
                 },
                 error.Unexpected => |e| {
@@ -771,8 +776,7 @@ pub fn ClientConnection(
                 },
             };
 
-            if (self.state == .closing and !self.write.peer_initiated_close) {
-                // Close timeout expired (client-initiated) — force disconnect
+            if (self.state == .closing) {
                 self.handleDisconnect();
             } else if (self.state == .closed) {
                 self.checkAllDone();
@@ -794,7 +798,9 @@ pub fn ClientConnection(
             // Only relevant for teardown if the connection closed while the
             // cancellation was in-flight.
             if (self_opt) |self| {
-                if (self.state == .closed) self.checkAllDone();
+                if (self.state == .closed) {
+                    self.checkAllDone();
+                }
             }
             return .disarm;
         }
@@ -816,21 +822,7 @@ pub fn ClientConnection(
             self.write = .{};
             self.handler.onClose(self);
 
-            const timer_active = self.close_timer_completion.state() == .active;
-            const cancel_active = self.close_timer_cancel_completion.state() == .active;
-            if (timer_active and !cancel_active) {
-                // Cancel via xev.Timer.cancel() (not a raw `.cancel` op) since some
-                // backends (e.g. io_uring) require a timer-specific remove.
-                self.timer.cancel(
-                    self.loop,
-                    &self.close_timer_completion,
-                    &self.close_timer_cancel_completion,
-                    ConnectionSelf,
-                    self,
-                    onTimerCancelled,
-                );
-            }
-
+            self.cancelTimer(&self.close_timer_completion, &self.close_timer_cancel_completion);
             self.cancelActive(&self.read_completion, &self.cancel_completion);
             self.cancelActive(&self.write_completion, &self.close_completion);
 
@@ -850,6 +842,27 @@ pub fn ClientConnection(
                 self.checkAllDone();
             }
             return .disarm;
+        }
+
+        /// Cancel an active timer using its cancel completion slot.
+        fn cancelTimer(
+            self: *ConnectionSelf,
+            timer_completion: *xev.Completion,
+            cancel_slot: *xev.Completion,
+        ) void {
+            const is_active = timer_completion.state() == .active;
+            if (is_active and cancel_slot.state() != .active) {
+                // Cancel via xev.Timer.cancel() (not a raw `.cancel` op) since some
+                // backends (e.g. io_uring) require a timer-specific remove.
+                self.timer.cancel(
+                    self.loop,
+                    timer_completion,
+                    cancel_slot,
+                    ConnectionSelf,
+                    self,
+                    onTimerCancelled,
+                );
+            }
         }
 
         /// Cancel an active completion using a cancel slot.
@@ -882,10 +895,9 @@ pub fn ClientConnection(
             for (completions) |c| {
                 if (c.state() == .active) return;
             }
-            self.closeSocket();
-        }
 
-        fn closeSocket(self: *ConnectionSelf) void {
+            // Note: we just immediately close, no shutdown/FIN sent as it is not
+            // required by RFC 6455.
             self.socket.close(
                 self.loop,
                 &self.close_completion,

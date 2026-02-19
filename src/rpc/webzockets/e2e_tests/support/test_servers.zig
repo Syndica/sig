@@ -48,6 +48,20 @@ pub fn startPingOnOpenServer(allocator: std.mem.Allocator) !*PingOnOpenTestServe
     });
 }
 
+/// Server that sends ping then closes immediately on open.
+pub const PingThenCloseOnOpenServer = ws.Server(
+    server_handlers.PingThenCloseOnOpenHandler,
+    default_read_buf_size,
+);
+pub const PingThenCloseOnOpenTestServer = server_runner.ServerRunner(PingThenCloseOnOpenServer);
+
+pub fn startPingThenCloseOnOpenServer(allocator: std.mem.Allocator) !*PingThenCloseOnOpenTestServer {
+    return try PingThenCloseOnOpenTestServer.start(allocator, .{
+        .address = localhost,
+        .handler_context = {},
+    });
+}
+
 /// Server that sends an unsolicited pong to every connection immediately on open.
 pub const PongOnOpenServer = ws.Server(server_handlers.PongOnOpenHandler, default_read_buf_size);
 pub const PongOnOpenTestServer = server_runner.ServerRunner(PongOnOpenServer);
