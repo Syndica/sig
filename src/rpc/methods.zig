@@ -14,6 +14,8 @@ const rpc = @import("lib.zig");
 const base58 = @import("base58");
 const parse_instruction = @import("parse_instruction/lib.zig");
 
+const parse_token = sig.rpc.account_decoder.parse_token;
+
 const Allocator = std.mem.Allocator;
 const ParseOptions = std.json.ParseOptions;
 
