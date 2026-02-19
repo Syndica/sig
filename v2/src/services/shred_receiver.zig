@@ -38,10 +38,6 @@ const stub_max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for th
 pub fn serviceMain(writer: *std.io.Writer, ro: ReadOnly, rw: ReadWrite) !noreturn {
     try writer.print("Waiting for shreds on port {}\n", .{rw.pair.port});
 
-    var fba_buf: [2 * 1024]u8 = undefined;
-    var fba: std.heap.FixedBufferAllocator = .init(&fba_buf);
-    const shred_allocator = fba.allocator();
-
     var verified_roots_fba_buf: [64 * 1024]u8 = undefined;
     var verified_roots_fba: std.heap.FixedBufferAllocator = .init(&verified_roots_fba_buf);
     const roots_allocator = verified_roots_fba.allocator();
@@ -50,8 +46,6 @@ pub fn serviceMain(writer: *std.io.Writer, ro: ReadOnly, rw: ReadWrite) !noretur
     defer verified_roots.deinit(roots_allocator);
 
     while (true) {
-        defer fba.reset();
-
         var slice = rw.pair.recv.getReadable() catch continue;
         const packet = slice.one();
         defer slice.markUsed(1);
@@ -74,7 +68,7 @@ pub fn serviceMain(writer: *std.io.Writer, ro: ReadOnly, rw: ReadWrite) !noretur
             continue;
         };
 
-        const packet_shred = shred.Shred.fromPayload(shred_allocator, payload) catch |err| {
+        const packet_shred = shred.Shred.fromPayload(payload) catch |err| {
             try writer.print(
                 "failed to deserialize verified shred {?}.{?}: {}\n",
                 .{ layout.getSlot(payload), layout.getIndex(payload), err },
