@@ -13,7 +13,10 @@ const Pubkey = sig.core.Pubkey;
 const MemoryMap = memory.MemoryMap;
 const InstructionError = sig.core.instruction.InstructionError;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
+const SyscallError = sig.vm.SyscallError;
 const TransactionContext = sig.runtime.TransactionContext;
+
+const MM_INPUT_START = memory.INPUT_START;
 
 // https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/sysvar.rs#L164
 const SYSVAR_NOT_FOUND = 2;
@@ -31,6 +34,16 @@ fn getSyscall(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMa
             try tc.consumeCompute(tc.compute_budget.sysvar_base_cost + @sizeOf(T));
 
             const value_addr = registers.get(.r1);
+
+            // SIMD-0219: The destination address of all sysvar related syscalls
+            // must be on the stack or heap, meaning their virtual address is
+            // inside `0x200000000..0x400000000`.
+            if (value_addr >= MM_INPUT_START and
+                tc.feature_set.active(.stricter_abi_and_runtime_constraints, tc.slot))
+            {
+                return SyscallError.InvalidPointer;
+            }
+
             const value = try memory_map.translateType(
                 T,
                 .mutable,
@@ -71,6 +84,15 @@ pub fn getSysvar(
     const buf_cost = length / tc.compute_budget.cpi_bytes_per_unit;
     const mem_cost = @max(tc.compute_budget.mem_op_base_cost, buf_cost);
     try tc.consumeCompute(tc.compute_budget.sysvar_base_cost +| id_cost +| mem_cost);
+
+    // SIMD-0219: The destination address of all sysvar related syscalls
+    // must be on the stack or heap, meaning their virtual address is
+    // inside `0x200000000..0x400000000`.
+    if (value_addr >= MM_INPUT_START and
+        tc.feature_set.active(.stricter_abi_and_runtime_constraints, tc.slot))
+    {
+        return SyscallError.InvalidPointer;
+    }
 
     const check_aligned = tc.getCheckAligned();
     const id = (try memory_map.translateType(Pubkey, .constant, id_addr, check_aligned)).*;
