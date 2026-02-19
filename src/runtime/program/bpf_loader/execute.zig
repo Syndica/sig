@@ -587,8 +587,12 @@ pub fn executeV4Retract(
         .authority_address_or_next_version = state.authority_address_or_next_version,
     });
 
-    const old_program = try ic.tc.program_map.fetchPut(allocator, program_account.pubkey, .failed);
-    if (old_program) |p| p.deinit(allocator);
+    const old_program = try ic.tc.program_map.fetchPut(
+        ic.tc.programs_allocator,
+        program_account.pubkey,
+        .failed,
+    );
+    if (old_program) |p| p.deinit(ic.tc.programs_allocator);
 }
 
 pub fn executeV4TransferAuthority(
@@ -1597,8 +1601,8 @@ pub fn executeV3Close(
 
                     // Remove from the program map if it was deployed.
                     const old_program = try ic.tc.program_map
-                        .fetchPut(allocator, program_key, .failed);
-                    if (old_program) |p| p.deinit(allocator);
+                        .fetchPut(ic.tc.programs_allocator, program_key, .failed);
+                    if (old_program) |p| p.deinit(ic.tc.programs_allocator);
                 },
                 else => {
                     try ic.tc.log("Invalid Program Account", .{});
@@ -1983,8 +1987,12 @@ pub fn executeV3Migrate(
 
     if (progdata_info.len == 0) {
         // Close the program map entry.
-        const old_program = try ic.tc.program_map.fetchPut(allocator, program_key, .failed);
-        if (old_program) |p| p.deinit(allocator);
+        const old_program = try ic.tc.program_map.fetchPut(
+            ic.tc.programs_allocator,
+            program_key,
+            .failed,
+        );
+        if (old_program) |p| p.deinit(ic.tc.programs_allocator);
     } else {
         try ic.nativeInvoke(
             allocator,
@@ -2104,7 +2112,9 @@ pub fn deployProgram(
     try tc.log("Deploying program {}", .{program_id});
 
     // Remove from the program map since it should not be accessible on this slot anymore.
-    _ = try tc.program_map.fetchPut(allocator, program_id, .failed);
+    if (try tc.program_map.fetchPut(tc.programs_allocator, program_id, .failed)) |old| {
+        old.deinit(tc.programs_allocator);
+    }
 }
 
 pub fn verifyProgram(

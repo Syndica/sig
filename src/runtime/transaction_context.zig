@@ -34,6 +34,8 @@ pub const MAX_INSTRUCTION_STACK_DEPTH = 5;
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L192
 pub const TransactionContext = struct {
     allocator: std.mem.Allocator,
+    /// Allocator for ProgramMap entries that must outlive the transaction's arena.
+    programs_allocator: std.mem.Allocator,
 
     /// The slot number this transaction is being executed in. Used for feature gate activations.
     slot: sig.core.Slot,

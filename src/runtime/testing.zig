@@ -196,6 +196,7 @@ fn initTransactionContext(
     // Create Transaction Context
     transaction_context.* = .{
         .allocator = allocator,
+        .programs_allocator = allocator,
         .feature_set = feature_set,
         .sysvar_cache = sysvar_cache,
         .epoch_stakes = epoch_stakes,
