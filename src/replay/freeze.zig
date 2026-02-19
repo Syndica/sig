@@ -11,8 +11,6 @@ const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
 const Logger = sig.trace.Logger(@typeName(@This()));
-const RewardInfo = rewards.RewardInfo;
-const BlockRewards = rewards.BlockRewards;
 
 const Ancestors = core.Ancestors;
 const Hash = core.Hash;
@@ -41,10 +39,6 @@ pub const FreezeParams = struct {
     slot_hash: *sig.sync.RwMux(?Hash),
     accounts_lt_hash: *sig.sync.Mux(?LtHash),
 
-    /// Pointer to the block rewards list for this slot.
-    /// Matches Agave's `Bank.rewards: RwLock<Vec<(Pubkey, RewardInfo)>>`.
-    rewards: *sig.sync.RwMux(BlockRewards),
-
     hash_slot: HashSlotParams,
     finalize_state: FinalizeStateParams,
 
@@ -56,13 +50,13 @@ pub const FreezeParams = struct {
         constants: *const SlotConstants,
         slot: Slot,
         blockhash: Hash,
+        ledger: *sig.ledger.Ledger,
     ) FreezeParams {
         return .{
             .logger = logger,
             .slot_hash = &state.hash,
             .thread_pool = thread_pool,
             .accounts_lt_hash = &state.accounts_lt_hash,
-            .rewards = &state.rewards,
             .hash_slot = .{
                 .account_reader = account_store.reader(),
                 .slot = slot,
@@ -91,6 +85,7 @@ pub const FreezeParams = struct {
                 .collector_id = constants.collector_id,
                 .collected_transaction_fees = state.collected_transaction_fees.load(.monotonic),
                 .collected_priority_fees = state.collected_priority_fees.load(.monotonic),
+                .ledger = ledger,
             },
         };
     }
@@ -112,10 +107,7 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
 
     if (slot_hash.get().* != null) return; // already frozen
 
-    // Set up finalize params with the rewards pointer
-    var finalize_params = params.finalize_state;
-    finalize_params.rewards = params.rewards;
-    try finalizeState(allocator, finalize_params);
+    try finalizeState(allocator, params.finalize_state);
 
     const maybe_lt_hash, slot_hash.mut().* = try hashSlot(
         allocator,
@@ -153,9 +145,7 @@ const FinalizeStateParams = struct {
     collected_transaction_fees: u64,
     collected_priority_fees: u64,
 
-    /// Pointer to block rewards list. Matches Agave's `Bank.rewards`.
-    /// Fee rewards (and future vote/staking rewards) are pushed here.
-    rewards: ?*sig.sync.RwMux(BlockRewards) = null,
+    ledger: *sig.ledger.Ledger,
 };
 
 /// Updates some accounts and other shared state to finish up the slot execution.
@@ -186,7 +176,7 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
         params.collector_id,
         params.collected_transaction_fees,
         params.collected_priority_fees,
-        params.rewards,
+        params.ledger,
     );
 
     // Run incinerator
@@ -220,7 +210,7 @@ fn distributeTransactionFees(
     collector_id: Pubkey,
     collected_transaction_fees: u64,
     collected_priority_fees: u64,
-    rewards_mux: ?*sig.sync.RwMux(BlockRewards),
+    ledger: *sig.ledger.Ledger,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "distributeTransactionFees" });
     defer zone.deinit();
@@ -249,21 +239,17 @@ fn distributeTransactionFees(
             else => return err,
         };
 
-        // Push fee reward to the rewards list
-        // Matches Agave's `self.rewards.write().unwrap().push(...)` in deposit_or_burn_fee
-        if (rewards_mux) |mux| {
-            var rewards_guard = mux.write();
-            defer rewards_guard.unlock();
-            try rewards_guard.mut().push(.{
+        try ledger.db.put(sig.ledger.schema.schema.rewards, slot, .{
+            .rewards = &.{.{
                 .pubkey = collector_id,
-                .reward_info = .{
-                    .reward_type = .fee,
-                    .lamports = @intCast(payout_result.payout_amount),
-                    .post_balance = payout_result.post_balance,
-                    .commission = null,
-                },
-            });
-        }
+                .lamports = @intCast(payout_result.payout_amount),
+                .post_balance = payout_result.post_balance,
+                .reward_type = .fee,
+                .commission = null,
+            }},
+
+            .num_partitions = null, // num_partitions - TODO: implement for epoch rewards
+        });
     }
 
     _ = capitalization.fetchSub(burn, .monotonic);
@@ -580,6 +566,12 @@ test "freezeSlot: trivial e2e merkle hash test" {
         tp.shutdown();
         tp.deinit();
     }
+    var ledger, var ledger_dir = try sig.ledger.Ledger.initForTest(allocator);
+    defer {
+        ledger.deinit();
+        ledger_dir.cleanup();
+    }
+
     try freezeSlot(allocator, .init(
         .FOR_TESTS,
         account_store,
@@ -588,6 +580,7 @@ test "freezeSlot: trivial e2e merkle hash test" {
         &constants,
         0,
         .ZEROES,
+        &ledger,
     ));
 
     try std.testing.expectEqual(
@@ -637,6 +630,12 @@ test "freezeSlot: trivial e2e lattice hash test" {
     var state: SlotState = .GENESIS;
     defer state.deinit(allocator);
 
+    var ledger, var ledger_dir = try sig.ledger.Ledger.initForTest(allocator);
+    defer {
+        ledger.deinit();
+        ledger_dir.cleanup();
+    }
+
     try freezeSlot(allocator, .init(
         .FOR_TESTS,
         account_store,
@@ -645,6 +644,7 @@ test "freezeSlot: trivial e2e lattice hash test" {
         &constants,
         0,
         .ZEROES,
+        &ledger,
     ));
 
     try std.testing.expectEqual(

@@ -387,7 +387,6 @@ fn executeTxnContext(
                 .update_sysvar_deps = update_sysvar_deps,
             },
         );
-        var slot_block_time: std.atomic.Value(i64) = .init(0);
         try update_sysvar.updateClock(allocator, .{
             .feature_set = &feature_set,
             .epoch_schedule = &epoch_schedule,
@@ -398,7 +397,6 @@ fn executeTxnContext(
             .genesis_creation_time = genesis_config.creation_time,
             .ns_per_slot = @intCast(genesis_config.nsPerSlot()),
             .update_sysvar_deps = update_sysvar_deps,
-            .slot_block_time = &slot_block_time,
         });
         try update_sysvar.updateRent(allocator, genesis_config.rent, update_sysvar_deps);
         try update_sysvar.updateEpochSchedule(allocator, epoch_schedule, update_sysvar_deps);
@@ -613,7 +611,6 @@ fn executeTxnContext(
                         .update_sysvar_deps = update_sysvar_deps,
                     },
                 );
-                var slot_block_time: std.atomic.Value(i64) = .init(0);
                 try update_sysvar.updateClock(allocator, .{
                     .feature_set = &feature_set,
                     .epoch_schedule = &epoch_schedule,
@@ -624,7 +621,6 @@ fn executeTxnContext(
                     .genesis_creation_time = genesis_config.creation_time,
                     .ns_per_slot = @intCast(genesis_config.nsPerSlot()),
                     .update_sysvar_deps = update_sysvar_deps,
-                    .slot_block_time = &slot_block_time,
                 });
                 try update_sysvar.updateLastRestartSlot(
                     allocator,

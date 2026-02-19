@@ -673,9 +673,8 @@ test "EncodedInstruction serialization" {
     // Note: []const u8 serializes as a string via std.json, not as an integer array.
     // The accounts field contains raw byte values, serialized as escaped characters.
     try expectJsonStringify(
-        "{\"programIdIndex\":2,\"accounts\":\"\\u0000\\u0001\",\"data\":\"3Bxs3zzLZLuLQEYX\"}",
-        ix,
-    );
+        \\{"programIdIndex":2,"accounts":[0,1],"data":"3Bxs3zzLZLuLQEYX"}
+    , ix);
 }
 
 test "EncodedInstruction serialization - with stackHeight" {
@@ -686,9 +685,8 @@ test "EncodedInstruction serialization - with stackHeight" {
         .stackHeight = 1,
     };
     try expectJsonStringify(
-        "{\"programIdIndex\":2,\"accounts\":\"\",\"data\":\"3Bxs3zzLZLuLQEYX\",\"stackHeight\":1}",
-        ix,
-    );
+        \\{"programIdIndex":2,"accounts":[],"data":"3Bxs3zzLZLuLQEYX","stackHeight":1}
+    , ix);
 }
 
 test "EncodedMessage serialization" {
@@ -725,9 +723,8 @@ test "EncodedMessage serialization - with addressTableLookups" {
     };
     // Note: writableIndexes/readonlyIndexes are []const u8, serialized as strings
     try expectJsonStringify(
-        "{\"accountKeys\":[],\"header\":{\"numRequiredSignatures\":1,\"numReadonlySignedAccounts\":0,\"numReadonlyUnsignedAccounts\":0},\"recentBlockhash\":\"11111111111111111111111111111111\",\"instructions\":[],\"addressTableLookups\":[{\"accountKey\":\"11111111111111111111111111111111\",\"writableIndexes\":\"\\u0000\",\"readonlyIndexes\":\"\\u0001\"}]}",
-        msg,
-    );
+        \\{"accountKeys":[],"header":{"numRequiredSignatures":1,"numReadonlySignedAccounts":0,"numReadonlyUnsignedAccounts":0},"recentBlockhash":"11111111111111111111111111111111","instructions":[],"addressTableLookups":[{"accountKey":"11111111111111111111111111111111","readonlyIndexes":[1],"writableIndexes":[0]}]}
+    , msg);
 }
 
 // ============================================================================

@@ -60,7 +60,7 @@ pub fn updateSysvarsForNewSlot(
     state: *sig.core.SlotState,
     slot: Slot,
     hard_forks: *const sig.core.HardForks,
-) !void {
+) !Clock {
     const epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
     const parent_slots_epoch = epoch_tracker.epoch_schedule.getEpoch(constants.parent_slot);
     const epoch_info = try epoch_tracker.getEpochInfo(slot);
@@ -80,7 +80,7 @@ pub fn updateSysvarsForNewSlot(
         .update_sysvar_deps = sysvar_deps,
     });
 
-    try updateClock(
+    const clock = try updateClock(
         allocator,
         .{
             .feature_set = &constants.feature_set,
@@ -92,7 +92,6 @@ pub fn updateSysvarsForNewSlot(
             .genesis_creation_time = epoch_tracker.cluster.genesis_creation_time,
             .ns_per_slot = epoch_tracker.cluster.nanosPerSlot(),
             .update_sysvar_deps = sysvar_deps,
-            .slot_block_time = &state.unix_timestamp,
         },
     );
     try updateLastRestartSlot(
@@ -102,6 +101,7 @@ pub fn updateSysvarsForNewSlot(
         hard_forks,
         sysvar_deps,
     );
+    return clock;
 }
 
 pub fn fillMissingSysvarCacheEntries(
@@ -178,11 +178,9 @@ pub const UpdateClockDeps = struct {
     ns_per_slot: u64,
 
     update_sysvar_deps: UpdateSysvarAccountDeps,
-
-    slot_block_time: *std.atomic.Value(i64),
 };
 
-pub fn updateClock(allocator: Allocator, deps: UpdateClockDeps) !void {
+pub fn updateClock(allocator: Allocator, deps: UpdateClockDeps) !Clock {
     const clock = try nextClock(
         allocator,
         deps.feature_set,
@@ -197,9 +195,7 @@ pub fn updateClock(allocator: Allocator, deps: UpdateClockDeps) !void {
         deps.parent_slots_epoch,
     );
     try updateSysvarAccount(Clock, allocator, clock, deps.update_sysvar_deps);
-
-    // Store unix_timestamp in the slot's block_time for easy access at rooting time
-    deps.slot_block_time.store(clock.unix_timestamp, .monotonic);
+    return clock;
 }
 
 pub fn updateLastRestartSlot(
@@ -880,9 +876,7 @@ test "update all sysvars" {
         var stakes_cache = StakesCache.EMPTY;
         defer stakes_cache.deinit(allocator);
 
-        var slot_block_time: std.atomic.Value(i64) = .init(0);
-
-        try updateClock(
+        _ = try updateClock(
             allocator,
             .{
                 .feature_set = &feature_set,
@@ -894,7 +888,6 @@ test "update all sysvars" {
                 .genesis_creation_time = 0,
                 .ns_per_slot = 0,
                 .update_sysvar_deps = update_sysvar_deps,
-                .slot_block_time = &slot_block_time,
             },
         );
 
@@ -909,7 +902,6 @@ test "update all sysvars" {
             epoch_schedule.getLeaderScheduleEpoch(slot),
             new_sysvar.leader_schedule_epoch,
         );
-        try std.testing.expectEqual(0, new_sysvar.unix_timestamp);
         try expectSysvarAccountChange(rent, old_account, new_account);
     }
 
