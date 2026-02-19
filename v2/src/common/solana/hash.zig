@@ -32,7 +32,7 @@ pub const Hash = extern struct {
         return .initMany(&.{ &self.data, data });
     }
 
-    pub fn eql(self: Hash, other: Hash) bool {
+    pub fn eql(self: *const Hash, other: *const Hash) bool {
         const x: @Vector(SIZE, u8) = self.data;
         const y: @Vector(SIZE, u8) = other.data;
         return @reduce(.And, x == y);

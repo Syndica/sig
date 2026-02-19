@@ -12,6 +12,7 @@ const layout = shred.layout;
 const Pair = common.net.Pair;
 const Packet = common.net.Packet;
 const Slot = common.solana.Slot;
+const Hash = common.solana.Hash;
 const Atomic = std.atomic.Value;
 
 comptime {
@@ -37,9 +38,16 @@ const stub_max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for th
 pub fn serviceMain(writer: *std.io.Writer, ro: ReadOnly, rw: ReadWrite) !noreturn {
     try writer.print("Waiting for shreds on port {}\n", .{rw.pair.port});
 
-    var fba_buf: [16 * 1024]u8 = undefined;
+    var fba_buf: [2 * 1024]u8 = undefined;
     var fba: std.heap.FixedBufferAllocator = .init(&fba_buf);
-    const allocator = fba.allocator();
+    const shred_allocator = fba.allocator();
+
+    var verified_roots_fba_buf: [64 * 1024]u8 = undefined;
+    var verified_roots_fba: std.heap.FixedBufferAllocator = .init(&verified_roots_fba_buf);
+    const roots_allocator = verified_roots_fba.allocator();
+
+    var verified_roots: VerifiedMerkleRoots = try .init(roots_allocator, 128);
+    defer verified_roots.deinit(roots_allocator);
 
     while (true) {
         defer fba.reset();
@@ -53,7 +61,7 @@ pub fn serviceMain(writer: *std.io.Writer, ro: ReadOnly, rw: ReadWrite) !noretur
             continue;
         };
 
-        verifyShred(packet, ro.leader_schedule) catch |err| {
+        verifyShred(packet, ro.leader_schedule, &verified_roots) catch |err| {
             _ = err catch {};
             try writer.print("failed to verify shred: {}\n", .{err});
             continue;
@@ -66,7 +74,7 @@ pub fn serviceMain(writer: *std.io.Writer, ro: ReadOnly, rw: ReadWrite) !noretur
             continue;
         };
 
-        const packet_shred = shred.Shred.fromPayload(allocator, payload) catch |err| {
+        const packet_shred = shred.Shred.fromPayload(shred_allocator, payload) catch |err| {
             try writer.print(
                 "failed to deserialize verified shred {?}.{?}: {}\n",
                 .{ layout.getSlot(payload), layout.getIndex(payload), err },
@@ -89,6 +97,45 @@ pub fn serviceMain(writer: *std.io.Writer, ro: ReadOnly, rw: ReadWrite) !noretur
         });
     }
 }
+
+const VerifiedMerkleRoots = struct {
+    map: Map,
+    max_count: u32,
+
+    const Map = std.ArrayHashMapUnmanaged(Hash, void, MapContext, true);
+
+    const MapContext = struct {
+        pub fn hash(_: MapContext, pubkey: Hash) u32 {
+            return @bitCast(pubkey.data[0..4].*);
+        }
+
+        pub fn eql(_: MapContext, a: Hash, b: Hash, _: usize) bool {
+            return a.eql(&b);
+        }
+    };
+
+    fn init(allocator: std.mem.Allocator, max_count: u32) !VerifiedMerkleRoots {
+        var map: Map = .{};
+        errdefer map.deinit(allocator);
+
+        try map.ensureTotalCapacity(allocator, max_count);
+
+        return .{ .map = map, .max_count = max_count };
+    }
+
+    fn deinit(self: *VerifiedMerkleRoots, allocator: std.mem.Allocator) void {
+        self.map.deinit(allocator);
+    }
+
+    fn wasVerified(self: *VerifiedMerkleRoots, hash: *const Hash) bool {
+        return self.map.contains(hash.*);
+    }
+
+    fn insert(self: *VerifiedMerkleRoots, hash: *const Hash) void {
+        if (self.map.count() == self.max_count) self.map.orderedRemoveAt(0);
+        self.map.putAssumeCapacityNoClobber(hash.*, {});
+    }
+};
 
 fn validateShred(
     packet: *const Packet,
@@ -163,8 +210,7 @@ pub const ShredValidationError = error{
 pub fn verifyShred(
     packet: *const Packet,
     leader_schedule: *const common.solana.LeaderSchedule,
-    // verified_merkle_roots: *VerifiedMerkleRoots,
-    // metrics: Metrics,
+    verified_merkle_roots: *VerifiedMerkleRoots,
 ) ShredVerificationFailure!void {
     const zone = tracy.Zone.init(@src(), .{ .name = "verifyShred" });
     defer zone.deinit();
@@ -174,13 +220,13 @@ pub fn verifyShred(
     const signature = layout.getLeaderSignature(shred_) orelse return error.SignatureMissing;
     const signed_data = layout.merkleRoot(shred_) orelse return error.SignedDataMissing;
 
-    // if (verified_merkle_roots.get(signed_data) != null) return;
+    if (verified_merkle_roots.wasVerified(&signed_data)) return;
 
-    // metrics.cache_miss_count.inc();
     const leader = leader_schedule.get(slot) orelse return error.LeaderUnknown;
 
     signature.verify(leader, &signed_data.data) catch return error.FailedVerification;
-    // verified_merkle_roots.insert(signed_data, {}) catch return error.FailedCaching;
+
+    verified_merkle_roots.insert(&signed_data);
 }
 
 pub const ShredVerificationFailure = error{
