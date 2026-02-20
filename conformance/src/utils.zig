@@ -111,6 +111,7 @@ pub fn createTransactionContext(
     const slot = if (instr_ctx.slot_context) |slot_ctx| slot_ctx.slot else 0;
     tc.* = TransactionContext{
         .allocator = allocator,
+        .programs_allocator = allocator,
         .feature_set = feature_set,
         .epoch_stakes = epoch_stakes,
         .sysvar_cache = sysvar_cache,
