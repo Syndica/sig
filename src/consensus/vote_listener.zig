@@ -32,8 +32,9 @@ pub const SlotDataProvider = struct {
     }
 
     fn getSlotHash(self: *const SlotDataProvider, slot: Slot) ?Hash {
-        const slot_info = self.slot_tracker.get(slot) orelse return null;
-        return slot_info.state.hash.readCopy();
+        const ref, var slots_lock = self.slot_tracker.get(slot) orelse return null;
+        defer slots_lock.unlock();
+        return ref.state.hash.readCopy();
     }
 
     fn getSlotEpoch(self: *const SlotDataProvider, slot: Slot) sig.core.Epoch {
@@ -44,10 +45,9 @@ pub const SlotDataProvider = struct {
         self: *const SlotDataProvider,
         slot: Slot,
     ) ?*const sig.core.Ancestors {
-        if (self.slot_tracker.get(slot)) |ref|
-            return &ref.constants.ancestors
-        else
-            return null;
+        const ref, var slots_lock = self.slot_tracker.get(slot) orelse return null;
+        defer slots_lock.unlock();
+        return &ref.constants.ancestors;
     }
 
     fn getEpochTotalStake(self: *const SlotDataProvider, epoch: u64) ?u64 {

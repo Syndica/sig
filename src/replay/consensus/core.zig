@@ -138,7 +138,7 @@ pub const TowerConsensus = struct {
             signing: sig.identity.SigningKeys,
             account_reader: AccountReader,
             ledger: *sig.ledger.Ledger,
-            slot_tracker: *const SlotTracker,
+            slot_tracker: *SlotTracker,
             /// Usually `.now()`.
             now: sig.time.Instant,
             registry: *sig.prometheus.Registry(.{}),
@@ -156,7 +156,8 @@ pub const TowerConsensus = struct {
         errdefer fork_choice.deinit(allocator);
 
         const root = deps.slot_tracker.root.load(.monotonic);
-        const root_ref = deps.slot_tracker.get(root).?;
+        const root_ref, var root_ref_lock = deps.slot_tracker.get(root).?;
+        defer root_ref_lock.unlock();
         const root_ancestors = &root_ref.constants.ancestors;
 
         var tower: Tower = if (deps.identity.vote_account) |vote_account_address|
@@ -203,20 +204,21 @@ pub const TowerConsensus = struct {
     pub fn initForkChoice(
         allocator: std.mem.Allocator,
         logger: Logger,
-        slot_tracker: *const SlotTracker,
+        slot_tracker: *SlotTracker,
         ledger: *Ledger,
     ) !HeaviestSubtreeForkChoice {
         const root_slot, const root_hash = blk: {
-            const root = slot_tracker.getRoot();
+            const root, var root_lock = slot_tracker.getRoot();
+            defer root_lock.unlock();
             const root_slot = slot_tracker.root.load(.monotonic);
             const root_hash = root.state.hash.readCopy();
             break :blk .{ root_slot, root_hash.? };
         };
 
-        var frozen_slots = try slot_tracker.frozenSlots(allocator);
-        defer frozen_slots.deinit(allocator);
+        var frozen_result = try slot_tracker.frozenSlots(allocator);
+        defer frozen_result.deinit(allocator);
 
-        frozen_slots.sort(replay.service.FrozenSlotsSortCtx{ .slots = frozen_slots.keys() });
+        frozen_result.frozen_slots.sort(replay.service.FrozenSlotsSortCtx{ .slots = frozen_result.frozen_slots.keys() });
 
         // Given a root and a list of `frozen_slots` sorted smallest to greatest by slot,
         // initialize a new HeaviestSubtreeForkChoice
@@ -231,7 +233,7 @@ pub const TowerConsensus = struct {
         errdefer heaviest_subtree_fork_choice.deinit(allocator);
 
         var prev_slot = root_slot;
-        for (frozen_slots.keys(), frozen_slots.values()) |slot, info| {
+        for (frozen_result.frozen_slots.keys(), frozen_result.frozen_slots.values()) |slot, info| {
             const frozen_hash = info.state.hash.readCopy().?;
             if (slot > root_slot) {
                 // Make sure the list is sorted
@@ -259,7 +261,8 @@ pub const TowerConsensus = struct {
         defer duplicate_slots.deinit();
 
         while (try duplicate_slots.nextKey()) |slot| {
-            const ref = slot_tracker.get(slot) orelse continue;
+            const ref, var ref_lock = slot_tracker.get(slot) orelse continue;
+            defer ref_lock.unlock();
             try heaviest_subtree_fork_choice.markForkInvalidCandidate(allocator, &.{
                 .slot = slot,
                 .hash = ref.state.hash.readCopy().?,
@@ -436,7 +439,10 @@ pub const TowerConsensus = struct {
             // arena-allocated
             var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
             var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
-            for (params.slot_tracker.slots.keys(), params.slot_tracker.slots.values()) |slot, info| {
+            var slots_lock = params.slot_tracker.slots.read();
+            defer slots_lock.unlock();
+            const slots_map = slots_lock.get();
+            for (slots_map.keys(), slots_map.values()) |slot, info| {
                 const slot_ancestors = &info.constants.ancestors.ancestors;
                 const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
                 // Ensure every slot has a descendants entry (even if empty)
@@ -479,7 +485,7 @@ pub const TowerConsensus = struct {
         allocator: Allocator,
         ledger: *Ledger,
         progress_map: *ProgressMap,
-        slot_tracker: *const SlotTracker,
+        slot_tracker: *SlotTracker,
         ancestor_hashes_replay_update_sender: *Channel(AncestorHashesReplayUpdate),
         result: ReplayResult,
     ) !void {
@@ -557,8 +563,9 @@ pub const TowerConsensus = struct {
                     continue;
                 }
 
-                const slot_info = slot_tracker.get(slot) orelse
+                const slot_info, var slot_info_lock = slot_tracker.get(slot) orelse
                     return error.MissingSlotInSlotTracker;
+                defer slot_info_lock.unlock();
                 if (!slot_info.state.isFrozen()) {
                     continue;
                 }
@@ -635,8 +642,9 @@ pub const TowerConsensus = struct {
 
         // Vote on the fork
         if (maybe_voted_slot) |voted| {
-            const found_slot_info = slot_tracker.get(voted.slot) orelse
+            const found_slot_info, var found_lock = slot_tracker.get(voted.slot) orelse
                 return error.MissingSlot;
+            defer found_lock.unlock();
 
             const voted_hash = found_slot_info.state.hash.readCopy() orelse
                 return error.MissingSlotInTracker;
@@ -1338,7 +1346,7 @@ fn generateVoteTx(
     switch_fork_decision: SwitchForkDecision,
     replay_tower: *ReplayTower,
     account_reader: AccountReader,
-    slot_tracker: *const SlotTracker,
+    slot_tracker: *SlotTracker,
     epoch_schedule: *const EpochSchedule,
 ) !GenerateVoteTxResult {
     const logger = replay_tower.logger;
@@ -1362,13 +1370,14 @@ fn generateVoteTx(
         return .failed;
     };
 
-    const slot_info = slot_tracker.get(last_voted_slot) orelse {
+    const slot_info, var slot_info_lk = slot_tracker.get(last_voted_slot) orelse {
         logger.warn().logf(
             "Slot info not found in slot_tracker for last_voted_slot {}",
             .{last_voted_slot},
         );
         return .failed;
     };
+    defer slot_info_lk.unlock();
 
     const vote_account_result = account_reader.forSlot(&slot_info.constants.ancestors)
         .get(allocator, vote_account_pubkey) catch |err| {
@@ -1597,8 +1606,13 @@ fn checkAndHandleNewRoot(
     defer zone.deinit();
 
     // get the root bank before squash.
-    if (slot_tracker.slots.count() == 0) return error.EmptySlotTracker;
-    const root_tracker = slot_tracker.get(new_root) orelse return error.MissingSlot;
+    {
+        var slots_lock = slot_tracker.slots.read();
+        defer slots_lock.unlock();
+        if (slots_lock.get().count() == 0) return error.EmptySlotTracker;
+    }
+    const root_tracker, var root_lock = slot_tracker.get(new_root) orelse return error.MissingSlot;
+    defer root_lock.unlock();
     const maybe_root_hash = root_tracker.state.hash.readCopy();
     const root_hash = maybe_root_hash orelse return error.MissingHash;
 
@@ -1623,7 +1637,8 @@ fn checkAndHandleNewRoot(
     // Tell the status_cache about it for its tracking.
     if (status_cache) |sc| try sc.addRoot(allocator, new_root);
     // Tell the account_store about it for its unrooted accounts
-    const slot_constants = slot_tracker.get(new_root).?;
+    const slot_constants, var sc_lock = slot_tracker.get(new_root).?;
+    defer sc_lock.unlock();
     try account_store.onSlotRooted(new_root, &slot_constants.constants.ancestors);
 
     // TODO
@@ -1640,7 +1655,7 @@ fn checkAndHandleNewRoot(
     var index: usize = 0;
     while (index < progress_keys.len) {
         const progress_slot = progress_keys[index];
-        if (slot_tracker.get(progress_slot) == null) {
+        if (!slot_tracker.contains(progress_slot)) {
             const removed_value = progress.map.fetchSwapRemove(progress_slot) orelse continue;
             defer removed_value.value.deinit(allocator);
             progress_keys = progress.map.keys();
@@ -1699,7 +1714,7 @@ fn computeConsensusInputs(
     logger: Logger,
     my_vote_pubkey: ?Pubkey,
     ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
-    slot_tracker: *const SlotTracker,
+    slot_tracker: *SlotTracker,
     epoch_tracker: *const sig.core.EpochTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
@@ -1712,17 +1727,18 @@ fn computeConsensusInputs(
     var new_stats = std.ArrayListUnmanaged(Slot).empty;
     errdefer new_stats.deinit(allocator);
 
-    var frozen_slots = try slot_tracker.frozenSlots(allocator);
-    defer frozen_slots.deinit(allocator);
+    var frozen_result = try slot_tracker.frozenSlots(allocator);
+    defer frozen_result.deinit(allocator);
 
-    frozen_slots.sort(replay.service.FrozenSlotsSortCtx{ .slots = frozen_slots.keys() });
+    frozen_result.frozen_slots.sort(replay.service.FrozenSlotsSortCtx{ .slots = frozen_result.frozen_slots.keys() });
 
-    for (frozen_slots.keys()) |slot| {
+    for (frozen_result.frozen_slots.keys()) |slot| {
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
         if (!fork_stat.computed) {
             // TODO Self::adopt_on_chain_tower_if_behind
             // Gather voting information from all vote accounts to understand the current consensus state.
-            const slot_info_for_stakes = slot_tracker.get(slot) orelse return error.MissingSlot;
+            const slot_info_for_stakes, var stakes_slot_lock = slot_tracker.get(slot) orelse return error.MissingSlot;
+            defer stakes_slot_lock.unlock();
 
             const cluster_vote_state = blk: {
                 const stakes, var stakes_lg =
@@ -1758,7 +1774,8 @@ fn computeConsensusInputs(
             fork_stats.lockout_intervals = cluster_vote_state.lockout_intervals;
 
             fork_stats.block_height = blk: {
-                const slot_info = slot_tracker.get(slot) orelse return error.MissingSlots;
+                const slot_info, var slot_info_lock = slot_tracker.get(slot) orelse return error.MissingSlots;
+                defer slot_info_lock.unlock();
                 break :blk slot_info.constants.block_height;
             };
             fork_stats.my_latest_landed_vote = cluster_vote_state.my_latest_landed_vote;
@@ -1843,7 +1860,11 @@ test "processResult and handleDuplicateConfirmedFork" {
         replay_state.epoch_tracker.deinit(allocator);
         allocator.destroy(replay_state.epoch_tracker);
     }
-    replay_state.slot_tracker.get(0).?.state.hash.set(.{ .data = @splat(1) });
+    {
+        const ref, var lock = replay_state.slot_tracker.get(0).?;
+        defer lock.unlock();
+        ref.state.hash.set(.{ .data = @splat(1) });
+    }
 
     var consensus: TowerConsensus = try .init(allocator, .{
         .logger = .FOR_TESTS,
@@ -2803,9 +2824,12 @@ test "checkAndHandleNewRoot - success" {
     try testing.expectEqual(1, fixture.progress.map.count());
     // Now the write lock is released, we can acquire a read lock
     {
-        const ptr, var lg = slot_tracker4.readWithLock();
+        const ptr, var lg = slot_tracker4.writeWithLock();
         defer lg.unlock();
-        for (ptr.slots.keys()) |remaining_slots| {
+        var slots_lock = ptr.slots.read();
+        defer slots_lock.unlock();
+        const slots_map = slots_lock.get();
+        for (slots_map.keys()) |remaining_slots| {
             try testing.expect(remaining_slots >= hash3.slot);
         }
     }
@@ -2901,10 +2925,10 @@ test "computeBankStats - child bank heavier" {
     defer allocator.free(newly_computed_consensus_slots);
 
     // Sort frozen slots by slot number
-    const slot_list = try allocator.alloc(u64, frozen_slots.count());
+    const slot_list = try allocator.alloc(u64, frozen_slots.frozen_slots.count());
     defer allocator.free(slot_list);
     var i: usize = 0;
-    for (frozen_slots.keys()) |slot| {
+    for (frozen_slots.frozen_slots.keys()) |slot| {
         slot_list[i] = slot;
         i += 1;
     }
@@ -2923,8 +2947,9 @@ test "computeBankStats - child bank heavier" {
 
     // Check that the heaviest slot is always the leaf (slot 3)
     for (slot_list) |slot| {
-        const slot_info = fixture.slot_tracker.get(slot) orelse
+        const slot_info, var slot_lock = fixture.slot_tracker.get(slot) orelse
             return error.MissingSlot;
+        defer slot_lock.unlock();
         const best = fixture.fork_choice.heaviestSlot(
             .{ .slot = slot, .hash = slot_info.state.hash.readCopy().? },
         ) orelse
@@ -2998,8 +3023,10 @@ test "computeBankStats - same weight selects lower slot" {
     defer testing.allocator.free(newly_computed_consensus_slots);
 
     // Check that stake for slot 1 and slot 2 is equal
-    const bank1 = fixture.slot_tracker.get(1).?;
-    const bank2 = fixture.slot_tracker.get(2).?;
+    const bank1, var lock1 = fixture.slot_tracker.get(1).?;
+    defer lock1.unlock();
+    const bank2, var lock2 = fixture.slot_tracker.get(2).?;
+    defer lock2.unlock();
 
     const stake1 = fixture.fork_choice.stakeForSubtree(
         &.{ .slot = 1, .hash = bank1.state.hash.readCopy().? },
@@ -3024,7 +3051,11 @@ test "generateVoteTx - empty authorized voter keypairs returns non_voting" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref, var lock = fixture.slot_tracker.get(0).?;
+        defer lock.unlock();
+        ref.state.hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -3064,7 +3095,11 @@ test "generateVoteTx - no node keypair returns non_voting" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref, var lock = fixture.slot_tracker.get(0).?;
+        defer lock.unlock();
+        ref.state.hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -3102,7 +3137,11 @@ test "generateVoteTx - no last voted slot returns failed" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref, var lock = fixture.slot_tracker.get(0).?;
+        defer lock.unlock();
+        ref.state.hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -3142,7 +3181,11 @@ test "generateVoteTx - slot not in tracker returns failed" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref, var lock = fixture.slot_tracker.get(0).?;
+        defer lock.unlock();
+        ref.state.hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -3193,7 +3236,11 @@ test "generateVoteTx - vote account not found returns failed" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref, var lock = fixture.slot_tracker.get(0).?;
+        defer lock.unlock();
+        ref.state.hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -3244,7 +3291,11 @@ test "generateVoteTx - invalid switch fork decision returns failed" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref, var lock = fixture.slot_tracker.get(0).?;
+        defer lock.unlock();
+        ref.state.hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -3295,7 +3346,11 @@ test "generateVoteTx - success with tower_sync vote" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref, var lock = fixture.slot_tracker.get(0).?;
+        defer lock.unlock();
+        ref.state.hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -3389,7 +3444,11 @@ test "generateVoteTx - success with vote_state_update compacted" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref, var lock = fixture.slot_tracker.get(0).?;
+        defer lock.unlock();
+        ref.state.hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -3483,7 +3542,11 @@ test "generateVoteTx - success with switch proof" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref, var lock = fixture.slot_tracker.get(0).?;
+        defer lock.unlock();
+        ref.state.hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -3578,7 +3641,11 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref, var lock = fixture.slot_tracker.get(0).?;
+        defer lock.unlock();
+        ref.state.hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -3666,7 +3733,11 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref, var lock = fixture.slot_tracker.get(0).?;
+        defer lock.unlock();
+        ref.state.hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -4726,8 +4797,7 @@ test "findVoteIndexToEvict - full buffer evicts oldest index" {
 test "edge cases - duplicate slot" {
     // -- set up state -- //
     const gpa = std.testing.allocator;
-
-    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    var prng_state = std.Random.DefaultPrng.init(0xdeadbeef);
     const prng = prng_state.random();
 
     var registry: sig.prometheus.Registry(.{}) = .init(gpa);
@@ -4748,7 +4818,9 @@ test "edge cases - duplicate slot" {
     const root_slot0 = slot_tracker.root.load(.monotonic);
     std.debug.assert(root_slot0 == 0);
 
-    const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
+    const root_ref, var root_lock = slot_tracker.getRoot();
+    defer root_lock.unlock();
+    const root_slot0_hash = root_ref.state.hash.readCopy().?;
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
@@ -4812,7 +4884,11 @@ test "edge cases - duplicate slot" {
         .registry = &registry,
     });
     defer tower_consensus.deinit(gpa);
-    slot_tracker.getRoot().state.hash.set(null); // freeze the root slot (only after initializing consensus, because it needs a non-null hash initially)
+    {
+        const root_ref_freeze, var root_lock_freeze = slot_tracker.getRoot();
+        defer root_lock_freeze.unlock();
+        root_ref_freeze.state.hash.set(null); // freeze the root slot (only after initializing consensus, because it needs a non-null hash initially)
+    }
 
     // -- I/O state -- //
 
@@ -4855,7 +4931,7 @@ test "edge cases - duplicate slot" {
 
     var epoch_tracker = try sig.core.EpochTracker.initForTest(
         std.testing.allocator,
-        prng_state.random(),
+        prng,
         0,
         .INIT,
     );
@@ -4865,7 +4941,7 @@ test "edge cases - duplicate slot" {
         .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_votes = null,
-        .slot_tracker = &replay_state.slot_tracker,
+        .slot_tracker = slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &replay_state.progress_map,
         .status_cache = &replay_state.status_cache,
@@ -4884,7 +4960,7 @@ test "edge cases - duplicate slot" {
     defer gpa.free(last_vote_slots);
     tower_consensus.replay_tower.last_vote.copyAllSlotsTo(last_vote_slots);
 
-    const expected_slot_hash: SlotAndHash = .{ .slot = slot2, .hash = slot2_hash };
+    const expected_slot_hash: SlotAndHash = .{ .slot = slot1, .hash = slot1_hash };
     try std.testing.expectEqualSlices(Slot, &.{expected_slot_hash.slot}, last_vote_slots);
     try std.testing.expectEqual(
         expected_slot_hash.hash,
@@ -4895,8 +4971,7 @@ test "edge cases - duplicate slot" {
 test "edge cases - duplicate confirmed slot" {
     // -- set up state -- //
     const gpa = std.testing.allocator;
-
-    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    var prng_state = std.Random.DefaultPrng.init(0xdeadbeef);
     const prng = prng_state.random();
 
     var registry: sig.prometheus.Registry(.{}) = .init(gpa);
@@ -4917,7 +4992,9 @@ test "edge cases - duplicate confirmed slot" {
     const root_slot0 = slot_tracker.root.load(.monotonic);
     std.debug.assert(root_slot0 == 0);
 
-    const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
+    const root_ref, var root_lock = slot_tracker.getRoot();
+    defer root_lock.unlock();
+    const root_slot0_hash = root_ref.state.hash.readCopy().?;
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
@@ -4981,7 +5058,11 @@ test "edge cases - duplicate confirmed slot" {
         .registry = &registry,
     });
     defer tower_consensus.deinit(gpa);
-    slot_tracker.getRoot().state.hash.set(null); // freeze the root slot (only after initializing consensus, because it needs a non-null hash initially)
+    {
+        const root_ref_freeze, var root_lock_freeze = slot_tracker.getRoot();
+        defer root_lock_freeze.unlock();
+        root_ref_freeze.state.hash.set(null); // freeze the root slot (only after initializing consensus, because it needs a non-null hash initially)
+    }
 
     // -- I/O state -- //
 
@@ -5025,7 +5106,7 @@ test "edge cases - duplicate confirmed slot" {
 
     var epoch_tracker = try sig.core.EpochTracker.initForTest(
         std.testing.allocator,
-        prng_state.random(),
+        prng,
         0,
         .INIT,
     );
@@ -5091,7 +5172,9 @@ test "edge cases - gossip verified vote hashes" {
         try .init(.EPOCH_ZERO, root_slot0, &registry);
     defer vote_collector.deinit(gpa);
 
-    const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
+    const root_ref, var root_lock = slot_tracker.getRoot();
+    defer root_lock.unlock();
+    const root_slot0_hash = root_ref.state.hash.readCopy().?;
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
@@ -5155,7 +5238,11 @@ test "edge cases - gossip verified vote hashes" {
         .registry = &registry,
     });
     defer tower_consensus.deinit(gpa);
-    slot_tracker.getRoot().state.hash.set(null); // freeze the root slot (only after initializing consensus, because it needs a non-null hash initially)
+    {
+        const root_ref_freeze, var root_lock_freeze = slot_tracker.getRoot();
+        defer root_lock_freeze.unlock();
+        root_ref_freeze.state.hash.set(null); // freeze the root slot (only after initializing consensus, because it needs a non-null hash initially)
+    }
 
     // -- I/O state -- //
 
@@ -5564,7 +5651,8 @@ test "vote accounts with landed votes populate bank stats" {
 
     {
         const epoch_info = try epoch_tracker.getEpochInfo(0);
-        const slot1_ref = slot_tracker.get(1).?;
+        const slot1_ref, var slot1_lock = slot_tracker.get(1).?;
+        defer slot1_lock.unlock();
         const stakes_ptr, var stakes_guard = slot1_ref.state.stakes_cache.stakes.writeWithLock();
         defer stakes_guard.unlock();
         stakes_ptr.deinit(allocator);
@@ -6488,7 +6576,8 @@ test "detect and mark duplicate confirmed fork" {
 
     {
         {
-            const slot1_ref = slot_tracker.get(1).?;
+            const slot1_ref, var slot1_lock = slot_tracker.get(1).?;
+            defer slot1_lock.unlock();
             const stakes_ptr, var stakes_guard = slot1_ref.state.stakes_cache.stakes.writeWithLock();
             defer stakes_guard.unlock();
             stakes_ptr.deinit(allocator);
@@ -6499,7 +6588,8 @@ test "detect and mark duplicate confirmed fork" {
         }
 
         {
-            const slot2_ref = slot_tracker.get(2).?;
+            const slot2_ref, var slot2_lock = slot_tracker.get(2).?;
+            defer slot2_lock.unlock();
             const stakes_ptr, var stakes_guard = slot2_ref.state.stakes_cache.stakes.writeWithLock();
             defer stakes_guard.unlock();
             stakes_ptr.deinit(allocator);
@@ -6969,7 +7059,8 @@ test "successful fork switch (switch_proof)" {
 
     {
         {
-            const s1 = slot_tracker.get(1).?;
+            const s1, var s1_lock = slot_tracker.get(1).?;
+            defer s1_lock.unlock();
             const stakes_ptr1, var g1 = s1.state.stakes_cache.stakes.writeWithLock();
             defer g1.unlock();
             stakes_ptr1.deinit(allocator);
@@ -6979,7 +7070,8 @@ test "successful fork switch (switch_proof)" {
             );
         }
         {
-            const s2 = slot_tracker.get(2).?;
+            const s2, var s2_lock = slot_tracker.get(2).?;
+            defer s2_lock.unlock();
             const stakes_ptr2, var g2 = s2.state.stakes_cache.stakes.writeWithLock();
             defer g2.unlock();
             stakes_ptr2.deinit(allocator);
@@ -6989,7 +7081,8 @@ test "successful fork switch (switch_proof)" {
             );
         }
         {
-            const s4 = slot_tracker.get(4).?;
+            const s4, var s4_lock = slot_tracker.get(4).?;
+            defer s4_lock.unlock();
             const stakes_ptr4, var g4 = s4.state.stakes_cache.stakes.writeWithLock();
             defer g4.unlock();
             stakes_ptr4.deinit(allocator);
@@ -7077,9 +7170,13 @@ test "successful fork switch (switch_proof)" {
         descendants_map.deinit(allocator);
     }
 
-    try ancestors_map.ensureTotalCapacity(allocator, slot_tracker.slots.count());
-    try descendants_map.ensureTotalCapacity(allocator, slot_tracker.slots.count());
-    for (slot_tracker.slots.keys(), slot_tracker.slots.values()) |slot, info| {
+    var slots_lock = slot_tracker.slots.read();
+    defer slots_lock.unlock();
+    const slots_map = slots_lock.get();
+
+    try ancestors_map.ensureTotalCapacity(allocator, slots_map.count());
+    try descendants_map.ensureTotalCapacity(allocator, slots_map.count());
+    for (slots_map.keys(), slots_map.values()) |slot, info| {
         const slot_ancestors = &info.constants.ancestors.ancestors;
         const gop = try ancestors_map.getOrPutValue(allocator, slot, .EMPTY);
         if (!gop.found_existing) {
@@ -7256,9 +7353,13 @@ test "successful fork switch (switch_proof)" {
         descendants_map2.deinit(allocator);
     }
 
-    try ancestors_map2.ensureTotalCapacity(allocator, slot_tracker.slots.count());
-    try descendants_map2.ensureTotalCapacity(allocator, slot_tracker.slots.count());
-    for (slot_tracker.slots.keys(), slot_tracker.slots.values()) |slot, info| {
+    var slots_lock2 = slot_tracker.slots.read();
+    defer slots_lock2.unlock();
+    const slots_map2 = slots_lock2.get();
+
+    try ancestors_map2.ensureTotalCapacity(allocator, slots_map2.count());
+    try descendants_map2.ensureTotalCapacity(allocator, slots_map2.count());
+    for (slots_map2.keys(), slots_map2.values()) |slot, info| {
         const slot_ancestors = &info.constants.ancestors.ancestors;
         const gop = try ancestors_map2.getOrPutValue(allocator, slot, .EMPTY);
         if (!gop.found_existing) {

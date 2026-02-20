@@ -703,7 +703,7 @@ pub const common = struct {
 };
 
 pub const RpcHookContext = struct {
-    slot_tracker: *const sig.replay.trackers.SlotTracker,
+    slot_tracker: *sig.replay.trackers.SlotTracker,
     epoch_tracker: *const sig.core.EpochTracker,
 
     // Limit the length of the `epoch_credits` array for each validator in a `get_vote_accounts`
@@ -734,7 +734,8 @@ pub const RpcHookContext = struct {
         const slot = self.slot_tracker.getSlotForCommitment(config.commitment orelse .finalized);
 
         // Get the state for the requested commitment slot.
-        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        const slot_ref, var slot_lock = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        defer slot_lock.unlock();
 
         // Setup config consts for the request.
         const delinquent_distance = config.delinquentSlotDistance orelse

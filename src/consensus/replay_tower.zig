@@ -5439,7 +5439,7 @@ pub const TestFixture = struct {
         allocator: std.mem.Allocator,
         root: SlotAndHash,
     ) !TestFixture {
-        const slot_tracker: SlotTracker = blk: {
+        var slot_tracker: SlotTracker = blk: {
             var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
             errdefer constants.deinit(allocator);
             constants.parent_slot = root.slot -| 1;
@@ -5590,8 +5590,9 @@ pub const TestFixture = struct {
             }
             if (frozen_state == .frozen) {
                 // new_bank.freeze();
-                const new_slot = self.slot_tracker.get(parent_slot) orelse continue;
-                new_slot.state.hash = .init(parent_hash);
+                const ref, var lock = self.slot_tracker.get(parent_slot) orelse continue;
+                defer lock.unlock();
+                ref.state.hash = .init(parent_hash);
                 const fork_state = self.progress.getForkStats(parent_slot) orelse continue;
                 fork_state.slot_hash = parent_hash;
             }

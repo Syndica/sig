@@ -48,7 +48,7 @@ pub const ProcessResultParams = struct {
 
     // replay state
     progress_map: *ProgressMap,
-    slot_tracker: *const SlotTracker,
+    slot_tracker: *SlotTracker,
 
     // consensus state
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
@@ -73,7 +73,8 @@ pub fn processResult(params: ProcessResultParams, result: sig.replay.execution.R
         .last_entry_hash => |_| {},
     }
 
-    const slot_info = params.slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+    const slot_info, var slot_lock = params.slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+    defer slot_lock.unlock();
 
     if (slot_info.state.isFrozen()) {
         // TODO Send things out via a couple of senders
@@ -131,9 +132,10 @@ fn markDeadSlot(
         params.allocator.free(proof.shred2);
     };
     if (!params.duplicate_slots_tracker.contains(dead_slot) and maybe_duplicate_proof != null) {
-        const slot_info =
+        const slot_ref, var slot_lock =
             params.slot_tracker.get(dead_slot) orelse return error.MissingSlotInTracker;
-        const slot_hash = slot_info.state.hash.readCopy();
+        defer slot_lock.unlock();
+        const slot_hash = slot_ref.state.hash.readCopy();
         const duplicate_state: DuplicateState = .fromState(
             .from(params.logger),
             dead_slot,
@@ -158,16 +160,17 @@ fn markDeadSlot(
 
 /// Applies fork-choice and vote updates after a slot has been frozen.
 fn updateConsensusForFrozenSlot(params: ProcessResultParams, slot: Slot) !void {
-    var slot_info = params.slot_tracker.get(slot) orelse
+    const slot_ref, var slot_lock = params.slot_tracker.get(slot) orelse
         return error.MissingSlotInTracker;
+    defer slot_lock.unlock();
 
-    const parent_slot = slot_info.constants.parent_slot;
-    const parent_hash = slot_info.constants.parent_hash;
+    const parent_slot = slot_ref.constants.parent_slot;
+    const parent_hash = slot_ref.constants.parent_hash;
 
     var progress = params.progress_map.map.getPtr(slot) orelse
         return error.MissingBankProgress;
 
-    const hash = slot_info.state.hash.readCopy() orelse
+    const hash = slot_ref.state.hash.readCopy() orelse
         return error.MissingHash;
     std.debug.assert(!hash.eql(Hash.ZEROES));
 
