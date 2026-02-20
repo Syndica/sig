@@ -450,12 +450,17 @@ pub const GetBlock = struct {
                 signatures: []const Signature,
                 message: UiMessage,
             },
+            accounts: struct {
+                signatures: []const Signature,
+                accountKeys: []const ParsedAccount,
+            },
 
             pub fn jsonStringify(self: @This(), jw: anytype) !void {
                 switch (self) {
                     .legacy_binary => |b| try jw.write(b),
                     .binary => |b| try b.jsonStringify(jw),
                     .json => |j| try jw.write(j),
+                    .accounts => |a| try jw.write(a),
                 }
             }
         };
@@ -627,38 +632,42 @@ pub const GetBlock = struct {
             fee: u64,
             preBalances: []const u64,
             postBalances: []const u64,
-            innerInstructions: []const parse_instruction.UiInnerInstructions = &.{},
-            logMessages: []const []const u8 = &.{},
-            preTokenBalances: []const UiTransactionTokenBalance = &.{},
-            postTokenBalances: []const UiTransactionTokenBalance = &.{},
-            rewards: ?[]const UiReward = &.{},
-            loadedAddresses: ?UiLoadedAddresses = null,
-            returnData: ?UiTransactionReturnData = null,
-            computeUnitsConsumed: ?u64 = null,
-            costUnits: ?u64 = null,
+            innerInstructions: JsonSkippable([]const parse_instruction.UiInnerInstructions) = .{ .value = &.{} },
+            logMessages: JsonSkippable([]const []const u8) = .{ .value = &.{} },
+            preTokenBalances: JsonSkippable([]const UiTransactionTokenBalance) = .{ .value = &.{} },
+            postTokenBalances: JsonSkippable([]const UiTransactionTokenBalance) = .{ .value = &.{} },
+            rewards: JsonSkippable([]const UiReward) = .{ .value = &.{} },
+            loadedAddresses: JsonSkippable(UiLoadedAddresses) = .skip,
+            returnData: JsonSkippable(UiTransactionReturnData) = .skip,
+            computeUnitsConsumed: JsonSkippable(u64) = .skip,
+            costUnits: JsonSkippable(u64) = .skip,
 
             pub fn jsonStringify(self: @This(), jw: anytype) !void {
                 try jw.beginObject();
-                if (self.computeUnitsConsumed) |cuc| {
+                if (self.computeUnitsConsumed != .skip) {
                     try jw.objectField("computeUnitsConsumed");
-                    try jw.write(cuc);
+                    try jw.write(self.computeUnitsConsumed);
                 }
-                if (self.costUnits) |cw| {
+                if (self.costUnits != .skip) {
                     try jw.objectField("costUnits");
-                    try jw.write(cw);
+                    try jw.write(self.costUnits);
                 }
                 try jw.objectField("err");
                 try jw.write(self.err);
                 try jw.objectField("fee");
                 try jw.write(self.fee);
-                try jw.objectField("innerInstructions");
-                try jw.write(self.innerInstructions);
-                if (self.loadedAddresses) |la| {
-                    try jw.objectField("loadedAddresses");
-                    try jw.write(la);
+                if (self.innerInstructions != .skip) {
+                    try jw.objectField("innerInstructions");
+                    try jw.write(self.innerInstructions);
                 }
-                try jw.objectField("logMessages");
-                try jw.write(self.logMessages);
+                if (self.loadedAddresses != .skip) {
+                    try jw.objectField("loadedAddresses");
+                    try jw.write(self.loadedAddresses);
+                }
+                if (self.logMessages != .skip) {
+                    try jw.objectField("logMessages");
+                    try jw.write(self.logMessages);
+                }
                 try jw.objectField("postBalances");
                 try jw.write(self.postBalances);
                 try jw.objectField("postTokenBalances");
@@ -667,12 +676,14 @@ pub const GetBlock = struct {
                 try jw.write(self.preBalances);
                 try jw.objectField("preTokenBalances");
                 try jw.write(self.preTokenBalances);
-                if (self.returnData) |rd| {
+                if (self.returnData != .skip) {
                     try jw.objectField("returnData");
-                    try jw.write(rd);
+                    try jw.write(self.returnData);
                 }
-                try jw.objectField("rewards");
-                try jw.write(self.rewards);
+                if (self.rewards != .skip) {
+                    try jw.objectField("rewards");
+                    try jw.write(self.rewards);
+                }
                 try jw.objectField("status");
                 try jw.write(self.status);
                 try jw.endObject();
@@ -681,6 +692,7 @@ pub const GetBlock = struct {
             pub fn from(
                 allocator: Allocator,
                 meta: sig.ledger.meta.TransactionStatusMeta,
+                version: sig.core.transaction.Version,
                 show_rewards: bool,
             ) !UiTransactionStatusMeta {
                 // Build status field
@@ -707,10 +719,13 @@ pub const GetBlock = struct {
                     &.{};
 
                 // Convert loaded addresses
-                const loaded_addresses = try BlockHookContext.convertLoadedAddresses(
-                    allocator,
-                    meta.loaded_addresses,
-                );
+                const loaded_addresses = switch (version) {
+                    .v0 => try BlockHookContext.convertLoadedAddresses(
+                        allocator,
+                        meta.loaded_addresses,
+                    ),
+                    .legacy => null,
+                };
 
                 // Convert return data
                 const return_data = if (meta.return_data) |rd|
@@ -740,15 +755,15 @@ pub const GetBlock = struct {
                     .fee = meta.fee,
                     .preBalances = try allocator.dupe(u64, meta.pre_balances),
                     .postBalances = try allocator.dupe(u64, meta.post_balances),
-                    .innerInstructions = inner_instructions,
-                    .logMessages = log_messages,
-                    .preTokenBalances = pre_token_balances,
-                    .postTokenBalances = post_token_balances,
-                    .rewards = rewards,
-                    .loadedAddresses = loaded_addresses,
-                    .returnData = return_data,
-                    .computeUnitsConsumed = meta.compute_units_consumed,
-                    .costUnits = meta.cost_units,
+                    .innerInstructions = .{ .value = inner_instructions },
+                    .logMessages = .{ .value = log_messages },
+                    .preTokenBalances = .{ .value = pre_token_balances },
+                    .postTokenBalances = .{ .value = post_token_balances },
+                    .rewards = if (rewards) |r| .{ .value = r } else .none,
+                    .loadedAddresses = if (loaded_addresses) |la| .{ .value = la } else .skip,
+                    .returnData = if (return_data) |rd| .{ .value = rd } else .skip,
+                    .computeUnitsConsumed = if (meta.compute_units_consumed) |cuc| .{ .value = cuc } else .skip,
+                    .costUnits = if (meta.cost_units) |cu| .{ .value = cu } else .skip,
                 };
             }
         };
@@ -1572,8 +1587,24 @@ pub const BlockHookContext = struct {
 
                 return .{ null, sigs };
             },
-            // TODO: implement json parsing
-            .accounts => return error.NotImplemented,
+            .accounts => {
+                const transactions = try allocator.alloc(
+                    GetBlock.Response.EncodedTransactionWithStatusMeta,
+                    block.transactions.len,
+                );
+                errdefer allocator.free(transactions);
+
+                for (block.transactions, 0..) |tx_with_meta, i| {
+                    transactions[i] = try buildJsonAccounts(
+                        allocator,
+                        tx_with_meta,
+                        options.max_supported_version,
+                        options.show_rewards,
+                    );
+                }
+
+                return .{ transactions, null };
+            },
         }
     }
 
@@ -1620,13 +1651,13 @@ pub const BlockHookContext = struct {
                 .jsonParsed => try parseUiTransactionStatusMeta(
                     allocator,
                     tx_with_meta.meta,
-                    tx_with_meta.transaction.version,
                     tx_with_meta.transaction.msg.account_keys,
                     show_rewards,
                 ),
                 else => try GetBlock.Response.UiTransactionStatusMeta.from(
                     allocator,
                     tx_with_meta.meta,
+                    tx_with_meta.transaction.version,
                     show_rewards,
                 ),
             },
@@ -1908,7 +1939,6 @@ pub const BlockHookContext = struct {
     fn parseUiTransactionStatusMeta(
         allocator: std.mem.Allocator,
         meta: sig.ledger.transaction_status.TransactionStatusMeta,
-        version: sig.core.transaction.Version,
         static_keys: []const Pubkey,
         show_rewards: bool,
     ) !GetBlock.Response.UiTransactionStatusMeta {
@@ -1952,12 +1982,6 @@ pub const BlockHookContext = struct {
         else
             &.{};
 
-        // Convert loaded addresses
-        const loaded_addresses = switch (version) {
-            .v0 => try convertLoadedAddresses(allocator, meta.loaded_addresses),
-            .legacy => null,
-        };
-
         // Convert return data
         const return_data = if (meta.return_data) |rd|
             try convertReturnData(allocator, rd)
@@ -1984,15 +2008,99 @@ pub const BlockHookContext = struct {
             .fee = meta.fee,
             .preBalances = try allocator.dupe(u64, meta.pre_balances),
             .postBalances = try allocator.dupe(u64, meta.post_balances),
-            .innerInstructions = inner_instructions,
-            .logMessages = log_messages,
-            .preTokenBalances = pre_token_balances,
-            .postTokenBalances = post_token_balances,
-            .rewards = rewards,
-            .loadedAddresses = loaded_addresses,
-            .returnData = return_data,
-            .computeUnitsConsumed = meta.compute_units_consumed,
-            .costUnits = meta.cost_units,
+            .innerInstructions = .{ .value = inner_instructions },
+            .logMessages = .{ .value = log_messages },
+            .preTokenBalances = .{ .value = pre_token_balances },
+            .postTokenBalances = .{ .value = post_token_balances },
+            .rewards = .{ .value = rewards },
+            .loadedAddresses = .skip,
+            .returnData = if (return_data) |rd| .{ .value = rd } else .skip,
+            .computeUnitsConsumed = if (meta.compute_units_consumed) |cuc| .{
+                .value = cuc,
+            } else .skip,
+            .costUnits = if (meta.cost_units) |cu| .{ .value = cu } else .skip,
+        };
+    }
+
+    fn buildJsonAccounts(
+        allocator: std.mem.Allocator,
+        tx_with_meta: sig.ledger.Reader.VersionedTransactionWithStatusMeta,
+        max_supported_version: ?u8,
+        show_rewards: bool,
+    ) !GetBlock.Response.EncodedTransactionWithStatusMeta {
+        const version = try validateVersion(
+            tx_with_meta.transaction.version,
+            max_supported_version,
+        );
+        const reserved_account_keys = try parse_instruction.ReservedAccountKeys.newAllActivated(
+            allocator,
+        );
+
+        const account_keys = switch (tx_with_meta.transaction.version) {
+            .legacy => try parseLegacyMessageAccounts(
+                allocator,
+                tx_with_meta.transaction.msg,
+                &reserved_account_keys,
+            ),
+            .v0 => try parseV0MessageAccounts(allocator, try parse_instruction.LoadedMessage.init(
+                allocator,
+                tx_with_meta.transaction.msg,
+                tx_with_meta.meta.loaded_addresses,
+                &reserved_account_keys.active,
+            )),
+        };
+
+        return .{
+            .transaction = .{ .accounts = .{
+                .signatures = try allocator.dupe(Signature, tx_with_meta.transaction.signatures),
+                .accountKeys = account_keys,
+            } },
+            .meta = try buildSimpleUiTransactionStatusMeta(
+                allocator,
+                tx_with_meta.meta,
+                show_rewards,
+            ),
+            .version = version,
+        };
+    }
+
+    fn buildSimpleUiTransactionStatusMeta(
+        allocator: std.mem.Allocator,
+        meta: sig.ledger.transaction_status.TransactionStatusMeta,
+        show_rewards: bool,
+    ) !GetBlock.Response.UiTransactionStatusMeta {
+        return .{
+            .err = meta.status,
+            .status = if (meta.status) |err|
+                .{ .Ok = null, .Err = err }
+            else
+                .{ .Ok = .{}, .Err = null },
+            .fee = meta.fee,
+            .preBalances = try allocator.dupe(u64, meta.pre_balances),
+            .postBalances = try allocator.dupe(u64, meta.post_balances),
+            .innerInstructions = .skip,
+            .logMessages = .skip,
+            .preTokenBalances = .{ .value = if (meta.pre_token_balances) |balances|
+                try BlockHookContext.convertTokenBalances(allocator, balances)
+            else
+                &.{} },
+            .postTokenBalances = .{ .value = if (meta.post_token_balances) |balances|
+                try BlockHookContext.convertTokenBalances(allocator, balances)
+            else
+                &.{} },
+            .rewards = if (show_rewards) rewards: {
+                if (meta.rewards) |rewards| {
+                    const converted = try allocator.alloc(GetBlock.Response.UiReward, rewards.len);
+                    for (rewards, 0..) |reward, i| {
+                        converted[i] = try GetBlock.Response.UiReward.fromLedgerReward(reward);
+                    }
+                    break :rewards .{ .value = converted };
+                } else break :rewards .{ .value = &.{} };
+            } else .skip,
+            .loadedAddresses = .skip,
+            .returnData = .skip,
+            .computeUnitsConsumed = .skip,
+            .costUnits = .skip,
         };
     }
 
@@ -2137,3 +2245,19 @@ pub const BlockHookContext = struct {
         return rewards;
     }
 };
+
+fn JsonSkippable(comptime T: type) type {
+    return union(enum) {
+        value: T,
+        none,
+        skip,
+
+        pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            switch (self) {
+                .value => |v| try jw.write(v),
+                .none => try jw.write(null),
+                .skip => {},
+            }
+        }
+    };
+}

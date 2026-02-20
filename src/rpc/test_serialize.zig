@@ -597,7 +597,7 @@ test "UiTransactionStatusMeta serialization - with computeUnitsConsumed" {
         .fee = 5000,
         .preBalances = &.{},
         .postBalances = &.{},
-        .computeUnitsConsumed = 150_000,
+        .computeUnitsConsumed = .{ .value = 150_000 },
     };
     try expectJsonStringify(
         \\{"computeUnitsConsumed":150000,"err":null,"fee":5000,"innerInstructions":[],"logMessages":[],"postBalances":[],"postTokenBalances":[],"preBalances":[],"preTokenBalances":[],"rewards":[],"status":{"Ok":null}}
@@ -611,10 +611,10 @@ test "UiTransactionStatusMeta serialization - with loadedAddresses" {
         .fee = 5000,
         .preBalances = &.{},
         .postBalances = &.{},
-        .loadedAddresses = .{
+        .loadedAddresses = .{ .value = .{
             .readonly = &.{Pubkey.ZEROES},
             .writable = &.{},
-        },
+        } },
     };
     try expectJsonStringify(
         \\{"err":null,"fee":5000,"innerInstructions":[],"loadedAddresses":{"readonly":["11111111111111111111111111111111"],"writable":[]},"logMessages":[],"postBalances":[],"postTokenBalances":[],"preBalances":[],"preTokenBalances":[],"rewards":[],"status":{"Ok":null}}
