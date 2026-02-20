@@ -13,6 +13,7 @@ const GetBlockCommitment = methods.GetBlockCommitment;
 const GetBlockHeight = methods.GetBlockHeight;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
+const GetGenesisHash = methods.GetGenesisHash;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
@@ -165,7 +166,16 @@ test GetEpochSchedule {
 
 // TODO: test getFeeForMessage()
 // TODO: test getFirstAvailableBlock()
-// TODO: test getGenesisHash()
+
+test GetGenesisHash {
+    try testRequest(.getGenesisHash, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getGenesisHash","params":[]}
+    );
+    try testResponse(GetGenesisHash, .{ .result = .{ .hash = sig.core.Hash.parse("4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZAMdL4VZHirAn") } },
+        \\{"jsonrpc":"2.0","result":"4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZAMdL4VZHirAn","id":1}
+    );
+}
+
 // TODO: test getHealth()
 // TODO: test getHighestSnapshotSlot()
 // TODO: test getIdentity()
