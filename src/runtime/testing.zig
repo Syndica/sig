@@ -232,7 +232,7 @@ pub fn deinitTransactionContext(
 
     allocator.destroy(tc.feature_set);
 
-    tc.program_map.deinit(allocator);
+    tc.program_map.deinit(tc.programs_allocator);
     allocator.destroy(tc.program_map);
 
     tc.sysvar_cache.deinit(allocator);
