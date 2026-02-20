@@ -27,7 +27,7 @@ pub const Hash = extern struct {
         return .{ .data = new.finalResult() };
     }
 
-    /// re-hashes the current hash with the mixed-in byte slice(s).
+    /// Makes a new hash by hashing the current hash's bytes with the provided data
     pub fn extend(self: Hash, data: []const u8) Hash {
         return .initMany(&.{ &self.data, data });
     }
