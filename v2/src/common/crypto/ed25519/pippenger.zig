@@ -3,6 +3,11 @@
 //! See Section 4. of <https://eprint.iacr.org/2012/549.pdf>
 
 const std = @import("std");
+
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 const common = @import("common");
 
 const crypto = std.crypto;
@@ -41,10 +46,10 @@ fn asRadix2w(c: CompressedScalar, w: u6) [64]i8 {
         const element = scalars[u64_idx] >> bit_idx;
 
         const below = bit_idx < @as(u64, 64) - w or u64_idx == 3;
-        const bit_buf: u64 = switch (below) {
-            true => element,
-            else => element | (scalars[1 + u64_idx] << @intCast(@as(u64, 64) - bit_idx)),
-        };
+        const bit_buf: u64 = if (below)
+            element
+        else
+            element | (scalars[1 + u64_idx] << @intCast(@as(u64, 64) - bit_idx));
 
         const coef = carry + (bit_buf & window_mask);
         carry = (coef + (radix / 2)) >> w;
@@ -85,8 +90,11 @@ pub fn mulMultiRuntime(
         else => unreachable,
     };
 
-    var scalars: std.BoundedArray([64]i8, max_elements) = .{};
-    var points: std.BoundedArray(CachedPoint, max_elements) = .{};
+    var scalars_buf: [max_elements][64]i8 = undefined;
+    var scalars: std.ArrayList([64]i8) = .initBuffer(&scalars_buf);
+
+    var points_buf: [max_elements]CachedPoint = undefined;
+    var points: std.ArrayList(CachedPoint) = .initBuffer(&points_buf);
 
     for (compressed_scalars) |s| {
         scalars.appendAssumeCapacity(asRadix2w(s, w));

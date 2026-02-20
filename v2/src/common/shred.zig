@@ -427,14 +427,10 @@ fn ShredMethods(shred_type: ShredType) type {
             return self;
         }
 
-        fn zeroedForTest(
-            allocator: std.mem.Allocator,
-            payload: *const [constants.payload_size]u8,
-        ) !Self {
+        fn zeroedForTest(payload: *const [constants.payload_size]u8) !Self {
             return .{
                 .common = CommonHeader.ZEROED_FOR_TEST,
                 .custom = CustomHeader.ZEROED_FOR_TEST,
-                .allocator = allocator,
                 .payload = payload,
             };
         }

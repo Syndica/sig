@@ -2,6 +2,11 @@
 //! https://github.com/dalek-cryptography/curve25519-dalek/tree/c3f91f762042debf7c516c21ad9b9a2a9f4ef3b8/curve25519-dalek/src/backend/vector/ifma
 
 const std = @import("std");
+
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 const Ed25519 = std.crypto.ecc.Edwards25519;
 const Fe = Ed25519.Fe;
 

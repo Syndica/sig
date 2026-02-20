@@ -4,6 +4,11 @@
 //! Zig's `@Vector` type to work on all platforms.
 
 const std = @import("std");
+
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 const Ed25519 = std.crypto.ecc.Edwards25519;
 const Fe = Ed25519.Fe;
 

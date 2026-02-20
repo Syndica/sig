@@ -1,4 +1,9 @@
 const std = @import("std");
+
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 const builtin = @import("builtin");
 const common = @import("../../common.zig");
 
@@ -54,10 +59,17 @@ pub fn verifyBatchOverSingleMessage(
     std.debug.assert(public_keys.len <= max);
     std.debug.assert(signatures.len == public_keys.len);
 
-    var s_batch: std.BoundedArray(CompressedScalar, max) = .{};
-    var a_batch: std.BoundedArray(Edwards25519, max) = .{};
-    var hram_batch: std.BoundedArray(CompressedScalar, max) = .{};
-    var expected_r_batch: std.BoundedArray(Edwards25519, max) = .{};
+    var s_batch_buf: [max]CompressedScalar = undefined;
+    var s_batch: std.ArrayList(CompressedScalar) = .initBuffer(&s_batch_buf);
+
+    var a_batch_buf: [max]Edwards25519 = undefined;
+    var a_batch: std.ArrayList(Edwards25519) = .initBuffer(&a_batch_buf);
+
+    var hram_batch_buf: [max]CompressedScalar = undefined;
+    var hram_batch: std.ArrayList(CompressedScalar) = .initBuffer(&hram_batch_buf);
+
+    var expected_r_batch_buf: [max]Edwards25519 = undefined;
+    var expected_r_batch: std.ArrayList(Edwards25519) = .initBuffer(&expected_r_batch_buf);
 
     for (signatures, public_keys) |signature, pubkey| {
         const r = signature.r;
@@ -85,10 +97,10 @@ pub fn verifyBatchOverSingleMessage(
     }
 
     for (
-        a_batch.constSlice(),
-        hram_batch.constSlice(),
-        s_batch.constSlice(),
-        expected_r_batch.constSlice(),
+        a_batch.items,
+        hram_batch.items,
+        s_batch.items,
+        expected_r_batch.items,
     ) |a, k, s, expected_r| {
         const r = doubleBaseMul(k, a.neg(), s);
         if (!affineEqual(r, expected_r)) return error.InvalidSignature;
@@ -181,7 +193,7 @@ pub fn affineLowOrder(a: Edwards25519) !void {
     ) return error.WeakPublicKey;
 }
 
-pub fn ReturnType(encoded: bool, ristretto: bool) type {
+pub fn MulMultiReturnType(encoded: bool, ristretto: bool) type {
     const Base = if (ristretto) Ristretto255 else Edwards25519;
     return if (encoded) (error{NonCanonical} || std.crypto.errors.EncodingError)!Base else Base;
 }
@@ -215,7 +227,7 @@ pub fn mulMultiRuntime(
     comptime ristretto: bool,
     ed_points: []const PointType(encoded, ristretto),
     compressed_scalars: []const CompressedScalar,
-) ReturnType(encoded, ristretto) {
+) MulMultiReturnType(encoded, ristretto) {
     // through impirical benchmarking, we see that pippenger's MSM becomes faster around
     // the 190 element mark.
     // TODO: maybe consider checking the `max_elements < 190` here instead
@@ -586,7 +598,7 @@ test "eddsa test cases" {
         _ = try std.fmt.hexToBytes(&sig_bytes, entry.sig_hex);
 
         const public_key: Pubkey = try .fromBytes(public_key_bytes);
-        const signature: Signature = .fromBytes(sig_bytes);
+        const signature: Signature = Signature.fromBytes(&sig_bytes).*;
 
         const result = verifyBatchOverSingleMessage(
             1,
@@ -664,7 +676,7 @@ test "wycheproof" {
             if (signature_bytes.len != 64) continue;
 
             const pubkey = Pubkey.fromBytes(public_key_buffer) catch continue;
-            const signature: Signature = .fromBytes(sig_buffer);
+            const signature: Signature = Signature.fromBytes(&sig_buffer).*;
 
             // Single verify
             {

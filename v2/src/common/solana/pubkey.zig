@@ -1,4 +1,9 @@
 const std = @import("std");
+
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 const base58 = @import("base58");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
@@ -23,7 +28,7 @@ pub const Pubkey = extern struct {
     pub fn initRandom(random: std.Random) Pubkey {
         var bytes: [SIZE]u8 = undefined;
         random.bytes(&bytes);
-        return .{ .data = Edwards25519.fromUniform(bytes) };
+        return .{ .data = Edwards25519.fromUniform(bytes).toBytes() };
     }
 
     pub fn order(self: Pubkey, other: Pubkey) std.math.Order {
@@ -70,10 +75,9 @@ pub const Pubkey = extern struct {
     }
 
     pub const BASE58_MAX_SIZE = base58.encodedMaxSize(SIZE);
-    pub const Base58String = std.BoundedArray(u8, BASE58_MAX_SIZE);
-
-    pub fn base58String(self: Pubkey) Base58String {
-        return BASE58_ENDEC.encodeArray(SIZE, self.data);
+    pub fn base58String(self: *const Pubkey, buffer: *[BASE58_MAX_SIZE]u8) []const u8 {
+        const len = BASE58_ENDEC.encode(buffer, &self.data);
+        return buffer[0..len];
     }
 
     pub fn format(

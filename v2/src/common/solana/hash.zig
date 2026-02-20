@@ -1,4 +1,9 @@
 const std = @import("std");
+
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 const builtin = @import("builtin");
 const common = @import("../../common.zig");
 const base58 = @import("base58");
@@ -68,17 +73,17 @@ pub const Hash = extern struct {
 
         var decoded_buf: [SIZE + 2]u8 = undefined;
         const decoded_len = BASE58_ENDEC.decode(&decoded_buf, encoded[0..encoded_len]) catch {
-            return error.InvalidPubkey;
+            return error.InvalidHash;
         };
 
-        if (decoded_len != SIZE) return error.InvalidLength;
+        if (decoded_len != SIZE) return error.InvalidHash;
         return .{ .data = decoded_buf[0..SIZE].* };
     }
 
     pub const BASE58_MAX_SIZE = base58.encodedMaxSize(SIZE);
-    pub const Base58String = std.BoundedArray(u8, BASE58_MAX_SIZE);
-    pub fn base58String(self: Hash) Base58String {
-        return BASE58_ENDEC.encodeArray(SIZE, self.data);
+    pub fn base58String(self: *const Hash, buffer: *[BASE58_MAX_SIZE]u8) []const u8 {
+        const len = BASE58_ENDEC.encode(buffer, &self.data);
+        return buffer[0..len];
     }
 
     pub fn format(

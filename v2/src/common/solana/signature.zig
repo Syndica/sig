@@ -1,4 +1,9 @@
 const std = @import("std");
+
+test {
+    _ = std.testing.refAllDecls(@This());
+}
+
 const common = @import("../../common.zig");
 const binkode = @import("binkode");
 
@@ -51,23 +56,28 @@ pub const Signature = extern struct {
 
     pub fn parseRuntime(str: []const u8) error{InvalidSignature}!Signature {
         if (str.len > BASE58_MAX_SIZE) return error.InvalidSignature;
-        var encoded: std.BoundedArray(u8, BASE58_MAX_SIZE) = .{};
-        encoded.appendSliceAssumeCapacity(str);
+
+        var encoded: [BASE58_MAX_SIZE]u8 = undefined;
+        var encoded_len: usize = 0;
+
+        @memcpy(encoded[0..str.len], str);
+        encoded_len += str.len;
 
         if (@inComptime()) @setEvalBranchQuota(str.len * str.len * str.len);
-        const decoded = BASE58_ENDEC.decodeBounded(BASE58_MAX_SIZE, encoded) catch {
+
+        var decoded_buf: [SIZE + 2]u8 = undefined;
+        const decoded_len = BASE58_ENDEC.decode(&decoded_buf, encoded[0..encoded_len]) catch {
             return error.InvalidSignature;
         };
 
-        if (decoded.len != SIZE) return error.InvalidSignature;
-        return .fromBytes(decoded.constSlice()[0..SIZE].*);
+        if (decoded_len != SIZE) return error.InvalidSignature;
+        return Signature.fromBytes(decoded_buf[0..SIZE]).*;
     }
 
     pub const BASE58_MAX_SIZE = base58.encodedMaxSize(SIZE);
-    pub const Base58String = std.BoundedArray(u8, BASE58_MAX_SIZE);
-
-    pub fn base58String(self: Signature) Base58String {
-        return BASE58_ENDEC.encodeArray(SIZE, self.toBytes());
+    pub fn base58String(self: *const Signature, buffer: *[BASE58_MAX_SIZE]u8) []const u8 {
+        const len = BASE58_ENDEC.encode(buffer, &self.toBytes());
+        return buffer[0..len];
     }
 
     pub fn format(

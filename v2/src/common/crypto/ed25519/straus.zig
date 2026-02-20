@@ -1,4 +1,8 @@
 const std = @import("std");
+
+test {
+    _ = std.testing.refAllDecls(@This());
+}
 const common = @import("common");
 
 const ed25519 = common.crypto.ed25519;
@@ -36,17 +40,19 @@ pub fn mulMultiRuntime(
     comptime ristretto: bool,
     points: []const ed25519.PointType(encoded, ristretto),
     scalars: []const CompressedScalar,
-) ed25519.ReturnType(encoded, ristretto) {
+) ed25519.MulMultiReturnType(encoded, ristretto) {
     std.debug.assert(points.len <= max);
     std.debug.assert(scalars.len <= max);
     std.debug.assert(points.len == scalars.len);
 
-    var scalars_in_radix: std.BoundedArray([64]i8, max) = .{};
+    var scalars_in_radix_buf: [max][64]i8 = undefined;
+    var scalars_in_radix: std.ArrayListUnmanaged([64]i8) = .initBuffer(&scalars_in_radix_buf);
     for (scalars) |scalar| {
         scalars_in_radix.appendAssumeCapacity(asRadix16(scalar));
     }
 
-    var lookup_tables: std.BoundedArray(LookupTable, max) = .{};
+    var lookup_tables_buf: [max]LookupTable = undefined;
+    var lookup_tables: std.ArrayList(LookupTable) = .initBuffer(&lookup_tables_buf);
     for (points) |point| {
         // Translate from whatever the input format is to a decompressed Ed25519 point.
         const decompressed = switch (encoded) {
@@ -66,7 +72,7 @@ pub fn mulMultiRuntime(
     for (0..64) |rev| {
         const i = 64 - rev - 1;
         q = q.mulByPow2(4);
-        for (scalars_in_radix.constSlice(), lookup_tables.constSlice()) |s, lt| {
+        for (scalars_in_radix.items, lookup_tables.items) |s, lt| {
             q = q.addCached(lt.select(s[i]));
         }
     }
