@@ -1,5 +1,5 @@
-//! This services gives other services access to sockets, sharing a pair of ringbuffers for sending
-//! and receiving packets.
+//! This services gives other services access to UDP sockets, sharing a pair of ringbuffers for
+//! sending and receiving packets.
 
 const std = @import("std");
 const start = @import("start");
@@ -35,8 +35,8 @@ fn mainInner(pairs: []const *Pair) !noreturn {
         errdefer for (sockets[0..i]) |socket| std.posix.close(socket);
         const socket = try std.posix.socket(
             std.posix.AF.INET,
-            std.posix.SOCK.DGRAM | std.posix.SOCK.NONBLOCK,
-            0,
+            std.posix.SOCK.DGRAM | std.posix.SOCK.NONBLOCK | std.posix.SOCK.CLOEXEC,
+            std.posix.IPPROTO.UDP,
         );
         errdefer std.posix.close(socket);
 
