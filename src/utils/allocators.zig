@@ -860,7 +860,7 @@ pub const DiskMemoryAllocator = struct {
             return true;
         }
 
-        const buf_ptr: [*]align(std.heap.pageSize()) u8 = @alignCast(buf.ptr);
+        const buf_ptr: [*]align(std.heap.page_size_min) u8 = @alignCast(buf.ptr);
         const old_metadata_start = old_file_aligned_size - @sizeOf(Metadata);
         const metadata: Metadata = @bitCast(blk: {
             // you might think this block can be replaced with:
@@ -929,7 +929,7 @@ pub const DiskMemoryAllocator = struct {
 
         const file_aligned_size = alignedFileSize(buf.len);
 
-        const buf_ptr: [*]align(std.heap.pageSize()) u8 = @alignCast(buf.ptr);
+        const buf_ptr: [*]align(std.heap.page_size_min) u8 = @alignCast(buf.ptr);
         const metadata_start = file_aligned_size - @sizeOf(Metadata);
         const metadata: Metadata = @bitCast(buf_ptr[metadata_start..][0..@sizeOf(Metadata)].*);
 
@@ -958,7 +958,7 @@ pub fn createAndMmapFile(
     dir: std.fs.Dir,
     file_name: []const u8,
     n: u64,
-) ![]align(std.heap.pageSize()) u8 {
+) ![]align(std.heap.page_size_min) u8 {
     const file = try dir.createFile(file_name, .{ .read = true, .truncate = true });
     defer file.close();
 
