@@ -80,14 +80,10 @@ pub const Pubkey = extern struct {
         return buffer[0..len];
     }
 
-    pub fn format(
-        self: @This(),
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        const str = self.base58String();
-        return writer.writeAll(str.constSlice());
+    pub fn format(self: *const Pubkey, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        var buf: [BASE58_MAX_SIZE]u8 = undefined;
+        const str = self.base58String(&buf);
+        return writer.writeAll(str);
     }
 
     pub fn jsonStringify(self: Pubkey, write_stream: anytype) !void {
@@ -127,3 +123,20 @@ pub const Pubkey = extern struct {
 };
 
 const Error = error{ InvalidBytesLength, InvalidEncodedLength, InvalidEncodedValue };
+
+test "pubkey format roundtrip" {
+    const str = "SyndicAgdEphcy5xhAKZAomTYhcF8xhC7za2UD9xeug";
+    const pk = try Pubkey.parseRuntime(str);
+
+    {
+        var buf: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+        const str2 = pk.base58String(&buf);
+        try std.testing.expectEqualStrings(str, str2);
+    }
+
+    {
+        var buf: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+        const str2 = try std.fmt.bufPrint(&buf, "{f}", .{pk});
+        try std.testing.expectEqualStrings(str, str2);
+    }
+}

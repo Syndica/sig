@@ -847,7 +847,7 @@ pub const CommonHeader = struct {
 
     const ZEROED_FOR_TEST: CommonHeader = .{
         .leader_signature = .ZEROES,
-        .variant = ShredVariant{ .shred_type = .data, .proof_size = 0, .chained = false, .resigned = false },
+        .variant = .{ .shred_type = .data, .proof_size = 0, .chained = false, .resigned = false },
         .slot = 0,
         .index = 0,
         .version = 0,
@@ -1240,7 +1240,7 @@ pub fn overwriteShredForTest(allocator: Allocator, shred: *Shred, data: []const 
     const new_payload = try allocator.dupe(u8, shred.payload());
     @memset(new_payload, 0);
 
-    var buf = std.io.fixedBufferStream(new_payload[0..constants.payload_size]);
+    var buf = std.Io.fixedBufferStream(new_payload[0..constants.payload_size]);
     const writer = buf.writer();
 
     switch (shred.*) {
@@ -1395,7 +1395,7 @@ pub fn loadShredsFromFile(allocator: Allocator, path: []const u8) ![]const Shred
     return shreds.toOwnedSlice(allocator);
 }
 
-fn readChunk(allocator: Allocator, reader: *std.io.Reader) !?[]const u8 {
+fn readChunk(allocator: Allocator, reader: *std.Io.Reader) !?[]const u8 {
     var size_bytes: [8]u8 = undefined;
     const num_size_bytes_read = try reader.readSliceShort(&size_bytes);
     if (num_size_bytes_read == 0) {

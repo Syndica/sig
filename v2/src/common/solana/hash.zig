@@ -86,14 +86,10 @@ pub const Hash = extern struct {
         return buffer[0..len];
     }
 
-    pub fn format(
-        self: Hash,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) @TypeOf(writer).Error!void {
-        const str = self.base58String();
-        return writer.writeAll(str.constSlice());
+    pub fn format(self: Hash, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        var buf: [BASE58_MAX_SIZE]u8 = undefined;
+        const str = self.base58String(&buf);
+        return writer.writeAll(str);
     }
 
     /// Intended to be used in tests.

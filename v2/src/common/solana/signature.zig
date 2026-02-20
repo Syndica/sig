@@ -80,14 +80,10 @@ pub const Signature = extern struct {
         return buffer[0..len];
     }
 
-    pub fn format(
-        self: Signature,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        const str = self.base58String();
-        return writer.writeAll(str.constSlice());
+    pub fn format(self: *const Signature, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        var buf: [BASE58_MAX_SIZE]u8 = undefined;
+        const str = self.base58String(&buf);
+        return writer.writeAll(str);
     }
 
     pub fn jsonStringify(self: Signature, writer: anytype) @TypeOf(writer.*).Error!void {

@@ -69,7 +69,7 @@ pub const SharedRegion = struct {
     shares: []const Share,
     requested_location: ?[*]align(page_size_min) u8 = null,
 
-    pub fn format(self: SharedRegion, writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn format(self: SharedRegion, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print("Region `{s}` shared with [ ", .{@tagName(self.region)});
         for (self.shares) |share| try writer.print(
             "{f} ({s}), ",
@@ -88,7 +88,7 @@ pub const Region = union(RegionType) {
     net_pair: struct { port: u16 },
     leader_schedule: struct {
         // TODO: this should not exist - remove once we can open snapshots again
-        schedule_string: *std.io.Reader,
+        schedule_string: *std.Io.Reader,
     },
 
     pub fn size(self: Region) usize {
@@ -125,7 +125,7 @@ pub const ServiceInstance = struct {
     /// for supporting multiple services of the same kind
     n: u8 = 0,
 
-    pub fn format(self: ServiceInstance, writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn format(self: ServiceInstance, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print("{s}_{}", .{ @tagName(self.service), self.n });
     }
 };

@@ -24,7 +24,7 @@ pub const LeaderSchedule = extern struct {
 
     /// Reads the leader schedule as formatted by the `solana leader-schedule` and
     /// `sig leader-schedule` commands. Return the start slot and the leader schedule.
-    pub fn fromCommand(schedule: *LeaderSchedule, reader: *std.io.Reader) !void {
+    pub fn fromCommand(schedule: *LeaderSchedule, reader: *std.Io.Reader) !void {
         const slot_max_len = comptime std.fmt.count("{d}", .{std.math.maxInt(Slot)});
         const hash_max_len = 44;
         std.debug.assert(reader.buffer.len >= @max(slot_max_len, hash_max_len));

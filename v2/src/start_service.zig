@@ -285,7 +285,7 @@ const SimpleStackIterator = struct {
     fp: usize,
 
     pub fn init(first_address: ?usize, fp: ?usize) SimpleStackIterator {
-        return SimpleStackIterator{
+        return .{
             .first_address = first_address,
             .fp = fp orelse @frameAddress(),
         };
