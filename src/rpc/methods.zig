@@ -448,7 +448,7 @@ pub const GetBlock = struct {
             /// JSON encoding: object with signatures and message
             json: struct {
                 signatures: []const Signature,
-                message: EncodedMessage,
+                message: UiMessage,
             },
 
             pub fn jsonStringify(self: @This(), jw: anytype) !void {
@@ -457,6 +457,69 @@ pub const GetBlock = struct {
                     .binary => |b| try b.jsonStringify(jw),
                     .json => |j| try jw.write(j),
                 }
+            }
+        };
+
+        pub const UiMessage = union(enum) {
+            parsed: UiParsedMessage,
+            raw: UiRawMessage,
+
+            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+                switch (self) {
+                    .parsed => |p| try jw.write(p),
+                    .raw => |r| try jw.write(r),
+                }
+            }
+        };
+
+        pub const UiParsedMessage = struct {
+            account_keys: []const ParsedAccount,
+            recent_blockhash: Hash,
+            instructions: []const parse_instruction.UiInstruction,
+            address_table_lookups: ?[]const AddressTableLookup = null,
+
+            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("accountKeys");
+                try jw.write(self.account_keys);
+                try jw.objectField("recentBlockhash");
+                try jw.write(self.recent_blockhash);
+                try jw.objectField("instructions");
+                try jw.write(self.instructions);
+                if (self.address_table_lookups) |atl| {
+                    try jw.objectField("addressTableLookups");
+                    try jw.write(atl);
+                }
+                try jw.endObject();
+            }
+        };
+
+        pub const UiRawMessage = struct {
+            header: struct {
+                numRequiredSignatures: u8,
+                numReadonlySignedAccounts: u8,
+                numReadonlyUnsignedAccounts: u8,
+            },
+            account_keys: []const Pubkey,
+            recent_blockhash: Hash,
+            instructions: []const parse_instruction.UiCompiledInstruction,
+            address_table_lookups: ?[]const AddressTableLookup = null,
+
+            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("accountKeys");
+                try jw.write(self.account_keys);
+                try jw.objectField("header");
+                try jw.write(self.header);
+                try jw.objectField("recentBlockhash");
+                try jw.write(self.recent_blockhash);
+                try jw.objectField("instructions");
+                try jw.write(self.instructions);
+                if (self.address_table_lookups) |atl| {
+                    try jw.objectField("addressTableLookups");
+                    try jw.write(atl);
+                }
+                try jw.endObject();
             }
         };
 
@@ -529,6 +592,32 @@ pub const GetBlock = struct {
                 try writeU8SliceAsIntArray(self.writableIndexes, jw);
                 try jw.endObject();
             }
+        };
+
+        /// Account key with metadata (for jsonParsed and accounts modes)
+        pub const ParsedAccount = struct {
+            pubkey: Pubkey,
+            writable: bool,
+            signer: bool,
+            source: ParsedAccountSource,
+
+            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("pubkey");
+                try jw.write(self.pubkey);
+                try jw.objectField("signer");
+                try jw.write(self.signer);
+                try jw.objectField("source");
+                try jw.write(@tagName(self.source));
+                try jw.objectField("writable");
+                try jw.write(self.writable);
+                try jw.endObject();
+            }
+        };
+
+        pub const ParsedAccountSource = enum {
+            transaction,
+            lookupTable,
         };
 
         /// UI representation of transaction status metadata
@@ -1531,6 +1620,7 @@ pub const BlockHookContext = struct {
                 .jsonParsed => try parseUiTransactionStatusMeta(
                     allocator,
                     tx_with_meta.meta,
+                    tx_with_meta.transaction.version,
                     tx_with_meta.transaction.msg.account_keys,
                     show_rewards,
                 ),
@@ -1595,12 +1685,26 @@ pub const BlockHookContext = struct {
                     .encoding = .base64,
                 } };
             },
-            .json => return try jsonEncodeTransaction(allocator, transaction),
-            // TODO: implement json and jsonParsed encoding
-            .jsonParsed => {
-                _ = meta;
-                return error.NotImplemented;
-            },
+            .json => return .{ .json = .{
+                .signatures = try allocator.dupe(Signature, transaction.signatures),
+                .message = try encodeTransactionMessage(
+                    allocator,
+                    transaction.msg,
+                    .json,
+                    transaction.version,
+                    meta.loaded_addresses,
+                ),
+            } },
+            .jsonParsed => return .{ .json = .{
+                .signatures = try allocator.dupe(Signature, transaction.signatures),
+                .message = try encodeTransactionMessage(
+                    allocator,
+                    transaction.msg,
+                    .jsonParsed,
+                    transaction.version,
+                    meta.loaded_addresses,
+                ),
+            } },
         }
     }
 
@@ -1609,6 +1713,7 @@ pub const BlockHookContext = struct {
     fn jsonEncodeTransaction(
         allocator: std.mem.Allocator,
         transaction: sig.core.Transaction,
+        meta: sig.ledger.meta.TransactionStatusMeta,
     ) !GetBlock.Response.EncodedTransaction {
         return .{ .json = .{
             .signatures = try allocator.dupe(Signature, transaction.signatures),
@@ -1617,6 +1722,7 @@ pub const BlockHookContext = struct {
                 transaction.msg,
                 .json,
                 transaction.version,
+                meta.loaded_addresses,
             ),
         } };
     }
@@ -1628,9 +1734,73 @@ pub const BlockHookContext = struct {
         message: sig.core.transaction.Message,
         encoding: GetBlock.Encoding,
         version: sig.core.transaction.Version,
-    ) !GetBlock.Response.EncodedMessage {
+        loaded_addresses: sig.ledger.transaction_status.LoadedAddresses,
+    ) !GetBlock.Response.UiMessage {
         switch (encoding) {
-            .jsonParsed => return error.NotImplemented,
+            .jsonParsed => {
+                const ReservedAccountKeys = parse_instruction.ReservedAccountKeys;
+                var reserved_account_keys = try ReservedAccountKeys.newAllActivated(allocator);
+                errdefer reserved_account_keys.deinit(allocator);
+                const account_keys = parse_instruction.AccountKeys.init(
+                    message.account_keys,
+                    loaded_addresses,
+                );
+                var loaded_message = try parse_instruction.LoadedMessage.init(
+                    allocator,
+                    message,
+                    loaded_addresses,
+                    &reserved_account_keys.active,
+                );
+                errdefer loaded_message.deinit(allocator);
+
+                var instructions = try allocator.alloc(
+                    parse_instruction.UiInstruction,
+                    message.instructions.len,
+                );
+                for (message.instructions, 0..) |ix, i| {
+                    instructions[i] = try parse_instruction.parseUiInstruction(
+                        allocator,
+                        .{
+                            .program_id_index = ix.program_index,
+                            .accounts = ix.account_indexes,
+                            .data = ix.data,
+                        },
+                        &account_keys,
+                        1,
+                    );
+                }
+
+                const address_table_lookups = blk: switch (version) {
+                    .v0 => {
+                        const atls = try allocator.alloc(
+                            GetBlock.Response.AddressTableLookup,
+                            message.address_lookups.len,
+                        );
+                        errdefer allocator.free(atls);
+                        for (message.address_lookups, 0..) |atl, i| {
+                            atls[i] = .{
+                                .accountKey = atl.table_address,
+                                .writableIndexes = try allocator.dupe(u8, atl.writable_indexes),
+                                .readonlyIndexes = try allocator.dupe(u8, atl.readonly_indexes),
+                            };
+                        }
+                        break :blk atls;
+                    },
+                    .legacy => break :blk null,
+                };
+
+                return .{
+                    .parsed = .{
+                        .account_keys = switch (version) {
+                            .legacy => try parseLegacyMessageAccounts(allocator, message, &reserved_account_keys),
+                            .v0 => try parseV0MessageAccounts(allocator, loaded_message),
+                        },
+                        .recent_blockhash = message.recent_blockhash,
+                        .instructions = instructions,
+                        .address_table_lookups = address_table_lookups,
+                    },
+                };
+            },
             else => |_| return try jsonEncodeTransactionMessage(
                 allocator,
                 message,
@@ -1639,15 +1809,56 @@ pub const BlockHookContext = struct {
         }
     }
 
+    /// Parse account keys for a legacy transaction message
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_accounts.rs#L7
+    fn parseLegacyMessageAccounts(
+        allocator: Allocator,
+        message: sig.core.transaction.Message,
+        reserved_account_keys: *const parse_instruction.ReservedAccountKeys,
+    ) ![]const GetBlock.Response.ParsedAccount {
+        var accounts = try allocator.alloc(GetBlock.Response.ParsedAccount, message.account_keys.len);
+        for (message.account_keys, 0..) |account_key, i| {
+            accounts[i] = .{
+                .pubkey = account_key,
+                .writable = message.isMaybeWritable(i, &reserved_account_keys.active),
+                .signer = message.isSigner(i),
+                .source = .transaction,
+            };
+        }
+        return accounts;
+    }
+
+    /// Parse account keys for a versioned transaction message
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_accounts.rs#L21
+    fn parseV0MessageAccounts(
+        allocator: Allocator,
+        message: parse_instruction.LoadedMessage,
+    ) ![]const GetBlock.Response.ParsedAccount {
+        const account_keys = message.accountKeys();
+        const total_len = account_keys.len();
+        var accounts = try allocator.alloc(GetBlock.Response.ParsedAccount, total_len);
+
+        for (0..total_len) |i| {
+            const account_key = account_keys.get(i).?;
+            accounts[i] = .{
+                .pubkey = account_key,
+                .writable = message.isWritable(i),
+                .signer = message.isSigner(i),
+                .source = if (i < message.message.account_keys.len) .transaction else .lookupTable,
+            };
+        }
+        return accounts;
+    }
+
     /// Encode a transaction message for the json encoding
     /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L859
     fn jsonEncodeTransactionMessage(
         allocator: std.mem.Allocator,
         message: sig.core.transaction.Message,
         version: sig.core.transaction.Version,
-    ) !GetBlock.Response.EncodedMessage {
+    ) !GetBlock.Response.UiMessage {
         const instructions = try allocator.alloc(
-            GetBlock.Response.EncodedInstruction,
+            parse_instruction.UiCompiledInstruction,
             message.instructions.len,
         );
         errdefer allocator.free(instructions);
@@ -1679,17 +1890,17 @@ pub const BlockHookContext = struct {
             .legacy => break :blk null,
         };
 
-        return .{
-            .accountKeys = try allocator.dupe(Pubkey, message.account_keys),
+        return .{ .raw = .{
+            .account_keys = try allocator.dupe(Pubkey, message.account_keys),
             .header = .{
                 .numRequiredSignatures = message.signature_count,
                 .numReadonlySignedAccounts = message.readonly_signed_count,
                 .numReadonlyUnsignedAccounts = message.readonly_unsigned_count,
             },
-            .recentBlockhash = message.recent_blockhash,
+            .recent_blockhash = message.recent_blockhash,
             .instructions = instructions,
-            .addressTableLookups = address_table_lookups,
-        };
+            .address_table_lookups = address_table_lookups,
+        } };
     }
 
     /// Parse transaction and its metadata into the UiTransactionStatusMeta format for the jsonParsed encoding
@@ -1697,10 +1908,14 @@ pub const BlockHookContext = struct {
     fn parseUiTransactionStatusMeta(
         allocator: std.mem.Allocator,
         meta: sig.ledger.transaction_status.TransactionStatusMeta,
+        version: sig.core.transaction.Version,
         static_keys: []const Pubkey,
         show_rewards: bool,
     ) !GetBlock.Response.UiTransactionStatusMeta {
-        const account_keys = parse_instruction.AccountKeys.init(static_keys, meta.loaded_addresses);
+        const account_keys = parse_instruction.AccountKeys.init(
+            static_keys,
+            meta.loaded_addresses,
+        );
 
         // Build status field
         const status: GetBlock.Response.UiTransactionResultStatus = if (meta.status) |err|
@@ -1738,7 +1953,10 @@ pub const BlockHookContext = struct {
             &.{};
 
         // Convert loaded addresses
-        const loaded_addresses = try convertLoadedAddresses(allocator, meta.loaded_addresses);
+        const loaded_addresses = switch (version) {
+            .v0 => try convertLoadedAddresses(allocator, meta.loaded_addresses),
+            .legacy => null,
+        };
 
         // Convert return data
         const return_data = if (meta.return_data) |rd|

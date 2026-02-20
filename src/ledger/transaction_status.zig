@@ -313,6 +313,7 @@ pub const TransactionStatusMetaBuilder = struct {
         defer current_inner.deinit();
 
         var current_top_level_index: u8 = 0;
+        var top_level_count: u8 = 0;
         var has_top_level: bool = false;
 
         for (trace.slice()) |entry| {
@@ -325,7 +326,8 @@ pub const TransactionStatusMetaBuilder = struct {
                     });
                 }
                 current_inner.clearRetainingCapacity();
-                current_top_level_index = @intCast(result.items.len);
+                current_top_level_index = top_level_count;
+                top_level_count += 1;
                 has_top_level = true;
             } else if (entry.depth > 1) {
                 // This is an inner instruction (CPI)
@@ -803,9 +805,9 @@ test "TransactionStatusMetaBuilder.convertInstructionTrace" {
     }
 
     // Only the second top-level has inner instructions (the CPI).
-    // The index is result.items.len at flush time (0, since first top-level had no CPIs to flush).
+    // The index should be 1, matching the top-level instruction position.
     try std.testing.expectEqual(@as(usize, 1), result.len);
-    try std.testing.expectEqual(@as(u8, 0), result[0].index);
+    try std.testing.expectEqual(@as(u8, 1), result[0].index);
     try std.testing.expectEqual(@as(usize, 1), result[0].instructions.len);
     try std.testing.expectEqual(@as(u8, 2), result[0].instructions[0].instruction.program_id_index);
     try std.testing.expectEqual(@as(?u32, 2), result[0].instructions[0].stack_height);
