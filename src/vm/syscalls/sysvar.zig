@@ -493,20 +493,27 @@ test getSysvar {
 
     // SIMD-0219: value_addr >= INPUT_START with stricter_abi_and_runtime_constraints returns InvalidPointer
     {
-        var cache_strict, var tc_strict = try testing.createTransactionContext(allocator, prng.random(), .{
-            .accounts = &.{},
-            .compute_meter = std.math.maxInt(u64),
-            .feature_set = &.{ .{ .feature = .stricter_abi_and_runtime_constraints, .slot = 0 } },
-            .slot = 0,
-            .sysvar_cache = .{
-                .clock = src.clock,
-                .epoch_schedule = src.epoch_schedule,
-                .fees = src.fees,
-                .rent = src.rent,
-                .epoch_rewards = src.rewards,
-                .last_restart_slot = src.restart,
+        var cache_strict, var tc_strict = try testing.createTransactionContext(
+            allocator,
+            prng.random(),
+            .{
+                .accounts = &.{},
+                .compute_meter = std.math.maxInt(u64),
+                .feature_set = &.{ .{ 
+                    .feature = .stricter_abi_and_runtime_constraints,
+                    .slot = 0 
+                 } },
+                .slot = 0,
+                .sysvar_cache = .{
+                    .clock = src.clock,
+                    .epoch_schedule = src.epoch_schedule,
+                    .fees = src.fees,
+                    .rent = src.rent,
+                    .epoch_rewards = src.rewards,
+                    .last_restart_slot = src.restart,
+                },
             },
-        });
+        );
         defer {
             testing.deinitTransactionContext(allocator, &tc_strict);
             cache_strict.deinit(allocator);
