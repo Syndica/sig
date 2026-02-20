@@ -141,30 +141,30 @@ fn validateShred(
     shred_version: *const Atomic(u16),
     max_slot: Slot,
 ) ShredValidationError!void {
-    const packet_shred = layout.getShred(packet, false) orelse return error.insufficient_shred_size;
-    const version = layout.getVersion(packet_shred) orelse return error.missing_version;
-    const slot = layout.getSlot(packet_shred) orelse return error.slot_missing;
-    const index = layout.getIndex(packet_shred) orelse return error.index_missing;
-    const variant = layout.getShredVariant(packet_shred) orelse return error.variant_missing;
+    const packet_shred = layout.getShred(packet, false) orelse return error.InsufficientShredSize;
+    const version = layout.getVersion(packet_shred) orelse return error.MissingVersion;
+    const slot = layout.getSlot(packet_shred) orelse return error.SlotMissing;
+    const index = layout.getIndex(packet_shred) orelse return error.IndexMissing;
+    const variant = layout.getShredVariant(packet_shred) orelse return error.VariantMissing;
 
-    if (version != shred_version.load(.acquire)) return error.wrong_version;
-    if (slot > max_slot) return error.slot_too_new;
+    if (version != shred_version.load(.acquire)) return error.WrongVersion;
+    if (slot > max_slot) return error.SlotTooNew;
     switch (variant.shred_type) {
         .code => {
             if (index >= shred.CodeShred.constants.max_per_slot) {
-                return error.code_index_too_high;
+                return error.CodeIndexTooHigh;
             }
-            if (slot <= root) return error.rooted_slot;
+            if (slot <= root) return error.RootedSlot;
         },
         .data => {
             if (index >= shred.DataShred.constants.max_per_slot) {
-                return error.data_index_too_high;
+                return error.DataIndexTooHigh;
             }
             const parent_slot_offset = layout.getParentSlotOffset(packet_shred) orelse {
-                return error.parent_slot_offset_missing;
+                return error.ParentSlotOffsetMissing;
             };
             const parent = slot -| @as(Slot, @intCast(parent_slot_offset));
-            if (!verifyShredSlots(slot, parent, root)) return error.slot_verification_failed;
+            if (!verifyShredSlots(slot, parent, root)) return error.SlotVerificationFailed;
         },
     }
 
@@ -182,24 +182,6 @@ fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
     // or have invalid parent >= slot.
     return root <= parent and parent < slot;
 }
-
-/// Something about the shred was unexpected, so we will discard it.
-pub const ShredValidationError = error{
-    insufficient_shred_size,
-    missing_version,
-    slot_missing,
-    index_missing,
-    variant_missing,
-    wrong_version,
-    slot_too_new,
-    code_index_too_high,
-    rooted_slot,
-    data_index_too_high,
-    parent_slot_offset_missing,
-    slot_verification_failed,
-    signature_missing,
-    signed_data_missing,
-};
 
 /// Analogous to [verify_shred_cpu](https://github.com/anza-xyz/agave/blob/83e7d84bcc4cf438905d07279bc07e012a49afd9/ledger/src/sigverify_shreds.rs#L35)
 pub fn verifyShred(
@@ -232,4 +214,22 @@ pub const ShredVerificationFailure = error{
     LeaderUnknown,
     FailedVerification,
     FailedCaching,
+};
+
+/// Something about the shred was unexpected, so we will discard it.
+pub const ShredValidationError = error{
+    InsufficientShredSize,
+    MissingVersion,
+    SlotMissing,
+    IndexMissing,
+    VariantMissing,
+    WrongVersion,
+    SlotTooNew,
+    CodeIndexTooHigh,
+    RootedSlot,
+    DataIndexTooHigh,
+    ParentSlotOffsetMissing,
+    SlotVerificationFailed,
+    SignatureMissing,
+    SignedDataMissing,
 };
