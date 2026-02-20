@@ -47,7 +47,7 @@ pub fn allowSyscallOnFd(syscall: u32, fd: u32) [5]sock_filter {
 }
 
 /// Only allows writing to stderr, sleeping, and exiting.
-pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [33]sock_filter {
+pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [28]sock_filter {
     // load syscall number
     const preamble = .{stmt(LD + W + ABS, @offsetOf(SECCOMP.data, "nr"))};
 
@@ -56,11 +56,10 @@ pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [33]sock_filter {
             std.debug.panic("Negative fd supplied? {}\n", .{stderr_fd});
 
         break :blk allowSyscallOnFd(@intFromEnum(syscalls.write), stderr) ++
-            allowSyscallOnFd(@intFromEnum(syscalls.writev), stderr) ++
-            allowSyscallOnFd(@intFromEnum(syscalls.pwritev), stderr);
+            allowSyscallOnFd(@intFromEnum(syscalls.writev), stderr);
     } else
         // forward unconditional + noops
-        .{jump(JMP, 0, 14, 14)} ++ .{jump(JMP, 0, 0, 0)} ** 14;
+        .{jump(JMP, 0, 9, 9)} ++ .{jump(JMP, 0, 0, 0)} ** 9;
 
     const fall_through = .{stmt(RET + K, default_deny_action)};
 

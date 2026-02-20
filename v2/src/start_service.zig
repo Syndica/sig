@@ -40,12 +40,16 @@ comptime {
         if (@typeInfo(Return) != .error_union) @compileError("Invalid return type");
         if (@typeInfo(Return).error_union.payload != noreturn) @compileError("Invalid return type");
 
-        @export(&serviceMain, .{ .name = "svc_main_" ++ root.name });
-        @export(&handleSegfault, .{ .name = "svc_fault_handler_" ++ root.name });
+        @export(&serviceMain, .{ .name = "svc_main_" ++ @tagName(root.name) });
+        @export(&handleSegfault, .{ .name = "svc_fault_handler_" ++ @tagName(root.name) });
     }
 }
 
 pub const panic = std.debug.FullPanic(servicePanic);
+
+pub const options: std.Options = .{
+    .logFn = serviceLog,
+};
 
 pub const panic_state = struct {
     pub var stderr: std.os.linux.fd_t = undefined;
@@ -53,8 +57,29 @@ pub const panic_state = struct {
     var faulted: bool = false;
 };
 
+fn serviceLog(
+    comptime message_level: std.log.Level,
+    comptime scope: @TypeOf(.enum_literal),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    const stderr: std.fs.File = .{ .handle = panic_state.stderr };
+    var writer_buf: [1024]u8 = undefined;
+
+    // using writerStreaming to avoid pwritev, which isn't safe to use in multithreaded contexts
+    var writer = stderr.writerStreaming(&writer_buf);
+    defer writer.interface.flush() catch {};
+
+    const level_txt = comptime message_level.asText();
+    const prefix2 = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
+
+    const fmt_string = "(" ++ @tagName(root.name) ++ ") " ++ level_txt ++ prefix2 ++ format ++ "\n";
+
+    nosuspend writer.interface.print(fmt_string, args) catch return;
+}
+
 fn serviceMain(params: common.ResolvedArgs) callconv(.c) void {
-    tracy.setThreadName("svc: " ++ root.name);
+    tracy.setThreadName("svc: " ++ @tagName(root.name));
 
     const exit: *common.Exit = @ptrCast(params.exit);
     exit.* = .{};
@@ -64,10 +89,6 @@ fn serviceMain(params: common.ResolvedArgs) callconv(.c) void {
 
     panic_state.stderr = params.stderr;
     panic_state.exit = exit;
-
-    const stderr: std.fs.File = .{ .handle = params.stderr };
-    var writer_buf: [0]u8 = undefined;
-    var writer = stderr.writer(&writer_buf);
 
     // Call main with args specified by ReadWrite/ReadOnly structs
     const ret_val =
@@ -82,7 +103,7 @@ fn serviceMain(params: common.ResolvedArgs) callconv(.c) void {
                 @field(read_only, field.name) = @ptrCast(data.?[0..data_len]);
             }
 
-            break :err root.serviceMain(&writer.interface, read_only);
+            break :err root.serviceMain(read_only);
         } else if (!@hasDecl(root, "ReadOnly")) err: {
             var read_write: root.ReadWrite = undefined;
             const root_rw_fields = @typeInfo(root.ReadWrite).@"struct".fields;
@@ -94,7 +115,7 @@ fn serviceMain(params: common.ResolvedArgs) callconv(.c) void {
                 @field(read_write, field.name) = @ptrCast(data.?[0..data_len]);
             }
 
-            break :err root.serviceMain(&writer.interface, read_write);
+            break :err root.serviceMain(read_write);
         } else err: {
             var read_only: root.ReadOnly = undefined;
             const root_ro_fields = @typeInfo(root.ReadOnly).@"struct".fields;
@@ -116,7 +137,7 @@ fn serviceMain(params: common.ResolvedArgs) callconv(.c) void {
                 @field(read_write, field.name) = @ptrCast(data.?[0..data_len]);
             }
 
-            break :err root.serviceMain(&writer.interface, read_only, read_write);
+            break :err root.serviceMain(read_only, read_write);
         };
 
     ret_val catch |err| {
@@ -133,8 +154,6 @@ fn serviceMain(params: common.ResolvedArgs) callconv(.c) void {
                 trace.instruction_addresses[0..n_addresses],
             );
         }
-
-        writer.interface.flush() catch {};
     };
 }
 

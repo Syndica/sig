@@ -10,21 +10,22 @@ comptime {
     _ = start;
 }
 
-pub const name = "net";
+pub const name = .net;
 pub const panic = start.panic;
+pub const std_options = start.options;
 
 pub const ReadWrite = struct {
     pair: *Pair,
 };
 
-pub fn serviceMain(writer: *std.io.Writer, rw: ReadWrite) !noreturn {
-    try mainInner(writer, &.{rw.pair});
+pub fn serviceMain(rw: ReadWrite) !noreturn {
+    try mainInner(&.{rw.pair});
 }
 
 const MAX_SOCKETS = 10;
 
 /// `ports` is the list of ports it'll listen on.
-fn mainInner(writer: *std.io.Writer, pairs: []const *Pair) !noreturn {
+fn mainInner(pairs: []const *Pair) !noreturn {
     std.debug.assert(pairs.len <= MAX_SOCKETS);
 
     var sockets: [MAX_SOCKETS]std.posix.fd_t = undefined;
@@ -39,7 +40,7 @@ fn mainInner(writer: *std.io.Writer, pairs: []const *Pair) !noreturn {
         );
         errdefer std.posix.close(socket);
 
-        try writer.print("(net)binding 0.0.0.0:{}\n", .{pair.port});
+        std.log.info("binding 0.0.0.0:{}", .{pair.port});
 
         const local: std.net.Address = .initIp4(.{ 0, 0, 0, 0 }, pair.port);
         try std.posix.bind(socket, &local.any, local.getOsSockLen());

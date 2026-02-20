@@ -19,8 +19,9 @@ comptime {
     _ = start;
 }
 
-pub const name = "shred_receiver";
+pub const name = .shred_receiver;
 pub const panic = start.panic;
+pub const std_options = start.options;
 
 pub const ReadWrite = struct {
     pair: *Pair,
@@ -35,8 +36,8 @@ const stub_root_slot = 0;
 const stub_shred_version: Atomic(u16) = .{ .raw = 29062 }; // TODO: port over getShredAndIPFromEchoServer
 const stub_max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
 
-pub fn serviceMain(writer: *std.io.Writer, ro: ReadOnly, rw: ReadWrite) !noreturn {
-    try writer.print("Waiting for shreds on port {}\n", .{rw.pair.port});
+pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
+    std.log.info("Waiting for shreds on port {}", .{rw.pair.port});
 
     var verified_roots_fba_buf: [64 * 1024]u8 = undefined;
     var verified_roots_fba: std.heap.FixedBufferAllocator = .init(&verified_roots_fba_buf);
@@ -55,37 +56,36 @@ pub fn serviceMain(writer: *std.io.Writer, ro: ReadOnly, rw: ReadWrite) !noretur
         defer slice.markUsed(1);
 
         validateShred(packet, stub_root_slot, &stub_shred_version, stub_max_slot) catch |err| {
-            try writer.print("invalid shred: {}\n", .{err});
+            std.log.debug("invalid shred: {}", .{err});
             continue;
         };
 
         verifyShred(packet, ro.leader_schedule, &verified_roots) catch |err| {
             _ = err catch {};
-            try writer.print("failed to verify shred: {}\n", .{err});
+            std.log.debug("failed to verify shred: {}", .{err});
             continue;
         };
 
         // TODO: this is where we might retransmit
 
         const payload = layout.getShred(packet, false) orelse {
-            try writer.print("failed to get shred\n", .{});
+            std.log.debug("failed to get shred", .{});
             continue;
         };
 
         const packet_shred = shred.Shred.fromPayload(payload) catch |err| {
-            try writer.print(
-                "failed to deserialize verified shred {?}.{?}: {}\n",
+            std.log.debug(
+                "failed to deserialize verified shred {?}.{?}: {}",
                 .{ layout.getSlot(payload), layout.getIndex(payload), err },
             );
             continue;
         };
 
-        try writer.print(
+        std.log.debug(
             \\slot: {}
             \\erasure_set_index: {}
             \\index: {}
             \\shred_type: {}
-            \\
             \\
         , .{
             packet_shred.commonHeader().slot,
