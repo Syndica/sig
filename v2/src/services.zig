@@ -7,6 +7,7 @@
 //! - Dumping stack traces + errors on service exit
 
 const std = @import("std");
+const tracy = @import("tracy");
 
 test {
     _ = std.testing.refAllDecls(@This());
@@ -338,6 +339,10 @@ fn spawnService(
         return child_pid;
     }
 
+    switch (service_instance.service) {
+        inline else => |svc| tracy.setThreadName("svc: " ++ @tagName(svc)),
+    }
+
     // register fault handlers
     {
         const act: *const std.os.linux.Sigaction = &.{
@@ -602,11 +607,16 @@ pub fn spawnAndWaitNoSandbox(
 
 fn threadEntry(
     entry_point: ServiceEntrypoint,
+    service: Service,
     args: common.ResolvedArgs,
     service_idx: u16,
     finished_idx: *?u16,
     reset_event: *std.Thread.ResetEvent,
 ) void {
+    switch (service) {
+        inline else => |svc| tracy.setThreadName("svc: " ++ @tagName(svc)),
+    }
+
     entry_point(args);
     finished_idx.* = service_idx;
     reset_event.set();
@@ -626,6 +636,13 @@ fn spawnServiceNoSandbox(
     return try std.Thread.spawn(
         .{},
         threadEntry,
-        .{ service_instance.service.entrypoint(), resolved_args, service_idx, finished_idx, reset_event },
+        .{
+            service_instance.service.entrypoint(),
+            service_instance.service,
+            resolved_args,
+            service_idx,
+            finished_idx,
+            reset_event,
+        },
     );
 }

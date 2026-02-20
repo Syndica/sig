@@ -79,8 +79,6 @@ fn serviceLog(
 }
 
 fn serviceMain(params: common.ResolvedArgs) callconv(.c) void {
-    tracy.setThreadName("svc: " ++ @tagName(root.name));
-
     const exit: *common.Exit = @ptrCast(params.exit);
     exit.* = .{};
 
