@@ -196,6 +196,7 @@ fn initTransactionContext(
     // Create Transaction Context
     transaction_context.* = .{
         .allocator = allocator,
+        .programs_allocator = allocator,
         .feature_set = feature_set,
         .sysvar_cache = sysvar_cache,
         .epoch_stakes = epoch_stakes,
@@ -231,7 +232,7 @@ pub fn deinitTransactionContext(
 
     allocator.destroy(tc.feature_set);
 
-    tc.program_map.deinit(allocator);
+    tc.program_map.deinit(tc.programs_allocator);
     allocator.destroy(tc.program_map);
 
     tc.sysvar_cache.deinit(allocator);

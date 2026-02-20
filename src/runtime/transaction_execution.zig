@@ -265,6 +265,7 @@ pub fn loadAndExecuteTransaction(
 
     const executed_transaction = try executeTransaction(
         tmp_allocator,
+        programs_allocator,
         transaction,
         loaded_accounts.accounts.slice(),
         &compute_budget_limits,
@@ -344,6 +345,7 @@ test hasDuplicates {
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L909
 pub fn executeTransaction(
     allocator: std.mem.Allocator,
+    programs_allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
     /// transaction execution modifies accounts, which is implemented by
     /// directly mutating the data in this slice
@@ -388,6 +390,7 @@ pub fn executeTransaction(
 
     var tc: TransactionContext = .{
         .allocator = allocator,
+        .programs_allocator = programs_allocator,
         .feature_set = environment.feature_set,
         .epoch_stakes = environment.epoch_stakes,
         .sysvar_cache = environment.sysvar_cache,
