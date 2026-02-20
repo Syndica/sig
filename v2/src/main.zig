@@ -32,9 +32,9 @@ const Config = struct {
 };
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var dba_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = dba_state.deinit();
+    const allocator = dba_state.allocator();
 
     const config: Config = cfg: {
         var args = std.process.args();
