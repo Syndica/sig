@@ -90,6 +90,10 @@ pub fn loadIfProgram(
         !account.owner.equals(&bpf_loader.v4.ID) or
         programs.contains(address)) return;
 
+    // TODO(TOCTOU): at this point 2 executions of this function can reach
+    // this point for the same program, but addressing this involves completely
+    // altering the access pattern for ProgramMap
+
     var loaded_program = try loadProgram(
         programs_allocator,
         account,
