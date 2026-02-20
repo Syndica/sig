@@ -5,24 +5,27 @@ const Pubkey = sig.core.Pubkey;
 
 const ReservedAccountKeys = @This();
 
-allocator: std.mem.Allocator,
 /// Set of currently active reserved account keys
-active: std.AutoHashMap(Pubkey, void),
+active: std.AutoHashMapUnmanaged(Pubkey, void),
 /// Set of currently inactive reserved account keys that will be moved to the
 /// active set when their feature id is activated
-inactive: std.AutoHashMap(Pubkey, Pubkey),
+inactive: std.AutoHashMapUnmanaged(Pubkey, Pubkey),
+
+pub fn deinit(self: *ReservedAccountKeys, allocator: std.mem.Allocator) void {
+    self.active.deinit(allocator);
+    self.inactive.deinit(allocator);
+}
 
 // TODO: add a function to update the active/inactive sets based on the current feature set
 pub fn newAllActivated(allocator: std.mem.Allocator) !ReservedAccountKeys {
-    var active = std.AutoHashMap(Pubkey, void).init(allocator);
+    var active: std.AutoHashMapUnmanaged(Pubkey, void) = .{};
     for (RESERVED_ACCOUNTS) |reserved_account| {
-        try active.put(reserved_account.key, {});
+        try active.put(allocator, reserved_account.key, {});
     }
 
     return .{
-        .allocator = allocator,
         .active = active,
-        .inactive = std.AutoHashMap(Pubkey, Pubkey).init(allocator),
+        .inactive = std.AutoHashMapUnmanaged(Pubkey, Pubkey).empty,
     };
 }
 

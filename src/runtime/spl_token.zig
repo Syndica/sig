@@ -296,7 +296,7 @@ fn realNumberString(allocator: Allocator, amount: u64, decimals: u8) error{OutOf
 ///   (1_000_000_000, 9) -> "1"
 ///   (1_234_567_890, 3) -> "1234567.89"
 ///   (600010892365405206, 9) -> "600010892.365405206"
-fn realNumberStringTrimmed(
+pub fn realNumberStringTrimmed(
     allocator: Allocator,
     amount: u64,
     decimals: u8,

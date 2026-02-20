@@ -415,6 +415,65 @@ pub const Message = struct {
         return index < self.signature_count;
     }
 
+    pub fn isMaybeWritable(
+        self: Message,
+        i: usize,
+        reserved_account_keys: ?*const std.AutoHashMapUnmanaged(Pubkey, void),
+    ) bool {
+        return (self.isWritableIndex(i) and
+            !self.isAccountMaybeReserved(i, reserved_account_keys) and
+            !self.demoteProgramId(i));
+    }
+
+    pub fn isWritableIndex(
+        self: Message,
+        i: usize,
+    ) bool {
+        const num_required_signatures: usize = @intCast(self.signature_count);
+        const num_readonly_signed_accounts: usize = @intCast(self.readonly_signed_count);
+        if (i < num_required_signatures -| num_readonly_signed_accounts) return true;
+
+        const num_readonly_unsigned_accounts: usize = @intCast(self.readonly_unsigned_count);
+        if (i >= num_required_signatures and i < self.account_keys.len -| num_readonly_unsigned_accounts) return true;
+
+        return false;
+    }
+
+    pub fn isAccountMaybeReserved(
+        self: Message,
+        i: usize,
+        reserved_account_keys: ?*const std.AutoHashMapUnmanaged(Pubkey, void),
+    ) bool {
+        if (reserved_account_keys) |keys| {
+            if (i >= self.account_keys.len) return false;
+            return keys.contains(self.account_keys[i]);
+        }
+        return false;
+    }
+
+    pub fn demoteProgramId(
+        self: Message,
+        i: usize,
+    ) bool {
+        return self.isKeyCalledAsProgram(i) and !self.isUpgradeableLoaderPresent();
+    }
+
+    pub fn isKeyCalledAsProgram(self: Message, key_index: usize) bool {
+        if (std.math.cast(u8, key_index)) |idx| {
+            for (self.instructions) |ixn| {
+                if (ixn.program_index == idx) return true;
+            }
+        }
+        return false;
+    }
+
+    pub fn isUpgradeableLoaderPresent(self: Message) bool {
+        for (self.account_keys) |account_key| {
+            if (account_key.equals(&sig.runtime.program.bpf_loader.v3.ID)) return true;
+        }
+        return false;
+    }
+
     /// https://github.com/anza-xyz/solana-sdk/blob/5ff67c1a53c10e16689e377f98a92ba3afd6bb7c/message/src/versions/v0/loaded.rs#L118-L150
     pub fn isWritable(
         self: Message,
