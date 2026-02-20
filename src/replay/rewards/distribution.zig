@@ -279,7 +279,7 @@ fn buildUpdatedStakeReward(
         .stake_pubkey = partitioned_reward.stake_pubkey,
         .stake_reward_info = .{
             .reward_type = .staking,
-            .lamports = @intCast(partitioned_reward.stake_reward),
+            .lamports = partitioned_reward.stake_reward,
             .post_balance = account.lamports,
             .commission = partitioned_reward.commission,
         },
