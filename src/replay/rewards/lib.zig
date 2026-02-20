@@ -24,15 +24,11 @@ pub const RewardType = enum {
     voting,
 };
 
-/// Protocol-level reward information that was distributed by the bank.
-/// Matches Agave's `RewardInfo` struct in runtime/src/reward_info.rs.
 pub const RewardInfo = struct {
     reward_type: RewardType,
-    /// Can be negative in edge cases (e.g., when rent is deducted)
-    lamports: i64,
+    lamports: u64,
     post_balance: u64,
-    /// Commission for vote/staking rewards, null for fee rewards
-    commission: ?u8,
+    commission: u8,
 };
 
 pub const StakeReward = struct {

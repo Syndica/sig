@@ -548,7 +548,7 @@ fn calculateVoteAccountsToStore(
             .vote_pubkey = vote_pubkey,
             .rewards = .{
                 .reward_type = .voting,
-                .lamports = @intCast(vote_reward.rewards),
+                .lamports = vote_reward.rewards,
                 .post_balance = vote_reward.account.lamports,
                 .commission = vote_reward.commission,
             },
@@ -1224,7 +1224,7 @@ test calculateVoteAccountsToStore {
             vote_rewards.vote_rewards.entries[0].vote_pubkey,
         );
         try std.testing.expectEqual(
-            @as(i64, @intCast(vote_account_0_reward.rewards)),
+            vote_account_0_reward.rewards,
             vote_rewards.vote_rewards.entries[0].rewards.lamports,
         );
         try std.testing.expectEqual(
