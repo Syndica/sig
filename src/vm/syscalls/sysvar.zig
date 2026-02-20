@@ -490,6 +490,51 @@ test getSysvar {
             std.mem.asBytes(&clean_obj),
         );
     }
+
+    // SIMD-0219: value_addr >= INPUT_START with stricter_abi_and_runtime_constraints returns InvalidPointer
+    {
+        var cache_strict, var tc_strict = try testing.createTransactionContext(allocator, prng.random(), .{
+            .accounts = &.{},
+            .compute_meter = std.math.maxInt(u64),
+            .feature_set = &.{ .{ .feature = .stricter_abi_and_runtime_constraints, .slot = 0 } },
+            .slot = 0,
+            .sysvar_cache = .{
+                .clock = src.clock,
+                .epoch_schedule = src.epoch_schedule,
+                .fees = src.fees,
+                .rent = src.rent,
+                .epoch_rewards = src.rewards,
+                .last_restart_slot = src.restart,
+            },
+        });
+        defer {
+            testing.deinitTransactionContext(allocator, &tc_strict);
+            cache_strict.deinit(allocator);
+        }
+
+        var dummy: u64 = 0;
+        var memory_map = try MemoryMap.init(
+            allocator,
+            &.{memory.Region.init(.mutable, std.mem.asBytes(&dummy), 0x100000000)},
+            .v2,
+            .{},
+        );
+        defer memory_map.deinit(allocator);
+
+        try std.testing.expectError(
+            SyscallError.InvalidPointer,
+            callSysvarSyscall(&tc_strict, &memory_map, getClock, .{memory.INPUT_START}),
+        );
+        try std.testing.expectError(
+            SyscallError.InvalidPointer,
+            callSysvarSyscall(&tc_strict, &memory_map, getSysvar, .{
+                0x200000000,
+                memory.INPUT_START,
+                0,
+                sysvar.Clock.STORAGE_SIZE,
+            }),
+        );
+    }
 }
 
 test "getSysvar(StakeHistory, partial)" {
