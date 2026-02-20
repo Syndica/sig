@@ -5,7 +5,7 @@ test {
 }
 
 const common = @import("../common.zig");
-const binkode = @import("binkode");
+const bk = @import("binkode");
 
 const ShredType = @import("shred/shred_type.zig").ShredType;
 const ShredConstants = @import("shred/ShredConstants.zig");
@@ -141,7 +141,7 @@ pub const CodeShred = struct {
     custom: CodeHeader,
     payload: []const u8,
 
-    const Generic = GenericShred(.code);
+    const Generic = ShredMethods(.code);
 
     pub const constants: ShredConstants = .{
         .max_per_slot = 32_768,
@@ -266,8 +266,7 @@ pub const DataShred = struct {
         .headers_size = 88,
     };
 
-    const Self = @This();
-    const Generic = GenericShred(.data);
+    const Generic = ShredMethods(.data);
 
     /// agave: ShredData::from_recovered_shard
     pub fn fromRecoveredShard(
@@ -276,7 +275,7 @@ pub const DataShred = struct {
         chained_merkle_root: ?Hash,
         retransmitter_signature: ?Signature,
         shard: []const u8,
-    ) !Self {
+    ) !DataShred {
         if (shard.len + Signature.SIZE > constants.payload_size) {
             return error.InvalidShardSize;
         }
@@ -303,22 +302,22 @@ pub const DataShred = struct {
         return shred;
     }
 
-    pub fn zeroedForTest(allocator: std.mem.Allocator) !Self {
+    pub fn zeroedForTest(allocator: std.mem.Allocator) !DataShred {
         return Generic.zeroedForTest(allocator);
     }
 
-    pub fn sanitize(self: *const Self) !void {
+    pub fn sanitize(self: *const DataShred) !void {
         try Generic.sanitize(self);
         // see ShredFlags comptime block for omitted check that is guaranteed at comptime.
         _ = try self.data();
         _ = try self.parent();
     }
 
-    pub fn writePayload(self: *Self, new_payload: []const u8) !void {
+    pub fn writePayload(self: *DataShred, new_payload: []const u8) !void {
         return Generic.writePayload(self, new_payload);
     }
 
-    pub fn data(self: *const Self) ![]const u8 {
+    pub fn data(self: *const DataShred) ![]const u8 {
         const data_buffer_size = try capacity(constants, self.common.variant);
         const size = self.custom.size;
         if (size > self.payload.len or
@@ -331,7 +330,7 @@ pub const DataShred = struct {
         return self.payload[constants.headers_size..size];
     }
 
-    pub fn parent(self: *const Self) error{InvalidParentSlotOffset}!Slot {
+    pub fn parent(self: *const DataShred) error{InvalidParentSlotOffset}!Slot {
         const slot = self.common.slot;
         if (self.custom.parent_slot_offset == 0 and slot != 0) {
             return error.InvalidParentSlotOffset;
@@ -343,7 +342,7 @@ pub const DataShred = struct {
         ) catch error.InvalidParentSlotOffset;
     }
 
-    pub fn erasureShardIndex(self: *const Self) !usize {
+    pub fn erasureShardIndex(self: *const DataShred) !usize {
         return try std.math.sub(
             u32,
             self.common.index,
@@ -351,38 +350,38 @@ pub const DataShred = struct {
         );
     }
 
-    pub fn dataComplete(self: Self) bool {
+    pub fn dataComplete(self: DataShred) bool {
         return self.custom.flags.isSet(.data_complete_shred);
     }
 
-    pub fn isLastInSlot(self: Self) bool {
+    pub fn isLastInSlot(self: DataShred) bool {
         return self.custom.flags.isSet(.last_shred_in_slot);
     }
 
-    pub fn referenceTick(self: Self) u8 {
+    pub fn referenceTick(self: DataShred) u8 {
         return self.custom.flags
             .intersection(.shred_tick_reference_mask).state;
     }
 
-    pub fn id(self: Self) ShredId {
+    pub fn id(self: DataShred) ShredId {
         return Generic.id(&self);
     }
 
-    pub fn merkleRoot(self: Self) !Hash {
+    pub fn merkleRoot(self: DataShred) !Hash {
         return Generic.merkleRoot(self);
     }
 
-    pub fn chainedMerkleRoot(self: Self) !Hash {
+    pub fn chainedMerkleRoot(self: DataShred) !Hash {
         return Generic.chainedMerkleRoot(self);
     }
 
-    pub fn retransmitterSignature(self: Self) !Signature {
+    pub fn retransmitterSignature(self: DataShred) !Signature {
         return Generic.retransmitterSignature(self);
     }
 };
 
 /// Analogous to [Shred trait](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/ledger/src/shred/traits.rs#L6)
-fn GenericShred(shred_type: ShredType) type {
+fn ShredMethods(shred_type: ShredType) type {
     const Self = switch (shred_type) {
         .data => DataShred,
         .code => CodeShred,
@@ -428,8 +427,10 @@ fn GenericShred(shred_type: ShredType) type {
             return self;
         }
 
-        fn zeroedForTest(allocator: std.mem.Allocator) !Self {
-            const payload = try allocator.alloc(u8, constants.payload_size);
+        fn zeroedForTest(
+            allocator: std.mem.Allocator,
+            payload: *const [constants.payload_size]u8,
+        ) !Self {
             return .{
                 .common = CommonHeader.ZEROED_FOR_TEST,
                 .custom = CustomHeader.ZEROED_FOR_TEST,
@@ -789,19 +790,17 @@ pub const MerkleProofEntryList = struct {
     bytes: []const u8,
     len: usize,
 
-    const Self = @This();
-
-    pub fn deinit(self: Self, allocator: Allocator) void {
+    pub fn deinit(self: MerkleProofEntryList, allocator: Allocator) void {
         allocator.free(self.bytes);
     }
 
-    pub fn sanitize(self: Self) !void {
+    pub fn sanitize(self: MerkleProofEntryList) !void {
         if (self.len * merkle_proof_entry_size != self.bytes.len) {
             return error.InvalidMerkleProof;
         }
     }
 
-    pub fn get(self: *const Self, index: usize) ?MerkleProofEntry {
+    pub fn get(self: *const MerkleProofEntryList, index: usize) ?MerkleProofEntry {
         if (index > self.len) return null;
         const start = index * merkle_proof_entry_size;
         const end = start + merkle_proof_entry_size;
@@ -810,11 +809,11 @@ pub const MerkleProofEntryList = struct {
         return entry;
     }
 
-    pub fn iterator(self: Self) MerkleProofIterator {
+    pub fn iterator(self: MerkleProofEntryList) MerkleProofIterator {
         return .{ .slice = self.bytes };
     }
 
-    pub fn eql(self: Self, other: Self) bool {
+    pub fn eql(self: MerkleProofEntryList, other: MerkleProofEntryList) bool {
         return self.len == other.len and
             std.mem.eql(u8, self.bytes[0..self.len], other.bytes[0..other.len]);
     }
@@ -841,9 +840,9 @@ pub const CommonHeader = struct {
     /// aka "fec_set_index"
     erasure_set_index: u32,
 
-    pub const bk_config: binkode.Codec(CommonHeader) = .standard(.tuple(.{
+    pub const bk_config: bk.Codec(CommonHeader) = .standard(.tuple(.{
         .leader_signature = .from(Signature.bk_config),
-        .variant = ShredVariant.bk_codec,
+        .variant = .from(ShredVariant.bk_codec),
         .slot = .fixint,
         .index = .fixint,
         .version = .fixint,
@@ -876,15 +875,13 @@ pub const DataHeader = struct {
 
     /// Standard codec for a zero-sized value.
     /// Never fails to encode or decode.
-    pub const bk_config: binkode.Codec(DataHeader) = .standard(.tuple(.{
+    pub const bk_config: bk.Codec(DataHeader) = .standard(.tuple(.{
         .parent_slot_offset = .fixint,
         .flags = ShredFlags.bk_config,
         .size = .fixint,
     }));
 
-    const Self = @This();
-
-    const ZEROED_FOR_TEST = Self{
+    const ZEROED_FOR_TEST: DataHeader = .{
         .parent_slot_offset = 0,
         .flags = .{},
         .size = 0,
@@ -898,15 +895,13 @@ pub const CodeHeader = struct {
     /// shreds in the set. This index is the code shred's position within that sequence.
     erasure_code_index: u16,
 
-    pub const bk_config: binkode.Codec(CodeHeader) = .standard(.tuple(.{
+    pub const bk_config: bk.Codec(CodeHeader) = .standard(.tuple(.{
         .num_data_shreds = .fixint,
         .num_code_shreds = .fixint,
         .erasure_code_index = .fixint,
     }));
 
-    const Self = @This();
-
-    const ZEROED_FOR_TEST = Self{
+    const ZEROED_FOR_TEST: CodeHeader = .{
         .num_data_shreds = 0,
         .num_code_shreds = 0,
         .erasure_code_index = 0,
@@ -919,8 +914,8 @@ pub const ShredVariant = struct {
     chained: bool,
     resigned: bool,
 
-    pub const bk_codec: binkode.StdCodec(ShredVariant) = .from(.implement(void, void, struct {
-        const bk = binkode;
+    /// Serialises and deserialises from/to a single byte. See ShredVariant.fromByte and .toByte.
+    pub const bk_codec: bk.Codec(ShredVariant) = .implement(void, void, struct {
         const V = ShredVariant;
 
         pub fn encode(
@@ -981,11 +976,9 @@ pub const ShredVariant = struct {
         }
 
         pub const free = null;
-    }));
+    });
 
-    const Self = @This();
-
-    pub fn fromByte(byte: u8) error{ UnknownShredVariant, LegacyShredVariant }!Self {
+    pub fn fromByte(byte: u8) error{ UnknownShredVariant, LegacyShredVariant }!ShredVariant {
         return switch (byte & 0xF0) {
             0x40 => .{
                 .shred_type = .code,
@@ -1029,7 +1022,7 @@ pub const ShredVariant = struct {
         };
     }
 
-    pub fn toByte(self: Self) error{ UnknownShredVariant, LegacyShredVariant, IllegalProof }!u8 {
+    pub fn toByte(self: ShredVariant) error{ UnknownShredVariant, LegacyShredVariant, IllegalProof }!u8 {
         if (self.proof_size & 0xF0 != 0) return error.IllegalProof;
         const big_end: u8 =
             if (self.shred_type == .code and
@@ -1061,7 +1054,7 @@ pub const ShredVariant = struct {
         return big_end | self.proof_size;
     }
 
-    pub fn constants(self: Self) ShredConstants {
+    pub fn constants(self: ShredVariant) ShredConstants {
         return switch (self.shred_type) {
             .data => DataShred.constants,
             .code => CodeShred.constants,
@@ -1075,8 +1068,7 @@ pub const ShredFlags = packed struct(u8) {
     // last_shred_in_slot implies data_complete_shred
     last_shred_in_slot: bool,
 
-    pub const bk_config: binkode.StdCodec(ShredFlags) = .from(.implement(void, void, struct {
-        const bk = binkode;
+    pub const bk_config: bk.StdCodec(ShredFlags) = .from(.implement(void, void, struct {
         const V = ShredFlags;
 
         pub fn encode(
