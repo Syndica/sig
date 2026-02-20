@@ -499,10 +499,7 @@ test getSysvar {
             .{
                 .accounts = &.{},
                 .compute_meter = std.math.maxInt(u64),
-                .feature_set = &.{ .{ 
-                    .feature = .stricter_abi_and_runtime_constraints,
-                    .slot = 0 
-                 } },
+                .feature_set = &.{.{ .feature = .stricter_abi_and_runtime_constraints, .slot = 0 }},
                 .slot = 0,
                 .sysvar_cache = .{
                     .clock = src.clock,
