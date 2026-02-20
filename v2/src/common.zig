@@ -28,7 +28,8 @@ pub const ResolvedArgs = extern struct {
 
 pub const ServiceFn = *const fn (ResolvedArgs) callconv(.c) void;
 
-/// This value should be written to before a service exits. Both fields may be active at once.
+/// This value should be written to before a service exits. Multiple traces (e.g. error return, and
+/// fault) may be written to.
 /// Each one is equivalent to an std.builtin.StackTrace.
 pub const Exit = extern struct {
     /// when the service returned in an error
