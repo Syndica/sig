@@ -25,44 +25,59 @@ pub const LeaderSchedule = extern struct {
     /// Reads the leader schedule as formatted by the `solana leader-schedule` and
     /// `sig leader-schedule` commands. Return the start slot and the leader schedule.
     pub fn fromCommand(schedule: *LeaderSchedule, reader: *std.io.Reader) !void {
-        const nextNonEmpty = struct {
-            pub fn nextNonEmpty(word_iter: anytype) ?[]const u8 {
-                while (word_iter.next()) |word| if (word.len > 0) return word;
-                return null;
-            }
-        }.nextNonEmpty;
+        const slot_max_len = comptime std.fmt.count("{d}", .{std.math.maxInt(Slot)});
+        const hash_max_len = 44;
+        std.debug.assert(reader.buffer.len >= @max(slot_max_len, hash_max_len));
 
-        var start_slot: Slot = 0;
-        var expect: ?Slot = null;
+        var start_slot: ?Slot = null;
+        var i: u32 = 0;
 
-        var i: usize = 0;
-        while (true) {
-            const line = l: {
-                const line = reader.takeDelimiterInclusive('\n') catch |e| switch (e) {
-                    error.EndOfStream => break,
-                    else => return e,
-                };
-                break :l std.mem.trim(u8, line, "\n");
+        while (true) : (i += 1) {
+            try skipSpaces(reader);
+
+            const slot_str = reader.takeDelimiterExclusive(' ') catch |err| switch (err) {
+                error.ReadFailed => |e| return e,
+                error.EndOfStream => break,
+                error.StreamTooLong => return error.InvalidSlot,
             };
+            if (std.mem.indexOfScalar(u8, slot_str, '\n') != null) break;
 
-            var word_iter = std.mem.splitScalar(u8, line, ' ');
-            const slot = try std.fmt.parseInt(Slot, nextNonEmpty(&word_iter) orelse continue, 10);
+            const slot = std.fmt.parseInt(Slot, slot_str, 10) catch return error.InvalidSlot;
 
-            if (expect) |*exp_slot| {
-                if (slot != exp_slot.*) {
-                    return error.Discontinuity;
-                }
-                exp_slot.* += 1;
+            if (start_slot) |start| {
+                if (slot != start + i) return error.Discontinuity;
             } else {
-                expect = slot + 1;
                 start_slot = slot;
             }
-            const node_str = nextNonEmpty(&word_iter) orelse return error.MissingPubkey;
-            const node_pk = try Pubkey.parseRuntime(node_str);
+
+            try skipSpaces(reader);
+
+            const node_str = reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
+                error.ReadFailed => |e| return e,
+                error.EndOfStream => break,
+                error.StreamTooLong => return error.InvalidPubkey,
+            };
+            const node_pk = Pubkey.parseRuntime(std.mem.trim(u8, node_str, " ")) catch return error.InvalidPubkey;
+
             schedule.leaders[i] = node_pk;
-            i += 1;
+
+            if (reader.buffer.len == 0) break; // no '\n' delimiter means end of stream.
+            reader.toss(1);
         }
 
-        schedule.base_slot = start_slot;
+        if (i != slots_per_epoch) return error.IncorrectNumberOfSlots;
+        schedule.base_slot = start_slot.?;
+    }
+
+    fn skipSpaces(r: *std.Io.Reader) error{ReadFailed}!void {
+        while (true) {
+            const byte = r.peekByte() catch |err| switch (err) {
+                error.EndOfStream => return,
+                error.ReadFailed => |e| return e,
+            };
+
+            if (byte != ' ') break;
+            r.seek += 1;
+        }
     }
 };
