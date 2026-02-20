@@ -54,6 +54,10 @@ pub const Pubkey = struct {
         );
         return fromBytes(buffer);
     }
+
+    pub fn rejectIdentity(self: *const Pubkey) error{IdentityElement}!void {
+        try self.point.rejectIdentity();
+    }
 };
 
 pub const Keypair = struct {
@@ -106,6 +110,11 @@ pub const Ciphertext = struct {
             string,
         );
         return fromBytes(buffer);
+    }
+
+    pub fn rejectIdentity(self: *const Ciphertext) error{IdentityElement}!void {
+        try self.commitment.point.rejectIdentity();
+        try self.handle.point.rejectIdentity();
     }
 };
 
@@ -168,13 +177,27 @@ pub fn GroupedElGamalCiphertext(comptime N: u64) type {
             };
         }
 
+        pub fn fromBase64(string: []const u8) !Self {
+            const base64 = std.base64.standard;
+            var buffer: [BYTE_LEN]u8 = @splat(0);
+            const decoded_length = try base64.Decoder.calcSizeForSlice(string);
+            try std.base64.standard.Decoder.decode(
+                buffer[0..decoded_length],
+                string,
+            );
+            return fromBytes(buffer);
+        }
+
         pub fn toBytes(self: Self) [BYTE_LEN]u8 {
             var handles: [N * 32]u8 = undefined;
             for (self.handles, 0..) |handle, i| {
-                const position = i * 32;
-                handles[position..][0..32].* = handle.point.toBytes();
+                handles[i * 32 ..][0..32].* = handle.point.toBytes();
             }
             return self.commitment.point.toBytes() ++ handles;
+        }
+
+        pub fn rejectIdentity(self: *const Self) error{IdentityElement}!void {
+            try self.commitment.rejectIdentity();
         }
     };
 }

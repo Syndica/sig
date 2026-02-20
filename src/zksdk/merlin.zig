@@ -190,7 +190,7 @@ pub const Strobe128 = struct {
 pub const Transcript = struct {
     strobe: Strobe128,
 
-    const DomainSeperator = enum {
+    pub const DomainSeperator = enum {
         @"zero-ciphertext-instruction",
         @"zero-ciphertext-proof",
         @"pubkey-validity-instruction",
@@ -230,21 +230,26 @@ pub const Transcript = struct {
         ciphertext: zksdk.elgamal.Ciphertext,
         commitment: zksdk.pedersen.Commitment,
         u64: u64,
+        domsep: DomainSeperator,
 
         grouped_2: zksdk.elgamal.GroupedElGamalCiphertext(2),
         grouped_3: zksdk.elgamal.GroupedElGamalCiphertext(3),
     };
 
-    pub fn init(comptime seperator: DomainSeperator, inputs: []const TranscriptInput) Transcript {
+    /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/lib.rs#L36
+    const TRANSCRIPT_DOMAIN = "solana-zk-elgamal-proof-program-v1";
+
+    pub fn init(comptime seperator: DomainSeperator) Transcript {
         var transcript: Transcript = .{ .strobe = Strobe128.init("Merlin v1.0") };
-        transcript.appendDomSep(seperator);
-        for (inputs) |input| transcript.appendMessage(input.label, input.message);
+        transcript.appendBytes("dom-sep", TRANSCRIPT_DOMAIN);
+        transcript.appendBytes("dom-sep", @tagName(seperator));
         return transcript;
     }
 
     pub fn initTest(label: []const u8) Transcript {
         comptime if (!builtin.is_test) @compileError("should only be used during tests");
         var transcript: Transcript = .{ .strobe = Strobe128.init("Merlin v1.0") };
+        transcript.appendBytes("dom-sep", TRANSCRIPT_DOMAIN);
         transcript.appendBytes("dom-sep", label);
         return transcript;
     }
@@ -264,6 +269,7 @@ pub const Transcript = struct {
             .point => |*point| &point.toBytes(),
             .pubkey => |*pubkey| &pubkey.toBytes(),
             .scalar => |*scalar| &scalar.toBytes(),
+            .domsep => |t| @tagName(t),
             .ciphertext => |*ct| b: {
                 @memcpy(buffer[0..32], &ct.commitment.point.toBytes());
                 @memcpy(buffer[32..64], &ct.handle.point.toBytes());
@@ -284,26 +290,30 @@ pub const Transcript = struct {
         comptime session: *Session,
         comptime t: Input.Type,
         comptime label: []const u8,
-        data: t.Data(),
-    ) if (t == .validate_point) error{IdentityElement}!void else void {
-        // if validate_point fails to validate, we no longer want to check the contract
+        data: @FieldType(Message, @tagName(t.base())),
+    ) if (t.validates()) error{IdentityElement}!void else void {
+        // If validate_point fails to validate, we no longer want to check the contract
         // because the function calling append will now return early.
         errdefer session.cancel();
 
-        if (t == .bytes and !builtin.is_test)
-            @compileError("message type `bytes` only allowed in tests");
-
-        // assert correctness
+        // Get the next expected input, and inside we verify that it matches
+        // the type we're about to append to the transcript.
         const input = comptime session.nextInput(t, label);
-        if (t == .validate_point) try data.rejectIdentity();
+        // If the input requires validation, we perform it here.
+        if (comptime t.validates()) try data.rejectIdentity();
+        // Ensure that the domain seperators are added with the correct label.
+        // They should always be added through the `appendDomSep` helper function.
+        switch (t) {
+            .domsep => comptime {
+                std.debug.assert(input.seperator.? == data);
+                std.debug.assert(std.mem.eql(u8, label, "dom-sep"));
+            },
+            else => {},
+        }
 
-        // add the message
         self.appendMessage(input.label, @unionInit(
             Message,
-            @tagName(switch (t) {
-                .validate_point => .point,
-                else => t,
-            }),
+            @tagName(t.base()),
             data,
         ));
     }
@@ -314,22 +324,26 @@ pub const Transcript = struct {
     pub inline fn appendNoValidate(
         self: *Transcript,
         comptime session: *Session,
+        comptime t: Input.Type,
         comptime label: []const u8,
-        point: Ristretto255,
+        data: @FieldType(Message, @tagName(t.base())),
     ) void {
-        const input = comptime session.nextInput(.validate_point, label);
-        point.rejectIdentity() catch {}; // ignore the error
-        self.appendMessage(input.label, .{ .point = point });
+        const input = comptime session.nextInput(
+            @field(Input.Type, "validate_" ++ @tagName(t)),
+            label,
+        );
+        data.rejectIdentity() catch {}; // ignore the error
+        self.appendMessage(input.label, @unionInit(Message, @tagName(t), data));
     }
 
-    fn challengeBytes(
+    /// NOTE: This is only meant for `challengeScalar` and tests.
+    pub fn challengeBytes(
         self: *Transcript,
         label: []const u8,
         destination: []u8,
     ) void {
         var data_len: [4]u8 = undefined;
         std.mem.writeInt(u32, &data_len, @intCast(destination.len), .little);
-
         self.strobe.metaAd(label, false);
         self.strobe.metaAd(&data_len, true);
         self.strobe.prf(destination, false);
@@ -351,35 +365,25 @@ pub const Transcript = struct {
 
     // domain seperation helpers
 
-    pub fn appendDomSep(self: *Transcript, comptime seperator: DomainSeperator) void {
-        self.appendBytes("dom-sep", @tagName(seperator));
-    }
-
-    pub fn appendHandleDomSep(
+    pub inline fn appendDomSep(
         self: *Transcript,
-        comptime mode: enum { batched, unbatched },
-        comptime handles: enum { two, three },
+        comptime session: *Session,
+        comptime seperator: DomainSeperator,
     ) void {
-        self.appendDomSep(switch (mode) {
-            .batched => .@"batched-validity-proof",
-            .unbatched => .@"validity-proof",
-        });
-        self.appendMessage("handles", .{ .u64 = switch (handles) {
-            .two => 2,
-            .three => 3,
-        } });
+        self.append(session, .domsep, "dom-sep", seperator);
     }
 
-    pub fn appendRangeProof(
+    pub inline fn appendRangeProof(
         self: *Transcript,
+        comptime session: *Session,
         comptime mode: enum { range, inner },
         n: comptime_int,
     ) void {
-        self.appendDomSep(switch (mode) {
+        self.appendDomSep(session, switch (mode) {
             .range => .@"range-proof",
             .inner => .@"inner-product",
         });
-        self.appendMessage("n", .{ .u64 = n });
+        self.append(session, .u64, "n", n);
     }
 
     // sessions
@@ -387,28 +391,63 @@ pub const Transcript = struct {
     pub const Input = struct {
         label: []const u8,
         type: Type,
+        seperator: ?DomainSeperator = null,
 
         const Type = enum {
             bytes,
             scalar,
-            challenge,
-            point,
-            validate_point,
-            pubkey,
+            u64,
 
-            pub fn Data(comptime t: Type) type {
+            point,
+            pubkey,
+            ciphertext,
+            commitment,
+            grouped_2,
+            grouped_3,
+
+            validate_point,
+            validate_pubkey,
+            validate_ciphertext,
+            validate_commitment,
+            validate_grouped_2,
+            validate_grouped_3,
+
+            domsep,
+            challenge,
+
+            /// Returns whether this input type performs identity validation.
+            fn validates(t: Type) bool {
                 return switch (t) {
-                    .bytes => []const u8,
-                    .scalar => Scalar,
-                    .validate_point, .point => Ristretto255,
-                    .pubkey => zksdk.elgamal.Pubkey,
-                    .challenge => unreachable, // call `challenge*`
+                    .validate_point,
+                    .validate_pubkey,
+                    .validate_ciphertext,
+                    .validate_commitment,
+                    .validate_grouped_2,
+                    .validate_grouped_3,
+                    => true,
+                    else => false,
                 };
+            }
+
+            /// For a given input type, returns the base type.
+            /// E.g. `validate_point` -> `point`
+            /// E.g. `point` -> `point`
+            fn base(t: Type) Type {
+                if (t.validates()) {
+                    return @field(Type, @tagName(t)["validate_".len..]);
+                }
+                return t;
             }
         };
 
+        pub fn domain(sep: DomainSeperator) Input {
+            return .{ .label = "dom-sep", .type = .domsep, .seperator = sep };
+        }
+
         fn check(self: Input, t: Type, label: []const u8) void {
-            std.debug.assert(self.type == t);
+            if (self.type != t) {
+                @compileError("expected: " ++ @tagName(self.type) ++ ", found: " ++ @tagName(t));
+            }
             std.debug.assert(std.mem.eql(u8, self.label, label));
         }
     };
@@ -418,7 +457,8 @@ pub const Transcript = struct {
     pub const Session = struct {
         i: u8,
         contract: Contract,
-        err: bool, // if validate_point errors, we skip the finish() check
+        // If an identity validation errors, we skip the finish() check.
+        err: bool,
 
         pub inline fn nextInput(comptime self: *Session, t: Input.Type, label: []const u8) Input {
             comptime {
@@ -453,6 +493,15 @@ pub const Transcript = struct {
             return .{ .i = 0, .contract = contract, .err = false };
         }
     }
+
+    /// The same as `getSession`, but does not check that it ends with a challenge.
+    ///
+    /// Only used in certain cases when we need an "init" contract, such as `percentage_with_cap`.
+    pub inline fn getInitSession(comptime contract: []const Input) Session {
+        comptime {
+            return .{ .i = 0, .contract = contract, .err = false };
+        }
+    }
 };
 
 test "equivalence" {
@@ -468,9 +517,9 @@ test "equivalence" {
     transcript.challengeBytes("challenge", &bytes);
 
     try std.testing.expectEqualSlices(u8, &.{
-        0xd5, 0xa2, 0x19, 0x72, 0xd0, 0xd5, 0xfe, 0x32,
-        0xc,  0xd,  0x26, 0x3f, 0xac, 0x7f, 0xff, 0xb8,
-        0x14, 0x5a, 0xa6, 0x40, 0xaf, 0x6e, 0x9b, 0xca,
-        0x17, 0x7c, 0x3,  0xc7, 0xef, 0xcf, 0x6,  0x15,
+        159, 115, 74,  116, 119, 227, 89,  42,
+        108, 83,  69,  218, 43,  29,  11,  79,
+        117, 141, 121, 172, 163, 50,  123, 92,
+        25,  21,  111, 177, 11,  232, 4,   35,
     }, &bytes);
 }
