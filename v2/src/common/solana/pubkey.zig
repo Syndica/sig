@@ -23,7 +23,7 @@ pub const Pubkey = extern struct {
     pub fn initRandom(random: std.Random) Pubkey {
         var bytes: [SIZE]u8 = undefined;
         random.bytes(&bytes);
-        return .{ .data = bytes };
+        return .{ .data = Edwards25519.fromUniform(bytes) };
     }
 
     pub fn order(self: Pubkey, other: Pubkey) std.math.Order {
