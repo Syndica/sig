@@ -2110,8 +2110,6 @@ pub fn deployProgram(
         if (tc.log_collector) |*lc| lc else null,
     );
 
-    try tc.log("Deploying program {f}", .{program_id});
-
     // Remove from the program map since it should not be accessible on this slot anymore.
     if (try tc.program_map.fetchPut(tc.programs_allocator, program_id, .failed)) |old| {
         old.deinit(tc.programs_allocator);
