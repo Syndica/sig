@@ -20,9 +20,9 @@ pub fn ServerRunner(comptime ServerType: type) type {
     return struct {
         const ServerRunnerSelf = @This();
 
-        loop: *xev.Loop,
+        loop: xev.Loop,
         thread_pool: xev.ThreadPool,
-        server: *ServerType,
+        server: ServerType,
         stop_notifier: xev.Async,
         stop_completion: xev.Completion,
         thread: std.Thread,
@@ -45,14 +45,10 @@ pub fn ServerRunner(comptime ServerType: type) type {
                 self.thread_pool.deinit();
             }
 
-            self.loop = try allocator.create(xev.Loop);
-            errdefer allocator.destroy(self.loop);
-            self.loop.* = try xev.Loop.init(.{ .thread_pool = &self.thread_pool });
+            self.loop = try xev.Loop.init(.{ .thread_pool = &self.thread_pool });
             errdefer self.loop.deinit();
 
-            self.server = try allocator.create(ServerType);
-            errdefer allocator.destroy(self.server);
-            self.server.* = try ServerType.init(allocator, self.loop, config);
+            self.server = try ServerType.init(allocator, &self.loop, config);
             errdefer self.server.deinit();
 
             self.port = getAssignedPortFromFd(self.server.listen_socket.fd);
@@ -61,7 +57,7 @@ pub fn ServerRunner(comptime ServerType: type) type {
             errdefer self.stop_notifier.deinit();
             self.stop_completion = .{};
             self.stop_notifier.wait(
-                self.loop,
+                &self.loop,
                 &self.stop_completion,
                 ServerRunnerSelf,
                 self,
@@ -69,7 +65,7 @@ pub fn ServerRunner(comptime ServerType: type) type {
             );
 
             self.server.accept();
-            self.thread = try std.Thread.spawn(.{}, runLoop, .{self.loop});
+            self.thread = try std.Thread.spawn(.{}, runLoop, .{&self.loop});
             return self;
         }
 
@@ -101,8 +97,6 @@ pub fn ServerRunner(comptime ServerType: type) type {
             self.thread_pool.shutdown();
             self.thread_pool.deinit();
 
-            self.allocator.destroy(self.server);
-            self.allocator.destroy(self.loop);
             self.allocator.destroy(self);
         }
     };
