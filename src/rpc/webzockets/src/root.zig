@@ -30,6 +30,17 @@ pub const ClientMaskPRNG = types.ClientMaskPRNG;
 test {
     // Uncomment to see logs during tests
     // std.testing.log_level = .debug;
-    std.testing.refAllDecls(@This());
-    std.testing.refAllDecls(@import("control_queue.zig"));
+    _ = @import("types.zig");
+    _ = @import("mask.zig");
+    _ = @import("http.zig");
+    _ = @import("frame.zig");
+    _ = @import("reader.zig");
+    _ = @import("control_queue.zig");
+    _ = @import("server/server.zig");
+    _ = @import("server/connection.zig");
+    _ = @import("server/handshake.zig");
+    _ = @import("server/slot_pool.zig");
+    _ = @import("client/client.zig");
+    _ = @import("client/handshake.zig");
+    _ = @import("client/connection.zig");
 }
