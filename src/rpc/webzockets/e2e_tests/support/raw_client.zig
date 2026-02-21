@@ -42,8 +42,8 @@ pub const RawClient = struct {
 
         // Set SO_RCVTIMEO for blocking reads (defaults to 2s) to reduce scheduler-jitter flakes.
         const timeout = std.posix.timeval{
-            .sec = opts.read_timeout_ms / 1000,
-            .usec = (opts.read_timeout_ms % 1000) * 1000,
+            .sec = @intCast(opts.read_timeout_ms / 1000),
+            .usec = @intCast((opts.read_timeout_ms % 1000) * 1000),
         };
         try std.posix.setsockopt(
             stream.handle,
