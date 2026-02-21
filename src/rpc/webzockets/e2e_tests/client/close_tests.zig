@@ -67,7 +67,6 @@ test "e2e client close: close frame still sent when ping write is in flight" {
 
     try testing.expect(capture.saw_ping);
     try testing.expect(capture.saw_close);
-    try testing.expect(!capture.parse_failed);
 }
 
 const PingThenCloseHandler = struct {
@@ -95,7 +94,6 @@ const PingThenCloseHandler = struct {
 const CaptureContext = struct {
     saw_ping: bool = false,
     saw_close: bool = false,
-    parse_failed: bool = false,
 };
 
 const FrameCaptureServer = struct {
@@ -127,32 +125,32 @@ const FrameCaptureServer = struct {
     }
 };
 
-fn acceptAndCaptureFrames(listener: std.posix.socket_t, ctx: *CaptureContext) void {
+fn acceptAndCaptureFrames(listener: std.posix.socket_t, ctx: *CaptureContext) !void {
     var client_addr: std.posix.sockaddr.storage = undefined;
     var client_addr_len: std.posix.socklen_t = @sizeOf(@TypeOf(client_addr));
-    const conn_fd = std.posix.accept(
+    const conn_fd = try std.posix.accept(
         listener,
         @ptrCast(&client_addr),
         &client_addr_len,
         0,
-    ) catch return;
+    );
     defer std.posix.close(conn_fd);
 
     const stream = std.net.Stream{ .handle = conn_fd };
 
     // Keep reads bounded so test failures do not block indefinitely.
     const timeout = std.posix.timeval{ .sec = 2, .usec = 0 };
-    std.posix.setsockopt(
+    try std.posix.setsockopt(
         conn_fd,
         std.posix.SOL.SOCKET,
         std.posix.SO.RCVTIMEO,
         std.mem.asBytes(&timeout),
-    ) catch return;
+    );
 
     var req_buf: [4096]u8 = undefined;
     var req_total: usize = 0;
     while (req_total < req_buf.len) {
-        const n = stream.read(req_buf[req_total..]) catch return;
+        const n = try stream.read(req_buf[req_total..]);
         if (n == 0) {
             return;
         }
@@ -168,15 +166,15 @@ fn acceptAndCaptureFrames(listener: std.posix.socket_t, ctx: *CaptureContext) vo
     const accept_key = ws.http.computeAcceptKey(&accept_buf, key);
 
     var response_buf: [256]u8 = undefined;
-    const response = std.fmt.bufPrint(
+    const response = try std.fmt.bufPrint(
         &response_buf,
         "HTTP/1.1 101 Switching Protocols\r\n" ++
             "Upgrade: websocket\r\n" ++
             "Connection: Upgrade\r\n" ++
             "Sec-WebSocket-Accept: {s}\r\n\r\n",
         .{accept_key},
-    ) catch return;
-    stream.writeAll(response) catch return;
+    );
+    try stream.writeAll(response);
 
     var frame_buf: [1024]u8 = undefined;
     var frame_start: usize = 0;
@@ -192,7 +190,7 @@ fn acceptAndCaptureFrames(listener: std.posix.socket_t, ctx: *CaptureContext) vo
             frame_end = remaining;
         }
 
-        const n = stream.read(frame_buf[frame_end..]) catch return;
+        const n = try stream.read(frame_buf[frame_end..]);
         if (n == 0) {
             return;
         }
@@ -200,22 +198,13 @@ fn acceptAndCaptureFrames(listener: std.posix.socket_t, ctx: *CaptureContext) vo
 
         while (frame_start < frame_end) {
             const available = frame_buf[frame_start..frame_end];
-            const header = ws.frame.parseHeader(available) catch |err| {
-                if (err == error.InsufficientData) {
-                    break;
-                }
-                ctx.parse_failed = true;
-                return;
+            const header = ws.frame.parseHeader(available) catch |err| switch (err) {
+                error.InsufficientData => break,
+                else => return err,
             };
 
-            header.validate() catch {
-                ctx.parse_failed = true;
-                return;
-            };
-            header.validateServerBound() catch {
-                ctx.parse_failed = true;
-                return;
-            };
+            try header.validate();
+            try header.validateServerBound();
 
             const total_len: usize = @intCast(header.totalLen());
             if (available.len < total_len) {
