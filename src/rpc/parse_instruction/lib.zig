@@ -3296,7 +3296,11 @@ fn tokenAmountToUiAmount(allocator: Allocator, amount: u64, decimals: u8) !JsonV
         const divisor: f64 = std.math.pow(f64, 10.0, @floatFromInt(decimals));
         const ui_amount: f64 = @as(f64, @floatFromInt(amount)) / divisor;
         try obj.put("uiAmount", .{ .float = ui_amount });
-        const ui_amount_str = try sig.runtime.spl_token.realNumberStringTrimmed(allocator, amount, decimals);
+        const ui_amount_str = try sig.runtime.spl_token.realNumberStringTrimmed(
+            allocator,
+            amount,
+            decimals,
+        );
         try obj.put("uiAmountString", .{ .string = ui_amount_str });
     }
 
