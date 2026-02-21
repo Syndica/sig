@@ -17,10 +17,8 @@ pub const RawClient = struct {
     read_pos: usize, // start of unconsumed data
     read_end: usize, // end of valid data in read_buf
 
-    pub const default_read_buf_size: usize = 4096;
-
     pub const ConnectOpts = struct {
-        read_buf_size: usize = default_read_buf_size,
+        read_buf_size: usize = 4096,
         read_timeout_ms: u32 = 2000,
     };
 
@@ -43,8 +41,8 @@ pub const RawClient = struct {
 
         // Set SO_RCVTIMEO for blocking reads (defaults to 2s) to reduce scheduler-jitter flakes.
         const timeout = std.posix.timeval{
-            .sec = @intCast(opts.read_timeout_ms / 1000),
-            .usec = @intCast((opts.read_timeout_ms % 1000) * 1000),
+            .sec = opts.read_timeout_ms / 1000,
+            .usec = (opts.read_timeout_ms % 1000) * 1000,
         };
         try std.posix.setsockopt(
             stream.handle,
@@ -56,7 +54,8 @@ pub const RawClient = struct {
         // Generate WebSocket key and build upgrade request
         var key_buf: [24]u8 = undefined;
         var raw_key: [16]u8 = undefined;
-        std.crypto.random.bytes(&raw_key);
+        var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+        rng.random().bytes(&raw_key);
         const key = http.encodeKey(&key_buf, &raw_key);
 
         var request_buf: [512]u8 = undefined;

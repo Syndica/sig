@@ -350,13 +350,7 @@ test "randomized concurrent echo" {
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
 
-    // Seed from crypto random for non-deterministic runs; log seed for reproducibility
-    var seed_bytes: [8]u8 = undefined;
-    std.crypto.random.bytes(&seed_bytes);
-    const seed = std.mem.readInt(u64, &seed_bytes, .little);
-    std.debug.print("\n[randomized concurrent echo] seed={d}\n", .{seed});
-
-    var prng = std.Random.DefaultPrng.init(seed);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     // Randomize dimensions
