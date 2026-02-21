@@ -29,11 +29,13 @@ pub const Request = struct {
     extensions: []const u8,
 };
 
-/// Bitmask bits for tracking required headers during parsing.
-const required_upgrade: u4 = 0b0001;
-const required_connection: u4 = 0b0010;
-const required_key: u4 = 0b0100;
-const required_version: u4 = 0b1000;
+/// Tracks which required headers have been seen during parsing.
+const FoundRequired = packed struct(u4) {
+    upgrade: bool = false,
+    connection: bool = false,
+    key: bool = false,
+    version: bool = false,
+};
 
 /// Parses an HTTP WebSocket upgrade request from `buf`.
 ///
@@ -69,7 +71,7 @@ pub fn parseRequest(buf: []const u8) HandshakeError!Request {
     }
 
     // Step 2: Parse headers.
-    var found: u4 = 0;
+    var found: FoundRequired = .{};
     var version_seen = false;
 
     var websocket_key: []const u8 = &[_]u8{};
@@ -86,19 +88,19 @@ pub fn parseRequest(buf: []const u8) HandshakeError!Request {
 
         if (std.ascii.eqlIgnoreCase(header_name, "Upgrade")) {
             if (headerContainsToken(header_value, "websocket")) {
-                found |= required_upgrade;
+                found.upgrade = true;
             }
         } else if (std.ascii.eqlIgnoreCase(header_name, "Connection")) {
             if (headerContainsToken(header_value, "upgrade")) {
-                found |= required_connection;
+                found.connection = true;
             }
         } else if (std.ascii.eqlIgnoreCase(header_name, "Sec-WebSocket-Key")) {
             websocket_key = header_value;
-            found |= required_key;
+            found.key = true;
         } else if (std.ascii.eqlIgnoreCase(header_name, "Sec-WebSocket-Version")) {
             version_seen = true;
             if (std.mem.eql(u8, header_value, "13")) {
-                found |= required_version;
+                found.version = true;
             }
         } else if (std.ascii.eqlIgnoreCase(header_name, "Host")) {
             host = header_value;
@@ -112,10 +114,10 @@ pub fn parseRequest(buf: []const u8) HandshakeError!Request {
     }
 
     // Step 3: Check all required headers were found.
-    if (found & required_upgrade == 0) return HandshakeError.MissingUpgradeHeader;
-    if (found & required_connection == 0) return HandshakeError.MissingConnectionHeader;
-    if (found & required_key == 0) return HandshakeError.MissingWebSocketKey;
-    if (found & required_version == 0) {
+    if (!found.upgrade) return HandshakeError.MissingUpgradeHeader;
+    if (!found.connection) return HandshakeError.MissingConnectionHeader;
+    if (!found.key) return HandshakeError.MissingWebSocketKey;
+    if (!found.version) {
         if (version_seen) {
             return HandshakeError.UnsupportedWebSocketVersion;
         }
@@ -538,8 +540,8 @@ test "encodeKey: produces 24-byte base64 string" {
 test "encodeKey: different inputs produce different keys" {
     var buf1: [24]u8 = undefined;
     var buf2: [24]u8 = undefined;
-    const raw1 = [_]u8{0x01} ** 16;
-    const raw2 = [_]u8{0x02} ** 16;
+    const raw1: [16]u8 = @splat(0x01);
+    const raw2: [16]u8 = @splat(0x02);
     const key1 = encodeKey(&buf1, &raw1);
     const key2 = encodeKey(&buf2, &raw2);
     try testing.expect(!std.mem.eql(u8, key1, key2));

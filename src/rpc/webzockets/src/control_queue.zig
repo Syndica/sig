@@ -194,14 +194,14 @@ test "wraparound — dequeue some, enqueue more that wraps around buffer" {
     var out: [125]u8 = undefined;
 
     // Fill most of the buffer with a large payload (header_size + 120 = 122 bytes).
-    const large = "x" ** 120;
-    try q.enqueue(.ping, large);
-    try q.enqueue(.pong, large); // 244 bytes used
+    const large: [120]u8 = @splat('x');
+    try q.enqueue(.ping, &large);
+    try q.enqueue(.pong, &large); // 244 bytes used
 
     // Dequeue first to free space at the front.
     const e1 = q.dequeue(&out).?;
     try testing.expectEqual(Opcode.ping, e1.opcode);
-    try testing.expectEqualSlices(u8, large, out[0..e1.len]);
+    try testing.expectEqualSlices(u8, &large, out[0..e1.len]);
     // 122 bytes free at front, tail is at 244.
 
     // Enqueue an entry that wraps around the end of the buffer.
@@ -222,9 +222,9 @@ test "full queue returns error.QueueFull" {
     var q = ControlQueue.init();
 
     // Each entry with 125-byte payload takes 127 bytes. Two fit in 256 (254 bytes).
-    const max_payload = "M" ** 125;
-    try q.enqueue(.ping, max_payload); // 127 bytes
-    try q.enqueue(.pong, max_payload); // 127 bytes → 254 used, 2 free
+    const max_payload: [125]u8 = @splat('M');
+    try q.enqueue(.ping, &max_payload); // 127 bytes
+    try q.enqueue(.pong, &max_payload); // 127 bytes → 254 used, 2 free
 
     // Even an empty-payload entry needs 2 bytes — exactly fits.
     try q.enqueue(.ping, "");
@@ -254,12 +254,12 @@ test "variable-length entries — empty, small, max 125-byte payload" {
     try testing.expectEqualSlices(u8, "hi", out[0..e2.len]);
 
     // Max payload in isolation.
-    const max_payload = "Z" ** 125;
-    try q.enqueue(.close, max_payload);
+    const max_payload: [125]u8 = @splat('Z');
+    try q.enqueue(.close, &max_payload);
     const e3 = q.dequeue(&out).?;
     try testing.expectEqual(Opcode.close, e3.opcode);
     try testing.expectEqual(@as(u8, 125), e3.len);
-    try testing.expectEqualSlices(u8, max_payload, out[0..e3.len]);
+    try testing.expectEqualSlices(u8, &max_payload, out[0..e3.len]);
 }
 
 test "clear resets to empty" {

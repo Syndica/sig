@@ -1136,12 +1136,12 @@ test "Reader(.client): fragment reassembly with unmasked frames" {
 
 test "Reader: payload exactly at max_message_size via read loop" {
     const max_msg_size = 100;
-    const payload = "A" ** max_msg_size;
+    const payload: [max_msg_size]u8 = @splat('A');
     const mask_key = [_]u8{ 0x37, 0xFA, 0x21, 0x3D };
 
     // Build the full wire frame (header + mask + payload)
     var wire_buf: [256]u8 = undefined;
-    const wire_frame = buildMaskedFrame(&wire_buf, .text, true, payload, mask_key);
+    const wire_frame = buildMaskedFrame(&wire_buf, .text, true, &payload, mask_key);
     // Sanity: wire frame is larger than max_message_size due to header overhead
     try testing.expect(wire_frame.len > max_msg_size);
 
@@ -1162,7 +1162,7 @@ test "Reader: payload exactly at max_message_size via read loop" {
 
         if (try reader.nextMessage()) |msg| {
             try testing.expectEqual(types.Message.Type.text, msg.type);
-            try testing.expectEqualStrings(payload, msg.data);
+            try testing.expectEqualStrings(&payload, msg.data);
             return; // success
         }
     }
