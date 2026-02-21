@@ -228,60 +228,6 @@ fn writeHeader(
     return buf[0..len_end];
 }
 
-/// Comptime: returns the total frame size for a server-to-client message of
-/// the given payload length (header bytes + payload, no mask).
-pub fn calculateFrameLen(comptime msg_len: usize) usize {
-    if (msg_len <= 125) {
-        return 2 + msg_len;
-    } else if (msg_len <= 65535) {
-        return 4 + msg_len;
-    } else {
-        return 10 + msg_len;
-    }
-}
-
-/// Comptime: returns a complete pre-framed WebSocket message as a fixed-size array.
-///
-/// The frame has FIN=1, the given opcode, and appropriate length encoding.
-/// Server frames are never masked.
-///
-/// Usage:
-/// ```
-/// const framed = comptime frame.frameStatic(.text, "Hello");
-/// ```
-pub fn frameStatic(
-    comptime opcode: Opcode,
-    comptime msg: []const u8,
-) [calculateFrameLen(msg.len)]u8 {
-    comptime {
-        const total_len = calculateFrameLen(msg.len);
-        var buf: [total_len]u8 = undefined;
-
-        // Byte 0: FIN=1, no RSV, opcode
-        buf[0] = 0x80 | @as(u8, @intFromEnum(opcode));
-
-        // Encode length and copy payload
-        if (msg.len <= 125) {
-            buf[1] = @truncate(msg.len);
-            @memcpy(buf[2..], msg);
-        } else if (msg.len <= 65535) {
-            buf[1] = 126;
-            buf[2] = @truncate(msg.len >> 8);
-            buf[3] = @truncate(msg.len);
-            @memcpy(buf[4..], msg);
-        } else {
-            buf[1] = 127;
-            // 8 bytes big-endian length
-            for (0..8) |i| {
-                buf[2 + i] = @truncate(msg.len >> @intCast((7 - i) * 8));
-            }
-            @memcpy(buf[10..], msg);
-        }
-
-        return buf;
-    }
-}
-
 const testing = std.testing;
 
 test "parseHeader: 7-bit payload length (unmasked)" {
@@ -847,85 +793,6 @@ test "writeFrameHeader + parseHeader round-trip: all length tiers and compressed
     }
 }
 
-test "calculateFrameLen: 7-bit tier" {
-    try testing.expectEqual(@as(usize, 2 + 0), calculateFrameLen(0));
-    try testing.expectEqual(@as(usize, 2 + 1), calculateFrameLen(1));
-    try testing.expectEqual(@as(usize, 2 + 125), calculateFrameLen(125));
-}
-
-test "calculateFrameLen: 16-bit tier" {
-    try testing.expectEqual(@as(usize, 4 + 126), calculateFrameLen(126));
-    try testing.expectEqual(@as(usize, 4 + 65535), calculateFrameLen(65535));
-}
-
-test "calculateFrameLen: 64-bit tier" {
-    try testing.expectEqual(@as(usize, 10 + 65536), calculateFrameLen(65536));
-}
-
-test "frameStatic: text message 'Hello'" {
-    const framed = comptime frameStatic(.text, "Hello");
-    try testing.expectEqual(@as(usize, 7), framed.len); // 2 header + 5 payload
-    try testing.expectEqual(@as(u8, 0x81), framed[0]); // FIN=1, text
-    try testing.expectEqual(@as(u8, 5), framed[1]); // len=5
-    try testing.expectEqualSlices(u8, "Hello", framed[2..]);
-}
-
-test "frameStatic: empty payload" {
-    const framed = comptime frameStatic(.ping, "");
-    try testing.expectEqual(@as(usize, 2), framed.len);
-    try testing.expectEqual(@as(u8, 0x89), framed[0]); // FIN=1, ping
-    try testing.expectEqual(@as(u8, 0), framed[1]);
-}
-
-test "frameStatic: close frame with status code bytes" {
-    const framed = comptime frameStatic(.close, &[_]u8{ 0x03, 0xE8 }); // 1000 big-endian
-    try testing.expectEqual(@as(usize, 4), framed.len);
-    try testing.expectEqual(@as(u8, 0x88), framed[0]); // FIN=1, close
-    try testing.expectEqual(@as(u8, 2), framed[1]);
-    try testing.expectEqual(@as(u8, 0x03), framed[2]);
-    try testing.expectEqual(@as(u8, 0xE8), framed[3]);
-}
-
-test "frameStatic: binary frame" {
-    const framed = comptime frameStatic(.binary, &[_]u8{ 0xDE, 0xAD, 0xBE, 0xEF });
-    try testing.expectEqual(@as(usize, 6), framed.len);
-    try testing.expectEqual(@as(u8, 0x82), framed[0]); // FIN=1, binary
-    try testing.expectEqual(@as(u8, 4), framed[1]);
-    try testing.expectEqualSlices(u8, &[_]u8{ 0xDE, 0xAD, 0xBE, 0xEF }, framed[2..]);
-}
-
-test "frameStatic: verify parseHeader can parse the result" {
-    const framed = comptime frameStatic(.text, "Hello, World!");
-    const header = try parseHeader(&framed);
-    try testing.expect(header.fin);
-    try testing.expect(!header.rsv1);
-    try testing.expectEqual(Opcode.text, header.opcode);
-    try testing.expect(!header.masked);
-    try testing.expectEqual(@as(u64, 13), header.payload_len);
-    try testing.expectEqual(@as(u8, 2), header.header_len);
-    try testing.expectEqualSlices(u8, "Hello, World!", framed[header.header_len..]);
-}
-
-test "frameStatic: 126-byte payload uses 16-bit length" {
-    const payload = [_]u8{0x42} ** 126;
-    const framed = comptime frameStatic(.text, &payload);
-    try testing.expectEqual(@as(usize, 4 + 126), framed.len);
-    try testing.expectEqual(@as(u8, 0x81), framed[0]); // FIN=1, text
-    try testing.expectEqual(@as(u8, 126), framed[1]); // 16-bit extended
-    try testing.expectEqual(@as(u16, 126), std.mem.readInt(u16, framed[2..4], .big));
-    // Verify payload content
-    for (framed[4..]) |b| {
-        try testing.expectEqual(@as(u8, 0x42), b);
-    }
-}
-
-test "frameStatic: pong frame" {
-    const framed = comptime frameStatic(.pong, "pong-data");
-    try testing.expectEqual(@as(u8, 0x8A), framed[0]); // FIN=1, pong
-    try testing.expectEqual(@as(u8, 9), framed[1]);
-    try testing.expectEqualSlices(u8, "pong-data", framed[2..]);
-}
-
 // --- validateClientBound tests ---
 
 test "FrameHeader.validateClientBound: unmasked frame passes" {
@@ -1012,12 +879,13 @@ test "writeClientFrameHeader + parseHeader round-trip" {
 // --- Fuzz tests ---
 
 test "fuzz parseHeader: no crash on arbitrary input" {
-    try testing.fuzz({}, struct {
+    const helper = struct {
         fn run(_: void, input: []const u8) anyerror!void {
             // parseHeader must either return a valid header or an error, never crash.
             _ = parseHeader(input) catch return;
         }
-    }.run, .{
+    };
+    try testing.fuzz({}, helper.run, .{
         .corpus = &[_][]const u8{
             // Minimal valid frames
             &[_]u8{ 0x81, 0x05 }, // text, len=5
@@ -1042,7 +910,7 @@ test "fuzz parseHeader: no crash on arbitrary input" {
 }
 
 test "fuzz writeHeader + parseHeader round-trip (server and client)" {
-    try testing.fuzz({}, struct {
+    const helper = struct {
         // Input layout: [0] opcode selector, [1..9] payload_len, [9..13] mask_key, [13] flags
         // flags bit 0 = compressed, flags bit 1 = masked (client frame)
         fn run(_: void, input: []const u8) anyerror!void {
@@ -1073,7 +941,8 @@ test "fuzz writeHeader + parseHeader round-trip (server and client)" {
                 try testing.expectEqualSlices(u8, &mask_key, &header.mask_key);
             }
         }
-    }.run, .{
+    };
+    try testing.fuzz({}, helper.run, .{
         .corpus = &[_][]const u8{
             // Server (unmasked): flags bit 1 = 0
             &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0 },
