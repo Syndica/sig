@@ -1618,7 +1618,7 @@ fn checkAndHandleNewRoot(
     // Set new root.
     slot_tracker.root.store(new_root, .monotonic);
     // Prune non rooted slots
-    slot_tracker.pruneNonRooted(allocator, maybe_thread_pool);
+    slot_tracker.pruneNonRooted(maybe_thread_pool);
 
     // Tell the status_cache about it for its tracking.
     if (status_cache) |sc| try sc.addRoot(allocator, new_root);
@@ -2537,6 +2537,7 @@ test "checkAndHandleNewRoot - missing slot" {
         try slot_tracker.put(testing.allocator, root_slot_and_hash.slot, .{
             .constants = constants,
             .state = .GENESIS,
+            .allocator = testing.allocator,
         });
     }
 
@@ -2601,6 +2602,7 @@ test "checkAndHandleNewRoot - missing hash" {
         try slot_tracker2.put(allocator, root.slot, .{
             .constants = constants,
             .state = state,
+            .allocator = allocator,
         });
     }
 
@@ -2746,10 +2748,12 @@ test "checkAndHandleNewRoot - success" {
         try ptr.put(allocator, hash2.slot, .{
             .constants = constants2,
             .state = state2,
+            .allocator = allocator,
         });
         try ptr.put(allocator, hash3.slot, .{
             .constants = constants3,
             .state = state3,
+            .allocator = allocator,
         });
     }
 
@@ -4767,6 +4771,7 @@ test "edge cases - duplicate slot" {
         try slot_tracker.put(gpa, slot1, .{
             .constants = slot_constants,
             .state = slot_state,
+            .allocator = gpa,
         });
     }
     {
@@ -4792,6 +4797,7 @@ test "edge cases - duplicate slot" {
         try slot_tracker.put(gpa, slot2, .{
             .constants = slot_constants,
             .state = slot_state,
+            .allocator = gpa,
         });
     }
     {
@@ -4936,6 +4942,7 @@ test "edge cases - duplicate confirmed slot" {
         try slot_tracker.put(gpa, slot1, .{
             .constants = slot_constants,
             .state = slot_state,
+            .allocator = gpa,
         });
     }
     {
@@ -4961,6 +4968,7 @@ test "edge cases - duplicate confirmed slot" {
         try slot_tracker.put(gpa, slot2, .{
             .constants = slot_constants,
             .state = slot_state,
+            .allocator = gpa,
         });
     }
     {
@@ -5110,6 +5118,7 @@ test "edge cases - gossip verified vote hashes" {
         try slot_tracker.put(gpa, slot1, .{
             .constants = slot_constants,
             .state = slot_state,
+            .allocator = gpa,
         });
     }
     {
@@ -5135,6 +5144,7 @@ test "edge cases - gossip verified vote hashes" {
         try slot_tracker.put(gpa, slot2, .{
             .constants = slot_constants,
             .state = slot_state,
+            .allocator = gpa,
         });
     }
     {
@@ -5308,6 +5318,7 @@ test "vote on heaviest frozen descendant with no switch" {
         .{
             .constants = root_consts,
             .state = root_state,
+            .allocator = allocator,
         },
     );
     defer slot_tracker.deinit(allocator);
@@ -5332,6 +5343,7 @@ test "vote on heaviest frozen descendant with no switch" {
             .{
                 .constants = slot_constants,
                 .state = slot_state,
+                .allocator = allocator,
             },
         );
     }
@@ -5488,6 +5500,7 @@ test "vote accounts with landed votes populate bank stats" {
         .{
             .constants = root_consts,
             .state = root_state,
+            .allocator = allocator,
         },
     );
     defer slot_tracker.deinit(allocator);
@@ -5509,7 +5522,7 @@ test "vote accounts with landed votes populate bank stats" {
         try slot_tracker.put(
             allocator,
             slot_1,
-            .{ .constants = slot_constants, .state = slot_state },
+            .{ .constants = slot_constants, .state = slot_state, .allocator = allocator },
         );
     }
 
@@ -5779,7 +5792,7 @@ test "root advances after vote satisfies lockouts" {
     var slot_tracker: SlotTracker = try .init(
         allocator,
         initial_root,
-        .{ .constants = root_consts, .state = root_state },
+        .{ .constants = root_consts, .state = root_state, .allocator = allocator },
     );
     defer slot_tracker.deinit(allocator);
 
@@ -5865,6 +5878,7 @@ test "root advances after vote satisfies lockouts" {
             try slot_tracker.put(allocator, slot, .{
                 .constants = slot_constants,
                 .state = slot_state,
+                .allocator = allocator,
             });
         }
 
@@ -5969,7 +5983,11 @@ test "root advances after vote satisfies lockouts" {
         var slot_state: sig.core.SlotState = .GENESIS;
         slot_state.hash = .init(slot_hash);
 
-        try slot_tracker.put(allocator, slot, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(allocator, slot, .{
+            .constants = slot_constants,
+            .state = slot_state,
+            .allocator = allocator,
+        });
     }
     {
         var fp = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
@@ -6052,7 +6070,11 @@ test "root advances after vote satisfies lockouts" {
         var slot_state: sig.core.SlotState = .GENESIS;
         slot_state.hash = .init(slot_hash);
 
-        try slot_tracker.put(allocator, slot, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(allocator, slot, .{
+            .constants = slot_constants,
+            .state = slot_state,
+            .allocator = allocator,
+        });
     }
     {
         var fp = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
@@ -6192,7 +6214,7 @@ test "vote refresh when no new vote available" {
     var slot_tracker = try SlotTracker.init(
         allocator,
         root_slot,
-        .{ .constants = root_consts, .state = root_state },
+        .{ .constants = root_consts, .state = root_state, .allocator = allocator },
     );
     defer slot_tracker.deinit(allocator);
 
@@ -6208,7 +6230,11 @@ test "vote refresh when no new vote available" {
         errdefer slot_state.deinit(allocator);
         slot_state.hash = .init(slot1_hash);
 
-        try slot_tracker.put(allocator, 1, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(allocator, 1, .{
+            .constants = slot_constants,
+            .state = slot_state,
+            .allocator = allocator,
+        });
     }
 
     var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
@@ -6392,7 +6418,7 @@ test "detect and mark duplicate confirmed fork" {
     var slot_tracker = try SlotTracker.init(
         allocator,
         root_slot,
-        .{ .constants = root_consts, .state = root_state },
+        .{ .constants = root_consts, .state = root_state, .allocator = allocator },
     );
     defer slot_tracker.deinit(allocator);
 
@@ -6415,7 +6441,11 @@ test "detect and mark duplicate confirmed fork" {
         errdefer slot_state.deinit(allocator);
         slot_state.hash.set(slot1_hash);
 
-        try slot_tracker.put(allocator, 1, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(allocator, 1, .{
+            .constants = slot_constants,
+            .state = slot_state,
+            .allocator = allocator,
+        });
     }
 
     const slot2_hash = Hash{ .data = .{2} ** Hash.SIZE };
@@ -6437,7 +6467,11 @@ test "detect and mark duplicate confirmed fork" {
         errdefer slot_state.deinit(allocator);
         slot_state.hash.set(slot2_hash);
 
-        try slot_tracker.put(allocator, 2, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(allocator, 2, .{
+            .constants = slot_constants,
+            .state = slot_state,
+            .allocator = allocator,
+        });
     }
 
     const epoch_stakes = blk: {
@@ -6658,7 +6692,7 @@ test "detect and mark duplicate slot" {
     var slot_tracker = try SlotTracker.init(
         allocator,
         root_slot,
-        .{ .constants = root_consts, .state = root_state },
+        .{ .constants = root_consts, .state = root_state, .allocator = allocator },
     );
     defer slot_tracker.deinit(allocator);
 
@@ -6679,7 +6713,11 @@ test "detect and mark duplicate slot" {
         errdefer slot_state.deinit(allocator);
         slot_state.hash.set(slot1_hash);
 
-        try slot_tracker.put(allocator, 1, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(allocator, 1, .{
+            .constants = slot_constants,
+            .state = slot_state,
+            .allocator = allocator,
+        });
     }
 
     var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
@@ -6858,7 +6896,7 @@ test "successful fork switch (switch_proof)" {
     var slot_tracker = try SlotTracker.init(
         allocator,
         root_slot,
-        .{ .constants = root_consts, .state = root_state },
+        .{ .constants = root_consts, .state = root_state, .allocator = allocator },
     );
     defer slot_tracker.deinit(allocator);
 
@@ -6885,7 +6923,7 @@ test "successful fork switch (switch_proof)" {
         try slot_tracker.put(
             allocator,
             1,
-            .{ .constants = slot_constants, .state = slot_state },
+            .{ .constants = slot_constants, .state = slot_state, .allocator = allocator },
         );
     }
 
@@ -6898,7 +6936,10 @@ test "successful fork switch (switch_proof)" {
     //     +-- slot 1 (A)
     const slot2_hash = Hash{ .data = .{2} ** Hash.SIZE };
     {
-        var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+        var slot_constants = try sig.core.SlotConstants.genesis(
+            allocator,
+            .DEFAULT,
+        );
         errdefer slot_constants.deinit(allocator);
         slot_constants.parent_slot = 0;
         slot_constants.parent_hash = Hash.ZEROES;
@@ -6911,7 +6952,11 @@ test "successful fork switch (switch_proof)" {
         var slot_state: sig.core.SlotState = .GENESIS;
         errdefer slot_state.deinit(allocator);
         slot_state.hash.set(slot2_hash);
-        try slot_tracker.put(allocator, 2, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(allocator, 2, .{
+            .constants = slot_constants,
+            .state = slot_state,
+            .allocator = allocator,
+        });
     }
 
     // Add heavier sibling we’ll vote on:
@@ -6940,7 +6985,11 @@ test "successful fork switch (switch_proof)" {
         var slot_state: sig.core.SlotState = .GENESIS;
         errdefer slot_state.deinit(allocator);
         slot_state.hash.set(slot4_hash);
-        try slot_tracker.put(allocator, 4, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(allocator, 4, .{
+            .constants = slot_constants,
+            .state = slot_state,
+            .allocator = allocator,
+        });
     }
 
     var vote_pubkeys = try allocator.alloc(Pubkey, 5);
@@ -7211,7 +7260,11 @@ test "successful fork switch (switch_proof)" {
         var slot_state: sig.core.SlotState = .GENESIS;
         errdefer slot_state.deinit(allocator);
         slot_state.hash.set(slot5_hash);
-        try slot_tracker.put(allocator, 5, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(allocator, 5, .{
+            .constants = slot_constants,
+            .state = slot_state,
+            .allocator = allocator,
+        });
     }
     // Progress map entry for slot 5
     {

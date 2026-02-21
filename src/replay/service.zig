@@ -212,7 +212,11 @@ pub const ReplayState = struct {
         var slot_tracker: SlotTracker = try .init(
             deps.allocator,
             deps.root.slot,
-            .{ .constants = deps.root.constants, .state = deps.root.state },
+            .{
+                .constants = deps.root.constants,
+                .state = deps.root.state,
+                .allocator = deps.allocator,
+            },
         );
         errdefer slot_tracker.deinit(deps.allocator);
         errdefer {
@@ -415,7 +419,11 @@ pub fn trackNewSlots(
                 hard_forks,
             );
 
-            try slot_tracker.put(allocator, slot, .{ .constants = constants, .state = state });
+            try slot_tracker.put(allocator, slot, .{
+                .constants = constants,
+                .state = state,
+                .allocator = allocator,
+            });
             try slot_tree.record(allocator, slot, constants.parent_slot);
 
             // TODO: update_fork_propagated_threshold_from_votes
@@ -605,7 +613,7 @@ fn bypassConsensus(state: *ReplayState) !void {
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root.store(new_root, .monotonic);
-        slot_tracker.pruneNonRooted(state.allocator, &state.thread_pool);
+        slot_tracker.pruneNonRooted(&state.thread_pool);
 
         try state.status_cache.addRoot(state.allocator, new_root);
 
@@ -686,6 +694,7 @@ test trackNewSlots {
     var slot_tracker: SlotTracker = try .init(allocator, 0, .{
         .state = state,
         .constants = try .genesis(allocator, .DEFAULT),
+        .allocator = allocator,
     });
     defer slot_tracker.deinit(allocator);
     slot_tracker.get(0).?.state.hash.set(.ZEROES);

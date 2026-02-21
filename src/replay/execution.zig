@@ -928,7 +928,11 @@ test "prepareSlot: empty and dead slots are handled correctly" {
         1,
     );
 
-    try state.slot_tracker.put(allocator, 1, .{ .constants = constants, .state = slot_state });
+    try state.slot_tracker.put(allocator, 1, .{
+        .constants = constants,
+        .state = slot_state,
+        .allocator = allocator,
+    });
 
     try std.testing.expectEqual(
         .empty,

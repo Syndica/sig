@@ -951,6 +951,7 @@ pub fn slotTrackerElementGenesis(
     return .{
         .constants = constants,
         .state = state,
+        .allocator = allocator,
     };
 }
 
@@ -1752,6 +1753,7 @@ test "simple usage" {
             .rent_collector = .DEFAULT,
         },
         .state = .GENESIS,
+        .allocator = allocator,
     });
     defer slot_tracker.deinit(allocator);
 
@@ -1842,6 +1844,7 @@ test "check trackers" {
                 .rent_collector = .DEFAULT,
             },
             .state = state,
+            .allocator = allocator,
         });
     };
     defer slot_tracker.deinit(allocator);

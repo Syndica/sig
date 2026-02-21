@@ -59,7 +59,7 @@ pub const SlotTracker = struct {
         state: SlotState,
         destroy_task: ThreadPool.Task = .{ .callback = runDestroy },
         pruned_wg: ?*std.Thread.WaitGroup = null,
-        allocator: ?Allocator = null,
+        allocator: Allocator,
 
         fn toRef(self: *Element) Reference {
             return .{
@@ -68,7 +68,8 @@ pub const SlotTracker = struct {
             };
         }
 
-        fn destroy(self: *Element, allocator: Allocator) void {
+        fn destroy(self: *Element) void {
+            const allocator = self.allocator;
             self.constants.deinit(allocator);
             self.state.deinit(allocator);
             allocator.destroy(self);
@@ -82,8 +83,7 @@ pub const SlotTracker = struct {
             const wg = self.pruned_wg.?; // read it out of self, as this will destroy(self)
             defer wg.finish();
 
-            const allocator = self.allocator.?;
-            self.destroy(allocator);
+            self.destroy();
         }
     };
 
@@ -124,7 +124,7 @@ pub const SlotTracker = struct {
         allocator.destroy(self.wg);
 
         var slots = self.slots;
-        for (slots.values()) |element| element.destroy(allocator);
+        for (slots.values()) |element| element.destroy();
         slots.deinit(allocator);
     }
 
@@ -253,7 +253,6 @@ pub const SlotTracker = struct {
     // In Agave, only the slots not in the root path are removed.
     pub fn pruneNonRooted(
         self: *SlotTracker,
-        allocator: Allocator,
         maybe_thread_pool: ?*ThreadPool,
     ) void {
         const zone = tracy.Zone.init(@src(), .{ .name = "SlotTracker.pruneNonRooted" });
@@ -279,10 +278,9 @@ pub const SlotTracker = struct {
                 // Destroy element inline, or destroy in ThreadPool if provided.
                 if (maybe_thread_pool) |_| {
                     element.pruned_wg = self.wg;
-                    element.allocator = allocator;
                     destroy_batch.push(.from(&element.destroy_task));
                 } else {
-                    element.destroy(allocator);
+                    element.destroy();
                 }
             } else {
                 index += 1;
@@ -554,6 +552,7 @@ test "SlotTracker.prune removes all slots less than root" {
         var tracker: SlotTracker = try .init(allocator, root_slot, .{
             .constants = testDummySlotConstants(root_slot),
             .state = .GENESIS,
+            .allocator = allocator,
         });
         defer tracker.deinit(allocator);
 
@@ -562,12 +561,13 @@ test "SlotTracker.prune removes all slots less than root" {
             const gop = try tracker.getOrPut(allocator, slot, .{
                 .constants = testDummySlotConstants(slot),
                 .state = .GENESIS,
+                .allocator = allocator,
             });
             if (gop.found_existing) std.debug.assert(slot == root_slot);
         }
 
         // Prune slots less than root (4)
-        tracker.pruneNonRooted(allocator, maybe_thread_pool);
+        tracker.pruneNonRooted(maybe_thread_pool);
 
         // Only slots 4 and 5 should remain
         try std.testing.expect(tracker.contains(4));

@@ -1405,6 +1405,7 @@ const TestData = struct {
             self: SlotInfo,
             slot_infos: []const SlotInfo,
             random: std.Random,
+            allocator: std.mem.Allocator,
         ) !SlotTracker.Element {
             return .{
                 .constants = .{
@@ -1435,6 +1436,7 @@ const TestData = struct {
                     .collected_priority_fees = .init(random.int(u64)),
                     .reward_status = .inactive,
                 },
+                .allocator = allocator,
             };
         }
     };
@@ -1487,7 +1489,7 @@ const TestData = struct {
         var slot_tracker: SlotTracker = try .init(
             allocator,
             root_slot,
-            try slot_infos[root_slot].toDummyElem(&slot_infos, random),
+            try slot_infos[root_slot].toDummyElem(&slot_infos, random, allocator),
         );
         errdefer slot_tracker.deinit(allocator);
 
@@ -1521,7 +1523,7 @@ const TestData = struct {
                 } else null,
             );
 
-            var elem = try slot_info.toDummyElem(slot_infos[0..], random);
+            var elem = try slot_info.toDummyElem(slot_infos[0..], random, allocator);
             const gop = try slot_tracker.getOrPut(allocator, slot_info.slot, elem);
             if (gop.found_existing) {
                 std.debug.assert(slot_info.slot == root_slot);

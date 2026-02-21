@@ -548,6 +548,7 @@ test "processResult: confirm status with done poll and slot complete - success p
     try test_resources.slot_tracker.put(allocator, slot, .{
         .constants = mock_slot_constants,
         .state = mock_slot_state,
+        .allocator = allocator,
     });
 
     try processResult(test_resources.params, .{
@@ -645,6 +646,7 @@ test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot"
     try test_resources.slot_tracker.put(allocator, slot, .{
         .constants = slot_consts,
         .state = slot_state,
+        .allocator = allocator,
     });
 
     // Insert a duplicate proof into the ledger to trigger the duplicate branch
@@ -738,6 +740,7 @@ test "updateConsensusForFrozenSlot: moves gossip votes with gossip vote_kind" {
     try test_state.slot_tracker.put(allocator, slot, .{
         .constants = slot_consts,
         .state = slot_state,
+        .allocator = allocator,
     });
 
     // Ensure fork choice knows about the parent before adding the leaf

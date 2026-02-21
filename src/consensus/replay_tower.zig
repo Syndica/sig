@@ -5451,7 +5451,7 @@ pub const TestFixture = struct {
             break :blk try .init(
                 allocator,
                 root.slot,
-                .{ .constants = constants, .state = state },
+                .{ .constants = constants, .state = state, .allocator = allocator },
             );
         };
         errdefer slot_tracker.deinit(allocator);
@@ -5571,7 +5571,7 @@ pub const TestFixture = struct {
                 try self.slot_tracker.put(
                     allocator,
                     tree[0].slot,
-                    .{ .constants = constants, .state = state },
+                    .{ .constants = constants, .state = state, .allocator = allocator },
                 );
             }
 
