@@ -143,6 +143,11 @@ const AutobahnHandler = struct {
 pub fn main() !void {
     const address = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 9001);
 
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // NOTE: server never exits so this is mostly ceremonial
+    defer if (gpa.deinit() == .leak) @panic("memory leak detected");
+    const allocator = gpa.allocator();
+
     var thread_pool = xev.ThreadPool.init(.{});
     defer thread_pool.deinit();
     defer thread_pool.shutdown();
@@ -151,7 +156,7 @@ pub fn main() !void {
     defer loop.deinit();
 
     var server = try AutobahnServer.init(
-        std.heap.c_allocator,
+        allocator,
         &loop,
         .{
             .address = address,
