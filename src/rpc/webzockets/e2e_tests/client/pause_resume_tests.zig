@@ -4,11 +4,11 @@ const testing = std.testing;
 const servers = @import("../support/test_servers.zig");
 const server_handlers = @import("../support/server_handlers.zig");
 const clients = @import("../support/test_clients.zig");
-const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
+const FdLeakDetector = @import("../support/fd_leak_detector.zig");
 
 test "sequential processing of server burst" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const messages = [_][]const u8{ "msg-1", "msg-2", "msg-3" };
     var send_ctx: server_handlers.SendMessagesOnOpenHandler.Context = .{ .messages = &messages };
@@ -52,7 +52,7 @@ test "sequential processing of server burst" {
 
 test "pause mid-stream stops dispatch then delivers on resume" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const messages = [_][]const u8{ "msg-1", "msg-2", "msg-3", "msg-4" };
     var send_ctx: server_handlers.SendMessagesOnOpenHandler.Context = .{
@@ -98,7 +98,7 @@ test "pause mid-stream stops dispatch then delivers on resume" {
 
 test "close while client is paused" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const messages = [_][]const u8{"msg-1"};
     var send_ctx: server_handlers.SendMessagesOnOpenHandler.Context = .{ .messages = &messages };
@@ -139,7 +139,7 @@ test "close while client is paused" {
 
 test "no re-entrant onMessage dispatch" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const messages = [_][]const u8{ "a", "b", "c", "done" };
     var send_ctx: server_handlers.SendMessagesOnOpenHandler.Context = .{ .messages = &messages };
@@ -181,7 +181,7 @@ test "no re-entrant onMessage dispatch" {
 
 test "buffer fills while paused (small read buffer)" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     var send_ctx: server_handlers.SendMessagesOnOpenHandler.Context = .{
         .messages = &servers.small_buf_slices,

@@ -3,11 +3,11 @@ const std = @import("std");
 const testing = std.testing;
 const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
-const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
+const FdLeakDetector = @import("../support/fd_leak_detector.zig");
 
 test "text echo" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -41,7 +41,7 @@ test "text echo" {
 
 test "binary echo" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -75,7 +75,7 @@ test "binary echo" {
 
 test "ping/pong" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -109,7 +109,7 @@ test "ping/pong" {
 
 test "close handshake" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -134,7 +134,7 @@ test "close handshake" {
 
 test "multiple messages in sequence" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -173,7 +173,7 @@ test "multiple messages in sequence" {
 
 test "large message (>125 bytes)" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -214,7 +214,7 @@ test "large message (>125 bytes)" {
 
 test "multiple concurrent connections" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();

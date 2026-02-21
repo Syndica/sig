@@ -4,11 +4,11 @@ const ws = @import("webzockets_lib");
 const testing = std.testing;
 const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
-const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
+const FdLeakDetector = @import("../support/fd_leak_detector.zig");
 
 test "connection pool exhaustion" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try startLimitedTestServer(testing.allocator);
     defer ts.stop();

@@ -4,7 +4,7 @@ const ws = @import("webzockets_lib");
 const testing = std.testing;
 const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
-const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
+const FdLeakDetector = @import("../support/fd_leak_detector.zig");
 
 test "medium message requiring pooled buffer (8KB)" {
     try runBufferTierTest(8 * 1024, null);
@@ -28,7 +28,7 @@ test "very large message requiring dynamic allocation (256KB)" {
 
 test "buffer tier retained after large messages" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -86,7 +86,7 @@ test "buffer tier retained after large messages" {
 /// If `max_message_size` is non-null it is forwarded to the client config.
 fn runBufferTierTest(msg_size: usize, max_message_size: ?usize) !void {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();

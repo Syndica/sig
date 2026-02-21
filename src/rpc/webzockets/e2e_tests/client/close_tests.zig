@@ -4,11 +4,11 @@ const ws = @import("webzockets_lib");
 
 const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
-const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
+const FdLeakDetector = @import("../support/fd_leak_detector.zig");
 
 test "server-initiated close disconnects cleanly" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     // Server closes immediately on open (server-initiated close).
     // Client echoes and disconnects.
@@ -35,7 +35,7 @@ test "server-initiated close disconnects cleanly" {
 
 test "close frame still sent when ping write is in flight" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     var capture: CaptureContext = .{};
 

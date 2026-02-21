@@ -3,7 +3,7 @@ const testing = std.testing;
 
 const servers = @import("../support/test_servers.zig");
 const RawClient = @import("../support/raw_client.zig").RawClient;
-const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
+const FdLeakDetector = @import("../support/fd_leak_detector.zig");
 const helpers = @import("../support/test_helpers.zig");
 
 const wait_ms: u64 = 2_000;
@@ -11,7 +11,7 @@ const poll_read_timeout_ms: u32 = 100;
 
 test "normal code 1000" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -44,7 +44,7 @@ test "server echoes close frame" {
 
 test "server disconnects when peer ignores close response" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     // Server echoes first message then closes.
     const ts = try servers.startCloseAfterFirstMessageServer(testing.allocator, 200);
@@ -75,7 +75,7 @@ test "server disconnects when peer ignores close response" {
 
 test "server sends close even when ping write is in flight" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startPingThenCloseOnOpenServer(testing.allocator);
     defer ts.stop();
@@ -155,7 +155,7 @@ test "server echoes max-length close reason (123 bytes)" {
 
 test "server accepts close with no payload" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -174,7 +174,7 @@ test "server accepts close with no payload" {
 /// responds with the expected close code.
 fn testCloseRejection(close_payload: []u8, expected_code: u16) !void {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -190,7 +190,7 @@ fn testCloseRejection(close_payload: []u8, expected_code: u16) !void {
 /// echoes them back.
 fn testCloseEcho(code: u16, reason: []const u8) !void {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();

@@ -5,12 +5,12 @@ const xev = @import("xev");
 const testing = std.testing;
 const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
-const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
+const FdLeakDetector = @import("../support/fd_leak_detector.zig");
 const verifyServerFunctional = @import("../support/test_helpers.zig").verifyServerFunctional;
 
 test "rapid connect/disconnect" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -54,7 +54,7 @@ test "rapid connect/disconnect" {
 
 test "many concurrent echo clients" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -153,7 +153,7 @@ test "many concurrent echo clients" {
 
 test "rapid message burst" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -202,7 +202,7 @@ test "rapid message burst" {
 
 test "mixed operations under load" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -345,7 +345,7 @@ test "mixed operations under load" {
 
 test "randomized concurrent echo" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();

@@ -3,11 +3,11 @@ const testing = std.testing;
 
 const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
-const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
+const FdLeakDetector = @import("../support/fd_leak_detector.zig");
 
 test "auto-pong response to server ping" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     // PingOnOpenServer sends ping("hello") on open. The client's handler
     // (ServerCloseHandler) does not declare onPing, so the library auto-pongs.
@@ -37,7 +37,7 @@ test "auto-pong response to server ping" {
 
 test "onPong callback fires on unsolicited pong" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     // PongOnOpenServer sends an unsolicited pong("hello") on open.
     // The client's PongTrackingHandler captures the pong data via onPong
@@ -71,7 +71,7 @@ test "onPong callback fires on unsolicited pong" {
 
 test "explicit onPing handler sends pong" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     // PingOnOpenServer sends ping("hello") on open. The client's
     // ExplicitPongHandler declares onPing, so the library does NOT auto-pong.

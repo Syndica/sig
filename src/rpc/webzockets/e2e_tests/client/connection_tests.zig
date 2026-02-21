@@ -4,11 +4,11 @@ const testing = std.testing;
 const http = @import("webzockets_lib").http;
 const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
-const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
+const FdLeakDetector = @import("../support/fd_leak_detector.zig");
 
 test "connection to non-existent server" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     // Use an ephemeral port that nothing is listening on.
     // Bind a socket to get an OS-assigned port, then close it immediately.
@@ -44,7 +44,7 @@ test "connection to non-existent server" {
 
 test "connection refused by server (handler rejects)" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startRejectServer(testing.allocator);
     defer ts.stop();
@@ -71,7 +71,7 @@ test "connection refused by server (handler rejects)" {
 
 test "10 concurrent clients to same server" {
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -123,7 +123,7 @@ test "bare LF response doesn't crash client" {
     // uses \r\n but headers use bare \n, terminated by \n\n. The client must
     // reject gracefully without crashing.
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const fake = try startWithResponseFn(buildBareLfResponse);
     defer fake.stop();
@@ -151,7 +151,7 @@ test "bare LF response doesn't crash client" {
 test "fully bare LF response (no \\r\\n at all) doesn't crash client" {
     // Same as above but the entire response uses bare \n — no \r\n anywhere.
     const fd_check = FdLeakDetector.baseline();
-    defer fd_check.assertNoLeaks();
+    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
 
     const fake = try startWithResponseFn(buildFullyBareLfResponse);
     defer fake.stop();

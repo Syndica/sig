@@ -1,42 +1,44 @@
+//! Utility to detect file descriptor leaks in tests.
+//!
+//! Snapshots the open FD count at baseline and asserts no new FDs are leaked
+//! after cleanup. FD counts are process-wide, so tests using this should be
+//! run serially to avoid false positives from concurrent tests.
+//!
+//! Usage:
+//! ```zig
+//! const fd_check = FdLeakDetector.baseline();
+//! defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+//! // ... test body ...
+//! ```
+
 const std = @import("std");
 const builtin = @import("builtin");
 const native_os = builtin.os.tag;
 
-/// Utility to detect file descriptor leaks in tests.
-///
-/// Snapshots the open FD count at baseline and asserts no new FDs are leaked
-/// after cleanup. FD counts are process-wide, so tests using this should be
-/// run serially to avoid false positives from concurrent tests.
-///
-/// Usage:
-/// ```zig
-/// const fd_check = FdLeakDetector.baseline();
-/// defer fd_check.assertNoLeaks();
-/// // ... test body ...
-/// ```
-pub const FdLeakDetector = struct {
-    baseline_count: usize,
+pub const Result = enum { ok, leak };
 
-    /// Snapshot current open FD count. Call as first line of test.
-    pub fn baseline() FdLeakDetector {
-        return .{ .baseline_count = countOpenFds() };
-    }
+baseline_count: usize,
 
-    /// Assert FD count matches baseline. Panics with count delta on failure.
-    pub fn assertNoLeaks(self: *const FdLeakDetector) void {
-        const current = countOpenFds();
-        if (current != self.baseline_count) {
-            const cur: isize = @intCast(current);
-            const base: isize = @intCast(self.baseline_count);
-            const delta: isize = cur - base;
-            std.debug.panic(
-                "FD leak detected: {d} more FDs open " ++
-                    "than at baseline (baseline={d}, current={d})",
-                .{ delta, base, current },
-            );
-        }
-    }
-};
+/// Snapshot current open FD count. Call as first line of test.
+pub fn baseline() @This() {
+    return .{ .baseline_count = countOpenFds() };
+}
+
+/// Check for FD leaks. Logs details if any are found.
+/// Returns `.leak` if the FD count exceeds baseline, `.ok` otherwise.
+pub fn check(self: *const @This()) Result {
+    const current = countOpenFds();
+    if (current == self.baseline_count) return .ok;
+    const cur: isize = @intCast(current);
+    const base: isize = @intCast(self.baseline_count);
+    const delta: isize = cur - base;
+    std.log.err(
+        "FD leak detected: {d} more FDs open " ++
+            "than at baseline (baseline={d}, current={d})",
+        .{ delta, base, current },
+    );
+    return .leak;
+}
 
 fn countOpenFds() usize {
     if (native_os == .macos) {
@@ -102,16 +104,15 @@ fn countOpenFdsLinux() usize {
 }
 
 test "FdLeakDetector: no leak when no FDs opened" {
-    const detector = FdLeakDetector.baseline();
-    // No FDs opened — should not panic.
-    detector.assertNoLeaks();
+    const detector = @This().baseline();
+    try std.testing.expect(detector.check() == .ok);
 }
 
 test "FdLeakDetector: detects leaked FD" {
-    const detector = FdLeakDetector.baseline();
+    const detector = @This().baseline();
 
     // Open a file to leak an FD.
-    const leaked_fd = std.posix.open("/dev/null", .{}, 0) catch return;
+    const leaked_fd = try std.posix.open("/dev/null", .{}, 0);
     // Don't close it — simulate a leak.
 
     const current = countOpenFds();
@@ -122,7 +123,7 @@ test "FdLeakDetector: detects leaked FD" {
     std.posix.close(leaked_fd);
 
     // Now it should pass.
-    detector.assertNoLeaks();
+    try std.testing.expect(detector.check() == .ok);
 }
 
 test "countOpenFds returns reasonable value" {
