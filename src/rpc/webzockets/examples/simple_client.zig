@@ -57,10 +57,10 @@ const SimpleClient = ws.Client(ClientHandler, 4096);
 
 fn usage(exe_name: []const u8) void {
     std.debug.print(
-        "Usage: {s} [ip] [port] [message]\n" ++
-            "Defaults: ip=127.0.0.1 port=8080 message=hello\n",
-        .{exe_name},
-    );
+        \\Usage: {s} [ip] [port] [message]
+        \\Defaults: ip=127.0.0.1 port=8080 message=hello
+        \\
+    , .{exe_name});
 }
 
 pub fn main() !void {
@@ -111,6 +111,7 @@ pub fn main() !void {
     });
 
     try client.connect();
+    defer conn.deinit();
     try loop.run(.until_done);
 
     if (handler.received) |data| {
@@ -119,6 +120,4 @@ pub fn main() !void {
     } else {
         std.debug.print("No response received\n", .{});
     }
-
-    conn.deinit();
 }
