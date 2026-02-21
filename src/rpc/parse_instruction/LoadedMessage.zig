@@ -79,11 +79,17 @@ fn isWritableIndex(
         return loaded_addresses_index < self.loaded_addresses.writable.len;
     } else if (key_index >= num_signed_accounts) {
         const num_unsigned_accounts = num_account_keys -| num_signed_accounts;
-        const num_writable_unsigned_accounts = num_unsigned_accounts -| std.math.cast(usize, header.num_readonly_unsigned_accounts).?;
+        const num_writable_unsigned_accounts = num_unsigned_accounts -| std.math.cast(
+            usize,
+            header.num_readonly_unsigned_accounts,
+        ).?;
         const unsigned_account_index = key_index -| num_signed_accounts;
         return unsigned_account_index < num_writable_unsigned_accounts;
     } else {
-        const num_writable_signed_accounts = num_signed_accounts -| std.math.cast(usize, header.num_readonly_signed_accounts).?;
+        const num_writable_signed_accounts = num_signed_accounts -| std.math.cast(
+            usize,
+            header.num_readonly_signed_accounts,
+        ).?;
         return key_index < num_writable_signed_accounts;
     }
 }

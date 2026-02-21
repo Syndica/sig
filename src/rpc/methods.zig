@@ -633,10 +633,18 @@ pub const GetBlock = struct {
             fee: u64,
             preBalances: []const u64,
             postBalances: []const u64,
-            innerInstructions: JsonSkippable([]const parse_instruction.UiInnerInstructions) = .{ .value = &.{} },
-            logMessages: JsonSkippable([]const []const u8) = .{ .value = &.{} },
-            preTokenBalances: JsonSkippable([]const UiTransactionTokenBalance) = .{ .value = &.{} },
-            postTokenBalances: JsonSkippable([]const UiTransactionTokenBalance) = .{ .value = &.{} },
+            innerInstructions: JsonSkippable([]const parse_instruction.UiInnerInstructions) = .{
+                .value = &.{},
+            },
+            logMessages: JsonSkippable([]const []const u8) = .{
+                .value = &.{},
+            },
+            preTokenBalances: JsonSkippable([]const UiTransactionTokenBalance) = .{
+                .value = &.{},
+            },
+            postTokenBalances: JsonSkippable([]const UiTransactionTokenBalance) = .{
+                .value = &.{},
+            },
             rewards: JsonSkippable([]const UiReward) = .{ .value = &.{} },
             loadedAddresses: JsonSkippable(UiLoadedAddresses) = .skip,
             returnData: JsonSkippable(UiTransactionReturnData) = .skip,
@@ -763,7 +771,9 @@ pub const GetBlock = struct {
                     .rewards = if (rewards) |r| .{ .value = r } else .none,
                     .loadedAddresses = if (loaded_addresses) |la| .{ .value = la } else .skip,
                     .returnData = if (return_data) |rd| .{ .value = rd } else .skip,
-                    .computeUnitsConsumed = if (meta.compute_units_consumed) |cuc| .{ .value = cuc } else .skip,
+                    .computeUnitsConsumed = if (meta.compute_units_consumed) |cuc| .{
+                        .value = cuc,
+                    } else .skip,
                     .costUnits = if (meta.cost_units) |cu| .{ .value = cu } else .skip,
                 };
             }
@@ -1861,7 +1871,11 @@ pub const BlockHookContext = struct {
                 return .{
                     .parsed = .{
                         .account_keys = switch (version) {
-                            .legacy => try parseLegacyMessageAccounts(allocator, message, &reserved_account_keys),
+                            .legacy => try parseLegacyMessageAccounts(
+                                allocator,
+                                message,
+                                &reserved_account_keys,
+                            ),
                             .v0 => try parseV0MessageAccounts(allocator, loaded_message),
                         },
                         .recent_blockhash = message.recent_blockhash,
@@ -1885,7 +1899,10 @@ pub const BlockHookContext = struct {
         message: sig.core.transaction.Message,
         reserved_account_keys: *const parse_instruction.ReservedAccountKeys,
     ) ![]const GetBlock.Response.ParsedAccount {
-        var accounts = try allocator.alloc(GetBlock.Response.ParsedAccount, message.account_keys.len);
+        var accounts = try allocator.alloc(
+            GetBlock.Response.ParsedAccount,
+            message.account_keys.len,
+        );
         for (message.account_keys, 0..) |account_key, i| {
             accounts[i] = .{
                 .pubkey = account_key,
