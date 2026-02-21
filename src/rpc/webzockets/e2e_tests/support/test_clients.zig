@@ -116,7 +116,9 @@ pub const TestEnv = struct {
         errdefer self.loop.deinit();
 
         var seed: [ws.ClientMaskPRNG.secret_seed_length]u8 = undefined;
-        std.crypto.random.bytes(&seed);
+        for (std.mem.bytesAsSlice(u64, &seed), 0..) |*w, i| {
+            w.* = std.testing.random_seed ^ @as(u64, i);
+        }
         self.csprng = ws.ClientMaskPRNG.init(seed);
     }
 

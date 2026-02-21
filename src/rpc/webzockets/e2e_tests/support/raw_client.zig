@@ -16,6 +16,7 @@ pub const RawClient = struct {
     read_buf: []u8,
     read_pos: usize, // start of unconsumed data
     read_end: usize, // end of valid data in read_buf
+    rng: std.Random.DefaultPrng,
 
     pub const ConnectOpts = struct {
         read_buf_size: usize = 4096,
@@ -92,6 +93,7 @@ pub const RawClient = struct {
                 .read_buf = read_buf,
                 .read_pos = header_len,
                 .read_end = total_read,
+                .rng = rng,
             };
         }
     }
@@ -150,7 +152,7 @@ pub const RawClient = struct {
         // Mask key (only when masking)
         if (opts.mask) {
             var mask_key: [4]u8 = undefined;
-            std.crypto.random.bytes(&mask_key);
+            self.rng.random().bytes(&mask_key);
             @memcpy(header_buf[header_len..][0..4], &mask_key);
             header_len += 4;
 
