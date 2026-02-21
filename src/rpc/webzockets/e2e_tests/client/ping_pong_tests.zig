@@ -5,7 +5,7 @@ const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
 const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
 
-test "e2e client: auto-pong response to server ping" {
+test "auto-pong response to server ping" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -35,7 +35,7 @@ test "e2e client: auto-pong response to server ping" {
     conn.deinit();
 }
 
-test "e2e client: onPong callback fires on unsolicited pong" {
+test "onPong callback fires on unsolicited pong" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -69,7 +69,7 @@ test "e2e client: onPong callback fires on unsolicited pong" {
     conn.deinit();
 }
 
-test "e2e client: explicit onPing handler sends pong" {
+test "explicit onPing handler sends pong" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 

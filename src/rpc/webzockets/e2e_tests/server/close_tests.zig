@@ -9,7 +9,7 @@ const helpers = @import("../support/test_helpers.zig");
 const wait_ms: u64 = 2_000;
 const poll_read_timeout_ms: u32 = 100;
 
-test "e2e close: normal code 1000" {
+test "normal code 1000" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -30,19 +30,19 @@ test "e2e close: normal code 1000" {
     try helpers.expectCloseWithCode(&client, 1000);
 }
 
-test "e2e close: custom code in registered range (3000-3999)" {
+test "custom code in registered range (3000-3999)" {
     try testCloseEcho(3500, "custom close");
 }
 
-test "e2e close: custom code in private range (4000-4999)" {
+test "custom code in private range (4000-4999)" {
     try testCloseEcho(4999, "private close");
 }
 
-test "e2e close: server echoes close frame" {
+test "server echoes close frame" {
     try testCloseEcho(1000, "bye");
 }
 
-test "e2e close: server disconnects when peer ignores close response" {
+test "server disconnects when peer ignores close response" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -73,7 +73,7 @@ test "e2e close: server disconnects when peer ignores close response" {
     try client.waitForClosedNoData(wait_ms);
 }
 
-test "e2e close: server sends close even when ping write is in flight" {
+test "server sends close even when ping write is in flight" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -100,60 +100,60 @@ test "e2e close: server sends close even when ping write is in flight" {
     try client.waitForClosedNoData(wait_ms);
 }
 
-test "e2e close: server rejects invalid close code 0 with 1002" {
+test "server rejects invalid close code 0 with 1002" {
     var payload = [_]u8{ 0x00, 0x00 };
     try testCloseRejection(&payload, 1002);
 }
 
-test "e2e close: server rejects reserved close code 1004 with 1002" {
+test "server rejects reserved close code 1004 with 1002" {
     var payload = [_]u8{ 0x03, 0xEC };
     try testCloseRejection(&payload, 1002);
 }
 
-test "e2e close: server rejects API-only close code 1005 with 1002" {
+test "server rejects API-only close code 1005 with 1002" {
     var payload = [_]u8{ 0x03, 0xED };
     try testCloseRejection(&payload, 1002);
 }
 
-test "e2e close: server rejects out-of-range close code 5000 with 1002" {
+test "server rejects out-of-range close code 5000 with 1002" {
     var payload = [_]u8{ 0x13, 0x88 };
     try testCloseRejection(&payload, 1002);
 }
 
-test "e2e close: server rejects invalid UTF-8 in close reason with 1007" {
+test "server rejects invalid UTF-8 in close reason with 1007" {
     // 0xFE is never valid in UTF-8
     var payload = [_]u8{ 0x03, 0xE8, 0xFE, 0xFF };
     try testCloseRejection(&payload, 1007);
 }
 
-test "e2e close: server rejects 1-byte close payload with 1002" {
+test "server rejects 1-byte close payload with 1002" {
     var payload = [_]u8{0x42};
     try testCloseRejection(&payload, 1002);
 }
 
-test "e2e close: server rejects API-only close code 1006 with 1002" {
+test "server rejects API-only close code 1006 with 1002" {
     var payload = [_]u8{ 0x03, 0xEE };
     try testCloseRejection(&payload, 1002);
 }
 
-test "e2e close: server rejects close code 999 (below valid range) with 1002" {
+test "server rejects close code 999 (below valid range) with 1002" {
     var payload = [_]u8{ 0x03, 0xE7 };
     try testCloseRejection(&payload, 1002);
 }
 
-test "e2e close: server rejects close code 2000 (gap range 1012-2999) with 1002" {
+test "server rejects close code 2000 (gap range 1012-2999) with 1002" {
     var payload = [_]u8{ 0x07, 0xD0 };
     try testCloseRejection(&payload, 1002);
 }
 
-test "e2e close: server echoes max-length close reason (123 bytes)" {
+test "server echoes max-length close reason (123 bytes)" {
     // Control frame max payload is 125 bytes; 2 for code leaves 123 for reason
     var reason: [123]u8 = undefined;
     @memset(&reason, 'R');
     try testCloseEcho(1000, &reason);
 }
 
-test "e2e close: server accepts close with no payload" {
+test "server accepts close with no payload" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 

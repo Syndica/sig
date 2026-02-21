@@ -6,27 +6,27 @@ const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
 const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
 
-test "e2e: medium message requiring pooled buffer (8KB)" {
+test "medium message requiring pooled buffer (8KB)" {
     try runBufferTierTest(8 * 1024, null);
 }
 
-test "e2e: large message requiring pooled buffer (32KB)" {
+test "large message requiring pooled buffer (32KB)" {
     try runBufferTierTest(32 * 1024, null);
 }
 
-test "e2e: message at pool buffer boundary (64KB)" {
+test "message at pool buffer boundary (64KB)" {
     try runBufferTierTest(64 * 1024, 128 * 1024);
 }
 
-test "e2e: large message requiring dynamic allocation (128KB)" {
+test "large message requiring dynamic allocation (128KB)" {
     try runBufferTierTest(128 * 1024, 256 * 1024);
 }
 
-test "e2e: very large message requiring dynamic allocation (256KB)" {
+test "very large message requiring dynamic allocation (256KB)" {
     try runBufferTierTest(256 * 1024, 512 * 1024);
 }
 
-test "e2e: buffer tier retained after large messages" {
+test "buffer tier retained after large messages" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 

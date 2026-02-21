@@ -15,7 +15,7 @@ fn expectText(client: *RawClient, expected: []const u8) !void {
     try testing.expectEqualSlices(u8, expected, response.data);
 }
 
-test "e2e pause/resume server: sequential processing of buffered burst" {
+test "sequential processing of buffered burst" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -49,7 +49,7 @@ test "e2e pause/resume server: sequential processing of buffered burst" {
     try helpers.expectCloseWithCode(&client, 1000);
 }
 
-test "e2e pause/resume server: pause mid-stream stops dispatch then delivers on resume" {
+test "pause mid-stream stops dispatch then delivers on resume" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -83,7 +83,7 @@ test "e2e pause/resume server: pause mid-stream stops dispatch then delivers on 
     try helpers.expectCloseWithCode(&client, 1000);
 }
 
-test "e2e pause/resume server: close frame while server is paused" {
+test "close frame while server is paused" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -109,7 +109,7 @@ test "e2e pause/resume server: close frame while server is paused" {
     try helpers.expectCloseWithCode(&client, 1000);
 }
 
-test "e2e pause/resume server: no re-entrant onMessage dispatch" {
+test "no re-entrant onMessage dispatch" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -140,7 +140,7 @@ test "e2e pause/resume server: no re-entrant onMessage dispatch" {
     try helpers.expectCloseWithCode(&client, 1000);
 }
 
-test "e2e pause/resume server: buffer fills while paused (small read buffer)" {
+test "buffer fills while paused (small read buffer)" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 

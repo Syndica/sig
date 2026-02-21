@@ -8,7 +8,7 @@ const clients = @import("../support/test_clients.zig");
 const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
 const verifyServerFunctional = @import("../support/test_helpers.zig").verifyServerFunctional;
 
-test "e2e/stress: rapid connect/disconnect" {
+test "rapid connect/disconnect" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -52,7 +52,7 @@ test "e2e/stress: rapid connect/disconnect" {
     try verifyServerFunctional(ts.port);
 }
 
-test "e2e/stress: many concurrent echo clients" {
+test "many concurrent echo clients" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -151,7 +151,7 @@ test "e2e/stress: many concurrent echo clients" {
     }
 }
 
-test "e2e/stress: rapid message burst" {
+test "rapid message burst" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -200,7 +200,7 @@ test "e2e/stress: rapid message burst" {
     }
 }
 
-test "e2e/stress: mixed operations under load" {
+test "mixed operations under load" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -343,7 +343,7 @@ test "e2e/stress: mixed operations under load" {
     try verifyServerFunctional(ts.port);
 }
 
-test "e2e/stress: randomized concurrent echo" {
+test "randomized concurrent echo" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 

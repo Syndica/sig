@@ -6,7 +6,7 @@ const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
 const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
 
-test "e2e: handler rejects connection" {
+test "handler rejects connection" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -31,7 +31,7 @@ test "e2e: handler rejects connection" {
     try testing.expect(!handler.open_called);
 }
 
-test "e2e: handler accepts valid path" {
+test "handler accepts valid path" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 

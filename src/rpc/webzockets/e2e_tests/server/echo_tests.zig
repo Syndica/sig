@@ -5,7 +5,7 @@ const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
 const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
 
-test "e2e: text echo" {
+test "text echo" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -39,7 +39,7 @@ test "e2e: text echo" {
     try testing.expectEqualSlices(u8, "hello", received_data);
 }
 
-test "e2e: binary echo" {
+test "binary echo" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -73,7 +73,7 @@ test "e2e: binary echo" {
     try testing.expectEqualSlices(u8, &[_]u8{ 0x01, 0x02, 0x03, 0xFF }, received_data);
 }
 
-test "e2e: ping/pong" {
+test "ping/pong" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -107,7 +107,7 @@ test "e2e: ping/pong" {
     try testing.expectEqualSlices(u8, "ping", received_data);
 }
 
-test "e2e: close handshake" {
+test "close handshake" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -132,7 +132,7 @@ test "e2e: close handshake" {
     try testing.expect(handler.open_called);
 }
 
-test "e2e: multiple messages in sequence" {
+test "multiple messages in sequence" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -171,7 +171,7 @@ test "e2e: multiple messages in sequence" {
     try testing.expectEqualSlices(u8, "three", handler.results.items[2].data);
 }
 
-test "e2e: large message (>125 bytes)" {
+test "large message (>125 bytes)" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -212,7 +212,7 @@ test "e2e: large message (>125 bytes)" {
     }
 }
 
-test "e2e: multiple concurrent connections" {
+test "multiple concurrent connections" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 

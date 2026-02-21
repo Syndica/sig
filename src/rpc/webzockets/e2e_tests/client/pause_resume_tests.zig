@@ -6,7 +6,7 @@ const server_handlers = @import("../support/server_handlers.zig");
 const clients = @import("../support/test_clients.zig");
 const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
 
-test "e2e client pause/resume: sequential processing of server burst" {
+test "sequential processing of server burst" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -50,7 +50,7 @@ test "e2e client pause/resume: sequential processing of server burst" {
     conn.deinit();
 }
 
-test "e2e client pause/resume: pause mid-stream stops dispatch then delivers on resume" {
+test "pause mid-stream stops dispatch then delivers on resume" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -96,7 +96,7 @@ test "e2e client pause/resume: pause mid-stream stops dispatch then delivers on 
     conn.deinit();
 }
 
-test "e2e client pause/resume: close while client is paused" {
+test "close while client is paused" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -137,7 +137,7 @@ test "e2e client pause/resume: close while client is paused" {
     conn.deinit();
 }
 
-test "e2e client pause/resume: no re-entrant onMessage dispatch" {
+test "no re-entrant onMessage dispatch" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -179,7 +179,7 @@ test "e2e client pause/resume: no re-entrant onMessage dispatch" {
     conn.deinit();
 }
 
-test "e2e client pause/resume: buffer fills while paused (small read buffer)" {
+test "buffer fills while paused (small read buffer)" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 

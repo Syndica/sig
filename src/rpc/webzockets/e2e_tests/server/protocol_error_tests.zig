@@ -7,7 +7,7 @@ const RawClient = @import("../support/raw_client.zig").RawClient;
 const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
 const expectCloseWithCode = @import("../support/test_helpers.zig").expectCloseWithCode;
 
-test "e2e protocol error: unmasked client frame → 1002" {
+test "unmasked client frame → 1002" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -24,7 +24,7 @@ test "e2e protocol error: unmasked client frame → 1002" {
     try expectCloseWithCode(&client, 1002);
 }
 
-test "e2e protocol error: reserved opcode 0x3 → 1002" {
+test "reserved opcode 0x3 → 1002" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -41,7 +41,7 @@ test "e2e protocol error: reserved opcode 0x3 → 1002" {
     try expectCloseWithCode(&client, 1002);
 }
 
-test "e2e protocol error: RSV1 set without extension → 1002" {
+test "RSV1 set without extension → 1002" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -58,7 +58,7 @@ test "e2e protocol error: RSV1 set without extension → 1002" {
     try expectCloseWithCode(&client, 1002);
 }
 
-test "e2e protocol error: fragmented ping (FIN=0) → 1002" {
+test "fragmented ping (FIN=0) → 1002" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -75,7 +75,7 @@ test "e2e protocol error: fragmented ping (FIN=0) → 1002" {
     try expectCloseWithCode(&client, 1002);
 }
 
-test "e2e protocol error: ping with 126-byte payload → 1002" {
+test "ping with 126-byte payload → 1002" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -93,7 +93,7 @@ test "e2e protocol error: ping with 126-byte payload → 1002" {
     try expectCloseWithCode(&client, 1002);
 }
 
-test "e2e protocol error: unexpected continuation frame → 1002" {
+test "unexpected continuation frame → 1002" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -110,7 +110,7 @@ test "e2e protocol error: unexpected continuation frame → 1002" {
     try expectCloseWithCode(&client, 1002);
 }
 
-test "e2e protocol error: new data frame during fragmentation → 1002" {
+test "new data frame during fragmentation → 1002" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -131,7 +131,7 @@ test "e2e protocol error: new data frame during fragmentation → 1002" {
     try expectCloseWithCode(&client, 1002);
 }
 
-test "e2e protocol error: message exceeding max_message_size → 1009" {
+test "message exceeding max_message_size → 1009" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 

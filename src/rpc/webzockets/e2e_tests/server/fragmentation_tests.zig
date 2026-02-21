@@ -8,7 +8,7 @@ const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
 
 const wait_ms: u64 = 2_000;
 
-test "e2e fragment: text message in 2 fragments" {
+test "text message in 2 fragments" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -31,7 +31,7 @@ test "e2e fragment: text message in 2 fragments" {
     try testing.expectEqualSlices(u8, "Hello", response.data);
 }
 
-test "e2e fragment: text message in 6 fragments" {
+test "text message in 6 fragments" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -66,7 +66,7 @@ test "e2e fragment: text message in 6 fragments" {
     try testing.expectEqualSlices(u8, expected, response.data);
 }
 
-test "e2e fragment: binary message in 2 fragments" {
+test "binary message in 2 fragments" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -89,7 +89,7 @@ test "e2e fragment: binary message in 2 fragments" {
     try testing.expectEqualSlices(u8, &[_]u8{ 0x01, 0x02, 0x03, 0x04, 0x05 }, response.data);
 }
 
-test "e2e fragment: ping interleaved during fragmentation" {
+test "ping interleaved during fragmentation" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -122,7 +122,7 @@ test "e2e fragment: ping interleaved during fragmentation" {
     try testing.expectEqualSlices(u8, "Hello", response.data);
 }
 
-test "e2e fragment: non-empty first, empty final continuation" {
+test "non-empty first, empty final continuation" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -145,7 +145,7 @@ test "e2e fragment: non-empty first, empty final continuation" {
     try testing.expectEqualSlices(u8, "data", response.data);
 }
 
-test "e2e fragment: empty first, non-empty final continuation" {
+test "empty first, non-empty final continuation" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -168,7 +168,7 @@ test "e2e fragment: empty first, non-empty final continuation" {
     try testing.expectEqualSlices(u8, "data", response.data);
 }
 
-test "e2e fragment: all-empty fragments produce empty message" {
+test "all-empty fragments produce empty message" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -191,7 +191,7 @@ test "e2e fragment: all-empty fragments produce empty message" {
     try testing.expectEqual(@as(usize, 0), response.data.len);
 }
 
-test "e2e fragment: 8KB message across 4 fragments" {
+test "8KB message across 4 fragments" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -235,7 +235,7 @@ test "e2e fragment: 8KB message across 4 fragments" {
     try testing.expectEqualSlices(u8, &expected, response.data);
 }
 
-test "e2e fragment: 256KB message across 64 fragments" {
+test "256KB message across 64 fragments" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 

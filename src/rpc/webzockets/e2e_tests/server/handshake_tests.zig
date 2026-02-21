@@ -9,7 +9,7 @@ const verifyServerFunctional = @import("../support/test_helpers.zig").verifyServ
 
 const wait_ms: u64 = 2_000;
 
-test "e2e handshake: malformed HTTP request (garbage bytes)" {
+test "malformed HTTP request (garbage bytes)" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -26,7 +26,7 @@ test "e2e handshake: malformed HTTP request (garbage bytes)" {
     try expectClosed(stream);
 }
 
-test "e2e handshake: missing Upgrade header" {
+test "missing Upgrade header" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -43,7 +43,7 @@ test "e2e handshake: missing Upgrade header" {
     try expectClosed(stream);
 }
 
-test "e2e handshake: missing Sec-WebSocket-Key" {
+test "missing Sec-WebSocket-Key" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -60,7 +60,7 @@ test "e2e handshake: missing Sec-WebSocket-Key" {
     try expectClosed(stream);
 }
 
-test "e2e handshake: wrong HTTP method (POST)" {
+test "wrong HTTP method (POST)" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -77,7 +77,7 @@ test "e2e handshake: wrong HTTP method (POST)" {
     try expectClosed(stream);
 }
 
-test "e2e handshake: unsupported WebSocket version" {
+test "unsupported WebSocket version" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -94,7 +94,7 @@ test "e2e handshake: unsupported WebSocket version" {
     try expectClosed(stream);
 }
 
-test "e2e handshake: incremental request (chunked with delays)" {
+test "incremental request (chunked with delays)" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -136,7 +136,7 @@ test "e2e handshake: incremental request (chunked with delays)" {
     try testing.expect(std.mem.startsWith(u8, response, "HTTP/1.1 101 Switching Protocols\r\n"));
 }
 
-test "e2e handshake: byte-by-byte request" {
+test "byte-by-byte request" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -170,7 +170,7 @@ test "e2e handshake: byte-by-byte request" {
     try testing.expect(std.mem.startsWith(u8, response, "HTTP/1.1 101 Switching Protocols\r\n"));
 }
 
-test "e2e handshake: bare LF headers (no \\r\\n) doesn't crash server" {
+test "bare LF headers (no \\r\\n) doesn't crash server" {
     // HeadParser accepts \n\n as end-of-headers. Send a request with \r\n on
     // the request line but bare \n on headers, terminated by \n\n. The server
     // must reject it gracefully (close the connection) without crashing.
@@ -202,7 +202,7 @@ test "e2e handshake: bare LF headers (no \\r\\n) doesn't crash server" {
     try verifyServerFunctional(ts.port);
 }
 
-test "e2e handshake: fully bare LF request (no \\r\\n at all) doesn't crash server" {
+test "fully bare LF request (no \\r\\n at all) doesn't crash server" {
     // Everything uses bare \n — no \r\n anywhere. HeadParser sees \n\n and
     // reports finished, but the headers won't be found without \r\n line endings.
     const fd_check = FdLeakDetector.baseline();
@@ -231,7 +231,7 @@ test "e2e handshake: fully bare LF request (no \\r\\n at all) doesn't crash serv
     try verifyServerFunctional(ts.port);
 }
 
-test "e2e handshake: partial request then disconnect" {
+test "partial request then disconnect" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -252,7 +252,7 @@ test "e2e handshake: partial request then disconnect" {
     try verifyServerFunctional(ts.port);
 }
 
-test "e2e handshake: headers exceeding read buffer size" {
+test "headers exceeding read buffer size" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -318,7 +318,7 @@ fn expectClosed(stream: std.net.Stream) !void {
     }
 }
 
-test "e2e handshake: onHandshakeFailed fires on connection pool exhaustion" {
+test "onHandshakeFailed fires on connection pool exhaustion" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -355,7 +355,7 @@ test "e2e handshake: onHandshakeFailed fires on connection pool exhaustion" {
     try verifyEchoOnClient(&client1);
 }
 
-test "e2e handshake: handler without onHandshakeFailed still works" {
+test "handler without onHandshakeFailed still works" {
     // The default EchoHandler does NOT declare onHandshakeFailed.
     // Verify that pool exhaustion doesn't crash — the handler is silently
     // dropped (pre-existing behavior for handlers without the callback).

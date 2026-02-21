@@ -6,7 +6,7 @@ const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
 const FdLeakDetector = @import("../support/fd_leak.zig").FdLeakDetector;
 
-test "e2e client: connection to non-existent server" {
+test "connection to non-existent server" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -42,7 +42,7 @@ test "e2e client: connection to non-existent server" {
     try testing.expect(handler.socket_close_called);
 }
 
-test "e2e client: connection refused by server (handler rejects)" {
+test "connection refused by server (handler rejects)" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -69,7 +69,7 @@ test "e2e client: connection refused by server (handler rejects)" {
     try testing.expect(handler.socket_close_called);
 }
 
-test "e2e client: 10 concurrent clients to same server" {
+test "10 concurrent clients to same server" {
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
 
@@ -118,7 +118,7 @@ test "e2e client: 10 concurrent clients to same server" {
     }
 }
 
-test "e2e client: bare LF response doesn't crash client" {
+test "bare LF response doesn't crash client" {
     // A malicious/broken server sends a 101 response where the status line
     // uses \r\n but headers use bare \n, terminated by \n\n. The client must
     // reject gracefully without crashing.
@@ -148,7 +148,7 @@ test "e2e client: bare LF response doesn't crash client" {
     try testing.expect(handler.socket_close_called);
 }
 
-test "e2e client: fully bare LF response (no \\r\\n at all) doesn't crash client" {
+test "fully bare LF response (no \\r\\n at all) doesn't crash client" {
     // Same as above but the entire response uses bare \n — no \r\n anywhere.
     const fd_check = FdLeakDetector.baseline();
     defer fd_check.assertNoLeaks();
