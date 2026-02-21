@@ -7,6 +7,7 @@ const Allocator = std.mem.Allocator;
 const Slot = sig.core.Slot;
 const SlotConstants = sig.core.SlotConstants;
 const SlotState = sig.core.SlotState;
+const ReferenceCounter = sig.sync.ReferenceCounter;
 const ThreadPool = sig.sync.ThreadPool;
 const Commitment = sig.rpc.methods.common.Commitment;
 
@@ -60,15 +61,15 @@ pub const SlotTracker = struct {
         destroy_task: ThreadPool.Task = .{ .callback = runDestroy },
         pruned_wg: ?*std.Thread.WaitGroup = null,
         allocator: Allocator,
+        rc: ReferenceCounter = .init,
 
-        fn toRef(self: *Element) Reference {
-            return .{
-                .constants = &self.constants,
-                .state = &self.state,
-            };
+        pub fn toRef(self: *Element) ?Reference {
+            if (!self.rc.acquire()) return null;
+            return .{ .element = self };
         }
 
         fn destroy(self: *Element) void {
+            if (!self.rc.release()) return;
             const allocator = self.allocator;
             self.constants.deinit(allocator);
             self.state.deinit(allocator);
@@ -88,8 +89,21 @@ pub const SlotTracker = struct {
     };
 
     pub const Reference = struct {
-        constants: *const SlotConstants,
-        state: *SlotState,
+        // constants: *const SlotConstants,
+        // state: *SlotState,
+        element: *Element,
+
+        pub fn constants(self: Reference) *const SlotConstants {
+            return &self.element.constants;
+        }
+
+        pub fn state(self: Reference) *SlotState {
+            return &self.element.state;
+        }
+
+        pub fn release(self: Reference) void {
+            self.element.destroy();
+        }
     };
 
     pub fn initEmpty(allocator: Allocator, root_slot: Slot) !SlotTracker {
@@ -178,7 +192,7 @@ pub const SlotTracker = struct {
         self.slots.putAssumeCapacityNoClobber(slot, elem);
         return .{
             .found_existing = false,
-            .reference = elem.toRef(),
+            .reference = elem.toRef().?,
         };
     }
 
@@ -215,9 +229,10 @@ pub const SlotTracker = struct {
         for (self.slots.keys(), self.slots.values()) |slot, value| {
             if (!value.state.isFrozen()) continue;
 
+            const ref = value.toRef() orelse continue;
             frozen_slots.putAssumeCapacity(
                 slot,
-                .{ .constants = &value.constants, .state = &value.state },
+                ref,
             );
         }
         return frozen_slots;
@@ -563,6 +578,7 @@ test "SlotTracker.prune removes all slots less than root" {
                 .state = .GENESIS,
                 .allocator = allocator,
             });
+            gop.reference.release();
             if (gop.found_existing) std.debug.assert(slot == root_slot);
         }
 

@@ -748,6 +748,7 @@ pub const RpcHookContext = struct {
 
         // Get the state for the requested commitment slot.
         const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        defer slot_ref.release();
 
         // Setup config consts for the request.
         const delinquent_distance = config.delinquentSlotDistance orelse
@@ -772,7 +773,7 @@ pub const RpcHookContext = struct {
         }
 
         // Access stakes cache (takes read lock).
-        const stakes, var stakes_guard = slot_ref.state.stakes_cache.stakes.readWithLock();
+        const stakes, var stakes_guard = slot_ref.state().stakes_cache.stakes.readWithLock();
         defer stakes_guard.unlock();
         const vote_accounts_map = &stakes.vote_accounts.vote_accounts;
         for (vote_accounts_map.keys(), vote_accounts_map.values()) |vote_pk, stake_and_vote| {

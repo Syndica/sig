@@ -74,8 +74,9 @@ pub fn processResult(params: ProcessResultParams, result: sig.replay.execution.R
     }
 
     const slot_info = params.slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+    defer slot_info.release();
 
-    if (slot_info.state.isFrozen()) {
+    if (slot_info.state().isFrozen()) {
         // TODO Send things out via a couple of senders
         // - cluster_slots_update_sender;
         // - transaction_status_sender;
@@ -133,7 +134,8 @@ fn markDeadSlot(
     if (!params.duplicate_slots_tracker.contains(dead_slot) and maybe_duplicate_proof != null) {
         const slot_info =
             params.slot_tracker.get(dead_slot) orelse return error.MissingSlotInTracker;
-        const slot_hash = slot_info.state.hash.readCopy();
+        defer slot_info.release();
+        const slot_hash = slot_info.state().hash.readCopy();
         const duplicate_state: DuplicateState = .fromState(
             .from(params.logger),
             dead_slot,
@@ -160,14 +162,15 @@ fn markDeadSlot(
 fn updateConsensusForFrozenSlot(params: ProcessResultParams, slot: Slot) !void {
     var slot_info = params.slot_tracker.get(slot) orelse
         return error.MissingSlotInTracker;
+    defer slot_info.release();
 
-    const parent_slot = slot_info.constants.parent_slot;
-    const parent_hash = slot_info.constants.parent_hash;
+    const parent_slot = slot_info.constants().parent_slot;
+    const parent_hash = slot_info.constants().parent_hash;
 
     var progress = params.progress_map.map.getPtr(slot) orelse
         return error.MissingBankProgress;
 
-    const hash = slot_info.state.hash.readCopy() orelse
+    const hash = slot_info.state().hash.readCopy() orelse
         return error.MissingHash;
     std.debug.assert(!hash.eql(Hash.ZEROES));
 

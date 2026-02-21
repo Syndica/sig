@@ -5591,7 +5591,8 @@ pub const TestFixture = struct {
             if (frozen_state == .frozen) {
                 // new_bank.freeze();
                 const new_slot = self.slot_tracker.get(parent_slot) orelse continue;
-                new_slot.state.hash = .init(parent_hash);
+                defer new_slot.release();
+                new_slot.state().hash = .init(parent_hash);
                 const fork_state = self.progress.getForkStats(parent_slot) orelse continue;
                 fork_state.slot_hash = parent_hash;
             }

@@ -273,6 +273,7 @@ pub fn initProgressMap(
 ) !ProgressMap {
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
+    defer for (frozen_slots.values()) |ref| ref.release();
 
     frozen_slots.sort(FrozenSlotsSortCtx{ .slots = frozen_slots.keys() });
 
@@ -282,7 +283,7 @@ pub fn initProgressMap(
     // Initialize progress map with any root slots
     for (frozen_slots.keys(), frozen_slots.values()) |slot, ref| {
         const epoch_info = try epoch_tracker.getEpochInfo(slot);
-        const prev_leader_slot = progress.getSlotPrevLeaderSlot(ref.constants.parent_slot);
+        const prev_leader_slot = progress.getSlotPrevLeaderSlot(ref.constants().parent_slot);
         try progress.map.ensureUnusedCapacity(allocator, 1);
         progress.map.putAssumeCapacity(slot, try .initFromInfo(allocator, .{
             .slot_info = ref,
@@ -333,6 +334,7 @@ pub fn trackNewSlots(
     const root = slot_tracker.root.load(.monotonic);
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
+    defer for (frozen_slots.values()) |ref| ref.release();
 
     var frozen_slots_since_root = try std.ArrayListUnmanaged(sig.core.Slot)
         .initCapacity(allocator, frozen_slots.count());
@@ -361,8 +363,8 @@ pub fn trackNewSlots(
                 account_store.reader(),
                 epoch_tracker.cluster.ticks_per_slot,
                 parent_slot,
-                parent_info.constants,
-                parent_info.state,
+                parent_info.constants(),
+                parent_info.state(),
                 slot_leaders.get(slot) orelse return error.UnknownLeader,
                 slot,
             );
@@ -571,14 +573,15 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
         .last_entry_hash => |last_entry_hash| {
             const slot = result.slot;
             const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
-            if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+            defer slot_info.release();
+            if (slot_info.state().tickHeight() == slot_info.constants().max_tick_height) {
                 state.logger.info().logf("finished replaying slot: {}", .{slot});
                 try replay.freeze.freezeSlot(state.allocator, .init(
                     .from(state.logger),
                     state.account_store,
                     &state.thread_pool,
-                    slot_info.state,
-                    slot_info.constants,
+                    slot_info.state(),
+                    slot_info.constants(),
                     slot,
                     last_entry_hash,
                 ));
@@ -618,9 +621,10 @@ fn bypassConsensus(state: *ReplayState) !void {
         try state.status_cache.addRoot(state.allocator, new_root);
 
         const slot_constants = slot_tracker.get(new_root).?;
+        defer slot_constants.release();
         try state.account_store.onSlotRooted(
             new_root,
-            &slot_constants.constants.ancestors,
+            &slot_constants.constants().ancestors,
         );
     }
 }
@@ -697,7 +701,11 @@ test trackNewSlots {
         .allocator = allocator,
     });
     defer slot_tracker.deinit(allocator);
-    slot_tracker.get(0).?.state.hash.set(.ZEROES);
+    {
+        const ref = slot_tracker.get(0).?;
+        defer ref.release();
+        ref.state().hash.set(.ZEROES);
+    }
 
     var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
         .start = 0,
@@ -775,7 +783,11 @@ test trackNewSlots {
     );
 
     // freezing 1 should result in 2 and 4 being added
-    slot_tracker.get(1).?.state.hash.set(.ZEROES);
+    {
+        const ref = slot_tracker.get(1).?;
+        defer ref.release();
+        ref.state().hash.set(.ZEROES);
+    }
 
     try trackNewSlots(
         allocator,
@@ -797,8 +809,16 @@ test trackNewSlots {
     );
 
     // freezing 2 and 4 should only result in 6 being added since 3's parent is unknown
-    slot_tracker.get(2).?.state.hash.set(.ZEROES);
-    slot_tracker.get(4).?.state.hash.set(.ZEROES);
+    {
+        const ref2 = slot_tracker.get(2).?;
+        defer ref2.release();
+        ref2.state().hash.set(.ZEROES);
+    }
+    {
+        const ref4 = slot_tracker.get(4).?;
+        defer ref4.release();
+        ref4.state().hash.set(.ZEROES);
+    }
 
     try trackNewSlots(
         allocator,
@@ -832,14 +852,17 @@ fn expectSlotTracker(
     for (included_slots) |item| {
         const slot, const parent = item;
         const slot_info = slot_tracker.get(slot) orelse return error.Fail;
-        try std.testing.expectEqual(parent, slot_info.constants.parent_slot);
+        defer slot_info.release();
+        try std.testing.expectEqual(parent, slot_info.constants().parent_slot);
         if (slot != 0) try std.testing.expectEqual(
             leader_schedule.leaders[slot],
-            slot_info.constants.collector_id,
+            slot_info.constants().collector_id,
         );
     }
     for (excluded_slots) |slot| {
-        try std.testing.expectEqual(null, slot_tracker.get(slot));
+        const maybe_ref = slot_tracker.get(slot);
+        if (maybe_ref) |ref| ref.release();
+        try std.testing.expectEqual(null, maybe_ref);
     }
 }
 
@@ -1111,7 +1134,8 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     // get slot hash
     const actual_slot_hash = tracker_lock: {
         const ref = replay_state.slot_tracker.get(execution_slot).?;
-        break :tracker_lock ref.state.hash.readCopy().?;
+        defer ref.release();
+        break :tracker_lock ref.state().hash.readCopy().?;
     };
 
     const expected_slot_hash = sig.core.Hash.parse("4UeCbit4YGY42p9KrDzoD1LL21Vn3htb5N5G9w6L1kUE");
