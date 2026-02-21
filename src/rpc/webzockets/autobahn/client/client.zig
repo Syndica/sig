@@ -36,95 +36,28 @@ const AutobahnRunner = struct {
     phase: Phase,
     path_buf: [256]u8 = undefined,
     csprng: ws.ClientMaskPRNG,
-    retry_count: usize = 0,
-    retry_timer: xev.Timer = .{},
-    retry_timer_completion: xev.Completion = undefined,
 
-    const max_retries = 20;
-    const retry_delay_ms = 3000;
-
-    fn init(allocator: std.mem.Allocator, loop: *xev.Loop) AutobahnRunner {
+    fn init(self: *AutobahnRunner, allocator: std.mem.Allocator, loop: *xev.Loop) !void {
         var seed: [ws.ClientMaskPRNG.secret_seed_length]u8 = undefined;
         std.crypto.random.bytes(&seed);
-        return .{
+        self.* = .{
             .loop = loop,
             .allocator = allocator,
             .current_case = 1,
             .total_cases = 0,
+            // conn and client are transient, initialized/deinit'd per interaction
             .conn = undefined,
             .client = undefined,
-            .handler = undefined,
+            .handler = .{ .runner = self },
             .phase = .get_case_count,
             .csprng = ws.ClientMaskPRNG.init(seed),
         };
+        try self.getCaseCount();
     }
 
-    fn retryTimerCallback(
-        self_opt: ?*AutobahnRunner,
-        _: *xev.Loop,
-        _: *xev.Completion,
-        r: xev.Timer.RunError!void,
-    ) xev.CallbackAction {
-        r catch {
-            log.err("retry timer failed", .{});
-            return .disarm;
-        };
-        const self = self_opt.?;
-        self.getCaseCount() catch |err| {
-            log.err("getCaseCount failed: {}", .{err});
-        };
-        return .disarm;
-    }
-
-    fn deinit(_: *AutobahnRunner) void {}
-
-    /// First step: connect to /getCaseCount to discover how many cases there are.
-    fn getCaseCount(self: *AutobahnRunner) !void {
-        log.debug("getCaseCount: connecting to /getCaseCount", .{});
-        self.phase = .get_case_count;
-        self.handler = .{ .runner = self };
-        self.client = AutobahnClient.init(
-            self.allocator,
-            self.loop,
-            &self.handler,
-            &self.conn,
-            &self.csprng,
-            .{
-                .address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001),
-                .path = "/getCaseCount",
-                .max_message_size = max_message_size,
-            },
-        );
-        try self.client.connect();
-        log.debug("getCaseCount: connect submitted to loop", .{});
-    }
-
-    /// Start the next test case, or trigger report generation when done.
-    fn startNextCase(self: *AutobahnRunner) !void {
-        if (self.current_case > self.total_cases) {
-            // All cases done — connect to updateReports and finish
-            log.info("All {d} cases complete, generating report...", .{self.total_cases});
-            try self.connectUpdateReports(false);
-            return;
-        }
-
-        const case_num = self.current_case;
-        self.current_case += 1;
-
-        log.info("Running case {d}/{d}", .{ case_num, self.total_cases });
-
-        // Build path: /runCase?case=N&agent=webzockets
-        const path = std.fmt.bufPrint(
-            &self.path_buf,
-            "/runCase?case={d}&agent=webzockets",
-            .{case_num},
-        ) catch {
-            log.debug("startNextCase: ERROR — failed to format path for case {d}", .{case_num});
-            return;
-        };
-
-        self.phase = .run_case;
-        self.handler = .{ .runner = self };
+    /// Resets phase state, initializes a new client for `path`, and submits a connect.
+    fn startConnection(self: *AutobahnRunner, phase: Phase, path: []const u8) !void {
+        self.phase = phase;
         self.client = AutobahnClient.init(
             self.allocator,
             self.loop,
@@ -140,24 +73,35 @@ const AutobahnRunner = struct {
         try self.client.connect();
     }
 
-    /// Connect to /updateReports to tell the fuzzingserver to generate HTML.
+    fn getCaseCount(self: *AutobahnRunner) !void {
+        try self.startConnection(.get_case_count, "/getCaseCount");
+    }
+
     fn connectUpdateReports(self: *AutobahnRunner, periodic: bool) !void {
-        log.debug("connectUpdateReports: periodic={}", .{periodic});
-        self.phase = if (periodic) .update_reports_periodic else .update_reports;
-        self.handler = .{ .runner = self };
-        self.client = AutobahnClient.init(
-            self.allocator,
-            self.loop,
-            &self.handler,
-            &self.conn,
-            &self.csprng,
-            .{
-                .address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001),
-                .path = "/updateReports?agent=webzockets",
-                .max_message_size = max_message_size,
-            },
-        );
-        try self.client.connect();
+        const phase: Phase = if (periodic) .update_reports_periodic else .update_reports;
+        try self.startConnection(phase, "/updateReports?agent=webzockets");
+    }
+
+    /// Start the next test case, or trigger report generation when done.
+    fn startNextCase(self: *AutobahnRunner) !void {
+        if (self.current_case > self.total_cases) {
+            log.info("All {d} cases complete, generating report...", .{self.total_cases});
+            try self.connectUpdateReports(false);
+            return;
+        }
+
+        const case_num = self.current_case;
+        self.current_case += 1;
+        log.info("Running case {d}/{d}", .{ case_num, self.total_cases });
+
+        // path_buf is 256 bytes; path is at most ~50 bytes so this never fails.
+        const path = std.fmt.bufPrint(
+            &self.path_buf,
+            "/runCase?case={d}&agent=webzockets",
+            .{case_num},
+        ) catch unreachable;
+
+        try self.startConnection(.run_case, path);
     }
 
     /// Called from handler when a connection's socket is fully closed.
@@ -167,47 +111,12 @@ const AutobahnRunner = struct {
     fn onConnectionDone(self: *AutobahnRunner) void {
         const was_opened = self.handler.opened;
         log.debug("onConnectionDone: phase={s}, opened={}", .{ @tagName(self.phase), was_opened });
-        // conn.deinit() releases buffers back to the pool.
         if (was_opened) {
             self.conn.deinit();
         }
 
-        // Retry getCaseCount if it failed (server may not be fully ready yet).
         if (self.phase == .get_case_count and self.total_cases == 0) {
-            self.retry_count += 1;
-            if (self.retry_count > max_retries) {
-                log.err("getCaseCount failed after {d} retries, giving up.", .{max_retries});
-                return;
-            }
-            if (!was_opened) {
-                log.warn("WebSocket handshake to /getCaseCount failed, " ++
-                    "retrying in {d}s ({d}/{d})...", .{
-                    retry_delay_ms / 1000,
-                    self.retry_count,
-                    max_retries,
-                });
-            } else {
-                log.warn("Got 0 cases from fuzzingserver, " ++
-                    "retrying in {d}s ({d}/{d})...", .{
-                    retry_delay_ms / 1000,
-                    self.retry_count,
-                    max_retries,
-                });
-            }
-            // Schedule retry via xev timer
-            self.retry_timer = xev.Timer.init() catch {
-                log.err("failed to create retry timer", .{});
-                return;
-            };
-            self.retry_timer_completion = .{};
-            self.retry_timer.run(
-                self.loop,
-                &self.retry_timer_completion,
-                retry_delay_ms,
-                AutobahnRunner,
-                self,
-                retryTimerCallback,
-            );
+            log.err("getCaseCount failed: no cases returned from fuzzingserver.", .{});
             return;
         }
 
@@ -427,10 +336,9 @@ fn run(allocator: std.mem.Allocator) !void {
     var loop = try xev.Loop.init(.{ .thread_pool = &thread_pool });
     defer loop.deinit();
 
-    // Init runner — first connection will be getCaseCount
-    var runner = AutobahnRunner.init(allocator, &loop);
-    defer runner.deinit();
-    try runner.getCaseCount();
+    // Init runner — starts the first getCaseCount connection
+    var runner: AutobahnRunner = undefined;
+    try runner.init(allocator, &loop);
 
     log.debug("main: entering loop.run(.until_done)", .{});
 
