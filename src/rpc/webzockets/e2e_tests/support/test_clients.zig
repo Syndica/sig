@@ -125,6 +125,7 @@ pub const TestEnv = struct {
     /// Create a client wired to this env's loop, buffer pool, and CSPRNG.
     pub fn initClient(
         self: *TestEnv,
+        /// Expected to be ws.Client(Handler, n)
         comptime ClientType: type,
         handler: anytype,
         conn: anytype,
