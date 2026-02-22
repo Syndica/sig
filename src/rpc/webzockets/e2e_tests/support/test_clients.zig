@@ -34,6 +34,9 @@ pub const ConnectFailHandler = client_handlers.ConnectFailHandler;
 /// Client-side handler that explicitly manages pong responses via onPing.
 pub const ExplicitPongHandler = client_handlers.ExplicitPongHandler;
 
+/// Client-side handler that sends raw pre-built masked frames on open.
+pub const RawSendOnOpenHandler = client_handlers.RawSendOnOpenHandler;
+
 /// Client-side handler that pauses reads on open and waits for enough data
 /// to buffer before resuming. Used for deterministic burst-processing tests.
 pub const PauseUntilBufferedClientHandler = client_handlers.PauseUntilBufferedClientHandler;
@@ -72,6 +75,9 @@ pub const TestConnectFailClient = ws.Client(ConnectFailHandler, 4096);
 
 /// WebSocket client type for explicit pong handler tests.
 pub const TestExplicitPongClient = ws.Client(ExplicitPongHandler, 4096);
+
+/// WebSocket client type for raw send tests.
+pub const TestRawSendClient = ws.Client(RawSendOnOpenHandler, 4096);
 
 /// WebSocket client type for deterministic pause-until-buffered tests.
 pub const TestPauseUntilBufferedClient = ws.Client(PauseUntilBufferedClientHandler, 4096);

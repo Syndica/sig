@@ -16,6 +16,9 @@ comptime {
     // Resources
     _ = @import("pool_tests.zig");
 
+    // Raw send
+    _ = @import("raw_send_tests.zig");
+
     // Stress/load
     _ = @import("stress_tests.zig");
 

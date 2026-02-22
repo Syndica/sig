@@ -157,7 +157,8 @@ pub fn ClientConnection(
             // Data write buffers
             /// Header buffer for current or pending data write (10 + 4 mask key).
             header_buf: [14]u8 = undefined,
-            /// Length of actual header in header_buf.
+            /// Length of actual header in header_buf. Set to 1 if raw write is pending/in-flight
+            /// to distinguish from normal data writes.
             header_len: usize = 0,
             /// Payload for current or pending data write (caller owned slice, data masked in place).
             payload: []const u8 = &.{},
@@ -256,6 +257,16 @@ pub fn ClientConnection(
         pub fn sendBinary(self: *ConnectionSelf, data: []u8) !void {
             if (self.state != .open) return error.InvalidState;
             try self.startDataWrite(.binary, data);
+        }
+
+        /// Send pre-built frame data (one or more complete masked frames) as a
+        /// single write. Zero-copy; keep buffer alive until `onWriteComplete`.
+        /// Returns `error.WriteBusy` if another send is pending. Caller builds
+        /// headers via `frame.writeClientFrameHeader` and masks payloads via
+        /// `mask.mask`; no validation is performed.
+        pub fn sendRaw(self: *ConnectionSelf, data: []const u8) !void {
+            if (self.state != .open) return error.InvalidState;
+            try self.startRawWrite(data);
         }
 
         /// Send a ping frame. The payload is copied into an internal control queue,
@@ -567,6 +578,27 @@ pub fn ClientConnection(
             self.submitWrite(self.write.header_buf[0..self.write.header_len]);
         }
 
+        /// Start a raw write — single contiguous slice, no header/payload split.
+        fn startRawWrite(self: *ConnectionSelf, data: []const u8) !void {
+            if (self.outstandingUserWrite()) {
+                return error.WriteBusy;
+            }
+
+            // Use header_len as the "outstanding write" sentinel (same as startDataWrite).
+            // A value of 1 is impossible for real frame headers (min 6 bytes for client),
+            // so finishControlWrite can distinguish raw from normal deferred writes.
+            self.write.header_len = 1;
+            self.write.payload = data;
+
+            if (self.write.in_flight == .control) {
+                return; // deferred until control write completes
+            }
+
+            // Skip header phase — go directly to payload phase with offset 0
+            self.write.in_flight = .{ .data = .{ .phase = .payload, .offset = 0 } };
+            self.submitWrite(data);
+        }
+
         /// Submit a write to the socket using the shared write completion.
         fn submitWrite(self: *ConnectionSelf, slice: []const u8) void {
             self.socket.write(
@@ -698,9 +730,15 @@ pub fn ClientConnection(
             // Pending controls have priority over pending data writes.
             self.trySubmitNextControl();
             if (self.write.in_flight == .idle and self.outstandingUserWrite()) {
-                // Start deferred data write (header already built in header_buf).
-                self.write.in_flight = .{ .data = .{ .phase = .header, .offset = 0 } };
-                self.submitWrite(self.write.header_buf[0..self.write.header_len]);
+                if (self.write.header_len == 1) {
+                    // Raw write — no header phase, go directly to payload
+                    self.write.in_flight = .{ .data = .{ .phase = .payload, .offset = 0 } };
+                    self.submitWrite(self.write.payload);
+                } else {
+                    // Normal data write — start with header phase
+                    self.write.in_flight = .{ .data = .{ .phase = .header, .offset = 0 } };
+                    self.submitWrite(self.write.header_buf[0..self.write.header_len]);
+                }
             }
         }
 

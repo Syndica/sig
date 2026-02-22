@@ -240,6 +240,20 @@ fn makeSmallBufSlices() [small_buf_msg_count][]const u8 {
     return slices;
 }
 
+/// Server that sends raw pre-built frames on open.
+pub const RawSendServer = ws.Server(server_handlers.RawSendOnOpenHandler, default_read_buf_size);
+pub const RawSendTestServer = server_runner.ServerRunner(RawSendServer);
+
+pub fn startRawSendServer(
+    allocator: std.mem.Allocator,
+    ctx: *server_handlers.RawSendOnOpenHandler.Context,
+) !*RawSendTestServer {
+    return try RawSendTestServer.start(allocator, .{
+        .address = localhost,
+        .handler_context = ctx,
+    });
+}
+
 /// Server that detects re-entrant onMessage dispatch via pauseReads/resumeReads.
 pub const ReentrancyDetectServer = ws.Server(
     server_handlers.ReentrancyDetectHandler,

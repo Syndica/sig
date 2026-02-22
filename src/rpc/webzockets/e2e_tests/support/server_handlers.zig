@@ -541,6 +541,76 @@ pub const SendMessagesOnOpenHandler = struct {
     }
 };
 
+/// Server-side handler that sends raw pre-built frames on open.
+/// Supports sending one or more frames (batched into a single `sendRaw` call).
+pub const RawSendOnOpenHandler = struct {
+    pub const FrameSpec = struct {
+        opcode: ws.Opcode,
+        data: []const u8,
+    };
+
+    pub const Context = struct {
+        frames: []const FrameSpec,
+    };
+
+    frames: []const FrameSpec,
+    sent_buf: ?[]const u8 = null,
+
+    pub fn init(_: ws.http.Request, ctx: *Context) !RawSendOnOpenHandler {
+        return .{ .frames = ctx.frames };
+    }
+
+    pub fn onOpen(self: *RawSendOnOpenHandler, conn: anytype) void {
+        // Upper-bound allocation: header is 2/4/10 bytes depending on
+        // payload size; use 10 (worst case) so the buffer is always big enough.
+        var total_size: usize = 0;
+        for (self.frames) |f| {
+            total_size += 10 + f.data.len;
+        }
+
+        const buf = conn.allocator.alloc(u8, total_size) catch return;
+        var pos: usize = 0;
+
+        for (self.frames) |f| {
+            var header_buf: [10]u8 = undefined;
+            const header = ws.frame.writeFrameHeader(
+                &header_buf,
+                f.opcode,
+                f.data.len,
+                false,
+            );
+            @memcpy(buf[pos..][0..header.len], header);
+            pos += header.len;
+            @memcpy(buf[pos..][0..f.data.len], f.data);
+            pos += f.data.len;
+        }
+
+        const raw_data = buf[0..pos];
+        conn.sendRaw(raw_data) catch {
+            conn.allocator.free(buf);
+            return;
+        };
+        self.sent_buf = buf;
+    }
+
+    pub fn onMessage(_: *RawSendOnOpenHandler, _: anytype, _: ws.Message) void {}
+
+    pub fn onWriteComplete(self: *RawSendOnOpenHandler, conn: anytype) void {
+        if (self.sent_buf) |buf| {
+            conn.allocator.free(buf);
+            self.sent_buf = null;
+        }
+        conn.close(.normal, "");
+    }
+
+    pub fn onClose(self: *RawSendOnOpenHandler, conn: anytype) void {
+        if (self.sent_buf) |buf| {
+            conn.allocator.free(buf);
+            self.sent_buf = null;
+        }
+    }
+};
+
 /// Server-side handler that detects re-entrant onMessage dispatch.
 ///
 /// Pauses reads on open, waits for a byte threshold via onBytesRead +

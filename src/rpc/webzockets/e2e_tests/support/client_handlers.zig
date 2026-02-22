@@ -348,6 +348,103 @@ pub const SequenceHandler = struct {
     }
 };
 
+/// Client-side handler that sends raw pre-built masked frames on open.
+/// Captures echo responses and closes after receiving the expected number.
+pub const RawSendOnOpenHandler = struct {
+    pub const FrameSpec = struct {
+        opcode: ws.Opcode,
+        data: []const u8,
+    };
+
+    pub const RecvResult = struct {
+        data: []const u8,
+        msg_type: ws.Message.Type,
+    };
+
+    frames: []const FrameSpec,
+    results: std.ArrayList(RecvResult),
+    allocator: std.mem.Allocator,
+    csprng: *ws.ClientMaskPRNG,
+    sent_buf: ?[]const u8 = null,
+    open_called: bool = false,
+
+    pub fn deinit(self: *RawSendOnOpenHandler) void {
+        for (self.results.items) |item| {
+            self.allocator.free(item.data);
+        }
+        self.results.deinit();
+        if (self.sent_buf) |buf| {
+            self.allocator.free(buf);
+            self.sent_buf = null;
+        }
+    }
+
+    pub fn onOpen(self: *RawSendOnOpenHandler, conn: anytype) void {
+        self.open_called = true;
+
+        // Upper-bound allocation: client header is 6/8/14 bytes depending
+        // on payload size; use 14 (worst case) so the buffer is always big enough.
+        var total_size: usize = 0;
+        for (self.frames) |f| {
+            total_size += 14 + f.data.len;
+        }
+
+        const buf = self.allocator.alloc(u8, total_size) catch return;
+        var pos: usize = 0;
+
+        for (self.frames) |f| {
+            var mask_key: [4]u8 = undefined;
+            self.csprng.fill(&mask_key);
+
+            var header_buf: [14]u8 = undefined;
+            const header = ws.frame.writeClientFrameHeader(
+                &header_buf,
+                f.opcode,
+                f.data.len,
+                mask_key,
+                false,
+            );
+            @memcpy(buf[pos..][0..header.len], header);
+            pos += header.len;
+            @memcpy(buf[pos..][0..f.data.len], f.data);
+            ws.mask.mask(mask_key, buf[pos..][0..f.data.len]);
+            pos += f.data.len;
+        }
+
+        const raw_data = buf[0..pos];
+        conn.sendRaw(raw_data) catch {
+            self.allocator.free(buf);
+            return;
+        };
+        self.sent_buf = buf;
+    }
+
+    pub fn onMessage(self: *RawSendOnOpenHandler, conn: anytype, message: ws.Message) void {
+        const copy = self.allocator.dupe(u8, message.data) catch return;
+        self.results.append(.{ .data = copy, .msg_type = message.type }) catch {
+            self.allocator.free(copy);
+            return;
+        };
+        if (self.results.items.len >= self.frames.len) {
+            conn.close(.normal, "");
+        }
+    }
+
+    pub fn onWriteComplete(self: *RawSendOnOpenHandler, _: anytype) void {
+        if (self.sent_buf) |buf| {
+            self.allocator.free(buf);
+            self.sent_buf = null;
+        }
+    }
+
+    pub fn onClose(self: *RawSendOnOpenHandler, _: anytype) void {
+        if (self.sent_buf) |buf| {
+            self.allocator.free(buf);
+            self.sent_buf = null;
+        }
+    }
+};
+
 /// Client-side handler that pauses reads on open and waits for enough data
 /// to accumulate in the read buffer before resuming. Uses `onBytesRead` to
 /// observe raw TCP data arrival while paused. This makes burst-processing

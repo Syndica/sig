@@ -11,7 +11,8 @@ See [examples/echo_server.zig](examples/echo_server.zig) and [examples/simple_cl
 ### Buffer Lifetime
 
 - **Server `sendText`/`sendBinary`**: zero-copy. Keep buffer alive until `onWriteComplete`.
-- **Client `sendText`/`sendBinary`**: masks in-place (XOR). Don't read/free/reuse until `onWriteComplete`.
+- **Client `sendText`/`sendBinary`**: zero-copy, masks in-place (XOR). Don't read/free/reuse until `onWriteComplete`.
+- **Server/Client `sendRaw`**: zero-copy. The buffer contains pre-built frame(s) (header + payload, masked if client send). Keep alive until `onWriteComplete`.
 - **Read data in callbacks**: transient — points into internal buffers reused after callback returns. Copy if needed.
 - **`sendPing`/`sendPong`**: copies internally. Buffer can be freed immediately. Does not trigger `onWriteComplete`.
 
@@ -230,6 +231,7 @@ Server `init` runs before 101. Return error to reject. `onHandshakeFailed` fires
 ```zig
 fn sendText(data) !void          // server: []const u8 (zero-copy), client: []u8 (zero-copy, masked in-place)
 fn sendBinary(data) !void        // same as above
+fn sendRaw(data) !void           // []const u8 — pre-built frame(s), single write, no validation
 fn sendPing(data) !void          // copies internally, max 125 bytes
 fn sendPong(data) !void          // copies internally, max 125 bytes
 fn close(code: CloseCode, reason: []const u8) void
