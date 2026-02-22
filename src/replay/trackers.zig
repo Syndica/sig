@@ -8,6 +8,7 @@ const Slot = sig.core.Slot;
 const SlotConstants = sig.core.SlotConstants;
 const SlotState = sig.core.SlotState;
 const ReferenceCounter = sig.sync.ReferenceCounter;
+const RwMux = sig.sync.RwMux;
 const ThreadPool = sig.sync.ThreadPool;
 const Commitment = sig.rpc.methods.common.Commitment;
 
@@ -46,10 +47,11 @@ pub const OptimisticallyConfirmedSlot = struct {
 ///
 /// [BankForks](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank_forks.rs#L75)
 ///
-/// This struct is *not* thread safe, and the lifetimes of the returned pointers
-/// will end as soon as the items are removed.
+/// This struct is thread safe for concurrent reads / exclusive writes on slots.
 pub const SlotTracker = struct {
-    slots: std.AutoArrayHashMapUnmanaged(Slot, *Element),
+    pub const SlotsMap = std.AutoArrayHashMapUnmanaged(Slot, *Element);
+
+    slots: RwMux(SlotsMap),
     latest_processed_slot: ForkChoiceProcessedSlot,
     latest_confirmed_slot: OptimisticallyConfirmedSlot,
     root: std.atomic.Value(Slot),
@@ -111,7 +113,7 @@ pub const SlotTracker = struct {
         wg.* = .{};
         return .{
             .root = .init(root_slot),
-            .slots = .empty,
+            .slots = RwMux(SlotsMap).init(.empty),
             .latest_processed_slot = .{},
             .latest_confirmed_slot = .{},
             .wg = wg,
@@ -128,18 +130,24 @@ pub const SlotTracker = struct {
         errdefer self.deinit(allocator);
 
         try self.put(allocator, root_slot, slot_init);
-        tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
+        {
+            var slots = self.slots.read();
+            defer slots.unlock();
+            tracy.plot(u32, "slots tracked", @intCast(slots.get().count()));
+        }
 
         return self;
     }
 
-    pub fn deinit(self: SlotTracker, allocator: Allocator) void {
+    pub fn deinit(self: *SlotTracker, allocator: Allocator) void {
         self.wg.wait();
         allocator.destroy(self.wg);
 
-        var slots = self.slots;
+        var slots_lg = self.slots.write();
+        const slots = slots_lg.mut();
         for (slots.values()) |element| element.destroy();
         slots.deinit(allocator);
+        slots_lg.unlock();
     }
 
     pub fn put(
@@ -148,16 +156,22 @@ pub const SlotTracker = struct {
         slot: Slot,
         slot_init: Element,
     ) Allocator.Error!void {
-        defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
+        var slots_lg = self.slots.write();
+        defer slots_lg.unlock();
+        const slots = slots_lg.mut();
 
-        try self.slots.ensureUnusedCapacity(allocator, 1);
+        defer tracy.plot(u32, "slots tracked", @intCast(slots.count()));
+
+        try slots.ensureUnusedCapacity(allocator, 1);
         const elem = try allocator.create(Element);
         elem.* = slot_init;
-        self.slots.putAssumeCapacity(slot, elem);
+        slots.putAssumeCapacity(slot, elem);
     }
 
-    pub fn get(self: *const SlotTracker, slot: Slot) ?Reference {
-        const elem = self.slots.get(slot) orelse return null;
+    pub fn get(self: *SlotTracker, slot: Slot) ?Reference {
+        var slots_lg = self.slots.read();
+        defer slots_lg.unlock();
+        const elem = slots_lg.get().get(slot) orelse return null;
         return elem.toRef();
     }
 
@@ -180,38 +194,50 @@ pub const SlotTracker = struct {
         slot: Slot,
         slot_init: Element,
     ) Allocator.Error!GetOrPutResult {
-        defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
+        var slots_lg = self.slots.write();
+        defer slots_lg.unlock();
+        const slots = slots_lg.mut();
 
-        if (self.get(slot)) |existing| return .{
-            .found_existing = true,
-            .reference = existing,
-        };
-        try self.slots.ensureUnusedCapacity(allocator, 1);
+        defer tracy.plot(u32, "slots tracked", @intCast(slots.count()));
+
+        if (slots.get(slot)) |existing| {
+            if (existing.toRef()) |ref| return .{
+                .found_existing = true,
+                .reference = ref,
+            };
+        }
+        try slots.ensureUnusedCapacity(allocator, 1);
         const elem = try allocator.create(Element);
         elem.* = slot_init;
-        self.slots.putAssumeCapacityNoClobber(slot, elem);
+        slots.putAssumeCapacityNoClobber(slot, elem);
         return .{
             .found_existing = false,
             .reference = elem.toRef().?,
         };
     }
 
-    pub fn getRoot(self: *const SlotTracker) Reference {
+    pub fn getRoot(self: *SlotTracker) Reference {
         return self.get(self.root.load(.monotonic)).?; // root slot's bank must exist
     }
 
-    pub fn contains(self: *const SlotTracker, slot: Slot) bool {
-        return self.slots.contains(slot);
+    pub fn contains(self: *SlotTracker, slot: Slot) bool {
+        var slots_lg = self.slots.read();
+        defer slots_lg.unlock();
+        return slots_lg.get().contains(slot);
     }
 
     pub fn activeSlots(
-        self: *const SlotTracker,
+        self: *SlotTracker,
         allocator: Allocator,
     ) Allocator.Error![]const Slot {
-        var list = try std.ArrayListUnmanaged(Slot).initCapacity(allocator, self.slots.count());
+        var slots_lg = self.slots.read();
+        defer slots_lg.unlock();
+        const slots = slots_lg.get();
+
+        var list = try std.ArrayListUnmanaged(Slot).initCapacity(allocator, slots.count());
         errdefer list.deinit(allocator);
 
-        for (self.slots.keys(), self.slots.values()) |slot, value| {
+        for (slots.keys(), slots.values()) |slot, value| {
             if (!value.state.isFrozen()) {
                 list.appendAssumeCapacity(slot);
             }
@@ -220,13 +246,17 @@ pub const SlotTracker = struct {
     }
 
     pub fn frozenSlots(
-        self: *const SlotTracker,
+        self: *SlotTracker,
         allocator: Allocator,
     ) Allocator.Error!std.AutoArrayHashMapUnmanaged(Slot, Reference) {
-        var frozen_slots: std.AutoArrayHashMapUnmanaged(Slot, Reference) = .empty;
-        try frozen_slots.ensureTotalCapacity(allocator, self.slots.count());
+        var slots_lg = self.slots.read();
+        defer slots_lg.unlock();
+        const slots = slots_lg.get();
 
-        for (self.slots.keys(), self.slots.values()) |slot, value| {
+        var frozen_slots: std.AutoArrayHashMapUnmanaged(Slot, Reference) = .empty;
+        try frozen_slots.ensureTotalCapacity(allocator, slots.count());
+
+        for (slots.keys(), slots.values()) |slot, value| {
             if (!value.state.isFrozen()) continue;
 
             const ref = value.toRef() orelse continue;
@@ -239,18 +269,22 @@ pub const SlotTracker = struct {
     }
 
     pub fn parents(
-        self: *const SlotTracker,
+        self: *SlotTracker,
         allocator: Allocator,
         slot: Slot,
     ) Allocator.Error![]const Slot {
+        var slots_lg = self.slots.read();
+        defer slots_lg.unlock();
+        const slots = slots_lg.get();
+
         var parents_list = std.ArrayListUnmanaged(Slot).empty;
         errdefer parents_list.deinit(allocator);
 
         // Parent list count cannot be more than the self.slots count.
-        try parents_list.ensureTotalCapacity(allocator, self.slots.count());
+        try parents_list.ensureTotalCapacity(allocator, slots.count());
 
         var current_slot = slot;
-        while (self.slots.get(current_slot)) |current| {
+        while (slots.get(current_slot)) |current| {
             const parent_slot = current.constants.parent_slot;
             parents_list.appendAssumeCapacity(parent_slot);
 
@@ -273,7 +307,11 @@ pub const SlotTracker = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "SlotTracker.pruneNonRooted" });
         defer zone.deinit();
 
-        defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
+        var slots_lg = self.slots.write();
+        defer slots_lg.unlock();
+        const slots = slots_lg.mut();
+
+        defer tracy.plot(u32, "slots tracked", @intCast(slots.count()));
 
         var destroy_batch = ThreadPool.Batch{};
         defer if (maybe_thread_pool) |thread_pool| {
@@ -281,14 +319,14 @@ pub const SlotTracker = struct {
             thread_pool.schedule(destroy_batch);
         };
 
-        var slice = self.slots.entries.slice();
+        var slice = slots.entries.slice();
         var index: usize = 0;
         const root = self.root.load(.monotonic);
         while (index < slice.len) {
             if (slice.items(.key)[index] < root) {
                 const element = slice.items(.value)[index];
-                self.slots.swapRemoveAt(index);
-                slice = self.slots.entries.slice();
+                slots.swapRemoveAt(index);
+                slice = slots.entries.slice();
 
                 // Destroy element inline, or destroy in ThreadPool if provided.
                 if (maybe_thread_pool) |_| {

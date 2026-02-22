@@ -716,7 +716,7 @@ pub const common = struct {
 };
 
 pub const RpcHookContext = struct {
-    slot_tracker: *const sig.replay.trackers.SlotTracker,
+    slot_tracker: *sig.replay.trackers.SlotTracker,
     epoch_tracker: *const sig.core.EpochTracker,
 
     // Limit the length of the `epoch_credits` array for each validator in a `get_vote_accounts`

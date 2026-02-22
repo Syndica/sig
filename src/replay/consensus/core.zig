@@ -138,7 +138,7 @@ pub const TowerConsensus = struct {
             signing: sig.identity.SigningKeys,
             account_reader: AccountReader,
             ledger: *sig.ledger.Ledger,
-            slot_tracker: *const SlotTracker,
+            slot_tracker: *SlotTracker,
             /// Usually `.now()`.
             now: sig.time.Instant,
             registry: *sig.prometheus.Registry(.{}),
@@ -204,7 +204,7 @@ pub const TowerConsensus = struct {
     pub fn initForkChoice(
         allocator: std.mem.Allocator,
         logger: Logger,
-        slot_tracker: *const SlotTracker,
+        slot_tracker: *SlotTracker,
         ledger: *Ledger,
     ) !HeaviestSubtreeForkChoice {
         const root_slot, const root_hash = blk: {
@@ -440,20 +440,25 @@ pub const TowerConsensus = struct {
             // arena-allocated
             var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
             var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
-            for (params.slot_tracker.slots.keys(), params.slot_tracker.slots.values()) |slot, info| {
-                const slot_ancestors = &info.constants.ancestors.ancestors;
-                const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
-                // Ensure every slot has a descendants entry (even if empty)
-                _ = try descendants.getOrPutValue(arena, slot, .empty);
-                try ancestor_gop.value_ptr.ancestors
-                    .ensureUnusedCapacity(arena, slot_ancestors.count());
-                for (slot_ancestors.keys()) |ancestor_slot| {
-                    // Exclude the slot itself from ancestors.
-                    if (ancestor_slot == slot) continue;
-                    try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
-                    const descendants_gop =
-                        try descendants.getOrPutValue(arena, ancestor_slot, .empty);
-                    try descendants_gop.value_ptr.put(arena, slot);
+            {
+                var slots_lg = params.slot_tracker.slots.read();
+                defer slots_lg.unlock();
+                const slots = slots_lg.get();
+                for (slots.keys(), slots.values()) |slot, info| {
+                    const slot_ancestors = &info.constants.ancestors.ancestors;
+                    const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
+                    // Ensure every slot has a descendants entry (even if empty)
+                    _ = try descendants.getOrPutValue(arena, slot, .empty);
+                    try ancestor_gop.value_ptr.ancestors
+                        .ensureUnusedCapacity(arena, slot_ancestors.count());
+                    for (slot_ancestors.keys()) |ancestor_slot| {
+                        // Exclude the slot itself from ancestors.
+                        if (ancestor_slot == slot) continue;
+                        try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
+                        const descendants_gop =
+                            try descendants.getOrPutValue(arena, ancestor_slot, .empty);
+                        try descendants_gop.value_ptr.put(arena, slot);
+                    }
                 }
             }
             break :cluster_sync_and_ancestors_descendants .{ ancestors, descendants };
@@ -483,7 +488,7 @@ pub const TowerConsensus = struct {
         allocator: Allocator,
         ledger: *Ledger,
         progress_map: *ProgressMap,
-        slot_tracker: *const SlotTracker,
+        slot_tracker: *SlotTracker,
         ancestor_hashes_replay_update_sender: *Channel(AncestorHashesReplayUpdate),
         result: ReplayResult,
     ) !void {
@@ -1345,7 +1350,7 @@ fn generateVoteTx(
     switch_fork_decision: SwitchForkDecision,
     replay_tower: *ReplayTower,
     account_reader: AccountReader,
-    slot_tracker: *const SlotTracker,
+    slot_tracker: *SlotTracker,
     epoch_schedule: *const EpochSchedule,
 ) !GenerateVoteTxResult {
     const logger = replay_tower.logger;
@@ -1605,7 +1610,11 @@ fn checkAndHandleNewRoot(
     defer zone.deinit();
 
     // get the root bank before squash.
-    if (slot_tracker.slots.count() == 0) return error.EmptySlotTracker;
+    {
+        var slots_lg = slot_tracker.slots.read();
+        defer slots_lg.unlock();
+        if (slots_lg.get().count() == 0) return error.EmptySlotTracker;
+    }
     const root_tracker = slot_tracker.get(new_root) orelse return error.MissingSlot;
     defer root_tracker.release();
     const maybe_root_hash = root_tracker.state().hash.readCopy();
@@ -1711,7 +1720,7 @@ fn computeConsensusInputs(
     logger: Logger,
     my_vote_pubkey: ?Pubkey,
     ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
-    slot_tracker: *const SlotTracker,
+    slot_tracker: *SlotTracker,
     epoch_tracker: *const sig.core.EpochTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
@@ -2826,9 +2835,11 @@ test "checkAndHandleNewRoot - success" {
     try testing.expectEqual(1, fixture.progress.map.count());
     // Now the write lock is released, we can acquire a read lock
     {
-        const ptr, var lg = slot_tracker4.readWithLock();
+        const ptr, var lg = slot_tracker4.writeWithLock();
         defer lg.unlock();
-        for (ptr.slots.keys()) |remaining_slots| {
+        var slots_lg = ptr.slots.read();
+        defer slots_lg.unlock();
+        for (slots_lg.get().keys()) |remaining_slots| {
             try testing.expect(remaining_slots >= hash3.slot);
         }
     }
@@ -7231,18 +7242,24 @@ test "successful fork switch (switch_proof)" {
         descendants_map.deinit(allocator);
     }
 
-    try ancestors_map.ensureTotalCapacity(allocator, slot_tracker.slots.count());
-    try descendants_map.ensureTotalCapacity(allocator, slot_tracker.slots.count());
-    for (slot_tracker.slots.keys(), slot_tracker.slots.values()) |slot, info| {
-        const slot_ancestors = &info.constants.ancestors.ancestors;
-        const gop = try ancestors_map.getOrPutValue(allocator, slot, .EMPTY);
-        if (!gop.found_existing) {
-            try gop.value_ptr.ancestors.ensureUnusedCapacity(allocator, slot_ancestors.count());
-        }
-        for (slot_ancestors.keys()) |a| {
-            try gop.value_ptr.addSlot(allocator, a);
-            const dg = try descendants_map.getOrPutValue(allocator, a, .empty);
-            try dg.value_ptr.put(allocator, slot);
+    {
+        var slots_lg = slot_tracker.slots.read();
+        defer slots_lg.unlock();
+        const slots = slots_lg.get();
+
+        try ancestors_map.ensureTotalCapacity(allocator, slots.count());
+        try descendants_map.ensureTotalCapacity(allocator, slots.count());
+        for (slots.keys(), slots.values()) |slot, info| {
+            const slot_ancestors = &info.constants.ancestors.ancestors;
+            const gop = try ancestors_map.getOrPutValue(allocator, slot, .EMPTY);
+            if (!gop.found_existing) {
+                try gop.value_ptr.ancestors.ensureUnusedCapacity(allocator, slot_ancestors.count());
+            }
+            for (slot_ancestors.keys()) |a| {
+                try gop.value_ptr.addSlot(allocator, a);
+                const dg = try descendants_map.getOrPutValue(allocator, a, .empty);
+                try dg.value_ptr.put(allocator, slot);
+            }
         }
     }
 
@@ -7414,18 +7431,24 @@ test "successful fork switch (switch_proof)" {
         descendants_map2.deinit(allocator);
     }
 
-    try ancestors_map2.ensureTotalCapacity(allocator, slot_tracker.slots.count());
-    try descendants_map2.ensureTotalCapacity(allocator, slot_tracker.slots.count());
-    for (slot_tracker.slots.keys(), slot_tracker.slots.values()) |slot, info| {
-        const slot_ancestors = &info.constants.ancestors.ancestors;
-        const gop = try ancestors_map2.getOrPutValue(allocator, slot, .EMPTY);
-        if (!gop.found_existing) {
-            try gop.value_ptr.ancestors.ensureUnusedCapacity(allocator, slot_ancestors.count());
-        }
-        for (slot_ancestors.keys()) |a| {
-            try gop.value_ptr.addSlot(allocator, a);
-            const dg = try descendants_map2.getOrPutValue(allocator, a, .empty);
-            try dg.value_ptr.put(allocator, slot);
+    {
+        var slots_lg = slot_tracker.slots.read();
+        defer slots_lg.unlock();
+        const slots = slots_lg.get();
+
+        try ancestors_map2.ensureTotalCapacity(allocator, slots.count());
+        try descendants_map2.ensureTotalCapacity(allocator, slots.count());
+        for (slots.keys(), slots.values()) |slot, info| {
+            const slot_ancestors = &info.constants.ancestors.ancestors;
+            const gop = try ancestors_map2.getOrPutValue(allocator, slot, .EMPTY);
+            if (!gop.found_existing) {
+                try gop.value_ptr.ancestors.ensureUnusedCapacity(allocator, slot_ancestors.count());
+            }
+            for (slot_ancestors.keys()) |a| {
+                try gop.value_ptr.addSlot(allocator, a);
+                const dg = try descendants_map2.getOrPutValue(allocator, a, .empty);
+                try dg.value_ptr.put(allocator, slot);
+            }
         }
     }
 

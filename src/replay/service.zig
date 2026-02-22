@@ -221,7 +221,9 @@ pub const ReplayState = struct {
         errdefer slot_tracker.deinit(deps.allocator);
         errdefer {
             // do not free the root slot data parameter, we don't own it unless the function returns successfully
-            deps.allocator.destroy(slot_tracker.slots.fetchSwapRemove(deps.root.slot).?.value);
+            var slots_lg = slot_tracker.slots.write();
+            defer slots_lg.unlock();
+            deps.allocator.destroy(slots_lg.mut().fetchSwapRemove(deps.root.slot).?.value);
         }
 
         const replay_votes_channel: ?*Channel(ParsedVote) = if (consensus_status == .enabled)
@@ -266,7 +268,7 @@ pub const ReplayState = struct {
 /// Analogous to [`initialize_progress_and_fork_choice_with_locked_bank_forks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L637)
 pub fn initProgressMap(
     allocator: std.mem.Allocator,
-    slot_tracker: *const SlotTracker,
+    slot_tracker: *SlotTracker,
     epoch_tracker: *const sig.core.EpochTracker,
     my_pubkey: Pubkey,
     vote_account: ?Pubkey,
@@ -844,7 +846,7 @@ test trackNewSlots {
 }
 
 fn expectSlotTracker(
-    slot_tracker: *const SlotTracker,
+    slot_tracker: *SlotTracker,
     leader_schedule: sig.core.leader_schedule.LeaderSchedule,
     included_slots: []const [2]Slot,
     excluded_slots: []const Slot,

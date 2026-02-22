@@ -48,7 +48,7 @@ pub const ProcessResultParams = struct {
 
     // replay state
     progress_map: *ProgressMap,
-    slot_tracker: *const SlotTracker,
+    slot_tracker: *SlotTracker,
 
     // consensus state
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),

@@ -404,7 +404,7 @@ const PreparedSlot = union(enum) {
 /// - [confirm_slot](https://github.com/anza-xyz/agave/blob/d79257e5f4afca4d092793f7a1e854cd5ccd6be9/ledger/src/blockstore_processor.rs#L1486)
 fn prepareSlot(
     state: *ReplayState,
-    slot_tracker: *const SlotTracker,
+    slot_tracker: *SlotTracker,
     epoch_tracker: *const sig.core.EpochTracker,
     slot: Slot,
 ) !PreparedSlot {

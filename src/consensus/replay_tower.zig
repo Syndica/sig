@@ -5439,7 +5439,7 @@ pub const TestFixture = struct {
         allocator: std.mem.Allocator,
         root: SlotAndHash,
     ) !TestFixture {
-        const slot_tracker: SlotTracker = blk: {
+        var slot_tracker: SlotTracker = blk: {
             var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
             errdefer constants.deinit(allocator);
             constants.parent_slot = root.slot -| 1;
