@@ -27,6 +27,10 @@ pub const ParseError = error{
 };
 
 pub const AccountEncoding = enum {
+    /// Legacy, deprecated alias for base58. Retained for RPC backwards compatibility.
+    /// Serializes as a plain string instead of the `[data, encoding]` array tuple.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/lib.rs#L72
+    binary,
     base58,
     base64,
     @"base64+zstd",
@@ -57,6 +61,11 @@ pub const AccountData = union(enum) {
     /// back to base64 encoding, detectable when the data field is type string.
     json_parsed_base64_fallback: []const u8,
 
+    /// Legacy binary encoding (deprecated). Serializes as a plain base58-encoded string,
+    /// NOT as an `[data, encoding]` array tuple.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/lib.rs#L39
+    legacy_binary: []const u8,
+
     pub fn jsonStringify(
         self: AccountData,
         /// `*std.json.WriteStream(...)`
@@ -68,6 +77,11 @@ pub const AccountData = union(enum) {
             // Fallback must return array format ["data", "base64"] like testnet
             .json_parsed_base64_fallback => |str| {
                 try jw.write(.{ str, AccountEncoding.base64 });
+            },
+            // Legacy binary: plain string, not an array tuple
+            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/lib.rs#L39
+            .legacy_binary => |str| {
+                try jw.write(str);
             },
         }
     }
@@ -128,14 +142,17 @@ pub fn encodeJsonParsed(
     defer arena.deinit();
 
     // Try to parse based on owner program
-    const maybe_parsed_account = try parse_account(
+    const maybe_parsed_account = parse_account(
         arena.allocator(),
         pubkey,
         account.owner,
         account_data_iter.reader(),
         account.data.len(),
         if (additional_data.spl_token != null) additional_data else null,
-    );
+    ) catch |err| switch (err) {
+        error.InvalidAccountData => null,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
 
     if (maybe_parsed_account) |parsed| {
         const json_str = try std.json.stringifyAlloc(
@@ -168,7 +185,7 @@ pub fn encodeJsonParsed(
     return .{ .json_parsed_base64_fallback = try encoded.toOwnedSlice(allocator) };
 }
 
-/// Handles base58, base64, base64+zstd encodings.
+/// Handles binary, base58, base64, base64+zstd encodings.
 pub fn encodeStandard(
     allocator: std.mem.Allocator,
     account: sig.core.Account,
@@ -185,12 +202,11 @@ pub fn encodeStandard(
         data_slice,
         encoded_data.writer(allocator),
     );
-    return .{
-        .encoded = .{
-            try encoded_data.toOwnedSlice(allocator),
-            encoding,
-        },
-    };
+    const slice = try encoded_data.toOwnedSlice(allocator);
+    return if (encoding == .binary)
+        .{ .legacy_binary = slice }
+    else
+        .{ .encoded = .{ slice, encoding } };
 }
 
 fn estimateEncodedSize(
@@ -201,7 +217,7 @@ fn estimateEncodedSize(
     const start, const end = calculateSliceRange(account, data_slice);
     const data_len = end - start;
     return switch (encoding) {
-        .base58 => base58.encodedMaxSize(data_len),
+        .binary, .base58 => base58.encodedMaxSize(data_len),
         .base64 => std.base64.standard.Encoder.calcSize(data_len),
         // NOTE: we just use base64 size as a catch-all.
         .@"base64+zstd" => std.base64.standard.Encoder.calcSize(data_len),
@@ -219,7 +235,7 @@ fn encodeAccountData(
 ) !void {
     const start, const end = calculateSliceRange(account, data_slice);
     return switch (encoding) {
-        .base58 => {
+        .binary, .base58 => {
             const data_len = end - start;
 
             if (data_len > MAX_BASE58_INPUT_LEN) {
