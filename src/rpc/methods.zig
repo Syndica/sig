@@ -855,6 +855,7 @@ pub const RpcHookContext = struct {
 
 pub const StaticHookContext = struct {
     genesis_hash: sig.core.Hash,
+    identity: Pubkey,
 
     pub fn getGenesisHash(
         self: *const @This(),
@@ -862,5 +863,13 @@ pub const StaticHookContext = struct {
         _: GetGenesisHash,
     ) !GetGenesisHash.Response {
         return .{ .hash = self.genesis_hash };
+    }
+
+    pub fn getIdentity(
+        self: *const @This(),
+        _: std.mem.Allocator,
+        _: GetIdentity,
+    ) !GetIdentity.Response {
+        return .{ .identity = self.identity };
     }
 };

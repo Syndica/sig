@@ -14,6 +14,7 @@ const GetBlockHeight = methods.GetBlockHeight;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
 const GetGenesisHash = methods.GetGenesisHash;
+const GetIdentity = methods.GetIdentity;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
@@ -178,7 +179,16 @@ test GetGenesisHash {
 
 // TODO: test getHealth()
 // TODO: test getHighestSnapshotSlot()
-// TODO: test getIdentity()
+
+test GetIdentity {
+    try testRequest(.getIdentity, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getIdentity","params":[]}
+    );
+    try testResponse(GetIdentity, .{ .result = .{ .identity = Pubkey.parse("2r1F4iWqVcb8M1DbAjQuFpebkQHY9hcVU4WuW2DJBppN") } },
+        \\{"jsonrpc":"2.0","result":{"identity":"2r1F4iWqVcb8M1DbAjQuFpebkQHY9hcVU4WuW2DJBppN"},"id":1}
+    );
+}
+
 // TODO: test getInflationGovernor()
 // TODO: test getInflationRate()
 // TODO: test getInflationReward()

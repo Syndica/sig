@@ -1559,6 +1559,7 @@ fn validator(
 
     const static_rpc_ctx: sig.rpc.methods.StaticHookContext = .{
         .genesis_hash = loaded_snapshot.genesis_config.hash,
+        .identity = Pubkey.fromPublicKey(&app_base.my_keypair.public_key),
     };
 
     try app_base.rpc_hooks.set(allocator, &static_rpc_ctx);
