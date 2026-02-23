@@ -1,0 +1,13 @@
+.{
+    .name = .gossip,
+    .version = "0.0.1",
+    .paths = .{""},
+    .minimum_zig_version = "0.15.1",
+    .fingerprint = 0x74560674ebd0c332,
+    .dependencies = .{
+        .base58 = .{
+            .url = "git+https://github.com/Syndica/base58-zig#ed42a74253e71577680ca826ee8ba16631808f3f",
+            .hash = "base58-0.2.0-wW0iYDIxAABuG_QuEPHMJgn99CvMhTFzgYhGrneaMhdJ",
+        },
+    },
+}
