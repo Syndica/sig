@@ -165,7 +165,7 @@ pub const Service = struct {
 
         var rpc_client = try RpcClient.init(
             self.allocator,
-            self.config.cluster,
+            self.config.cluster.getRpcUrl() orelse @panic("No RPC Url for cluster type!"),
             .{ .max_retries = self.config.rpc_retries, .logger = .from(self.logger) },
         );
         defer rpc_client.deinit();
