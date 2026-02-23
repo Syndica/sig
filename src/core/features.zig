@@ -181,11 +181,28 @@ pub const Set = struct {
     };
 };
 
-pub fn activationSlotFromAccount(account: sig.core.Account) !?u64 {
-    if (!account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) return null;
+/// Returns the activation slot from a feature account.
+/// - Returns `.pending` if the feature is pending activation (valid 9-byte account with null slot)
+/// - Returns `.{ .activated = slot }` if already activated
+/// - Returns `.invalid` if the account is not a valid feature account
+const FeatureActivationState = union(enum) {
+    pending,
+    activated: u64,
+    invalid,
+};
+
+/// Feature accounts must have at least 9 bytes of data (bincode-serialized ?u64)
+/// An empty account (0 bytes) is not a valid pending feature
+/// [solana-sdk] https://github.com/anza-xyz/solana-sdk/blob/54449336c03ae8a99bc37745ac97ab90a77eb24b/feature-gate-interface/src/state.rs#L37
+pub fn activationStateFromAccount(account: sig.core.Account) !FeatureActivationState {
+    if (account.data.len() < 9 or
+        !account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) return .invalid;
+
     var feature_bytes = [_]u8{0} ** 9;
     account.data.readAll(&feature_bytes);
-    return sig.bincode.readFromSlice(failing_allocator, ?u64, &feature_bytes, .{});
+    const maybe_slot = try sig.bincode.readFromSlice(failing_allocator, ?u64, &feature_bytes, .{});
+
+    return if (maybe_slot) |slot| .{ .activated = slot } else .pending;
 }
 
 test "full inflation enabled" {
