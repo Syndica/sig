@@ -183,7 +183,7 @@ pub const GossipService = struct {
     broker: LocalMessageBroker,
 
     pub const PushMessageQueue = Mux(struct {
-        queue: ArrayList(GossipData),
+        queue: std.ArrayList(GossipData),
         data_allocator: std.mem.Allocator,
     });
     const Entrypoint = struct { addr: SocketAddr, info: ?ContactInfo = null };
@@ -308,7 +308,7 @@ pub const GossipService = struct {
             .verified_incoming_channel = verified_incoming_channel,
             .gossip_table_rw = .init(gossip_table),
             .push_msg_queue_mux = .init(.{
-                .queue = .init(allocator),
+                .queue = .empty,
                 .data_allocator = gossip_data_allocator,
             }),
             .active_set_rw = .init(.init(allocator)),
@@ -382,7 +382,7 @@ pub const GossipService = struct {
             const push_msg_queue, var lock = self.push_msg_queue_mux.writeWithLock();
             defer lock.unlock();
             for (push_msg_queue.queue.items) |*v| v.deinit(push_msg_queue.data_allocator);
-            push_msg_queue.queue.deinit();
+            push_msg_queue.queue.deinit(self.allocator);
         }
     }
 
@@ -987,7 +987,7 @@ pub const GossipService = struct {
                         &contact_info,
                     );
 
-                    try push_msg_queue.queue.appendSlice(&.{
+                    try push_msg_queue.queue.appendSlice(self.allocator, &.{
                         .{ .ContactInfo = contact_info },
                         .{ .LegacyContactInfo = legacy_contact_info },
                     });
@@ -2998,8 +2998,8 @@ test "test build push messages" {
     {
         var pqlg = gossip_service.push_msg_queue_mux.lock();
         var push_queue = pqlg.mut();
-        try push_queue.queue.append(value);
-        pqlg.unlock();
+        defer pqlg.unlock();
+        try push_queue.queue.append(allocator, value);
     }
     try gossip_service.drainPushQueueToGossipTable(getWallclockMs());
 

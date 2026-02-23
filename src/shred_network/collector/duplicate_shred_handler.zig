@@ -332,7 +332,7 @@ fn enqueueDuplicateShredCrdsValues(
             .chunk = chunk_copy,
         };
 
-        try push_queue.append(.{
+        try push_queue.append(allocator, .{
             .DuplicateShred = .{ ring_index, dup_owned },
         });
     }
@@ -352,15 +352,12 @@ const TestGossipState = struct {
         if (!builtin.is_test) @compileError("TestGossipState is only for testing");
 
         const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
-        const gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
-        const push_msg_queue = sig.gossip.GossipService.PushMessageQueue.init(.{
-            .queue = std.ArrayList(sig.gossip.data.GossipData).init(allocator),
-            .data_allocator = allocator,
-        });
-
         return .{
-            .gossip_table_rw = gossip_table_rw,
-            .push_msg_queue = push_msg_queue,
+            .gossip_table_rw = .init(gossip_table),
+            .push_msg_queue = .init(.{
+                .queue = .empty,
+                .data_allocator = allocator,
+            }),
             .allocator = allocator,
         };
     }
@@ -373,7 +370,7 @@ const TestGossipState = struct {
         var push_queue, var pq_lock = self.push_msg_queue.writeWithLock();
         defer pq_lock.unlock();
         for (push_queue.queue.items) |*item| item.deinit(push_queue.data_allocator);
-        push_queue.queue.deinit();
+        push_queue.queue.deinit(self.allocator);
     }
 };
 test "handleDuplicateSlots: no sender configured" {
