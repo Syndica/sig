@@ -30,8 +30,7 @@ fn scalarMask(mask_key: [4]u8, payload: []u8) void {
 const testing = std.testing;
 
 test "mask: empty payload is no-op" {
-    var buf = [_]u8{};
-    mask(.{ 0xAA, 0xBB, 0xCC, 0xDD }, &buf);
+    mask(.{ 0xAA, 0xBB, 0xCC, 0xDD }, &.{});
 }
 
 test "mask: single byte" {
