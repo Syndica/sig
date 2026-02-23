@@ -28,8 +28,6 @@ pub const Client = client.Client;
 pub const ClientMaskPRNG = types.ClientMaskPRNG;
 
 test {
-    // Uncomment to see logs during tests
-    // std.testing.log_level = .debug;
     _ = @import("types.zig");
     _ = @import("mask.zig");
     _ = @import("http.zig");
