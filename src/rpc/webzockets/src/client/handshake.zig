@@ -98,6 +98,7 @@ pub fn ClientHandshake(comptime Context: type) type {
             self.state = .writing;
             log.debug("start: sending {d} byte request", .{self.request_len});
 
+            // TODO: missing timer for write timeout
             self.socket.write(
                 self.loop,
                 &self.write_completion,
@@ -184,6 +185,7 @@ pub fn ClientHandshake(comptime Context: type) type {
                 self.read_pos,
                 self.read_buf.len - self.read_pos,
             });
+            // TODO: missing timer for read timeout
             self.socket.read(
                 self.loop,
                 &self.read_completion,

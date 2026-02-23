@@ -78,6 +78,7 @@ pub fn Handshake(
                 return;
             }
 
+            // TODO: missing timer for read timeout
             self.socket.read(
                 self.server.loop,
                 &self.read_completion,
@@ -152,6 +153,7 @@ pub fn Handshake(
         }
 
         fn startWrite(self: *HandshakeSelf) void {
+            // TODO: missing timer for write timeout
             self.socket.write(
                 self.server.loop,
                 &self.write_completion,
