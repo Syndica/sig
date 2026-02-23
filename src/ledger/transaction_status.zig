@@ -941,3 +941,104 @@ test "TransactionStatusMetaBuilder.build - transaction with no outputs" {
     try std.testing.expectEqual(@as(?TransactionReturnData, null), status.return_data);
     try std.testing.expectEqual(@as(?u64, null), status.compute_units_consumed);
 }
+
+test "TransactionStatusMetaBuilder.build - outputs with null sub-fields" {
+    const allocator = std.testing.allocator;
+    const ExecutedTransaction = sig.runtime.transaction_execution.ExecutedTransaction;
+    const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
+
+    // Outputs exist but log_collector, instruction_trace, and return_data are all null
+    const processed = ProcessedTransaction{
+        .fees = .{ .transaction_fee = 5_000, .prioritization_fee = 0 },
+        .rent = 0,
+        .writes = .{},
+        .err = null,
+        .loaded_accounts_data_size = 0,
+        .outputs = ExecutedTransaction{
+            .err = null,
+            .log_collector = null,
+            .instruction_trace = null,
+            .return_data = null,
+            .compute_limit = 200_000,
+            .compute_meter = 100_000,
+            .accounts_data_len_delta = 0,
+        },
+        .pre_balances = .{},
+        .pre_token_balances = .{},
+        .cost_units = 0,
+    };
+
+    const pre_balances = [_]u64{1_000_000};
+    const post_balances = [_]u64{995_000};
+
+    const status = try TransactionStatusMetaBuilder.build(
+        allocator,
+        processed,
+        &pre_balances,
+        &post_balances,
+        .{},
+        null,
+        null,
+    );
+    defer status.deinit(allocator);
+
+    // Outputs exist so compute_units_consumed should be calculated
+    try std.testing.expectEqual(@as(?u64, 100_000), status.compute_units_consumed);
+    // But sub-fields are null since their sources were null
+    try std.testing.expectEqual(@as(?[]const []const u8, null), status.log_messages);
+    try std.testing.expectEqual(@as(?[]const InnerInstructions, null), status.inner_instructions);
+    try std.testing.expectEqual(@as(?TransactionReturnData, null), status.return_data);
+}
+
+test "TransactionStatusMetaBuilder.build - with loaded addresses" {
+    const allocator = std.testing.allocator;
+    const ExecutedTransaction = sig.runtime.transaction_execution.ExecutedTransaction;
+    const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
+
+    const processed = ProcessedTransaction{
+        .fees = .{ .transaction_fee = 5_000, .prioritization_fee = 0 },
+        .rent = 0,
+        .writes = .{},
+        .err = null,
+        .loaded_accounts_data_size = 0,
+        .outputs = ExecutedTransaction{
+            .err = null,
+            .log_collector = null,
+            .instruction_trace = null,
+            .return_data = null,
+            .compute_limit = 200_000,
+            .compute_meter = 200_000,
+            .accounts_data_len_delta = 0,
+        },
+        .pre_balances = .{},
+        .pre_token_balances = .{},
+        .cost_units = 0,
+    };
+
+    const writable_keys = [_]Pubkey{Pubkey{ .data = [_]u8{0xAA} ** 32 }};
+    const readonly_keys = [_]Pubkey{
+        Pubkey{ .data = [_]u8{0xBB} ** 32 },
+        Pubkey{ .data = [_]u8{0xCC} ** 32 },
+    };
+
+    const status = try TransactionStatusMetaBuilder.build(
+        allocator,
+        processed,
+        &.{},
+        &.{},
+        .{ .writable = &writable_keys, .readonly = &readonly_keys },
+        null,
+        null,
+    );
+    defer status.deinit(allocator);
+
+    // Loaded addresses should be copied
+    try std.testing.expectEqual(@as(usize, 1), status.loaded_addresses.writable.len);
+    try std.testing.expectEqual(@as(usize, 2), status.loaded_addresses.readonly.len);
+    try std.testing.expect(
+        status.loaded_addresses.writable[0].equals(&Pubkey{ .data = [_]u8{0xAA} ** 32 }),
+    );
+    try std.testing.expect(
+        status.loaded_addresses.readonly[1].equals(&Pubkey{ .data = [_]u8{0xCC} ** 32 }),
+    );
+}

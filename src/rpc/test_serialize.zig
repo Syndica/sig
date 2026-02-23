@@ -850,3 +850,399 @@ test "GetBlock request serialization - with config" {
         \\{"jsonrpc":"2.0","id":1,"method":"getBlock","params":[430,{"commitment":null,"encoding":"json","transactionDetails":"full","maxSupportedTransactionVersion":null,"rewards":false}]}
     );
 }
+
+// ============================================================================
+// JsonSkippable serialization tests
+// ============================================================================
+
+test "JsonSkippable - value state serializes the inner value" {
+    const meta = GetBlock.Response.UiTransactionStatusMeta{
+        .err = null,
+        .status = .{ .Ok = .{}, .Err = null },
+        .fee = 0,
+        .preBalances = &.{},
+        .postBalances = &.{},
+        .computeUnitsConsumed = .{ .value = 42 },
+    };
+    const json = try std.json.stringifyAlloc(std.testing.allocator, meta, .{});
+    defer std.testing.allocator.free(json);
+    // computeUnitsConsumed should appear with value 42
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"computeUnitsConsumed\":42") != null);
+}
+
+test "JsonSkippable - skip state omits the field entirely" {
+    const meta = GetBlock.Response.UiTransactionStatusMeta{
+        .err = null,
+        .status = .{ .Ok = .{}, .Err = null },
+        .fee = 0,
+        .preBalances = &.{},
+        .postBalances = &.{},
+        .computeUnitsConsumed = .skip,
+        .loadedAddresses = .skip,
+        .returnData = .skip,
+    };
+    const json = try std.json.stringifyAlloc(std.testing.allocator, meta, .{});
+    defer std.testing.allocator.free(json);
+    // These fields should NOT appear in the output
+    try std.testing.expect(std.mem.indexOf(u8, json, "computeUnitsConsumed") == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "loadedAddresses") == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "returnData") == null);
+}
+
+test "JsonSkippable - none state serializes as null" {
+    const meta = GetBlock.Response.UiTransactionStatusMeta{
+        .err = null,
+        .status = .{ .Ok = .{}, .Err = null },
+        .fee = 0,
+        .preBalances = &.{},
+        .postBalances = &.{},
+        .rewards = .none,
+    };
+    const json = try std.json.stringifyAlloc(std.testing.allocator, meta, .{});
+    defer std.testing.allocator.free(json);
+    // rewards should appear as null
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"rewards\":null") != null);
+}
+
+// ============================================================================
+// ParsedAccount serialization tests
+// ============================================================================
+
+test "ParsedAccount serialization - transaction source" {
+    const account = GetBlock.Response.ParsedAccount{
+        .pubkey = Pubkey.ZEROES,
+        .writable = true,
+        .signer = true,
+        .source = .transaction,
+    };
+    try expectJsonStringify(
+        \\{"pubkey":"11111111111111111111111111111111","signer":true,"source":"transaction","writable":true}
+    , account);
+}
+
+test "ParsedAccount serialization - lookupTable source" {
+    const account = GetBlock.Response.ParsedAccount{
+        .pubkey = Pubkey.ZEROES,
+        .writable = false,
+        .signer = false,
+        .source = .lookupTable,
+    };
+    try expectJsonStringify(
+        \\{"pubkey":"11111111111111111111111111111111","signer":false,"source":"lookupTable","writable":false}
+    , account);
+}
+
+// ============================================================================
+// AddressTableLookup serialization tests (uses writeU8SliceAsIntArray)
+// ============================================================================
+
+test "AddressTableLookup serialization - indexes as integer arrays" {
+    const atl = GetBlock.Response.AddressTableLookup{
+        .accountKey = Pubkey.ZEROES,
+        .writableIndexes = &[_]u8{ 0, 1, 4 },
+        .readonlyIndexes = &[_]u8{ 2, 3 },
+    };
+    try expectJsonStringify(
+        \\{"accountKey":"11111111111111111111111111111111","readonlyIndexes":[2,3],"writableIndexes":[0,1,4]}
+    , atl);
+}
+
+test "AddressTableLookup serialization - empty indexes" {
+    const atl = GetBlock.Response.AddressTableLookup{
+        .accountKey = Pubkey.ZEROES,
+        .writableIndexes = &.{},
+        .readonlyIndexes = &.{},
+    };
+    try expectJsonStringify(
+        \\{"accountKey":"11111111111111111111111111111111","readonlyIndexes":[],"writableIndexes":[]}
+    , atl);
+}
+
+// ============================================================================
+// EncodedInstruction serialization (accounts as integer array)
+// ============================================================================
+
+test "EncodedInstruction serialization - accounts as integer array" {
+    // Verifies that accounts field is serialized as [0,1,2] not as a string
+    const ix = GetBlock.Response.EncodedInstruction{
+        .programIdIndex = 3,
+        .accounts = &[_]u8{ 0, 1, 2 },
+        .data = "base58data",
+    };
+    try expectJsonStringify(
+        \\{"programIdIndex":3,"accounts":[0,1,2],"data":"base58data"}
+    , ix);
+}
+
+// ============================================================================
+// UiRawMessage serialization tests
+// ============================================================================
+
+test "UiRawMessage serialization - without address table lookups" {
+    const msg = GetBlock.Response.UiRawMessage{
+        .header = .{
+            .numRequiredSignatures = 1,
+            .numReadonlySignedAccounts = 0,
+            .numReadonlyUnsignedAccounts = 1,
+        },
+        .account_keys = &.{Pubkey.ZEROES},
+        .recent_blockhash = Hash.ZEROES,
+        .instructions = &.{},
+    };
+    const json = try std.json.stringifyAlloc(std.testing.allocator, msg, .{});
+    defer std.testing.allocator.free(json);
+    // Should have accountKeys, header, recentBlockhash, instructions but NOT addressTableLookups
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"accountKeys\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"header\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"numRequiredSignatures\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "addressTableLookups") == null);
+}
+
+test "UiRawMessage serialization - with address table lookups" {
+    const atl = GetBlock.Response.AddressTableLookup{
+        .accountKey = Pubkey.ZEROES,
+        .writableIndexes = &[_]u8{0},
+        .readonlyIndexes = &.{},
+    };
+    const msg = GetBlock.Response.UiRawMessage{
+        .header = .{
+            .numRequiredSignatures = 1,
+            .numReadonlySignedAccounts = 0,
+            .numReadonlyUnsignedAccounts = 0,
+        },
+        .account_keys = &.{},
+        .recent_blockhash = Hash.ZEROES,
+        .instructions = &.{},
+        .address_table_lookups = &.{atl},
+    };
+    const json = try std.json.stringifyAlloc(std.testing.allocator, msg, .{});
+    defer std.testing.allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"addressTableLookups\"") != null);
+}
+
+// ============================================================================
+// UiParsedMessage serialization tests
+// ============================================================================
+
+test "UiParsedMessage serialization - without address table lookups" {
+    const msg = GetBlock.Response.UiParsedMessage{
+        .account_keys = &.{},
+        .recent_blockhash = Hash.ZEROES,
+        .instructions = &.{},
+    };
+    const json = try std.json.stringifyAlloc(std.testing.allocator, msg, .{});
+    defer std.testing.allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"accountKeys\":[]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"recentBlockhash\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "addressTableLookups") == null);
+}
+
+// ============================================================================
+// UiMessage serialization tests
+// ============================================================================
+
+test "UiMessage serialization - raw variant" {
+    const msg = GetBlock.Response.UiMessage{ .raw = .{
+        .header = .{
+            .numRequiredSignatures = 2,
+            .numReadonlySignedAccounts = 0,
+            .numReadonlyUnsignedAccounts = 1,
+        },
+        .account_keys = &.{},
+        .recent_blockhash = Hash.ZEROES,
+        .instructions = &.{},
+    } };
+    const json = try std.json.stringifyAlloc(std.testing.allocator, msg, .{});
+    defer std.testing.allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"numRequiredSignatures\":2") != null);
+}
+
+// ============================================================================
+// EncodedTransaction.accounts serialization test
+// ============================================================================
+
+test "EncodedTransaction serialization - accounts variant" {
+    const account = GetBlock.Response.ParsedAccount{
+        .pubkey = Pubkey.ZEROES,
+        .writable = true,
+        .signer = true,
+        .source = .transaction,
+    };
+    const tx = GetBlock.Response.EncodedTransaction{ .accounts = .{
+        .signatures = &.{},
+        .accountKeys = &.{account},
+    } };
+    const json = try std.json.stringifyAlloc(std.testing.allocator, tx, .{});
+    defer std.testing.allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"accountKeys\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"source\":\"transaction\"") != null);
+}
+
+// ============================================================================
+// UiTransactionStatusMeta serialization - skipped fields
+// ============================================================================
+
+test "UiTransactionStatusMeta serialization - innerInstructions and logMessages skipped" {
+    const meta = GetBlock.Response.UiTransactionStatusMeta{
+        .err = null,
+        .status = .{ .Ok = .{}, .Err = null },
+        .fee = 0,
+        .preBalances = &.{},
+        .postBalances = &.{},
+        .innerInstructions = .skip,
+        .logMessages = .skip,
+        .rewards = .skip,
+    };
+    const json = try std.json.stringifyAlloc(std.testing.allocator, meta, .{});
+    defer std.testing.allocator.free(json);
+    // innerInstructions, logMessages, and rewards should all be omitted
+    try std.testing.expect(std.mem.indexOf(u8, json, "innerInstructions") == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "logMessages") == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "rewards") == null);
+    // But err, fee, balances, status should still be present
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"err\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"fee\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"status\"") != null);
+}
+
+test "UiTransactionStatusMeta serialization - costUnits present" {
+    const meta = GetBlock.Response.UiTransactionStatusMeta{
+        .err = null,
+        .status = .{ .Ok = .{}, .Err = null },
+        .fee = 0,
+        .preBalances = &.{},
+        .postBalances = &.{},
+        .costUnits = .{ .value = 3428 },
+    };
+    const json = try std.json.stringifyAlloc(std.testing.allocator, meta, .{});
+    defer std.testing.allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"costUnits\":3428") != null);
+}
+
+test "UiTransactionStatusMeta serialization - returnData present" {
+    const meta = GetBlock.Response.UiTransactionStatusMeta{
+        .err = null,
+        .status = .{ .Ok = .{}, .Err = null },
+        .fee = 0,
+        .preBalances = &.{},
+        .postBalances = &.{},
+        .returnData = .{ .value = .{
+            .programId = Pubkey.ZEROES,
+            .data = .{ "AQID", .base64 },
+        } },
+    };
+    const json = try std.json.stringifyAlloc(std.testing.allocator, meta, .{});
+    defer std.testing.allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"returnData\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"programId\"") != null);
+}
+
+// ============================================================================
+// UiTransactionStatusMeta.from() tests
+// ============================================================================
+
+test "UiTransactionStatusMeta.from - legacy version skips loadedAddresses" {
+    const allocator = std.testing.allocator;
+    const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
+    const result = try GetBlock.Response.UiTransactionStatusMeta.from(
+        allocator,
+        meta,
+        .legacy,
+        true,
+    );
+    defer {
+        allocator.free(result.preBalances);
+        allocator.free(result.postBalances);
+    }
+    // Legacy version: loadedAddresses should be skipped
+    try std.testing.expect(result.loadedAddresses == .skip);
+}
+
+test "UiTransactionStatusMeta.from - v0 version includes loadedAddresses" {
+    const allocator = std.testing.allocator;
+    const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
+    const result = try GetBlock.Response.UiTransactionStatusMeta.from(
+        allocator,
+        meta,
+        .v0,
+        true,
+    );
+    defer {
+        allocator.free(result.preBalances);
+        allocator.free(result.postBalances);
+        if (result.loadedAddresses == .value) {
+            allocator.free(result.loadedAddresses.value.writable);
+            allocator.free(result.loadedAddresses.value.readonly);
+        }
+    }
+    // V0 version: loadedAddresses should have a value
+    try std.testing.expect(result.loadedAddresses != .skip);
+}
+
+test "UiTransactionStatusMeta.from - show_rewards false skips rewards" {
+    const allocator = std.testing.allocator;
+    const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
+    const result = try GetBlock.Response.UiTransactionStatusMeta.from(
+        allocator,
+        meta,
+        .legacy,
+        false,
+    );
+    defer {
+        allocator.free(result.preBalances);
+        allocator.free(result.postBalances);
+    }
+    // Rewards should be .none (serialized as null) when show_rewards is false
+    try std.testing.expect(result.rewards == .none);
+}
+
+test "UiTransactionStatusMeta.from - show_rewards true includes rewards" {
+    const allocator = std.testing.allocator;
+    const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
+    const result = try GetBlock.Response.UiTransactionStatusMeta.from(
+        allocator,
+        meta,
+        .legacy,
+        true,
+    );
+    defer {
+        allocator.free(result.preBalances);
+        allocator.free(result.postBalances);
+    }
+    // Rewards should be present (as value) when show_rewards is true
+    try std.testing.expect(result.rewards != .skip);
+}
+
+test "UiTransactionStatusMeta.from - compute_units_consumed present" {
+    const allocator = std.testing.allocator;
+    var meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
+    meta.compute_units_consumed = 42_000;
+    const result = try GetBlock.Response.UiTransactionStatusMeta.from(
+        allocator,
+        meta,
+        .legacy,
+        false,
+    );
+    defer {
+        allocator.free(result.preBalances);
+        allocator.free(result.postBalances);
+    }
+    try std.testing.expect(result.computeUnitsConsumed == .value);
+    try std.testing.expectEqual(@as(u64, 42_000), result.computeUnitsConsumed.value);
+}
+
+test "UiTransactionStatusMeta.from - compute_units_consumed absent" {
+    const allocator = std.testing.allocator;
+    const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
+    const result = try GetBlock.Response.UiTransactionStatusMeta.from(
+        allocator,
+        meta,
+        .legacy,
+        false,
+    );
+    defer {
+        allocator.free(result.preBalances);
+        allocator.free(result.postBalances);
+    }
+    try std.testing.expect(result.computeUnitsConsumed == .skip);
+}

@@ -2316,3 +2316,129 @@ fn JsonSkippable(comptime T: type) type {
         }
     };
 }
+
+// ============================================================================
+// Tests for private BlockHookContext functions
+// ============================================================================
+
+test "validateVersion - legacy with max_supported_version" {
+    const result = try BlockHookContext.validateVersion(.legacy, 0);
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.? == .legacy);
+}
+
+test "validateVersion - v0 with max_supported_version >= 0" {
+    const result = try BlockHookContext.validateVersion(.v0, 0);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqual(@as(u8, 0), result.?.number);
+}
+
+test "validateVersion - legacy without max_supported_version returns null" {
+    const result = try BlockHookContext.validateVersion(.legacy, null);
+    try std.testing.expect(result == null);
+}
+
+test "validateVersion - v0 without max_supported_version errors" {
+    const result = BlockHookContext.validateVersion(.v0, null);
+    try std.testing.expectError(error.UnsupportedTransactionVersion, result);
+}
+
+test "buildSimpleUiTransactionStatusMeta - basic" {
+    const allocator = std.testing.allocator;
+    const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
+    const result = try BlockHookContext.buildSimpleUiTransactionStatusMeta(allocator, meta, false);
+    defer {
+        allocator.free(result.preBalances);
+        allocator.free(result.postBalances);
+    }
+
+    // Basic fields
+    try std.testing.expectEqual(@as(u64, 0), result.fee);
+    try std.testing.expect(result.err == null);
+    // innerInstructions and logMessages should be skipped for accounts mode
+    try std.testing.expect(result.innerInstructions == .skip);
+    try std.testing.expect(result.logMessages == .skip);
+    // show_rewards false → skip
+    try std.testing.expect(result.rewards == .skip);
+}
+
+test "buildSimpleUiTransactionStatusMeta - show_rewards true with empty rewards" {
+    const allocator = std.testing.allocator;
+    const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
+    const result = try BlockHookContext.buildSimpleUiTransactionStatusMeta(allocator, meta, true);
+    defer {
+        allocator.free(result.preBalances);
+        allocator.free(result.postBalances);
+    }
+
+    // show_rewards true but meta.rewards is null → empty value
+    try std.testing.expect(result.rewards == .value);
+}
+
+test "jsonEncodeTransactionMessage - legacy message" {
+    const allocator = std.testing.allocator;
+
+    const msg = sig.core.transaction.Message{
+        .signature_count = 1,
+        .readonly_signed_count = 0,
+        .readonly_unsigned_count = 1,
+        .account_keys = &.{ Pubkey.ZEROES, Pubkey{ .data = [_]u8{0xFF} ** 32 } },
+        .recent_blockhash = Hash.ZEROES,
+        .instructions = &.{},
+        .address_lookups = &.{},
+    };
+
+    const result = try BlockHookContext.jsonEncodeTransactionMessage(allocator, msg, .legacy);
+    // Result should be a raw message
+    const raw = result.raw;
+
+    try std.testing.expectEqual(@as(u8, 1), raw.header.numRequiredSignatures);
+    try std.testing.expectEqual(@as(u8, 0), raw.header.numReadonlySignedAccounts);
+    try std.testing.expectEqual(@as(u8, 1), raw.header.numReadonlyUnsignedAccounts);
+    try std.testing.expectEqual(@as(usize, 2), raw.account_keys.len);
+    try std.testing.expectEqual(@as(usize, 0), raw.instructions.len);
+    // Legacy should have no address table lookups
+    try std.testing.expect(raw.address_table_lookups == null);
+
+    allocator.free(raw.account_keys);
+}
+
+test "jsonEncodeTransactionMessage - v0 message with address lookups" {
+    const allocator = std.testing.allocator;
+
+    const msg = sig.core.transaction.Message{
+        .signature_count = 1,
+        .readonly_signed_count = 0,
+        .readonly_unsigned_count = 0,
+        .account_keys = &.{Pubkey.ZEROES},
+        .recent_blockhash = Hash.ZEROES,
+        .instructions = &.{},
+        .address_lookups = &.{.{
+            .table_address = Pubkey{ .data = [_]u8{0xAA} ** 32 },
+            .writable_indexes = &[_]u8{ 0, 1 },
+            .readonly_indexes = &[_]u8{2},
+        }},
+    };
+
+    const result = try BlockHookContext.jsonEncodeTransactionMessage(allocator, msg, .v0);
+    const raw = result.raw;
+
+    try std.testing.expectEqual(@as(usize, 1), raw.account_keys.len);
+    // V0 should have address table lookups
+    try std.testing.expect(raw.address_table_lookups != null);
+    try std.testing.expectEqual(@as(usize, 1), raw.address_table_lookups.?.len);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 0, 1 },
+        raw.address_table_lookups.?[0].writableIndexes,
+    );
+    try std.testing.expectEqualSlices(u8, &.{2}, raw.address_table_lookups.?[0].readonlyIndexes);
+
+    // Clean up
+    allocator.free(raw.account_keys);
+    for (raw.address_table_lookups.?) |atl| {
+        allocator.free(atl.writableIndexes);
+        allocator.free(atl.readonlyIndexes);
+    }
+    allocator.free(raw.address_table_lookups.?);
+}
