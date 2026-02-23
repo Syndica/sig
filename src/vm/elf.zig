@@ -1028,7 +1028,7 @@ const Elf64 = struct {
             }
 
             // Concat all of the gathered read-only sections into one contiguous slice.
-            const ro_section = try allocator.alignedAlloc(u8, 16, highest_addr);
+            const ro_section = try allocator.alignedAlloc(u8, .fromByteUnits(16), highest_addr);
             @memset(ro_section, 0);
             for (ro_slices.items) |ro_slice| {
                 const section_addr, const slice = ro_slice;
