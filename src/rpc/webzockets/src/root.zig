@@ -1,5 +1,3 @@
-const std = @import("std");
-
 pub const types = @import("types.zig");
 pub const mask = @import("mask.zig");
 pub const http = @import("http.zig");
