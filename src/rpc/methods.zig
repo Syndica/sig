@@ -326,7 +326,6 @@ pub const GetBlock = struct {
         /// The slot of the parent block
         parentSlot: u64,
         /// Transactions in the block (present when transactionDetails is full or accounts)
-        /// TODO: Phase 2 - implement EncodedTransactionWithStatusMeta
         transactions: ?[]const EncodedTransactionWithStatusMeta = null,
         /// Transaction signatures (present when transactionDetails is signatures)
         signatures: ?[]const Signature = null,
@@ -1755,11 +1754,9 @@ pub const BlockHookContext = struct {
     ) !GetBlock.Response.EncodedTransaction {
         switch (encoding) {
             .binary => {
-                // Serialize transaction to bincode
                 const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
                 defer allocator.free(bincode_bytes);
 
-                // Base58 encode
                 const base58_str = base58.Table.BITCOIN.encodeAlloc(allocator, bincode_bytes) catch {
                     return error.EncodingError;
                 };
@@ -1767,11 +1764,9 @@ pub const BlockHookContext = struct {
                 return .{ .legacy_binary = base58_str };
             },
             .base58 => {
-                // Serialize transaction to bincode
                 const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
                 defer allocator.free(bincode_bytes);
 
-                // Base58 encode
                 const base58_str = base58.Table.BITCOIN.encodeAlloc(allocator, bincode_bytes) catch {
                     return error.EncodingError;
                 };
@@ -1782,11 +1777,9 @@ pub const BlockHookContext = struct {
                 } };
             },
             .base64 => {
-                // Serialize transaction to bincode
                 const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
                 defer allocator.free(bincode_bytes);
 
-                // Base64 encode
                 const encoded_len = std.base64.standard.Encoder.calcSize(bincode_bytes.len);
                 const base64_buf = try allocator.alloc(u8, encoded_len);
                 _ = std.base64.standard.Encoder.encode(base64_buf, bincode_bytes);
