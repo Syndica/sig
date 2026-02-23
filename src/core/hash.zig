@@ -123,7 +123,7 @@ pub const Hash = extern struct {
     }
 
     pub fn jsonStringify(self: Hash, write_stream: anytype) !void {
-        try write_stream.write(self.base58String().slice());
+        try write_stream.write(self.base58String().constSlice());
     }
 
     /// Intended to be used in tests.
