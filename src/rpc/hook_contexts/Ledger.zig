@@ -9,6 +9,7 @@ const parse_instruction = @import("../parse_instruction/lib.zig");
 const AccountKeys = parse_instruction.AccountKeys;
 const Allocator = std.mem.Allocator;
 const GetBlock = methods.GetBlock;
+const GetTransaction = methods.GetTransaction;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
 const Pubkey = sig.core.Pubkey;
 const ReservedAccounts = sig.core.ReservedAccounts;
@@ -68,6 +69,47 @@ pub fn getBlock(
         .show_rewards = show_rewards,
         .max_supported_version = max_supported_version,
     });
+}
+
+pub fn getTransaction(
+    self: @This(),
+    allocator: std.mem.Allocator,
+    params: GetTransaction,
+) !GetTransaction.Response {
+    const config = params.config orelse GetTransaction.Config{};
+    const commitment = config.commitment orelse .finalized;
+    const encoding = config.encoding orelse .json;
+    const max_supported_version = config.maxSupportedTransactionVersion;
+
+    if (commitment == .processed) {
+        return error.ProcessedNotSupported;
+    }
+
+    const reader = self.ledger.reader();
+    const highest_confirmed_slot = self.slot_tracker.getSlotForCommitment(.confirmed);
+
+    // Get transaction from ledger.
+    const confirmed_tx_with_meta = try reader.getCompleteTransaction(
+        allocator,
+        params.signature,
+        highest_confirmed_slot,
+    ) orelse {
+        // TODO: implement bigtable?
+        return .none;
+    };
+    defer confirmed_tx_with_meta.deinit(allocator);
+
+    return .{ .value = .{
+        .slot = confirmed_tx_with_meta.slot,
+        .transaction = try encodeTransactionWithStatusMeta(
+            allocator,
+            confirmed_tx_with_meta.tx_with_meta,
+            encoding,
+            max_supported_version,
+            true,
+        ),
+        .block_time = confirmed_tx_with_meta.block_time,
+    } };
 }
 
 /// Encode transactions and/or signatures based on the requested options.
