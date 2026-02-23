@@ -1523,6 +1523,7 @@ pub const BlockHookContext = struct {
     slot_tracker: *const sig.replay.trackers.SlotTracker,
 
     const SlotTrackerRef = sig.replay.trackers.SlotTracker.Reference;
+    const ReservedAccountKeys = parse_instruction.ReservedAccountKeys;
 
     pub fn getBlock(
         self: @This(),
@@ -1880,7 +1881,6 @@ pub const BlockHookContext = struct {
     ) !GetBlock.Response.UiMessage {
         switch (encoding) {
             .jsonParsed => {
-                const ReservedAccountKeys = parse_instruction.ReservedAccountKeys;
                 var reserved_account_keys = try ReservedAccountKeys.newAllActivated(allocator);
                 errdefer reserved_account_keys.deinit(allocator);
                 const account_keys = parse_instruction.AccountKeys.init(
@@ -1998,9 +1998,8 @@ pub const BlockHookContext = struct {
     ) !GetBlock.Response.UiMessage {
         switch (encoding) {
             .jsonParsed => {
-                const ReservedAccountKeys = parse_instruction.ReservedAccountKeys;
                 var reserved_account_keys = try ReservedAccountKeys.newAllActivated(allocator);
-                errdefer reserved_account_keys.deinit(allocator);
+                defer reserved_account_keys.deinit(allocator);
                 const account_keys = parse_instruction.AccountKeys.init(
                     message.account_keys,
                     null,
@@ -2011,7 +2010,7 @@ pub const BlockHookContext = struct {
                     meta.loaded_addresses,
                     &reserved_account_keys.active,
                 );
-                errdefer loaded_message.deinit(allocator);
+                defer loaded_message.deinit(allocator);
 
                 var instructions = try allocator.alloc(
                     parse_instruction.UiInstruction,
