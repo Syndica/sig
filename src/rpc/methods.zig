@@ -2181,7 +2181,7 @@ pub const BlockHookContext = struct {
         allocator: Allocator,
         transaction: sig.core.Transaction,
     ) !GetBlock.Response.EncodedTransaction {
-        var reserved_account_keys = try parse_instruction.ReservedAccountKeys.newAllActivated(allocator);
+        var reserved_account_keys = try ReservedAccountKeys.newAllActivated(allocator);
         return .{ .accounts = .{
             .signatures = try allocator.dupe(Signature, transaction.signatures),
             .accountKeys = try parseLegacyMessageAccounts(
