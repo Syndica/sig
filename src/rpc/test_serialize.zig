@@ -1139,30 +1139,12 @@ test "UiTransactionStatusMeta serialization - returnData present" {
 // UiTransactionStatusMeta.from() tests
 // ============================================================================
 
-test "UiTransactionStatusMeta.from - legacy version skips loadedAddresses" {
+test "UiTransactionStatusMeta.from - always includes loadedAddresses" {
     const allocator = std.testing.allocator;
     const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
     const result = try GetBlock.Response.UiTransactionStatusMeta.from(
         allocator,
         meta,
-        .legacy,
-        true,
-    );
-    defer {
-        allocator.free(result.preBalances);
-        allocator.free(result.postBalances);
-    }
-    // Legacy version: loadedAddresses should be skipped
-    try std.testing.expect(result.loadedAddresses == .skip);
-}
-
-test "UiTransactionStatusMeta.from - v0 version includes loadedAddresses" {
-    const allocator = std.testing.allocator;
-    const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
-    const result = try GetBlock.Response.UiTransactionStatusMeta.from(
-        allocator,
-        meta,
-        .v0,
         true,
     );
     defer {
@@ -1173,8 +1155,8 @@ test "UiTransactionStatusMeta.from - v0 version includes loadedAddresses" {
             allocator.free(result.loadedAddresses.value.readonly);
         }
     }
-    // V0 version: loadedAddresses should have a value
-    try std.testing.expect(result.loadedAddresses != .skip);
+    // loadedAddresses should always have a value
+    try std.testing.expect(result.loadedAddresses == .value);
 }
 
 test "UiTransactionStatusMeta.from - show_rewards false skips rewards" {
@@ -1183,7 +1165,6 @@ test "UiTransactionStatusMeta.from - show_rewards false skips rewards" {
     const result = try GetBlock.Response.UiTransactionStatusMeta.from(
         allocator,
         meta,
-        .legacy,
         false,
     );
     defer {
@@ -1200,7 +1181,6 @@ test "UiTransactionStatusMeta.from - show_rewards true includes rewards" {
     const result = try GetBlock.Response.UiTransactionStatusMeta.from(
         allocator,
         meta,
-        .legacy,
         true,
     );
     defer {
@@ -1218,7 +1198,6 @@ test "UiTransactionStatusMeta.from - compute_units_consumed present" {
     const result = try GetBlock.Response.UiTransactionStatusMeta.from(
         allocator,
         meta,
-        .legacy,
         false,
     );
     defer {
@@ -1235,7 +1214,6 @@ test "UiTransactionStatusMeta.from - compute_units_consumed absent" {
     const result = try GetBlock.Response.UiTransactionStatusMeta.from(
         allocator,
         meta,
-        .legacy,
         false,
     );
     defer {
