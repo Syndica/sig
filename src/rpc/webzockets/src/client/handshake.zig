@@ -35,7 +35,7 @@ pub fn ClientHandshake(comptime Context: type) type {
         head_parser: http.HeadParser,
 
         key_buf: [24]u8,
-        key: []const u8,
+        key_len: usize,
 
         /// Caller-provided PRNG used to generate the WebSocket key.
         /// Must only be used from the loop thread (not thread-safe).
@@ -70,7 +70,7 @@ pub fn ClientHandshake(comptime Context: type) type {
                 .write_pos = 0,
                 .head_parser = .{},
                 .key_buf = undefined,
-                .key = &.{},
+                .key_len = 0,
                 .csprng = csprng,
                 .read_completion = .{},
                 .write_completion = .{},
@@ -85,9 +85,10 @@ pub fn ClientHandshake(comptime Context: type) type {
 
             var raw_key: [16]u8 = undefined;
             self.csprng.fill(&raw_key);
-            self.key = http.encodeKey(&self.key_buf, &raw_key);
+            self.key_len = http.encodeKey(&self.key_buf, &raw_key).len;
 
-            const request = http.writeRequest(&self.request_buf, address, path, self.key) catch {
+            const key = self.key_buf[0..self.key_len];
+            const request = http.writeRequest(&self.request_buf, address, path, key) catch {
                 log.debug("start: writeRequest failed (buffer too small)", .{});
                 self.fail();
                 return;
@@ -240,7 +241,8 @@ pub fn ClientHandshake(comptime Context: type) type {
         }
 
         fn processResponse(self: *ClientHandshakeSelf) void {
-            http.validateResponse(self.read_buf[0..self.header_len], self.key) catch |err| {
+            const key = self.key_buf[0..self.key_len];
+            http.validateResponse(self.read_buf[0..self.header_len], key) catch |err| {
                 log.debug("processResponse: parse error: {s}", .{@errorName(err)});
                 self.fail();
                 return;
