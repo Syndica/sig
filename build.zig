@@ -570,7 +570,7 @@ fn generateFeatureSetId(b: *Build, base58_mod: *Build.Module) Build.LazyPath {
             },
         }),
     });
-    return b.addRunArtifact(gen).captureStdOut();
+    return b.addRunArtifact(gen).addOutputFileArg("feature-set-id.zig");
 }
 
 fn genSqlite(
