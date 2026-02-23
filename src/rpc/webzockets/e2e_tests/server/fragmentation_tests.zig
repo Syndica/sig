@@ -4,7 +4,7 @@ const testing = std.testing;
 
 const servers = @import("../support/test_servers.zig");
 const RawClient = @import("../support/raw_client.zig").RawClient;
-const FdLeakDetector = @import("../support/fd_leak_detector.zig");
+const FdLeakDetector = @import("../support/FdLeakDetector.zig");
 
 const wait_ms: u64 = 2_000;
 

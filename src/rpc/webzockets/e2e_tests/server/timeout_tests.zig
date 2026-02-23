@@ -3,7 +3,7 @@ const testing = std.testing;
 
 const servers = @import("../support/test_servers.zig");
 const RawClient = @import("../support/raw_client.zig").RawClient;
-const FdLeakDetector = @import("../support/fd_leak_detector.zig");
+const FdLeakDetector = @import("../support/FdLeakDetector.zig");
 
 const poll_read_timeout_ms: u32 = 100;
 const close_deadline_ms: u64 = 2_000;

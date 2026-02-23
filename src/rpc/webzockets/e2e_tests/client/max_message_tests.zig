@@ -3,7 +3,7 @@ const testing = std.testing;
 
 const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
-const FdLeakDetector = @import("../support/fd_leak_detector.zig");
+const FdLeakDetector = @import("../support/FdLeakDetector.zig");
 
 test "max_message_size enforcement closes with 1009" {
     const fd_check = FdLeakDetector.baseline();

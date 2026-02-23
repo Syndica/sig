@@ -5,7 +5,7 @@ const xev = @import("xev");
 const testing = std.testing;
 const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
-const FdLeakDetector = @import("../support/fd_leak_detector.zig");
+const FdLeakDetector = @import("../support/FdLeakDetector.zig");
 const verifyServerFunctional = @import("../support/test_helpers.zig").verifyServerFunctional;
 
 test "rapid connect/disconnect" {

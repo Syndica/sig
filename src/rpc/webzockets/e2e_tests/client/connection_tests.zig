@@ -4,7 +4,7 @@ const testing = std.testing;
 const http = @import("webzockets_lib").http;
 const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
-const FdLeakDetector = @import("../support/fd_leak_detector.zig");
+const FdLeakDetector = @import("../support/FdLeakDetector.zig");
 
 test "connection to non-existent server" {
     const fd_check = FdLeakDetector.baseline();

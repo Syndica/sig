@@ -4,7 +4,7 @@ const testing = std.testing;
 const servers = @import("../support/test_servers.zig");
 const server_handlers = @import("../support/server_handlers.zig");
 const clients = @import("../support/test_clients.zig");
-const FdLeakDetector = @import("../support/fd_leak_detector.zig");
+const FdLeakDetector = @import("../support/FdLeakDetector.zig");
 
 test "sequential processing of server burst" {
     const fd_check = FdLeakDetector.baseline();

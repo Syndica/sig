@@ -4,7 +4,7 @@ const ws = @import("webzockets_lib");
 const testing = std.testing;
 const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
-const FdLeakDetector = @import("../support/fd_leak_detector.zig");
+const FdLeakDetector = @import("../support/FdLeakDetector.zig");
 
 test "connection pool exhaustion" {
     const fd_check = FdLeakDetector.baseline();

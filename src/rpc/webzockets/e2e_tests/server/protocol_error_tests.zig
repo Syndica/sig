@@ -4,7 +4,7 @@ const ws = @import("webzockets_lib");
 const testing = std.testing;
 const servers = @import("../support/test_servers.zig");
 const RawClient = @import("../support/raw_client.zig").RawClient;
-const FdLeakDetector = @import("../support/fd_leak_detector.zig");
+const FdLeakDetector = @import("../support/FdLeakDetector.zig");
 const expectCloseWithCode = @import("../support/test_helpers.zig").expectCloseWithCode;
 
 test "unmasked client frame → 1002" {
