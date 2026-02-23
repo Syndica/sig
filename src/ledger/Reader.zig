@@ -1547,7 +1547,7 @@ const ConfirmedTransactionWithStatusMeta = struct {
     block_time: ?UnixTimestamp,
 };
 
-const TransactionWithStatusMeta = union(enum) {
+pub const TransactionWithStatusMeta = union(enum) {
     // Very old transactions may be missing metadata
     missing_metadata: Transaction,
     // Versioned stored transaction always have metadata
