@@ -1134,31 +1134,61 @@ pub const GetTransaction = struct {
 
     pub const Config = struct {
         /// processed is not supported.
-        commitment: ?enum { confirmed, finalized },
+        commitment: ?common.Commitment = null,
         /// Set the max transaction version to return in responses.
         /// If the requested transaction is a higher version, an error will be returned.
         /// If this parameter is omitted, only legacy transactions will be returned,
         /// and any versioned transaction will prompt the error.
-        max_supported_transaction_version: ?u8,
+        maxSupportedTransactionVersion: ?u8 = null,
         /// Encoding for the returned Transaction
         /// jsonParsed encoding attempts to use program-specific state parsers to return
         /// more human-readable and explicit data in the transaction.message.instructions
         /// list. If jsonParsed is requested but a parser cannot be found, the instruction
         /// falls back to regular JSON encoding (accounts, data, and programIdIndex fields).
-        encoding: ?enum { json, jsonParsed, base64, base58 },
+        encoding: ?common.TransactionEncoding = null,
     };
 
-    pub const Response = struct {
-        /// the slot this transaction was processed in
-        slot: Slot,
-        /// Transaction object, either in JSON format or encoded binary data, depending on encoding parameter
-        transaction: void,
-        /// estimated production time, as Unix timestamp (seconds since the Unix epoch) of when the transaction was processed. null if not available
-        blocktime: ?i64,
-        /// transaction status metadata object:
-        meta: void,
-        /// Transaction version. Undefined if maxSupportedTransactionVersion is not set in request params.
-        version: union(enum) { legacy, version: u8, not_defined },
+    pub const Response = union(enum) {
+        none,
+        value: struct {
+            /// the slot this transaction was processed in
+            slot: Slot,
+            /// Transaction object
+            transaction: GetBlock.Response.EncodedTransactionWithStatusMeta,
+            /// estimated production time, as Unix timestamp (seconds since the Unix epoch) of when the transaction was processed. null if not available
+            block_time: ?i64,
+
+            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("slot");
+                try jw.write(self.slot);
+
+                // Flatten EncodedTransactionWithStatusMeta fields to top level
+                if (self.transaction.meta) |m| {
+                    try jw.objectField("meta");
+                    try jw.write(m);
+                }
+                try jw.objectField("transaction");
+                try jw.write(self.transaction.transaction);
+                if (self.transaction.version) |v| {
+                    try jw.objectField("version");
+                    try v.jsonStringify(jw);
+                }
+
+                if (self.block_time) |bt| {
+                    try jw.objectField("blockTime");
+                    try jw.write(bt);
+                }
+                try jw.endObject();
+            }
+        },
+
+        pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            switch (self) {
+                .none => try jw.write(null),
+                .value => |v| try v.jsonStringify(jw),
+            }
+        }
     };
 };
 
@@ -1520,6 +1550,47 @@ pub const BlockHookContext = struct {
             .show_rewards = show_rewards,
             .max_supported_version = max_supported_version,
         });
+    }
+
+    pub fn getTransaction(
+        self: @This(),
+        allocator: std.mem.Allocator,
+        params: GetTransaction,
+    ) !GetTransaction.Response {
+        const config = params.config orelse GetTransaction.Config{};
+        const commitment = config.commitment orelse .finalized;
+        const encoding = config.encoding orelse .json;
+        const max_supported_version = config.maxSupportedTransactionVersion;
+
+        if (commitment == .processed) {
+            return error.ProcessedNotSupported;
+        }
+
+        const reader = self.ledger.reader();
+        const highest_confirmed_slot = self.slot_tracker.getSlotForCommitment(.confirmed);
+
+        // Get transaction from ledger.
+        const confirmed_tx_with_meta = try reader.getCompleteTransaction(
+            allocator,
+            params.signature,
+            highest_confirmed_slot,
+        ) orelse {
+            // TODO: implement bigtable?
+            return .none;
+        };
+        defer confirmed_tx_with_meta.deinit(allocator);
+
+        return .{ .value = .{
+            .slot = confirmed_tx_with_meta.slot,
+            .transaction = try encodeTransactionWithStatusMeta(
+                allocator,
+                confirmed_tx_with_meta.tx_with_meta,
+                encoding,
+                max_supported_version,
+                true,
+            ),
+            .block_time = confirmed_tx_with_meta.block_time,
+        } };
     }
 
     /// Encode transactions and/or signatures based on the requested options.
