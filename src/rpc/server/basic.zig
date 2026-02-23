@@ -134,8 +134,48 @@ fn handleGetOrHead(
         const path = target[1..];
 
         if (std.mem.eql(u8, path, "health")) {
-            // TODO: https://github.com/Syndica/sig/issues/558
-            request.respond("unknown", .{
+            // Call the getHealth RPC method through hooks
+            // Analogous to GET /health endpoint in agave
+            // Note: HTTP /health always returns 200 with status string,
+            // unlike JSON-RPC getHealth which returns error for unhealthy states.
+            // See: https://github.com/anza-xyz/agave/blob/master/rpc/src/rpc_service.rs#L331-L339
+            const health_result = server_ctx.rpc_hooks.call(
+                server_ctx.allocator,
+                .getHealth,
+                .{},
+            ) catch |e| switch (e) {
+                error.MethodNotImplemented => {
+                    // Health check not implemented, return unknown status
+                    request.respond("unknown", .{
+                        .status = .ok,
+                        .keep_alive = false,
+                    }) catch |err| switch (err) {
+                        error.ConnectionResetByPeer => return,
+                        else => return error.SystemIoError,
+                    };
+                    return;
+                },
+            };
+
+            // HTTP /health endpoint always returns 200 OK with status string
+            // This differs from JSON-RPC getHealth which returns error for unhealthy states
+            const status_str = switch (health_result) {
+                .ok => |response| response,
+                .err => |err| blk: {
+                    // Map error name to HTTP status string
+                    // "NodeUnhealthyUnknown" -> "unknown"
+                    // "NodeUnhealthyBehind" -> "behind"
+                    if (std.mem.eql(u8, err.message, "NodeUnhealthyUnknown")) {
+                        break :blk "unknown";
+                    } else if (std.mem.eql(u8, err.message, "NodeUnhealthyBehind")) {
+                        break :blk "behind";
+                    }
+                    // Fallback for any other error
+                    break :blk "unknown";
+                },
+            };
+
+            request.respond(status_str, .{
                 .status = .ok,
                 .keep_alive = false,
             }) catch return error.SystemIoError;
