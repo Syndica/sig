@@ -321,18 +321,7 @@ fn authorize(
     clock: Clock,
     signers: []const Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot))
-        .v4
-    else
-        .v3;
-
-    const checked = try getVoteStateChecked(
-        allocator,
-        vote_account,
-        target_version,
-        false,
-    );
-    var vote_state = checked.vote_state;
+    var vote_state = try getVoteStateChecked(allocator, vote_account, targetVersion(ic.tc), false);
     defer vote_state.deinit(allocator);
 
     switch (vote_authorize) {
@@ -547,18 +536,7 @@ fn updateValidatorIdentity(
     vote_account: *BorrowedAccount,
     new_identity: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot))
-        .v4
-    else
-        .v3;
-
-    const checked = try getVoteStateChecked(
-        allocator,
-        vote_account,
-        target_version,
-        false,
-    );
-    var vote_state = checked.vote_state;
+    var vote_state = try getVoteStateChecked(allocator, vote_account, targetVersion(ic.tc), false);
     defer vote_state.deinit(allocator);
 
     // Both the current authorized withdrawer and new identity must sign.
@@ -610,15 +588,10 @@ fn updateCommission(
     epoch_schedule: EpochSchedule,
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot))
-        .v4
-    else
-        .v3;
-
-    const checked = getVoteStateChecked(
+    var vote_state = getVoteStateChecked(
         allocator,
         vote_account,
-        target_version,
+        targetVersion(ic.tc),
         false,
     ) catch |err| {
         // Deserialization failed - enforce the commission update rule
@@ -628,14 +601,12 @@ fn updateCommission(
         }
         return err;
     };
-    var vote_state = checked.vote_state;
     defer vote_state.deinit(allocator);
 
     // [SIMD-0185] New commission value multiplied by 100 for bps; compare with current bps.
     const current_bps = vote_state.inflationRewardsCommissionBps() orelse
-        (@as(u16, vote_state.commission()) * 100);
-    const enforce_commission_update_rule =
-        @as(u16, commission) * 100 > current_bps;
+        @as(u16, vote_state.commission()) * 100;
+    const enforce_commission_update_rule = @as(u16, commission) * 100 > current_bps;
 
     if (enforce_commission_update_rule and !isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
         ic.tc.custom_error = @intFromEnum(VoteError.commission_update_too_late);
@@ -715,18 +686,7 @@ fn widthraw(
     var vote_account = try ic.borrowInstructionAccount(vote_account_index);
     defer vote_account.release();
 
-    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot))
-        .v4
-    else
-        .v3;
-
-    const checked = try getVoteStateChecked(
-        allocator,
-        &vote_account,
-        target_version,
-        false,
-    );
-    var vote_state = checked.vote_state;
+    var vote_state = try getVoteStateChecked(allocator, &vote_account, targetVersion(ic.tc), false);
     defer vote_state.deinit(allocator);
 
     if (!ic.ixn_info.isPubkeySigner(vote_state.withdrawerKey().*)) {
@@ -832,18 +792,7 @@ fn processVoteWithAccount(
     slot_hashes: SlotHashes,
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot))
-        .v4
-    else
-        .v3;
-
-    const checked = try getVoteStateChecked(
-        allocator,
-        vote_account,
-        target_version,
-        true,
-    );
-    var vote_state = checked.vote_state;
+    var vote_state = try getVoteStateChecked(allocator, vote_account, targetVersion(ic.tc), true);
     defer vote_state.deinit(allocator);
 
     const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
@@ -929,18 +878,7 @@ fn voteStateUpdate(
     clock: Clock,
     vote_state_update: *VoteStateUpdate,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot))
-        .v4
-    else
-        .v3;
-
-    const checked = try getVoteStateChecked(
-        allocator,
-        vote_account,
-        target_version,
-        true,
-    );
-    var vote_state = checked.vote_state;
+    var vote_state = try getVoteStateChecked(allocator, vote_account, targetVersion(ic.tc), true);
     defer vote_state.deinit(allocator);
 
     const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
@@ -1007,18 +945,7 @@ fn towerSync(
     clock: Clock,
     tower_sync: *TowerSync,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const target_version: VoteVersion = if (ic.tc.feature_set.active(.vote_state_v4, ic.tc.slot))
-        .v4
-    else
-        .v3;
-
-    const checked = try getVoteStateChecked(
-        allocator,
-        vote_account,
-        target_version,
-        true,
-    );
-    var vote_state = checked.vote_state;
+    var vote_state = try getVoteStateChecked(allocator, vote_account, targetVersion(ic.tc), true);
     defer vote_state.deinit(allocator);
 
     const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
@@ -1051,10 +978,6 @@ fn towerSync(
     );
 }
 
-const VerifiedVoteState = struct {
-    vote_state: VoteState,
-};
-
 /// Deserialize and validate the vote state from an account.
 /// Matches `get_vote_state_handler_checked` in agave v3.1.8.
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/programs/vote/src/vote_state/mod.rs#L45-L77
@@ -1063,7 +986,7 @@ fn getVoteStateChecked(
     vote_account: *BorrowedAccount,
     target_version: VoteVersion,
     check_initialized: bool,
-) (error{OutOfMemory} || InstructionError)!VerifiedVoteState {
+) (error{OutOfMemory} || InstructionError)!VoteState {
     var versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
@@ -1098,7 +1021,11 @@ fn getVoteStateChecked(
     );
     errdefer vote_state.deinit(allocator);
 
-    return .{ .vote_state = vote_state };
+    return vote_state;
+}
+
+fn targetVersion(tc: *const sig.runtime.TransactionContext) VoteVersion {
+    return if (tc.feature_set.active(.vote_state_v4, tc.slot)) .v4 else .v3;
 }
 
 fn validateIsSigner(
