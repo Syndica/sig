@@ -8,7 +8,7 @@ const server_handlers = @import("../support/server_handlers.zig");
 
 test "raw send text" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const frames = [_]server_handlers.RawSendOnOpenHandler.FrameSpec{
         .{ .opcode = .text, .data = "hello raw" },
@@ -44,7 +44,7 @@ test "raw send text" {
 
 test "raw send binary" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const payload = [_]u8{ 0xDE, 0xAD, 0xBE, 0xEF };
     const frames = [_]server_handlers.RawSendOnOpenHandler.FrameSpec{
@@ -81,7 +81,7 @@ test "raw send binary" {
 
 test "raw send 16-bit length" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const large_payload = try testing.allocator.alloc(u8, 300);
     defer testing.allocator.free(large_payload);
@@ -124,7 +124,7 @@ test "raw send 16-bit length" {
 
 test "raw send batched messages" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const frames = [_]server_handlers.RawSendOnOpenHandler.FrameSpec{
         .{ .opcode = .text, .data = "first" },

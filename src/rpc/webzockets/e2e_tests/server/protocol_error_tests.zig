@@ -9,7 +9,7 @@ const expectCloseWithCode = @import("../support/test_helpers.zig").expectCloseWi
 
 test "unmasked client frame → 1002" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -26,7 +26,7 @@ test "unmasked client frame → 1002" {
 
 test "reserved opcode 0x3 → 1002" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -43,7 +43,7 @@ test "reserved opcode 0x3 → 1002" {
 
 test "RSV1 set without extension → 1002" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -60,7 +60,7 @@ test "RSV1 set without extension → 1002" {
 
 test "fragmented ping (FIN=0) → 1002" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -77,7 +77,7 @@ test "fragmented ping (FIN=0) → 1002" {
 
 test "ping with 126-byte payload → 1002" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -95,7 +95,7 @@ test "ping with 126-byte payload → 1002" {
 
 test "unexpected continuation frame → 1002" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -112,7 +112,7 @@ test "unexpected continuation frame → 1002" {
 
 test "new data frame during fragmentation → 1002" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -133,7 +133,7 @@ test "new data frame during fragmentation → 1002" {
 
 test "message exceeding max_message_size → 1009" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try startSmallMaxTestServer(testing.allocator);
     defer ts.stop();

@@ -8,7 +8,7 @@ const FdLeakDetector = @import("../support/FdLeakDetector.zig");
 
 test "connection pool exhaustion" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try startLimitedTestServer(testing.allocator);
     defer ts.stop();

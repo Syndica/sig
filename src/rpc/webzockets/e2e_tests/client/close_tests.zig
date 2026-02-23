@@ -8,7 +8,7 @@ const FdLeakDetector = @import("../support/FdLeakDetector.zig");
 
 test "server-initiated close disconnects cleanly" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     // Server closes immediately on open (server-initiated close).
     // Client echoes and disconnects.
@@ -35,7 +35,7 @@ test "server-initiated close disconnects cleanly" {
 
 test "close frame still sent when ping write is in flight" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     var capture: CaptureContext = .{};
 

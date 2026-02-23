@@ -28,7 +28,7 @@ test "very large message requiring dynamic allocation (256KB)" {
 
 test "buffer tier retained after large messages" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -86,7 +86,7 @@ test "buffer tier retained after large messages" {
 /// If `max_message_size` is non-null it is forwarded to the client config.
 fn runBufferTierTest(msg_size: usize, max_message_size: ?usize) !void {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();

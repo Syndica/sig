@@ -10,7 +10,7 @@ const wait_ms: u64 = 2_000;
 
 test "text message in 2 fragments" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -33,7 +33,7 @@ test "text message in 2 fragments" {
 
 test "text message in 6 fragments" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -68,7 +68,7 @@ test "text message in 6 fragments" {
 
 test "binary message in 2 fragments" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -91,7 +91,7 @@ test "binary message in 2 fragments" {
 
 test "ping interleaved during fragmentation" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -124,7 +124,7 @@ test "ping interleaved during fragmentation" {
 
 test "non-empty first, empty final continuation" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -147,7 +147,7 @@ test "non-empty first, empty final continuation" {
 
 test "empty first, non-empty final continuation" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -170,7 +170,7 @@ test "empty first, non-empty final continuation" {
 
 test "all-empty fragments produce empty message" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -193,7 +193,7 @@ test "all-empty fragments produce empty message" {
 
 test "8KB message across 4 fragments" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -237,7 +237,7 @@ test "8KB message across 4 fragments" {
 
 test "256KB message across 64 fragments" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();

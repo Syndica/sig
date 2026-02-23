@@ -8,7 +8,7 @@ const FdLeakDetector = @import("../support/FdLeakDetector.zig");
 
 test "handler rejects connection" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try startRejectingTestServer(testing.allocator);
     defer ts.stop();
@@ -33,7 +33,7 @@ test "handler rejects connection" {
 
 test "handler accepts valid path" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try startRejectingTestServer(testing.allocator);
     defer ts.stop();

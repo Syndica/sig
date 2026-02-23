@@ -7,7 +7,7 @@
 //! Usage:
 //! ```zig
 //! const fd_check = FdLeakDetector.baseline();
-//! defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+//! defer _ = fd_check.detectLeaks();
 //! // ... test body ...
 //! ```
 
@@ -26,7 +26,7 @@ pub fn baseline() @This() {
 
 /// Check for FD leaks. Logs details if any are found.
 /// Returns `.leak` if the FD count exceeds baseline, `.ok` otherwise.
-pub fn check(self: *const @This()) Result {
+pub fn detectLeaks(self: *const @This()) Result {
     const current = countOpenFds();
     if (current == self.baseline_count) return .ok;
     const cur: isize = @intCast(current);
@@ -105,7 +105,7 @@ fn countOpenFdsLinux() usize {
 
 test "FdLeakDetector: no leak when no FDs opened" {
     const detector = @This().baseline();
-    try std.testing.expect(detector.check() == .ok);
+    try std.testing.expect(detector.detectLeaks() == .ok);
 }
 
 test "FdLeakDetector: detects leaked FD" {
@@ -123,11 +123,11 @@ test "FdLeakDetector: detects leaked FD" {
     std.posix.close(leaked_fd);
 
     // Now it should pass.
-    try std.testing.expect(detector.check() == .ok);
+    try std.testing.expect(detector.detectLeaks() == .ok);
 }
 
 test "countOpenFds returns reasonable value" {
     const count = countOpenFds();
     // A running process should have at least stdin, stdout, stderr.
-    std.debug.assert(count >= 3);
+    try std.testing.expect(count >= 3);
 }

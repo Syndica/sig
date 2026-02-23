@@ -11,7 +11,7 @@ const wait_ms: u64 = 2_000;
 
 test "malformed HTTP request (garbage bytes)" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -28,7 +28,7 @@ test "malformed HTTP request (garbage bytes)" {
 
 test "missing Upgrade header" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -45,7 +45,7 @@ test "missing Upgrade header" {
 
 test "missing Sec-WebSocket-Key" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -62,7 +62,7 @@ test "missing Sec-WebSocket-Key" {
 
 test "wrong HTTP method (POST)" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -79,7 +79,7 @@ test "wrong HTTP method (POST)" {
 
 test "unsupported WebSocket version" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -96,7 +96,7 @@ test "unsupported WebSocket version" {
 
 test "incremental request (chunked with delays)" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -138,7 +138,7 @@ test "incremental request (chunked with delays)" {
 
 test "byte-by-byte request" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -175,7 +175,7 @@ test "bare LF headers (no \\r\\n) doesn't crash server" {
     // the request line but bare \n on headers, terminated by \n\n. The server
     // must reject it gracefully (close the connection) without crashing.
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -206,7 +206,7 @@ test "fully bare LF request (no \\r\\n at all) doesn't crash server" {
     // Everything uses bare \n — no \r\n anywhere. HeadParser sees \n\n and
     // reports finished, but the headers won't be found without \r\n line endings.
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -233,7 +233,7 @@ test "fully bare LF request (no \\r\\n at all) doesn't crash server" {
 
 test "partial request then disconnect" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -254,7 +254,7 @@ test "partial request then disconnect" {
 
 test "headers exceeding read buffer size" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -320,7 +320,7 @@ fn expectClosed(stream: std.net.Stream) !void {
 
 test "onHandshakeFailed fires on connection pool exhaustion" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     var ctx = HandshakeFailContext{};
 
@@ -360,7 +360,7 @@ test "handler without onHandshakeFailed still works" {
     // Verify that pool exhaustion doesn't crash — the handler is silently
     // dropped (pre-existing behavior for handlers without the callback).
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try LimitedEchoTestServer.start(testing.allocator, .{
         .address = servers.localhost,

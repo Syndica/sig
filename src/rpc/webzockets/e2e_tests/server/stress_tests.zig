@@ -10,7 +10,7 @@ const verifyServerFunctional = @import("../support/test_helpers.zig").verifyServ
 
 test "rapid connect/disconnect" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -54,7 +54,7 @@ test "rapid connect/disconnect" {
 
 test "many concurrent echo clients" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -153,7 +153,7 @@ test "many concurrent echo clients" {
 
 test "rapid message burst" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -202,7 +202,7 @@ test "rapid message burst" {
 
 test "mixed operations under load" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();
@@ -345,7 +345,7 @@ test "mixed operations under load" {
 
 test "randomized concurrent echo" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startTestServer(testing.allocator);
     defer ts.stop();

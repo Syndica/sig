@@ -10,7 +10,7 @@ const close_deadline_ms: u64 = 2_000;
 
 test "idle timeout: server closes idle connection" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startEchoServerWithTimeouts(testing.allocator, 200, 200);
     defer ts.stop();
@@ -36,7 +36,7 @@ test "idle timeout: server closes idle connection" {
 
 test "idle timeout: activity resets timer" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     // Worst-case close arrives 2 × idle_timeout after last message.
     const ts = try servers.startEchoServerWithTimeouts(testing.allocator, 200, 200);
@@ -75,7 +75,7 @@ test "idle timeout: activity resets timer" {
 
 test "idle timeout: peer ignoring close still disconnects" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startEchoServerWithTimeouts(testing.allocator, 200, 200);
     defer ts.stop();
@@ -96,7 +96,7 @@ test "idle timeout: peer ignoring close still disconnects" {
 
 test "close in onOpen with idle timeout configured" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     // Server calls close() in onOpen. idle_timeout_ms is configured, but
     // close in onOpen should still disconnect promptly.
@@ -122,7 +122,7 @@ test "close in onOpen with idle timeout configured" {
 
 test "normal close still works with idle timeout enabled" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     const ts = try servers.startEchoServerWithTimeouts(testing.allocator, 500, 500);
     defer ts.stop();

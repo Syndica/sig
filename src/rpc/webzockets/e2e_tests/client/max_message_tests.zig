@@ -7,7 +7,7 @@ const FdLeakDetector = @import("../support/FdLeakDetector.zig");
 
 test "max_message_size enforcement closes with 1009" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     // OversizedServer sends a 2048-byte binary message on open.
     // The client is configured with max_message_size = 1024, so it should

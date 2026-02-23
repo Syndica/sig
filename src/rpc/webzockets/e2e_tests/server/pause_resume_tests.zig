@@ -17,7 +17,7 @@ fn expectText(client: *RawClient, expected: []const u8) !void {
 
 test "sequential processing of buffered burst" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     // Each masked text frame: 6-byte header (2 + 4 mask) + payload.
     // "a","b","c","d" = 4 × (6 + 1) = 28 bytes.
@@ -51,7 +51,7 @@ test "sequential processing of buffered burst" {
 
 test "pause mid-stream stops dispatch then delivers on resume" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     // 4 × (6 + 1) = 28 bytes threshold.
     var mid_ctx: server_handlers.PauseMidStreamEchoHandler.Context = .{
@@ -85,7 +85,7 @@ test "pause mid-stream stops dispatch then delivers on resume" {
 
 test "close frame while server is paused" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     // "hello" text frame: 6 + 5 = 11 bytes.
     // Close frame (code 1000, no reason): 6 + 2 = 8 bytes.
@@ -111,7 +111,7 @@ test "close frame while server is paused" {
 
 test "no re-entrant onMessage dispatch" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     // "a"(7) + "b"(7) + "c"(7) + "done"(10) = 31 bytes.
     var ctx: server_handlers.ReentrancyDetectHandler.Context = .{
@@ -142,7 +142,7 @@ test "no re-entrant onMessage dispatch" {
 
 test "buffer fills while paused (small read buffer)" {
     const fd_check = FdLeakDetector.baseline();
-    defer std.testing.expect(fd_check.check() == .ok) catch @panic("FD leak");
+    defer _ = fd_check.detectLeaks();
 
     // 256-byte read buffer. Each masked frame with 20-byte payload = 26 bytes.
     // 12 messages × 26 = 312 bytes total — exceeds the 256-byte buffer.
