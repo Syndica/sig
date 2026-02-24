@@ -160,7 +160,7 @@ pub const BenchmarkLedger = struct {
         var indices = try std.ArrayList(u32).initCapacity(allocator, num_reads);
         defer indices.deinit();
         for (0..num_reads) |_| {
-            indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds)));
+            indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds - 1)));
         }
 
         const reader = state.reader();
@@ -247,7 +247,7 @@ pub const BenchmarkLedger = struct {
         var indices = try std.ArrayList(u32).initCapacity(allocator, total_shreds);
         defer indices.deinit();
         for (0..total_shreds) |_| {
-            indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds)));
+            indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds - 1)));
         }
 
         const reader = state.reader();
@@ -347,8 +347,8 @@ pub const BenchmarkLedger = struct {
             _ = try result_writer.writeTransactionStatus(
                 slot,
                 signature,
-                w_keys,
-                r_keys,
+                w_keys.items,
+                r_keys.items,
                 status,
                 tx_idx,
             );
