@@ -297,8 +297,8 @@ fn writeTransactionStatus(
     try result_writer.writeTransactionStatus(
         slot,
         signature,
-        writable_keys,
-        readonly_keys,
+        writable_keys.items,
+        readonly_keys.items,
         status,
         transaction_index,
     );
