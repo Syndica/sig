@@ -2613,14 +2613,6 @@ fn startGossip(
             return .ok;
         }
 
-        pub fn getIdentity(
-            self: @This(),
-            _: std.mem.Allocator,
-            _: anytype,
-        ) !sig.rpc.methods.GetIdentity.Response {
-            return .{ .identity = self.info.pubkey };
-        }
-
         pub fn getVersion(
             self: @This(),
             allocator_: std.mem.Allocator,

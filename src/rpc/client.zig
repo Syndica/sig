@@ -74,6 +74,13 @@ pub const Client = struct {
         return self.fetch(.null, .getAccountInfo, request);
     }
 
+    pub fn getIdentity(
+        self: *Client,
+        request: rpc.methods.GetIdentity,
+    ) Error!Response(rpc.methods.GetIdentity.Response) {
+        return self.fetch(.null, .getIdentity, request);
+    }
+
     pub fn getBalance(
         self: *Client,
         request: rpc.methods.GetBalance,
