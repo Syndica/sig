@@ -258,8 +258,7 @@ test "start and stop gracefully" {
 
     const keypair: KeyPair = .generate();
     const shred_version: Atomic(u16) = .init(0);
-    const contact_info: ThreadSafeContactInfo =
-        try .initRandom(prng, .initRandom(prng), 0);
+    const contact_info: ThreadSafeContactInfo = .initRandom(prng, .initRandom(prng), 0);
 
     var gossip_table: GossipTable = try .init(allocator, allocator);
     defer gossip_table.deinit();

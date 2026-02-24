@@ -114,7 +114,7 @@ pub const LeaderInfo = struct {
             .logger = logger.withScope(@typeName(LeaderInfo)),
             .rpc_client = try RpcClient.init(
                 allocator,
-                config.cluster,
+                config.cluster.getRpcUrl() orelse @panic("No RPC Url for cluster type!"),
                 .{ .max_retries = config.rpc_retries, .logger = .from(logger) },
             ),
             .leader_schedule_cache = LeaderScheduleCache.init(allocator, epoch_schedule),

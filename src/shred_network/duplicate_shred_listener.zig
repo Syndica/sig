@@ -736,6 +736,7 @@ test "GossipDuplicateShredHandler: cacheRootInfo populates and uses cached stake
         // Transfer ownership - epoch_ctx_mgr will handle cleanup
         _ = try epoch_tracker.insertRootedEpochInfo(
             gpa,
+            0,
             epoch_stakes,
             &.ALL_DISABLED,
         );
@@ -997,7 +998,7 @@ test "GossipDuplicateShredHandler: reconstructShredsFromData returns shreds on v
             123,
         );
 
-        try epoch_tracker.insertRootedEpochInfo(gpa, epoch_stakes, &.ALL_DISABLED);
+        try epoch_tracker.insertRootedEpochInfo(gpa, epoch, epoch_stakes, &.ALL_DISABLED);
     }
 
     epoch_tracker.root_slot.store(slot, .monotonic);

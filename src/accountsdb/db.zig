@@ -3305,7 +3305,7 @@ pub fn indexAndValidateAccountFile(
 }
 
 pub fn getAccountPerFileEstimateFromCluster(
-    cluster: sig.core.Cluster,
+    cluster: sig.core.ClusterType,
 ) error{NotImplementedYet}!u64 {
     return switch (cluster) {
         .testnet => 500,
@@ -4178,7 +4178,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         use_disk: bool,
         n_threads: u32,
         name: []const u8,
-        cluster: sig.core.Cluster,
+        cluster: sig.core.ClusterType,
     };
 
     pub const inputs = [_]BenchInputs{.{

@@ -144,12 +144,19 @@ pub const Transaction = struct {
         const msg_bytes_bounded = message.serializeBounded(version) catch return error.BadMessage;
         const msg_bytes = msg_bytes_bounded.constSlice();
 
-        const signatures = try allocator.alloc(Signature, keypairs.len);
+        // TODO: remove these allocations, we have well-known bounds on all the numbers
+        const signatures = try allocator.alloc(Signature, message.signature_count);
         errdefer allocator.free(signatures);
 
-        for (signatures, keypairs) |*signature, keypair| {
-            const msg_signature = keypair.sign(msg_bytes, null) catch return error.SigningError;
-            signature.* = .fromSignature(msg_signature);
+        // NOTE: The current only usecase is when we send votes, which *does* sign the same message twice.
+        const signing_keys = message.account_keys[0..message.signature_count];
+        for (signing_keys, 0..) |key, i| {
+            for (keypairs) |kp| {
+                const public_key: Pubkey = .fromPublicKey(&kp.public_key);
+                if (!key.equals(&public_key)) continue;
+                const msg_signature = kp.sign(msg_bytes, null) catch return error.SigningError;
+                signatures[i] = .fromSignature(msg_signature);
+            }
         }
 
         return .{

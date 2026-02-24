@@ -67,18 +67,16 @@ pub fn main() !void {
     var gpa_state: GpaOrCAllocator(.{}) = .{};
     // defer _ = gpa_state.deinit();
 
-    var tracing_gpa = tracy.TracingAllocator{
+    var tracing_gpa: tracy.TracingAllocator = .{
         .name = "gpa",
         .parent = gpa_state.allocator(),
     };
     const gpa = tracing_gpa.allocator();
 
-    var gossip_gpa_state: GpaOrCAllocator(.{ .stack_trace_frames = 100 }) = .{};
-    var tracing_gossip_gpa = tracy.TracingAllocator{
+    var tracing_gossip_gpa: tracy.TracingAllocator = .{
         .name = "gossip gpa",
-        .parent = gossip_gpa_state.allocator(),
+        .parent = tracing_gpa.allocator(),
     };
-    // defer _ = gossip_gpa_state.deinit();
     const gossip_gpa = tracing_gossip_gpa.allocator();
 
     const argv = try std.process.argsAlloc(gpa);
@@ -182,6 +180,7 @@ pub fn main() !void {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
+            current_config.genesis_file_path = params.genesis_file_path;
             current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
             current_config.shred_network.log_finished_slots = params.repair.log_finished_slots;
             current_config.turbine.overwrite_stake_for_testing =
@@ -209,7 +208,7 @@ pub fn main() !void {
             );
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
-            current_config.gossip.cluster = params.gossip_cluster;
+            current_config.cluster = params.gossip_cluster;
             params.geyser.apply(&current_config);
             current_config.geyser.pipe_path = try current_config.derivePathFromValidatorDir(
                 gpa,
@@ -556,7 +555,7 @@ const Cmd = struct {
             cfg.gossip.host = args.host;
             cfg.gossip.port = args.port;
             cfg.gossip.entrypoints = args.entrypoints;
-            cfg.gossip.cluster = args.network;
+            cfg.cluster = args.network;
         }
     };
     const GossipArgumentsNode = struct {
@@ -978,6 +977,7 @@ const Cmd = struct {
         gossip_base: GossipArgumentsCommon,
         gossip_node: GossipArgumentsNode,
         repair: RepairArgumentsBase,
+        genesis_file_path: ?[]const u8,
         /// TODO: Remove when no longer needed
         overwrite_stake_for_testing: bool,
         no_retransmit: bool,
@@ -1005,6 +1005,7 @@ const Cmd = struct {
                 .gossip_base = GossipArgumentsCommon.cmd_info,
                 .gossip_node = GossipArgumentsNode.cmd_info,
                 .repair = RepairArgumentsBase.cmd_info,
+                .genesis_file_path = genesis_file_path_arg,
                 .overwrite_stake_for_testing = .{
                     .kind = .named,
                     .name_override = null,
@@ -1356,7 +1357,7 @@ fn ensureGenesis(
     allocator.free(existing_path);
 
     // Determine cluster for genesis
-    const cluster = try cfg.gossip.getCluster() orelse {
+    const cluster = try cfg.getCluster() orelse {
         logger.err().log(
             \\No genesis file path provided and no cluster specified. 
             \\Use --genesis-file-path or --cluster"
@@ -1366,12 +1367,7 @@ fn ensureGenesis(
 
     // Otherwise, download genesis from network
     logger.info().logf("Downloading genesis from {s} cluster...", .{@tagName(cluster)});
-    const cluster_url = switch (cluster) {
-        .mainnet => "https://api.mainnet-beta.solana.com",
-        .testnet => "https://api.testnet.solana.com",
-        .devnet => "https://api.devnet.solana.com",
-        .localnet => unreachable,
-    };
+    const cluster_url = cluster.getRpcUrl() orelse @panic("No RPC Url!");
     const genesis_path = downloadAndExtractGenesis(
         allocator,
         cluster_url,
@@ -1618,7 +1614,8 @@ fn validator(
     defer epoch_tracker.deinit(allocator);
 
     const rpc_cluster_type = loaded_snapshot.genesis_config.cluster_type;
-    var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
+    const rpc_url = rpc_cluster_type.getRpcUrl() orelse @panic("No RPC Url for cluster type!");
+    var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{});
     defer rpc_client.deinit();
 
     const turbine_config = cfg.turbine;
@@ -1678,6 +1675,7 @@ fn validator(
         &app_base,
         if (maybe_vote_sockets) |*vs| vs else null,
         &gossip_votes,
+        &gossip_service.gossip_table_rw,
     );
 
     // shred network
@@ -1890,6 +1888,7 @@ fn replayOffline(
         &app_base,
         null,
         null,
+        null,
     );
 
     replay_thread.join();
@@ -1914,7 +1913,9 @@ fn shredNetwork(
     const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
     defer allocator.free(ledger_dir);
 
-    var rpc_client = try sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
+    const rpc_url = genesis_config.cluster_type.getRpcUrl() orelse
+        @panic("No RPC Url for cluster type!");
+    var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{});
     defer rpc_client.deinit();
 
     const shred_network_conf = cfg.shred_network.toConfig(
@@ -2155,17 +2156,11 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
 
     const leader_schedule //
     = try getLeaderScheduleFromCli(allocator, cfg) orelse b: {
-        const cluster = try cfg.gossip.getCluster() orelse
+        const cluster_type = try cfg.getCluster() orelse
             return error.ClusterNotProvided;
 
-        const cluster_type: ClusterType = switch (cluster) {
-            .mainnet => .MainnetBeta,
-            .devnet => .Devnet,
-            .testnet => .Testnet,
-            .localnet => .LocalHost,
-        };
-
-        var rpc_client = try sig.rpc.Client.init(allocator, cluster_type, .{});
+        const rpc_url = cluster_type.getRpcUrl() orelse @panic("No RPC Url for cluster type!");
+        var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{});
         defer rpc_client.deinit();
 
         const slot = blk: {
@@ -2238,12 +2233,7 @@ fn testTransactionSenderService(
     }
 
     // define cluster of where to land transactions
-    const rpc_cluster: ClusterType = if (try cfg.gossip.getCluster()) |n| switch (n) {
-        .mainnet => .MainnetBeta,
-        .devnet => .Devnet,
-        .testnet => .Testnet,
-        .localnet => .LocalHost,
-    } else {
+    const rpc_cluster: ClusterType = try cfg.getCluster() orelse {
         @panic("cluster option (-c) not provided");
     };
     app_base.logger.warn().logf(
@@ -2273,7 +2263,8 @@ fn testTransactionSenderService(
     );
 
     // rpc is used to get blockhashes and other balance information
-    var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster, .{
+    const rpc_url = rpc_cluster.getRpcUrl() orelse @panic("No RPC Url for cluster type!");
+    var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{
         .logger = .from(app_base.logger),
     });
     defer rpc_client.deinit();
@@ -2492,7 +2483,8 @@ const AppBase = struct {
         const my_keypair = try sig.identity.getOrInit(allocator, .from(logger));
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
-        const entrypoints = try cfg.gossip.getEntrypointAddrs(allocator);
+        const entrypoints = try cfg.gossip.getEntrypointAddrs(try cfg.getCluster(), allocator);
+        if (entrypoints.len == 0) logger.warn().log("no gossip entrypoints provided");
 
         const echo_data = try getShredAndIPFromEchoServer(.from(logger), entrypoints);
 
@@ -2726,7 +2718,7 @@ const ReplayAndConsensusServiceState = struct {
                         // For now, default to using the node keypair as the authorized voter
                         // (same as Agave's default behavior when no --authorized-voter is specified)
                         // ref https://github.com/anza-xyz/agave/blob/67a1cc9ef4222187820818d95325a0c8e700312f/validator/src/commands/run/execute.rs#L136-L138
-                        &.{params.app_base.my_keypair}
+                        (&params.app_base.my_keypair)[0..1]
                     else
                         &.{},
                 },
@@ -2790,6 +2782,7 @@ const ReplayAndConsensusServiceState = struct {
         app_base: *const AppBase,
         vote_sockets: ?*const replay.consensus.core.VoteSockets,
         gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
+        gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     ) !std.Thread {
         return try app_base.spawnService(
             "replay",
@@ -2810,6 +2803,7 @@ const ReplayAndConsensusServiceState = struct {
                     .senders = c.senders,
                     .receivers = c.receivers,
                     .vote_sockets = vote_sockets,
+                    .gossip_table = gossip_table,
                 } else null,
             },
         );
@@ -2995,7 +2989,7 @@ const RpcLeaderScheduleService = struct {
                     self.allocator.destroy(entry);
                 }
 
-                try self.epoch_tracker.rooted_epochs.insert(self.allocator, entry);
+                try self.epoch_tracker.rooted_epochs.insert(self.allocator, e, entry);
             }
         }
     }
