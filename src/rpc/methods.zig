@@ -1508,12 +1508,16 @@ pub const BlockHookContext = struct {
         // matching Agave's get_rooted_block).
         // Confirmed path uses getCompleteBlock (no cleanup check, slot may not be rooted yet).
         const reader = self.ledger.reader();
-        const block = try reader.getCompleteBlock(
+        const latest_confirmed_slot = self.slot_tracker.getSlotForCommitment(.confirmed);
+        const block = if (params.slot <= latest_confirmed_slot) try reader.getRootedBlock(
             allocator,
             params.slot,
             true,
-        );
-        defer block.deinit(allocator);
+        ) else if (commitment == .confirmed) try reader.getCompleteBlock(
+            allocator,
+            params.slot,
+            true,
+        ) else return error.BlockNotAvailable;
 
         return try encodeBlockWithOptions(allocator, block, encoding, .{
             .tx_details = transaction_details,
