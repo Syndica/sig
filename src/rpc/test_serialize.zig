@@ -21,6 +21,7 @@ const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSlot = methods.GetSlot;
+const GetTransaction = methods.GetTransaction;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
 
@@ -273,7 +274,69 @@ test GetSlot {
 // TODO: test getTockenAccountsByOwner()
 // TODO: test getTokenLargestAccounts()
 // TODO: test getTokenSupply()
-// TODO: test getTransaction()
+test GetTransaction {
+    const tx_sig: Signature = .parse(
+        "56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp",
+    );
+
+    // Request serialization - signature only
+    try testRequest(
+        .getTransaction,
+        .{ .signature = tx_sig },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTransaction","params":["56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp"]}
+        ,
+    );
+
+    // Request serialization - with config
+    try testRequest(
+        .getTransaction,
+        .{
+            .signature = tx_sig,
+            .config = .{
+                .maxSupportedTransactionVersion = 0,
+                .encoding = .base64,
+            },
+        },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTransaction","params":["56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp",{"commitment":null,"maxSupportedTransactionVersion":0,"encoding":"base64"}]}
+        ,
+    );
+
+    // Response serialization - transaction not found (none)
+    try expectJsonStringify("null", @as(GetTransaction.Response, .none));
+
+    // Response serialization - minimal (no meta, no version, no blockTime)
+    try expectJsonStringify(
+        \\{"slot":430,"transaction":["AQID","base64"]}
+    , @as(GetTransaction.Response, .{ .value = .{
+        .slot = 430,
+        .transaction = .{
+            .transaction = .{ .binary = .{ .data = "AQID", .encoding = .base64 } },
+        },
+        .block_time = null,
+    } }));
+
+    // Response serialization - full (with meta, version, and blockTime)
+    const pre_balances = [_]u64{ 1_000_000_000, 500_000_000 };
+    const post_balances = [_]u64{ 999_995_000, 500_005_000 };
+    try expectJsonStringify(
+        \\{"slot":430,"meta":{"err":null,"fee":5000,"innerInstructions":[],"logMessages":[],"postBalances":[999995000,500005000],"postTokenBalances":[],"preBalances":[1000000000,500000000],"preTokenBalances":[],"rewards":[],"status":{"Ok":null}},"transaction":["AQID","base64"],"version":0,"blockTime":1700000000}
+    , @as(GetTransaction.Response, .{ .value = .{
+        .slot = 430,
+        .transaction = .{
+            .transaction = .{ .binary = .{ .data = "AQID", .encoding = .base64 } },
+            .meta = .{
+                .err = null,
+                .status = .{ .Ok = .{}, .Err = null },
+                .fee = 5000,
+                .preBalances = &pre_balances,
+                .postBalances = &post_balances,
+            },
+            .version = .{ .number = 0 },
+        },
+        .block_time = 1_700_000_000,
+    } }));
+}
+
 // TODO: test getTransactionCount()
 // TODO: test getVoteAccounts()
 // TODO: test isBlockhashValid()
