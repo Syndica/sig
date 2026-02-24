@@ -542,6 +542,7 @@ fn prepareSlot(
         .stakes_cache = &slot_info.state.stakes_cache,
         .new_rate_activation_epoch = new_rate_activation_epoch,
         .replay_votes_sender = state.replay_votes_channel,
+        .account_capture_sender = if (replay.account_capture.enable) state.account_capture_sender else {},
     };
 
     const verify_ticks_params = replay.execution.VerifyTicksParams{
@@ -1112,6 +1113,7 @@ pub const TestState = struct {
             .stakes_cache = &self.stakes_cache,
             .new_rate_activation_epoch = null,
             .replay_votes_sender = self.replay_votes_channel,
+            .account_capture_sender = replay.account_capture.sender_disabled,
         };
     }
 

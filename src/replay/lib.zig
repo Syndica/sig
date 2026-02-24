@@ -1,3 +1,4 @@
+pub const account_capture = @import("account_capture.zig");
 pub const AccountLocks = @import("AccountLocks.zig");
 pub const exec_async = @import("exec_async.zig");
 pub const Committer = @import("Committer.zig");

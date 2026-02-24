@@ -21,6 +21,8 @@ const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 const parseSanitizedVoteTransaction =
     sig.consensus.vote_listener.vote_parser.parseSanitizedVoteTransaction;
 
+const account_capture = replay.account_capture;
+
 const Committer = @This();
 
 logger: Logger,
@@ -29,6 +31,7 @@ status_cache: *sig.core.StatusCache,
 stakes_cache: *sig.core.StakesCache,
 new_rate_activation_epoch: ?sig.core.Epoch,
 replay_votes_sender: ?*Channel(ParsedVote),
+account_capture_sender: account_capture.SenderField,
 
 pub fn commitTransactions(
     self: Committer,
@@ -137,6 +140,28 @@ pub fn commitTransactions(
             account.account,
             self.new_rate_activation_epoch,
         );
+    }
+
+    // Capture modified accounts for offline analysis / load testing.
+    // When `account_capture.enable` is false, this entire block is comptime-eliminated.
+    if (account_capture.enable) {
+        if (self.account_capture_sender) |sender| {
+            for (accounts_to_store.keys(), accounts_to_store.values()) |pubkey, loaded| {
+                const data_copy = persistent_allocator.dupe(u8, loaded.account.data) catch continue;
+                const captured: account_capture.CapturedAccount = .{
+                    .slot = slot,
+                    .pubkey = pubkey,
+                    .lamports = loaded.account.lamports,
+                    .owner = loaded.account.owner,
+                    .executable = loaded.account.executable,
+                    .rent_epoch = loaded.account.rent_epoch,
+                    .data = data_copy,
+                };
+                if (!sender.trySend(captured)) {
+                    persistent_allocator.free(data_copy);
+                }
+            }
+        }
     }
 }
 

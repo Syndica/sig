@@ -22,6 +22,8 @@ const ProgressMap = sig.consensus.ProgressMap;
 const TowerConsensus = replay.consensus.TowerConsensus;
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 
+const account_capture = replay.account_capture;
+
 const ReplayResult = replay.execution.ReplayResult;
 
 const SlotTracker = replay.trackers.SlotTracker;
@@ -190,6 +192,11 @@ pub const ReplayState = struct {
     replay_votes_channel: ?*Channel(ParsedVote),
     stop_at_slot: ?sig.core.Slot,
 
+    // Account capture (comptime-gated)
+    account_capture_channel: if (account_capture.enable) *Channel(account_capture.CapturedAccount) else void,
+    account_capture_sender: if (account_capture.enable) *account_capture.BoundedSender else void,
+    account_capture_thread: if (account_capture.enable) std.Thread else void,
+
     pub fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
         self.thread_pool.deinit();
@@ -200,6 +207,19 @@ pub const ReplayState = struct {
         if (self.replay_votes_channel) |channel| {
             while (channel.tryReceive()) |item| item.deinit(self.allocator);
             channel.destroy();
+        }
+
+        // Shut down account capture writer thread
+        if (account_capture.enable) {
+            self.account_capture_channel.close();
+            self.account_capture_thread.join();
+            // Drain any remaining items the writer didn't consume
+            while (self.account_capture_channel.tryReceive()) |item| {
+                self.account_capture_sender.ack();
+                item.deinit(self.allocator);
+            }
+            self.allocator.destroy(self.account_capture_sender);
+            self.account_capture_channel.destroy();
         }
 
         self.slot_tree.deinit(self.allocator);
@@ -227,6 +247,30 @@ pub const ReplayState = struct {
         else
             null;
         errdefer if (replay_votes_channel) |ch| ch.destroy();
+
+        // Account capture channel + writer thread (comptime-gated)
+        const capture_channel, const capture_sender, const capture_thread = if (account_capture.enable) blk: {
+            const ch = try Channel(account_capture.CapturedAccount).create(deps.allocator);
+            errdefer ch.destroy();
+            const sender = try deps.allocator.create(account_capture.BoundedSender);
+            errdefer deps.allocator.destroy(sender);
+            sender.* = account_capture.BoundedSender.init(ch);
+
+            const exit_flag = sig.sync.ExitCondition{ .unordered = &ch.closed };
+            const thread = try std.Thread.spawn(
+                .{},
+                account_capture.writerThread,
+                .{
+                    sender,
+                    deps.allocator,
+                    account_capture.default_output_path,
+                    account_capture.default_capture_limit,
+                    exit_flag,
+                    .from(deps.logger),
+                },
+            );
+            break :blk .{ ch, sender, thread };
+        } else .{ {}, {}, {} };
 
         const progress_map = try initProgressMap(
             deps.allocator,
@@ -257,6 +301,9 @@ pub const ReplayState = struct {
             .execution_log_helper = .init(.from(deps.logger)),
             .replay_votes_channel = replay_votes_channel,
             .stop_at_slot = deps.stop_at_slot,
+            .account_capture_channel = capture_channel,
+            .account_capture_sender = capture_sender,
+            .account_capture_thread = capture_thread,
         };
     }
 };
