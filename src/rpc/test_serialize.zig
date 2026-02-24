@@ -836,14 +836,23 @@ test "GetBlock request serialization" {
     );
 }
 
+test "GetBlock request serialization - with encoding only (deprecated)" {
+    try testRequest(.getBlock, .{
+        .slot = 430,
+        .encoding_or_config = .{ .encoding = .base64 },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlock","params":[430,"base64"]}
+    );
+}
+
 test "GetBlock request serialization - with config" {
     try testRequest(.getBlock, .{
         .slot = 430,
-        .config = .{
+        .encoding_or_config = .{ .config = .{
             .encoding = .json,
             .transactionDetails = .full,
             .rewards = false,
-        },
+        } },
     },
         \\{"jsonrpc":"2.0","id":1,"method":"getBlock","params":[430,{"commitment":null,"encoding":"json","transactionDetails":"full","maxSupportedTransactionVersion":null,"rewards":false}]}
     );
