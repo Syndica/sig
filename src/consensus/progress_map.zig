@@ -275,7 +275,7 @@ pub const ForkProgress = struct {
         },
     ) std.mem.Allocator.Error!ForkProgress {
         const validator_stake_info: ?ValidatorStakeInfo = if (Pubkey.equals(
-            &params.slot_info.constants.collector_id,
+            &params.slot_info.constants().collector_id,
             params.validator_identity,
         )) .{
             .validator_vote_pubkey = params.validator_vote_pubkey,
@@ -292,7 +292,7 @@ pub const ForkProgress = struct {
         var new_progress: ForkProgress = try .init(allocator, .{
             .now = params.now,
             .last_entry = blk: {
-                const bhq, var bhq_lg = params.slot_info.state.blockhash_queue.readWithLock();
+                const bhq, var bhq_lg = params.slot_info.state().blockhash_queue.readWithLock();
                 defer bhq_lg.unlock();
                 break :blk bhq.last_hash orelse std.debug.panic("no hash has been set", .{});
             },
@@ -303,7 +303,7 @@ pub const ForkProgress = struct {
         });
         errdefer new_progress.deinit(allocator);
 
-        if (params.slot_info.state.hash.readCopy()) |frozen_hash| {
+        if (params.slot_info.state().hash.readCopy()) |frozen_hash| {
             new_progress.fork_stats.slot_hash = frozen_hash;
         }
 
@@ -1249,16 +1249,19 @@ test "ForkProgress.init" {
     const slot = bank_data.slot;
     const slot_consts: sig.core.SlotConstants =
         try .fromBankFields(allocator, &bank_data, .ALL_DISABLED);
-    defer slot_consts.deinit(allocator);
 
     var slot_state: sig.core.SlotState =
         try .fromBankFieldsForTest(allocator, &bank_data, null);
-    defer slot_state.deinit(allocator);
 
-    const slot_info: replay.trackers.SlotTracker.Reference = .{
-        .constants = &slot_consts,
-        .state = &slot_state,
+    var slot_element: replay.trackers.SlotTracker.Element = .{
+        .constants = slot_consts,
+        .state = slot_state,
+        .allocator = allocator,
     };
+    defer slot_element.constants.deinit(allocator);
+    defer slot_element.state.deinit(allocator);
+    const slot_info: replay.trackers.SlotTracker.Reference = slot_element.toRef().?;
+    defer slot_info.release();
 
     const epoch_stakes = bank_data.epoch_stakes.get(bank_data.epoch).?;
 

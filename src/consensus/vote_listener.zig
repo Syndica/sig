@@ -33,7 +33,8 @@ pub const SlotDataProvider = struct {
 
     fn getSlotHash(self: *const SlotDataProvider, slot: Slot) ?Hash {
         const slot_info = self.slot_tracker.get(slot) orelse return null;
-        return slot_info.state.hash.readCopy();
+        defer slot_info.release();
+        return slot_info.state().hash.readCopy();
     }
 
     fn getSlotEpoch(self: *const SlotDataProvider, slot: Slot) sig.core.Epoch {
@@ -44,10 +45,10 @@ pub const SlotDataProvider = struct {
         self: *const SlotDataProvider,
         slot: Slot,
     ) ?*const sig.core.Ancestors {
-        if (self.slot_tracker.get(slot)) |ref|
-            return &ref.constants.ancestors
-        else
-            return null;
+        if (self.slot_tracker.get(slot)) |ref| {
+            defer ref.release();
+            return &ref.constants().ancestors;
+        } else return null;
     }
 
     fn getEpochTotalStake(self: *const SlotDataProvider, epoch: u64) ?u64 {
@@ -951,6 +952,7 @@ pub fn slotTrackerElementGenesis(
     return .{
         .constants = constants,
         .state = state,
+        .allocator = allocator,
     };
 }
 
@@ -1752,6 +1754,7 @@ test "simple usage" {
             .rent_collector = .DEFAULT,
         },
         .state = .GENESIS,
+        .allocator = allocator,
     });
     defer slot_tracker.deinit(allocator);
 
@@ -1842,6 +1845,7 @@ test "check trackers" {
                 .rent_collector = .DEFAULT,
             },
             .state = state,
+            .allocator = allocator,
         });
     };
     defer slot_tracker.deinit(allocator);
