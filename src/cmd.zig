@@ -133,7 +133,7 @@ pub fn main() !void {
                 params.snapshot_dir,
                 "accounts_db",
             );
-            current_config.genesis_file_path = params.genesis_file_path;
+            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
             params.geyser.apply(&current_config);
@@ -160,7 +160,7 @@ pub fn main() !void {
                 params.snapshot_dir,
                 "accounts_db",
             );
-            current_config.genesis_file_path = params.genesis_file_path;
+            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
             params.geyser.apply(&current_config);
@@ -180,7 +180,7 @@ pub fn main() !void {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
-            current_config.genesis_file_path = params.genesis_file_path;
+            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
             current_config.shred_network.log_finished_slots = params.repair.log_finished_slots;
             current_config.turbine.overwrite_stake_for_testing =
@@ -206,7 +206,7 @@ pub fn main() !void {
                 params.snapshot_dir,
                 "accounts_db",
             );
-            current_config.genesis_file_path = params.genesis_file_path;
+            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             current_config.cluster = params.gossip_cluster;
             params.geyser.apply(&current_config);
@@ -219,7 +219,7 @@ pub fn main() !void {
         },
         .snapshot_create => |params| {
             // current_config.accounts_db.snapshot_dir = params.snapshot_dir;
-            // current_config.genesis_file_path = params.genesis_file_path;
+            // current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             // try createSnapshot(gpa, current_config);
             _ = params;
             @panic("TODO: support snapshot creation");
@@ -242,14 +242,14 @@ pub fn main() !void {
                 params.snapshot_dir,
                 "accounts_db",
             );
-            current_config.genesis_file_path = params.genesis_file_path;
+            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
             try printLeaderSchedule(gpa, current_config);
         },
         .test_transaction_sender => |params| {
             current_config.shred_version = params.shred_version;
-            current_config.genesis_file_path = params.genesis_file_path;
+            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             current_config.test_transaction_sender.n_transactions = params.n_transactions;
             current_config.test_transaction_sender.n_lamports_per_transaction =
                 params.n_lamports_per_tx;
@@ -266,7 +266,7 @@ pub fn main() !void {
                 params.snapshot_dir,
                 "accounts_db",
             );
-            current_config.genesis_file_path = params.genesis_file_path;
+            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
             try mockRpcServer(gpa, current_config);
@@ -1331,7 +1331,7 @@ fn ensureGenesis(
     logger: Logger,
 ) ![]const u8 {
     // If explicit path provided, use it directly
-    if (cfg.genesis_file_path) |provided_path| {
+    if (try cfg.genesisFilePath()) |provided_path| {
         logger.info().logf("Using provided genesis file: {s}", .{provided_path});
         return try allocator.dupe(u8, provided_path);
     }
