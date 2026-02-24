@@ -70,7 +70,7 @@ pub const MethodAndParams = union(enum) {
     getMaxRetransmitSlot: noreturn,
     getMaxShredInsertSlot: noreturn,
     getMinimumBalanceForRentExemption: noreturn,
-    getMultipleAccounts: noreturn,
+    getMultipleAccounts: GetMultipleAccounts,
     getProgramAccounts: noreturn,
     getRecentPerformanceSamples: noreturn,
     getRecentPrioritizationFees: noreturn,
@@ -416,7 +416,20 @@ pub const GetLeaderSchedule = struct {
 // TODO: getMaxRetransmitSlot
 // TODO: getMaxShredInsertSlot
 // TODO: getMinimumBalanceForRentExemption
-// TODO: getMultipleAccounts
+
+pub const GetMultipleAccounts = struct {
+    pubkeys: []const Pubkey,
+    config: ?GetAccountInfo.Config = null,
+
+    // TODO: document from agave.
+    pub const MAX_PUBKEYS = 100;
+
+    pub const Response = struct {
+        context: common.Context,
+        value: []const ?GetAccountInfo.Response.Value,
+    };
+};
+
 // TODO: getProgramAccounts
 // TODO: getRecentPerformanceSamples
 // TODO: getRecentPrioritizationFees
@@ -843,6 +856,50 @@ pub const AccountHookContext = struct {
                 .rentEpoch = account.rent_epoch,
                 .space = account.data.len(),
             },
+        };
+    }
+
+    pub fn getMultipleAccounts(
+        self: AccountHookContext,
+        allocator: std.mem.Allocator,
+        params: GetMultipleAccounts,
+    ) !GetMultipleAccounts.Response {
+        if (params.pubkeys.len > GetMultipleAccounts.MAX_PUBKEYS) {
+            return error.TooManyInputs;
+        }
+        const config = params.config orelse GetAccountInfo.Config{};
+        const commitment = config.commitment orelse .finalized;
+        const encoding = config.encoding orelse common.AccountEncoding.base64;
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+        }
+        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotFound;
+        const slot_reader = self.account_reader.forSlot(&ref.constants.ancestors);
+        const values = try allocator.alloc(?GetAccountInfo.Response.Value, params.pubkeys.len);
+        errdefer allocator.free(values);
+        for (params.pubkeys, values) |pubkey, *value| {
+            const account = try slot_reader.get(allocator, pubkey) orelse {
+                value.* = null;
+                continue;
+            };
+            defer account.deinit(allocator);
+            const data: GetAccountInfo.Response.Value.Data = if (encoding == .jsonParsed)
+                try account_codec.encodeJsonParsed(allocator, pubkey, account, slot_reader)
+            else
+                try account_codec.encodeStandard(allocator, account, encoding, config.dataSlice);
+            value.* = .{
+                .data = data,
+                .executable = account.executable,
+                .lamports = account.lamports,
+                .owner = account.owner,
+                .rentEpoch = account.rent_epoch,
+                .space = account.data.len(),
+            };
+        }
+        return .{
+            .context = .{ .slot = slot },
+            .value = values,
         };
     }
 };
