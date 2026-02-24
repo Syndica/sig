@@ -1400,7 +1400,7 @@ pub const ReplayTower = struct {
         progress: *const ProgressMap,
         latest_validator_votes: *const LatestValidatorVotes,
         fork_choice: *const HeaviestSubtreeForkChoice,
-        epoch_tracker: *const sig.core.EpochTracker,
+        epoch_tracker: *sig.core.EpochTracker,
         /// For reading the slot history account
         account_reader: sig.accounts_db.AccountReader,
     ) !SelectVoteAndResetForkResult {
@@ -1410,6 +1410,7 @@ pub const ReplayTower = struct {
 
         const epoch_info = epoch_tracker.getEpochInfo(heaviest_slot) catch
             return error.ForkStatsNotFound;
+        defer epoch_info.release();
         // Check switch threshold conditions
         const initial_decision = try self.checkSwitchThreshold(
             allocator,

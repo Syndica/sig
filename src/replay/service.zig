@@ -72,7 +72,9 @@ pub fn advanceReplay(
     var start_time = sig.time.Timer.start();
     replay_state.logger.debug().log("advancing replay");
 
-    var leader_schedules = try replay_state.epoch_tracker.getLeaderSchedules();
+    var leader_schedules_with_epoch_infos = try replay_state.epoch_tracker.getLeaderSchedules();
+    defer leader_schedules_with_epoch_infos.release();
+    var leader_schedules = leader_schedules_with_epoch_infos.leader_schedules;
     const slot_leaders = SlotLeaders.init(
         &leader_schedules,
         sig.core.leader_schedule.LeaderSchedules.getLeaderOrNull,
@@ -272,7 +274,7 @@ pub const ReplayState = struct {
 pub fn initProgressMap(
     allocator: std.mem.Allocator,
     slot_tracker: *SlotTracker,
-    epoch_tracker: *const sig.core.EpochTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     my_pubkey: Pubkey,
     vote_account: ?Pubkey,
 ) !ProgressMap {
@@ -288,6 +290,7 @@ pub fn initProgressMap(
     // Initialize progress map with any root slots
     for (frozen_slots.keys(), frozen_slots.values()) |slot, ref| {
         const epoch_info = try epoch_tracker.getEpochInfo(slot);
+        defer epoch_info.release();
         const prev_leader_slot = progress.getSlotPrevLeaderSlot(ref.constants().parent_slot);
         try progress.map.ensureUnusedCapacity(allocator, 1);
         progress.map.putAssumeCapacity(slot, try .initFromInfo(allocator, .{

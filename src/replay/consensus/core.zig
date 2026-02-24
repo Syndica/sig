@@ -1723,7 +1723,7 @@ fn computeConsensusInputs(
     my_vote_pubkey: ?Pubkey,
     ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
     slot_tracker: *SlotTracker,
-    epoch_tracker: *const sig.core.EpochTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
     replay_tower: *const ReplayTower,
@@ -5785,6 +5785,7 @@ test "vote accounts with landed votes populate bank stats" {
 
     {
         const epoch_info = try epoch_tracker.getEpochInfo(0);
+        defer epoch_info.release();
         const slot1_ref = slot_tracker.get(1).?;
         defer slot1_ref.release();
         const stakes_ptr, var stakes_guard = slot1_ref.state().stakes_cache.stakes.writeWithLock();
@@ -7408,6 +7409,7 @@ test "successful fork switch (switch_proof)" {
     }
 
     const epoch_info = try epoch_tracker.getEpochInfo(0);
+    defer epoch_info.release();
     const vote_accounts_map = &epoch_info.stakes.stakes.vote_accounts.vote_accounts;
     const total_stake: u64 = 500;
 

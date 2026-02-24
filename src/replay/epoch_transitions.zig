@@ -84,7 +84,9 @@ pub fn updateEpochStakes(
     epoch_tracker: *sig.core.EpochTracker,
 ) !void {
     const epoch_info = epoch_tracker.getEpochInfoNoOffset(slot, ancestors) catch null;
-    if (epoch_info == null) {
+    if (epoch_info) |info| {
+        info.release();
+    } else {
         const epoch_stakes = try getEpochStakes(
             allocator,
             epoch_tracker.epoch_schedule.getLeaderScheduleEpoch(slot),
