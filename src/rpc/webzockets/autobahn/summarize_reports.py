@@ -13,7 +13,6 @@ grouped by test category.
 
 import argparse
 import json
-import os
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -156,7 +155,6 @@ def print_summary(agent_name: str, summary: dict, verbose: bool = False):
             print()
             print("Detailed descriptions of non-OK cases:")
             print()
-            reports_dir = None  # Will be set by caller if needed
     else:
         print("All test cases passed with OK! 🎉")
 
