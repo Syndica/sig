@@ -6,7 +6,10 @@ pub const SavedTower = struct {};
 
 pub const SavedTower1_7_14 = struct {};
 
-pub const SavedTowerVersions = union(enum) { current: SavedTower, v1_17_14: SavedTower1_7_14 };
+pub const SavedTowerVersions = union(enum) {
+    current: SavedTower,
+    v1_17_14: SavedTower1_7_14,
+};
 
 pub const TowerStorage = struct {
     pub fn load(self: *const TowerStorage, node_pubkey: *const Pubkey) !Tower {

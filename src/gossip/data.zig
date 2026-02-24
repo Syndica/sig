@@ -1482,20 +1482,22 @@ pub const ThreadSafeContactInfo = struct {
     tpu_addr: ?SocketAddr,
     tvu_addr: ?SocketAddr,
     tpu_quic_addr: ?SocketAddr,
+    tpu_vote_addr: ?SocketAddr,
 
     pub fn initRandom(
         random: std.Random,
         pubkey: Pubkey,
         shred_version: u16,
-    ) !ThreadSafeContactInfo {
+    ) ThreadSafeContactInfo {
         return .{
             .pubkey = pubkey,
             .shred_version = shred_version,
-            .gossip_addr = SocketAddr.initRandom(random),
-            .rpc_addr = SocketAddr.initRandom(random),
-            .tpu_addr = SocketAddr.initRandom(random),
-            .tvu_addr = SocketAddr.initRandom(random),
-            .tpu_quic_addr = SocketAddr.initRandom(random),
+            .gossip_addr = .initRandom(random),
+            .rpc_addr = .initRandom(random),
+            .tpu_addr = .initRandom(random),
+            .tvu_addr = .initRandom(random),
+            .tpu_quic_addr = .initRandom(random),
+            .tpu_vote_addr = .initRandom(random),
         };
     }
 
@@ -1508,6 +1510,7 @@ pub const ThreadSafeContactInfo = struct {
             .tpu_addr = contact_info.getSocket(.tpu),
             .tvu_addr = contact_info.getSocket(.turbine_recv),
             .tpu_quic_addr = contact_info.getSocket(.tpu_quic),
+            .tpu_vote_addr = contact_info.getSocket(.tpu_vote),
         };
     }
 
@@ -1520,6 +1523,7 @@ pub const ThreadSafeContactInfo = struct {
             .tpu_addr = legacy_contact_info.tpu,
             .tvu_addr = legacy_contact_info.turbine_recv,
             .tpu_quic_addr = null,
+            .tpu_vote_addr = legacy_contact_info.tpu_vote,
         };
     }
 };

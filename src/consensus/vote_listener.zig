@@ -1867,7 +1867,7 @@ test "check trackers" {
             try stakes.epoch_authorized_voters.put(allocator, vote_key, vote_key);
         }
 
-        try epoch_tracker.insertRootedEpochInfo(allocator, stakes, &.ALL_DISABLED);
+        try epoch_tracker.insertRootedEpochInfo(allocator, 0, stakes, &.ALL_DISABLED);
     }
 
     const slot_data_provider: SlotDataProvider = .{

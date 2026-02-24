@@ -189,6 +189,9 @@ pub const SlotData = struct {
         self.purge_repair_slot_counter.deinit(allocator);
         self.unfrozen_gossip_verified_vote_hashes.deinit(allocator);
         self.duplicate_slots.deinit(allocator);
+
+        var latest_validator_votes = self.latest_validator_votes;
+        latest_validator_votes.deinit(allocator);
     }
 };
 

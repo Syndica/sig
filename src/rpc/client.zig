@@ -20,11 +20,7 @@ pub const Client = struct {
         rpc_url: []const u8,
         options: HttpPostFetcher.Options,
     ) Allocator.Error!Client {
-        return .{ .fetcher = try HttpPostFetcher.init(
-            allocator,
-            rpc_url,
-            options,
-        ) };
+        return .{ .fetcher = try .init(allocator, rpc_url, options) };
     }
 
     pub fn deinit(self: *Client) void {
