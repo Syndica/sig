@@ -1056,6 +1056,7 @@ fn testHealthContext(
         .ledger = ledger,
         .override_health_check = override_health_check,
         .health_check_slot_distance = health_check_slot_distance,
+        .account_reader = .noop, // not used in health check
     };
 }
 
