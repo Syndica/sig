@@ -19,6 +19,7 @@ const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 const Commitment = common.Commitment;
+const ClientVersion = sig.version.ClientVersion;
 
 pub fn Result(comptime method: MethodAndParams.Tag) type {
     return union(enum) {
@@ -718,6 +719,7 @@ pub const common = struct {
 pub const RpcHookContext = struct {
     slot_tracker: *const sig.replay.trackers.SlotTracker,
     epoch_tracker: *const sig.core.EpochTracker,
+    account_reader: sig.accounts_db.AccountReader,
 
     // Limit the length of the `epoch_credits` array for each validator in a `get_vote_accounts`
     // response.
@@ -849,6 +851,42 @@ pub const RpcHookContext = struct {
         return .{
             .current = current,
             .delinquent = dlinqt,
+        };
+    }
+
+    pub fn getBalance(
+        self: RpcHookContext,
+        allocator: std.mem.Allocator,
+        params: GetBalance,
+    ) !GetBalance.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+        // [agave] Default commitment is finalized:
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
+        const commitment = config.commitment orelse .finalized;
+
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+        }
+
+        // Get slot reference to access ancestors
+        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        const slot_reader = self.account_reader.forSlot(&ref.constants.ancestors);
+
+        // Look up account
+        const maybe_account = try slot_reader.get(allocator, params.pubkey);
+
+        const lamports: u64 = if (maybe_account) |account| blk: {
+            defer account.deinit(allocator);
+            break :blk account.lamports;
+        } else 0;
+
+        return .{
+            .context = .{
+                .slot = slot,
+                .apiVersion = ClientVersion.API_VERSION,
+            },
+            .value = lamports,
         };
     }
 };
