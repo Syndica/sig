@@ -86,10 +86,7 @@ pub const Signature = extern struct {
         options: std.json.ParseOptions,
     ) !Signature {
         const value = try std.json.Value.jsonParse(allocator, source, options);
-        return if (value == .string)
-            parseRuntime(value.string) catch return error.InvalidNumber
-        else
-            error.UnexpectedToken;
+        return try jsonParseFromValue(allocator, value, options);
     }
 
     pub fn jsonParseFromValue(
