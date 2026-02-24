@@ -15,10 +15,12 @@ const http = @import("../http.zig");
 ///   - `onError(ctx: *Context, hs: *ClientHandshake(Context)) void`
 pub fn ClientHandshake(comptime Context: type) type {
     comptime {
-        if (!@hasDecl(Context, "onSuccess"))
+        if (!@hasDecl(Context, "onSuccess")) {
             @compileError("Context must declare an onSuccess method");
-        if (!@hasDecl(Context, "onError"))
+        }
+        if (!@hasDecl(Context, "onError")) {
             @compileError("Context must declare an onError method");
+        }
     }
 
     return struct {
@@ -40,16 +42,27 @@ pub fn ClientHandshake(comptime Context: type) type {
         /// Caller-provided PRNG used to generate the WebSocket key.
         /// Must only be used from the loop thread (not thread-safe).
         csprng: *types.ClientMaskPRNG,
+        upgrade_timeout_ms: u32,
 
-        read_completion: xev.Completion,
-        write_completion: xev.Completion,
+        io_completion: xev.Completion,
         close_completion: xev.Completion,
 
+        timer: xev.Timer,
+        upgrade_timer_completion: xev.Completion,
+        upgrade_timer_cancel_completion: xev.Completion,
+
         header_len: usize,
+        terminal_action: TerminalAction,
 
         const ClientHandshakeSelf = @This();
 
         const log = std.log.scoped(.client_handshake);
+
+        const TerminalAction = enum {
+            none,
+            success,
+            failure,
+        };
 
         pub fn init(
             socket: xev.TCP,
@@ -57,6 +70,7 @@ pub fn ClientHandshake(comptime Context: type) type {
             read_buf: []u8,
             context: *Context,
             csprng: *types.ClientMaskPRNG,
+            upgrade_timeout_ms: u32,
         ) ClientHandshakeSelf {
             return .{
                 .state = .writing,
@@ -72,10 +86,14 @@ pub fn ClientHandshake(comptime Context: type) type {
                 .key_buf = undefined,
                 .key_len = 0,
                 .csprng = csprng,
-                .read_completion = .{},
-                .write_completion = .{},
+                .upgrade_timeout_ms = upgrade_timeout_ms,
+                .io_completion = .{},
                 .close_completion = .{},
+                .timer = xev.Timer.init() catch unreachable,
+                .upgrade_timer_completion = .{},
+                .upgrade_timer_cancel_completion = .{},
                 .header_len = 0,
+                .terminal_action = .none,
             };
         }
 
@@ -98,10 +116,19 @@ pub fn ClientHandshake(comptime Context: type) type {
             self.state = .writing;
             log.debug("start: sending {d} byte request", .{self.request_len});
 
-            // TODO: missing timer for write timeout
+            if (self.upgrade_timer_completion.state() != .active) {
+                self.timer.run(
+                    self.loop,
+                    &self.upgrade_timer_completion,
+                    self.upgrade_timeout_ms,
+                    ClientHandshakeSelf,
+                    self,
+                    onUpgradeTimerCallback,
+                );
+            }
             self.socket.write(
                 self.loop,
-                &self.write_completion,
+                &self.io_completion,
                 .{ .slice = self.request_buf[0..self.request_len] },
                 ClientHandshakeSelf,
                 self,
@@ -131,8 +158,79 @@ pub fn ClientHandshake(comptime Context: type) type {
         // ====================================================================
 
         fn fail(self: *ClientHandshakeSelf) void {
+            if (self.state == .failed or self.terminal_action != .none) {
+                // already failed or terminal action in progress
+                return;
+            }
             self.state = .failed;
-            self.context.onError(self);
+            self.terminal_action = .failure;
+            self.maybeDispatchTerminal();
+        }
+
+        fn maybeDispatchTerminal(self: *ClientHandshakeSelf) void {
+            if (self.terminal_action == .none) {
+                // no action to perform yet
+                return;
+            }
+
+            if (self.upgrade_timer_completion.state() == .active and
+                self.upgrade_timer_cancel_completion.state() != .active)
+            {
+                self.timer.cancel(
+                    self.loop,
+                    &self.upgrade_timer_completion,
+                    &self.upgrade_timer_cancel_completion,
+                    ClientHandshakeSelf,
+                    self,
+                    onUpgradeTimerCancelled,
+                );
+            }
+            if (self.upgrade_timer_completion.state() == .active or
+                self.upgrade_timer_cancel_completion.state() == .active)
+            {
+                return;
+            }
+
+            if (self.terminal_action == .failure) {
+                if (self.close_completion.state() != .active and
+                    self.io_completion.state() == .active)
+                {
+                    self.close_completion = .{
+                        .op = .{ .cancel = .{ .c = &self.io_completion } },
+                        .userdata = @ptrCast(self),
+                        .callback = cancelCallback,
+                    };
+                    self.loop.add(&self.close_completion);
+                }
+
+                if (self.io_completion.state() == .active or
+                    self.close_completion.state() == .active)
+                {
+                    return;
+                }
+            }
+
+            const action = self.terminal_action;
+            self.terminal_action = .none;
+            switch (action) {
+                .none => unreachable,
+                .success => self.context.onSuccess(self),
+                .failure => self.context.onError(self),
+            }
+        }
+
+        fn cancelCallback(
+            ud: ?*anyopaque,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            result: xev.Result,
+        ) xev.CallbackAction {
+            result.cancel catch |err| log.debug("handshake cancel failed: {}", .{err});
+            if (ud) |ptr| {
+                const self: *ClientHandshakeSelf = @ptrCast(@alignCast(ptr));
+                self.maybeDispatchTerminal();
+            }
+            return .disarm;
         }
 
         fn onWriteComplete(
@@ -144,7 +242,9 @@ pub fn ClientHandshake(comptime Context: type) type {
             result: xev.WriteError!usize,
         ) xev.CallbackAction {
             const self = self_opt orelse return .disarm;
-            if (self.state != .writing) return .disarm;
+            if (self.state != .writing) {
+                return .disarm;
+            }
 
             const bytes_written = result catch |err| {
                 log.debug("onWriteComplete: write error: {s}", .{@errorName(err)});
@@ -158,7 +258,7 @@ pub fn ClientHandshake(comptime Context: type) type {
             if (self.write_pos < self.request_len) {
                 self.socket.write(
                     self.loop,
-                    &self.write_completion,
+                    &self.io_completion,
                     .{ .slice = self.request_buf[self.write_pos..self.request_len] },
                     ClientHandshakeSelf,
                     self,
@@ -185,10 +285,9 @@ pub fn ClientHandshake(comptime Context: type) type {
                 self.read_pos,
                 self.read_buf.len - self.read_pos,
             });
-            // TODO: missing timer for read timeout
             self.socket.read(
                 self.loop,
-                &self.read_completion,
+                &self.io_completion,
                 .{ .slice = self.read_buf[self.read_pos..] },
                 ClientHandshakeSelf,
                 self,
@@ -205,7 +304,9 @@ pub fn ClientHandshake(comptime Context: type) type {
             result: xev.ReadError!usize,
         ) xev.CallbackAction {
             const self = self_opt orelse return .disarm;
-            if (self.state != .reading) return .disarm;
+            if (self.state != .reading) {
+                return .disarm;
+            }
 
             const bytes_read = result catch |err| {
                 log.debug("onReadCallback: read error: {s}", .{@errorName(err)});
@@ -238,24 +339,73 @@ pub fn ClientHandshake(comptime Context: type) type {
             }
 
             self.header_len = old_pos + consumed;
-            self.processResponse();
-            return .disarm;
-        }
 
-        fn processResponse(self: *ClientHandshakeSelf) void {
             const key = self.key_buf[0..self.key_len];
             http.validateResponse(self.read_buf[0..self.header_len], key) catch |err| {
                 log.debug("processResponse: parse error: {s}", .{@errorName(err)});
                 self.fail();
-                return;
+                return .disarm;
             };
 
-            self.state = .completed;
             log.debug("processResponse: success, header_len={d}, leftover={d}", .{
                 self.header_len,
                 self.read_pos - self.header_len,
             });
-            self.context.onSuccess(self);
+            if (self.state != .failed and self.terminal_action == .none) {
+                self.state = .completed;
+                self.terminal_action = .success;
+            }
+            self.maybeDispatchTerminal();
+            return .disarm;
+        }
+
+        fn onUpgradeTimerCallback(
+            self_opt: ?*ClientHandshakeSelf,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            result: xev.Timer.RunError!void,
+        ) xev.CallbackAction {
+            const self = self_opt orelse return .disarm;
+
+            result catch |err| switch (err) {
+                error.Canceled => {
+                    self.maybeDispatchTerminal();
+                    return .disarm;
+                },
+                error.Unexpected => |e| {
+                    log.err("upgrade timer error: {}", .{e});
+                    // we shuold never be here (unexpected error) but if we are then
+                    // defensively progress our state
+                    if (self.state == .reading or self.state == .writing) {
+                        self.fail();
+                    } else {
+                        self.maybeDispatchTerminal();
+                    }
+                    return .disarm;
+                },
+            };
+
+            if (self.state == .reading or self.state == .writing) {
+                log.debug("handshake upgrade timed out after {d}ms", .{self.upgrade_timeout_ms});
+                self.fail();
+            } else {
+                self.maybeDispatchTerminal();
+            }
+
+            return .disarm;
+        }
+
+        fn onUpgradeTimerCancelled(
+            self_opt: ?*ClientHandshakeSelf,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            result: xev.Timer.CancelError!void,
+        ) xev.CallbackAction {
+            result catch |err| log.debug("upgrade timer cancel error: {}", .{err});
+            if (self_opt) |self| {
+                self.maybeDispatchTerminal();
+            }
+            return .disarm;
         }
     };
 }

@@ -139,6 +139,10 @@ pub fn Server(
             /// Idle timeout in ms. Server sends close (going_away) if no data
             /// received for this long. null = disabled (default).
             idle_timeout_ms: ?u32 = null,
+            /// Absolute timeout in ms for the HTTP upgrade handshake.
+            /// If the handshake does not complete in time, the socket is closed.
+            /// Default: 10000.
+            upgrade_timeout_ms: u32 = 10_000,
             /// Maximum time in ms a connection may remain in `.closing`
             /// before force-disconnecting. Default: 5000.
             close_timeout_ms: u32 = 5_000,

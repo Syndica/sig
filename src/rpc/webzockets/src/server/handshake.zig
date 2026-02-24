@@ -27,17 +27,26 @@ pub fn Handshake(
         response_len: usize,
         write_pos: usize,
         head_parser: http.HeadParser,
-        read_completion: xev.Completion,
-        write_completion: xev.Completion,
+        io_completion: xev.Completion,
         close_completion: xev.Completion,
+        timer: xev.Timer,
+        upgrade_timer_completion: xev.Completion,
+        upgrade_timer_cancel_completion: xev.Completion,
         header_len: usize,
         server: *ServerType,
         user_handler: ?Handler,
+        terminal_action: TerminalAction,
 
         const HandshakeSelf = @This();
 
         const log = std.log.scoped(.server_handshake);
         const has_on_handshake_failed = @hasDecl(Handler, "onHandshakeFailed");
+
+        const TerminalAction = enum {
+            none,
+            success,
+            failure,
+        };
 
         /// Fixed-size buffer length for the HTTP 101 Switching Protocols response.
         /// 129 bytes: status line + headers + base64-encoded accept key + \r\n\r\n.
@@ -46,14 +55,25 @@ pub fn Handshake(
         /// Initialize the handshake in-place. Sets all runtime fields except
         /// `read_buf` (the pool provides the struct and the buffer is embedded).
         pub fn init(self: *HandshakeSelf, socket: xev.TCP, server: *ServerType) void {
-            self.reset();
             self.socket = socket;
             self.server = server;
             self.response_buf = undefined;
+            self.timer = xev.Timer.init() catch unreachable;
+            self.reset();
         }
 
         /// Begin reading the HTTP upgrade request from the socket.
         pub fn start(self: *HandshakeSelf) void {
+            if (self.upgrade_timer_completion.state() != .active) {
+                self.timer.run(
+                    self.server.loop,
+                    &self.upgrade_timer_completion,
+                    self.server.config.upgrade_timeout_ms,
+                    HandshakeSelf,
+                    self,
+                    onUpgradeTimerCallback,
+                );
+            }
             self.startRead();
         }
 
@@ -64,11 +84,13 @@ pub fn Handshake(
             self.response_len = 0;
             self.write_pos = 0;
             self.head_parser = .{};
-            self.read_completion = .{};
-            self.write_completion = .{};
+            self.io_completion = .{};
             self.close_completion = .{};
+            self.upgrade_timer_completion = .{};
+            self.upgrade_timer_cancel_completion = .{};
             self.header_len = 0;
             self.user_handler = null;
+            self.terminal_action = .none;
         }
 
         fn startRead(self: *HandshakeSelf) void {
@@ -78,10 +100,9 @@ pub fn Handshake(
                 return;
             }
 
-            // TODO: missing timer for read timeout
             self.socket.read(
                 self.server.loop,
-                &self.read_completion,
+                &self.io_completion,
                 .{ .slice = self.read_buf[self.read_pos..] },
                 HandshakeSelf,
                 self,
@@ -97,8 +118,13 @@ pub fn Handshake(
             _: xev.ReadBuffer,
             result: xev.ReadError!usize,
         ) xev.CallbackAction {
-            const self = self_opt orelse return .disarm;
-            if (self.state != .reading) return .disarm;
+            const self = self_opt orelse {
+                return .disarm;
+            };
+            if (self.state != .reading) {
+                self.maybeFinalizeTerminal();
+                return .disarm;
+            }
 
             const bytes_read = result catch |err| {
                 log.debug("handshake read failed: {}", .{err});
@@ -153,10 +179,9 @@ pub fn Handshake(
         }
 
         fn startWrite(self: *HandshakeSelf) void {
-            // TODO: missing timer for write timeout
             self.socket.write(
                 self.server.loop,
-                &self.write_completion,
+                &self.io_completion,
                 .{ .slice = self.response_buf[self.write_pos..self.response_len] },
                 HandshakeSelf,
                 self,
@@ -172,8 +197,13 @@ pub fn Handshake(
             _: xev.WriteBuffer,
             result: xev.WriteError!usize,
         ) xev.CallbackAction {
-            const self = self_opt orelse return .disarm;
-            if (self.state != .writing) return .disarm;
+            const self = self_opt orelse {
+                return .disarm;
+            };
+            if (self.state != .writing) {
+                self.maybeFinalizeTerminal();
+                return .disarm;
+            }
 
             const bytes_written = result catch |err| {
                 log.debug("handshake write failed: {}", .{err});
@@ -188,8 +218,11 @@ pub fn Handshake(
                 return .disarm;
             }
 
-            self.state = .completed;
-            self.transitionToConnection();
+            if (self.terminal_action == .none) {
+                self.state = .completed;
+                self.terminal_action = .success;
+            }
+            self.maybeFinalizeTerminal();
             return .disarm;
         }
 
@@ -236,6 +269,11 @@ pub fn Handshake(
         /// code for failed WebSocket validation, but we close without a response
         /// for simplicity.
         fn fail(self: *HandshakeSelf) void {
+            if (self.state == .failed or self.terminal_action != .none) {
+                // already failed or terminal action in progress
+                return;
+            }
+
             self.state = .failed;
             if (self.user_handler) |*handler| {
                 if (comptime has_on_handshake_failed) {
@@ -243,17 +281,84 @@ pub fn Handshake(
                 }
                 self.user_handler = null;
             }
-            self.closeAndRelease();
+
+            self.terminal_action = .failure;
+            self.maybeFinalizeTerminal();
         }
 
-        fn closeAndRelease(self: *HandshakeSelf) void {
-            self.socket.close(
-                self.server.loop,
-                &self.close_completion,
-                HandshakeSelf,
-                self,
-                onCloseComplete,
-            );
+        fn maybeFinalizeTerminal(self: *HandshakeSelf) void {
+            if (self.terminal_action == .none) {
+                // no action to perform yet
+                return;
+            }
+
+            if (self.upgrade_timer_completion.state() == .active and
+                self.upgrade_timer_cancel_completion.state() != .active)
+            {
+                self.timer.cancel(
+                    self.server.loop,
+                    &self.upgrade_timer_completion,
+                    &self.upgrade_timer_cancel_completion,
+                    HandshakeSelf,
+                    self,
+                    onUpgradeTimerCancelled,
+                );
+            }
+
+            if (self.upgrade_timer_completion.state() == .active or
+                self.upgrade_timer_cancel_completion.state() == .active)
+            {
+                return;
+            }
+
+            switch (self.terminal_action) {
+                .none => unreachable,
+                .success => {
+                    self.terminal_action = .none;
+                    self.transitionToConnection();
+                },
+                .failure => {
+                    if (self.close_completion.state() != .active and
+                        self.io_completion.state() == .active)
+                    {
+                        // cancel io_completion
+                        self.close_completion = .{
+                            .op = .{ .cancel = .{ .c = &self.io_completion } },
+                            .userdata = @ptrCast(self),
+                            .callback = cancelCallback,
+                        };
+                        self.server.loop.add(&self.close_completion);
+                    }
+
+                    if (self.io_completion.state() == .active or
+                        self.close_completion.state() == .active)
+                    {
+                        return;
+                    }
+
+                    self.socket.close(
+                        self.server.loop,
+                        &self.close_completion,
+                        HandshakeSelf,
+                        self,
+                        onCloseComplete,
+                    );
+                },
+            }
+        }
+
+        fn cancelCallback(
+            self_opt: ?*anyopaque,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            result: xev.Result,
+        ) xev.CallbackAction {
+            result.cancel catch |err| log.debug("handshake cancel failed: {}", .{err});
+            if (self_opt) |ptr| {
+                const self: *HandshakeSelf = @ptrCast(@alignCast(ptr));
+                self.maybeFinalizeTerminal();
+            }
+            return .disarm;
         }
 
         fn onCloseComplete(
@@ -266,6 +371,62 @@ pub fn Handshake(
             result catch |err| log.debug("handshake close failed: {}", .{err});
             if (self_opt) |self| {
                 self.server.handshake_pool.release(self);
+            }
+            return .disarm;
+        }
+
+        fn onUpgradeTimerCallback(
+            self_opt: ?*HandshakeSelf,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            result: xev.Timer.RunError!void,
+        ) xev.CallbackAction {
+            const self = self_opt orelse {
+                return .disarm;
+            };
+
+            result catch |err| switch (err) {
+                error.Canceled => {
+                    self.maybeFinalizeTerminal();
+                    return .disarm;
+                },
+                error.Unexpected => |e| {
+                    log.err("upgrade timer error: {}", .{e});
+                    // we shuold never be here (unexpected error) but if we are then
+                    // defensively progress our state
+                    if (self.state == .reading or self.state == .writing) {
+                        self.fail();
+                    } else {
+                        self.maybeFinalizeTerminal();
+                    }
+                    return .disarm;
+                },
+            };
+
+            switch (self.state) {
+                .reading, .writing => {
+                    log.debug("handshake upgrade timed out after {d}ms", .{
+                        self.server.config.upgrade_timeout_ms,
+                    });
+                    self.fail();
+                },
+                else => {
+                    self.maybeFinalizeTerminal();
+                },
+            }
+
+            return .disarm;
+        }
+
+        fn onUpgradeTimerCancelled(
+            self_opt: ?*HandshakeSelf,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            result: xev.Timer.CancelError!void,
+        ) xev.CallbackAction {
+            result catch |err| log.debug("upgrade timer cancel error: {}", .{err});
+            if (self_opt) |self| {
+                self.maybeFinalizeTerminal();
             }
             return .disarm;
         }

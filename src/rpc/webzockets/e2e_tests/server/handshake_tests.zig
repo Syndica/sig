@@ -252,6 +252,56 @@ test "partial request then disconnect" {
     try verifyServerFunctional(ts.port);
 }
 
+test "partial request stall triggers handshake timeout and server remains healthy" {
+    const fd_check = FdLeakDetector.baseline();
+    defer _ = fd_check.detectLeaks();
+
+    const ts = try servers.TestServer.start(testing.allocator, .{
+        .address = servers.localhost,
+        .handler_context = {},
+        .upgrade_timeout_ms = 100,
+    });
+    defer ts.stop();
+
+    const stream = try rawConnect(ts.port);
+    defer stream.close();
+
+    // Send headers without the terminating CRLFCRLF so the handshake stays pending.
+    try stream.writeAll(
+        "GET / HTTP/1.1\r\n" ++
+            "Host: 127.0.0.1\r\n" ++
+            "Upgrade: websocket\r\n" ++
+            "Connection: Upgrade\r\n",
+    );
+
+    // Server should close once the upgrade timeout elapses.
+    try expectClosed(stream);
+
+    // Verify server still accepts new normal WebSocket connections.
+    try verifyServerFunctional(ts.port);
+}
+
+test "empty request stall triggers handshake timeout and server remains healthy" {
+    const fd_check = FdLeakDetector.baseline();
+    defer _ = fd_check.detectLeaks();
+
+    const ts = try servers.TestServer.start(testing.allocator, .{
+        .address = servers.localhost,
+        .handler_context = {},
+        .upgrade_timeout_ms = 100,
+    });
+    defer ts.stop();
+
+    const stream = try rawConnect(ts.port);
+    defer stream.close();
+
+    // Do not send any data. Server should close once the upgrade timeout elapses.
+    try expectClosed(stream);
+
+    // Verify server still accepts new normal WebSocket connections.
+    try verifyServerFunctional(ts.port);
+}
+
 test "headers exceeding read buffer size" {
     const fd_check = FdLeakDetector.baseline();
     defer _ = fd_check.detectLeaks();

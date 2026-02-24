@@ -42,6 +42,7 @@ See [examples/echo_server.zig](examples/echo_server.zig) and [examples/simple_cl
 
 ### Timers
 
+- **Handshake upgrade timeout** (`upgrade_timeout_ms`, client+server, default `10_000`): absolute deadline for completing the HTTP upgrade handshake. Always enabled.
 - **Idle timeout** (`idle_timeout_ms`, server only, default `null`): sends close on inactivity. Resets on each read.
 - **Close timeout** (`close_timeout_ms`, client+server, default `5000`): maximum time allowed in `.closing` before force-disconnect.
 - **libxev tip:** prefer `Timer.cancel()` over raw `.cancel` completions (different behavior across backends). Note: cancellation still delivers the original callback with `error.Canceled`.
@@ -156,6 +157,7 @@ const Config = struct {
     max_handshakes: ?usize = null,
     max_connections: ?usize = null,
     idle_timeout_ms: ?u32 = null,
+    upgrade_timeout_ms: u32 = 10_000,
     close_timeout_ms: u32 = 5_000,
     handler_context: …,  // if Handler.Context != void: *Handler.Context, else: void ({})
 };
@@ -171,6 +173,7 @@ const Config = struct {
     address: std.net.Address,
     path: []const u8 = "/",
     max_message_size: usize = 16 * 1024 * 1024,
+    upgrade_timeout_ms: u32 = 10_000,
     close_timeout_ms: u32 = 5_000,
 };
 ```
@@ -187,6 +190,7 @@ var client = SimpleClient.init(allocator, &loop, &handler, &conn, &csprng, .{
     .address = std.net.Address.parseIp4("127.0.0.1", 8080) catch unreachable,
     .path = "/",
     .max_message_size = 16 * 1024 * 1024,
+    .upgrade_timeout_ms = 10_000,
     .close_timeout_ms = 5_000,
 });
 try client.connect();

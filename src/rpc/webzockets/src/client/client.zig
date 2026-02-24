@@ -122,6 +122,10 @@ pub fn Client(comptime Handler: type, comptime read_buf_size: usize) type {
             /// (across all fragments). Messages exceeding this limit
             /// cause the connection to be closed with a message too big error.
             max_message_size: usize = 16 * 1024 * 1024,
+            /// Absolute timeout in ms for the HTTP upgrade handshake.
+            /// If the handshake does not complete in time, the socket is closed.
+            /// Default: 10000.
+            upgrade_timeout_ms: u32 = 10_000,
             /// Maximum time in ms the client may remain in `.closing` before
             /// force-disconnecting. Default: 5000.
             close_timeout_ms: u32 = 5_000,
@@ -205,6 +209,7 @@ pub fn Client(comptime Handler: type, comptime read_buf_size: usize) type {
                 &self.conn.read_buf,
                 self,
                 self.csprng,
+                self.config.upgrade_timeout_ms,
             );
             self.hs.start(self.config.address, self.config.path);
 

@@ -85,7 +85,7 @@ test "10 concurrent clients to same server" {
     // Initialize all handlers with unique messages
     var msg_bufs: [num_clients][16]u8 = undefined;
     for (0..num_clients) |i| {
-        const msg = std.fmt.bufPrint(&msg_bufs[i], "client_{d}", .{i}) catch unreachable;
+        const msg = try std.fmt.bufPrint(&msg_bufs[i], "client_{d}", .{i});
         handlers[i] = .{
             .send_kind = .text,
             .send_data = msg,
@@ -112,7 +112,7 @@ test "10 concurrent clients to same server" {
     for (0..num_clients) |i| {
         defer if (handlers[i].open_called) conns[i].deinit();
         try testing.expect(handlers[i].open_called);
-        const expected = std.fmt.bufPrint(&msg_bufs[i], "client_{d}", .{i}) catch unreachable;
+        const expected = try std.fmt.bufPrint(&msg_bufs[i], "client_{d}", .{i});
         const received_data = handlers[i].received_data orelse return error.NoData;
         try testing.expectEqualSlices(u8, expected, received_data);
     }
@@ -174,27 +174,79 @@ test "fully bare LF response (no \\r\\n at all) doesn't crash client" {
     try testing.expect(handler.socket_close_called);
 }
 
+test "handshake upgrade timeout when server accepts and never responds" {
+    const fd_check = FdLeakDetector.baseline();
+    defer _ = fd_check.detectLeaks();
+
+    const fake = try startWithStallMode(.no_response);
+    defer fake.stop();
+
+    var handler: clients.ConnectFailHandler = .{};
+
+    var env: clients.TestEnv = undefined;
+    try env.start();
+    defer env.deinit();
+
+    var conn: clients.TestConnectFailClient.Conn = undefined;
+    var client = env.initClient(clients.TestConnectFailClient, &handler, &conn, .{
+        .address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, fake.port),
+        .upgrade_timeout_ms = 100,
+    });
+
+    try client.connect();
+    try env.loop.run(.until_done);
+
+    try testing.expect(!handler.open_called);
+    try testing.expect(handler.socket_close_called);
+}
+
+test "handshake upgrade timeout on partial response stall" {
+    const fd_check = FdLeakDetector.baseline();
+    defer _ = fd_check.detectLeaks();
+
+    const fake = try startWithStallMode(.partial_response);
+    defer fake.stop();
+
+    var handler: clients.ConnectFailHandler = .{};
+
+    var env: clients.TestEnv = undefined;
+    try env.start();
+    defer env.deinit();
+
+    var conn: clients.TestConnectFailClient.Conn = undefined;
+    var client = env.initClient(clients.TestConnectFailClient, &handler, &conn, .{
+        .address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, fake.port),
+        .upgrade_timeout_ms = 100,
+    });
+
+    try client.connect();
+    try env.loop.run(.until_done);
+
+    try testing.expect(!handler.open_called);
+    try testing.expect(handler.socket_close_called);
+}
+
 /// Build a 101 response with \r\n on the status line but bare \n on headers.
-fn buildBareLfResponse(buf: []u8, accept_key: []const u8) []const u8 {
+fn buildBareLfResponse(buf: []u8, accept_key: []const u8) ![]const u8 {
     var fbs = std.io.fixedBufferStream(buf);
     const w = fbs.writer();
-    w.writeAll("HTTP/1.1 101 Switching Protocols\r\n") catch unreachable;
-    w.writeAll("Upgrade: websocket\n") catch unreachable;
-    w.writeAll("Connection: Upgrade\n") catch unreachable;
-    w.print("Sec-WebSocket-Accept: {s}\n", .{accept_key}) catch unreachable;
-    w.writeAll("\n") catch unreachable;
+    try w.writeAll("HTTP/1.1 101 Switching Protocols\r\n");
+    try w.writeAll("Upgrade: websocket\n");
+    try w.writeAll("Connection: Upgrade\n");
+    try w.print("Sec-WebSocket-Accept: {s}\n", .{accept_key});
+    try w.writeAll("\n");
     return buf[0..fbs.pos];
 }
 
 /// Build a 101 response where the entire response uses bare \n (no \r\n at all).
-fn buildFullyBareLfResponse(buf: []u8, accept_key: []const u8) []const u8 {
+fn buildFullyBareLfResponse(buf: []u8, accept_key: []const u8) ![]const u8 {
     var fbs = std.io.fixedBufferStream(buf);
     const w = fbs.writer();
-    w.writeAll("HTTP/1.1 101 Switching Protocols\n") catch unreachable;
-    w.writeAll("Upgrade: websocket\n") catch unreachable;
-    w.writeAll("Connection: Upgrade\n") catch unreachable;
-    w.print("Sec-WebSocket-Accept: {s}\n", .{accept_key}) catch unreachable;
-    w.writeAll("\n") catch unreachable;
+    try w.writeAll("HTTP/1.1 101 Switching Protocols\n");
+    try w.writeAll("Upgrade: websocket\n");
+    try w.writeAll("Connection: Upgrade\n");
+    try w.print("Sec-WebSocket-Accept: {s}\n", .{accept_key});
+    try w.writeAll("\n");
     return buf[0..fbs.pos];
 }
 
@@ -209,36 +261,103 @@ const FakeServer = struct {
     }
 };
 
+const StallMode = enum {
+    no_response,
+    partial_response,
+};
+
 /// Shared implementation: start a TCP listener on an ephemeral port and spawn
 /// a background thread that accepts one connection, reads the client's upgrade
 /// request to extract Sec-WebSocket-Key, then responds using `responseFn`.
-fn startWithResponseFn(comptime responseFn: fn ([]u8, []const u8) []const u8) !FakeServer {
+fn startWithResponseFn(comptime responseFn: fn ([]u8, []const u8) anyerror![]const u8) !FakeServer {
     const addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
-    const listener = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0) catch
-        @panic("failed to create socket");
-    std.posix.bind(listener, @ptrCast(&addr.any), addr.getOsSockLen()) catch
-        @panic("failed to bind");
-    std.posix.listen(listener, 1) catch @panic("failed to listen");
+    const listener = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
+    errdefer std.posix.close(listener);
+    try std.posix.bind(listener, @ptrCast(&addr.any), addr.getOsSockLen());
+    try std.posix.listen(listener, 1);
 
     // Get the assigned port.
     var bound_addr: std.posix.sockaddr.storage = undefined;
     var addr_len: std.posix.socklen_t = @sizeOf(@TypeOf(bound_addr));
-    std.posix.getsockname(listener, @ptrCast(&bound_addr), &addr_len) catch
-        @panic("failed to getsockname");
+    try std.posix.getsockname(listener, @ptrCast(&bound_addr), &addr_len);
     const sa4: *const std.posix.sockaddr.in = @ptrCast(@alignCast(&bound_addr));
     const port = std.mem.bigToNative(u16, sa4.port);
 
-    const thread = std.Thread.spawn(.{}, acceptAndRespond, .{ listener, responseFn }) catch
-        @panic("failed to spawn thread");
+    const thread = try std.Thread.spawn(.{}, acceptAndRespond, .{ listener, responseFn });
 
     return FakeServer{ .listener = listener, .port = port, .thread = thread };
+}
+
+/// Start a fake server that accepts one TCP connection and then stalls the
+/// HTTP upgrade response path.
+fn startWithStallMode(mode: StallMode) !FakeServer {
+    const addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
+    const listener = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
+    errdefer std.posix.close(listener);
+    try std.posix.bind(listener, @ptrCast(&addr.any), addr.getOsSockLen());
+    try std.posix.listen(listener, 1);
+
+    var bound_addr: std.posix.sockaddr.storage = undefined;
+    var addr_len: std.posix.socklen_t = @sizeOf(@TypeOf(bound_addr));
+    try std.posix.getsockname(listener, @ptrCast(&bound_addr), &addr_len);
+    const sa4: *const std.posix.sockaddr.in = @ptrCast(@alignCast(&bound_addr));
+    const port = std.mem.bigToNative(u16, sa4.port);
+
+    const thread = try std.Thread.spawn(.{}, acceptAndStall, .{ listener, mode });
+
+    return FakeServer{ .listener = listener, .port = port, .thread = thread };
+}
+
+/// Thread function: accept one connection, read the client's request, then
+/// either send nothing or send an incomplete 101 response and stall.
+fn acceptAndStall(listener: std.posix.socket_t, mode: StallMode) void {
+    var client_addr: std.posix.sockaddr.storage = undefined;
+    var client_addr_len: std.posix.socklen_t = @sizeOf(@TypeOf(client_addr));
+    const conn_fd = std.posix.accept(
+        listener,
+        @ptrCast(&client_addr),
+        &client_addr_len,
+        0,
+    ) catch return;
+    defer std.posix.close(conn_fd);
+    const stream = std.net.Stream{ .handle = conn_fd };
+
+    var req_buf: [4096]u8 = undefined;
+    var total: usize = 0;
+    while (total < req_buf.len) {
+        const n = stream.read(req_buf[total..]) catch return;
+        if (n == 0) return;
+        total += n;
+        if (std.mem.indexOf(u8, req_buf[0..total], "\r\n\r\n") != null) break;
+    }
+
+    switch (mode) {
+        .no_response => {},
+        .partial_response => {
+            const key = extractWebSocketKey(req_buf[0..total]) orelse return;
+            var accept_buf: [28]u8 = undefined;
+            const accept_key = http.computeAcceptKey(&accept_buf, key);
+
+            var resp_buf: [512]u8 = undefined;
+            var fbs = std.io.fixedBufferStream(&resp_buf);
+            const w = fbs.writer();
+            w.writeAll("HTTP/1.1 101 Switching Protocols\r\n") catch return;
+            w.writeAll("Upgrade: websocket\r\n") catch return;
+            w.writeAll("Connection: Upgrade\r\n") catch return;
+            w.print("Sec-WebSocket-Accept: {s}\r\n", .{accept_key}) catch return;
+            // Deliberately omit the final CRLF terminator so the client keeps waiting.
+            stream.writeAll(resp_buf[0..fbs.pos]) catch return;
+        },
+    }
+
+    std.time.sleep(500 * std.time.ns_per_ms);
 }
 
 /// Thread function: accept one connection, read the upgrade request, extract
 /// the Sec-WebSocket-Key, compute the accept key, send the response, then close.
 fn acceptAndRespond(
     listener: std.posix.socket_t,
-    comptime responseFn: fn ([]u8, []const u8) []const u8,
+    comptime responseFn: fn ([]u8, []const u8) anyerror![]const u8,
 ) void {
     var client_addr: std.posix.sockaddr.storage = undefined;
     var client_addr_len: std.posix.socklen_t = @sizeOf(@TypeOf(client_addr));
@@ -270,7 +389,7 @@ fn acceptAndRespond(
 
     // Build and send the bare-LF response.
     var resp_buf: [512]u8 = undefined;
-    const response = responseFn(&resp_buf, accept_key);
+    const response = responseFn(&resp_buf, accept_key) catch return;
     stream.writeAll(response) catch return;
 }
 
