@@ -48,7 +48,7 @@ pub const ProcessResultParams = struct {
 
     // replay state
     progress_map: *ProgressMap,
-    slot_tracker: *const SlotTracker,
+    slot_tracker: *SlotTracker,
 
     // consensus state
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
@@ -74,8 +74,9 @@ pub fn processResult(params: ProcessResultParams, result: sig.replay.execution.R
     }
 
     const slot_info = params.slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
+    defer slot_info.release();
 
-    if (slot_info.state.isFrozen()) {
+    if (slot_info.state().isFrozen()) {
         // TODO Send things out via a couple of senders
         // - cluster_slots_update_sender;
         // - transaction_status_sender;
@@ -133,7 +134,8 @@ fn markDeadSlot(
     if (!params.duplicate_slots_tracker.contains(dead_slot) and maybe_duplicate_proof != null) {
         const slot_info =
             params.slot_tracker.get(dead_slot) orelse return error.MissingSlotInTracker;
-        const slot_hash = slot_info.state.hash.readCopy();
+        defer slot_info.release();
+        const slot_hash = slot_info.state().hash.readCopy();
         const duplicate_state: DuplicateState = .fromState(
             .from(params.logger),
             dead_slot,
@@ -160,14 +162,15 @@ fn markDeadSlot(
 fn updateConsensusForFrozenSlot(params: ProcessResultParams, slot: Slot) !void {
     var slot_info = params.slot_tracker.get(slot) orelse
         return error.MissingSlotInTracker;
+    defer slot_info.release();
 
-    const parent_slot = slot_info.constants.parent_slot;
-    const parent_hash = slot_info.constants.parent_hash;
+    const parent_slot = slot_info.constants().parent_slot;
+    const parent_hash = slot_info.constants().parent_hash;
 
     const progress = params.progress_map.map.getPtr(slot) orelse
         return error.MissingBankProgress;
 
-    const hash = slot_info.state.hash.readCopy() orelse
+    const hash = slot_info.state().hash.readCopy() orelse
         return error.MissingHash;
     std.debug.assert(!hash.eql(Hash.ZEROES));
 
@@ -546,6 +549,7 @@ test "processResult: confirm status with done poll and slot complete - success p
 
     // Add the slot to the slot tracker
     try test_resources.slot_tracker.put(allocator, slot, .{
+        .allocator = allocator,
         .constants = mock_slot_constants,
         .state = mock_slot_state,
     });
@@ -643,6 +647,7 @@ test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot"
         .rent_collector = .DEFAULT,
     };
     try test_resources.slot_tracker.put(allocator, slot, .{
+        .allocator = allocator,
         .constants = slot_consts,
         .state = slot_state,
     });
@@ -736,6 +741,7 @@ test "updateConsensusForFrozenSlot: moves gossip votes with gossip vote_kind" {
     slot_state.hash.set(slot_hash);
 
     try test_state.slot_tracker.put(allocator, slot, .{
+        .allocator = allocator,
         .constants = slot_consts,
         .state = slot_state,
     });

@@ -135,7 +135,7 @@ pub const TowerConsensus = struct {
             signing: sig.identity.SigningKeys,
             account_reader: AccountReader,
             ledger: *sig.ledger.Ledger,
-            slot_tracker: *const SlotTracker,
+            slot_tracker: *SlotTracker,
             /// Usually `.now()`.
             now: sig.time.Instant,
             registry: *sig.prometheus.Registry(.{}),
@@ -154,7 +154,8 @@ pub const TowerConsensus = struct {
 
         const root = deps.slot_tracker.root.load(.monotonic);
         const root_ref = deps.slot_tracker.get(root).?;
-        const root_ancestors = &root_ref.constants.ancestors;
+        defer root_ref.release();
+        const root_ancestors = &root_ref.constants().ancestors;
 
         var tower: Tower = if (deps.identity.vote_account) |vote_account_address|
             try loadTower(
@@ -199,18 +200,20 @@ pub const TowerConsensus = struct {
     pub fn initForkChoice(
         allocator: std.mem.Allocator,
         logger: Logger,
-        slot_tracker: *const SlotTracker,
+        slot_tracker: *SlotTracker,
         ledger: *Ledger,
     ) !HeaviestSubtreeForkChoice {
         const root_slot, const root_hash = blk: {
             const root = slot_tracker.getRoot();
+            defer root.release();
             const root_slot = slot_tracker.root.load(.monotonic);
-            const root_hash = root.state.hash.readCopy();
+            const root_hash = root.state().hash.readCopy();
             break :blk .{ root_slot, root_hash.? };
         };
 
         var frozen_slots = try slot_tracker.frozenSlots(allocator);
         defer frozen_slots.deinit(allocator);
+        defer for (frozen_slots.values()) |ref| ref.release();
 
         frozen_slots.sort(replay.service.FrozenSlotsSortCtx{ .slots = frozen_slots.keys() });
 
@@ -228,16 +231,16 @@ pub const TowerConsensus = struct {
 
         var prev_slot = root_slot;
         for (frozen_slots.keys(), frozen_slots.values()) |slot, info| {
-            const frozen_hash = info.state.hash.readCopy().?;
+            const frozen_hash = info.state().hash.readCopy().?;
             if (slot > root_slot) {
                 // Make sure the list is sorted
                 std.debug.assert(slot > prev_slot);
                 prev_slot = slot;
-                const parent_bank_hash = info.constants.parent_hash;
+                const parent_bank_hash = info.constants().parent_hash;
                 try heaviest_subtree_fork_choice.addNewLeafSlot(
                     allocator,
                     .{ .slot = slot, .hash = frozen_hash },
-                    .{ .slot = info.constants.parent_slot, .hash = parent_bank_hash },
+                    .{ .slot = info.constants().parent_slot, .hash = parent_bank_hash },
                 );
             }
         }
@@ -256,9 +259,10 @@ pub const TowerConsensus = struct {
 
         while (try duplicate_slots.nextKey()) |slot| {
             const ref = slot_tracker.get(slot) orelse continue;
+            defer ref.release();
             try heaviest_subtree_fork_choice.markForkInvalidCandidate(allocator, &.{
                 .slot = slot,
-                .hash = ref.state.hash.readCopy().?,
+                .hash = ref.state().hash.readCopy().?,
             });
         }
 
@@ -433,20 +437,25 @@ pub const TowerConsensus = struct {
             // arena-allocated
             var ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
             var descendants: std.AutoArrayHashMapUnmanaged(Slot, SlotSet) = .empty;
-            for (params.slot_tracker.slots.keys(), params.slot_tracker.slots.values()) |slot, info| {
-                const slot_ancestors = &info.constants.ancestors.ancestors;
-                const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
-                // Ensure every slot has a descendants entry (even if empty)
-                _ = try descendants.getOrPutValue(arena, slot, .empty);
-                try ancestor_gop.value_ptr.ancestors
-                    .ensureUnusedCapacity(arena, slot_ancestors.count());
-                for (slot_ancestors.keys()) |ancestor_slot| {
-                    // Exclude the slot itself from ancestors.
-                    if (ancestor_slot == slot) continue;
-                    try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
-                    const descendants_gop =
-                        try descendants.getOrPutValue(arena, ancestor_slot, .empty);
-                    try descendants_gop.value_ptr.put(arena, slot);
+            {
+                var slots_lg = params.slot_tracker.slots.read();
+                defer slots_lg.unlock();
+                const slots = slots_lg.get();
+                for (slots.keys(), slots.values()) |slot, info| {
+                    const slot_ancestors = &info.constants.ancestors.ancestors;
+                    const ancestor_gop = try ancestors.getOrPutValue(arena, slot, .EMPTY);
+                    // Ensure every slot has a descendants entry (even if empty)
+                    _ = try descendants.getOrPutValue(arena, slot, .empty);
+                    try ancestor_gop.value_ptr.ancestors
+                        .ensureUnusedCapacity(arena, slot_ancestors.count());
+                    for (slot_ancestors.keys()) |ancestor_slot| {
+                        // Exclude the slot itself from ancestors.
+                        if (ancestor_slot == slot) continue;
+                        try ancestor_gop.value_ptr.addSlot(arena, ancestor_slot);
+                        const descendants_gop =
+                            try descendants.getOrPutValue(arena, ancestor_slot, .empty);
+                        try descendants_gop.value_ptr.put(arena, slot);
+                    }
                 }
             }
             break :cluster_sync_and_ancestors_descendants .{ ancestors, descendants };
@@ -476,7 +485,7 @@ pub const TowerConsensus = struct {
         allocator: Allocator,
         ledger: *Ledger,
         progress_map: *ProgressMap,
-        slot_tracker: *const SlotTracker,
+        slot_tracker: *SlotTracker,
         ancestor_hashes_replay_update_sender: *Channel(AncestorHashesReplayUpdate),
         result: ReplayResult,
     ) !void {
@@ -556,7 +565,8 @@ pub const TowerConsensus = struct {
 
                 const slot_info = slot_tracker.get(slot) orelse
                     return error.MissingSlotInSlotTracker;
-                if (!slot_info.state.isFrozen()) {
+                defer slot_info.release();
+                if (!slot_info.state().isFrozen()) {
                     continue;
                 }
                 if (isDuplicateSlotConfirmed(
@@ -564,10 +574,11 @@ pub const TowerConsensus = struct {
                     &fork_stats.voted_stakes,
                     fork_stats.total_stake,
                 )) {
+                    const hash = slot_info.state().hash.readCopy() orelse return error.MissingHash;
                     duplicate_confirmed_forks.appendAssumeCapacity(
                         .{
                             .slot = slot,
-                            .hash = slot_info.state.hash.readCopy() orelse return error.MissingHash,
+                            .hash = hash,
                         },
                     );
                 }
@@ -634,8 +645,9 @@ pub const TowerConsensus = struct {
         if (maybe_voted_slot) |voted| {
             const found_slot_info = slot_tracker.get(voted.slot) orelse
                 return error.MissingSlot;
+            defer found_slot_info.release();
 
-            const voted_hash = found_slot_info.state.hash.readCopy() orelse
+            const voted_hash = found_slot_info.state().hash.readCopy() orelse
                 return error.MissingSlotInTracker;
 
             try handleVotableBank(
@@ -1336,7 +1348,7 @@ fn generateVoteTx(
     switch_fork_decision: SwitchForkDecision,
     replay_tower: *ReplayTower,
     account_reader: AccountReader,
-    slot_tracker: *const SlotTracker,
+    slot_tracker: *SlotTracker,
     epoch_schedule: *const EpochSchedule,
 ) !GenerateVoteTxResult {
     const logger = replay_tower.logger;
@@ -1367,8 +1379,9 @@ fn generateVoteTx(
         );
         return .failed;
     };
+    defer slot_info.release();
 
-    const vote_account_result = account_reader.forSlot(&slot_info.constants.ancestors)
+    const vote_account_result = account_reader.forSlot(&slot_info.constants().ancestors)
         .get(allocator, vote_account_pubkey) catch |err| {
         logger.err().logf("Failed to read vote account: {}", .{err});
         return err;
@@ -1457,7 +1470,7 @@ fn generateVoteTx(
     defer vote_ix.deinit(allocator);
 
     const blockhash = blk: {
-        const bhq, var bhq_lg = slot_info.state.blockhash_queue.readWithLock();
+        const bhq, var bhq_lg = slot_info.state().blockhash_queue.readWithLock();
         defer bhq_lg.unlock();
         break :blk bhq.last_hash orelse {
             logger.warn().logf("Blockhash is null for slot {}", .{last_voted_slot});
@@ -1599,9 +1612,14 @@ fn checkAndHandleNewRoot(
     defer zone.deinit();
 
     // get the root bank before squash.
-    if (slot_tracker.slots.count() == 0) return error.EmptySlotTracker;
+    {
+        var slots_lg = slot_tracker.slots.read();
+        defer slots_lg.unlock();
+        if (slots_lg.get().count() == 0) return error.EmptySlotTracker;
+    }
     const root_tracker = slot_tracker.get(new_root) orelse return error.MissingSlot;
-    const maybe_root_hash = root_tracker.state.hash.readCopy();
+    defer root_tracker.release();
+    const maybe_root_hash = root_tracker.state().hash.readCopy();
     const root_hash = maybe_root_hash orelse return error.MissingHash;
 
     const rooted_slots = try slot_tracker.parents(allocator, new_root);
@@ -1612,7 +1630,7 @@ fn checkAndHandleNewRoot(
     try epoch_tracker.onSlotRooted(
         allocator,
         new_root,
-        &root_tracker.constants.ancestors,
+        &root_tracker.constants().ancestors,
     );
 
     // Audit: The rest of the code maps to Self::handle_new_root in Agave.
@@ -1620,13 +1638,14 @@ fn checkAndHandleNewRoot(
     // Set new root.
     slot_tracker.root.store(new_root, .monotonic);
     // Prune non rooted slots
-    slot_tracker.pruneNonRooted(allocator, maybe_thread_pool);
+    slot_tracker.pruneNonRooted(maybe_thread_pool);
 
     // Tell the status_cache about it for its tracking.
     if (status_cache) |sc| try sc.addRoot(allocator, new_root);
     // Tell the account_store about it for its unrooted accounts
     const slot_constants = slot_tracker.get(new_root).?;
-    try account_store.onSlotRooted(new_root, &slot_constants.constants.ancestors);
+    defer slot_constants.release();
+    try account_store.onSlotRooted(new_root, &slot_constants.constants().ancestors);
 
     // TODO
     // - Prune program cache bank_forks.read().unwrap().prune_program_cache(new_root);
@@ -1642,7 +1661,9 @@ fn checkAndHandleNewRoot(
     var index: usize = 0;
     while (index < progress_keys.len) {
         const progress_slot = progress_keys[index];
-        if (slot_tracker.get(progress_slot) == null) {
+        const maybe_ref = slot_tracker.get(progress_slot);
+        if (maybe_ref) |ref| ref.release();
+        if (maybe_ref == null) {
             const removed_value = progress.map.fetchSwapRemove(progress_slot) orelse continue;
             defer removed_value.value.deinit(allocator);
             progress_keys = progress.map.keys();
@@ -1701,7 +1722,7 @@ fn computeConsensusInputs(
     logger: Logger,
     my_vote_pubkey: ?Pubkey,
     ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
-    slot_tracker: *const SlotTracker,
+    slot_tracker: *SlotTracker,
     epoch_tracker: *const sig.core.EpochTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
@@ -1716,6 +1737,7 @@ fn computeConsensusInputs(
 
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
+    defer for (frozen_slots.values()) |ref| ref.release();
 
     frozen_slots.sort(replay.service.FrozenSlotsSortCtx{ .slots = frozen_slots.keys() });
 
@@ -1725,10 +1747,11 @@ fn computeConsensusInputs(
             // TODO Self::adopt_on_chain_tower_if_behind
             // Gather voting information from all vote accounts to understand the current consensus state.
             const slot_info_for_stakes = slot_tracker.get(slot) orelse return error.MissingSlot;
+            defer slot_info_for_stakes.release();
 
             const cluster_vote_state = blk: {
                 const stakes, var stakes_lg =
-                    slot_info_for_stakes.state.stakes_cache.stakes.readWithLock();
+                    slot_info_for_stakes.state().stakes_cache.stakes.readWithLock();
                 defer stakes_lg.unlock();
 
                 break :blk try collectClusterVoteState(
@@ -1761,7 +1784,8 @@ fn computeConsensusInputs(
 
             fork_stats.block_height = blk: {
                 const slot_info = slot_tracker.get(slot) orelse return error.MissingSlots;
-                break :blk slot_info.constants.block_height;
+                defer slot_info.release();
+                break :blk slot_info.constants().block_height;
             };
             fork_stats.my_latest_landed_vote = cluster_vote_state.my_latest_landed_vote;
             fork_stats.computed = true;
@@ -1857,7 +1881,11 @@ test "processResult and handleDuplicateConfirmedFork" {
         replay_state.epoch_tracker.deinit(allocator);
         allocator.destroy(replay_state.epoch_tracker);
     }
-    replay_state.slot_tracker.get(0).?.state.hash.set(.{ .data = @splat(1) });
+    {
+        const ref = replay_state.slot_tracker.get(0).?;
+        defer ref.release();
+        ref.state().hash.set(.{ .data = @splat(1) });
+    }
 
     var consensus: TowerConsensus = try .init(allocator, .{
         .logger = .FOR_TESTS,
@@ -2549,6 +2577,7 @@ test "checkAndHandleNewRoot - missing slot" {
         const constants: SlotConstants = try .genesis(allocator, .initRandom(random));
         errdefer constants.deinit(allocator);
         try slot_tracker.put(testing.allocator, root_slot_and_hash.slot, .{
+            .allocator = testing.allocator,
             .constants = constants,
             .state = .GENESIS,
         });
@@ -2613,6 +2642,7 @@ test "checkAndHandleNewRoot - missing hash" {
         errdefer state.deinit(allocator);
 
         try slot_tracker2.put(allocator, root.slot, .{
+            .allocator = allocator,
             .constants = constants,
             .state = state,
         });
@@ -2758,10 +2788,12 @@ test "checkAndHandleNewRoot - success" {
         const ptr, var lg = slot_tracker4.writeWithLock();
         defer lg.unlock();
         try ptr.put(allocator, hash2.slot, .{
+            .allocator = allocator,
             .constants = constants2,
             .state = state2,
         });
         try ptr.put(allocator, hash3.slot, .{
+            .allocator = allocator,
             .constants = constants3,
             .state = state3,
         });
@@ -2817,9 +2849,11 @@ test "checkAndHandleNewRoot - success" {
     try testing.expectEqual(1, fixture.progress.map.count());
     // Now the write lock is released, we can acquire a read lock
     {
-        const ptr, var lg = slot_tracker4.readWithLock();
+        const ptr, var lg = slot_tracker4.writeWithLock();
         defer lg.unlock();
-        for (ptr.slots.keys()) |remaining_slots| {
+        var slots_lg = ptr.slots.read();
+        defer slots_lg.unlock();
+        for (slots_lg.get().keys()) |remaining_slots| {
             try testing.expect(remaining_slots >= hash3.slot);
         }
     }
@@ -2863,6 +2897,7 @@ test "computeBankStats - child bank heavier" {
 
     var frozen_slots = try fixture.slot_tracker.frozenSlots(gpa);
     defer frozen_slots.deinit(gpa);
+    defer for (frozen_slots.values()) |ref| ref.release();
     errdefer frozen_slots.deinit(gpa);
 
     var epoch_tracker: sig.core.EpochTracker = blk: {
@@ -2934,8 +2969,9 @@ test "computeBankStats - child bank heavier" {
     for (slot_list) |slot| {
         const slot_info = fixture.slot_tracker.get(slot) orelse
             return error.MissingSlot;
+        defer slot_info.release();
         const best = fixture.fork_choice.heaviestSlot(
-            .{ .slot = slot, .hash = slot_info.state.hash.readCopy().? },
+            .{ .slot = slot, .hash = slot_info.state().hash.readCopy().? },
         ) orelse
             return error.MissingSlot;
         try testing.expectEqual(2, best.slot);
@@ -3008,13 +3044,15 @@ test "computeBankStats - same weight selects lower slot" {
 
     // Check that stake for slot 1 and slot 2 is equal
     const bank1 = fixture.slot_tracker.get(1).?;
+    defer bank1.release();
     const bank2 = fixture.slot_tracker.get(2).?;
+    defer bank2.release();
 
     const stake1 = fixture.fork_choice.stakeForSubtree(
-        &.{ .slot = 1, .hash = bank1.state.hash.readCopy().? },
+        &.{ .slot = 1, .hash = bank1.state().hash.readCopy().? },
     ).?;
     const stake2 = fixture.fork_choice.stakeForSubtree(
-        &.{ .slot = 2, .hash = bank2.state.hash.readCopy().? },
+        &.{ .slot = 2, .hash = bank2.state().hash.readCopy().? },
     ).?;
     try testing.expectEqual(stake1, stake2);
 
@@ -3033,7 +3071,11 @@ test "generateVoteTx - empty authorized voter keypairs returns non_voting" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref = fixture.slot_tracker.get(0).?;
+        defer ref.release();
+        ref.state().hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -3073,7 +3115,11 @@ test "generateVoteTx - no node keypair returns non_voting" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref = fixture.slot_tracker.get(0).?;
+        defer ref.release();
+        ref.state().hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -3111,7 +3157,11 @@ test "generateVoteTx - no last voted slot returns failed" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref = fixture.slot_tracker.get(0).?;
+        defer ref.release();
+        ref.state().hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -3151,7 +3201,11 @@ test "generateVoteTx - slot not in tracker returns failed" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref = fixture.slot_tracker.get(0).?;
+        defer ref.release();
+        ref.state().hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -3202,7 +3256,11 @@ test "generateVoteTx - vote account not found returns failed" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref = fixture.slot_tracker.get(0).?;
+        defer ref.release();
+        ref.state().hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -3253,7 +3311,11 @@ test "generateVoteTx - invalid switch fork decision returns failed" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref = fixture.slot_tracker.get(0).?;
+        defer ref.release();
+        ref.state().hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -3315,6 +3377,7 @@ test "generateVoteTx - success with tower_sync vote" {
         state.hash = .init(root.hash);
 
         break :blk try .init(gpa, root.slot, .{
+            .allocator = gpa,
             .constants = constants,
             .state = state,
         });
@@ -3323,7 +3386,9 @@ test "generateVoteTx - success with tower_sync vote" {
 
     const blockhash: Hash = .initRandom(prng);
     {
-        const bhq, var bhq_lg = slot_tracker.getRoot().state.blockhash_queue.writeWithLock();
+        const root_ref = slot_tracker.getRoot();
+        defer root_ref.release();
+        const bhq, var bhq_lg = root_ref.state().blockhash_queue.writeWithLock();
         defer bhq_lg.unlock();
         try bhq.insertHash(gpa, blockhash, 6);
     }
@@ -3427,6 +3492,7 @@ test "generateVoteTx - success with vote_state_update compacted" {
         state.hash = .init(root.hash);
 
         break :blk try .init(gpa, root.slot, .{
+            .allocator = gpa,
             .constants = constants,
             .state = state,
         });
@@ -3435,7 +3501,9 @@ test "generateVoteTx - success with vote_state_update compacted" {
 
     const blockhash: Hash = .initRandom(prng);
     {
-        const bhq, var bhq_lg = slot_tracker.getRoot().state.blockhash_queue.writeWithLock();
+        const root_ref = slot_tracker.getRoot();
+        defer root_ref.release();
+        const bhq, var bhq_lg = root_ref.state().blockhash_queue.writeWithLock();
         defer bhq_lg.unlock();
         try bhq.insertHash(gpa, blockhash, 6);
     }
@@ -3539,6 +3607,7 @@ test "generateVoteTx - success with switch proof" {
         state.hash = .init(root.hash);
 
         break :blk try .init(gpa, root.slot, .{
+            .allocator = gpa,
             .constants = constants,
             .state = state,
         });
@@ -3547,7 +3616,9 @@ test "generateVoteTx - success with switch proof" {
 
     const blockhash: Hash = .initRandom(prng);
     {
-        const bhq, var bhq_lg = slot_tracker.getRoot().state.blockhash_queue.writeWithLock();
+        const root_ref = slot_tracker.getRoot();
+        defer root_ref.release();
+        const bhq, var bhq_lg = root_ref.state().blockhash_queue.writeWithLock();
         defer bhq_lg.unlock();
         try bhq.insertHash(gpa, blockhash, 7);
     }
@@ -3641,7 +3712,11 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
     var fixture = try TestFixture.init(gpa, root);
     defer fixture.deinit(gpa);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref = fixture.slot_tracker.get(0).?;
+        defer ref.release();
+        ref.state().hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(gpa);
@@ -3729,7 +3804,11 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    {
+        const ref = fixture.slot_tracker.get(0).?;
+        defer ref.release();
+        ref.state().hash.set(root.hash);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(allocator);
@@ -4849,7 +4928,11 @@ test "edge cases - duplicate slot" {
     const root_slot0 = slot_tracker.root.load(.monotonic);
     std.debug.assert(root_slot0 == 0);
 
-    const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
+    const root_slot0_hash = blk: {
+        const root_ref = slot_tracker.getRoot();
+        defer root_ref.release();
+        break :blk root_ref.state().hash.readCopy().?;
+    };
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
@@ -4866,6 +4949,7 @@ test "edge cases - duplicate slot" {
         slot_state.hash.set(slot1_hash);
 
         try slot_tracker.put(gpa, slot1, .{
+            .allocator = gpa,
             .constants = slot_constants,
             .state = slot_state,
         });
@@ -4891,6 +4975,7 @@ test "edge cases - duplicate slot" {
         slot_state.hash.set(slot2_hash);
 
         try slot_tracker.put(gpa, slot2, .{
+            .allocator = gpa,
             .constants = slot_constants,
             .state = slot_state,
         });
@@ -4913,7 +4998,11 @@ test "edge cases - duplicate slot" {
         .registry = &registry,
     });
     defer tower_consensus.deinit(gpa);
-    slot_tracker.getRoot().state.hash.set(null); // freeze the root slot (only after initializing consensus, because it needs a non-null hash initially)
+    {
+        const root_ref = slot_tracker.getRoot();
+        defer root_ref.release();
+        root_ref.state().hash.set(null); // freeze the root slot (only after initializing consensus, because it needs a non-null hash initially)
+    }
 
     // -- I/O state -- //
 
@@ -5019,7 +5108,11 @@ test "edge cases - duplicate confirmed slot" {
     const root_slot0 = slot_tracker.root.load(.monotonic);
     std.debug.assert(root_slot0 == 0);
 
-    const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
+    const root_slot0_hash = blk: {
+        const root_ref = slot_tracker.getRoot();
+        defer root_ref.release();
+        break :blk root_ref.state().hash.readCopy().?;
+    };
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
@@ -5036,6 +5129,7 @@ test "edge cases - duplicate confirmed slot" {
         slot_state.hash.set(slot1_hash);
 
         try slot_tracker.put(gpa, slot1, .{
+            .allocator = gpa,
             .constants = slot_constants,
             .state = slot_state,
         });
@@ -5061,6 +5155,7 @@ test "edge cases - duplicate confirmed slot" {
         slot_state.hash.set(slot2_hash);
 
         try slot_tracker.put(gpa, slot2, .{
+            .allocator = gpa,
             .constants = slot_constants,
             .state = slot_state,
         });
@@ -5083,7 +5178,11 @@ test "edge cases - duplicate confirmed slot" {
         .registry = &registry,
     });
     defer tower_consensus.deinit(gpa);
-    slot_tracker.getRoot().state.hash.set(null); // freeze the root slot (only after initializing consensus, because it needs a non-null hash initially)
+    {
+        const root_ref = slot_tracker.getRoot();
+        defer root_ref.release();
+        root_ref.state().hash.set(null); // freeze the root slot (only after initializing consensus, because it needs a non-null hash initially)
+    }
 
     // -- I/O state -- //
 
@@ -5194,7 +5293,11 @@ test "edge cases - gossip verified vote hashes" {
         try .init(.EPOCH_ZERO, root_slot0, &registry);
     defer vote_collector.deinit(gpa);
 
-    const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
+    const root_slot0_hash = blk: {
+        const root_ref = slot_tracker.getRoot();
+        defer root_ref.release();
+        break :blk root_ref.state().hash.readCopy().?;
+    };
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
@@ -5211,6 +5314,7 @@ test "edge cases - gossip verified vote hashes" {
         slot_state.hash.set(slot1_hash);
 
         try slot_tracker.put(gpa, slot1, .{
+            .allocator = gpa,
             .constants = slot_constants,
             .state = slot_state,
         });
@@ -5236,6 +5340,7 @@ test "edge cases - gossip verified vote hashes" {
         slot_state.hash.set(slot2_hash);
 
         try slot_tracker.put(gpa, slot2, .{
+            .allocator = gpa,
             .constants = slot_constants,
             .state = slot_state,
         });
@@ -5258,7 +5363,11 @@ test "edge cases - gossip verified vote hashes" {
         .registry = &registry,
     });
     defer tower_consensus.deinit(gpa);
-    slot_tracker.getRoot().state.hash.set(null); // freeze the root slot (only after initializing consensus, because it needs a non-null hash initially)
+    {
+        const root_ref = slot_tracker.getRoot();
+        defer root_ref.release();
+        root_ref.state().hash.set(null); // freeze the root slot (only after initializing consensus, because it needs a non-null hash initially)
+    }
 
     // -- I/O state -- //
 
@@ -5413,6 +5522,7 @@ test "vote on heaviest frozen descendant with no switch" {
         gpa,
         root_slot,
         .{
+            .allocator = gpa,
             .constants = root_consts,
             .state = root_state,
         },
@@ -5437,6 +5547,7 @@ test "vote on heaviest frozen descendant with no switch" {
             gpa,
             slot_1,
             .{
+                .allocator = gpa,
                 .constants = slot_constants,
                 .state = slot_state,
             },
@@ -5597,6 +5708,7 @@ test "vote accounts with landed votes populate bank stats" {
         gpa,
         root_slot,
         .{
+            .allocator = gpa,
             .constants = root_consts,
             .state = root_state,
         },
@@ -5620,7 +5732,7 @@ test "vote accounts with landed votes populate bank stats" {
         try slot_tracker.put(
             gpa,
             slot_1,
-            .{ .constants = slot_constants, .state = slot_state },
+            .{ .allocator = gpa, .constants = slot_constants, .state = slot_state },
         );
     }
 
@@ -5674,7 +5786,8 @@ test "vote accounts with landed votes populate bank stats" {
     {
         const epoch_info = try epoch_tracker.getEpochInfo(0);
         const slot1_ref = slot_tracker.get(1).?;
-        const stakes_ptr, var stakes_guard = slot1_ref.state.stakes_cache.stakes.writeWithLock();
+        defer slot1_ref.release();
+        const stakes_ptr, var stakes_guard = slot1_ref.state().stakes_cache.stakes.writeWithLock();
         defer stakes_guard.unlock();
         stakes_ptr.deinit(gpa);
         stakes_ptr.* = try sig.core.bank.parseStakesForTest(
@@ -5892,7 +6005,7 @@ test "root advances after vote satisfies lockouts" {
     var slot_tracker: SlotTracker = try .init(
         gpa,
         initial_root,
-        .{ .constants = root_consts, .state = root_state },
+        .{ .allocator = gpa, .constants = root_consts, .state = root_state },
     );
     defer slot_tracker.deinit(gpa);
 
@@ -5974,6 +6087,7 @@ test "root advances after vote satisfies lockouts" {
             slot_state.hash = .init(slot_hash);
 
             try slot_tracker.put(gpa, slot, .{
+                .allocator = gpa,
                 .constants = slot_constants,
                 .state = slot_state,
             });
@@ -6081,7 +6195,15 @@ test "root advances after vote satisfies lockouts" {
         var slot_state: sig.core.SlotState = .GENESIS;
         slot_state.hash = .init(slot_hash);
 
-        try slot_tracker.put(gpa, slot, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(
+            gpa,
+            slot,
+            .{
+                .allocator = gpa,
+                .constants = slot_constants,
+                .state = slot_state,
+            },
+        );
     }
     {
         var fp = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
@@ -6165,7 +6287,15 @@ test "root advances after vote satisfies lockouts" {
         var slot_state: sig.core.SlotState = .GENESIS;
         slot_state.hash = .init(slot_hash);
 
-        try slot_tracker.put(gpa, slot, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(
+            gpa,
+            slot,
+            .{
+                .allocator = gpa,
+                .constants = slot_constants,
+                .state = slot_state,
+            },
+        );
     }
     {
         var fp = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
@@ -6309,7 +6439,7 @@ test "vote refresh when no new vote available" {
     var slot_tracker = try SlotTracker.init(
         gpa,
         root_slot,
-        .{ .constants = root_consts, .state = root_state },
+        .{ .allocator = gpa, .constants = root_consts, .state = root_state },
     );
     defer slot_tracker.deinit(gpa);
 
@@ -6325,7 +6455,15 @@ test "vote refresh when no new vote available" {
         errdefer slot_state.deinit(gpa);
         slot_state.hash = .init(slot1_hash);
 
-        try slot_tracker.put(gpa, 1, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(
+            gpa,
+            1,
+            .{
+                .allocator = gpa,
+                .constants = slot_constants,
+                .state = slot_state,
+            },
+        );
     }
 
     var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
@@ -6514,7 +6652,7 @@ test "detect and mark duplicate confirmed fork" {
     var slot_tracker = try SlotTracker.init(
         gpa,
         root_slot,
-        .{ .constants = root_consts, .state = root_state },
+        .{ .allocator = gpa, .constants = root_consts, .state = root_state },
     );
     defer slot_tracker.deinit(gpa);
 
@@ -6537,7 +6675,15 @@ test "detect and mark duplicate confirmed fork" {
         errdefer slot_state.deinit(gpa);
         slot_state.hash.set(slot1_hash);
 
-        try slot_tracker.put(gpa, 1, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(
+            gpa,
+            1,
+            .{
+                .allocator = gpa,
+                .constants = slot_constants,
+                .state = slot_state,
+            },
+        );
     }
 
     const slot2_hash = Hash{ .data = .{2} ** Hash.SIZE };
@@ -6559,7 +6705,15 @@ test "detect and mark duplicate confirmed fork" {
         errdefer slot_state.deinit(gpa);
         slot_state.hash.set(slot2_hash);
 
-        try slot_tracker.put(gpa, 2, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(
+            gpa,
+            2,
+            .{
+                .allocator = gpa,
+                .constants = slot_constants,
+                .state = slot_state,
+            },
+        );
     }
 
     const epoch_stakes = blk: {
@@ -6608,7 +6762,9 @@ test "detect and mark duplicate confirmed fork" {
     {
         {
             const slot1_ref = slot_tracker.get(1).?;
-            const stakes_ptr, var stakes_guard = slot1_ref.state.stakes_cache.stakes.writeWithLock();
+            defer slot1_ref.release();
+            const stakes_ptr, var stakes_guard =
+                slot1_ref.state().stakes_cache.stakes.writeWithLock();
             defer stakes_guard.unlock();
             stakes_ptr.deinit(gpa);
             stakes_ptr.* = try sig.core.bank.parseStakesForTest(
@@ -6619,7 +6775,9 @@ test "detect and mark duplicate confirmed fork" {
 
         {
             const slot2_ref = slot_tracker.get(2).?;
-            const stakes_ptr, var stakes_guard = slot2_ref.state.stakes_cache.stakes.writeWithLock();
+            defer slot2_ref.release();
+            const stakes_ptr, var stakes_guard =
+                slot2_ref.state().stakes_cache.stakes.writeWithLock();
             defer stakes_guard.unlock();
             stakes_ptr.deinit(gpa);
             stakes_ptr.* = try sig.core.bank.parseStakesForTest(
@@ -6781,7 +6939,7 @@ test "detect and mark duplicate slot" {
     var slot_tracker = try SlotTracker.init(
         gpa,
         root_slot,
-        .{ .constants = root_consts, .state = root_state },
+        .{ .allocator = gpa, .constants = root_consts, .state = root_state },
     );
     defer slot_tracker.deinit(gpa);
 
@@ -6802,7 +6960,15 @@ test "detect and mark duplicate slot" {
         errdefer slot_state.deinit(gpa);
         slot_state.hash.set(slot1_hash);
 
-        try slot_tracker.put(gpa, 1, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(
+            gpa,
+            1,
+            .{
+                .allocator = gpa,
+                .constants = slot_constants,
+                .state = slot_state,
+            },
+        );
     }
 
     var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
@@ -6985,7 +7151,7 @@ test "successful fork switch (switch_proof)" {
     var slot_tracker = try SlotTracker.init(
         gpa,
         root_slot,
-        .{ .constants = root_consts, .state = root_state },
+        .{ .allocator = gpa, .constants = root_consts, .state = root_state },
     );
     defer slot_tracker.deinit(gpa);
 
@@ -7012,7 +7178,7 @@ test "successful fork switch (switch_proof)" {
         try slot_tracker.put(
             gpa,
             1,
-            .{ .constants = slot_constants, .state = slot_state },
+            .{ .allocator = gpa, .constants = slot_constants, .state = slot_state },
         );
     }
 
@@ -7038,7 +7204,15 @@ test "successful fork switch (switch_proof)" {
         var slot_state: sig.core.SlotState = .GENESIS;
         errdefer slot_state.deinit(gpa);
         slot_state.hash.set(slot2_hash);
-        try slot_tracker.put(gpa, 2, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(
+            gpa,
+            2,
+            .{
+                .allocator = gpa,
+                .constants = slot_constants,
+                .state = slot_state,
+            },
+        );
     }
 
     // Add heavier sibling we’ll vote on:
@@ -7067,7 +7241,15 @@ test "successful fork switch (switch_proof)" {
         var slot_state: sig.core.SlotState = .GENESIS;
         errdefer slot_state.deinit(gpa);
         slot_state.hash.set(slot4_hash);
-        try slot_tracker.put(gpa, 4, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(
+            gpa,
+            4,
+            .{
+                .allocator = gpa,
+                .constants = slot_constants,
+                .state = slot_state,
+            },
+        );
     }
 
     const vote_pubkeys = try gpa.alloc(Pubkey, 5);
@@ -7095,7 +7277,8 @@ test "successful fork switch (switch_proof)" {
     {
         {
             const s1 = slot_tracker.get(1).?;
-            const stakes_ptr1, var g1 = s1.state.stakes_cache.stakes.writeWithLock();
+            defer s1.release();
+            const stakes_ptr1, var g1 = s1.state().stakes_cache.stakes.writeWithLock();
             defer g1.unlock();
             stakes_ptr1.deinit(gpa);
             stakes_ptr1.* = try sig.core.bank.parseStakesForTest(
@@ -7105,7 +7288,8 @@ test "successful fork switch (switch_proof)" {
         }
         {
             const s2 = slot_tracker.get(2).?;
-            const stakes_ptr2, var g2 = s2.state.stakes_cache.stakes.writeWithLock();
+            defer s2.release();
+            const stakes_ptr2, var g2 = s2.state().stakes_cache.stakes.writeWithLock();
             defer g2.unlock();
             stakes_ptr2.deinit(gpa);
             stakes_ptr2.* = try sig.core.bank.parseStakesForTest(
@@ -7115,7 +7299,8 @@ test "successful fork switch (switch_proof)" {
         }
         {
             const s4 = slot_tracker.get(4).?;
-            const stakes_ptr4, var g4 = s4.state.stakes_cache.stakes.writeWithLock();
+            defer s4.release();
+            const stakes_ptr4, var g4 = s4.state().stakes_cache.stakes.writeWithLock();
             defer g4.unlock();
             stakes_ptr4.deinit(gpa);
             stakes_ptr4.* = try sig.core.bank.parseStakesForTest(
@@ -7202,18 +7387,23 @@ test "successful fork switch (switch_proof)" {
         descendants_map.deinit(gpa);
     }
 
-    try ancestors_map.ensureTotalCapacity(gpa, slot_tracker.slots.count());
-    try descendants_map.ensureTotalCapacity(gpa, slot_tracker.slots.count());
-    for (slot_tracker.slots.keys(), slot_tracker.slots.values()) |slot, info| {
-        const slot_ancestors = &info.constants.ancestors.ancestors;
-        const gop = try ancestors_map.getOrPutValue(gpa, slot, .EMPTY);
-        if (!gop.found_existing) {
-            try gop.value_ptr.ancestors.ensureUnusedCapacity(gpa, slot_ancestors.count());
-        }
-        for (slot_ancestors.keys()) |a| {
-            try gop.value_ptr.addSlot(gpa, a);
-            const dg = try descendants_map.getOrPutValue(gpa, a, .empty);
-            try dg.value_ptr.put(gpa, slot);
+    {
+        var slots_lg = slot_tracker.slots.read();
+        defer slots_lg.unlock();
+        const slots = slots_lg.get();
+        try ancestors_map.ensureTotalCapacity(gpa, slots.count());
+        try descendants_map.ensureTotalCapacity(gpa, slots.count());
+        for (slots.keys(), slots.values()) |slot, info| {
+            const slot_ancestors = &info.constants.ancestors.ancestors;
+            const gop = try ancestors_map.getOrPutValue(gpa, slot, .EMPTY);
+            if (!gop.found_existing) {
+                try gop.value_ptr.ancestors.ensureUnusedCapacity(gpa, slot_ancestors.count());
+            }
+            for (slot_ancestors.keys()) |a| {
+                try gop.value_ptr.addSlot(gpa, a);
+                const dg = try descendants_map.getOrPutValue(gpa, a, .empty);
+                try dg.value_ptr.put(gpa, slot);
+            }
         }
     }
 
@@ -7338,7 +7528,15 @@ test "successful fork switch (switch_proof)" {
         var slot_state: sig.core.SlotState = .GENESIS;
         errdefer slot_state.deinit(gpa);
         slot_state.hash.set(slot5_hash);
-        try slot_tracker.put(gpa, 5, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(
+            gpa,
+            5,
+            .{
+                .allocator = gpa,
+                .constants = slot_constants,
+                .state = slot_state,
+            },
+        );
     }
     // Progress map entry for slot 5
     {
@@ -7384,18 +7582,23 @@ test "successful fork switch (switch_proof)" {
         descendants_map2.deinit(gpa);
     }
 
-    try ancestors_map2.ensureTotalCapacity(gpa, slot_tracker.slots.count());
-    try descendants_map2.ensureTotalCapacity(gpa, slot_tracker.slots.count());
-    for (slot_tracker.slots.keys(), slot_tracker.slots.values()) |slot, info| {
-        const slot_ancestors = &info.constants.ancestors.ancestors;
-        const gop = try ancestors_map2.getOrPutValue(gpa, slot, .EMPTY);
-        if (!gop.found_existing) {
-            try gop.value_ptr.ancestors.ensureUnusedCapacity(gpa, slot_ancestors.count());
-        }
-        for (slot_ancestors.keys()) |a| {
-            try gop.value_ptr.addSlot(gpa, a);
-            const dg = try descendants_map2.getOrPutValue(gpa, a, .empty);
-            try dg.value_ptr.put(gpa, slot);
+    {
+        var slots_lg = slot_tracker.slots.read();
+        defer slots_lg.unlock();
+        const slots = slots_lg.get();
+        try ancestors_map2.ensureTotalCapacity(gpa, slots.count());
+        try descendants_map2.ensureTotalCapacity(gpa, slots.count());
+        for (slots.keys(), slots.values()) |slot, info| {
+            const slot_ancestors = &info.constants.ancestors.ancestors;
+            const gop = try ancestors_map2.getOrPutValue(gpa, slot, .EMPTY);
+            if (!gop.found_existing) {
+                try gop.value_ptr.ancestors.ensureUnusedCapacity(gpa, slot_ancestors.count());
+            }
+            for (slot_ancestors.keys()) |a| {
+                try gop.value_ptr.addSlot(gpa, a);
+                const dg = try descendants_map2.getOrPutValue(gpa, a, .empty);
+                try dg.value_ptr.put(gpa, slot);
+            }
         }
     }
 
