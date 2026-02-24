@@ -8,6 +8,8 @@ pub fn build(b: *Build) void {
     const filters = b.option([]const []const u8, "filter", "List of filters for tests.") orelse &.{};
     const bin_install = !(b.option(bool, "no-bin", "Don't install any of the artifacts implied by the specified steps.") orelse false);
     const bin_run = !(b.option(bool, "no-run", "Don't run any of the executables implied by the specified steps.") orelse false);
+    // Disabled by default due to it slowing down test-vector execution.
+    const enable_fuzz = b.option(bool, "enable-fuzz", "Enables SanCov points for fuzzing and tracing") orelse false;
 
     const install_step = b.getInstallStep();
     const solfuzz_sig_step = b.step("solfuzz_sig", "The solfuzz sig library.");
@@ -48,9 +50,7 @@ pub fn build(b: *Build) void {
             .target = target,
             .optimize = optimize,
             .omit_frame_pointer = false,
-            // NOTE: enable fuzzing for when we actually want to fuzz. This only slows us down when
-            // running fixtures.
-            .fuzz = false,
+            .fuzz = enable_fuzz,
             .imports = &common_imports,
         }),
     });
