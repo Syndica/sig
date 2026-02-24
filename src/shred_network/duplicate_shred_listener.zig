@@ -22,7 +22,7 @@ pub const HandlerParams = struct {
     ledger_reader: LedgerReader,
     duplicate_slots_sender: *Channel(Slot),
     shred_version: *const std.atomic.Value(u16),
-    epoch_tracker: *const sig.core.EpochTracker,
+    epoch_tracker: *sig.core.EpochTracker,
 };
 
 pub const RecvLoopParams = struct {
@@ -127,6 +127,7 @@ const GossipDuplicateShredHandler = struct {
 
             // Refresh cached staked nodes from epoch context
             if (self.params.epoch_tracker.getEpochInfo(self.last_root)) |epoch_info| {
+                defer epoch_info.release();
                 // Clear and repopulate cached staked nodes
                 self.cached_staked_nodes.clearRetainingCapacity();
                 for (
@@ -355,6 +356,7 @@ const GossipDuplicateShredHandler = struct {
         const leader = leader: {
             const info =
                 self.params.epoch_tracker.getEpochInfo(key.slot) catch return error.UnknownLeader;
+            defer info.release();
             break :leader info.leaders.getLeaderOrNull(key.slot) orelse return error.UnknownLeader;
         };
         shred1.verify(leader) catch {
@@ -1002,7 +1004,11 @@ test "GossipDuplicateShredHandler: reconstructShredsFromData returns shreds on v
     }
 
     epoch_tracker.root_slot.store(slot, .monotonic);
-    epoch_tracker.rooted_epochs.root.store(base_epoch, .monotonic);
+    {
+        var lock = epoch_tracker.rooted_epochs.write();
+        defer lock.unlock();
+        lock.mut().root.store(base_epoch, .monotonic);
+    }
 
     var ledger = try sig.ledger.tests.initTestLedger(gpa, @src(), .FOR_TESTS);
     defer ledger.deinit();

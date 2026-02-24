@@ -61,7 +61,7 @@ pub const ShredReceiver = struct {
 
         shred_version: *const Atomic(u16),
 
-        epoch_tracker: *const sig.core.EpochTracker,
+        epoch_tracker: *sig.core.EpochTracker,
 
         /// shared with repair
         tracker: *BasicShredTracker,
@@ -166,7 +166,9 @@ pub const ShredReceiver = struct {
             self.shred_batch.clearRetainingCapacity();
         }
 
-        const leader_schedules = try self.params.epoch_tracker.getLeaderSchedules();
+        const leader_schedules_with_infos = try self.params.epoch_tracker.getLeaderSchedules();
+        defer leader_schedules_with_infos.release();
+        const leader_schedules = leader_schedules_with_infos.leader_schedules;
 
         var packet_count: usize = 0;
         while (self.incoming_shreds.tryReceive()) |packet| {

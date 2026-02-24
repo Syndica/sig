@@ -58,6 +58,7 @@ pub fn beginPartitionedRewards(
         slot,
         &slot_constants.ancestors,
     );
+    defer current_epoch_info.release();
     const epoch_vote_accounts = current_epoch_info.stakes.stakes.vote_accounts;
 
     const slots_per_year = epoch_tracker.cluster.slotsPerYear();

@@ -718,8 +718,8 @@ pub const common = struct {
 
 pub const RpcHookContext = struct {
     slot_tracker: *sig.replay.trackers.SlotTracker,
-    epoch_tracker: *const sig.core.EpochTracker,
     account_reader: sig.accounts_db.AccountReader,
+    epoch_tracker: *sig.core.EpochTracker,
 
     // Limit the length of the `epoch_credits` array for each validator in a `get_vote_accounts`
     // response.
@@ -760,6 +760,7 @@ pub const RpcHookContext = struct {
 
         // Get epoch info for epochVoteAccounts check
         const epoch_constants = try self.epoch_tracker.getEpochInfo(slot);
+        defer epoch_constants.release();
         const epoch_stakes = epoch_constants.stakes.stakes;
         const epoch_vote_accounts = &epoch_stakes.vote_accounts.vote_accounts;
 
@@ -871,8 +872,9 @@ pub const RpcHookContext = struct {
         }
 
         // Get slot reference to access ancestors
-        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-        const slot_reader = self.account_reader.forSlot(&ref.constants.ancestors);
+        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        defer slot_ref.release();
+        const slot_reader = self.account_reader.forSlot(&slot_ref.constants().ancestors);
 
         // Look up account
         const maybe_account = try slot_reader.get(allocator, params.pubkey);

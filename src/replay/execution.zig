@@ -405,7 +405,7 @@ const PreparedSlot = union(enum) {
 fn prepareSlot(
     state: *ReplayState,
     slot_tracker: *SlotTracker,
-    epoch_tracker: *const sig.core.EpochTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     slot: Slot,
 ) !PreparedSlot {
     var zone = tracy.Zone.init(@src(), .{ .name = "prepareSlot" });
@@ -420,6 +420,7 @@ fn prepareSlot(
     }
 
     const epoch_info = try epoch_tracker.getEpochInfo(slot);
+    defer epoch_info.release();
     const slot_info = slot_tracker.get(slot) orelse return error.MissingSlot;
     defer slot_info.release();
 

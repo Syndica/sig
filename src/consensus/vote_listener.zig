@@ -25,7 +25,7 @@ const Logger = sig.trace.Logger("vote_listener");
 
 pub const SlotDataProvider = struct {
     slot_tracker: *SlotTracker,
-    epoch_tracker: *const EpochTracker,
+    epoch_tracker: *EpochTracker,
 
     pub fn rootSlot(self: *const SlotDataProvider) Slot {
         return self.slot_tracker.root.load(.monotonic);
@@ -52,12 +52,16 @@ pub const SlotDataProvider = struct {
     }
 
     fn getEpochTotalStake(self: *const SlotDataProvider, epoch: u64) ?u64 {
-        const epoch_info = self.epoch_tracker.rooted_epochs.get(epoch) catch return null;
+        var lock = self.epoch_tracker.rooted_epochs.read();
+        defer lock.unlock();
+        const epoch_info = lock.get().get(epoch) catch return null;
+        defer epoch_info.release();
         return epoch_info.stakes.total_stake;
     }
 
     fn getDelegatedStake(self: *const SlotDataProvider, slot: Slot, pubkey: Pubkey) ?u64 {
         const epoch_info = self.epoch_tracker.getEpochInfo(slot) catch return null;
+        defer epoch_info.release();
         return epoch_info.stakes.stakes.vote_accounts.getDelegatedStake(pubkey);
     }
 
@@ -67,6 +71,7 @@ pub const SlotDataProvider = struct {
         vote_account_key: Pubkey,
     ) ?Pubkey {
         const epoch_consts = self.epoch_tracker.getEpochInfo(slot) catch return null;
+        defer epoch_consts.release();
         const epoch_authorized_voters = &epoch_consts.stakes.epoch_authorized_voters;
         return epoch_authorized_voters.get(vote_account_key);
     }
@@ -244,7 +249,7 @@ fn parseAndVerifyVoteTransaction(
     allocator: std.mem.Allocator,
     vote_tx: Transaction,
     /// Should be associated with the root bank.
-    epoch_tracker: *const EpochTracker,
+    epoch_tracker: *EpochTracker,
 ) error{ OutOfMemory, Unverified }!vote_parser.ParsedVote {
     const zone = tracy.Zone.init(@src(), .{ .name = "verifyVoteTransaction" });
     defer zone.deinit();
@@ -260,6 +265,7 @@ fn parseAndVerifyVoteTransaction(
     const slot = vote.lastVotedSlot() orelse return error.Unverified;
     const authorized_voter: Pubkey = blk: {
         const epoch_consts = epoch_tracker.getEpochInfo(slot) catch return error.Unverified;
+        defer epoch_consts.release();
         const epoch_authorized_voters = &epoch_consts.stakes.epoch_authorized_voters;
         break :blk epoch_authorized_voters.get(vote_account_key) orelse return error.Unverified;
     };

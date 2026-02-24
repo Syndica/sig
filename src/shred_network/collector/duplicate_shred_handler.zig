@@ -24,7 +24,7 @@ const MAX_DUPLICATE_SHREDS: usize = sig.gossip.data.MAX_DUPLICATE_SHREDS;
 pub const DuplicateShredHandler = struct {
     ledger_reader: sig.ledger.Reader,
     result_writer: sig.ledger.ResultWriter,
-    epoch_tracker: ?*const sig.core.EpochTracker,
+    epoch_tracker: ?*sig.core.EpochTracker,
     duplicate_slots_sender: ?*Channel(Slot),
     push_msg_queue_mux: ?*sig.gossip.GossipService.PushMessageQueue,
     keypair: *const KeyPair,
@@ -90,8 +90,10 @@ pub const DuplicateShredHandler = struct {
                         const epoch_tracker = self.epoch_tracker orelse break :feature false;
                         const root_slot = epoch_tracker.root_slot.load(.monotonic);
                         const root_epoch = epoch_tracker.epoch_schedule.getEpoch(root_slot);
-                        const epoch_info = epoch_tracker.rooted_epochs.get(root_epoch) catch
-                            break :feature false;
+                        var lock = epoch_tracker.rooted_epochs.read();
+                        defer lock.unlock();
+                        const epoch_info = lock.get().get(root_epoch) catch break :feature false;
+                        defer epoch_info.release();
                         const feature_slot = epoch_info.feature_set.get(
                             .chained_merkle_conflict_duplicate_proofs,
                         ) orelse break :feature false;
