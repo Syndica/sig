@@ -134,18 +134,15 @@ fn handleGetOrHead(
         const path = target[1..];
 
         if (std.mem.eql(u8, path, "health")) {
-            // Call the getHealth RPC method through hooks
-            // Analogous to GET /health endpoint in agave
-            // Note: HTTP /health always returns 200 with status string,
-            // unlike JSON-RPC getHealth which returns error for unhealthy states.
-            // See: https://github.com/anza-xyz/agave/blob/master/rpc/src/rpc_service.rs#L331-L339
+            // HTTP GET /health always returns 200 OK with a plain-text status string.
+            // This matches agave's behavior:
+            // See: https://github.com/anza-xyz/agave/blob/master/rpc/src/rpc_service.rs#L332-L340
             const health_result = server_ctx.rpc_hooks.call(
                 server_ctx.allocator,
                 .getHealth,
                 .{},
             ) catch |e| switch (e) {
                 error.MethodNotImplemented => {
-                    // Health check not implemented, return unknown status
                     request.respond("unknown", .{
                         .status = .ok,
                         .keep_alive = false,
@@ -157,22 +154,10 @@ fn handleGetOrHead(
                 },
             };
 
-            // HTTP /health endpoint always returns 200 OK with status string
-            // This differs from JSON-RPC getHealth which returns error for unhealthy states
+            // The hooks system wraps the response in Result union
             const status_str = switch (health_result) {
-                .ok => |response| response,
-                .err => |err| blk: {
-                    // Map error name to HTTP status string
-                    // "NodeUnhealthyUnknown" -> "unknown"
-                    // "NodeUnhealthyBehind" -> "behind"
-                    if (std.mem.eql(u8, err.message, "NodeUnhealthyUnknown")) {
-                        break :blk "unknown";
-                    } else if (std.mem.eql(u8, err.message, "NodeUnhealthyBehind")) {
-                        break :blk "behind";
-                    }
-                    // Fallback for any other error
-                    break :blk "unknown";
-                },
+                .ok => |response| response.httpStatusString(),
+                .err => "unknown", // fallback for hook-level errors
             };
 
             request.respond(status_str, .{
@@ -272,6 +257,26 @@ fn handleGetOrHead(
 
     try respondSimpleErrorStatusBody(request, logger, .not_found, "");
 }
+
+/// Format the "Node is behind by N slots" message matching agave's format.
+/// See: https://github.com/anza-xyz/agave/blob/master/rpc-client-api/src/custom_error.rs#L153-L154
+fn behindMessage(buf: *[64]u8, num_slots: u64) []const u8 {
+    return std.fmt.bufPrint(buf, "Node is behind by {d} slots", .{num_slots}) catch "Node is behind";
+}
+
+/// Agave's NodeUnhealthy JSON-RPC error response structure.
+/// Matches agave's error format exactly:
+///   {"code": -32005, "message": "...", "data": {"numSlotsBehind": <n or null>}}
+/// See: https://github.com/anza-xyz/agave/blob/master/rpc-client-api/src/custom_error.rs#L149-L159
+const NodeUnhealthyError = struct {
+    code: i64 = rpc.methods.GetHealth.node_unhealthy_code,
+    message: []const u8,
+    data: NodeUnhealthyErrorData,
+
+    const NodeUnhealthyErrorData = struct {
+        numSlotsBehind: ?u64,
+    };
+};
 
 fn handlePost(
     server_ctx: *server.Context,
@@ -424,6 +429,58 @@ fn handleRpcRequest(
         .getSnapshot => {
             try sendFinalMethodNotFound(request, logger, .getSnapshot, rpc_request.id);
             return;
+        },
+        // getHealth requires special handling: unhealthy states must be returned as
+        // JSON-RPC errors with code -32005, matching agave's behavior.
+        // See: https://github.com/anza-xyz/agave/blob/master/rpc/src/rpc.rs#L2806-L2818
+        // See: https://github.com/anza-xyz/agave/blob/master/rpc-client-api/src/custom_error.rs#L149-L159
+        .getHealth => {
+            const allocator = json_arena;
+            const result = server_ctx.rpc_hooks.call(
+                allocator,
+                .getHealth,
+                .{},
+            ) catch |e| switch (e) {
+                error.MethodNotImplemented => {
+                    try sendFinalMethodNotFound(request, logger, .getHealth, rpc_request.id);
+                    return;
+                },
+            };
+
+            return switch (result) {
+                .ok => |health_status| switch (health_status) {
+                    .ok => try writeFinalJsonResponse(request, .{}, .{
+                        .jsonrpc = "2.0",
+                        .id = rpc_request.id,
+                        .result = "ok",
+                    }),
+                    .unknown => try writeFinalJsonResponse(request, .{}, .{
+                        .jsonrpc = "2.0",
+                        .id = rpc_request.id,
+                        .@"error" = NodeUnhealthyError{
+                            .message = "Node is unhealthy",
+                            .data = .{ .numSlotsBehind = null },
+                        },
+                    }),
+                    .behind => |num_slots| blk: {
+                        var msg_buf: [64]u8 = undefined;
+                        const message = behindMessage(&msg_buf, num_slots);
+                        break :blk try writeFinalJsonResponse(request, .{}, .{
+                            .jsonrpc = "2.0",
+                            .id = rpc_request.id,
+                            .@"error" = NodeUnhealthyError{
+                                .message = message,
+                                .data = .{ .numSlotsBehind = num_slots },
+                            },
+                        });
+                    },
+                },
+                .err => |err| try writeFinalJsonResponse(request, .{}, .{
+                    .jsonrpc = "2.0",
+                    .id = rpc_request.id,
+                    .@"error" = err,
+                }),
+            };
         },
         inline else => |method| {
             // For unimplemented methods, hard-code sending a not-found error.

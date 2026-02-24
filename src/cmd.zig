@@ -2678,15 +2678,6 @@ fn startGossip(
     try app_base.rpc_hooks.set(allocator, struct {
         info: ContactInfo,
 
-        pub fn getHealth(
-            _: @This(),
-            _: std.mem.Allocator,
-            _: anytype,
-        ) !sig.rpc.methods.GetHealth.Response {
-            // TODO: more intricate
-            return "ok";
-        }
-
         pub fn getIdentity(
             self: @This(),
             _: std.mem.Allocator,
