@@ -991,7 +991,7 @@ fn getVoteStateChecked(
         allocator,
         VoteStateVersions,
     );
-    defer versioned_state.deinit(allocator);
+    errdefer versioned_state.deinit(allocator);
 
     const target_v4 = target_version == .v4;
 
@@ -1014,14 +1014,7 @@ fn getVoteStateChecked(
         },
     }
 
-    var vote_state = try versioned_state.convertToVoteState(
-        allocator,
-        vote_account.pubkey,
-        target_v4,
-    );
-    errdefer vote_state.deinit(allocator);
-
-    return vote_state;
+    return versioned_state.convertToVoteState(allocator, vote_account.pubkey, target_v4);
 }
 
 fn targetVersion(tc: *const sig.runtime.TransactionContext) VoteVersion {

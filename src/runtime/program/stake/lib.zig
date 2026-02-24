@@ -682,6 +682,8 @@ fn delegate(
             vote_account.deserializeFromAccountData(allocator, VoteStateVersions),
         };
     };
+    var vote_state_to_deinit: ?*const anyerror!VoteStateVersions = &vote_state;
+    if (vote_state_to_deinit) |fallible| if (fallible.*) |*vs| vs.deinit(allocator) else |_| {};
 
     var stake_account = try ic.borrowInstructionAccount(stake_account_index);
     defer stake_account.release();
@@ -696,7 +698,8 @@ fn delegate(
             const stake_amount = validated.stake_amount;
 
             const payload = try vote_state;
-            var current_vote_state = try payload.convertToVoteState(allocator, vote_pubkey, false);
+            vote_state_to_deinit = null;
+            const current_vote_state = try payload.convertToVoteState(allocator, vote_pubkey, false);
             defer current_vote_state.deinit(allocator);
 
             const new_stake = newStake(
@@ -721,7 +724,8 @@ fn delegate(
             const stake_amount = validated.stake_amount;
 
             const payload = try vote_state;
-            var current_vote_state = try payload.convertToVoteState(allocator, vote_pubkey, false);
+            vote_state_to_deinit = null;
+            const current_vote_state = try payload.convertToVoteState(allocator, vote_pubkey, false);
             defer current_vote_state.deinit(allocator);
             if (redelegateStake(
                 ic,
@@ -1408,13 +1412,11 @@ fn deactivateDelinquent(
     if (!delinquent_vote_account.account.owner.equals(&runtime.program.vote.ID))
         return error.IncorrectProgramId;
 
-    var delinquent_vote_state_raw = try delinquent_vote_account.deserializeFromAccountData(
+    const delinquent_vote_state_raw = try delinquent_vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
-    defer delinquent_vote_state_raw.deinit(allocator);
-
-    var delinquent_vote_state = try delinquent_vote_state_raw.convertToVoteState(
+    const delinquent_vote_state = try delinquent_vote_state_raw.convertToVoteState(
         allocator,
         null,
         false,
@@ -1426,13 +1428,11 @@ fn deactivateDelinquent(
     if (!reference_vote_account.account.owner.equals(&runtime.program.vote.ID))
         return error.IncorrectProgramId;
 
-    var reference_vote_state_raw = try reference_vote_account.deserializeFromAccountData(
+    const reference_vote_state_raw = try reference_vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
-    defer reference_vote_state_raw.deinit(allocator);
-
-    var reference_vote_state = try reference_vote_state_raw.convertToVoteState(
+    const reference_vote_state = try reference_vote_state_raw.convertToVoteState(
         allocator,
         null,
         false,

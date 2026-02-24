@@ -658,7 +658,7 @@ pub const VoteStateVersions = union(enum(u32)) {
         return landed_votes;
     }
 
-    pub fn deinit(self: *VoteStateVersions, allocator: Allocator) void {
+    pub fn deinit(self: *const VoteStateVersions, allocator: Allocator) void {
         switch (self.*) {
             .v0_23_5 => |*vote_state| vote_state.deinit(allocator),
             .v1_14_11 => |*vote_state| vote_state.deinit(allocator),
@@ -673,19 +673,23 @@ pub const VoteStateVersions = union(enum(u32)) {
             VoteStateV4.isCorrectSizeAndInitialized(data);
     }
 
-    /// Clones the owned data within the vote state.
+    /// Takes ownership of the contained vote state and will either free it or return it.
+    ///
     /// [SIMD-0185] Returns VoteStateV4 with default values for new fields when converting from older versions.
     /// vote_pubkey: when provided, used as inflation_rewards_collector default for old versions.
     ///
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
     fn convertToV4(
         self: VoteStateVersions,
+        /// must be the allocator used to allocate self
         allocator: Allocator,
         vote_pubkey: ?Pubkey,
     ) !VoteStateV4 {
         const default_collector = vote_pubkey orelse Pubkey.ZEROES;
         switch (self) {
             .v0_23_5 => |state| {
+                defer self.deinit(allocator);
+
                 const authorized_voters: AuthorizedVoters = if (state.voter.isZeroed())
                     .EMPTY
                 else
@@ -722,6 +726,8 @@ pub const VoteStateVersions = union(enum(u32)) {
                 };
             },
             .v1_14_11 => |state| {
+                defer self.deinit(allocator);
+
                 const authorized_voters = try state.voters.clone(allocator);
                 errdefer authorized_voters.deinit(allocator);
 
@@ -751,6 +757,8 @@ pub const VoteStateVersions = union(enum(u32)) {
                 };
             },
             .v3 => |state| {
+                defer self.deinit(allocator);
+
                 var authorized_voters = try state.voters.clone(allocator);
                 errdefer authorized_voters.deinit(allocator);
 
@@ -776,7 +784,7 @@ pub const VoteStateVersions = union(enum(u32)) {
                     .last_timestamp = state.last_timestamp,
                 };
             },
-            .v4 => |state| return try state.clone(allocator),
+            .v4 => |state| return state,
         }
     }
 
@@ -795,9 +803,11 @@ pub const VoteStateVersions = union(enum(u32)) {
         }
         // target is v3: convert old versions to v3, v4 stays v4
         switch (self) {
-            .v3 => |state| return .{ .v3 = try state.clone(allocator) },
-            .v4 => |state| return .{ .v4 = try state.clone(allocator) },
+            .v3 => |state| return .{ .v3 = state },
+            .v4 => |state| return .{ .v4 = state },
             .v0_23_5 => |state| {
+                defer self.deinit(allocator);
+
                 const authorized_voters: AuthorizedVoters = if (state.voter.isZeroed())
                     .EMPTY
                 else
@@ -830,6 +840,8 @@ pub const VoteStateVersions = union(enum(u32)) {
                 } };
             },
             .v1_14_11 => |state| {
+                defer self.deinit(allocator);
+
                 const authorized_voters = try state.voters.clone(allocator);
                 errdefer authorized_voters.deinit(allocator);
 
@@ -915,7 +927,7 @@ pub const VoteState = union(enum(u32)) {
         ) };
     }
 
-    pub fn deinit(self: *VoteState, allocator: Allocator) void {
+    pub fn deinit(self: *const VoteState, allocator: Allocator) void {
         switch (self.*) {
             inline else => |*s| s.deinit(allocator),
         }
@@ -1427,9 +1439,11 @@ pub const VoteState0_23_5 = struct {
         };
     }
 
-    pub fn deinit(self: *VoteState0_23_5, allocator: Allocator) void {
-        self.votes.deinit(allocator);
-        self.epoch_credits.deinit(allocator);
+    pub fn deinit(self: *const VoteState0_23_5, allocator: Allocator) void {
+        var votes = self.votes;
+        votes.deinit(allocator);
+        var epoch_credits = self.epoch_credits;
+        epoch_credits.deinit(allocator);
     }
 };
 
@@ -1501,10 +1515,12 @@ pub const VoteState1_14_11 = struct {
         };
     }
 
-    pub fn deinit(self: *VoteState1_14_11, allocator: Allocator) void {
-        self.votes.deinit(allocator);
+    pub fn deinit(self: *const VoteState1_14_11, allocator: Allocator) void {
+        var votes = self.votes;
+        votes.deinit(allocator);
         self.voters.deinit(allocator);
-        self.epoch_credits.deinit(allocator);
+        var epoch_credits = self.epoch_credits;
+        epoch_credits.deinit(allocator);
     }
 
     pub fn isCorrectSizeAndInitialized(data: []const u8) bool {
@@ -1584,10 +1600,12 @@ pub const VoteStateV3 = struct {
         };
     }
 
-    pub fn deinit(self: *VoteStateV3, allocator: Allocator) void {
-        self.votes.deinit(allocator);
+    pub fn deinit(self: *const VoteStateV3, allocator: Allocator) void {
+        var votes = self.votes;
+        votes.deinit(allocator);
         self.voters.deinit(allocator);
-        self.epoch_credits.deinit(allocator);
+        var epoch_credits = self.epoch_credits;
+        epoch_credits.deinit(allocator);
     }
 
     pub fn clone(self: VoteStateV3, allocator: Allocator) Allocator.Error!VoteStateV3 {
@@ -2888,16 +2906,14 @@ test "state.VoteStateV3.convertToV4" {
     const vote_pubkey = Pubkey.ZEROES;
     // VoteState0_23_5 -> V4
     {
-        var vote_state_0_23_5: VoteStateVersions = .{ .v0_23_5 = try VoteState0_23_5.init(
+        const vote_state_0_23_5: VoteStateVersions = .{ .v0_23_5 = try VoteState0_23_5.init(
             Pubkey.ZEROES,
             Pubkey.ZEROES,
             Pubkey.ZEROES,
             10,
             0,
         ) };
-        defer vote_state_0_23_5.deinit(allocator);
-
-        var vote_state = try VoteStateVersions.convertToV4(
+        const vote_state = try VoteStateVersions.convertToV4(
             vote_state_0_23_5,
             allocator,
             vote_pubkey,
@@ -2917,7 +2933,7 @@ test "state.VoteStateV3.convertToV4" {
     }
     // VoteStatev1_14_11 -> V4
     {
-        var vote_state_1_14_1: VoteStateVersions = .{ .v1_14_11 = try VoteState1_14_11.init(
+        const vote_state_1_14_1: VoteStateVersions = .{ .v1_14_11 = try VoteState1_14_11.init(
             allocator,
             Pubkey.ZEROES,
             Pubkey.ZEROES,
@@ -2925,9 +2941,7 @@ test "state.VoteStateV3.convertToV4" {
             10,
             0,
         ) };
-        defer vote_state_1_14_1.deinit(allocator);
-
-        var vote_state = try VoteStateVersions.convertToV4(
+        const vote_state = try VoteStateVersions.convertToV4(
             vote_state_1_14_1,
             allocator,
             vote_pubkey,
@@ -2959,7 +2973,7 @@ test "state.VoteStateV3.convertToV4" {
         );
         defer expected.deinit(allocator);
 
-        const vote_state_1_14_1: VoteStateVersions = .{ .v3 = expected };
+        const vote_state_1_14_1: VoteStateVersions = .{ .v3 = try expected.clone(allocator) };
 
         var vote_state = try VoteStateVersions.convertToV4(
             vote_state_1_14_1,
@@ -6415,9 +6429,7 @@ test "state.VoteStateVersions.convertToVoteState: v0_23_5 to v3" {
         10,
         0,
     ) };
-    defer versions.deinit(allocator);
-
-    var vs = try versions.convertToVoteState(allocator, null, false);
+    const vs = try versions.convertToVoteState(allocator, null, false);
     defer vs.deinit(allocator);
 
     try std.testing.expect(vs.isV3());
@@ -6446,9 +6458,7 @@ test "state.VoteStateVersions.convertToVoteState: v1_14_11 to v3" {
         20,
         5,
     ) };
-    defer versions.deinit(allocator);
-
-    var vs = try versions.convertToVoteState(allocator, null, false);
+    const vs = try versions.convertToVoteState(allocator, null, false);
     defer vs.deinit(allocator);
 
     try std.testing.expect(vs.isV3());
@@ -6473,9 +6483,7 @@ test "state.VoteStateVersions.convertToVoteState: v3 stays v3" {
         30,
         0,
     ) };
-    defer versions.deinit(allocator);
-
-    var vs = try versions.convertToVoteState(allocator, null, false);
+    const vs = try versions.convertToVoteState(allocator, null, false);
     defer vs.deinit(allocator);
 
     try std.testing.expect(vs.isV3());
@@ -6495,9 +6503,7 @@ test "state.VoteStateVersions.convertToVoteState: v4 stays v4 even with target_v
         0,
         vote_pk,
     ) };
-    defer versions.deinit(allocator);
-
-    var vs = try versions.convertToVoteState(allocator, vote_pk, false);
+    const vs = try versions.convertToVoteState(allocator, vote_pk, false);
     defer vs.deinit(allocator);
 
     // v4 input stays v4 regardless of target_v4 flag
@@ -6518,9 +6524,7 @@ test "state.VoteStateVersions.convertToVoteState: target_v4=true converts to v4"
         50,
         0,
     ) };
-    defer versions.deinit(allocator);
-
-    var vs = try versions.convertToVoteState(allocator, vote_pk, true);
+    const vs = try versions.convertToVoteState(allocator, vote_pk, true);
     defer vs.deinit(allocator);
 
     try std.testing.expect(vs.isV4());

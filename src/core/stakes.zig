@@ -818,9 +818,8 @@ pub const VoteAccount = struct {
             account.data,
             .{},
         );
-        defer versioned_vote_state.deinit(allocator); // `convertToVoteState` clones
-
-        var vote_state = try versioned_vote_state.convertToVoteState(allocator, vote_pubkey, false);
+        const vote_state = try versioned_vote_state
+            .convertToVoteState(allocator, vote_pubkey, false);
         errdefer vote_state.deinit(allocator);
 
         return .init(
@@ -970,9 +969,7 @@ fn createStakeAccount(
         vote_account.data,
         .{},
     );
-    defer versioned_vote_state.deinit(allocator);
-
-    var vote_state = try versioned_vote_state.convertToVoteState(allocator, null, false);
+    const vote_state = try versioned_vote_state.convertToVoteState(allocator, null, false);
     defer vote_state.deinit(allocator);
 
     const minimum_rent = rent.minimumBalance(StakeStateV2.SIZE);
