@@ -87,7 +87,11 @@ pub fn getTransaction(
     // Get transaction from ledger.
     const confirmed_tx_with_meta = switch (commitment) {
         .processed => return error.ProcessedNotSupported,
-        .confirmed => try reader.getCompleteTransaction(allocator, params.signature, highest_confirmed_slot),
+        .confirmed => try reader.getCompleteTransaction(
+            allocator,
+            params.signature,
+            highest_confirmed_slot,
+        ),
         .finalized => try reader.getRootedTransaction(allocator, params.signature),
     } orelse return .none;
     defer confirmed_tx_with_meta.deinit(allocator);
