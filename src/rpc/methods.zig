@@ -307,7 +307,7 @@ pub const GetHealth = struct {
 pub const GetBlock = struct {
     /// The slot to get the block for (first positional argument)
     slot: Slot,
-    config: ?Config = null,
+    encoding_or_config: ?EncodingOrConfig = null,
 
     pub const Config = struct {
         /// Only `confirmed` and `finalized` are supported. `processed` is rejected.
@@ -316,7 +316,71 @@ pub const GetBlock = struct {
         transactionDetails: ?common.TransactionDetails = null,
         maxSupportedTransactionVersion: ?u8 = null,
         rewards: ?bool = null,
+
+        pub fn getCommitment(self: Config) common.Commitment {
+            return self.commitment orelse Commitment.finalized;
+        }
+
+        pub fn getEncoding(self: Config) common.TransactionEncoding {
+            return self.encoding orelse common.TransactionEncoding.json;
+        }
+
+        pub fn getTransactionDetails(self: Config) common.TransactionDetails {
+            return self.transactionDetails orelse common.TransactionDetails.full;
+        }
+
+        pub fn getMaxSupportedTransactionVersion(self: Config) u8 {
+            return self.maxSupportedTransactionVersion orelse 0;
+        }
+
+        pub fn getRewards(self: Config) bool {
+            return self.rewards orelse true;
+        }
     };
+
+    /// RPC spec allows either a config or just an encoding
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/rpc-client-types/src/config.rs#L233
+    pub const EncodingOrConfig = union(enum) {
+        encoding: common.TransactionEncoding,
+        config: Config,
+
+        pub fn jsonParseFromValue(
+            allocator: std.mem.Allocator,
+            source: std.json.Value,
+            options: std.json.ParseOptions,
+        ) std.json.ParseFromValueError!EncodingOrConfig {
+            return switch (source) {
+                .string => |s| .{
+                    .encoding = std.meta.stringToEnum(common.TransactionEncoding, s) orelse
+                        return error.InvalidEnumTag,
+                },
+                .object => .{ .config = try std.json.innerParseFromValue(
+                    Config,
+                    allocator,
+                    source,
+                    options,
+                ) },
+                else => error.UnexpectedToken,
+            };
+        }
+
+        pub fn jsonStringify(self: EncodingOrConfig, jw: anytype) !void {
+            switch (self) {
+                .encoding => |enc| try jw.write(@tagName(enc)),
+                .config => |c| try jw.write(c),
+            }
+        }
+    };
+
+    pub fn resolveConfig(self: GetBlock) Config {
+        const eoc = self.encoding_or_config orelse return Config{};
+        return switch (eoc) {
+            .encoding => |enc| Config{
+                .encoding = enc,
+            },
+            .config => |c| c,
+        };
+    }
 
     /// Response for getBlock RPC method (UiConfirmedBlock equivalent)
     pub const Response = struct {
@@ -1529,12 +1593,12 @@ pub const BlockHookContext = struct {
         allocator: std.mem.Allocator,
         params: GetBlock,
     ) !GetBlock.Response {
-        const config = params.config orelse GetBlock.Config{};
-        const commitment = config.commitment orelse .finalized;
-        const transaction_details = config.transactionDetails orelse .full;
-        const show_rewards = config.rewards orelse true;
-        const encoding = config.encoding orelse .json;
-        const max_supported_version = config.maxSupportedTransactionVersion;
+        const config = params.resolveConfig();
+        const commitment = config.getCommitment();
+        const transaction_details = config.getTransactionDetails();
+        const show_rewards = config.getRewards();
+        const encoding = config.getEncoding();
+        const max_supported_version = config.getMaxSupportedTransactionVersion();
 
         // Reject processed commitment (Agave behavior: only confirmed and finalized supported)
         if (commitment == .processed) {
