@@ -1562,22 +1562,15 @@ pub const BlockHookContext = struct {
         const encoding = config.encoding orelse .json;
         const max_supported_version = config.maxSupportedTransactionVersion;
 
-        if (commitment == .processed) {
-            return error.ProcessedNotSupported;
-        }
-
         const reader = self.ledger.reader();
         const highest_confirmed_slot = self.slot_tracker.getSlotForCommitment(.confirmed);
 
         // Get transaction from ledger.
-        const confirmed_tx_with_meta = try reader.getCompleteTransaction(
-            allocator,
-            params.signature,
-            highest_confirmed_slot,
-        ) orelse {
-            // TODO: implement bigtable?
-            return .none;
-        };
+        const confirmed_tx_with_meta = switch (commitment) {
+            .processed => return error.ProcessedNotSupported,
+            .confirmed => try reader.getCompleteTransaction(allocator, params.signature, highest_confirmed_slot),
+            .finalized => try reader.getRootedTransaction(allocator, params.signature),
+        } orelse return .none;
         defer confirmed_tx_with_meta.deinit(allocator);
 
         return .{ .value = .{
