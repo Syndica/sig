@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const cli = @import("cli");
 const builtin = @import("builtin");
 const sig = @import("sig.zig");
@@ -56,58 +57,64 @@ fn usageText() []const u8 {
     return text;
 }
 
-const benchmarks: std.EnumMap(Filter, []const Benchmark) = .init(.{
-    .sync = &.{.{
-        .type = @import("sync/channel.zig").BenchmarkChannel,
-        .resolution = .nanos,
-    }},
-    .socket_utils = &.{.{
-        .type = @import("net/socket_utils.zig").BenchmarkPacketProcessing,
-        .resolution = .millis,
-    }},
-    .gossip = &.{
-        .{
-            .type = @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
+/// TODO(0.16): Preferably, this would be implemented with a comptime EnumMap,
+/// but there is a compiler bug in 0.15 that prevents this from working. The bug
+/// is already fixed in 0.16.
+fn getBenchmarks(comptime filter: Filter) []const Benchmark {
+    return switch (filter) {
+        .sync => &.{.{
+            .type = @import("sync/channel.zig").BenchmarkChannel,
             .resolution = .nanos,
-        },
-        .{
-            .type = @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
-            .resolution = .nanos,
-        },
-    },
-    .crypto = &.{
-        .{
-            .type = @import("crypto/benchmark.zig").BenchmarkSigVerify,
-            .resolution = .micros,
-        },
-        .{
-            .type = @import("crypto/benchmark.zig").BenchmarkPohHash,
-            .resolution = .nanos,
-        },
-    },
-    .ledger = &.{
-        .{
-            .type = @import("ledger/benchmarks.zig").BenchmarkLedger,
-            .resolution = .nanos,
-        },
-        .{
-            .type = @import("ledger/benchmarks.zig").BenchmarkLedgerSlow,
+        }},
+        .socket_utils => &.{.{
+            .type = @import("net/socket_utils.zig").BenchmarkPacketProcessing,
             .resolution = .millis,
+        }},
+        .gossip => &.{
+            .{
+                .type = @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
+                .resolution = .nanos,
+            },
+            .{
+                .type = @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
+                .resolution = .nanos,
+            },
         },
-    },
-    .swissmap = &.{.{
-        .type = @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
-        .resolution = .nanos,
-    }},
-    .bincode = &.{.{
-        .type = @import("bincode/benchmarks.zig").BenchmarkEntry,
-        .resolution = .nanos,
-    }},
-    .zksdk = &.{.{
-        .type = @import("zksdk/benchmarks.zig").Benchmark,
-        .resolution = .micros,
-    }},
-});
+        .crypto => &.{
+            .{
+                .type = @import("crypto/benchmark.zig").BenchmarkSigVerify,
+                .resolution = .micros,
+            },
+            .{
+                .type = @import("crypto/benchmark.zig").BenchmarkPohHash,
+                .resolution = .nanos,
+            },
+        },
+        .ledger => &.{
+            .{
+                .type = @import("ledger/benchmarks.zig").BenchmarkLedger,
+                .resolution = .nanos,
+            },
+            .{
+                .type = @import("ledger/benchmarks.zig").BenchmarkLedgerSlow,
+                .resolution = .millis,
+            },
+        },
+        .swissmap => &.{.{
+            .type = @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
+            .resolution = .nanos,
+        }},
+        .bincode => &.{.{
+            .type = @import("bincode/benchmarks.zig").BenchmarkEntry,
+            .resolution = .nanos,
+        }},
+        .zksdk => &.{.{
+            .type = @import("zksdk/benchmarks.zig").Benchmark,
+            .resolution = .micros,
+        }},
+        .geyser, .accounts_db, .accounts_db_snapshot, .accounts_db_readwrite => &.{},
+    };
+}
 
 const Cmd = struct {
     filter: ?Filter,
@@ -189,8 +196,8 @@ pub fn main() !void {
     const cmd = try parser.parse(
         gpa,
         "benchmark",
-        std.io.tty.detectConfig(std.io.getStdOut()),
-        std.io.getStdOut().writer(),
+        std.io.tty.detectConfig(.stdout()),
+        std.fs.File.stdout().deprecatedWriter(),
         argv[1..],
     ) orelse return;
     defer parser.free(gpa, cmd);
@@ -216,7 +223,7 @@ pub fn main() !void {
 
     switch (filter) {
         inline else => |tag| {
-            const benches = benchmarks.get(tag).?;
+            const benches = comptime getBenchmarks(tag);
             inline for (benches) |bench| {
                 try benchmark(
                     gpa,
@@ -380,7 +387,9 @@ pub fn benchmark(
             .{ .read = true },
         );
         defer averages_file.close();
-        const averages_writer = averages_file.writer();
+        var averages_write_buf: [4096]u8 = undefined;
+        var averages_file_writer = averages_file.writer(&averages_write_buf);
+        const averages_writer = &averages_file_writer.interface;
         logger.debug().logf("writing benchmark results to {s}", .{averages_file_name});
 
         const runtimes_file_name = B.name ++ "/" ++ decl.name ++ "_runtimes.csv";
@@ -389,7 +398,9 @@ pub fn benchmark(
             .{ .read = true },
         );
         defer runtimes_file.close();
-        const runtimes_writer = runtimes_file.writer();
+        var runtimes_write_buf: [4096]u8 = undefined;
+        var runtimes_file_writer = runtimes_file.writer(&runtimes_write_buf);
+        const runtimes_writer = &runtimes_file_writer.interface;
 
         inline for (inputs, 0..) |input, i| {
             const input_name = if (has_inputs) input.name else "no input";
@@ -599,6 +610,9 @@ pub fn benchmark(
                 },
             }
         }
+
+        try averages_file_writer.interface.flush();
+        try runtimes_file_writer.interface.flush();
     }
 
     // print the results in a formatted table
@@ -611,7 +625,9 @@ pub fn benchmark(
         defer table.deinit();
 
         var read_buf: [1024 * 1024]u8 = undefined;
-        try table.readFrom(average_file.reader(), &read_buf, ",", true);
+        var file_reader = average_file.reader(&read_buf);
+        const reader = std14.deprecatedReader(&file_reader.interface);
+        try table.readFrom(reader, &read_buf, ",", true);
 
         const bench_function = @field(B, decl.name);
         const info = @typeInfo(@TypeOf(bench_function)).@"fn";
@@ -658,8 +674,8 @@ pub fn benchmark(
                 }
             }
 
-            var field_names_cells: std.ArrayListUnmanaged(pt.Cell) = .empty;
-            var stats_cells: std.ArrayListUnmanaged(pt.Cell) = .empty;
+            var field_names_cells: std.ArrayList(pt.Cell) = .empty;
+            var stats_cells: std.ArrayList(pt.Cell) = .empty;
             for (0..i) |cell_i| {
                 try field_names_cells.append(
                     allocator,
@@ -670,11 +686,11 @@ pub fn benchmark(
                     try pt.Cell.init(allocator, stat_data_row[cell_i]),
                 );
             }
-            const field_name_row = pt.Row.init(allocator, field_names_cells.toManaged(allocator));
-            const stats_row = pt.Row.init(allocator, stats_cells.toManaged(allocator));
+            const field_name_row = pt.Row.init(allocator, field_names_cells);
+            const stats_row = pt.Row.init(allocator, stats_cells);
 
             table.titles = field_name_row;
-            try table.rows.insert(0, stats_row);
+            try table.rows.insert(allocator, 0, stats_row);
             try table.printstd();
         }
     }
@@ -689,5 +705,8 @@ const Metric = struct {
 pub fn saveMetricsJson(metrics: []const Metric, output_path: []const u8) !void {
     const output_file = try std.fs.cwd().createFile(output_path, .{});
     defer output_file.close();
-    try std.json.stringify(metrics, .{}, output_file.writer());
+    var write_buf: [4096]u8 = undefined;
+    var file_writer = output_file.writer(&write_buf);
+    try std.json.fmt(metrics, .{}).format(&file_writer.interface);
+    try file_writer.interface.flush();
 }

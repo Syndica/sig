@@ -175,14 +175,14 @@ pub const Id = union(enum) {
                 break :id .null;
             },
             .string => id: {
-                var id_buf = std.ArrayList(u8).init(allocator);
+                var id_buf = std.array_list.Managed(u8).init(allocator);
                 defer id_buf.deinit();
                 const maybe_str = try source.allocNextIntoArrayList(&id_buf, options.allocate.?);
                 const str = maybe_str orelse try id_buf.toOwnedSlice();
                 break :id .{ .str = str };
             },
             .number => id: {
-                var id_buf = std.ArrayList(u8).init(allocator);
+                var id_buf = std.array_list.Managed(u8).init(allocator);
                 defer id_buf.deinit();
 
                 const maybe_str = try source.allocNextIntoArrayList(&id_buf, options.allocate.?);

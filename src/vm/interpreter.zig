@@ -840,7 +840,12 @@ pub const Vm = struct {
     ///
     /// NOTE: no `inline`, since we tail call. But looking at the codegen, it does inline the tail call.
     fn step(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
-        return @call(.always_tail, self.jump_table[@intFromEnum(inst.opcode)], .{ self, inst, pc });
+        return @call(
+            // self-hosted x86_64 backend does not support .always_tail
+            if (@import("builtin").zig_backend == .stage2_llvm) .always_tail else .auto,
+            self.jump_table[@intFromEnum(inst.opcode)],
+            .{ self, inst, pc },
+        );
     }
 
     fn pushCallFrame(self: *Vm) !void {

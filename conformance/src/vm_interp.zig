@@ -1,7 +1,6 @@
 const std = @import("std");
 const sig = @import("sig");
 const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
-const protobuf = @import("protobuf");
 const utils = @import("utils.zig");
 
 const serialize = sig.runtime.program.bpf.serialize;
@@ -32,9 +31,13 @@ export fn sol_compat_vm_interp_v1(
     const allocator = arena.allocator();
 
     const in_slice = in_ptr[0..in_size];
-    const syscall_context = SyscallContext.decode(in_slice, allocator) catch return 0;
+    var reader: std.Io.Reader = .fixed(in_slice);
+    const syscall_context = SyscallContext.decode(&reader, allocator) catch return 0;
     const result = executeVmTest(syscall_context, allocator) catch return 0;
-    const elf_effect_bytes = try result.encode(allocator);
+    var writer: std.Io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+    try result.encode(&writer.writer, allocator);
+    const elf_effect_bytes = writer.written();
 
     const out_slice = out_ptr[0..out_size.*];
     if (elf_effect_bytes.len > out_slice.len) {
@@ -55,15 +58,11 @@ fn executeVmTest(
     const slot = if (instr_context.slot_context) |slot_ctx| slot_ctx.slot else 0;
 
     for (instr_context.accounts.items) |acc| {
-        if (std.mem.eql(
-            u8,
-            acc.address.getSlice(),
-            instr_context.program_id.getSlice(),
-        )) break;
+        if (std.mem.eql(u8, acc.address, instr_context.program_id)) break;
     } else {
-        try instr_context.accounts.append(.{
-            .address = try instr_context.program_id.dupe(allocator),
-            .owner = protobuf.ManagedString.static(comptime &(.{0} ** 32)),
+        try instr_context.accounts.append(allocator, .{
+            .address = try allocator.dupe(u8, instr_context.program_id),
+            .owner = &(.{0} ** 32),
         });
     }
 
@@ -94,12 +93,12 @@ fn executeVmTest(
     env.loader.is_stubbed = true;
     const config = env.config;
 
-    if (instr_context.program_id.getSlice().len != Pubkey.SIZE) return error.OutOfBounds;
+    if (instr_context.program_id.len != Pubkey.SIZE) return error.OutOfBounds;
     const instr_info = try utils.createInstructionInfo(
         allocator,
         &tc,
-        .{ .data = instr_context.program_id.getSlice()[0..Pubkey.SIZE].* },
-        instr_context.data.getSlice(),
+        .{ .data = instr_context.program_id[0..Pubkey.SIZE].* },
+        instr_context.data,
         instr_context.instr_accounts.items,
     );
     defer instr_info.deinit(allocator);
@@ -130,12 +129,12 @@ fn executeVmTest(
     defer serialized.deinit(allocator);
     tc.serialized_accounts = serialized.account_metas;
 
-    const rodata = try allocator.dupe(u8, vm_context.rodata.getSlice());
+    const rodata = try allocator.dupe(u8, vm_context.rodata);
     defer allocator.free(rodata);
 
     var function_registry: Registry = .{};
 
-    const max_pc = vm_context.rodata.getSlice().len / 8;
+    const max_pc = vm_context.rodata.len / 8;
     const entry_pc = @min(vm_context.entry_pc, max_pc -| 1);
     const hash: u32 = if (sbpf_version.enableStricterElfHeaders())
         @truncate(entry_pc)
@@ -143,7 +142,7 @@ fn executeVmTest(
         sig.vm.sbpf.hashSymbolName("entrypoint");
     try function_registry.register(allocator, hash, "entrypoint", entry_pc);
 
-    for (vm_context.call_whitelist.getSlice(), 0..) |byte, idx| {
+    for (vm_context.call_whitelist, 0..) |byte, idx| {
         for (0..8) |bit_idx| {
             if (byte & (@as(u64, 1) << @intCast(bit_idx)) != 0) {
                 const pc = idx * 8 + bit_idx;
@@ -160,7 +159,7 @@ fn executeVmTest(
 
     if (rodata.len % 8 != 0) return .{
         .@"error" = -2,
-        .input_data_regions = std.ArrayList(pb.InputDataRegion).init(allocator),
+        .input_data_regions = .{},
     };
     const executable: Executable = .{
         .instructions = std.mem.bytesAsSlice(Instruction, rodata),
@@ -185,7 +184,7 @@ fn executeVmTest(
     if (std.meta.isError(verify_result)) {
         return .{
             .@"error" = -2,
-            .input_data_regions = std.ArrayList(pb.InputDataRegion).init(allocator),
+            .input_data_regions = .{},
         };
     }
 
@@ -204,7 +203,7 @@ fn executeVmTest(
     defer input_memory_regions.deinit(allocator);
 
     try input_memory_regions.appendSlice(allocator, &.{
-        memory.Region.init(.constant, vm_context.rodata.getSlice(), memory.RODATA_START),
+        memory.Region.init(.constant, vm_context.rodata, memory.RODATA_START),
         memory.Region.initGapped(
             .mutable,
             stack,
@@ -255,8 +254,8 @@ fn executeVmTest(
     // vm.registers.set(.r10, vm_context.r10);
     // vm.registers.set(.pc, vm_context.r11);
 
-    utils.copyPrefix(heap, syscall_inv.heap_prefix.getSlice());
-    utils.copyPrefix(stack, syscall_inv.stack_prefix.getSlice());
+    utils.copyPrefix(heap, syscall_inv.heap_prefix);
+    utils.copyPrefix(stack, syscall_inv.stack_prefix);
 
     const result, _ = vm.run();
 
@@ -274,7 +273,7 @@ fn executeVmTest(
             .@"error" = 9,
             .cu_avail = 0,
             .frame_count = vm.depth,
-            .input_data_regions = std.ArrayList(pb.InputDataRegion).init(allocator),
+            .input_data_regions = .{},
         };
     }
 

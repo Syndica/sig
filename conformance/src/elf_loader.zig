@@ -1,7 +1,6 @@
 const std = @import("std");
 const sig = @import("sig");
 const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
-const protobuf = @import("protobuf");
 
 const ELFLoaderCtx = pb.ELFLoaderCtx;
 const ElfLoaderEffects = pb.ELFLoaderEffects;
@@ -24,14 +23,17 @@ export fn sol_compat_elf_loader_v1(
     var decode_arena = std.heap.ArenaAllocator.init(allocator);
     defer decode_arena.deinit();
 
-    const ctx = ELFLoaderCtx.decode(in_ptr[0..in_size], decode_arena.allocator()) catch return 0;
-    defer ctx.deinit();
+    var reader = std.io.Reader.fixed(in_ptr[0..in_size]);
+    var ctx = ELFLoaderCtx.decode(&reader, decode_arena.allocator()) catch return 0;
+    defer ctx.deinit(decode_arena.allocator());
 
-    const elf_effects = executeElfTest(ctx, allocator) catch return 0;
-    defer elf_effects.deinit();
+    var elf_effects = executeElfTest(ctx, allocator) catch return 0;
+    defer elf_effects.deinit(allocator);
 
-    const effect_bytes = try elf_effects.encode(allocator);
-    defer allocator.free(effect_bytes);
+    var writer: std.io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+    try elf_effects.encode(&writer.writer, allocator);
+    const effect_bytes = writer.written();
 
     const out_slice = out_ptr[0..out_size.*];
     if (effect_bytes.len > out_slice.len) return 0;
@@ -43,7 +45,7 @@ export fn sol_compat_elf_loader_v1(
 
 fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEffects {
     const ctx_elf = ctx.elf orelse return error.Unknown;
-    const elf_bytes = ctx_elf.data.getSlice();
+    const elf_bytes = ctx_elf.data;
 
     var feature_set: sig.core.FeatureSet = .ALL_DISABLED;
     if (ctx.features) |features| for (features.features.items) |id| {
@@ -68,7 +70,7 @@ fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEff
     ) catch |err| {
         return .{
             .@"error" = ebpfErrToCode(err),
-            .calldests = .init(allocator),
+            .calldests = .{},
         };
     };
     defer executable.deinit(allocator);
@@ -80,12 +82,12 @@ fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEff
 
     var elf_effects: ElfLoaderEffects = .{
         .@"error" = 0,
-        .rodata = try protobuf.ManagedString.copy(ro_data, allocator),
+        .rodata = try allocator.dupe(u8, ro_data),
         .rodata_sz = ro_data.len,
         .entry_pc = executable.entry_pc,
         .text_off = executable.text_vaddr -| svm.memory.RODATA_START,
         .text_cnt = executable.instructions.len,
-        .calldests = .init(allocator),
+        .calldests = .{},
     };
 
     var calldests: std.AutoHashMapUnmanaged(u64, void) = .{};
@@ -97,7 +99,7 @@ fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEff
     }
     var iter = calldests.keyIterator();
     while (iter.next()) |key| {
-        try elf_effects.calldests.append(key.*);
+        try elf_effects.calldests.append(allocator, key.*);
     }
     std.sort.heap(u64, elf_effects.calldests.items, {}, std.sort.asc(u64));
 

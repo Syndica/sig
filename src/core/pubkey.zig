@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const base58 = @import("base58");
 const BASE58_ENDEC = base58.Table.BITCOIN;
 
@@ -51,31 +52,31 @@ pub const Pubkey = extern struct {
 
     pub fn parseRuntime(str: []const u8) error{ InvalidLength, InvalidPubkey }!Pubkey {
         if (str.len > BASE58_MAX_SIZE) return error.InvalidLength;
-        var encoded: std.BoundedArray(u8, BASE58_MAX_SIZE) = .{};
-        encoded.appendSliceAssumeCapacity(str);
 
         if (@inComptime()) @setEvalBranchQuota(str.len * str.len * str.len);
-        const decoded = BASE58_ENDEC.decodeBounded(BASE58_MAX_SIZE, encoded) catch {
+        var decoded_buf: [base58.decodedMaxSize(BASE58_MAX_SIZE)]u8 = undefined;
+        const decoded_len = BASE58_ENDEC.decode(&decoded_buf, str) catch {
             return error.InvalidPubkey;
         };
 
-        if (decoded.len != SIZE) return error.InvalidLength;
-        return .{ .data = decoded.constSlice()[0..SIZE].* };
+        if (decoded_len != SIZE) return error.InvalidLength;
+        return .{ .data = decoded_buf[0..SIZE].* };
     }
 
     pub const BASE58_MAX_SIZE = base58.encodedMaxSize(SIZE);
-    pub const Base58String = std.BoundedArray(u8, BASE58_MAX_SIZE);
+    pub const Base58String = std14.BoundedArray(u8, BASE58_MAX_SIZE);
 
     pub fn base58String(self: Pubkey) Base58String {
-        return BASE58_ENDEC.encodeArray(SIZE, self.data);
+        var result: Base58String = .{};
+        const len = BASE58_ENDEC.encode(result.unusedCapacitySlice(), &self.data);
+        result.len = len;
+        return result;
     }
 
     pub fn format(
         self: @This(),
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+        writer: *std.io.Writer,
+    ) std.io.Writer.Error!void {
         const str = self.base58String();
         return writer.writeAll(str.constSlice());
     }

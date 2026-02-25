@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 const tracy = @import("tracy");
@@ -52,6 +53,7 @@ pub const AvanceReplayConsensusParams = struct {
     senders: TowerConsensus.Senders,
     receivers: TowerConsensus.Receivers,
     vote_sockets: ?*const sig.replay.consensus.core.VoteSockets,
+    gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
 };
 
 /// Run a single iteration of the entire replay process. Includes:
@@ -109,6 +111,7 @@ pub fn advanceReplay(
             .maybe_thread_pool = &replay_state.thread_pool,
             .account_store = replay_state.account_store,
             .gossip_votes = consensus.gossip_votes,
+            .gossip_table = consensus.gossip_table,
             .ledger = replay_state.ledger,
             .slot_tracker = &replay_state.slot_tracker,
             .epoch_tracker = replay_state.epoch_tracker,
@@ -127,7 +130,7 @@ pub fn advanceReplay(
     if (slot_results.len != 0) {
         const elapsed = start_time.read().asNanos();
         metrics.slot_execution_time.observe(elapsed);
-        replay_state.logger.info().logf("advanced in {}", .{std.fmt.fmtDuration(elapsed)});
+        replay_state.logger.info().logf("advanced in {D}", .{elapsed});
     }
 
     if (replay_state.stop_at_slot) |stop_slot| {
@@ -902,6 +905,7 @@ test "process runs without error with no replay results" {
         .account_store = dep_stubs.accountStore(),
         .ledger = &dep_stubs.ledger,
         .gossip_votes = null,
+        .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = replay_state.epoch_tracker,
         .progress_map = &replay_state.progress_map,
@@ -983,11 +987,11 @@ test "freezeCompletedSlots handles errors correctly" {
 
     try std.testing.expectEqual(sig.trace.Level.warn, logger.messages.items[0].level);
     try std.testing.expectEqualSlices(u8,
-        \\replayed slot 1 with error: replay.execution.ReplaySlotError{ .invalid_block = replay.execution.BlockError.TooFewTicks }
+        \\replayed slot 1 with error: .{ .invalid_block = .TooFewTicks }
     , logger.messages.items[0].content);
     try std.testing.expectEqual(sig.trace.Level.@"error", logger.messages.items[1].level);
     try std.testing.expectEqualSlices(u8,
-        \\replayed slot 2 with error: replay.execution.ReplaySlotError{ .failed_to_load_meta = void }
+        \\replayed slot 2 with error: .{ .failed_to_load_meta = void }
     , logger.messages.items[1].content);
 
     try std.testing.expectEqual(false, processed_a_slot);
@@ -1118,12 +1122,16 @@ fn parseJsonFromGzipFile(
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
-    var decompressor = std.compress.gzip.decompressor(file.reader());
+    var read_buf: [4096]u8 = undefined;
+    var file_reader = file.reader(&read_buf);
+    var decompress_buf: [std.compress.flate.max_window_len]u8 = undefined;
+    var decompressor: std.compress.flate.Decompress =
+        .init(&file_reader.interface, .gzip, &decompress_buf);
 
-    var decompressor_reader = std.json.reader(allocator, decompressor.reader());
-    defer decompressor_reader.deinit();
+    var json_reader = std.json.Reader.init(allocator, &decompressor.reader);
+    defer json_reader.deinit();
 
-    return try std.json.parseFromTokenSource(T, allocator, &decompressor_reader, .{});
+    return try std.json.parseFromTokenSource(T, allocator, &json_reader, .{});
 }
 
 fn parseBincodeFromGzipFile(
@@ -1134,12 +1142,16 @@ fn parseBincodeFromGzipFile(
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
-    var decompressor = std.compress.gzip.decompressor(file.reader());
+    var read_buf: [4096]u8 = undefined;
+    var file_reader = file.reader(&read_buf);
+    var decompress_buf: [std.compress.flate.max_window_len]u8 = undefined;
+    var decompressor: std.compress.flate.Decompress =
+        .init(&file_reader.interface, .gzip, &decompress_buf);
 
     return try sig.bincode.read(
         allocator,
         T,
-        decompressor.reader(),
+        std14.deprecatedReader(&decompressor.reader),
         .{ .allocation_limit = 1 << 31 },
     );
 }

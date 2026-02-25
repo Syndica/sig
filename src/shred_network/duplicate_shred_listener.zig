@@ -736,6 +736,7 @@ test "GossipDuplicateShredHandler: cacheRootInfo populates and uses cached stake
         // Transfer ownership - epoch_ctx_mgr will handle cleanup
         _ = try epoch_tracker.insertRootedEpochInfo(
             gpa,
+            0,
             epoch_stakes,
             &.ALL_DISABLED,
         );
@@ -794,9 +795,9 @@ test "GossipDuplicateShredHandler: cacheRootInfo populates and uses cached stake
     const num_nodes = total_entries / entries_per_node;
 
     // Create many nodes - half with high stake (node1), half with low stake (node3)
-    var high_stake_nodes = std.ArrayList(Pubkey).init(gpa);
+    var high_stake_nodes = std.array_list.Managed(Pubkey).init(gpa);
     defer high_stake_nodes.deinit();
-    var low_stake_nodes = std.ArrayList(Pubkey).init(gpa);
+    var low_stake_nodes = std.array_list.Managed(Pubkey).init(gpa);
     defer low_stake_nodes.deinit();
 
     // Generate nodes and add them to cached_staked_nodes
@@ -997,7 +998,7 @@ test "GossipDuplicateShredHandler: reconstructShredsFromData returns shreds on v
             123,
         );
 
-        try epoch_tracker.insertRootedEpochInfo(gpa, epoch_stakes, &.ALL_DISABLED);
+        try epoch_tracker.insertRootedEpochInfo(gpa, epoch, epoch_stakes, &.ALL_DISABLED);
     }
 
     epoch_tracker.root_slot.store(slot, .monotonic);

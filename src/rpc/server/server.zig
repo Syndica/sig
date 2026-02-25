@@ -380,15 +380,14 @@ test "serveSpawn getSnapshot missing" {
     );
     const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
 
-    var buffer: [4096]u8 = undefined;
-    var request = try client.open(.HEAD, localhost_url, .{ .server_header_buffer = &buffer });
+    var request = try client.request(.HEAD, localhost_url, .{});
     defer request.deinit();
 
-    try request.send();
-    try request.finish();
-    try request.wait();
+    try request.sendBodiless();
+    var buffer: [4096]u8 = undefined;
+    const response = try request.receiveHead(&buffer);
 
-    try std.testing.expectEqual(request.response.status, .service_unavailable);
+    try std.testing.expectEqual(response.head.status, .service_unavailable);
 }
 
 test "serveSpawn getAccountInfo" {
@@ -533,8 +532,10 @@ fn testHttpRpcJsonRequest(
         .id = .null,
         .method = @unionInit(sig.rpc.methods.MethodAndParams, @tagName(method), method_param),
     };
-    const request_str = try std.json.stringifyAlloc(allocator, request, .{});
-    defer allocator.free(request_str);
+    var w = std.io.Writer.Allocating.init(allocator);
+    defer w.deinit();
+    try std.json.fmt(request, .{}).format(&w.writer);
+    const request_str = w.written();
 
     const resp_str = try testHttpFetchSelf(allocator, .POST, localhost_url, .{
         .body = request_str,
@@ -576,7 +577,7 @@ fn testExpectSnapshotResponse(
     defer std.posix.munmap(expected_data);
 
     const snap_url_str_bounded = sig.utils.fmt.boundedFmt(
-        "http://localhost:{d}/{s}",
+        "http://localhost:{d}/{f}",
         .{ rpc_port, sig.utils.fmt.boundedString(&snap_name_bounded) },
     );
     const snap_url = try std.Uri.parse(snap_url_str_bounded.constSlice());
@@ -608,32 +609,37 @@ fn testHttpFetchSelf(
     var client: std.http.Client = .{ .allocator = allocator };
     defer client.deinit();
 
-    var server_header_buffer: [4096 * 16]u8 = undefined;
-    var request = try client.open(http_method, uri, .{
-        .server_header_buffer = &server_header_buffer,
+    var request = try client.request(http_method, uri, .{
         .headers = opts.headers,
         .extra_headers = opts.extra_headers,
         .privileged_headers = opts.privileged_headers,
     });
     defer request.deinit();
 
-    if (opts.body) |body| request.transfer_encoding = .{ .content_length = body.len };
-    try request.send();
-    if (opts.body) |body| try request.writer().writeAll(body);
-    try request.finish();
-
-    try request.wait();
-
-    if (comptime http_method == .HEAD) {
-        return request.response.content_length.?;
+    if (opts.body) |body| {
+        request.transfer_encoding = .{ .content_length = body.len };
+        var body_buf: [16 * 1024]u8 = undefined;
+        var body_writer = try request.sendBody(&body_buf);
+        try body_writer.writer.writeAll(body);
+        try body_writer.end();
+    } else {
+        try request.sendBodiless();
     }
 
-    const reader = request.reader();
+    var server_header_buffer: [4096 * 16]u8 = undefined;
+    var response = try request.receiveHead(&server_header_buffer);
 
-    const response_content = try reader.readAllAlloc(allocator, 1 << 32);
+    if (comptime http_method == .HEAD) {
+        return response.head.content_length.?;
+    }
+
+    var transfer_buffer: [4096]u8 = undefined;
+    const reader = response.reader(&transfer_buffer);
+
+    const response_content = try reader.allocRemaining(allocator, .limited64(1 << 32));
     errdefer allocator.free(response_content);
 
-    if (request.response.content_length) |content_len| {
+    if (response.head.content_length) |content_len| {
         try std.testing.expectEqual(content_len, response_content.len);
     }
 

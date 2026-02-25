@@ -20,11 +20,7 @@ pub const Client = struct {
         rpc_url: []const u8,
         options: HttpPostFetcher.Options,
     ) Allocator.Error!Client {
-        return .{ .fetcher = try HttpPostFetcher.init(
-            allocator,
-            rpc_url,
-            options,
-        ) };
+        return .{ .fetcher = try .init(allocator, rpc_url, options) };
     }
 
     pub fn deinit(self: *Client) void {
@@ -44,8 +40,10 @@ pub const Client = struct {
             .method = @unionInit(MethodAndParams, @tagName(method), params),
         };
 
-        const request_json = try std.json.stringifyAlloc(allocator, request, .{});
-        defer allocator.free(request_json);
+        var w = std.io.Writer.Allocating.init(allocator);
+        defer w.deinit();
+        try std.json.fmt(request, .{}).format(&w.writer);
+        const request_json = w.written();
 
         const response_json = try self.fetcher.fetchWithRetries(allocator, request_json);
         defer allocator.free(response_json);

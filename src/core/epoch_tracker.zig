@@ -149,7 +149,12 @@ pub const EpochTracker = struct {
             const stakes = (epoch_stakes_map.get(epoch) orelse continue).current;
             const epoch_stakes = try stakes.convert(allocator, .delegation);
             errdefer epoch_stakes.deinit(allocator);
-            try epoch_tracker.insertRootedEpochInfo(allocator, epoch_stakes, feature_set);
+            try epoch_tracker.insertRootedEpochInfo(
+                allocator,
+                epoch_stakes.stakes.epoch,
+                epoch_stakes,
+                feature_set,
+            );
         }
 
         return epoch_tracker;
@@ -208,14 +213,16 @@ pub const EpochTracker = struct {
         slot: Slot,
         ancestors: *const Ancestors,
     ) !void {
-        if (self.rooted_epochs.isNext(self.epoch_schedule.getEpoch(slot)))
-            try self.onFirstSlotInEpochRooted(allocator, ancestors);
+        const epoch = self.epoch_schedule.getEpoch(slot);
+        if (self.rooted_epochs.isNext(epoch))
+            try self.onFirstSlotInEpochRooted(allocator, epoch, ancestors);
         self.root_slot.store(slot, .monotonic);
     }
 
     fn onFirstSlotInEpochRooted(
         self: *EpochTracker,
         allocator: Allocator,
+        epoch: Epoch,
         ancestors: *const Ancestors,
     ) !void {
         const entry = try self.unrooted_epochs.take(ancestors);
@@ -225,6 +232,7 @@ pub const EpochTracker = struct {
         }
         try self.rooted_epochs.insert(
             allocator,
+            epoch,
             entry,
         );
     }
@@ -232,13 +240,14 @@ pub const EpochTracker = struct {
     pub fn insertRootedEpochInfo(
         self: *EpochTracker,
         allocator: Allocator,
+        epoch: Epoch,
         epoch_stakes: EpochStakes,
         feature_set: *const FeatureSet,
     ) !void {
         const leader_schedule_epoch = self.epoch_schedule.getLeaderScheduleEpoch(
-            self.epoch_schedule.getFirstSlotInEpoch(epoch_stakes.stakes.epoch),
+            self.epoch_schedule.getFirstSlotInEpoch(epoch),
         );
-        const leaders = try LeaderSchedule.init(
+        const leaders: LeaderSchedule = try .init(
             allocator,
             leader_schedule_epoch,
             epoch_stakes.stakes.vote_accounts,
@@ -255,8 +264,7 @@ pub const EpochTracker = struct {
             .stakes = epoch_stakes,
             .feature_set = feature_set.*,
         };
-
-        try self.rooted_epochs.insert(allocator, epoch_info_ptr);
+        try self.rooted_epochs.insert(allocator, epoch, epoch_info_ptr);
     }
 
     pub fn insertUnrootedEpochInfo(
@@ -293,6 +301,8 @@ pub const EpochTracker = struct {
         );
     }
 
+    /// NOTE: this function assumes that `epoch == epoch_stakes[i].stakes.epoch`,
+    /// which is not actually always the case in real scenarios.
     pub fn initForTest(
         allocator: Allocator,
         random: Random,
@@ -308,25 +318,33 @@ pub const EpochTracker = struct {
             const epoch_info_ptr = try allocator.create(EpochInfo);
             errdefer allocator.destroy(epoch_info_ptr);
 
-            epoch_info_ptr.* = try EpochInfo.initRandom(
+            epoch_info_ptr.* = try .initRandom(
                 allocator,
                 random,
                 .{ .epoch = epoch_i, .schedule = epoch_schedule },
             );
             errdefer epoch_info_ptr.deinit(allocator);
 
-            try self.rooted_epochs.insert(allocator, epoch_info_ptr);
+            try self.rooted_epochs.insert(allocator, epoch_i, epoch_info_ptr);
         }
 
         return self;
     }
 
+    /// NOTE: this function assumes that `epoch == epoch_stakes[i].stakes.epoch`,
+    /// which is not actually always the case in real scenarios.
+    ///
+    /// Takes ownership of each element of `epoch_stakes`, but not the slice itself.
+    /// Uses `allocator` to allocate all the memory for the result, and to free all
+    /// the memory of each element in `epoch_stakes` in the event of an error return.
     pub fn initWithEpochStakesOnlyForTest(
         allocator: Allocator,
         epoch_stakes: []const EpochStakes,
     ) !EpochTracker {
         if (!builtin.is_test) @compileError("only for tests");
-        var self = EpochTracker.init(.default, 0, .INIT);
+        errdefer for (epoch_stakes) |epoch_stake| epoch_stake.deinit(allocator);
+
+        var self: EpochTracker = .init(.default, 0, .INIT);
         errdefer self.deinit(allocator);
 
         for (epoch_stakes) |stakes| {
@@ -342,9 +360,7 @@ pub const EpochTracker = struct {
                 .stakes = stakes,
                 .feature_set = .ALL_DISABLED,
             };
-            errdefer epoch_info_ptr.deinit(allocator);
-
-            try self.rooted_epochs.insert(allocator, epoch_info_ptr);
+            try self.rooted_epochs.insert(allocator, stakes.stakes.epoch, epoch_info_ptr);
         }
 
         return self;
@@ -421,9 +437,9 @@ const RootedEpochBuffer = struct {
     pub fn insert(
         self: *RootedEpochBuffer,
         allocator: Allocator,
+        epoch: Epoch,
         value: *const EpochInfo,
     ) !void {
-        const epoch = value.stakes.stakes.epoch;
         if (!self.isNext(epoch)) return error.InvalidInsert;
 
         const index = epoch % self.buf.len;
@@ -577,12 +593,12 @@ test RootedEpochBuffer {
             .schedule = epoch_schedule,
         },
     );
-    try buffer.insert(allocator, info_0);
+    try buffer.insert(allocator, epoch, info_0);
 
     // Check that duplicate insert fails
     try std.testing.expectError(
         error.InvalidInsert,
-        buffer.insert(allocator, info_0),
+        buffer.insert(allocator, epoch, info_0),
     );
 
     // Insert epoch 1 leader schedule
@@ -596,12 +612,12 @@ test RootedEpochBuffer {
             .schedule = epoch_schedule,
         },
     );
-    try buffer.insert(allocator, info_1);
+    try buffer.insert(allocator, epoch, info_1);
 
     // Check that non-monotonic insert fails
     try std.testing.expectError(
         error.InvalidInsert,
-        buffer.insert(allocator, info_0),
+        buffer.insert(allocator, epoch, info_0),
     );
 
     // Check that skipping an epoch insert fails
@@ -620,7 +636,7 @@ test RootedEpochBuffer {
     }
     try std.testing.expectError(
         error.InvalidInsert,
-        buffer.insert(allocator, info_3),
+        buffer.insert(allocator, epoch, info_3),
     );
 
     // Insert 4 epochs
@@ -635,7 +651,7 @@ test RootedEpochBuffer {
                 .schedule = epoch_schedule,
             },
         );
-        try buffer.insert(allocator, info);
+        try buffer.insert(allocator, epoch, info);
     }
 
     // Check get outside of range fails
@@ -678,7 +694,7 @@ test RootedEpochBuffer {
             .schedule = epoch_schedule,
         },
     );
-    try buffer.insert(allocator, info_6);
+    try buffer.insert(allocator, epoch, info_6);
 
     // Check that only the oldest epoch has been overwritten
     for (epoch - 3..epoch, expected) |epoch_i, expected_info| {

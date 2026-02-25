@@ -140,8 +140,8 @@ test expectProgramExecuteResult {
     const dst_account = Pubkey.initRandom(prng.random());
 
     var expected_logger = try LogCollector.init(allocator, null);
-    try expected_logger.log(allocator, "Program {} invoke [1]", .{system_program.ID});
-    try expected_logger.log(allocator, "Program {} success", .{system_program.ID});
+    try expected_logger.log(allocator, "Program {f} invoke [1]", .{system_program.ID});
+    try expected_logger.log(allocator, "Program {f} success", .{system_program.ID});
 
     // Test log_collector.eql path
     try expectProgramExecuteResult(

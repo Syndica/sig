@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 
@@ -22,7 +23,10 @@ pub fn getShredAndIPFromEchoServer(
     var my_shred_version: ?u16 = null;
 
     for (socket_addresses) |socket_addr| {
-        const response = requestIpEcho(socket_addr.toAddress(), .{}) catch continue;
+        const response = requestIpEcho(socket_addr.toAddress(), .{}) catch |e| {
+            logger.err().logf("failed ip echo: {}", .{e});
+            continue;
+        };
         my_ip = my_ip orelse response.address;
 
         if (response.shred_version) |shred_version| {
@@ -47,23 +51,36 @@ pub fn requestIpEcho(
     addr: std.net.Address,
     message: IpEchoRequest,
 ) !IpEchoResponse {
-    // connect + send
     const conn = try std.net.tcpConnectToAddress(addr);
     defer conn.close();
-    try conn.writeAll(&(.{0} ** HEADER_LENGTH));
-    try sig.bincode.write(conn.writer(), message, .{});
-    try conn.writeAll("\n");
 
-    // get response
-    var buff: [32]u8 = undefined;
-    const len = try conn.readAll(&buff);
-    var fbs = std.io.fixedBufferStream(buff[HEADER_LENGTH..len]);
+    { // send request
+        var write_buf: [256]u8 = undefined;
+        var conn_writer = conn.writer(&write_buf);
+        const writer: *std.io.Writer = &conn_writer.interface;
+        try writer.writeAll(&(.{0} ** HEADER_LENGTH));
+        try sig.bincode.write(std14.deprecatedWriter(writer), message, .{});
+        try writer.writeAll("\n");
+        try writer.flush();
+    }
+
+    // receive response
+    var read_buf: [64]u8 = undefined;
+    var reader = conn.reader(&read_buf);
+    if (HEADER_LENGTH != try reader.interface().discard(.limited(HEADER_LENGTH))) {
+        return error.InsufficientData;
+    }
     const assert_allocator = sig.utils.allocators.failing.allocator(.{
         .alloc = .assert,
         .resize = .assert,
         .free = .assert,
     });
-    return try sig.bincode.read(assert_allocator, IpEchoResponse, fbs.reader(), .{});
+    return try sig.bincode.read(
+        assert_allocator,
+        IpEchoResponse,
+        std14.deprecatedReader(reader.interface()),
+        .{},
+    );
 }
 
 const IpEchoRequest = struct {
@@ -163,7 +180,12 @@ pub const Server = struct {
 const ConnectionTask = struct {
     allocator: std.mem.Allocator,
     read_buffer: [4096]u8,
+    write_buffer: [4096]u8,
+    stream: std.net.Stream,
+    stream_reader: std.net.Stream.Reader,
+    stream_writer: std.net.Stream.Writer,
     server: std.http.Server,
+    connection_address: std.net.Address,
     logger: Logger,
 
     fn create(
@@ -174,18 +196,35 @@ const ConnectionTask = struct {
         const hct = try allocator.create(ConnectionTask);
         errdefer allocator.destroy(hct);
 
+        // first init fields that don't depend on self-referential pointers
         hct.* = .{
             .allocator = allocator,
-            .read_buffer = undefined,
-            .server = std.http.Server.init(connection, &hct.read_buffer),
+            .stream = connection.stream,
+            .connection_address = connection.address,
             .logger = logger,
+            .stream_reader = undefined,
+            .stream_writer = undefined,
+            .read_buffer = undefined,
+            .write_buffer = undefined,
+            .server = undefined,
         };
+
+        // now init the reader/writer that reference our buffers
+        hct.stream_reader = .init(connection.stream, &hct.read_buffer);
+        hct.stream_writer = .init(connection.stream, &hct.write_buffer);
+        hct.server = .init(
+            hct.stream_reader.interface(),
+            &hct.stream_writer.interface,
+        );
+
         return hct;
     }
 
     fn deinitAndDestroy(
         self: *ConnectionTask,
     ) void {
+        self.stream_writer.interface.flush() catch {};
+        self.stream.close();
         const allocator = self.allocator;
         allocator.destroy(self);
     }
@@ -193,7 +232,7 @@ const ConnectionTask = struct {
     fn handleNoError(hct: *ConnectionTask) void {
         handle(hct) catch |err| {
             if (@errorReturnTrace()) |st| {
-                std.log.err("{s}:\n{}", .{ @errorName(err), st });
+                std.log.err("{s}:\n{f}", .{ @errorName(err), st });
             } else {
                 std.log.err("{s}", .{@errorName(err)});
             }
@@ -204,10 +243,6 @@ const ConnectionTask = struct {
         defer hct.deinitAndDestroy();
 
         var request = try hct.server.receiveHead();
-        const reader = sig.utils.io.narrowAnyReader(
-            try request.reader(),
-            std.http.Server.Request.ReadError,
-        );
 
         if (request.head.method != .POST or
             !std.mem.eql(u8, request.head.target, "/"))
@@ -216,11 +251,24 @@ const ConnectionTask = struct {
             return;
         }
 
+        // save content_length before readerExpectNone invalidates head strings
+        const content_length = request.head.content_length;
+
         hct.logger.debug().log("handling echo request");
 
+        var reader_buf: [4096]u8 = undefined;
+        const reader = request.readerExpectNone(&reader_buf);
+
         var request_buf: [256]u8 = undefined;
-        const request_byte_count = try reader.readAll(&request_buf);
-        const request_bytes = request_buf[0..request_byte_count];
+        const request_bytes = if (content_length) |len| blk: {
+            const read_len: usize = @min(len, request_buf.len);
+            reader.readSliceAll(request_buf[0..read_len]) catch break :blk &[_]u8{};
+            break :blk request_buf[0..read_len];
+        } else blk: {
+            // no content-length, read what's available
+            const n = reader.readSliceShort(&request_buf) catch break :blk &[_]u8{};
+            break :blk request_buf[0..n];
+        };
 
         const ip_echo_request_result = std.json.parseFromSlice(
             IpEchoRequest,
@@ -235,22 +283,21 @@ const ConnectionTask = struct {
         _ = ip_echo_request;
         ip_echo_request_result.deinit();
 
-        const socket_addr: SocketAddr = .initAddress(request.server.connection.address);
+        const socket_addr: SocketAddr = .initAddress(hct.connection_address);
         const ip_echo_response: IpEchoResponse = .{
             .address = socket_addr.ip(),
             // TODO: correct shred version needs to be propagated here
             .shred_version = .{ .value = 0 },
         };
 
-        const content_len = blk: {
-            var counter = std.io.countingWriter(std.io.null_writer);
-            try std.json.stringify(ip_echo_response, .{}, counter.writer());
-            break :blk counter.bytes_written;
-        };
+        // compute content length by serializing to a buffer first
+        var json_buffer: [512]u8 = undefined;
+        var stream = std.io.Writer.fixed(&json_buffer);
+        try std.json.fmt(ip_echo_response, .{}).format(&stream);
+        const content_len = stream.end;
 
         var send_buffer: [4096]u8 = undefined;
-        var response = request.respondStreaming(.{
-            .send_buffer = &send_buffer,
+        var response = try request.respondStreaming(&send_buffer, .{
             .content_length = content_len,
             .respond_options = .{
                 .version = .@"HTTP/1.0",
@@ -258,11 +305,8 @@ const ConnectionTask = struct {
                 .keep_alive = false,
             },
         });
-        const writer = sig.utils.io.narrowAnyWriter(
-            response.writer(),
-            std.http.Server.Response.WriteError,
-        );
-        try std.json.stringify(ip_echo_response, .{}, writer);
+        // write directly to the Writer using the pre-serialized JSON
+        try response.writer.writeAll(json_buffer[0..content_len]);
         try response.end();
     }
 };
@@ -298,11 +342,8 @@ test "net.echo: Server works" {
     var client: std.http.Client = .{ .allocator = std.testing.allocator };
     defer client.deinit();
 
-    var server_header_buff: [4096]u8 = undefined;
-
     // create request
-    var request = try client.open(.POST, try std.Uri.parse("http://127.0.0.1:34333/"), .{
-        .server_header_buffer = &server_header_buff,
+    var request = try client.request(.POST, try std.Uri.parse("http://127.0.0.1:34333/"), .{
         .version = .@"HTTP/1.0",
         .keep_alive = false,
     });
@@ -312,23 +353,31 @@ test "net.echo: Server works" {
         .tcp_ports = .{ 1000, 2000, 3000, 4000 },
         .udp_ports = .{ 1000, 2000, 3000, 4000 },
     };
-    const request_bytes = try std.json.stringifyAlloc(
-        std.testing.allocator,
-        ip_echo_request,
-        .{},
-    );
-    defer std.testing.allocator.free(request_bytes);
+    // std.json.fmt(value: anytype, options: Options).format(writer: *Writer)
+    var w = std.io.Writer.Allocating.init(std.testing.allocator);
+    defer w.deinit();
+    try std.json.fmt(ip_echo_request, .{}).format(&w.writer);
+    const request_bytes = w.written();
 
+    // must set content_length before calling sendBody
     request.transfer_encoding = .{ .content_length = request_bytes.len };
-    try request.send();
-    try request.writeAll(request_bytes);
-    try request.finish();
-    try request.wait();
 
-    try std.testing.expectEqual(.ok, request.response.status);
+    var body_buf: [4096]u8 = undefined;
+    var body_writer = try request.sendBody(&body_buf);
+    try body_writer.writer.writeAll(request_bytes);
+    try body_writer.end();
+
+    var server_header_buff: [4096]u8 = undefined;
+    var response = try request.receiveHead(&server_header_buff);
+
+    try std.testing.expectEqual(.ok, response.head.status);
 
     // read body
-    const body = try request.reader().readAllAlloc(std.testing.allocator, 819_200);
+    var transfer_buffer: [4096]u8 = undefined;
+    const body = try response.reader(&transfer_buffer).allocRemaining(
+        std.testing.allocator,
+        .limited(819_200),
+    );
     defer std.testing.allocator.free(body);
 
     // deserialize json into type

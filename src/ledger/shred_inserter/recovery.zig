@@ -103,7 +103,7 @@ pub fn recover(
     allocator: Allocator,
     shreds: []const Shred,
     reed_solomon_cache: *ReedSolomonCache,
-) !std.ArrayList(Shred) {
+) !std.array_list.Managed(Shred) {
     const meta = try getRecoveryMetadata(shreds);
     const organized = try organizeShredsForRecovery(allocator, shreds, meta);
     defer organized.deinit();
@@ -122,7 +122,7 @@ pub fn recover(
     defer allocator.free(all_shreds);
 
     // Assemble list that excludes the shreds we already had
-    var ret = try std.ArrayList(Shred).initCapacity(allocator, organized.num_to_recover);
+    var ret = try std.array_list.Managed(Shred).initCapacity(allocator, organized.num_to_recover);
     for (all_shreds, organized.mask) |shred, was_present| {
         if (!was_present) {
             try shred.sanitize();
@@ -297,7 +297,7 @@ fn setMerkleProofs(
     all_shreds: []Shred,
 ) !void {
     // Compute merkle tree
-    var tree = try std.ArrayList(Hash).initCapacity(allocator, all_shreds.len);
+    var tree = try std.array_list.Managed(Hash).initCapacity(allocator, all_shreds.len);
     defer tree.deinit();
     for (all_shreds) |shred| {
         const merkle_node = try sig.ledger.shred.getMerkleNode(shred.payload());
@@ -481,7 +481,7 @@ test "recover mainnet shreds - construct shreds from shards" {
 }
 
 fn toShreds(payloads: []const []const u8) ![]const Shred {
-    var shreds = try std.ArrayList(Shred).initCapacity(std.testing.allocator, payloads.len);
+    var shreds = try std.array_list.Managed(Shred).initCapacity(std.testing.allocator, payloads.len);
     for (payloads) |payload| {
         shreds.appendAssumeCapacity(try Shred.fromPayload(std.testing.allocator, payload));
     }

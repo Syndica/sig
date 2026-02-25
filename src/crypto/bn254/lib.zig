@@ -2,6 +2,7 @@
 //! https://github.com/firedancer-io/firedancer/blob/9068496fbf7d211a01b535039e876ffbf84fcc6e/src/ballet/bn254/
 
 const std = @import("std");
+const std14 = @import("std14");
 pub const fields = @import("fields.zig");
 pub const pairing = @import("pairing.zig");
 pub const tests = @import("tests.zig");
@@ -497,8 +498,8 @@ pub fn mulSyscall(out: *[64]u8, input: *const [96]u8) !void {
 pub fn pairingSyscall(out: *[32]u8, input: []const u8) !void {
     const num_elements = input.len / 192;
 
-    var p: std.BoundedArray(G1, pairing.BATCH_SIZE) = .{};
-    var q: std.BoundedArray(G2, pairing.BATCH_SIZE) = .{};
+    var p: std14.BoundedArray(G1, pairing.BATCH_SIZE) = .{};
+    var q: std14.BoundedArray(G2, pairing.BATCH_SIZE) = .{};
 
     var r: Fp12 = .one;
     for (0..num_elements) |i| {

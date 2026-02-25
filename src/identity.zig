@@ -50,7 +50,8 @@ pub fn getOrInit(allocator: std.mem.Allocator, logger: Logger) !KeyPair {
     const size = (try file.stat()).size;
     if (size == 0) {
         const new_kp: KeyPair = .generate();
-        try std.json.stringify(&new_kp.secret_key.toBytes(), .{}, file.writer());
+        var file_writer = file.writer(&.{});
+        try std.json.fmt(&new_kp.secret_key.toBytes(), .{}).format(&file_writer.interface);
         return new_kp;
     }
 

@@ -242,7 +242,7 @@
     .{ .name = "enable_vote_address_leader_schedule", .pubkey = "5JsG4NWH8Jbrqdd8uL6BNwnyZK3dQSoieRXG5vmofj9y" },
     .{ .name = "enshrine_slashing_program", .pubkey = "sProgVaNWkYdP2eTRAy1CPrgb3b9p8yXCASrPEqo6VJ" },
     .{ .name = "stricter_abi_and_runtime_constraints", .pubkey = "sD3uVpaavUXQRvDXrMFCQ2CqLqnbz5mK8ttWNXbtD3r" },
-    .{ .name = "relax_intrabatch_account_locks", .pubkey = "ENTRYnPAoT5Swwx73YDGzMp3XnNH1kxacyvLosRHza1i" },
+    .{ .name = "relax_intrabatch_account_locks", .pubkey = "4WeHX6QoXCCwqbSFgi6dxnB6QsPo6YApaNTH7P4MLQ99" },
     .{ .name = "enforce_fixed_fec_set", .pubkey = "fixfecLZYMfkGzwq6NJA11Yw6KYztzXiK9QcL3K78in" },
     .{ .name = "deprecate_rent_exemption_threshold", .pubkey = "rent6iVy6PDoViPBeJ6k5EJQrkj62h7DPyLbWGHwjrC" },
     .{ .name = "static_instruction_limit", .pubkey = "64ixypL1HPu8WtJhNSMb9mSgfFaJvsANuRkTbHyuLfnx" },

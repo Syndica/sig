@@ -199,7 +199,7 @@ pub const ChannelPrintLogger = struct {
     }
 
     pub fn run(self: *ChannelPrintLogger, maybe_writer: anytype) void {
-        const stderr_writer = std.io.getStdErr().writer();
+        const stderr_writer = std.fs.File.stderr().deprecatedWriter();
         while (true) {
             self.channel.waitToReceive(.{ .unordered = &self.exit }) catch break;
 
@@ -229,7 +229,7 @@ pub const ChannelPrintLogger = struct {
         const msg_buf = self.log_allocator.alloc(u8, size) catch |err| {
             std.debug.lockStdErr();
             defer std.debug.unlockStdErr();
-            const stderr = std.io.getStdErr().writer();
+            const stderr = std.fs.File.stderr().deprecatedWriter();
             const err_msg = "failed to allocate {} bytes for log message - {}";
             logfmt.writeLog(stderr, "logger", .@"error", .{}, err_msg, .{ size, err }) catch {};
             logfmt.writeLog(stderr, scope, level, fields, fmt, args) catch {};
@@ -271,7 +271,7 @@ pub const direct_print = struct {
         comptime fmt: []const u8,
         args: anytype,
     ) void {
-        const writer = std.io.getStdErr().writer();
+        const writer = std.fs.File.stderr().deprecatedWriter();
         std.debug.lockStdErr();
         defer std.debug.unlockStdErr();
         logfmt.writeLog(writer, scope, level, fields, fmt, args) catch {};

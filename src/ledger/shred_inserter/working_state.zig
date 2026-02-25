@@ -7,7 +7,7 @@ const meta = ledger.meta;
 const schema = ledger.schema.schema;
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const AutoHashMap = std.AutoHashMap;
 
 const Slot = sig.core.Slot;
@@ -416,7 +416,7 @@ pub const ErasureMetaWorkingStore = struct {
 
 pub const DuplicateShredsWorkingStore = struct {
     db: *LedgerDB,
-    duplicate_shreds: *std.ArrayList(PossibleDuplicateShred),
+    duplicate_shreds: *ArrayList(PossibleDuplicateShred),
 
     const Self = DuplicateShredsWorkingStore;
 

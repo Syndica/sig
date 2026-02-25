@@ -39,8 +39,10 @@ fn testRequest(
         ),
     };
 
-    const actual_request_json = try std.json.stringifyAlloc(std.testing.allocator, request, .{});
-    defer std.testing.allocator.free(actual_request_json);
+    var w = std.io.Writer.Allocating.init(std.testing.allocator);
+    defer w.deinit();
+    try std.json.fmt(request, .{}).format(&w.writer);
+    const actual_request_json = w.written();
 
     try std.testing.expectEqualSlices(u8, expected_request_json, actual_request_json);
 }

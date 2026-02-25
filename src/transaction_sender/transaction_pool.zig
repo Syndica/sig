@@ -19,8 +19,8 @@ const TransactionInfo = sig.transaction_sender.TransactionInfo;
 /// only accessed by the process transactions thread.
 pub const TransactionPool = struct {
     pending_transactions_rw: RwMux(PendingTransactions),
-    retry_signatures: std.ArrayList(Signature),
-    drop_signatures: std.ArrayList(Signature),
+    retry_signatures: std.array_list.Managed(Signature),
+    drop_signatures: std.array_list.Managed(Signature),
     max_transactions: usize,
 
     const PendingTransactions = std.AutoArrayHashMap(Signature, TransactionInfo);
@@ -28,8 +28,8 @@ pub const TransactionPool = struct {
     pub fn init(allocator: Allocator, max_transactions: usize) TransactionPool {
         return .{
             .pending_transactions_rw = RwMux(PendingTransactions).init(PendingTransactions.init(allocator)),
-            .retry_signatures = std.ArrayList(Signature).init(allocator),
-            .drop_signatures = std.ArrayList(Signature).init(allocator),
+            .retry_signatures = std.array_list.Managed(Signature).init(allocator),
+            .drop_signatures = std.array_list.Managed(Signature).init(allocator),
             .max_transactions = max_transactions,
         };
     }

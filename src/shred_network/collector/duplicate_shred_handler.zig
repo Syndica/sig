@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../../sig.zig");
 
 const bincode = sig.bincode;
@@ -30,7 +31,7 @@ pub const DuplicateShredHandler = struct {
     logger: Logger,
 
     /// Tracks slots for which this handler has already pushed a duplicate proof to gossip.
-    slots_pushed_to_gossip: std.BoundedArray(Slot, MAX_DUPLICATE_SHREDS) = .{},
+    slots_pushed_to_gossip: std14.BoundedArray(Slot, MAX_DUPLICATE_SHREDS) = .{},
 
     /// Ring index used as part of the gossip table label for duplicate shred entries.
     ring_index: u16 = 0,
@@ -331,7 +332,7 @@ fn enqueueDuplicateShredCrdsValues(
             .chunk = chunk_copy,
         };
 
-        try push_queue.append(.{
+        try push_queue.append(allocator, .{
             .DuplicateShred = .{ ring_index, dup_owned },
         });
     }
@@ -351,15 +352,12 @@ const TestGossipState = struct {
         if (!builtin.is_test) @compileError("TestGossipState is only for testing");
 
         const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
-        const gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
-        const push_msg_queue = sig.gossip.GossipService.PushMessageQueue.init(.{
-            .queue = std.ArrayList(sig.gossip.data.GossipData).init(allocator),
-            .data_allocator = allocator,
-        });
-
         return .{
-            .gossip_table_rw = gossip_table_rw,
-            .push_msg_queue = push_msg_queue,
+            .gossip_table_rw = .init(gossip_table),
+            .push_msg_queue = .init(.{
+                .queue = .empty,
+                .data_allocator = allocator,
+            }),
             .allocator = allocator,
         };
     }
@@ -372,7 +370,7 @@ const TestGossipState = struct {
         var push_queue, var pq_lock = self.push_msg_queue.writeWithLock();
         defer pq_lock.unlock();
         for (push_queue.queue.items) |*item| item.deinit(push_queue.data_allocator);
-        push_queue.queue.deinit();
+        push_queue.queue.deinit(self.allocator);
     }
 };
 test "handleDuplicateSlots: no sender configured" {
@@ -396,7 +394,7 @@ test "handleDuplicateSlots: no sender configured" {
     // Create a result with a duplicate shred
     const shred: Shred = try .fromPayload(allocator, &sig.ledger.shred.test_data_shred);
 
-    var duplicate_shreds: std.ArrayList(PossibleDuplicateShred) = .init(allocator);
+    var duplicate_shreds: std.array_list.Managed(PossibleDuplicateShred) = .init(allocator);
     try duplicate_shreds.append(.{ .Exists = shred });
 
     const result: ShredInserter.Result = .{
@@ -488,7 +486,7 @@ test "handleDuplicateSlots: single duplicate shred" {
     // Now create the duplicate shred with the modified payload
     const duplicate_shred: Shred = try .fromPayload(allocator, modified_payload);
 
-    var duplicate_shreds: std.ArrayList(PossibleDuplicateShred) = .init(allocator);
+    var duplicate_shreds: std.array_list.Managed(PossibleDuplicateShred) = .init(allocator);
     try duplicate_shreds.append(.{ .Exists = duplicate_shred });
 
     const result: ShredInserter.Result = .{
@@ -560,7 +558,7 @@ test "handleDuplicateSlots: multiple duplicates same slot" {
         const duplicate_shred2: Shred = try .fromPayload(allocator, modified_payload2);
         errdefer duplicate_shred2.deinit();
 
-        var duplicate_shreds = std.ArrayList(PossibleDuplicateShred).init(allocator);
+        var duplicate_shreds = std.array_list.Managed(PossibleDuplicateShred).init(allocator);
         try duplicate_shreds.appendSlice(&.{
             .{ .Exists = duplicate_shred1 },
             .{ .Exists = duplicate_shred2 },
@@ -606,7 +604,7 @@ test "handleDuplicateSlots: Exists but slot already duplicate" {
 
     try ledger.resultWriter().storeDuplicateSlot(slot, shred.payload(), shred.payload());
 
-    var duplicate_shreds: std.ArrayList(PossibleDuplicateShred) = .init(allocator);
+    var duplicate_shreds: std.array_list.Managed(PossibleDuplicateShred) = .init(allocator);
     try duplicate_shreds.append(.{ .Exists = try shred.clone() });
 
     const result: ShredInserter.Result = .{

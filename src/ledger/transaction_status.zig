@@ -130,7 +130,7 @@ pub const UiTokenAmount = struct {
     }
 };
 
-pub const Rewards = std.ArrayList(Reward);
+pub const Rewards = std.array_list.Managed(Reward);
 
 pub const Reward = struct {
     pubkey: []const u8,

@@ -221,10 +221,13 @@ pub fn start(
         try service_manager.spawn("dump shred tracker", struct {
             fn run(exit: *const Atomic(bool), trakr: *BasicShredTracker) !void {
                 const file = try std.fs.cwd().createFile("shred-tracker.txt", .{});
+                var write_buffer: [4096]u8 = undefined;
                 while (!exit.load(.monotonic)) {
                     try file.seekTo(0);
                     try file.setEndPos(0);
-                    _ = trakr.print(file.writer()) catch unreachable;
+                    var writer = file.writer(&write_buffer);
+                    _ = trakr.print(&writer.interface) catch unreachable;
+                    try writer.interface.flush();
                     std.Thread.sleep(std.time.ns_per_s);
                 }
             }
@@ -258,8 +261,7 @@ test "start and stop gracefully" {
 
     const keypair: KeyPair = .generate();
     const shred_version: Atomic(u16) = .init(0);
-    const contact_info: ThreadSafeContactInfo =
-        try .initRandom(prng, .initRandom(prng), 0);
+    const contact_info: ThreadSafeContactInfo = .initRandom(prng, .initRandom(prng), 0);
 
     var gossip_table: GossipTable = try .init(allocator, allocator);
     defer gossip_table.deinit();

@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const Mutex = std.Thread.Mutex;
 
 const Duration = sig.time.Duration;
@@ -165,7 +165,7 @@ pub const BasicShredTracker = struct {
                 continue;
             }
             found_incomplete = true;
-            try writer.print("slot {} (parent {?}): ", .{ slot, monitored_slot.parent_slot });
+            try writer.print("slot {} (parent {any}): ", .{ slot, monitored_slot.parent_slot });
             if (monitored_slot.last_shred orelse monitored_slot.max_seen) |last_shred| {
                 for (0..last_shred + 1) |index| {
                     if (monitored_slot.shreds.isSet(index)) {

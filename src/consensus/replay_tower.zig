@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../sig.zig");
 const tracy = @import("tracy");
 
@@ -1708,7 +1709,7 @@ pub fn collectClusterVoteState(
         }
 
         logger.trace().logf(
-            "{?} {} with stake {}",
+            "{any} {f} with stake {}",
             .{ vote_account_pubkey, vote_address, vote.stake },
         );
 
@@ -2746,7 +2747,7 @@ test "default thresholds" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    const trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    const trees = try std14.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
     try fixture.fillFork(allocator, .{ .root = root, .data = trees }, .active);
 
     var registry = sig.prometheus.Registry(.{}).init(allocator);
@@ -4998,7 +4999,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     // slot 4    |
     //         slot 5
 
-    var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    var trees1 = try std14.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
     trees1.appendSliceAssumeCapacity(&[5]TreeNode{
         .{ hash1, root },
         .{ hash5, hash1 },
@@ -5162,7 +5163,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     //    slot 8
     //      |
     //    slot 9
-    var trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    var trees = try std14.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
     trees.appendSliceAssumeCapacity(&[5]TreeNode{
         .{ hash6, hash5 },
         .{ hash7, hash6 },
@@ -5344,7 +5345,7 @@ fn voteAndCheckRecent(num_votes: usize) !void {
     var tower = try createTestReplayTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var slots = std.ArrayList(Lockout).init(std.testing.allocator);
+    var slots = std.array_list.Managed(Lockout).init(std.testing.allocator);
     defer slots.deinit();
 
     if (num_votes > 0) {
@@ -5423,7 +5424,7 @@ fn fillProgressMapForkStats(
 
 pub const MAX_TEST_TREE_LEN = 100;
 const SlotTracker = sig.replay.trackers.SlotTracker;
-const Tree = struct { root: SlotAndHash, data: std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN) };
+const Tree = struct { root: SlotAndHash, data: std14.BoundedArray(TreeNode, MAX_TEST_TREE_LEN) };
 pub const TestFixture = struct {
     slot_tracker: SlotTracker,
     fork_choice: HeaviestSubtreeForkChoice,
@@ -5648,7 +5649,7 @@ fn getDescendants(allocator: std.mem.Allocator, tree: Tree) !std.AutoArrayHashMa
     }
     var descendants = std.AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)){};
 
-    var children_map = std.AutoHashMap(Slot, std.ArrayList(Slot)).init(allocator);
+    var children_map = std.AutoHashMap(Slot, std.array_list.Managed(Slot)).init(allocator);
     defer {
         var it = children_map.iterator();
         while (it.next()) |entry| {
@@ -5657,11 +5658,11 @@ fn getDescendants(allocator: std.mem.Allocator, tree: Tree) !std.AutoArrayHashMa
         children_map.deinit();
     }
 
-    try children_map.put(tree.root.slot, std.ArrayList(Slot).init(allocator));
+    try children_map.put(tree.root.slot, std.array_list.Managed(Slot).init(allocator));
     for (tree.data.constSlice()) |node| {
-        try children_map.put(node[0].slot, std.ArrayList(Slot).init(allocator));
+        try children_map.put(node[0].slot, std.array_list.Managed(Slot).init(allocator));
         if (node[1]) |parent| {
-            try children_map.put(parent.slot, std.ArrayList(Slot).init(allocator));
+            try children_map.put(parent.slot, std.array_list.Managed(Slot).init(allocator));
         }
     }
 
@@ -5674,7 +5675,7 @@ fn getDescendants(allocator: std.mem.Allocator, tree: Tree) !std.AutoArrayHashMa
     var visited = std.AutoHashMap(Slot, void).init(allocator);
     defer visited.deinit();
 
-    var stack = std.ArrayList(struct { slot: Slot, processed: bool }).init(allocator);
+    var stack = std.array_list.Managed(struct { slot: Slot, processed: bool }).init(allocator);
     defer stack.deinit();
 
     try stack.append(.{ .slot = tree.root.slot, .processed = false });
@@ -5749,7 +5750,7 @@ fn getAncestors(allocator: std.mem.Allocator, tree: Tree) !std.AutoArrayHashMapU
     var visited = std.AutoHashMap(Slot, void).init(allocator);
     defer visited.deinit();
 
-    var queue = std.ArrayList(Slot).init(allocator);
+    var queue = std.array_list.Managed(Slot).init(allocator);
     defer queue.deinit();
     try queue.append(tree.root.slot);
     try visited.put(tree.root.slot, {});

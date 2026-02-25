@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../sig.zig");
 
 /// Wrapper for `BoundedSpec(fmt_str).fmt(args)`.
@@ -40,7 +41,7 @@ pub fn BoundedSpec(comptime spec: []const u8) type {
         }
 
         pub fn BoundedArray(comptime Args: type) type {
-            return std.BoundedArray(u8, fmtLen(Args));
+            return std14.BoundedArray(u8, fmtLen(Args));
         }
 
         pub fn BoundedArrayValue(comptime args_value: anytype) type {
@@ -53,7 +54,7 @@ pub fn BoundedSpec(comptime spec: []const u8) type {
         /// try expectEqualStrings("fizz.buzz", BoundedFmtSpec("{s}.{s}").fmt(.{ "foo", "buzz" }).constSlice());
         /// ```
         pub inline fn fmt(args: anytype) BoundedArray(@TypeOf(args)) {
-            var out: std.BoundedArray(u8, fmtLen(@TypeOf(args))) = .{};
+            var out: std14.BoundedArray(u8, fmtLen(@TypeOf(args))) = .{};
             _ = fmtInto(args, &out);
             return out;
         }
@@ -76,14 +77,14 @@ pub fn BoundedSpec(comptime spec: []const u8) type {
 /// Returns a wrapper around the bounded array which will be usable as an argument
 /// to `BoundedSpec(spec)` functions.
 pub inline fn boundedString(
-    /// `*const std.BoundedArray(u8, capacity)`
+    /// `*const std14.BoundedArray(u8, capacity)`
     bounded: anytype,
 ) if (sig.utils.types.boundedArrayInfo(@TypeOf(bounded.*))) |ba_info|
     BoundedString(ba_info.capacity)
 else
     noreturn {
     const lazy = struct {
-        const compile_err = "Expected `std.BoundedArray(u8, capacity)`, got " ++
+        const compile_err = "Expected `std14.BoundedArray(u8, capacity)`, got " ++
             @typeName(@TypeOf(bounded.*));
     };
     const ba_info = sig.utils.types.boundedArrayInfo(@TypeOf(bounded.*)) orelse
@@ -92,20 +93,14 @@ else
     return .{ .bounded = bounded };
 }
 
-/// A wrapper around a `*const std.BoundedArray(u8, capacity)` which is
+/// A wrapper around a `*const std14.BoundedArray(u8, capacity)` which is
 /// usable as an argument type by `BoundedSpec(spec)` functions.
 pub fn BoundedString(comptime capacity: usize) type {
     return struct {
-        bounded: *const std.BoundedArray(u8, capacity),
+        bounded: *const std14.BoundedArray(u8, capacity),
         const Self = @This();
 
-        pub fn format(
-            str: Self,
-            comptime fmt_str: []const u8,
-            _: std.fmt.FormatOptions,
-            writer: anytype,
-        ) @TypeOf(writer).Error!void {
-            comptime if (!std.mem.eql(u8, fmt_str, "s")) std.fmt.invalidFmtError(fmt_str, str);
+        pub fn format(str: Self, writer: *std.Io.Writer) std.Io.Writer.Error!void {
             try writer.writeAll(str.bounded.constSlice());
         }
     };
@@ -135,7 +130,7 @@ inline fn maxArg(comptime T: type) T {
         },
         .array => |array| if (array.child == u8) return .{255} ** array.len,
         .pointer => |pointer| switch (pointer.size) {
-            .One => switch (@typeInfo(pointer.child)) {
+            .one => switch (@typeInfo(pointer.child)) {
                 .array => |array| if (array.child == u8) {
                     const arr = if (array.sentinel()) |sentinel|
                         [array.len:sentinel]u8
@@ -145,6 +140,12 @@ inline fn maxArg(comptime T: type) T {
                     return &result;
                 },
                 else => {},
+            },
+            .slice => if (pointer.child == u8) {
+                // For slices, we can't know the max size at comptime.
+                // Return an empty slice - callers should use fmtLenValue with explicit max length
+                const empty: []const u8 = "";
+                return empty;
             },
             else => {},
         },
@@ -207,12 +208,8 @@ pub const TryRealPathFmt = struct {
 
     pub fn format(
         fmt: TryRealPathFmt,
-        comptime fmt_str: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) @TypeOf(writer).Error!void {
-        if (comptime !std.mem.eql(u8, fmt_str, "s")) std.fmt.invalidFmtError(fmt_str, fmt);
-
+        writer: *std.io.Writer,
+    ) std.io.Writer.Error!void {
         var path_buf: [std.fs.max_path_bytes]u8 = undefined;
 
         if (fmt.dir.realpath(".", &path_buf)) |real_path| {
@@ -222,109 +219,9 @@ pub const TryRealPathFmt = struct {
             }
             try writer.writeAll(fmt.pathname);
         } else |err| {
-            try writer.print("(error.{s})/{s}", .{
-                @errorName(err), fmt.pathname,
+            try writer.print("(error.{t})/{s}", .{
+                err, fmt.pathname,
             });
         }
     }
 };
-
-/// The format string is of the form `key_fmt|value_fmt`, wherein the `|` character can be escaped in the `key_fmt` as `||`.
-pub inline fn hashMapFmt(
-    hash_map: anytype,
-    sep: []const u8,
-) if (sig.utils.types.hashMapInfo(@TypeOf(hash_map.*))) |hm_info|
-    HashMapFmt(hm_info)
-else
-    noreturn {
-    const Hm = @TypeOf(hash_map.*);
-    if (sig.utils.types.hashMapInfo(Hm) == null) @compileError(
-        "Expected pointer to hash map, got " ++ @typeName(Hm),
-    );
-    return .{
-        .map = hash_map,
-        .sep = sep,
-    };
-}
-
-pub fn HashMapFmt(comptime hm_info: sig.utils.types.HashMapInfo) type {
-    return struct {
-        map: *const hm_info.Type(),
-        sep: []const u8,
-        const Self = @This();
-
-        pub fn format(
-            fmt: Self,
-            comptime combo_fmt_str: []const u8,
-            _: std.fmt.FormatOptions,
-            writer: anytype,
-        ) @TypeOf(writer).Error!void {
-            const key_fmt, const val_fmt = comptime blk: {
-                if (combo_fmt_str.len == 0) break :blk .{ "", "" };
-                var key_fmt: []const u8 = "";
-
-                var i: usize = 0;
-                while (std.mem.indexOfScalarPos(u8, combo_fmt_str, i, '|')) |pipe_idx| {
-                    if (pipe_idx + 1 != combo_fmt_str.len and
-                        combo_fmt_str[pipe_idx + 1] == '|' //
-                    ) {
-                        key_fmt = key_fmt ++ combo_fmt_str[i .. pipe_idx + 1];
-                        i = pipe_idx + 2;
-                        continue;
-                    }
-
-                    key_fmt = key_fmt ++ combo_fmt_str[i..pipe_idx];
-                    i = pipe_idx + 1;
-                    break;
-                }
-
-                break :blk .{ key_fmt, combo_fmt_str[i..] };
-            };
-
-            var i: usize = 0;
-            var iter = fmt.map.iterator();
-            while (iter.next()) |entry| : (i += 1) {
-                if (i != 0) try writer.writeAll(fmt.sep);
-                try writer.print(
-                    "{{ {" ++ key_fmt ++ "}, {" ++ val_fmt ++ "} }}",
-                    .{ entry.key_ptr.*, entry.value_ptr.* },
-                );
-            }
-        }
-    };
-}
-
-test hashMapFmt {
-    var hm1 = std.AutoArrayHashMap(u32, i32).init(std.testing.allocator);
-    defer hm1.deinit();
-
-    try std.testing.expectFmt("", "{}", .{hashMapFmt(&hm1, ", ")});
-    try std.testing.expectFmt("", "{|}", .{hashMapFmt(&hm1, ", ")});
-
-    try hm1.put(255, -1);
-    try std.testing.expectFmt("{ FF, -1 }", "{X|d}", .{hashMapFmt(&hm1, ", ")});
-
-    try hm1.put(1, -255);
-    try std.testing.expectFmt("{ 255, -1 }, { 1, -255 }", "{d|d}", .{hashMapFmt(&hm1, ", ")});
-
-    const TestFmt = struct {
-        a: u32,
-
-        pub fn format(
-            _: @This(),
-            comptime fmt_str: []const u8,
-            _: std.fmt.FormatOptions,
-            writer: anytype,
-        ) !void {
-            try writer.writeAll(fmt_str);
-        }
-    };
-
-    var hm2 = std.AutoArrayHashMap(TestFmt, TestFmt).init(std.testing.allocator);
-    defer hm2.deinit();
-
-    // || escapes into | for the key fmt
-    try hm2.put(.{ .a = 2 }, .{ .a = 1 });
-    try hm2.put(.{ .a = 1 }, .{ .a = 2 });
-    try std.testing.expectFmt("{ |-, -| }, { |-, -| }", "{||-|-|}", .{hashMapFmt(&hm2, ", ")});
-}

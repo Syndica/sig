@@ -41,10 +41,10 @@ pub fn sliceConfig(comptime Slice: type) bincode.FieldConfig(Slice) {
     };
 }
 
-pub fn arrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(Child)) {
+pub fn arrayListConfig(comptime Child: type) bincode.FieldConfig(std.array_list.Managed(Child)) {
     const S = struct {
         pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
-            const list: std.ArrayList(Child) = data;
+            const list: std.array_list.Managed(Child) = data;
             const len = std.math.cast(u16, list.items.len) orelse return error.DataTooLarge;
             try std.leb.writeUleb128(writer, len);
             for (list.items) |item| {
@@ -52,11 +52,11 @@ pub fn arrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(C
             }
         }
 
-        pub fn deserialize(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !std.ArrayList(Child) {
+        pub fn deserialize(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !std.array_list.Managed(Child) {
             const len = try std.leb.readUleb128(u16, reader);
 
             var list =
-                try std.ArrayList(Child).initCapacity(limit_allocator.allocator(), @as(usize, len));
+                try std.array_list.Managed(Child).initCapacity(limit_allocator.allocator(), @as(usize, len));
             errdefer list.deinit();
 
             for (0..len) |_| {

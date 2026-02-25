@@ -164,7 +164,7 @@ fn updateConsensusForFrozenSlot(params: ProcessResultParams, slot: Slot) !void {
     const parent_slot = slot_info.constants.parent_slot;
     const parent_hash = slot_info.constants.parent_hash;
 
-    var progress = params.progress_map.map.getPtr(slot) orelse
+    const progress = params.progress_map.map.getPtr(slot) orelse
         return error.MissingBankProgress;
 
     const hash = slot_info.state.hash.readCopy() orelse
