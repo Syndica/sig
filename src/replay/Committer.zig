@@ -4,7 +4,7 @@ const replay = @import("lib.zig");
 const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 
 const Channel = sig.sync.Channel;
 const Logger = sig.trace.Logger("replay.committer");
@@ -276,12 +276,12 @@ fn writeTransactionStatus(
     errdefer status.deinit(allocator);
 
     // Extract writable and readonly keys for address_signatures index
-    var writable_keys = try ArrayList(Pubkey).initCapacity(
+    var writable_keys = try ArrayListUnmanaged(Pubkey).initCapacity(
         allocator,
         transaction.accounts.items(.pubkey).len,
     );
     defer writable_keys.deinit(allocator);
-    var readonly_keys = try ArrayList(Pubkey).initCapacity(
+    var readonly_keys = try ArrayListUnmanaged(Pubkey).initCapacity(
         allocator,
         transaction.accounts.items(.pubkey).len,
     );
