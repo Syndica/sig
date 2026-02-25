@@ -16,8 +16,6 @@ const RegisterMap = sig.vm.interpreter.RegisterMap;
 const SyscallError = sig.vm.SyscallError;
 const TransactionContext = sig.runtime.TransactionContext;
 
-const MM_INPUT_START = memory.INPUT_START;
-
 // https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/sysvar.rs#L164
 const SYSVAR_NOT_FOUND = 2;
 // https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/sysvar.rs#L165
@@ -38,7 +36,9 @@ fn getSyscall(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMa
             // SIMD-0219: The destination address of all sysvar related syscalls
             // must be on the stack or heap, meaning their virtual address is
             // inside `0x200000000..0x400000000`.
-            if (value_addr >= MM_INPUT_START and
+            // (bytecode/rodata regions below 0x200000000 are always readonly
+            // so mutable translation to addresses below that will result in an AccessViolation anyways).
+            if (value_addr >= memory.INPUT_START and
                 tc.feature_set.active(.stricter_abi_and_runtime_constraints, tc.slot))
             {
                 return SyscallError.InvalidPointer;
@@ -88,7 +88,9 @@ pub fn getSysvar(
     // SIMD-0219: The destination address of all sysvar related syscalls
     // must be on the stack or heap, meaning their virtual address is
     // inside `0x200000000..0x400000000`.
-    if (value_addr >= MM_INPUT_START and
+    // (bytecode/rodata regions below 0x200000000 are always readonly
+    // so mutable translation to addresses below that will result in an AccessViolation anyways).
+    if (value_addr >= memory.INPUT_START and
         tc.feature_set.active(.stricter_abi_and_runtime_constraints, tc.slot))
     {
         return SyscallError.InvalidPointer;
