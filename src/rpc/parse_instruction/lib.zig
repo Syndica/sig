@@ -83,9 +83,7 @@ pub const ParsableProgram = enum {
     system,
     vote,
 
-    // spl_token_ids = [sig.runtime.ids.TOKEN_PROGRAM_ID, sig.runtime.ids.TOKEN_2022_PROGRAM_ID]
-
-    pub const PARSABLE_PROGRAMS: [9]struct { Pubkey, ParsableProgram } = .{
+    pub const PARSABLE_PROGRAMS = [_]struct { Pubkey, ParsableProgram }{
         .{
             sig.runtime.program.address_lookup_table.ID,
             .addressLookupTable,
@@ -106,34 +104,8 @@ pub const ParsableProgram = enum {
     };
 
     pub fn fromID(program_id: Pubkey) ?ParsableProgram {
-        if (program_id.equals(&sig.runtime.program.address_lookup_table.ID)) {
-            return .addressLookupTable;
-        }
-        if (program_id.equals(&SPL_ASSOCIATED_TOKEN_ACC_ID)) {
-            return .splAssociatedTokenAccount;
-        }
-        if (program_id.equals(&SPL_MEMO_V1_ID) or program_id.equals(&SPL_MEMO_V3_ID)) {
-            return .splMemo;
-        }
-        if (program_id.equals(&sig.runtime.program.bpf_loader.v2.ID)) {
-            return .bpfLoader;
-        }
-        if (program_id.equals(&sig.runtime.program.bpf_loader.v3.ID)) {
-            return .bpfUpgradeableLoader;
-        }
-        if (program_id.equals(&sig.runtime.program.stake.ID)) {
-            return .stake;
-        }
-        if (program_id.equals(&sig.runtime.program.system.ID)) {
-            return .system;
-        }
-        if (program_id.equals(&sig.runtime.program.vote.ID)) {
-            return .vote;
-        }
-        if (program_id.equals(&sig.runtime.ids.TOKEN_PROGRAM_ID) or
-            program_id.equals(&sig.runtime.ids.TOKEN_2022_PROGRAM_ID))
-        {
-            return .splToken;
+        inline for (PARSABLE_PROGRAMS) |entry| {
+            if (program_id.equals(&entry[0])) return entry[1];
         }
         return null;
     }
