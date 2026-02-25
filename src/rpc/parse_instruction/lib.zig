@@ -907,7 +907,10 @@ fn voteToValue(allocator: Allocator, vote: vote_program.state.Vote) !JsonValue {
 
     try obj.put("hash", try hashToValue(allocator, vote.hash));
 
-    var slots_array = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(allocator, vote.slots.len);
+    var slots_array = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(
+        allocator,
+        vote.slots.len,
+    );
     for (vote.slots) |slot| {
         try slots_array.append(.{ .integer = @intCast(slot) });
     }
@@ -1297,7 +1300,10 @@ fn parseAddressLookupTableInstruction(
                 account_keys.get(@intCast(instruction.accounts[1])).?,
             ));
             // Build newAddresses array
-            var new_addresses_array = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(
+            var new_addresses_array = try std.array_list.AlignedManaged(
+                JsonValue,
+                null,
+            ).initCapacity(
                 allocator,
                 extend.new_addresses.len,
             );
@@ -3349,13 +3355,20 @@ fn formatUiAmount(allocator: Allocator, value: f64, decimals: u8) ![]const u8 {
     // Has decimal point - pad or truncate to desired precision
     const after_dot = result.len - dot_idx - 1;
     if (after_dot >= decimals) {
-        var output = try std.ArrayList(u8).initCapacity(allocator, result[0 .. dot_idx + 1 + decimals].len);
+        const slice = result[0 .. dot_idx + 1 + decimals];
+        var output = try std.ArrayList(u8).initCapacity(
+            allocator,
+            slice.len,
+        );
         errdefer output.deinit(allocator);
         // Truncate
-        try output.appendSlice(allocator, result[0 .. dot_idx + 1 + decimals]);
+        try output.appendSlice(allocator, slice);
         return try output.toOwnedSlice(allocator);
     } else {
-        var output = try std.ArrayList(u8).initCapacity(allocator, result.len + (decimals - after_dot));
+        var output = try std.ArrayList(u8).initCapacity(
+            allocator,
+            result.len + (decimals - after_dot),
+        );
         errdefer output.deinit(allocator);
         // Pad with zeros
         try output.appendSlice(allocator, result);

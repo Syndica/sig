@@ -109,7 +109,10 @@ pub const RawTokenBalance = struct {
 
 /// Bounded array type for storing raw token balances during execution.
 /// Uses the same max size as account locks since each account can have at most one token balance.
-pub const RawTokenBalances = std14.BoundedArray(RawTokenBalance, account_loader.MAX_TX_ACCOUNT_LOCKS);
+pub const RawTokenBalances = std14.BoundedArray(
+    RawTokenBalance,
+    account_loader.MAX_TX_ACCOUNT_LOCKS,
+);
 
 /// Collect raw token balance data from loaded accounts.
 /// This is used during transaction execution to capture pre-execution token balances.
