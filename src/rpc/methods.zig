@@ -752,7 +752,11 @@ pub const RpcHookContext = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L955-L958
-    pub fn getBlockHeight(self: RpcHookContext, _: std.mem.Allocator, params: GetBlockHeight) !GetBlockHeight.Response {
+    pub fn getBlockHeight(
+        self: RpcHookContext,
+        _: std.mem.Allocator,
+        params: GetBlockHeight,
+    ) !GetBlockHeight.Response {
         const config = params.config orelse common.CommitmentSlotConfig{};
         // [agave] Default commitment is finalized:
         // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L270-L285
@@ -768,7 +772,11 @@ pub const RpcHookContext = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1022-L1025
-    pub fn getTransactionCount(self: RpcHookContext, _: std.mem.Allocator, params: GetTransactionCount) !GetTransactionCount.Response {
+    pub fn getTransactionCount(
+        self: RpcHookContext,
+        _: std.mem.Allocator,
+        params: GetTransactionCount,
+    ) !GetTransactionCount.Response {
         const config = params.config orelse common.CommitmentSlotConfig{};
         // [agave] Default commitment is finalized:
         // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L270-L285
@@ -785,7 +793,11 @@ pub const RpcHookContext = struct {
 
     /// for the time being we will return null
     /// since accounts-db v2 don't have relevant implementation
-    pub fn getHighestSnapshotSlot(_: RpcHookContext, _: std.mem.Allocator, _: GetHighestSnapshotSlot) !GetHighestSnapshotSlot.Response {
+    pub fn getHighestSnapshotSlot(
+        _: RpcHookContext,
+        _: std.mem.Allocator,
+        _: GetHighestSnapshotSlot,
+    ) !GetHighestSnapshotSlot.Response {
         return null;
     }
 
