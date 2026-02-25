@@ -8,6 +8,7 @@
 //! - Token-2022: https://github.com/solana-labs/solana-program-library/tree/master/token/program-2022
 
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../sig.zig");
 
 const account_loader = sig.runtime.account_loader;
@@ -108,7 +109,7 @@ pub const RawTokenBalance = struct {
 
 /// Bounded array type for storing raw token balances during execution.
 /// Uses the same max size as account locks since each account can have at most one token balance.
-pub const RawTokenBalances = std.BoundedArray(RawTokenBalance, account_loader.MAX_TX_ACCOUNT_LOCKS);
+pub const RawTokenBalances = std14.BoundedArray(RawTokenBalance, account_loader.MAX_TX_ACCOUNT_LOCKS);
 
 /// Collect raw token balance data from loaded accounts.
 /// This is used during transaction execution to capture pre-execution token balances.
@@ -168,10 +169,13 @@ pub fn resolveTokenBalances(
 ) ?[]TransactionTokenBalance {
     if (raw_balances.len == 0) return null;
 
-    var result = std.ArrayList(TransactionTokenBalance).init(allocator);
+    var result = std.ArrayList(TransactionTokenBalance).initCapacity(
+        allocator,
+        raw_balances.len,
+    ) catch return null;
     errdefer {
         for (result.items) |item| item.deinit(allocator);
-        result.deinit();
+        result.deinit(allocator);
     }
 
     for (raw_balances.constSlice()) |raw| {
@@ -185,10 +189,14 @@ pub fn resolveTokenBalances(
         ) catch continue; // Skip tokens with missing mints
 
         // Format the token amount
-        const ui_token_amount = formatTokenAmount(allocator, raw.amount, decimals) catch return null;
+        const ui_token_amount = formatTokenAmount(
+            allocator,
+            raw.amount,
+            decimals,
+        ) catch return null;
         errdefer ui_token_amount.deinit(allocator);
 
-        result.append(.{
+        result.append(allocator, .{
             .account_index = raw.account_index,
             .mint = raw.mint,
             .owner = raw.owner,
@@ -197,7 +205,7 @@ pub fn resolveTokenBalances(
         }) catch return null;
     }
 
-    return result.toOwnedSlice() catch return null;
+    return result.toOwnedSlice(allocator) catch return null;
 }
 
 /// Cache for mint decimals to avoid repeated lookups

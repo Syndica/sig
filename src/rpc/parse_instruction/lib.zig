@@ -462,7 +462,12 @@ pub fn makeUiPartiallyDecodedInstruction(
     return .{
         .programId = program_id_str,
         .accounts = accounts,
-        .data = try base58.Table.BITCOIN.encodeAlloc(allocator, instruction.data),
+        .data = blk: {
+            const buf = try allocator.alloc(u8, base58.encodedMaxSize(instruction.data.len));
+            defer allocator.free(buf);
+            const len = base58.Table.BITCOIN.encode(buf, instruction.data);
+            break :blk try allocator.dupe(u8, buf[0..len]);
+        },
         .stackHeight = stack_height,
     };
 }
@@ -902,7 +907,7 @@ fn voteToValue(allocator: Allocator, vote: vote_program.state.Vote) !JsonValue {
 
     try obj.put("hash", try hashToValue(allocator, vote.hash));
 
-    var slots_array = std.ArrayList(JsonValue).init(allocator);
+    var slots_array = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(allocator, vote.slots.len);
     for (vote.slots) |slot| {
         try slots_array.append(.{ .integer = @intCast(slot) });
     }
@@ -942,7 +947,10 @@ fn towerSyncToValue(allocator: Allocator, ts: vote_program.state.TowerSync) !Jso
 
 /// Convert an array of Lockouts to a JSON array value
 fn lockoutsToValue(allocator: Allocator, lockouts: []const vote_program.state.Lockout) !JsonValue {
-    var arr = std.ArrayList(JsonValue).init(allocator);
+    var arr = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(
+        allocator,
+        lockouts.len,
+    );
     errdefer arr.deinit();
 
     for (lockouts) |lockout| {
@@ -1289,7 +1297,10 @@ fn parseAddressLookupTableInstruction(
                 account_keys.get(@intCast(instruction.accounts[1])).?,
             ));
             // Build newAddresses array
-            var new_addresses_array = std.ArrayList(JsonValue).init(allocator);
+            var new_addresses_array = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(
+                allocator,
+                extend.new_addresses.len,
+            );
             for (extend.new_addresses) |addr| {
                 try new_addresses_array.append(try pubkeyToValue(allocator, addr));
             }
@@ -2652,7 +2663,10 @@ fn parseTokenInstruction(
                 allocator,
                 account_keys.get(@intCast(instruction.accounts[1])).?,
             ));
-            var signers = std.ArrayList(JsonValue).init(allocator);
+            var signers = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(
+                allocator,
+                instruction.accounts[2..].len,
+            );
             for (instruction.accounts[2..]) |signer_idx| {
                 try signers.append(try pubkeyToValue(
                     allocator,
@@ -2673,7 +2687,10 @@ fn parseTokenInstruction(
                 allocator,
                 account_keys.get(@intCast(instruction.accounts[0])).?,
             ));
-            var signers = std.ArrayList(JsonValue).init(allocator);
+            var signers = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(
+                allocator,
+                instruction.accounts[1..].len,
+            );
             for (instruction.accounts[1..]) |signer_idx| {
                 try signers.append(try pubkeyToValue(
                     allocator,
@@ -3257,7 +3274,10 @@ fn parseSigners(
 ) !void {
     if (accounts.len > last_nonsigner_index + 1) {
         // Multisig case
-        var signers = std.ArrayList(JsonValue).init(allocator);
+        var signers = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(
+            allocator,
+            accounts[last_nonsigner_index + 1 ..].len,
+        );
         for (accounts[last_nonsigner_index + 1 ..]) |signer_idx| {
             try signers.append(try pubkeyToValue(
                 allocator,
@@ -3316,33 +3336,34 @@ fn formatUiAmount(allocator: Allocator, value: f64, decimals: u8) ![]const u8 {
     // Find decimal point
     const dot_idx = std.mem.indexOf(u8, result, ".") orelse {
         // No decimal point, add trailing zeros
-        var output = std.ArrayList(u8).init(allocator);
-        errdefer output.deinit();
-        try output.appendSlice(result);
-        try output.append('.');
+        var output = try std.ArrayList(u8).initCapacity(allocator, result.len + 1 + decimals);
+        errdefer output.deinit(allocator);
+        try output.appendSlice(allocator, result);
+        try output.append(allocator, '.');
         for (0..decimals) |_| {
-            try output.append('0');
+            try output.append(allocator, '0');
         }
-        return try output.toOwnedSlice();
+        return try output.toOwnedSlice(allocator);
     };
 
     // Has decimal point - pad or truncate to desired precision
     const after_dot = result.len - dot_idx - 1;
-    var output = std.ArrayList(u8).init(allocator);
-    errdefer output.deinit();
-
     if (after_dot >= decimals) {
+        var output = try std.ArrayList(u8).initCapacity(allocator, result[0 .. dot_idx + 1 + decimals].len);
+        errdefer output.deinit(allocator);
         // Truncate
-        try output.appendSlice(result[0 .. dot_idx + 1 + decimals]);
+        try output.appendSlice(allocator, result[0 .. dot_idx + 1 + decimals]);
+        return try output.toOwnedSlice(allocator);
     } else {
+        var output = try std.ArrayList(u8).initCapacity(allocator, result.len + (decimals - after_dot));
+        errdefer output.deinit(allocator);
         // Pad with zeros
-        try output.appendSlice(result);
+        try output.appendSlice(allocator, result);
         for (0..(decimals - after_dot)) |_| {
-            try output.append('0');
+            try output.append(allocator, '0');
         }
+        return try output.toOwnedSlice(allocator);
     }
-
-    return try output.toOwnedSlice();
 }
 
 test "ParsableProgram.fromID - known programs" {

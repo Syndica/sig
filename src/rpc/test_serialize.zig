@@ -344,7 +344,7 @@ test GetVoteAccounts {
 
 /// Helper to stringify a value and compare against expected JSON.
 fn expectJsonStringify(expected: []const u8, value: anytype) !void {
-    const actual = try std.json.stringifyAlloc(std.testing.allocator, value, .{});
+    const actual = try std.json.Stringify.valueAlloc(std.testing.allocator, value, .{});
     defer std.testing.allocator.free(actual);
     try std.testing.expectEqualStrings(expected, actual);
 }
@@ -441,7 +441,7 @@ test "UiReward serialization - all reward types" {
         .{ GetBlock.Response.UiReward.RewardType.Staking, "Staking" },
         .{ GetBlock.Response.UiReward.RewardType.Voting, "Voting" },
     }) |pair| {
-        const actual = try std.json.stringifyAlloc(std.testing.allocator, pair[0], .{});
+        const actual = try std.json.Stringify.valueAlloc(std.testing.allocator, pair[0], .{});
         defer std.testing.allocator.free(actual);
         const expected = "\"" ++ pair[1] ++ "\"";
         try std.testing.expectEqualStrings(expected, actual);
@@ -647,7 +647,7 @@ test "UiTransactionTokenBalance serialization" {
         },
     };
     try expectJsonStringify(
-        \\{"accountIndex":2,"mint":"11111111111111111111111111111111","owner":"11111111111111111111111111111111","programId":"11111111111111111111111111111111","uiTokenAmount":{"amount":"1000000","decimals":6,"uiAmount":1e0,"uiAmountString":"1"}}
+        \\{"accountIndex":2,"mint":"11111111111111111111111111111111","owner":"11111111111111111111111111111111","programId":"11111111111111111111111111111111","uiTokenAmount":{"amount":"1000000","decimals":6,"uiAmount":1,"uiAmountString":"1"}}
     , token_balance);
 }
 
@@ -787,14 +787,9 @@ test "ParsedInstruction serialization" {
         .stack_height = null,
     };
 
-    var buf = std.ArrayList(u8).init(std.testing.allocator);
-    defer buf.deinit();
-    var jw = std.json.writeStream(buf.writer(), .{});
-    try pi.jsonStringify(&jw);
-    // try jw.endDocument();
-
     // Verify it contains the expected fields
-    const output = buf.items;
+    const output = try std.json.Stringify.valueAlloc(std.testing.allocator, pi, .{});
+    defer std.testing.allocator.free(output);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"parsed\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"program\":\"system\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"programId\":\"11111111111111111111111111111111\"") != null);
@@ -873,7 +868,7 @@ test "JsonSkippable - value state serializes the inner value" {
         .postBalances = &.{},
         .computeUnitsConsumed = .{ .value = 42 },
     };
-    const json = try std.json.stringifyAlloc(std.testing.allocator, meta, .{});
+    const json = try std.json.Stringify.valueAlloc(std.testing.allocator, meta, .{});
     defer std.testing.allocator.free(json);
     // computeUnitsConsumed should appear with value 42
     try std.testing.expect(std.mem.indexOf(u8, json, "\"computeUnitsConsumed\":42") != null);
@@ -890,7 +885,7 @@ test "JsonSkippable - skip state omits the field entirely" {
         .loadedAddresses = .skip,
         .returnData = .skip,
     };
-    const json = try std.json.stringifyAlloc(std.testing.allocator, meta, .{});
+    const json = try std.json.Stringify.valueAlloc(std.testing.allocator, meta, .{});
     defer std.testing.allocator.free(json);
     // These fields should NOT appear in the output
     try std.testing.expect(std.mem.indexOf(u8, json, "computeUnitsConsumed") == null);
@@ -907,7 +902,7 @@ test "JsonSkippable - none state serializes as null" {
         .postBalances = &.{},
         .rewards = .none,
     };
-    const json = try std.json.stringifyAlloc(std.testing.allocator, meta, .{});
+    const json = try std.json.Stringify.valueAlloc(std.testing.allocator, meta, .{});
     defer std.testing.allocator.free(json);
     // rewards should appear as null
     try std.testing.expect(std.mem.indexOf(u8, json, "\"rewards\":null") != null);
@@ -998,7 +993,7 @@ test "UiRawMessage serialization - without address table lookups" {
         .recent_blockhash = Hash.ZEROES,
         .instructions = &.{},
     };
-    const json = try std.json.stringifyAlloc(std.testing.allocator, msg, .{});
+    const json = try std.json.Stringify.valueAlloc(std.testing.allocator, msg, .{});
     defer std.testing.allocator.free(json);
     // Should have accountKeys, header, recentBlockhash, instructions but NOT addressTableLookups
     try std.testing.expect(std.mem.indexOf(u8, json, "\"accountKeys\"") != null);
@@ -1024,7 +1019,7 @@ test "UiRawMessage serialization - with address table lookups" {
         .instructions = &.{},
         .address_table_lookups = &.{atl},
     };
-    const json = try std.json.stringifyAlloc(std.testing.allocator, msg, .{});
+    const json = try std.json.Stringify.valueAlloc(std.testing.allocator, msg, .{});
     defer std.testing.allocator.free(json);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"addressTableLookups\"") != null);
 }
@@ -1039,7 +1034,7 @@ test "UiParsedMessage serialization - without address table lookups" {
         .recent_blockhash = Hash.ZEROES,
         .instructions = &.{},
     };
-    const json = try std.json.stringifyAlloc(std.testing.allocator, msg, .{});
+    const json = try std.json.Stringify.valueAlloc(std.testing.allocator, msg, .{});
     defer std.testing.allocator.free(json);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"accountKeys\":[]") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"recentBlockhash\"") != null);
@@ -1061,7 +1056,7 @@ test "UiMessage serialization - raw variant" {
         .recent_blockhash = Hash.ZEROES,
         .instructions = &.{},
     } };
-    const json = try std.json.stringifyAlloc(std.testing.allocator, msg, .{});
+    const json = try std.json.Stringify.valueAlloc(std.testing.allocator, msg, .{});
     defer std.testing.allocator.free(json);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"numRequiredSignatures\":2") != null);
 }
@@ -1081,7 +1076,7 @@ test "EncodedTransaction serialization - accounts variant" {
         .signatures = &.{},
         .accountKeys = &.{account},
     } };
-    const json = try std.json.stringifyAlloc(std.testing.allocator, tx, .{});
+    const json = try std.json.Stringify.valueAlloc(std.testing.allocator, tx, .{});
     defer std.testing.allocator.free(json);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"accountKeys\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"source\":\"transaction\"") != null);
@@ -1102,7 +1097,7 @@ test "UiTransactionStatusMeta serialization - innerInstructions and logMessages 
         .logMessages = .skip,
         .rewards = .skip,
     };
-    const json = try std.json.stringifyAlloc(std.testing.allocator, meta, .{});
+    const json = try std.json.Stringify.valueAlloc(std.testing.allocator, meta, .{});
     defer std.testing.allocator.free(json);
     // innerInstructions, logMessages, and rewards should all be omitted
     try std.testing.expect(std.mem.indexOf(u8, json, "innerInstructions") == null);
@@ -1123,7 +1118,7 @@ test "UiTransactionStatusMeta serialization - costUnits present" {
         .postBalances = &.{},
         .costUnits = .{ .value = 3428 },
     };
-    const json = try std.json.stringifyAlloc(std.testing.allocator, meta, .{});
+    const json = try std.json.Stringify.valueAlloc(std.testing.allocator, meta, .{});
     defer std.testing.allocator.free(json);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"costUnits\":3428") != null);
 }
@@ -1140,7 +1135,7 @@ test "UiTransactionStatusMeta serialization - returnData present" {
             .data = .{ "AQID", .base64 },
         } },
     };
-    const json = try std.json.stringifyAlloc(std.testing.allocator, meta, .{});
+    const json = try std.json.Stringify.valueAlloc(std.testing.allocator, meta, .{});
     defer std.testing.allocator.free(json);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"returnData\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"programId\"") != null);

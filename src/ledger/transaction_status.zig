@@ -303,14 +303,17 @@ pub const TransactionStatusMetaBuilder = struct {
         // Group instructions by their top-level instruction index (depth == 1 starts a new group)
         // Instructions at depth > 1 are inner instructions of the most recent depth == 1 instruction
 
-        var result = std.ArrayList(InnerInstructions).init(allocator);
+        var result = try std.ArrayList(InnerInstructions).initCapacity(allocator, trace.len);
         errdefer {
             for (result.items) |item| item.deinit(allocator);
-            result.deinit();
+            result.deinit(allocator);
         }
 
-        var current_inner = std.ArrayList(InnerInstruction).init(allocator);
-        defer current_inner.deinit();
+        var current_inner = try std.ArrayList(InnerInstruction).initCapacity(allocator, trace.len);
+        defer {
+            for (current_inner.items) |ix| ix.deinit(allocator);
+            current_inner.deinit(allocator);
+        }
 
         var current_top_level_index: u8 = 0;
         var top_level_count: u8 = 0;
@@ -320,9 +323,9 @@ pub const TransactionStatusMetaBuilder = struct {
             if (entry.depth == 1) {
                 // This is a top-level instruction - flush previous group if any
                 if (has_top_level and current_inner.items.len > 0) {
-                    try result.append(InnerInstructions{
+                    try result.append(allocator, InnerInstructions{
                         .index = current_top_level_index,
-                        .instructions = try current_inner.toOwnedSlice(),
+                        .instructions = try current_inner.toOwnedSlice(allocator),
                     });
                 }
                 current_inner.clearRetainingCapacity();
@@ -332,19 +335,19 @@ pub const TransactionStatusMetaBuilder = struct {
             } else if (entry.depth > 1) {
                 // This is an inner instruction (CPI)
                 const inner = try convertToInnerInstruction(allocator, entry.ixn_info, entry.depth);
-                try current_inner.append(inner);
+                try current_inner.append(allocator, inner);
             }
         }
 
         // Flush final group
         if (has_top_level and current_inner.items.len > 0) {
-            try result.append(InnerInstructions{
+            try result.append(allocator, InnerInstructions{
                 .index = current_top_level_index,
-                .instructions = try current_inner.toOwnedSlice(),
+                .instructions = try current_inner.toOwnedSlice(allocator),
             });
         }
 
-        return try result.toOwnedSlice();
+        return try result.toOwnedSlice(allocator);
     }
 
     /// Convert a single instruction from InstructionInfo to InnerInstruction format.
@@ -561,7 +564,7 @@ pub const TransactionError = union(enum(u32)) {
 test "TransactionError jsonStringify" {
     const expectJsonStringify = struct {
         fn run(expected: []const u8, value: TransactionError) !void {
-            const actual = try std.json.stringifyAlloc(std.testing.allocator, value, .{});
+            const actual = try std.json.Stringify.valueAlloc(std.testing.allocator, value, .{});
             defer std.testing.allocator.free(actual);
             try std.testing.expectEqualStrings(expected, actual);
         }

@@ -276,19 +276,25 @@ fn writeTransactionStatus(
     errdefer status.deinit(allocator);
 
     // Extract writable and readonly keys for address_signatures index
-    var writable_keys = ArrayList(Pubkey).init(allocator);
-    defer writable_keys.deinit();
-    var readonly_keys = ArrayList(Pubkey).init(allocator);
-    defer readonly_keys.deinit();
+    var writable_keys = try ArrayList(Pubkey).initCapacity(
+        allocator,
+        transaction.accounts.items(.pubkey).len,
+    );
+    defer writable_keys.deinit(allocator);
+    var readonly_keys = try ArrayList(Pubkey).initCapacity(
+        allocator,
+        transaction.accounts.items(.pubkey).len,
+    );
+    defer readonly_keys.deinit(allocator);
 
     for (
         transaction.accounts.items(.pubkey),
         transaction.accounts.items(.is_writable),
     ) |pubkey, is_writable| {
         if (is_writable) {
-            try writable_keys.append(pubkey);
+            try writable_keys.append(allocator, pubkey);
         } else {
-            try readonly_keys.append(pubkey);
+            try readonly_keys.append(allocator, pubkey);
         }
     }
 

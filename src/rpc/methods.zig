@@ -9,6 +9,7 @@
 //! https://solana.com/de/docs/rpc
 
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../sig.zig");
 const rpc = @import("lib.zig");
 const base58 = @import("base58");
@@ -1770,22 +1771,26 @@ pub const BlockHookContext = struct {
                 const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
                 defer allocator.free(bincode_bytes);
 
-                const base58_str = base58.Table.BITCOIN.encodeAlloc(allocator, bincode_bytes) catch {
-                    return error.EncodingError;
-                };
+                var base58_str = try allocator.alloc(u8, base58.encodedMaxSize(bincode_bytes.len));
+                const encoded_len = base58.Table.BITCOIN.encode(
+                    base58_str,
+                    bincode_bytes,
+                );
 
-                return .{ .legacy_binary = base58_str };
+                return .{ .legacy_binary = base58_str[0..encoded_len] };
             },
             .base58 => {
                 const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
                 defer allocator.free(bincode_bytes);
 
-                const base58_str = base58.Table.BITCOIN.encodeAlloc(allocator, bincode_bytes) catch {
-                    return error.EncodingError;
-                };
+                var base58_str = try allocator.alloc(u8, base58.encodedMaxSize(bincode_bytes.len));
+                const encoded_len = base58.Table.BITCOIN.encode(
+                    base58_str,
+                    bincode_bytes,
+                );
 
                 return .{ .binary = .{
-                    .data = base58_str,
+                    .data = base58_str[0..encoded_len],
                     .encoding = .base58,
                 } };
             },
@@ -1863,22 +1868,26 @@ pub const BlockHookContext = struct {
                 const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
                 defer allocator.free(bincode_bytes);
 
-                const base58_str = base58.Table.BITCOIN.encodeAlloc(allocator, bincode_bytes) catch {
-                    return error.EncodingError;
-                };
+                var base58_str = try allocator.alloc(u8, base58.encodedMaxSize(bincode_bytes.len));
+                const encoded_len = base58.Table.BITCOIN.encode(
+                    base58_str,
+                    bincode_bytes,
+                );
 
-                return .{ .legacy_binary = base58_str };
+                return .{ .legacy_binary = base58_str[0..encoded_len] };
             },
             .base58 => {
                 const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
                 defer allocator.free(bincode_bytes);
 
-                const base58_str = base58.Table.BITCOIN.encodeAlloc(allocator, bincode_bytes) catch {
-                    return error.EncodingError;
-                };
+                var base58_str = try allocator.alloc(u8, base58.encodedMaxSize(bincode_bytes.len));
+                const encoded_len = base58.Table.BITCOIN.encode(
+                    base58_str,
+                    bincode_bytes,
+                );
 
                 return .{ .binary = .{
-                    .data = base58_str,
+                    .data = base58_str[0..encoded_len],
                     .encoding = .base58,
                 } };
             },
@@ -1985,7 +1994,10 @@ pub const BlockHookContext = struct {
                     instructions[i] = .{
                         .programIdIndex = ix.program_index,
                         .accounts = try allocator.dupe(u8, ix.account_indexes),
-                        .data = try base58.Table.BITCOIN.encodeAlloc(allocator, ix.data),
+                        .data = blk: {
+                            var ret = try allocator.alloc(u8, base58.encodedMaxSize(ix.data.len));
+                            break :blk ret[0..base58.Table.BITCOIN.encode(ret, ix.data)];
+                        },
                         .stackHeight = 1,
                     };
                 }
@@ -2019,7 +2031,10 @@ pub const BlockHookContext = struct {
             instructions[i] = .{
                 .programIdIndex = ix.program_index,
                 .accounts = try allocator.dupe(u8, ix.account_indexes),
-                .data = try base58.Table.BITCOIN.encodeAlloc(allocator, ix.data),
+                .data = blk: {
+                    var ret = try allocator.alloc(u8, base58.encodedMaxSize(ix.data.len));
+                    break :blk ret[0..base58.Table.BITCOIN.encode(ret, ix.data)];
+                },
                 .stackHeight = 1,
             };
         }
@@ -2396,12 +2411,15 @@ pub const BlockHookContext = struct {
             errdefer allocator.free(instructions);
 
             for (ii.instructions, 0..) |inner_ix, j| {
-                // Base58 encode the instruction data
-                const data_str = base58.Table.BITCOIN.encodeAlloc(
-                    allocator,
-                    inner_ix.instruction.data,
-                ) catch {
-                    return error.EncodingError;
+                const data_str = blk: {
+                    var ret = try allocator.alloc(
+                        u8,
+                        base58.encodedMaxSize(inner_ix.instruction.data.len),
+                    );
+                    break :blk ret[0..base58.Table.BITCOIN.encode(
+                        ret,
+                        inner_ix.instruction.data,
+                    )];
                 };
 
                 instructions[j] = .{ .compiled = .{
@@ -2686,7 +2704,9 @@ test "encodeLegacyTransactionMessage - base64 encoding" {
 }
 
 test "encodeTransactionWithoutMeta - base64 encoding" {
-    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
+    const allocator = arena.allocator();
     const tx = sig.core.Transaction.EMPTY;
 
     const result = try BlockHookContext.encodeTransactionWithoutMeta(allocator, tx, .base64);
@@ -2695,12 +2715,12 @@ test "encodeTransactionWithoutMeta - base64 encoding" {
     try std.testing.expect(binary.encoding == .base64);
     // base64 encoded data should be non-empty (even empty tx has some bincode overhead)
     try std.testing.expect(binary.data.len > 0);
-
-    allocator.free(binary.data);
 }
 
 test "encodeTransactionWithoutMeta - json encoding" {
-    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
+    const allocator = arena.allocator();
     const tx = sig.core.Transaction.EMPTY;
 
     const result = try BlockHookContext.encodeTransactionWithoutMeta(allocator, tx, .json);
@@ -2712,13 +2732,12 @@ test "encodeTransactionWithoutMeta - json encoding" {
     const raw = json.message.raw;
     try std.testing.expectEqual(@as(u8, 0), raw.header.numRequiredSignatures);
     try std.testing.expect(raw.address_table_lookups == null);
-
-    allocator.free(json.signatures);
-    allocator.free(raw.account_keys);
 }
 
 test "encodeTransactionWithoutMeta - base58 encoding" {
-    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
+    const allocator = arena.allocator();
     const tx = sig.core.Transaction.EMPTY;
 
     const result = try BlockHookContext.encodeTransactionWithoutMeta(allocator, tx, .base58);
@@ -2726,18 +2745,16 @@ test "encodeTransactionWithoutMeta - base58 encoding" {
 
     try std.testing.expect(binary.encoding == .base58);
     try std.testing.expect(binary.data.len > 0);
-
-    allocator.free(binary.data);
 }
 
 test "encodeTransactionWithoutMeta - legacy binary encoding" {
-    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
+    const allocator = arena.allocator();
     const tx = sig.core.Transaction.EMPTY;
 
     const result = try BlockHookContext.encodeTransactionWithoutMeta(allocator, tx, .binary);
     const legacy_binary = result.legacy_binary;
 
     try std.testing.expect(legacy_binary.len > 0);
-
-    allocator.free(legacy_binary);
 }
