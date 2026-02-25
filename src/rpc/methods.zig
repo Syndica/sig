@@ -1084,6 +1084,40 @@ test "RpcHealthStatus httpStatusString" {
     try testing.expectEqualStrings("unknown", (RpcHealthStatus{ .unknown = {} }).httpStatusString());
 }
 
+test "RpcHealthStatus jsonStringify ok" {
+    const testing = std.testing;
+    var w = std.io.Writer.Allocating.init(testing.allocator);
+    defer w.deinit();
+
+    std.json.Stringify.value(RpcHealthStatus{ .ok = {} }, .{}, &w.writer) catch unreachable;
+
+    try testing.expectEqualStrings("\"ok\"", w.written());
+}
+
+test "RpcHealthStatus jsonStringify unknown" {
+    const testing = std.testing;
+    var w = std.io.Writer.Allocating.init(testing.allocator);
+    defer w.deinit();
+
+    std.json.Stringify.value(RpcHealthStatus{ .unknown = {} }, .{}, &w.writer) catch unreachable;
+
+    try testing.expectEqualStrings("\"unknown\"", w.written());
+}
+
+test "RpcHealthStatus jsonStringify behind" {
+    const testing = std.testing;
+    var w = std.io.Writer.Allocating.init(testing.allocator);
+    defer w.deinit();
+
+    std.json.Stringify.value(RpcHealthStatus{ .behind = 42 }, .{}, &w.writer) catch unreachable;
+
+    // Verify the JSON structure for behind status
+    const expected =
+        \\{"status":"behind","numSlotsBehind":42}
+    ;
+    try testing.expectEqualStrings(expected, w.written());
+}
+
 test "checkHealth returns ok when override_health_check is true" {
     // When override_health_check is set to true, health should always be ok
     // regardless of slot distance.
