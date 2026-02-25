@@ -1,7 +1,7 @@
 Dependencies:
 - python 3.11
 - cargo/rust
-- zig 0.14.1
+- zig 0.15.2
 - git 2.49
 
 ```bash
