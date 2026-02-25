@@ -58,7 +58,7 @@ pub const MethodAndParams = union(enum) {
     /// Custom (not standardized) RPC method for "GET /*snapshot*.tar.bz2"
     getSnapshot: GetSnapshot,
 
-    getHighestSnapshotSlot: noreturn,
+    getHighestSnapshotSlot: GetHighestSnapshotSlot,
     getIdentity: GetIdentity,
     getInflationGovernor: noreturn,
     getInflationRate: noreturn,
@@ -86,7 +86,7 @@ pub const MethodAndParams = union(enum) {
     getTokenLargestAccounts: noreturn,
     getTokenSupply: noreturn,
     getTransaction: GetTransaction,
-    getTransactionCount: noreturn,
+    getTransactionCount: GetTransactionCount,
     getVersion: GetVersion,
     getVoteAccounts: GetVoteAccounts,
     isBlockhashValid: noreturn,
@@ -404,7 +404,16 @@ pub const GetGenesisHash = struct {
 };
 
 // TODO: getHealth
-// TODO: getHighestSnapshotSlot
+
+pub const GetHighestSnapshotSlot = struct {
+    pub const Response = ?SnapshotSlotInfo;
+
+    pub const SnapshotSlotInfo = struct {
+        full: Slot,
+        incremental: ?Slot = null,
+    };
+};
+
 // TODO: getIdentity
 // TODO: getInflationGovernor
 // TODO: getInflationRate
@@ -566,7 +575,11 @@ pub const GetTransaction = struct {
     };
 };
 
-// TODO: getTransactionCount
+pub const GetTransactionCount = struct {
+    config: ?common.CommitmentSlotConfig = null,
+
+    pub const Response = u64;
+};
 
 pub const GetIdentity = struct {
     pub const Response = struct {
@@ -736,6 +749,44 @@ pub const RpcHookContext = struct {
         const slot = self.slot_tracker.getSlotForCommitment(commitment);
         const min_slot = config.minContextSlot orelse return slot;
         return if (slot >= min_slot) slot else error.RpcMinContextSlotNotMet;
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L955-L958
+    pub fn getBlockHeight(self: RpcHookContext, _: std.mem.Allocator, params: GetBlockHeight) !GetBlockHeight.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+        // [agave] Default commitment is finalized:
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L270-L285
+        const commitment = config.commitment orelse .finalized;
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+        }
+
+        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        return slot_ref.constants.block_height;
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1022-L1025
+    pub fn getTransactionCount(self: RpcHookContext, _: std.mem.Allocator, params: GetTransactionCount) !GetTransactionCount.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+        // [agave] Default commitment is finalized:
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L270-L285
+        const commitment = config.commitment orelse .finalized;
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+        }
+
+        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        return slot_ref.state.transaction_count.load(.monotonic);
+    }
+
+    /// for the time being we will return null
+    /// since accounts-db v2 don't have relevant implementation
+    pub fn getHighestSnapshotSlot(_: RpcHookContext, _: std.mem.Allocator, _: GetHighestSnapshotSlot) !GetHighestSnapshotSlot.Response {
+        return null;
     }
 
     pub fn getVoteAccounts(
