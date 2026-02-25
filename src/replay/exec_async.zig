@@ -707,11 +707,11 @@ test "TransactionScheduler: sends replay vote after successful execution" {
     {
         var account = sig.runtime.AccountSharedData.NEW;
         account.owner = sig.runtime.program.vote.ID;
-        account.data = try allocator.alloc(u8, vote_program.state.VoteState.MAX_VOTE_STATE_SIZE);
+        account.data = try allocator.alloc(u8, vote_program.state.VoteStateV3.MAX_VOTE_STATE_SIZE);
         defer allocator.free(account.data);
         @memset(account.data, 0);
 
-        var vote_state = try vote_program.state.createTestVoteState(
+        var vote_state = try vote_program.state.createTestVoteStateV3(
             allocator,
             node_pubkey,
             authorized_voter,
@@ -725,7 +725,7 @@ test "TransactionScheduler: sends replay vote after successful execution" {
 
         _ = try sig.bincode.writeToSlice(
             account.data,
-            vote_program.state.VoteStateVersions{ .current = vote_state },
+            vote_program.state.VoteStateVersions{ .v3 = vote_state },
             .{},
         );
         // Ensure rent-exempt balance

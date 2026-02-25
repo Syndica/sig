@@ -1,9 +1,7 @@
 const std = @import("std");
 const Build = std.Build;
 
-// TODO(0.15): replace with `.parse(@import("build.zig.zon").version)` since
-// importing zon without a result type didn't make it into 0.14.x.
-const sig_version: std.SemanticVersion = .{ .major = 0, .minor = 2, .patch = 0 };
+const sig_version = std.SemanticVersion.parse(@import("build.zig.zon").version) catch unreachable;
 
 const LedgerDB = enum {
     rocksdb,
@@ -24,6 +22,7 @@ pub const Config = struct {
     no_network_tests: bool,
     has_side_effects: bool,
     enable_tracy: bool,
+    tracy_on_demand: bool,
     use_llvm: bool,
     error_tracing: ?bool,
     long_tests: bool,
@@ -105,6 +104,11 @@ pub const Config = struct {
                 "enable-tracy",
                 "Enables tracy",
             ) orelse false,
+            .tracy_on_demand = b.option(
+                bool,
+                "tracy-on-demand",
+                "Enables tracy on-demand mode (allows reconnecting). Only has an effect if tracy is enabled via enable-tracy.",
+            ) orelse false,
             .use_llvm = b.option(
                 bool,
                 "use-llvm",
@@ -127,7 +131,7 @@ pub const Config = struct {
                     "Override Sig's version string. The default is to find out through git.",
                 );
                 const version_slice = if (maybe_version_string) |version| version else v: {
-                    const version_string = b.fmt("{}", .{sig_version});
+                    const version_string = b.fmt("{f}", .{sig_version});
 
                     var code: u8 = undefined;
                     const git_describe_untrimmed = b.runAllowFail(&.{
@@ -163,7 +167,7 @@ pub const Config = struct {
                             const ancestor_ver = try std.SemanticVersion.parse(tagged_ancestor[1..]);
                             if (sig_version.order(ancestor_ver) != .gt) {
                                 std.debug.print(
-                                    "'{}' must be greater than tagged ancestor '{}'\n",
+                                    "'{f}' must be greater than tagged ancestor '{f}'\n",
                                     .{ sig_version, ancestor_ver },
                                 );
                                 std.process.exit(1);
@@ -257,7 +261,7 @@ pub fn build(b: *Build) !void {
     const rocksdb_mod = rocksdb_dep.module("bindings");
     // TODO: UB might be fixed by future RocksDB version upgrade.
     // reproducable via: zig build test -Dfilter="ledger"
-    rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = false;
+    rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = .off;
 
     const secp256k1_mod = b.dependency("secp256k1", .{
         .target = config.target,
@@ -268,26 +272,49 @@ pub fn build(b: *Build) !void {
         .target = config.target,
         .optimize = config.optimize,
         .tracy_enable = config.enable_tracy,
+        .tracy_on_demand = config.tracy_on_demand,
         .tracy_no_system_tracing = false,
         .tracy_callstack = 6,
     }).module("tracy");
-    tracy_mod.sanitize_c = false; // Workaround UB in Tracy.
+    tracy_mod.sanitize_c = .off; // Workaround UB in Tracy.
+
+    const std14_mod = b.createModule(.{
+        .root_source_file = b.path("src/std14.zig"),
+        .target = config.target,
+        .optimize = config.optimize,
+    });
 
     const cli_mod = b.createModule(.{
         .root_source_file = b.path("src/cli.zig"),
         .target = config.target,
         .optimize = config.optimize,
     });
+    cli_mod.addImport("std14", std14_mod);
 
     // G/H table for Bulletproofs
-    const gh_table = b.createModule(.{ .root_source_file = generateTable(b) });
+    const gh_table = b.createModule(.{
+        .root_source_file = generateTable(b),
+        .target = config.target,
+        .optimize = config.optimize,
+    });
+
+    // Feature set ID for version compatibility
+    const feature_set_id = b.createModule(.{ .root_source_file = generateFeatureSetId(b, base58_mod) });
 
     const sqlite_mod = genSqlite(b, config.target, config.optimize);
+    const blst_mod = b.dependency("blst", .{
+        .target = config.target,
+        .optimize = config.optimize,
+    }).module("blst");
+    const bzip2_mod = genBzip2(b, config.target, config.optimize);
 
     // zig fmt: off
     const imports: []const Build.Module.Import = &.{
         .{ .name = "base58",        .module = base58_mod },
+        .{ .name = "blst",          .module = blst_mod },
         .{ .name = "build-options", .module = build_options.createModule() },
+        .{ .name = "feature-set-id", .module = feature_set_id },
+        .{ .name = "bzip2",         .module = bzip2_mod },
         .{ .name = "httpz",         .module = httpz_mod },
         .{ .name = "lsquic",        .module = lsquic_mod },
         .{ .name = "poseidon",      .module = poseidon_mod },
@@ -295,11 +322,11 @@ pub fn build(b: *Build) !void {
         .{ .name = "secp256k1",     .module = secp256k1_mod },
         .{ .name = "sqlite",        .module = sqlite_mod },
         .{ .name = "ssl",           .module = ssl_mod },
+        .{ .name = "table",         .module = gh_table },
         .{ .name = "tracy",         .module = tracy_mod },
         .{ .name = "webzockets",    .module = webzockets_mod },
         .{ .name = "xev",           .module = xev_mod },
         .{ .name = "zstd",          .module = zstd_mod },
-        .{ .name = "table",         .module = gh_table },
     };
     // zig fmt: on
 
@@ -319,6 +346,8 @@ pub fn build(b: *Build) !void {
         .optimize = config.optimize,
         .imports = imports,
     });
+
+    sig_mod.addImport("std14", std14_mod);
 
     switch (config.ledger_db) {
         .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
@@ -340,6 +369,7 @@ pub fn build(b: *Build) !void {
     });
     sig_exe.root_module.addObject(memcpy);
     sig_exe.root_module.addImport("cli", cli_mod);
+    sig_exe.root_module.addImport("std14", std14_mod);
 
     // make sure pyroscope's got enough info to profile
     sig_exe.build_id = .fast;
@@ -364,6 +394,7 @@ pub fn build(b: *Build) !void {
     });
     unit_tests_exe.root_module.addObject(memcpy);
     unit_tests_exe.root_module.addImport("cli", cli_mod);
+    unit_tests_exe.root_module.addImport("std14", std14_mod);
     switch (config.ledger_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
@@ -381,9 +412,11 @@ pub fn build(b: *Build) !void {
             .sanitize_thread = config.enable_tsan,
             .link_libc = true,
         }),
+        .use_llvm = config.use_llvm,
     });
     fuzz_exe.root_module.addObject(memcpy);
     fuzz_exe.root_module.addImport("cli", cli_mod);
+    fuzz_exe.root_module.addImport("std14", std14_mod);
     switch (config.ledger_db) {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
@@ -401,9 +434,11 @@ pub fn build(b: *Build) !void {
             .sanitize_thread = config.enable_tsan,
             .link_libc = true,
         }),
+        .use_llvm = config.use_llvm,
     });
     benchmark_exe.root_module.addObject(memcpy);
     benchmark_exe.root_module.addImport("cli", cli_mod);
+    benchmark_exe.root_module.addImport("std14", std14_mod);
 
     // make sure pyroscope's got enough info to profile
     benchmark_exe.build_id = .fast;
@@ -428,6 +463,7 @@ pub fn build(b: *Build) !void {
     geyser_reader_exe.root_module.addObject(memcpy);
     geyser_reader_exe.root_module.addImport("sig", sig_mod);
     geyser_reader_exe.root_module.addImport("cli", cli_mod);
+    geyser_reader_exe.root_module.addImport("std14", std14_mod);
     addInstallAndRun(b, geyser_reader_step, geyser_reader_exe, config);
 
     const vm_exe = b.addExecutable(.{
@@ -436,6 +472,7 @@ pub fn build(b: *Build) !void {
             .root_source_file = b.path("src/vm/main.zig"),
             .target = config.target,
             .optimize = config.optimize,
+            .imports = imports,
             .sanitize_thread = config.enable_tsan,
             .error_tracing = config.error_tracing,
         }),
@@ -443,6 +480,7 @@ pub fn build(b: *Build) !void {
     vm_exe.root_module.addObject(memcpy);
     vm_exe.root_module.addImport("sig", sig_mod);
     vm_exe.root_module.addImport("cli", cli_mod);
+    vm_exe.root_module.addImport("std14", std14_mod);
     addInstallAndRun(b, vm_step, vm_exe, config);
 
     // docs for the Sig library
@@ -510,7 +548,31 @@ fn generateTable(b: *Build) Build.LazyPath {
             .root_source_file = b.path("scripts/generator_chain.zig"),
         }),
     });
-    return b.addRunArtifact(gen).captureStdOut();
+    const run = b.addRunArtifact(gen);
+    const generated = run.captureStdOut();
+    // Write the generated table to a file so it can be file-path imported
+    const wf = b.addWriteFiles();
+    const table_file = wf.addCopyFile(generated, "table.zig");
+    wf.step.dependOn(&run.step);
+    return table_file;
+}
+
+fn generateFeatureSetId(b: *Build, base58_mod: *Build.Module) Build.LazyPath {
+    const gen = b.addExecutable(.{
+        .name = "gen_feature_set_id",
+        .root_module = b.createModule(.{
+            .target = b.graph.host,
+            .optimize = .Debug,
+            .root_source_file = b.path("scripts/gen_feature_set_id.zig"),
+            .imports = &.{
+                .{ .name = "base58", .module = base58_mod },
+                .{ .name = "features", .module = b.createModule(.{
+                    .root_source_file = b.path("src/core/features.zon"),
+                }) },
+            },
+        }),
+    });
+    return b.addRunArtifact(gen).addOutputFileArg("feature-set-id.zig");
 }
 
 fn genSqlite(
@@ -533,6 +595,47 @@ fn genSqlite(
 
     const translate_c = b.addTranslateC(.{
         .root_source_file = dep.path("sqlite3.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const mod = translate_c.createModule();
+    mod.linkLibrary(lib);
+
+    return mod;
+}
+
+fn genBzip2(
+    b: *Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *Build.Module {
+    const dep = b.dependency("bzip2", .{});
+
+    const lib = b.addLibrary(.{
+        .name = "bz",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    lib.addCSourceFiles(.{
+        .root = dep.path("."),
+        .files = &.{
+            "bzlib.c",
+            "blocksort.c",
+            "compress.c",
+            "crctable.c",
+            "decompress.c",
+            "huffman.c",
+            "randtable.c",
+        },
+    });
+    lib.linkLibC();
+
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = dep.path("bzlib.h"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
@@ -637,9 +740,11 @@ const ssh = struct {
         if (static.exe == null) {
             static.exe = b.addExecutable(.{
                 .name = "send-file",
-                .root_source_file = b.path("scripts/send-file.zig"),
-                .target = b.graph.host,
-                .link_libc = true,
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("scripts/send-file.zig"),
+                    .target = b.graph.host,
+                    .link_libc = true,
+                }),
             });
         }
 

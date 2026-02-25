@@ -165,7 +165,7 @@ pub const Service = struct {
 
         var rpc_client = try RpcClient.init(
             self.allocator,
-            self.config.cluster,
+            self.config.cluster.getRpcUrl() orelse @panic("No RPC Url for cluster type!"),
             .{ .max_retries = self.config.rpc_retries, .logger = .from(self.logger) },
         );
         defer rpc_client.deinit();
@@ -221,14 +221,14 @@ pub const Service = struct {
                 if (signature_status.confirmations == null) {
                     try self.transaction_pool.drop_signatures.append(signature);
                     self.metrics.rooted_count.inc();
-                    self.logger.info().logf("transaction rooted: signature={}\n", .{signature});
+                    self.logger.info().logf("transaction rooted: signature={f}\n", .{signature});
                     continue;
                 }
 
                 if (signature_status.err) |err| {
                     try self.transaction_pool.drop_signatures.append(signature);
                     self.metrics.failed_count.inc();
-                    self.logger.info().logf("transaction failed: error={} signature={}\n", .{ err, signature });
+                    self.logger.info().logf("transaction failed: error={any} signature={f}\n", .{ err, signature });
                     continue;
                 }
             }
@@ -236,21 +236,21 @@ pub const Service = struct {
             if (transaction_info.isExpired(block_height)) {
                 try self.transaction_pool.drop_signatures.append(signature);
                 self.metrics.expired_count.inc();
-                self.logger.info().logf("transaction expired: signature={}\n", .{signature});
+                self.logger.info().logf("transaction expired: signature={f}\n", .{signature});
                 continue;
             }
 
             if (transaction_info.exceededMaxRetries(self.config.default_max_retries)) {
                 try self.transaction_pool.drop_signatures.append(signature);
                 self.metrics.exceeded_max_retries_count.inc();
-                self.logger.info().logf("transaction exceeded max retries: signature={}\n", .{signature});
+                self.logger.info().logf("transaction exceeded max retries: signature={f}\n", .{signature});
                 continue;
             }
 
             if (transaction_info.shouldRetry(self.config.retry_rate)) {
                 try self.transaction_pool.retry_signatures.append(signature);
                 self.metrics.retry_count.inc();
-                self.logger.info().logf("transaction retrying: signature={}\n", .{signature});
+                self.logger.info().logf("transaction retrying: signature={f}\n", .{signature});
                 continue;
             }
         }
@@ -309,7 +309,7 @@ pub const Service = struct {
 
         for (leader_addresses) |leader_address| {
             for (transactions) |tx| {
-                self.logger.info().logf("sending transaction to leader: address={} signature={}", .{ leader_address, tx.signature });
+                self.logger.info().logf("sending transaction to leader: address={f} signature={f}", .{ leader_address, tx.signature });
                 try self.send_channel.send(Packet.init(
                     leader_address,
                     tx.wire_transaction,

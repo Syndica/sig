@@ -355,11 +355,11 @@ pub fn paddingBytes(
 }
 
 /// Minimal implemenation of `std.tar.Header` since it's no longer `pub`
-const TarHeaderMinimal = struct {
+pub const TarHeaderMinimal = struct {
     bytes: *const [SIZE]u8,
 
     const SIZE = 512;
-    const MAX_NAME_SIZE = 100 + 1 + 155; // name(100) + separator(1) + prefix(155)
+    pub const MAX_NAME_SIZE = 100 + 1 + 155; // name(100) + separator(1) + prefix(155)
     const LINK_NAME_SIZE = 100;
 
     const This = @This();

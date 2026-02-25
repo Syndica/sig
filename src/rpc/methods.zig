@@ -18,6 +18,8 @@ const ParseOptions = std.json.ParseOptions;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
+const Commitment = common.Commitment;
+const ClientVersion = sig.version.ClientVersion;
 
 pub fn Result(comptime method: MethodAndParams.Tag) type {
     return union(enum) {
@@ -50,7 +52,7 @@ pub const MethodAndParams = union(enum) {
     getFirstAvailableBlock: noreturn,
 
     /// https://github.com/Syndica/sig/issues/557
-    getGenesisHash: noreturn,
+    getGenesisHash: GetGenesisHash,
     /// https://github.com/Syndica/sig/issues/558
     getHealth: GetHealth,
     /// Custom (not standardized) RPC method for "GET /*snapshot*.tar.bz2"
@@ -373,7 +375,34 @@ pub const GetEpochSchedule = struct {
 
 // TODO: getFeeForMessage
 // TODO: getFirstAvailableBlock
-// TODO: getGenesisHash
+
+pub const GetGenesisHash = struct {
+    pub const Response = struct {
+        hash: sig.core.Hash,
+
+        pub fn jsonParse(
+            _: std.mem.Allocator,
+            source: anytype,
+            _: std.json.ParseOptions,
+        ) std.json.ParseError(@TypeOf(source.*))!Response {
+            return switch (try source.next()) {
+                .string => |str| .{
+                    .hash = sig.core.Hash.parseRuntime(str) catch return error.UnexpectedToken,
+                },
+                else => error.UnexpectedToken,
+            };
+        }
+
+        pub fn jsonStringify(
+            self: Response,
+            /// `*std.json.WriteStream(...)`
+            jw: anytype,
+        ) !void {
+            try jw.write(self.hash.base58String().slice());
+        }
+    };
+};
+
 // TODO: getHealth
 // TODO: getHighestSnapshotSlot
 // TODO: getIdentity
@@ -582,7 +611,7 @@ pub const GetVoteAccounts = struct {
         commitment: ?common.Commitment = null,
         votePubkey: ?Pubkey = null,
         keepUnstakedDelinquents: ?bool = null,
-        delinquintSlotDistance: ?u64 = null,
+        delinquentSlotDistance: ?u64 = null,
     };
 
     pub const Response = struct {
@@ -645,7 +674,7 @@ pub const common = struct {
 
     /// Used to configure several RPC method requests
     pub const CommitmentSlotConfig = struct {
-        commitment: ?Commitment = null,
+        commitment: ?common.Commitment = null,
         minContextSlot: ?sig.core.Slot = null,
     };
 
@@ -685,4 +714,191 @@ pub const common = struct {
         /// Shred version
         shredVersion: ?u16 = null,
     };
+};
+
+pub const RpcHookContext = struct {
+    slot_tracker: *const sig.replay.trackers.SlotTracker,
+    epoch_tracker: *const sig.core.EpochTracker,
+    account_reader: sig.accounts_db.AccountReader,
+
+    // Limit the length of the `epoch_credits` array for each validator in a `get_vote_accounts`
+    // response.
+    // See: https://github.com/anza-xyz/agave/blob/cd00ceb1fdf43f694caf7af23cb87987922fce2c/rpc-client-types/src/request.rs#L159
+    const MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY: usize = 5;
+
+    // Validators that are this number of slots behind are considered delinquent.
+    // See: https://github.com/anza-xyz/agave/blob/cd00ceb1fdf43f694caf7af23cb87987922fce2c/rpc-client-types/src/request.rs#L162
+    const DELINQUENT_VALIDATOR_SLOT_DISTANCE: u64 = 128;
+
+    pub fn getSlot(self: RpcHookContext, _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+        const commitment = config.commitment orelse .finalized;
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        const min_slot = config.minContextSlot orelse return slot;
+        return if (slot >= min_slot) slot else error.RpcMinContextSlotNotMet;
+    }
+
+    pub fn getVoteAccounts(
+        self: RpcHookContext,
+        allocator: std.mem.Allocator,
+        params: GetVoteAccounts,
+    ) !GetVoteAccounts.Response {
+        const config: GetVoteAccounts.Config = params.config orelse .{};
+
+        // get slot for requested commitment. Agave uses finalized as default.
+        const slot = self.slot_tracker.getSlotForCommitment(config.commitment orelse .finalized);
+
+        // Get the state for the requested commitment slot.
+        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+
+        // Setup config consts for the request.
+        const delinquent_distance = config.delinquentSlotDistance orelse
+            DELINQUENT_VALIDATOR_SLOT_DISTANCE;
+        const keep_unstaked = config.keepUnstakedDelinquents orelse false;
+        const filter_pk = config.votePubkey;
+
+        // Get epoch info for epochVoteAccounts check
+        const epoch_constants = try self.epoch_tracker.getEpochInfo(slot);
+        const epoch_stakes = epoch_constants.stakes.stakes;
+        const epoch_vote_accounts = &epoch_stakes.vote_accounts.vote_accounts;
+
+        var current_list: std.ArrayListUnmanaged(GetVoteAccounts.VoteAccount) = .empty;
+        errdefer {
+            for (current_list.items) |va| allocator.free(va.epochCredits);
+            current_list.deinit(allocator);
+        }
+        var delinqt_list: std.ArrayListUnmanaged(GetVoteAccounts.VoteAccount) = .empty;
+        errdefer {
+            for (delinqt_list.items) |va| allocator.free(va.epochCredits);
+            delinqt_list.deinit(allocator);
+        }
+
+        // Access stakes cache (takes read lock).
+        const stakes, var stakes_guard = slot_ref.state.stakes_cache.stakes.readWithLock();
+        defer stakes_guard.unlock();
+        const vote_accounts_map = &stakes.vote_accounts.vote_accounts;
+        for (vote_accounts_map.keys(), vote_accounts_map.values()) |vote_pk, stake_and_vote| {
+            // Apply filter if specified.
+            if (filter_pk) |f| {
+                if (!vote_pk.equals(&f)) continue;
+            }
+
+            const vote_state = stake_and_vote.account.state;
+            const activated_stake = stake_and_vote.stake;
+
+            // Get the slot this vote account last voted on.
+            // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1172
+            const last_vote_slot = vote_state.lastVotedSlot() orelse 0;
+
+            // Check if vote account is active in current epoch.
+            const in_delegated_stakes = epoch_vote_accounts.contains(vote_pk);
+            const is_epoch_vote_account = in_delegated_stakes or activated_stake > 0;
+
+            // Partition by delinquent status. current is set when last_vote_slot > slot - delinquent_distance.
+            // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1194
+            const is_current = if (slot >= delinquent_distance)
+                last_vote_slot > slot - delinquent_distance
+            else
+                last_vote_slot > 0;
+
+            // Skip delinquent accounts with no stake unless explicitly requested.
+            // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1203
+            if (!is_current and !keep_unstaked and activated_stake == 0) continue;
+
+            // Convert epoch credits to [3]u64 format
+            // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1174
+            const all_credits = vote_state.epoch_credits.items;
+            const num_credits_to_return = @min(
+                all_credits.len,
+                MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY,
+            );
+            const epoch_credits = all_credits[all_credits.len - num_credits_to_return ..];
+            const credits = try allocator.alloc([3]u64, num_credits_to_return);
+            errdefer allocator.free(credits);
+            for (epoch_credits, 0..) |ec, i| {
+                credits[i] = .{ ec.epoch, ec.credits, ec.prev_credits };
+            }
+
+            const info = GetVoteAccounts.VoteAccount{
+                .votePubkey = vote_pk,
+                .nodePubkey = vote_state.node_pubkey,
+                .activatedStake = activated_stake,
+                .epochVoteAccount = is_epoch_vote_account,
+                .commission = vote_state.commission(),
+                .lastVote = last_vote_slot,
+                .epochCredits = credits,
+                // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1188
+                .rootSlot = vote_state.root_slot orelse 0,
+            };
+
+            if (is_current) {
+                try current_list.append(allocator, info);
+            } else {
+                try delinqt_list.append(allocator, info);
+            }
+        }
+
+        const current = try current_list.toOwnedSlice(allocator);
+        errdefer {
+            for (current) |va| allocator.free(va.epochCredits);
+            allocator.free(current);
+        }
+        const dlinqt = try delinqt_list.toOwnedSlice(allocator);
+        errdefer {
+            for (dlinqt) |va| allocator.free(va.epochCredits);
+            allocator.free(dlinqt);
+        }
+        return .{
+            .current = current,
+            .delinquent = dlinqt,
+        };
+    }
+
+    pub fn getBalance(
+        self: RpcHookContext,
+        allocator: std.mem.Allocator,
+        params: GetBalance,
+    ) !GetBalance.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+        // [agave] Default commitment is finalized:
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
+        const commitment = config.commitment orelse .finalized;
+
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+        }
+
+        // Get slot reference to access ancestors
+        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        const slot_reader = self.account_reader.forSlot(&ref.constants.ancestors);
+
+        // Look up account
+        const maybe_account = try slot_reader.get(allocator, params.pubkey);
+
+        const lamports: u64 = if (maybe_account) |account| blk: {
+            defer account.deinit(allocator);
+            break :blk account.lamports;
+        } else 0;
+
+        return .{
+            .context = .{
+                .slot = slot,
+                .apiVersion = ClientVersion.API_VERSION,
+            },
+            .value = lamports,
+        };
+    }
+};
+
+pub const StaticHookContext = struct {
+    genesis_hash: sig.core.Hash,
+
+    pub fn getGenesisHash(
+        self: *const @This(),
+        _: std.mem.Allocator,
+        _: GetGenesisHash,
+    ) !GetGenesisHash.Response {
+        return .{ .hash = self.genesis_hash };
+    }
 };

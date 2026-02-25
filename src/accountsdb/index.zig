@@ -98,7 +98,7 @@ pub const AccountIndex = struct {
                 errdefer index_dir.close();
 
                 logger.info().logf(
-                    "using disk memory (@{s}) for account index",
+                    "using disk memory (@{f}) for account index",
                     .{sig.utils.fmt.tryRealPath(index_dir, ".")},
                 );
 

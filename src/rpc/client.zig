@@ -1,10 +1,7 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
 const rpc = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
-
-const ClusterType = sig.core.ClusterType;
 
 const MethodAndParams = rpc.methods.MethodAndParams;
 const HttpPostFetcher = rpc.http.HttpPostFetcher;
@@ -20,10 +17,10 @@ pub const Client = struct {
 
     pub fn init(
         allocator: Allocator,
-        cluster_type: ClusterType,
+        rpc_url: []const u8,
         options: HttpPostFetcher.Options,
     ) Allocator.Error!Client {
-        return .{ .fetcher = try HttpPostFetcher.init(allocator, rpcUrl(cluster_type), options) };
+        return .{ .fetcher = try .init(allocator, rpc_url, options) };
     }
 
     pub fn deinit(self: *Client) void {
@@ -43,8 +40,10 @@ pub const Client = struct {
             .method = @unionInit(MethodAndParams, @tagName(method), params),
         };
 
-        const request_json = try std.json.stringifyAlloc(allocator, request, .{});
-        defer allocator.free(request_json);
+        var w = std.io.Writer.Allocating.init(allocator);
+        defer w.deinit();
+        try std.json.fmt(request, .{}).format(&w.writer);
+        const request_json = w.written();
 
         const response_json = try self.fetcher.fetchWithRetries(allocator, request_json);
         defer allocator.free(response_json);
@@ -126,6 +125,13 @@ pub const Client = struct {
         return self.fetch(.null, .getEpochSchedule, request);
     }
 
+    pub fn getGenesisHash(
+        self: *Client,
+        request: rpc.methods.GetGenesisHash,
+    ) Error!Response(rpc.methods.GetGenesisHash.Response) {
+        return self.fetch(.null, .getGenesisHash, request);
+    }
+
     pub fn getLatestBlockhash(
         self: *Client,
         request: rpc.methods.GetLatestBlockhash,
@@ -189,13 +195,3 @@ pub const Client = struct {
         return self.fetch(.null, .sendTransaction, request);
     }
 };
-
-pub fn rpcUrl(cluster_type: ClusterType) []const u8 {
-    return switch (cluster_type) {
-        .MainnetBeta => "https://api.mainnet-beta.solana.com",
-        .Testnet => "https://api.testnet.solana.com",
-        .Devnet => "https://api.devnet.solana.com",
-        .Custom => |cluster| cluster.url,
-        else => "http://localhost:8899",
-    };
-}

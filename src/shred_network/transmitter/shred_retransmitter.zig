@@ -17,7 +17,6 @@ const Histogram = sig.prometheus.Histogram;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
-const EpochContextManager = sig.adapter.EpochContextManager;
 const ShredId = sig.ledger.shred.ShredId;
 const Slot = sig.core.Slot;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
@@ -39,7 +38,7 @@ const DEDUPER_NUM_BITS: u64 = 637_534_199;
 pub const ShredRetransmitterParams = struct {
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
-    epoch_context_mgr: *EpochContextManager,
+    epoch_tracker: *const sig.core.EpochTracker,
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
     receiver: *Channel(Packet),
     maybe_num_retransmit_threads: ?usize,
@@ -79,7 +78,7 @@ pub fn runShredRetransmitter(params: ShredRetransmitterParams) !void {
     defer retransmit_socket.close();
     try retransmit_socket.bind(.initIp4(.{ 0, 0, 0, 0 }, 0));
 
-    var thread_handles = std.ArrayList(std.Thread).init(params.allocator);
+    var thread_handles = std.array_list.Managed(std.Thread).init(params.allocator);
     defer thread_handles.deinit();
 
     try thread_handles.append(try std.Thread.spawn(
@@ -88,7 +87,7 @@ pub fn runShredRetransmitter(params: ShredRetransmitterParams) !void {
         .{
             params.allocator,
             params.my_contact_info,
-            params.epoch_context_mgr,
+            params.epoch_tracker,
             params.receiver,
             &receive_to_retransmit_channel,
             params.gossip_table_rw,
@@ -132,7 +131,7 @@ pub fn runShredRetransmitter(params: ShredRetransmitterParams) !void {
 fn receiveShreds(
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
-    epoch_context_mgr: *EpochContextManager,
+    epoch_tracker: *const sig.core.EpochTracker,
     receiver: *Channel(Packet),
     sender: *Channel(RetransmitShredInfo),
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
@@ -152,7 +151,7 @@ fn receiveShreds(
     );
     defer deduper.deinit();
 
-    var shreds = std.ArrayList(Packet).init(allocator);
+    var shreds = std.array_list.Managed(Packet).init(allocator);
     var receive_shreds_timer = sig.time.Timer.start();
 
     while (true) {
@@ -193,7 +192,7 @@ fn receiveShreds(
                 allocator,
                 grouped_shreds,
                 my_contact_info,
-                epoch_context_mgr,
+                epoch_tracker,
                 gossip_table_rw,
                 &turbine_tree_cache,
                 sender,
@@ -213,12 +212,13 @@ fn receiveShreds(
 /// Returns a map of slot to a list of shred_id and packet pairs
 fn dedupAndGroupShredsBySlot(
     allocator: std.mem.Allocator,
-    shreds: *std.ArrayList(Packet),
+    shreds: *std.array_list.Managed(Packet),
     deduper: *ShredDeduper(2),
     metrics: *RetransmitServiceMetrics,
-) !std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)) {
+) !std.AutoArrayHashMap(Slot, std.array_list.Managed(ShredIdAndPacket)) {
     var dedup_and_group_shreds_timer = sig.time.Timer.start();
-    var result = std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)).init(allocator);
+    var result: std.AutoArrayHashMap(Slot, std.array_list.Managed(ShredIdAndPacket)) =
+        .init(allocator);
     for (shreds.items) |shred_packet| {
         const shred_id = try sig.ledger.shred.layout.getShredId(&shred_packet);
 
@@ -237,7 +237,7 @@ fn dedupAndGroupShredsBySlot(
         if (result.getEntry(shred_id.slot)) |entry| {
             try entry.value_ptr.append(.{ shred_id, shred_packet });
         } else {
-            var new_slot_shreds = std.ArrayList(ShredIdAndPacket).init(allocator);
+            var new_slot_shreds = std.array_list.Managed(ShredIdAndPacket).init(allocator);
             try new_slot_shreds.append(.{ shred_id, shred_packet });
             try result.put(shred_id.slot, new_slot_shreds);
         }
@@ -250,9 +250,9 @@ fn dedupAndGroupShredsBySlot(
 /// Retransmit info contains the slot leader, the shred_id, the shred_packet, and the turbine_tree
 fn createAndSendRetransmitInfo(
     allocator: std.mem.Allocator,
-    shreds: std.AutoArrayHashMap(Slot, std.ArrayList(ShredIdAndPacket)),
+    shreds: std.AutoArrayHashMap(Slot, std.array_list.Managed(ShredIdAndPacket)),
     my_contact_info: ThreadSafeContactInfo,
-    epoch_context_mgr: *EpochContextManager,
+    epoch_tracker: *const sig.core.EpochTracker,
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
     turbine_tree_cache: *TurbineTreeCache,
     retransmit_shred_sender: *Channel(RetransmitShredInfo),
@@ -260,13 +260,18 @@ fn createAndSendRetransmitInfo(
     overwrite_stake_for_testing: bool,
 ) !void {
     var create_and_send_retransmit_info_timer = sig.time.Timer.start();
+    const leader_schedule = epoch_tracker.getLeaderSchedules() catch return;
     for (shreds.keys(), shreds.values()) |slot, slot_shreds| {
-        const epoch, const slot_index = epoch_context_mgr.schedule.getEpochAndSlotIndex(slot);
-        const epoch_context = epoch_context_mgr.get(epoch) orelse continue;
-        defer epoch_context_mgr.release(epoch_context);
+        // NOTE: On transition boundaries we might want ancestors here so that we can get stakes
+        // for the new epoch which will be unrooted for a period of time.
+        const epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
+        const epoch_info = epoch_tracker.getEpochInfo(slot) catch continue;
+        const epoch_staked_nodes = &epoch_info.stakes.stakes.vote_accounts.staked_nodes;
 
         var get_slot_leader_timer = sig.time.Timer.start();
-        const slot_leader = epoch_context.leader_schedule[slot_index];
+        // We should always have a leader schedule the aggregate leader schedule contains leaders
+        // for the current and next epoch.
+        const slot_leader = try leader_schedule.getLeader(slot);
         metrics.get_slot_leader_nanos.observe(get_slot_leader_timer.read().asNanos());
 
         var get_turbine_tree_timer = sig.time.Timer.start();
@@ -276,7 +281,7 @@ fn createAndSendRetransmitInfo(
                 allocator,
                 my_contact_info,
                 gossip_table_rw,
-                &epoch_context.staked_nodes,
+                epoch_staked_nodes,
                 overwrite_stake_for_testing,
             );
             try turbine_tree_cache.put(epoch, turbine_tree);
@@ -314,12 +319,12 @@ fn retransmitShreds(
     metrics: *RetransmitServiceMetrics,
     exit: *AtomicBool,
 ) !void {
-    var children = try std.ArrayList(TurbineTree.Node).initCapacity(
+    var children = try std.array_list.Managed(TurbineTree.Node).initCapacity(
         allocator,
         TurbineTree.getDataPlaneFanout(),
     );
     defer children.deinit();
-    var shuffled_nodes = std.ArrayList(TurbineTree.Node).init(allocator);
+    var shuffled_nodes = std.array_list.Managed(TurbineTree.Node).init(allocator);
     defer shuffled_nodes.deinit();
 
     while (!exit.load(.acquire)) {

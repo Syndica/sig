@@ -1,6 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const tracy = @import("tracy");
+const std14 = @import("std14");
 const sig = @import("../../../sig.zig");
 
 const ids = sig.runtime.ids;
@@ -175,7 +176,7 @@ fn executeBpfProgram(
     // TODO: timings
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1646-L1653
-    try ic.tc.log("Program {} consumed {} of {} compute units", .{
+    try ic.tc.log("Program {f} consumed {} of {} compute units", .{
         ic.ixn_info.program_meta.pubkey,
         compute_consumed,
         compute_available,
@@ -587,8 +588,12 @@ pub fn executeV4Retract(
         .authority_address_or_next_version = state.authority_address_or_next_version,
     });
 
-    const old_program = try ic.tc.program_map.fetchPut(allocator, program_account.pubkey, .failed);
-    if (old_program) |p| p.deinit(allocator);
+    const old_program = try ic.tc.program_map.fetchPut(
+        ic.tc.programs_allocator,
+        program_account.pubkey,
+        .failed,
+    );
+    if (old_program) |p| p.deinit(ic.tc.programs_allocator);
 }
 
 pub fn executeV4TransferAuthority(
@@ -1091,7 +1096,7 @@ pub fn executeV3DeployWithMaxDataLen(
         );
     }
 
-    try ic.tc.log("Deployed program {}", .{new_program_id});
+    try ic.tc.log("Deployed program {f}", .{new_program_id});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L705-L894
@@ -1401,7 +1406,7 @@ pub fn executeV3SetAuthority(
     }
 
     if (new_authority) |some| {
-        try ic.tc.log("New authority Some({?})", .{some});
+        try ic.tc.log("New authority Some({f})", .{some});
     } else {
         try ic.tc.log("New authority None", .{});
     }
@@ -1491,7 +1496,7 @@ pub fn executeV3SetAuthorityChecked(
         },
     }
 
-    try ic.tc.log("New authority {?}", .{new_authority});
+    try ic.tc.log("New authority {f}", .{new_authority});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1033-L1138
@@ -1597,8 +1602,8 @@ pub fn executeV3Close(
 
                     // Remove from the program map if it was deployed.
                     const old_program = try ic.tc.program_map
-                        .fetchPut(allocator, program_key, .failed);
-                    if (old_program) |p| p.deinit(allocator);
+                        .fetchPut(ic.tc.programs_allocator, program_key, .failed);
+                    if (old_program) |p| p.deinit(ic.tc.programs_allocator);
                 },
                 else => {
                     try ic.tc.log("Invalid Program Account", .{});
@@ -1983,8 +1988,12 @@ pub fn executeV3Migrate(
 
     if (progdata_info.len == 0) {
         // Close the program map entry.
-        const old_program = try ic.tc.program_map.fetchPut(allocator, program_key, .failed);
-        if (old_program) |p| p.deinit(allocator);
+        const old_program = try ic.tc.program_map.fetchPut(
+            ic.tc.programs_allocator,
+            program_key,
+            .failed,
+        );
+        if (old_program) |p| p.deinit(ic.tc.programs_allocator);
     } else {
         try ic.nativeInvoke(
             allocator,
@@ -2101,10 +2110,12 @@ pub fn deployProgram(
         if (tc.log_collector) |*lc| lc else null,
     );
 
-    try tc.log("Deploying program {}", .{program_id});
+    try tc.log("Deploying program {f}", .{program_id});
 
     // Remove from the program map since it should not be accessible on this slot anymore.
-    _ = try tc.program_map.fetchPut(allocator, program_id, .failed);
+    if (try tc.program_map.fetchPut(tc.programs_allocator, program_id, .failed)) |old| {
+        old.deinit(tc.programs_allocator);
+    }
 }
 
 pub fn verifyProgram(
@@ -4069,7 +4080,7 @@ test executeV4SetProgramLength {
             },
         };
 
-        var instr_accounts: std.BoundedArray(testing.InstructionContextAccountMetaParams, 4) = .{};
+        var instr_accounts: std14.BoundedArray(testing.InstructionContextAccountMetaParams, 4) = .{};
         instr_accounts.appendSliceAssumeCapacity(&.{
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 }, // program
             .{ .is_signer = true, .is_writable = false, .index_in_transaction = 0 }, // auth
@@ -4344,4 +4355,132 @@ test handleExecutionResult {
     try std.testing.expectEqual(0, compute_meter);
 
     // TODO: Handle AccessViolation
+}
+
+// Regression test: executeV4Retract must use tc.programs_allocator (the persistent GPA)
+// for ProgramMap.fetchPut, not `allocator` (the per-batch arena passed as the first param).
+//
+// In production, `executor.executeInstruction` receives the per-batch arena as its
+// `allocator` parameter. This arena is freed at the end of `replayBatch`. If
+// `executeV4Retract` (or deployProgram/executeV3Close/executeV3Migrate) uses that arena
+// for `ProgramMap.fetchPut`, and the fetchPut triggers a hash map resize, the new backing
+// arrays are allocated on the arena. When the arena is freed, the ProgramMap holds
+// dangling pointers, and subsequent access crashes with "switch on corrupt value",
+// "munmap_chunk(): invalid pointer", or a segfault.
+//
+// The fix: use `tc.programs_allocator` (persistent GPA) for all ProgramMap operations.
+//
+// This test reproduces the production scenario:
+//   1. Pre-fill ProgramMap to capacity with the GPA so the next insert triggers a resize.
+//   2. Execute a v4 retract instruction via executor.executeInstruction with an arena
+//      allocator — exactly as replayBatch does.
+//   3. Free the arena (simulates replayBatch returning).
+//   4. Verify the ProgramMap is still valid (deinitTransactionContext frees it with GPA).
+//
+// To reproduce the bug, change `ic.tc.programs_allocator` back to `allocator` in
+// executeV4Retract's fetchPut call and this test will panic with an invalid-free from
+// the GPA during deinit.
+test "executeV4Retract: ProgramMap.fetchPut must use programs_allocator, not per-batch arena" {
+    const executor = sig.runtime.executor;
+    const testing_ = sig.runtime.testing;
+
+    const gpa = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const program_key = Pubkey.initRandom(prng.random());
+
+    // Set up V4State{deployed} account data for the program being retracted.
+    const program_buffer = try gpa.alloc(u8, @sizeOf(V4State));
+    defer gpa.free(program_buffer);
+    _ = try bincode.writeToSlice(
+        program_buffer,
+        V4State{
+            .slot = 0,
+            .authority_address_or_next_version = program_key,
+            .status = .deployed,
+        },
+        .{},
+    );
+
+    var clock = sysvar.Clock.INIT;
+    clock.slot = DEPLOYMENT_COOLDOWN_IN_SLOTS;
+
+    // Create TransactionContext using the test framework.
+    // Both tc.allocator and tc.programs_allocator are set to `gpa`.
+    const cache, const tc = try testing_.createTransactionContextPtr(
+        gpa,
+        prng.random(),
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = program_key,
+                    .data = program_buffer,
+                    .owner = bpf_loader_program.v4.ID,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v4.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = bpf_loader_program.v4.COMPUTE_UNITS,
+            .sysvar_cache = .{ .rent = sysvar.Rent.INIT, .clock = clock },
+            .feature_set = &.{.{ .feature = .enable_loader_v4 }},
+        },
+    );
+    defer {
+        testing_.deinitTransactionContext(gpa, tc);
+        testing_.deinitAccountMap(cache, gpa);
+        gpa.destroy(tc);
+    }
+
+    // Pre-fill the ProgramMap to exactly its backing capacity using the GPA.
+    // The program_key must NOT be among these entries so that executeV4Retract's
+    // fetchPut inserts a *new* entry, triggering a resize.
+    {
+        var fill_idx: u8 = 0;
+        // First insert triggers initial capacity allocation; continue until full.
+        while (tc.program_map.inner.entries.capacity == 0 or
+            tc.program_map.inner.entries.len < tc.program_map.inner.entries.capacity)
+        {
+            var key_data: [32]u8 = @splat(0xff);
+            key_data[0] = fill_idx;
+            fill_idx += 1;
+            _ = try tc.program_map.fetchPut(gpa, .{ .data = key_data }, .failed);
+        }
+    }
+
+    // Create instruction info for a v4 retract instruction.
+    // Allocated with tc.allocator (= gpa) via createInstructionInfo.
+    var instruction_info = try testing_.createInstructionInfo(
+        tc,
+        bpf_loader_program.v4.ID,
+        bpf_loader_program.v4.Instruction{ .retract = .{} },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 }, // program
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 0 }, // authority (same account)
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 }, // loader v4
+        },
+    );
+    defer instruction_info.deinit(gpa);
+
+    // Execute with an arena allocator, exactly as replayBatch does in production.
+    // In production, the per-batch arena is passed as the first `allocator` parameter
+    // to executeInstruction, which flows through to executeV4Retract's first param.
+    //
+    // With the fix: executeV4Retract uses tc.programs_allocator (gpa) for fetchPut.
+    //   → resize allocates new backing on the GPA → survives arena free.
+    // With the old code (bug): executeV4Retract used `allocator` (arena) for fetchPut.
+    //   → resize allocates new backing on the arena → freed below → dangling pointers.
+    {
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit(); // Simulates replayBatch returning → frees all arena memory.
+
+        try executor.executeInstruction(arena.allocator(), tc, instruction_info);
+    }
+
+    // If the bug existed, the ProgramMap's backing arrays would now be dangling
+    // (they were on the arena, which was freed above).
+    // deinitTransactionContext → program_map.deinit(gpa) would detect the invalid
+    // free because the backing pointer is not a known GPA allocation → test fails.
+    // With the fix, the backing is on the GPA → deinit succeeds.
 }

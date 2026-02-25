@@ -117,7 +117,7 @@ fn markDeadSlot(
         params.allocator,
         .from(params.logger),
         dead_slot,
-        params.slot_tracker.root,
+        params.slot_tracker.root.load(.monotonic),
         params.duplicate_slots_to_repair,
         ancestor_hashes_replay_update_sender,
         dead_state,
@@ -148,7 +148,7 @@ fn markDeadSlot(
             params.allocator,
             .from(params.logger),
             dead_slot,
-            params.slot_tracker.root,
+            params.slot_tracker.root.load(.monotonic),
             params.duplicate_slots_tracker,
             params.fork_choice,
             duplicate_state,
@@ -164,7 +164,7 @@ fn updateConsensusForFrozenSlot(params: ProcessResultParams, slot: Slot) !void {
     const parent_slot = slot_info.constants.parent_slot;
     const parent_hash = slot_info.constants.parent_hash;
 
-    var progress = params.progress_map.map.getPtr(slot) orelse
+    const progress = params.progress_map.map.getPtr(slot) orelse
         return error.MissingBankProgress;
 
     const hash = slot_info.state.hash.readCopy() orelse
@@ -194,7 +194,7 @@ fn updateConsensusForFrozenSlot(params: ProcessResultParams, slot: Slot) !void {
         params.allocator,
         .from(params.logger),
         slot,
-        params.slot_tracker.root,
+        params.slot_tracker.root.load(.monotonic),
         params.ledger.resultWriter(),
         params.fork_choice,
         params.duplicate_slots_to_repair,
@@ -305,10 +305,8 @@ const TestReplayStateResources = struct {
         self.duplicate_slots_to_repair = DuplicateSlotsToRepair.empty;
         self.purge_repair_slot_counter = PurgeRepairSlotCounters.empty;
 
-        self.slot_tracker = SlotTracker{
-            .slots = .empty,
-            .root = 0,
-        };
+        self.slot_tracker = try SlotTracker.initEmpty(allocator, 0);
+        errdefer self.slot_tracker.deinit(allocator);
 
         self.ancestor_hashes_replay_update_channel = try sig
             .sync
@@ -534,6 +532,7 @@ test "processResult: confirm status with done poll and slot complete - success p
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .empty,
         .inflation = .DEFAULT,
+        .rent_collector = .DEFAULT,
     };
 
     // Create slot state then modify tick height
@@ -641,6 +640,7 @@ test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot"
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .empty,
         .inflation = .DEFAULT,
+        .rent_collector = .DEFAULT,
     };
     try test_resources.slot_tracker.put(allocator, slot, .{
         .constants = slot_consts,
@@ -730,6 +730,7 @@ test "updateConsensusForFrozenSlot: moves gossip votes with gossip vote_kind" {
         .inflation = .DEFAULT,
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .empty,
+        .rent_collector = .DEFAULT,
     };
     var slot_state: sig.core.SlotState = .GENESIS;
     slot_state.hash.set(slot_hash);

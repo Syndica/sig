@@ -5,7 +5,7 @@ const tracy = @import("tracy");
 
 // std
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const AutoHashMap = std.AutoHashMap;
 
 // sig common
@@ -176,7 +176,7 @@ fn getShredsForSlot(
 ) !ArrayList(Shred) {
     var iterator = try self.ledger.db.iterator(cf, .forward, .{ slot, start_index });
     defer iterator.deinit();
-    var shreds = std.ArrayList(Shred).init(allocator);
+    var shreds = std.array_list.Managed(Shred).init(allocator);
     while (try iterator.nextBytes()) |shred_entry| {
         const key, const payload = shred_entry;
         defer key.deinit();
@@ -1400,7 +1400,7 @@ pub fn getLatestOptimisticSlots(
     allocator: Allocator,
     num: usize,
 ) !ArrayList(OptimisticSlot) {
-    var optimistic_slots = std.ArrayList(OptimisticSlot).init(allocator);
+    var optimistic_slots = std.array_list.Managed(OptimisticSlot).init(allocator);
     errdefer optimistic_slots.deinit();
 
     var iter = try self.ledger.db.iterator(schema.optimistic_slots, .reverse, null);
@@ -1418,6 +1418,11 @@ pub fn getLatestOptimisticSlots(
 /// Analogous to [is_dead](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3962)
 pub fn isDead(self: *const Reader, allocator: Allocator, slot: Slot) !bool {
     return try self.ledger.db.get(allocator, schema.dead_slots, slot) orelse false;
+}
+
+/// Analogous to [has_duplicate_shreds_in_slot](https://github.com/anza-xyz/agave/blob/60ba168d54d7ac6683f8f2e41a0e325f29d9ab2b/ledger/src/blockstore.rs#L4040)
+pub fn isDuplicateSlot(self: *const Reader, slot: Slot) !bool {
+    return try self.ledger.db.contains(schema.duplicate_slots, slot);
 }
 
 /// Analogous to [get_first_duplicate_proof](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3983)
@@ -1480,6 +1485,11 @@ pub fn lowestSlot(self: *const Reader) !Slot {
         }
     }
     // This means ledger is empty, should never get here aside from right at boot.
+    return self.ledger.max_root.load(.monotonic);
+}
+
+/// Returns the highest rooted slot known to the ledger
+pub fn maxRoot(self: *const Reader) Slot {
     return self.ledger.max_root.load(.monotonic);
 }
 
@@ -2710,4 +2720,28 @@ test getConfirmedSignaturesForAddress {
 
     try std.testing.expect(sig_infos.infos.items.len > 0);
     try std.testing.expect(sig_infos.found_before);
+}
+
+test isDuplicateSlot {
+    const allocator = std.testing.allocator;
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer state.deinit();
+
+    const reader = state.reader();
+    const result_writer = state.resultWriter();
+
+    // Test case: Slot with no duplicate proof returns false
+    try std.testing.expectEqual(false, reader.isDuplicateSlot(42));
+
+    // Test case: Slot with duplicate proof returns true
+    const slot: Slot = 100;
+    try result_writer.storeDuplicateSlot(
+        slot,
+        "duplicate_shred_1_data",
+        "duplicate_shred_2_data",
+    );
+    try std.testing.expectEqual(true, try reader.isDuplicateSlot(slot));
 }

@@ -1,42 +1,42 @@
-name: FuzzCorp
+# name: FuzzCorp
 
-on:
-  workflow_dispatch:
-  repository_dispatch:
-    types: [shim]
-  push:
-    branches:
-    - main 
+# on:
+#   workflow_dispatch:
+#   repository_dispatch:
+#     types: [shim]
+#   push:
+#     branches:
+#     - main 
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: conformance/
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+# jobs:
+#   build:
+#     runs-on: ubuntu-latest
+#     defaults:
+#       run:
+#         working-directory: conformance/
+#     steps:
+#       - name: Checkout
+#         uses: actions/checkout@v4
 
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.14.1
+#       - name: Setup Zig
+#         uses: mlugg/setup-zig@v2
+#         with:
+#           version: 0.14.1
 
-      - name: Build solfuzz_sig
-        run: zig build -Dcpu=haswell -Doptimize=ReleaseSafe --summary all
+#       - name: Build solfuzz_sig
+#         run: zig build -Dcpu=haswell -Doptimize=ReleaseSafe --summary all
          
-      - name: Bundle
-        env: 
-          PAT: ${{ secrets.PAT }}
-        run: |
-          ./scripts/download_fuzzcorp_artifacts.sh
-          ./scripts/bundle.sh
+#       - name: Bundle
+#         env: 
+#           PAT: ${{ secrets.PAT }}
+#         run: |
+#           ./scripts/download_fuzzcorp_artifacts.sh
+#           ./scripts/bundle.sh
 
-      - name: Upload to FuzzCorp
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AKID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.SKID }}
-          AWS_DEFAULT_REGION: us-east-2
-        run: |
-          aws s3 cp ./bundle/fuzz.zip s3://fuzzcorp-bundle-dropbox-975049986498-86c13d2/org_AAAAAAAT/prj_AAAAAAATADU/$(date +%s).zip
+#       - name: Upload to FuzzCorp
+#         env:
+#           AWS_ACCESS_KEY_ID: ${{ secrets.AKID }}
+#           AWS_SECRET_ACCESS_KEY: ${{ secrets.SKID }}
+#           AWS_DEFAULT_REGION: us-east-2
+#         run: |
+#           aws s3 cp ./bundle/fuzz.zip s3://fuzzcorp-bundle-dropbox-975049986498-86c13d2/org_AAAAAAAT/prj_AAAAAAATADU/$(date +%s).zip

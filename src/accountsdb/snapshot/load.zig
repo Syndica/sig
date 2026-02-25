@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
+const std14 = @import("std14");
 const tracy = @import("tracy");
 const accountsdb = @import("../lib.zig");
 const snapshot = @import("lib.zig");
@@ -9,11 +10,11 @@ const Allocator = std.mem.Allocator;
 
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
-const GenesisConfig = sig.core.GenesisConfig;
-
 const ThreadPool = sig.sync.ThreadPool;
-
 const Rooted = sig.accounts_db.Two.Rooted;
+const features = sig.core.features;
+const GenesisConfig = sig.core.GenesisConfig;
+const FeatureSet = sig.core.features.Set;
 const StatusCache = sig.accounts_db.snapshot.StatusCache;
 const Manifest = sig.accounts_db.snapshot.Manifest;
 const SnapshotFiles = sig.accounts_db.snapshot.SnapshotFiles;
@@ -31,6 +32,35 @@ pub const LoadedSnapshot = struct {
         self.combined_manifest.deinit(self.allocator);
         self.collapsed_manifest.deinit(self.allocator);
         self.genesis_config.deinit(self.allocator);
+    }
+
+    pub fn featureSet(
+        self: *LoadedSnapshot,
+        allocator: Allocator,
+        accounts_db: *sig.accounts_db.Two,
+    ) !FeatureSet {
+        const ancestors = self.collapsed_manifest.bank_fields.ancestors;
+
+        var feature_set = FeatureSet.ALL_DISABLED;
+        var inactive_iterator = feature_set.iterator(
+            self.collapsed_manifest.bank_fields.slot,
+            .inactive,
+        );
+        while (inactive_iterator.next()) |feature| {
+            const feature_id = features.map.get(feature).key;
+            if (try accounts_db.get(
+                allocator,
+                feature_id,
+                &ancestors,
+            )) |feature_account| {
+                defer feature_account.deinit(allocator);
+                if (try features.activationSlotFromAccount(feature_account)) |activation_slot| {
+                    feature_set.setSlot(feature, activation_slot);
+                }
+            }
+        }
+
+        return feature_set;
     }
 };
 
@@ -130,18 +160,18 @@ pub fn loadSnapshot(
 
         var timer = try std.time.Timer.start();
         logger.info().logf(
-            "verifying snapshot accounts_lt_hash: {}",
+            "verifying snapshot accounts_lt_hash: {f}",
             .{full_manifest.bank_extra.accounts_lt_hash.checksum()},
         );
         defer logger.info().logf(
-            "LtHash verified in {}",
-            .{std.fmt.fmtDuration(timer.read())},
+            "LtHash verified in {D}",
+            .{timer.read()},
         );
 
         const lt_hash = try maybe_rooted_db.?.computeLtHash(allocator, &pool);
         if (!full_manifest.bank_extra.accounts_lt_hash.eql(lt_hash)) {
             logger.err().logf(
-                "incorrect snapshot accounts hash: expected vs calculated: {} vs {}",
+                "incorrect snapshot accounts hash: expected vs calculated: {f} vs {f}",
                 .{
                     full_manifest.bank_extra.accounts_lt_hash.checksum(),
                     lt_hash.checksum(),
@@ -175,18 +205,18 @@ pub fn loadSnapshot(
         if (validate_snapshot) {
             var timer = try std.time.Timer.start();
             logger.info().logf(
-                "verifying incremental accounts_lt_hash: {}",
+                "verifying incremental accounts_lt_hash: {f}",
                 .{inc_manifest.bank_extra.accounts_lt_hash.checksum()},
             );
             defer logger.info().logf(
-                "LtHash verified in {}",
-                .{std.fmt.fmtDuration(timer.read())},
+                "LtHash verified in {D}",
+                .{timer.read()},
             );
 
             const lt_hash = try maybe_rooted_db.?.computeLtHash(allocator, &pool);
             if (!inc_manifest.bank_extra.accounts_lt_hash.eql(lt_hash)) {
                 logger.err().logf(
-                    "incorrect incremental accounts hash: expected vs calculated: {} vs {}",
+                    "incorrect incremental accounts hash: expected vs calculated: {f} vs {f}",
                     .{
                         inc_manifest.bank_extra.accounts_lt_hash.checksum(),
                         lt_hash.checksum(),
@@ -269,8 +299,8 @@ fn insertFromSnapshotArchive(
     var timer = try std.time.Timer.start();
     logger.info().logf("loading snapshot archive: {s}", .{snapshot_path});
     defer logger.info().logf(
-        "loaded snapshot archive in {}",
-        .{std.fmt.fmtDuration(timer.read())},
+        "loaded snapshot archive in {D}",
+        .{timer.read()},
     );
 
     if (maybe_rooted_db) |rooted_db| rooted_db.beginTransaction();
@@ -304,12 +334,10 @@ fn insertFromSnapshotArchive(
     var archive_stream = try zstd.Reader.init(memory);
     defer archive_stream.deinit();
 
-    var tar_file_name_buf: [std.fs.max_path_bytes]u8 = undefined;
-    var tar_link_name_buf: [std.fs.max_path_bytes]u8 = undefined;
-    var tar_iter = std.tar.iterator(archive_stream.reader(), .{
-        .file_name_buffer = &tar_file_name_buf,
-        .link_name_buffer = &tar_link_name_buf,
-    });
+    // Use utils/tar for parsing since it works with old GenericReader interface
+    const tar = sig.utils.tar;
+    var reader = archive_stream.reader();
+    var tar_file_name_buf: [tar.TarHeaderMinimal.MAX_NAME_SIZE]u8 = undefined;
 
     var maybe_version: ?[5]u8 = null;
     var maybe_manifest: ?Manifest = null;
@@ -325,37 +353,74 @@ fn insertFromSnapshotArchive(
     try account_data_buf.ensureTotalCapacity(allocator, 10 * 1024 * 1024);
     defer account_data_buf.deinit(allocator);
 
-    while (try tar_iter.next()) |tar_file| {
-        if (tar_file.kind != .file) continue;
+    tar_loop: while (true) {
+        const tar_hdr = blk: {
+            // The tar iterator in 0.15 returns an error reading the headers from
+            // snapshots, so we need to manually parse the tar headers here
+            var header_buf: [512]u8 = undefined;
+            const header_bytes_read = try reader.readAtLeast(&header_buf, 512);
+            if (header_bytes_read == 0) break :tar_loop;
+            if (header_bytes_read < 512) return error.UnexpectedEndOfStream;
+
+            const tar_header: tar.TarHeaderMinimal = .{ .bytes = &header_buf };
+            const tar_file_size = try tar_header.size();
+            const rounded_tar_size = std.mem.alignForward(u64, tar_file_size, 512);
+            const pad_len: usize = @intCast(rounded_tar_size - tar_file_size);
+
+            const tar_file_name = try tar_header.fullName(&tar_file_name_buf);
+            const tar_file_kind = tar_header.kind();
+
+            // Check for tar EOF (empty header)
+            if (tar_file_size == 0 and tar_file_name.len == 0) {
+                break :tar_loop;
+            }
+
+            // Skip non-file entries
+            if (tar_file_kind != .normal) {
+                try reader.skipBytes(rounded_tar_size, .{});
+                continue :tar_loop;
+            }
+            break :blk .{
+                .file_name = tar_file_name,
+                .file_size = tar_file_size,
+                .pad_len = pad_len,
+                .rounded_size = rounded_tar_size,
+            };
+        };
 
         // Read /version
-        if (std.mem.eql(u8, tar_file.name, "version")) {
+        if (std.mem.eql(u8, tar_hdr.file_name, "version")) {
             const tar_zone = tracy.Zone.init(@src(), .{ .name = "Snapshot.readVersion" });
             defer tar_zone.deinit();
 
             if (maybe_version) |_| return error.DuplicateVersion;
             maybe_version = @as([5]u8, undefined);
 
-            if ((try tar_file.reader().readAll(&maybe_version.?)) != maybe_version.?.len)
-                return error.InvalidVersion;
+            const version_bytes_read = try reader.readAll(&maybe_version.?);
+            if (version_bytes_read != maybe_version.?.len) return error.InvalidVersion;
             if (!std.mem.eql(u8, &maybe_version.?, "1.2.0"))
                 return error.InvalidVersion;
+            try reader.skipBytes(tar_hdr.pad_len, .{});
 
             // Read /snapshot/status_cache
-        } else if (std.mem.eql(u8, tar_file.name, "snapshots/status_cache")) {
+        } else if (std.mem.eql(u8, tar_hdr.file_name, "snapshots/status_cache")) {
             const inner_zone = tracy.Zone.init(@src(), .{ .name = "Snapshot.readStatusCache" });
             defer inner_zone.deinit();
 
             if (maybe_status_cache) |_| return error.DuplicateStatusCache;
-            maybe_status_cache = try StatusCache.decodeFromBincode(allocator, tar_file.reader());
+            // Read file content into memory for bincode deserialization
+            maybe_status_cache = try StatusCache.decodeFromBincode(allocator, reader);
+            try reader.skipBytes(tar_hdr.pad_len, .{});
 
             // Read /snapshot/{slot}/{slot}
-        } else if (std.mem.eql(u8, tar_file.name, manifest_path.constSlice())) {
+        } else if (std.mem.eql(u8, tar_hdr.file_name, manifest_path.constSlice())) {
             const inner_zone = tracy.Zone.init(@src(), .{ .name = "Snapshot.readManifest" });
             defer inner_zone.deinit();
 
             if (maybe_manifest) |_| return error.DuplicateManifest;
-            maybe_manifest = try Manifest.decodeFromBincode(allocator, tar_file.reader());
+            // Read file content into memory for bincode deserialization
+            maybe_manifest = try Manifest.decodeFromBincode(allocator, reader);
+            try reader.skipBytes(tar_hdr.pad_len, .{});
 
             if (maybe_manifest.?.accounts_db_fields.slot != slot_and_hash.slot)
                 return error.MismatchingManifestSlot;
@@ -363,16 +428,16 @@ fn insertFromSnapshotArchive(
                 return error.MismatchingManifestAccountsLtHash;
 
             // Read /accounts/{slot}.{id}
-        } else if (std.mem.startsWith(u8, tar_file.name, "accounts/")) {
+        } else if (std.mem.startsWith(u8, tar_hdr.file_name, "accounts/")) {
             const inner_zone = tracy.Zone.init(@src(), .{ .name = "Snapshot.readAccountFile" });
             defer inner_zone.deinit();
 
-            const split = std.mem.indexOf(u8, tar_file.name, ".") orelse
+            const split = std.mem.indexOf(u8, tar_hdr.file_name, ".") orelse
                 return error.InvalidAccountFile;
-            if (tar_file.name.len - 1 == split) return error.InvalidAccountFile;
-            const slot = std.fmt.parseInt(u64, tar_file.name["accounts/".len..split], 10) catch
+            if (tar_hdr.file_name.len - 1 == split) return error.InvalidAccountFile;
+            const slot = std.fmt.parseInt(u64, tar_hdr.file_name["accounts/".len..split], 10) catch
                 return error.InvalidAccountFile;
-            const id = std.fmt.parseInt(u32, tar_file.name[split + 1 ..], 10) catch
+            const id = std.fmt.parseInt(u32, tar_hdr.file_name[split + 1 ..], 10) catch
                 return error.InvalidAccountFile;
 
             if (maybe_version == null) return error.MissingVersion;
@@ -380,18 +445,21 @@ fn insertFromSnapshotArchive(
             if (maybe_status_cache == null) return error.MissingStatusCache;
 
             // No DB means no accounts should be inserted (skip processing account files).
-            const rooted_db = maybe_rooted_db orelse break;
+            const rooted_db = maybe_rooted_db orelse break :tar_loop;
             rooted_db.largest_rooted_slot = maybe_manifest.?.accounts_db_fields.slot;
 
             const info = maybe_manifest.?.accounts_db_fields.file_map.get(slot) orelse
                 return error.InvalidAccountFile;
-            if (info.id.toInt() != id)
-                continue; // TODO: error?
-            if (info.length > tar_file.size)
+            if (info.id.toInt() != id) {
+                // Skip this file's content and padding, then continue
+                try reader.skipBytes(tar_hdr.rounded_size, .{});
+                continue :tar_loop;
+            }
+            if (info.length > tar_hdr.file_size)
                 return error.InvalidAccountFile;
 
             // Insert accounts in AccountFile into Rooted db
-            var account_file_stream = std.io.limitedReader(tar_file.reader(), info.length);
+            var account_file_stream = std14.limitedReader(reader, info.length);
             while (account_file_stream.bytes_left > 0) {
                 const r = account_file_stream.reader();
 
@@ -451,12 +519,14 @@ fn insertFromSnapshotArchive(
                     },
                 });
             }
+            const remaining_and_pad = (tar_hdr.file_size - info.length) + tar_hdr.pad_len;
+            try reader.skipBytes(remaining_and_pad, .{});
 
             // Read unknown tar file
         } else {
             logger.err().logf(
                 "invalid file in snapshot tar:\"{s}\" len:{}",
-                .{ tar_file.name, tar_file.size },
+                .{ tar_hdr.file_name, tar_hdr.file_size },
             );
             return error.InvalidTar;
         }

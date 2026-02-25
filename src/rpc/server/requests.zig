@@ -2,6 +2,7 @@
 //! of RPC requests.
 
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../../sig.zig");
 
 const IncrementalSnapshotFileInfo = sig.accounts_db.snapshot.data.IncrementalSnapshotFileInfo;
@@ -15,7 +16,7 @@ pub const ContentType = enum(u8) {
     @"application/json",
 };
 
-pub const TargetBoundedStr = std.BoundedArray(u8, MAX_TARGET_LEN);
+pub const TargetBoundedStr = std14.BoundedArray(u8, MAX_TARGET_LEN);
 pub const MAX_TARGET_LEN: usize = blk: {
     const SnapSpec = IncrementalSnapshotFileInfo.SnapshotArchiveNameFmtSpec;
     break :blk "/".len + SnapSpec.fmtLenValue(.{
@@ -79,12 +80,8 @@ pub const MethodFmt = struct {
     method: std.http.Method,
     pub fn format(
         self: MethodFmt,
-        comptime fmt_str: []const u8,
-        fmt_options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) @TypeOf(writer).Error!void {
-        _ = fmt_options;
-        if (fmt_str.len != 0) std.fmt.invalidFmtError(fmt_str, self);
-        try self.method.write(writer);
+        w: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        try w.writeAll(@tagName(self.method));
     }
 };

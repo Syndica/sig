@@ -3,7 +3,7 @@ const sig = @import("../../sig.zig");
 const database = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
-const RwLock = std.Thread.RwLock;
+const RwLock = sig.sync.RwLock;
 
 const BatchAllocator = sig.utils.allocators.BatchAllocator;
 const BytesRef = database.interface.BytesRef;

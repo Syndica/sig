@@ -395,7 +395,7 @@ pub const Section = union(enum) {
 
     const Owned = struct {
         offset: u64,
-        data: []const u8,
+        data: []align(16) const u8,
     };
 
     const Borrowed = struct {

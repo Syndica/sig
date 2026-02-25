@@ -23,7 +23,7 @@ const StakesCache = sig.core.stakes.StakesCacheGeneric(.stake);
 const AccountSharedData = sig.runtime.AccountSharedData;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
 const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
-const VoteState = sig.runtime.program.vote.state.VoteState;
+const VoteStateV3 = sig.runtime.program.vote.state.VoteStateV3;
 
 const PreviousEpochInflationRewards = sig.replay.rewards.PreviousEpochInflationRewards;
 const VoteRewards = sig.replay.rewards.VoteRewards;
@@ -32,7 +32,6 @@ const PointValue = sig.replay.rewards.inflation_rewards.PointValue;
 const PartitionedStakeReward = sig.replay.rewards.PartitionedStakeReward;
 const PartitionedStakeRewards = sig.replay.rewards.PartitionedStakeRewards;
 const PartitionedVoteReward = sig.replay.rewards.PartitionedVoteReward;
-const EpochTracker = sig.replay.trackers.EpochTracker;
 
 const redeemRewards = sig.replay.rewards.inflation_rewards.redeemRewards;
 const calculatePoints = sig.replay.rewards.inflation_rewards.calculatePoints;
@@ -50,22 +49,20 @@ pub fn beginPartitionedRewards(
     slot_constants: *SlotConstants,
     slot_state: *SlotState,
     slot_store: SlotAccountStore,
-    epoch_tracker: *EpochTracker,
+    epoch_tracker: *sig.core.EpochTracker,
 ) !void {
-    const epoch = epoch_tracker.schedule.getEpoch(slot);
-    const parent_epoch = epoch_tracker.schedule.getEpoch(slot_constants.parent_slot);
+    const epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
+    const parent_epoch = epoch_tracker.epoch_schedule.getEpoch(slot_constants.parent_slot);
 
-    const leader_schedule_epoch = epoch_tracker.schedule.getLeaderScheduleEpoch(slot);
-    const leader_schedule_epoch_constants = epoch_tracker.get(leader_schedule_epoch) orelse
-        return error.NoEpochConstantsForLeaderScheduleEpoch;
-    const epoch_vote_accounts = leader_schedule_epoch_constants.stakes.stakes.vote_accounts;
+    const current_epoch_info = try epoch_tracker.getEpochInfoNoOffset(
+        slot,
+        &slot_constants.ancestors,
+    );
+    const epoch_vote_accounts = current_epoch_info.stakes.stakes.vote_accounts;
 
-    const epoch_constants = epoch_tracker.get(epoch) orelse
-        return error.NoEpochConstants;
-
-    const slots_per_year = epoch_constants.slots_per_year;
+    const slots_per_year = epoch_tracker.cluster.slotsPerYear();
     const previous_epoch_capitalization = &slot_state.capitalization;
-    const epoch_schedule = &epoch_tracker.schedule;
+    const epoch_schedule = &epoch_tracker.epoch_schedule;
     const feature_set = &slot_constants.feature_set;
     const inflation = &slot_constants.inflation;
     const stakes_cache = &slot_state.stakes_cache;
@@ -118,7 +115,7 @@ pub fn beginPartitionedRewards(
             .slot = slot,
             .slot_store = slot_store,
             .capitalization = &slot_state.capitalization,
-            .rent = &epoch_constants.rent_collector.rent,
+            .rent = &slot_constants.rent_collector.rent,
         },
     );
 }
@@ -437,7 +434,7 @@ fn calculateRewardPointsPartitioned(
         if (!vote_account.account.owner.equals(&sig.runtime.program.vote.ID)) continue;
         points += calculatePoints(
             stake,
-            vote_account.state,
+            &vote_account.state,
             stake_history,
             new_warmup_and_cooldown_rate_epoch,
         );
@@ -490,7 +487,7 @@ fn calculateStakeVoteRewards(
             else => return e,
         };
 
-        const commission = vote_account.state.commission;
+        const commission = vote_account.state.commission();
 
         var voters_reward_entry = try vote_account_rewards_map.getOrPut(allocator, vote_pubkey);
         if (!voters_reward_entry.found_existing) {
@@ -614,7 +611,8 @@ fn newVoteAccountForTest(
     comission: u8,
     voter_epoch: Epoch,
 ) !VoteAccount {
-    const vote_state = try VoteState.init(
+    const vote_pubkey = Pubkey.initRandom(random);
+    var vote_state = try VoteStateV3.init(
         allocator,
         Pubkey.initRandom(random),
         Pubkey.initRandom(random),
@@ -622,13 +620,20 @@ fn newVoteAccountForTest(
         comission,
         voter_epoch,
     );
+    defer vote_state.deinit(allocator);
+    var vote_state_v4 = try sig.runtime.program.vote.state.VoteStateV4.fromVoteStateV3(
+        allocator,
+        vote_state,
+        vote_pubkey,
+    );
+    errdefer vote_state_v4.deinit(allocator);
     return VoteAccount.init(
         allocator,
         .{
             .lamports = 1234,
             .owner = sig.runtime.program.vote.ID,
         },
-        vote_state,
+        vote_state_v4,
     );
 }
 
@@ -661,6 +666,7 @@ test calculateRewardsAndDistributeVoteRewards {
             Pubkey.initRandom(random),
             10,
             epoch,
+            vote_account_0_pubkey,
         ),
     );
     try vote_account_0.state.epoch_credits.append(allocator, .{
@@ -775,6 +781,7 @@ test calculateRewardsForPartitioning {
             Pubkey.initRandom(random),
             10,
             epoch,
+            vote_account_0_pubkey,
         ),
     );
     try vote_account_0.state.epoch_credits.append(allocator, .{
@@ -882,6 +889,7 @@ test calculateValidatorRewards {
             Pubkey.initRandom(random),
             10,
             epoch,
+            vote_account_0_pubkey,
         ),
     );
     try vote_account_0.state.epoch_credits.append(allocator, .{
@@ -1024,6 +1032,7 @@ test calculateRewardPointsPartitioned {
             Pubkey.initRandom(random),
             10,
             epoch,
+            vote_account_0_pubkey,
         ),
         .rc = rc,
     };

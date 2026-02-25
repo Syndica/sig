@@ -36,8 +36,8 @@ const Actions = enum {
     batch,
 };
 
-fn getKeys(map: *std.AutoHashMap(u32, Data)) !std.ArrayList(u32) {
-    var keys = std.ArrayList(u32).init(allocator);
+fn getKeys(map: *std.AutoHashMap(u32, Data)) !std.array_list.Managed(u32) {
+    var keys = std.array_list.Managed(u32).init(allocator);
     var it = map.iterator();
     while (it.next()) |entry| {
         try keys.append(entry.key_ptr.*);

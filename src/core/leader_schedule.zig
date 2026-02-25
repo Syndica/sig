@@ -1,20 +1,25 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
+const core = sig.core;
+
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
+
+const EpochSchedule = core.epoch_schedule.EpochSchedule;
+const Pubkey = core.pubkey.Pubkey;
+
+const Epoch = core.time.Epoch;
+const Slot = core.time.Slot;
+
+const FeatureSet = sig.core.features.Set;
+const VoteAccounts = sig.core.stakes.VoteAccounts;
 
 const ChaChaRng = sig.rand.ChaChaRng;
-const Epoch = sig.core.Epoch;
-const Pubkey = sig.core.Pubkey;
-const Slot = sig.core.Slot;
 const WeightedRandomSampler = sig.rand.WeightedRandomSampler;
-const EpochSchedule = sig.core.EpochSchedule;
-const RwMux = sig.sync.RwMux;
 
 pub const NUM_CONSECUTIVE_LEADER_SLOTS: u64 = 4;
-pub const MAX_CACHED_LEADER_SCHEDULES: usize = 10;
 
-/// interface to express a dependency on slot leaders
 pub const SlotLeaders = struct {
     state: *anyopaque,
     getFn: *const fn (*anyopaque, Slot) ?Pubkey,
@@ -27,7 +32,7 @@ pub const SlotLeaders = struct {
             .state = state,
             .getFn = struct {
                 fn genericFn(generic_state: *anyopaque, slot: Slot) ?Pubkey {
-                    return getSlotLeader(@alignCast(@ptrCast(generic_state)), slot);
+                    return getSlotLeader(@ptrCast(@alignCast(generic_state)), slot);
                 }
             }.genericFn,
         };
@@ -38,208 +43,101 @@ pub const SlotLeaders = struct {
     }
 };
 
-/// LeaderScheduleCache is a cache of leader schedules for each epoch.
-/// Leader schedules are expensive to compute, so this cache is used to avoid
-/// recomputing leader schedules for the same epoch.
-/// LeaderScheduleCache also keeps a copy of the epoch_schedule so that it can
-/// compute epoch and slot index from a slot.
-/// NOTE: This struct is not really a 'cache', we should consider renaming it
-/// to a SlotLeaders and maybe even moving it outside of the core module.
-/// This more accurately describes the purpose of this struct as caching is a means
-/// to an end, not the end itself. It may then follow that we could remove the
-/// above pointer closure in favor of passing the SlotLeaders directly.
-pub const LeaderScheduleCache = struct {
-    epoch_schedule: EpochSchedule,
-    leader_schedules: RwMux(std.AutoArrayHashMap(Epoch, LeaderSchedule)),
+pub const LeaderSchedules = struct {
+    curr: LeaderSchedule,
+    prev: ?LeaderSchedule,
+    next: ?LeaderSchedule,
 
-    const Self = @This();
-
-    pub fn init(allocator: Allocator, epoch_schedule: EpochSchedule) Self {
-        return .{
-            .epoch_schedule = epoch_schedule,
-            .leader_schedules = RwMux(std.AutoArrayHashMap(Epoch, LeaderSchedule)).init(
-                std.AutoArrayHashMap(Epoch, LeaderSchedule).init(allocator),
-            ),
-        };
+    pub fn getLeader(self: *const LeaderSchedules, slot: Slot) !Pubkey {
+        return if (slot < self.curr.start)
+            if (self.prev) |prev| prev.getLeader(slot) else error.SlotOutOfRange
+        else if (slot > self.curr.end)
+            if (self.next) |next| next.getLeader(slot) else error.SlotOutOfRange
+        else
+            self.curr.leaders[slot - self.curr.start];
     }
 
-    pub fn slotLeaders(self: *Self) SlotLeaders {
-        return SlotLeaders.init(self, LeaderScheduleCache.slotLeader);
-    }
-
-    pub fn put(self: *Self, epoch: Epoch, leader_schedule: LeaderSchedule) !void {
-        const leader_schedules, var leader_schedules_lg = self.leader_schedules.writeWithLock();
-        defer leader_schedules_lg.unlock();
-
-        if (leader_schedules.count() >= MAX_CACHED_LEADER_SCHEDULES) {
-            _ = leader_schedules.swapRemove(std.mem.min(Epoch, leader_schedules.keys()));
-        }
-
-        try leader_schedules.put(epoch, leader_schedule);
-    }
-
-    pub fn slotLeader(self: *Self, slot: Slot) ?Pubkey {
-        const epoch, const slot_index = self.epoch_schedule.getEpochAndSlotIndex(slot);
-        const leader_schedules, var leader_schedules_lg = self.leader_schedules.readWithLock();
-        defer leader_schedules_lg.unlock();
-        return if (leader_schedules.get(epoch)) |schedule| schedule.slot_leaders[slot_index] else null;
-    }
-
-    pub fn uniqueLeaders(self: *Self, allocator: std.mem.Allocator) ![]const Pubkey {
-        const leader_schedules, var leader_schedules_lg = self.leader_schedules.readWithLock();
-        defer leader_schedules_lg.unlock();
-
-        var unique_leaders = sig.utils.collections.PubkeyMapManaged(void).init(allocator);
-        defer unique_leaders.deinit();
-        for (leader_schedules.values()) |leader_schedule| {
-            for (leader_schedule.slot_leaders) |leader| {
-                try unique_leaders.put(leader, {});
-            }
-        }
-
-        const unqiue_list = try allocator.alloc(Pubkey, unique_leaders.count());
-        @memcpy(unqiue_list, unique_leaders.keys());
-
-        return unqiue_list;
+    // Required to conform with SlotLeaders interface
+    pub fn getLeaderOrNull(self: *const LeaderSchedules, slot: Slot) ?Pubkey {
+        return self.getLeader(slot) catch null;
     }
 };
 
-/// LeaderSchedule for a single epoch.
-/// LeaderSchedule's are constructed by either using information from bank fields
-/// to compute the leader schedule from scratch, or using information obtained from a
-/// getLeaderSchedule RPC request.
-/// To compute a leader schedule for epoch `e`, we must know the state of staked nodes at some
-/// fixed point in time before the first slot of epoch `e`. This is usually configured to be
-/// 1 full epoch before epoch `e`.
 pub const LeaderSchedule = struct {
-    allocator: std.mem.Allocator,
-    slot_leaders: []const Pubkey,
+    leaders: []const Pubkey,
+    start: Slot,
+    end: Slot,
 
-    pub fn deinit(self: LeaderSchedule) void {
-        self.allocator.free(self.slot_leaders);
+    pub fn deinit(self: *const LeaderSchedule, allocator: Allocator) void {
+        allocator.free(self.leaders);
     }
 
-    pub fn fromMap(
+    pub fn init(
         allocator: Allocator,
-        leader_to_slots: sig.utils.collections.PubkeyMap([]const u64),
+        leader_schedule_epoch: Epoch,
+        vote_accounts: VoteAccounts,
+        epoch_schedule: *const EpochSchedule,
+        feature_set: *const FeatureSet,
     ) !LeaderSchedule {
-        var num_leaders: u64 = 0;
-        for (leader_to_slots.values()) |leader_slots| {
-            num_leaders += leader_slots.len;
-        }
-
-        const Record = struct { slot: Slot, key: Pubkey };
-
-        var leaders_index: usize = 0;
-        var leaders = try allocator.alloc(Record, num_leaders);
-        defer allocator.free(leaders);
-
-        var rpc_leader_iter = leader_to_slots.iterator();
-        while (rpc_leader_iter.next()) |entry| {
-            for (entry.value_ptr.*) |slot| {
-                leaders[leaders_index] = .{ .slot = slot, .key = entry.key_ptr.* };
-                leaders_index += 1;
-            }
-        }
-
-        std.mem.sortUnstable(Record, leaders, {}, struct {
-            fn gt(_: void, lhs: Record, rhs: Record) bool {
-                return switch (std.math.order(lhs.slot, rhs.slot)) {
-                    .gt => false,
-                    else => true,
-                };
-            }
-        }.gt);
-
-        var slot_leaders = try allocator.alloc(Pubkey, leaders.len);
-        for (leaders, 0..) |record, i| {
-            slot_leaders[i] = record.key;
-        }
-
+        const slots_in_epoch = epoch_schedule.getSlotsInEpoch(leader_schedule_epoch);
+        const slot_leaders = if (useVoteKeyedLeaderSchedule(
+            leader_schedule_epoch,
+            epoch_schedule,
+            feature_set,
+        ))
+            try computeFromVoteAccounts(
+                allocator,
+                leader_schedule_epoch,
+                slots_in_epoch,
+                &vote_accounts.vote_accounts,
+            )
+        else
+            try computeFromStakedNodes(
+                allocator,
+                leader_schedule_epoch,
+                slots_in_epoch,
+                &vote_accounts.staked_nodes,
+            );
         return .{
-            .allocator = allocator,
-            .slot_leaders = slot_leaders,
+            .leaders = slot_leaders,
+            .start = epoch_schedule.getFirstSlotInEpoch(leader_schedule_epoch),
+            .end = epoch_schedule.getLastSlotInEpoch(leader_schedule_epoch),
         };
     }
 
-    pub fn fromVoteAccounts(
-        allocator: std.mem.Allocator,
-        epoch: Epoch,
-        slots_in_epoch: Slot,
-        vote_accounts: *const sig.core.stakes.StakeAndVoteAccountsMap,
-    ) ![]const Pubkey {
-        // this implementation is naive and performs unnecessay allocations to construct and
-        // input compatable with fromStakedNodes and re-key results.
-        // It should be addressed as part of issue #945
-        var stakes = sig.utils.collections.PubkeyMap(u64){};
-        defer stakes.deinit(allocator);
+    pub fn initRandom(
+        allocator: Allocator,
+        random: Random,
+        options: struct {
+            epoch: ?Epoch = null,
+            schedule: EpochSchedule = .INIT,
+        },
+    ) !LeaderSchedule {
+        const epoch = options.epoch orelse random.intRangeAtMost(Epoch, 0, 1_000);
 
-        for (vote_accounts.keys(), vote_accounts.values()) |key, value| {
-            try stakes.put(allocator, key, value.stake);
-        }
+        const start = options.schedule.getFirstSlotInEpoch(epoch);
+        const end = options.schedule.getLastSlotInEpoch(epoch);
 
-        const vote_keyed = try fromStakedNodes(allocator, epoch, slots_in_epoch, &stakes);
+        const leaders = try allocator.alloc(Pubkey, end - start + 1);
+        errdefer allocator.free(leaders);
+        for (leaders) |*leader| leader.* = Pubkey.initRandom(random);
 
-        for (vote_keyed) |*pubkey| {
-            const vote_account = vote_accounts.get(pubkey.*) orelse unreachable;
-            pubkey.* = vote_account.account.state.node_pubkey;
-        }
-
-        return vote_keyed;
+        return LeaderSchedule{
+            .leaders = leaders,
+            .start = start,
+            .end = end,
+        };
     }
 
-    pub fn fromStakedNodes(
-        allocator: std.mem.Allocator,
-        epoch: Epoch,
-        slots_in_epoch: Slot,
-        staked_nodes: *const sig.utils.collections.PubkeyMap(u64),
-    ) ![]Pubkey {
-        const Entry = sig.utils.collections.PubkeyMapManaged(u64).Entry;
+    pub fn getLeader(self: *const LeaderSchedule, slot: Slot) !Pubkey {
+        if (self.start <= slot and slot <= self.end)
+            return self.leaders[slot - self.start];
+        return error.SlotOutOfRange;
+    }
 
-        const nodes = try allocator.alloc(Entry, staked_nodes.count());
-        defer allocator.free(nodes);
-
-        for (nodes, staked_nodes.keys(), staked_nodes.values()) |*node, *key_ptr, *value_ptr| {
-            node.* = .{
-                .key_ptr = key_ptr,
-                .value_ptr = value_ptr,
-            };
-        }
-
-        std.mem.sortUnstable(Entry, nodes, {}, struct {
-            fn gt(_: void, lhs: Entry, rhs: Entry) bool {
-                return switch (std.math.order(lhs.value_ptr.*, rhs.value_ptr.*)) {
-                    .gt => true,
-                    .lt => false,
-                    .eq => .gt == std.mem.order(u8, &lhs.key_ptr.data, &rhs.key_ptr.data),
-                };
-            }
-        }.gt);
-
-        // init random number generator
-        var seed: [32]u8 = .{0} ** 32;
-        std.mem.writeInt(Epoch, seed[0..@sizeOf(Epoch)], epoch, .little);
-        var rng = ChaChaRng(20).fromSeed(seed);
-        const random = rng.random();
-
-        // init sampler from stake weights
-        const stakes = try allocator.alloc(u64, nodes.len);
-        defer allocator.free(stakes);
-        for (nodes, 0..) |entry, i| stakes[i] = entry.value_ptr.*;
-        var sampler = try WeightedRandomSampler(u64).init(allocator, random, stakes);
-        defer sampler.deinit();
-
-        // calculate leader schedule
-        var slot_leaders = try allocator.alloc(Pubkey, slots_in_epoch);
-        var current_node: Pubkey = undefined;
-        for (0..slots_in_epoch) |i| {
-            if (i % NUM_CONSECUTIVE_LEADER_SLOTS == 0) {
-                current_node = nodes[sampler.sample()].key_ptr.*;
-            }
-            slot_leaders[i] = current_node;
-        }
-
-        return slot_leaders;
+    // Required to conform with SlotLeaders interface
+    pub fn getLeaderOrNull(self: *const LeaderSchedule, slot: Slot) ?Pubkey {
+        return self.getLeader(slot) catch null;
     }
 
     /// Reads the leader schedule as formatted by the `solana leader-schedule` and
@@ -247,7 +145,7 @@ pub const LeaderSchedule = struct {
     pub fn read(
         allocator: std.mem.Allocator,
         reader: anytype,
-    ) !struct { Slot, LeaderSchedule } {
+    ) !LeaderSchedule {
         const nextNonEmpty = struct {
             pub fn nextNonEmpty(word_iter: anytype) ?[]const u8 {
                 while (word_iter.next()) |word| if (word.len > 0) return word;
@@ -255,7 +153,7 @@ pub const LeaderSchedule = struct {
             }
         }.nextNonEmpty;
 
-        var slot_leaders = std.ArrayList(Pubkey).init(allocator);
+        var slot_leaders: std.ArrayList(Pubkey) = .{};
         var start_slot: Slot = 0;
         var expect: ?Slot = null;
         var row: [256]u8 = undefined;
@@ -276,44 +174,157 @@ pub const LeaderSchedule = struct {
                 start_slot = slot;
             }
             const node_str = nextNonEmpty(&word_iter) orelse return error.MissingPubkey;
-            try slot_leaders.append(try Pubkey.parseRuntime(node_str));
+            try slot_leaders.append(allocator, try Pubkey.parseRuntime(node_str));
         }
 
+        const end_slot = start_slot +| (slot_leaders.items.len -| 1);
         return .{
-            start_slot,
-            .{
-                .allocator = allocator,
-                .slot_leaders = try slot_leaders.toOwnedSlice(),
-            },
+            .leaders = try slot_leaders.toOwnedSlice(allocator),
+            .start = start_slot,
+            .end = end_slot,
         };
     }
 
     /// Writes the leader schedule as formatted by the `solana leader-schedule` and
     /// `sig leader-schedule` commands.
-    pub fn write(self: *const LeaderSchedule, writer: anytype, start_slot: Slot) !void {
-        for (self.slot_leaders, 0..) |leader, i| {
-            try writer.print("  {}       {s}\n", .{ i + start_slot, leader });
+    pub fn write(self: *const LeaderSchedule, writer: anytype) !void {
+        for (self.leaders, 0..) |leader, i| {
+            try writer.print("  {}       {f}\n", .{ self.start + i, leader });
         }
     }
 };
 
-/// Minimal implementation of SlotLeaders for a single epoch. Useful for tests
-/// or any other context that will not exceed a single epoch.
-pub const SingleEpochSlotLeaders = struct {
-    start_slot: Slot,
-    slot_leaders: []const Pubkey,
-
-    pub fn get(self: *SingleEpochSlotLeaders, slot: Slot) ?Pubkey {
-        if (slot < self.start_slot or slot - self.start_slot >= self.slot_leaders.len) {
-            return null;
+pub fn useVoteKeyedLeaderSchedule(
+    epoch: Epoch,
+    epoch_schedule: *const EpochSchedule,
+    feature_set: *const FeatureSet,
+) bool {
+    const maybe_activation_slot = feature_set.get(.enable_vote_address_leader_schedule);
+    if (maybe_activation_slot) |activated_slot| {
+        if (activated_slot == 0) {
+            // If the feature is activated at slot 0, always use the new leader schedule
+            return true;
+        } else {
+            // Always use the new leader schedule for epochs after the activated epoch
+            const activated_epoch = epoch_schedule.getEpoch(activated_slot);
+            return epoch >= activated_epoch;
         }
-        return self.slot_leaders[slot - self.start_slot];
+    } else {
+        // TODO: do we need to return null here
+        return false;
+    }
+}
+
+pub fn computeFromVoteAccounts(
+    allocator: std.mem.Allocator,
+    leader_schedule_epoch: Epoch,
+    slots_in_epoch: Slot,
+    vote_accounts: *const sig.core.stakes.StakeAndVoteAccountsMap,
+) ![]const Pubkey {
+    // this implementation is naive and performs unnecessay allocations to construct and
+    // input compatable with fromStakedNodes and re-key results.
+    // It should be addressed as part of issue #945
+    var stakes = sig.utils.collections.PubkeyMap(u64){};
+    defer stakes.deinit(allocator);
+
+    for (vote_accounts.keys(), vote_accounts.values()) |key, value| {
+        try stakes.put(allocator, key, value.stake);
     }
 
-    pub fn slotLeaders(self: *SingleEpochSlotLeaders) SlotLeaders {
-        return SlotLeaders.init(self, get);
+    const vote_keyed = try computeFromStakedNodes(
+        allocator,
+        leader_schedule_epoch,
+        slots_in_epoch,
+        &stakes,
+    );
+
+    for (vote_keyed) |*pubkey| {
+        const vote_account = vote_accounts.get(pubkey.*) orelse unreachable;
+        pubkey.* = vote_account.account.state.node_pubkey;
     }
-};
+
+    return vote_keyed;
+}
+
+pub fn computeFromStakedNodes(
+    allocator: std.mem.Allocator,
+    leader_schedule_epoch: Epoch,
+    slots_in_epoch: Slot,
+    staked_nodes: *const sig.utils.collections.PubkeyMap(u64),
+) ![]Pubkey {
+    const Entry = sig.utils.collections.PubkeyMap(u64).Entry;
+
+    const nodes = try allocator.alloc(Entry, staked_nodes.count());
+    defer allocator.free(nodes);
+
+    for (nodes, staked_nodes.keys(), staked_nodes.values()) |*node, *key_ptr, *value_ptr| {
+        node.* = .{
+            .key_ptr = key_ptr,
+            .value_ptr = value_ptr,
+        };
+    }
+
+    std.mem.sortUnstable(Entry, nodes, {}, struct {
+        fn gt(_: void, lhs: Entry, rhs: Entry) bool {
+            return switch (std.math.order(lhs.value_ptr.*, rhs.value_ptr.*)) {
+                .gt => true,
+                .lt => false,
+                .eq => .gt == std.mem.order(u8, &lhs.key_ptr.data, &rhs.key_ptr.data),
+            };
+        }
+    }.gt);
+
+    // init random number generator
+    var seed: [32]u8 = .{0} ** 32;
+    std.mem.writeInt(Epoch, seed[0..@sizeOf(Epoch)], leader_schedule_epoch, .little);
+    var rng = ChaChaRng(20).fromSeed(seed);
+    const random = rng.random();
+
+    // init sampler from stake weights
+    const stakes = try allocator.alloc(u64, nodes.len);
+    defer allocator.free(stakes);
+    for (nodes, 0..) |entry, i| stakes[i] = entry.value_ptr.*;
+    const sampler = try WeightedRandomSampler(u64).init(allocator, random, stakes);
+    defer sampler.deinit();
+
+    // calculate leader schedule
+    var slot_leaders = try allocator.alloc(Pubkey, slots_in_epoch);
+    var current_node: Pubkey = undefined;
+    for (0..slots_in_epoch) |i| {
+        if (i % NUM_CONSECUTIVE_LEADER_SLOTS == 0) {
+            current_node = nodes[sampler.sample()].key_ptr.*;
+        }
+        slot_leaders[i] = current_node;
+    }
+
+    return slot_leaders;
+}
+
+pub fn computeFromMap(
+    allocator: Allocator,
+    slot_leaders_map: *const sig.utils.collections.PubkeyMap([]const u64),
+) !LeaderSchedule {
+    var start: u64 = std.math.maxInt(u64);
+    var end: u64 = 0;
+    for (slot_leaders_map.values()) |slots| {
+        for (slots) |i| {
+            start = @min(i, start);
+            end = @max(i, end);
+        }
+    }
+
+    if (start > end) return error.NoSlotLeaders;
+    const leaders = try allocator.alloc(Pubkey, 1 + end - start);
+    for (slot_leaders_map.keys(), slot_leaders_map.values()) |leader, slots| {
+        for (slots) |slot| leaders[slot - start] = leader;
+    }
+
+    return .{
+        .leaders = leaders,
+        .start = start,
+        .end = end,
+    };
+}
 
 test "leaderSchedule calculation matches agave" {
     var rng = ChaChaRng(20).fromSeed(.{0} ** 32);
@@ -327,7 +338,7 @@ test "leaderSchedule calculation matches agave" {
         const stake = random.int(u64) / 1000;
         try staked_nodes.put(key, stake);
     }
-    const slot_leaders = try LeaderSchedule.fromStakedNodes(std.testing.allocator, 123, 321, &staked_nodes.unmanaged);
+    const slot_leaders = try computeFromStakedNodes(std.testing.allocator, 123, 321, &staked_nodes.unmanaged);
     defer std.testing.allocator.free(slot_leaders);
     for (slot_leaders, 0..) |slot_leader, i| {
         try std.testing.expectEqual(
@@ -366,22 +377,22 @@ test "parseLeaderSchedule writeLeaderSchedule happy path roundtrip" {
         .parse("DWvDTSh3qfn88UoQTEKRV2JnLt5jtJAVoiCo3ivtMwXP"),
         .parse("DWvDTSh3qfn88UoQTEKRV2JnLt5jtJAVoiCo3ivtMwXP"),
     };
-    // const expected_start = 270864000;
+    const expected_start = 270864000;
 
     // parse input file
     var stream = std.io.fixedBufferStream(input_file);
-    _, const leader_schedule = try LeaderSchedule.read(allocator, stream.reader());
-    defer leader_schedule.deinit();
-    // try std.testing.expect(expected_start == leader_schedule.start_slot);
-    try std.testing.expect(expected_nodes.len == leader_schedule.slot_leaders.len);
-    for (expected_nodes, leader_schedule.slot_leaders) |expected, actual| {
+    const leader_schedule = try LeaderSchedule.read(allocator, stream.reader());
+    defer leader_schedule.deinit(allocator);
+    try std.testing.expect(expected_start == leader_schedule.start);
+    try std.testing.expect(expected_nodes.len == leader_schedule.leaders.len);
+    for (expected_nodes, leader_schedule.leaders) |expected, actual| {
         try std.testing.expect(expected.equals(&actual));
     }
 
     // write file out
     var out_buf: [2 * input_file.len]u8 = undefined;
     var out_stream = std.io.fixedBufferStream(&out_buf);
-    try leader_schedule.write(out_stream.writer(), 270864000);
+    try leader_schedule.write(out_stream.writer());
     const out_file = out_stream.getWritten();
     try std.testing.expect(std.mem.eql(u8, out_file, input_file));
 }

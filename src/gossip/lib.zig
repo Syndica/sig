@@ -24,5 +24,3 @@ pub const Ping = ping_pong.Ping;
 pub const Pong = ping_pong.Pong;
 pub const SocketTag = data.SocketTag;
 pub const PruneData = prune.PruneData;
-
-pub const getClusterEntrypoints = service.getClusterEntrypoints;

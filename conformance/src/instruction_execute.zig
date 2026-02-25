@@ -30,32 +30,36 @@ export fn sol_compat_instr_execute_v1(
     defer decode_arena.deinit();
 
     const in_slice = in_ptr[0..in_size];
+    var reader: std.Io.Reader = .fixed(in_slice);
     var pb_instr_ctx = pb.InstrContext.decode(
-        in_slice,
+        &reader,
         decode_arena.allocator(),
     ) catch |err| {
         std.debug.print("pb.InstrContext.decode: {s}\n", .{@errorName(err)});
         return 0;
     };
-    defer pb_instr_ctx.deinit();
+    defer pb_instr_ctx.deinit(decode_arena.allocator());
 
     // utils.printPbInstrContext(pb_instr_ctx) catch |err| {
     //     std.debug.print("printPbInstrContext: {s}\n", .{@errorName(err)});
     //     return 0;
     // };
 
-    const result = executeInstruction(allocator, pb_instr_ctx, EMIT_LOGS) catch |err| {
+    var result = executeInstruction(allocator, pb_instr_ctx, EMIT_LOGS) catch |err| {
         std.debug.print("executeInstruction: {s}\n", .{@errorName(err)});
         return 0;
     };
+    defer result.deinit(allocator);
 
     // printPbInstrEffects(result) catch |err| {
     //     std.debug.print("printPbInstrEffects: {s}\n", .{@errorName(err)});
     //     return 0;
     // };
 
-    const result_bytes = try result.encode(allocator);
-    defer allocator.free(result_bytes);
+    var writer: std.Io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+    try result.encode(&writer.writer, allocator);
+    const result_bytes = writer.written();
 
     const out_slice = out_ptr[0..out_size.*];
     if (result_bytes.len > out_slice.len) {
@@ -116,12 +120,12 @@ fn executeInstruction(
         clock.slot,
     );
 
-    if (pb_instr_ctx.program_id.getSlice().len != Pubkey.SIZE) return error.OutOfBounds;
+    if (pb_instr_ctx.program_id.len != Pubkey.SIZE) return error.OutOfBounds;
     const instr_info = try utils.createInstructionInfo(
         allocator,
         &tc,
-        .{ .data = pb_instr_ctx.program_id.getSlice()[0..Pubkey.SIZE].* },
-        pb_instr_ctx.data.getSlice(),
+        .{ .data = pb_instr_ctx.program_id[0..Pubkey.SIZE].* },
+        pb_instr_ctx.data,
         pb_instr_ctx.instr_accounts.items,
     );
     defer instr_info.deinit(allocator);

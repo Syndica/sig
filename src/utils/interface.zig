@@ -146,10 +146,10 @@ fn checkOneDecl(state: CheckState, iface_decl: Decl, types_map: []const [2]type)
             // that decl has the wrong type
             state.errors.print(
                 \\The implementation of `{[decl]s}` does not conform to the interface.
-                \\         Interface: {[interface]}.{[decl]s}
-                \\    Implementation: {[impl]}.{[decl]s}
-                \\      It should be: {[expected]}
-                \\      ...but it is: {[actual]}
+                \\         Interface: {[interface]any}.{[decl]s}
+                \\    Implementation: {[impl]any}.{[decl]s}
+                \\      It should be: {[expected]any}
+                \\      ...but it is: {[actual]any}
                 \\
                 \\
             ,
@@ -167,9 +167,9 @@ fn checkOneDecl(state: CheckState, iface_decl: Decl, types_map: []const [2]type)
         // there is *no* decl with the same name
         state.errors.print(
             \\`{[decl]s}` is required by the interface, but missing from the implementation.
-            \\         Interface: {[interface]}.{[decl]s}
-            \\    Implementation: {[impl]}
-            \\          Expected: {[expected]}
+            \\         Interface: {[interface]any}.{[decl]s}
+            \\    Implementation: {[impl]any}
+            \\          Expected: {[expected]any}
             \\
             \\
         ,
@@ -330,11 +330,11 @@ const FunctionSignature = struct {
     ) !void {
         try writer.print("fn (", .{});
         for (self.params, 0..) |param, i| {
-            if (param) |P| try writer.print("{}", .{P}) else try writer.print("???", .{});
+            if (param) |P| try writer.print("{any}", .{P}) else try writer.print("???", .{});
             if (i + 1 != self.params.len) try writer.print(", ", .{});
         }
         try writer.print(") ", .{});
-        if (self.Return) |R| try writer.print("{}", .{R}) else try writer.print("???", .{});
+        if (self.Return) |R| try writer.print("{any}", .{R}) else try writer.print("???", .{});
     }
 };
 

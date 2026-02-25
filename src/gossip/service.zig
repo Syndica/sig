@@ -7,7 +7,7 @@ const socket_utils = sig.net.socket_utils;
 const pull_request = sig.gossip.pull_request;
 const pull_response = sig.gossip.pull_response;
 
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const Thread = std.Thread;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -66,7 +66,7 @@ const GossipMessageWithEndpoint = struct {
 
 pub const PULL_REQUEST_RATE: Duration = .fromSecs(1);
 pub const PULL_RESPONSE_TIMEOUT: Duration = .fromSecs(5);
-pub const ACTIVE_SET_REFRESH_RATE: Duration = .fromSecs(15);
+pub const ACTIVE_SET_REFRESH_RATE: Duration = .fromMillis(500);
 pub const DATA_TIMEOUT: Duration = .fromSecs(15);
 pub const TABLE_TRIM_RATE: Duration = .fromSecs(10);
 pub const BUILD_MESSAGE_LOOP_MIN: Duration = .fromSecs(1);
@@ -183,7 +183,7 @@ pub const GossipService = struct {
     broker: LocalMessageBroker,
 
     pub const PushMessageQueue = Mux(struct {
-        queue: ArrayList(GossipData),
+        queue: std.ArrayList(GossipData),
         data_allocator: std.mem.Allocator,
     });
     const Entrypoint = struct { addr: SocketAddr, info: ?ContactInfo = null };
@@ -308,7 +308,7 @@ pub const GossipService = struct {
             .verified_incoming_channel = verified_incoming_channel,
             .gossip_table_rw = .init(gossip_table),
             .push_msg_queue_mux = .init(.{
-                .queue = .init(allocator),
+                .queue = .empty,
                 .data_allocator = gossip_data_allocator,
             }),
             .active_set_rw = .init(.init(allocator)),
@@ -382,7 +382,7 @@ pub const GossipService = struct {
             const push_msg_queue, var lock = self.push_msg_queue_mux.writeWithLock();
             defer lock.unlock();
             for (push_msg_queue.queue.items) |*v| v.deinit(push_msg_queue.data_allocator);
-            push_msg_queue.queue.deinit();
+            push_msg_queue.queue.deinit(self.allocator);
         }
     }
 
@@ -495,7 +495,7 @@ pub const GossipService = struct {
 
         message.verifySignature() catch |e| {
             logger.err().logf(
-                "packet_verify: failed to verify signature from {}: {s}",
+                "packet_verify: failed to verify signature from {f}: {s}",
                 .{ packet.addr, @errorName(e) },
             );
             return error.VerifyFail;
@@ -926,7 +926,8 @@ pub const GossipService = struct {
                 defer pull_req_timer.reset();
                 // this also includes sending ping messages to other peers
                 const now = getWallclockMs();
-                const pull_req_packets = self.buildPullRequests(
+                var pull_req_packets = self.buildPullRequests(
+                    self.allocator,
                     random,
                     pull_request.MAX_BLOOM_SIZE,
                     now,
@@ -934,7 +935,7 @@ pub const GossipService = struct {
                     self.logger.err().logf("failed to generate pull requests: {any}", .{e});
                     break :pull_blk;
                 };
-                defer pull_req_packets.deinit();
+                defer pull_req_packets.deinit(self.allocator);
                 for (pull_req_packets.items) |packet| {
                     try self.packet_outgoing_channel.send(packet);
                 }
@@ -986,7 +987,7 @@ pub const GossipService = struct {
                         &contact_info,
                     );
 
-                    try push_msg_queue.queue.appendSlice(&.{
+                    try push_msg_queue.queue.appendSlice(self.allocator, &.{
                         .{ .ContactInfo = contact_info },
                         .{ .LegacyContactInfo = legacy_contact_info },
                     });
@@ -1211,11 +1212,12 @@ pub const GossipService = struct {
     /// to be sent to a random set of gossip nodes.
     fn buildPullRequests(
         self: *GossipService,
+        gpa: std.mem.Allocator,
         random: std.Random,
         /// the bloomsize of the pull request's filters
         bloom_size: usize,
         now: u64,
-    ) !ArrayList(Packet) {
+    ) !std.ArrayListUnmanaged(Packet) {
         const zone = tracy.Zone.init(@src(), .{ .name = "gossip buildPullRequests" });
         defer zone.deinit();
 
@@ -1278,13 +1280,13 @@ pub const GossipService = struct {
         if (num_peers != 0) n_packets += filters.items.len;
         if (entrypoint_index != null) n_packets += filters.items.len;
 
-        var packet_batch = try ArrayList(Packet).initCapacity(self.allocator, n_packets);
-        packet_batch.appendNTimesAssumeCapacity(Packet.ANY_EMPTY, n_packets);
-        var packet_index: usize = 0;
+        var packet_batch: std.ArrayListUnmanaged(Packet) = .empty;
+        errdefer packet_batch.deinit(gpa);
+        try packet_batch.ensureTotalCapacityPrecise(gpa, n_packets);
 
         // update wallclock and sign
         self.my_contact_info.wallclock = now;
-        const my_contact_info_value = SignedGossipData.initSigned(
+        const my_contact_info_value: SignedGossipData = .initSigned(
             &self.my_keypair,
             // safe to copy contact info since it is immediately serialized
             .{ .ContactInfo = self.my_contact_info },
@@ -1302,12 +1304,10 @@ pub const GossipService = struct {
                 }
                 if (peer_contact_info.gossip_addr) |gossip_addr| {
                     const message: GossipMessage = .{ .PullRequest = .{ filter_i, my_contact_info_value } };
-                    var packet = &packet_batch.items[packet_index];
-
-                    const bytes = try bincode.writeToSlice(&packet.buffer, message, bincode.Params{});
+                    const packet = try packet_batch.addOne(gpa);
+                    const bytes = try bincode.writeToSlice(&packet.buffer, message, .standard);
                     packet.size = bytes.len;
                     packet.addr = gossip_addr;
-                    packet_index += 1;
                 }
             }
         }
@@ -1316,10 +1316,9 @@ pub const GossipService = struct {
         if (entrypoint_index) |entrypoint_idx| {
             const entrypoint = self.entrypoints[entrypoint_idx];
             for (filters.items) |filter| {
-                const packet = &packet_batch.items[packet_index];
+                const packet = try packet_batch.addOne(gpa);
                 const message: GossipMessage = .{ .PullRequest = .{ filter, my_contact_info_value } };
                 try packet.populateFromBincode(entrypoint.addr, message);
-                packet_index += 1;
             }
         }
 
@@ -2034,6 +2033,7 @@ pub const GossipService = struct {
 pub const LocalMessageBroker = struct {
     /// Pushes votes to VoteCollector in consensus.
     vote_collector: ?*Channel(sig.gossip.data.Vote) = null,
+    duplicate_shred_listener: ?*Channel(sig.gossip.data.DuplicateShred) = null,
 
     /// Publishes new gossip data that was just received over the network to the
     /// appropriate channels.
@@ -2041,12 +2041,25 @@ pub const LocalMessageBroker = struct {
     /// Any allocated data is cloned using the channel's allocator before sending.
     fn publish(self: *const LocalMessageBroker, data: *const GossipData) !void {
         switch (data.*) {
-            .Vote => |vote| if (self.vote_collector) |channel| {
-                const cloned_vote = try vote[1].clone(channel.allocator);
+            .Vote => |idx_vote| if (self.vote_collector) |channel| {
+                _, const vote = idx_vote;
+                const cloned_vote = try vote.clone(channel.allocator);
                 errdefer cloned_vote.deinit(channel.allocator);
                 try channel.send(cloned_vote);
             },
+            .DuplicateShred => |idx_dupe_shred| if (self.duplicate_shred_listener) |channel| {
+                _, const dupe_shred = idx_dupe_shred;
+                const dupe_shred_cloned = try dupe_shred.clone(channel.allocator);
+                errdefer dupe_shred_cloned.deinit(channel.allocator);
+                try channel.send(dupe_shred_cloned);
+            },
             else => {},
+        }
+    }
+
+    fn deinit(self: *const LocalMessageBroker) void {
+        if (self.vote_collector) |vcs| {
+            while (vcs.tryReceive()) |vote| vote.deinit(vcs.allocator);
         }
     }
 };
@@ -2254,34 +2267,6 @@ pub fn chunkValuesIntoPacketIndexes(
     }
 
     return packet_indexs;
-}
-
-pub fn getClusterEntrypoints(cluster: sig.core.Cluster) []const []const u8 {
-    return switch (cluster) {
-        .mainnet => &.{
-            "entrypoint.mainnet-beta.solana.com:8001",
-            "entrypoint2.mainnet-beta.solana.com:8001",
-            "entrypoint3.mainnet-beta.solana.com:8001",
-            "entrypoint4.mainnet-beta.solana.com:8001",
-            "entrypoint5.mainnet-beta.solana.com:8001",
-        },
-        .testnet => &.{
-            "entrypoint.testnet.solana.com:8001",
-            "entrypoint2.testnet.solana.com:8001",
-            "entrypoint3.testnet.solana.com:8001",
-        },
-        .devnet => &.{
-            "entrypoint.devnet.solana.com:8001",
-            "entrypoint2.devnet.solana.com:8001",
-            "entrypoint3.devnet.solana.com:8001",
-            "entrypoint4.devnet.solana.com:8001",
-            "entrypoint5.devnet.solana.com:8001",
-        },
-        .localnet => &.{
-            "127.0.0.1:1024", // agave test-validator default
-            "127.0.0.1:8001", // sig validator default
-        },
-    };
 }
 
 test "general coverage" {
@@ -2529,7 +2514,7 @@ test "handling prune messages" {
     };
     try prune_data.sign(&my_keypair);
 
-    var data = std.ArrayList(PruneData).init(allocator);
+    var data = std.array_list.Managed(PruneData).init(allocator);
     defer data.deinit();
     try data.append(prune_data);
 
@@ -2955,11 +2940,11 @@ fn testBuildPullRequests(
         }
     }
 
-    var packets = gossip_service.buildPullRequests(random, 2, now) catch |err| {
+    var packets = gossip_service.buildPullRequests(allocator, random, 2, now) catch |err| {
         std.log.err("\nThe failing now time is: '{d}'\n", .{now});
         return err;
     };
-    defer packets.deinit();
+    defer packets.deinit(allocator);
 
     try std.testing.expect(packets.items.len > 1);
     try std.testing.expect(!std.mem.eql(u8, packets.items[0].data(), packets.items[1].data()));
@@ -3013,8 +2998,8 @@ test "test build push messages" {
     {
         var pqlg = gossip_service.push_msg_queue_mux.lock();
         var push_queue = pqlg.mut();
-        try push_queue.queue.append(value);
-        pqlg.unlock();
+        defer pqlg.unlock();
+        try push_queue.queue.append(allocator, value);
     }
     try gossip_service.drainPushQueueToGossipTable(getWallclockMs());
 
@@ -3182,7 +3167,7 @@ test "test packet verification" {
         dshred.wallclock = 1714155765121;
         dshred.slot = 16592333628234015598;
         dshred.shred_index = 3853562894;
-        dshred.shred_type = .Data;
+        dshred.shred_type = .data;
         dshred.num_chunks = 99;
         dshred.chunk_index = 69;
         dshred.from = rand_pubkey;

@@ -18,7 +18,6 @@ const GeyserWriter = sig.geyser.GeyserWriter;
 const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
-const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SnapshotFiles = sig.accounts_db.snapshot.SnapshotFiles;
@@ -33,6 +32,7 @@ const getWallclockMs = sig.time.getWallclockMs;
 const globalRegistry = sig.prometheus.globalRegistry;
 const loadSnapshot = sig.accounts_db.snapshot.load.loadSnapshot;
 const servePrometheus = sig.prometheus.servePrometheus;
+const downloadAndExtractGenesis = sig.core.genesis_download.downloadAndExtractGenesis;
 
 const Logger = sig.trace.Logger("cmd");
 
@@ -67,26 +67,24 @@ pub fn main() !void {
     var gpa_state: GpaOrCAllocator(.{}) = .{};
     // defer _ = gpa_state.deinit();
 
-    var tracing_gpa = tracy.TracingAllocator{
+    var tracing_gpa: tracy.TracingAllocator = .{
         .name = "gpa",
         .parent = gpa_state.allocator(),
     };
     const gpa = tracing_gpa.allocator();
 
-    var gossip_gpa_state: GpaOrCAllocator(.{ .stack_trace_frames = 100 }) = .{};
-    var tracing_gossip_gpa = tracy.TracingAllocator{
+    var tracing_gossip_gpa: tracy.TracingAllocator = .{
         .name = "gossip gpa",
-        .parent = gossip_gpa_state.allocator(),
+        .parent = tracing_gpa.allocator(),
     };
-    // defer _ = gossip_gpa_state.deinit();
     const gossip_gpa = tracing_gossip_gpa.allocator();
 
     const argv = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, argv);
 
     const parser = cli.Parser(Cmd, Cmd.cmd_info);
-    const tty_config = std.io.tty.detectConfig(std.io.getStdOut());
-    const stdout = std.io.getStdOut().writer();
+    const tty_config = std.io.tty.detectConfig(.stdout());
+    const stdout = std.fs.File.stdout().deprecatedWriter();
     const cmd = try parser.parse(
         gpa,
         "sig",
@@ -104,6 +102,7 @@ pub fn main() !void {
     current_config.metrics_port = cmd.metrics_port;
     current_config.log_file = cmd.log_file;
     current_config.tee_logs = cmd.tee_logs;
+    current_config.validator_dir = try ensureValidatorDir(gpa, cmd.validator_dir);
 
     // If no subcommand was provided, print a friendly header and help information.
     const subcmd = cmd.subcmd orelse {
@@ -128,11 +127,21 @@ pub fn main() !void {
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
             current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
-            current_config.genesis_file_path = params.genesis_file_path;
+            current_config.shred_network.log_finished_slots = params.repair.log_finished_slots;
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
+            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
             params.geyser.apply(&current_config);
+            current_config.geyser.pipe_path = try current_config.derivePathFromValidatorDir(
+                gpa,
+                current_config.geyser.pipe_path,
+                "geyser.pipe",
+            );
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.stop_at_slot = params.stop_at_slot;
@@ -146,11 +155,20 @@ pub fn main() !void {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
-            current_config.genesis_file_path = params.genesis_file_path;
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
+            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
             params.geyser.apply(&current_config);
+            current_config.geyser.pipe_path = try current_config.derivePathFromValidatorDir(
+                gpa,
+                current_config.geyser.pipe_path,
+                "geyser.pipe",
+            );
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.stop_at_slot = params.stop_at_slot;
@@ -162,7 +180,9 @@ pub fn main() !void {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
+            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             current_config.shred_network.dump_shred_tracker = params.repair.dump_shred_tracker;
+            current_config.shred_network.log_finished_slots = params.repair.log_finished_slots;
             current_config.turbine.overwrite_stake_for_testing =
                 params.overwrite_stake_for_testing;
             current_config.shred_network.no_retransmit = params.no_retransmit;
@@ -171,28 +191,45 @@ pub fn main() !void {
         },
         .snapshot_download => |params| {
             current_config.shred_version = params.shred_version;
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
             params.accountsdb_download.apply(&current_config);
             params.gossip_base.apply(&current_config);
             try downloadSnapshot(gpa, gossip_gpa, current_config);
         },
         .snapshot_validate => |params| {
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
-            current_config.genesis_file_path = params.genesis_file_path;
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
+            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
-            current_config.gossip.cluster = params.gossip_cluster;
+            current_config.cluster = params.gossip_cluster;
             params.geyser.apply(&current_config);
+            current_config.geyser.pipe_path = try current_config.derivePathFromValidatorDir(
+                gpa,
+                current_config.geyser.pipe_path,
+                "geyser.pipe",
+            );
             try validateSnapshot(gpa, current_config);
         },
         .snapshot_create => |params| {
             // current_config.accounts_db.snapshot_dir = params.snapshot_dir;
-            // current_config.genesis_file_path = params.genesis_file_path;
+            // current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             // try createSnapshot(gpa, current_config);
             _ = params;
             @panic("TODO: support snapshot creation");
         },
         .print_manifest => |params| {
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
             try printManifest(gpa, current_config);
         },
         .leader_schedule => |params| {
@@ -200,15 +237,19 @@ pub fn main() !void {
             current_config.leader_schedule_path = params.leader_schedule;
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
-            current_config.genesis_file_path = params.genesis_file_path;
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
+            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
             try printLeaderSchedule(gpa, current_config);
         },
         .test_transaction_sender => |params| {
             current_config.shred_version = params.shred_version;
-            current_config.genesis_file_path = params.genesis_file_path;
+            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             current_config.test_transaction_sender.n_transactions = params.n_transactions;
             current_config.test_transaction_sender.n_lamports_per_transaction =
                 params.n_lamports_per_tx;
@@ -219,8 +260,13 @@ pub fn main() !void {
         .mock_rpc_server => |params| {
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
-            current_config.accounts_db.snapshot_dir = params.snapshot_dir;
-            current_config.genesis_file_path = params.genesis_file_path;
+
+            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+                gpa,
+                params.snapshot_dir,
+                "accounts_db",
+            );
+            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
             try mockRpcServer(gpa, current_config);
@@ -249,6 +295,13 @@ pub fn main() !void {
                 ),
             }
         },
+        .ledger => |params| {
+            const action = params.action orelse {
+                _ = try parser.parse(gpa, "sig", tty_config, stdout, &.{ "ledger", "--help" });
+                return;
+            };
+            try ledgerTool(gpa, current_config, action);
+        },
     }
 }
 
@@ -257,6 +310,7 @@ const Cmd = struct {
     metrics_port: u16,
     log_file: ?[]const u8,
     tee_logs: bool,
+    validator_dir: []const u8,
     subcmd: ?union(enum) {
         identity,
         gossip: Gossip,
@@ -271,12 +325,13 @@ const Cmd = struct {
         test_transaction_sender: TestTransactionSender,
         mock_rpc_server: MockRpcServer,
         agave_migration_tool: AgaveMigrationTool,
+        ledger: LedgerSubCmd,
     },
 
     const cmd_info: cli.CommandInfo(@This()) = .{
         .help = .{
             .short = std.fmt.comptimePrint(
-                \\Version: {}
+                \\Version: {f}
                 \\
                 \\Sig is a Solana validator client written in Zig. The project is still a
                 \\work in progress so contributions are welcome.
@@ -298,6 +353,7 @@ const Cmd = struct {
                 .test_transaction_sender = TestTransactionSender.cmd_info,
                 .mock_rpc_server = MockRpcServer.cmd_info,
                 .agave_migration_tool = AgaveMigrationTool.cmd_info,
+                .ledger = LedgerSubCmd.cmd_info,
             },
             .log_filters = .{
                 .kind = .named,
@@ -332,6 +388,17 @@ const Cmd = struct {
                 .help =
                 \\If --log-file is set, it disables logging to stderr.
                 \\Enable this flag to reactivate stderr logging when using --log-file.
+                ,
+            },
+            .validator_dir = .{
+                .kind = .named,
+                .name_override = "validator-dir",
+                .alias = .d,
+                .default_value = sig.VALIDATOR_DIR,
+                .config = .string,
+                .help =
+                \\base directory for all validator data (ledger, accounts_db, geyser pipe).
+                \\Subdirectory paths are derived from this base unless explicitly overridden.
                 ,
             },
         },
@@ -370,9 +437,8 @@ const Cmd = struct {
         .alias = .s,
         .default_value = sig.VALIDATOR_DIR ++ "accounts_db",
         .config = .string,
-        .help = "path to snapshot directory" ++
-            " (where snapshots are downloaded and/or unpacked to/from)" ++
-            " - default: {VALIDATOR_DIR}/accounts_db",
+        .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked). " ++
+            "Defaults to <validator-dir>/accounts_db. Overrides --validator-dir for this path.",
     };
 
     const genesis_file_path_arg: cli.ArgumentInfo(?[]const u8) = .{
@@ -489,7 +555,7 @@ const Cmd = struct {
             cfg.gossip.host = args.host;
             cfg.gossip.port = args.port;
             cfg.gossip.entrypoints = args.entrypoints;
-            cfg.gossip.cluster = args.network;
+            cfg.cluster = args.network;
         }
     };
     const GossipArgumentsNode = struct {
@@ -638,6 +704,7 @@ const Cmd = struct {
         max_shreds: u64,
         num_retransmit_threads: ?usize,
         dump_shred_tracker: bool,
+        log_finished_slots: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .turbine_port = .{
@@ -694,6 +761,14 @@ const Cmd = struct {
                 .help = "Create shred-tracker.txt" ++
                     " to visually represent the currently tracked slots.",
             },
+            .log_finished_slots = .{
+                .kind = .named,
+                .name_override = "log-finished-slots",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "Log the highest finished slot when it updates.",
+            },
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
@@ -724,7 +799,10 @@ const Cmd = struct {
                 .alias = .none,
                 .default_value = sig.VALIDATOR_DIR ++ "geyser.pipe",
                 .config = .string,
-                .help = "path to the geyser pipe",
+                .help =
+                \\path to the geyser pipe.
+                \\Defaults to <validator-dir>/geyser.pipe. Overrides --validator-dir for this path.
+                ,
             },
             .writer_fba_bytes = .{
                 .kind = .named,
@@ -899,6 +977,7 @@ const Cmd = struct {
         gossip_base: GossipArgumentsCommon,
         gossip_node: GossipArgumentsNode,
         repair: RepairArgumentsBase,
+        genesis_file_path: ?[]const u8,
         /// TODO: Remove when no longer needed
         overwrite_stake_for_testing: bool,
         no_retransmit: bool,
@@ -926,6 +1005,7 @@ const Cmd = struct {
                 .gossip_base = GossipArgumentsCommon.cmd_info,
                 .gossip_node = GossipArgumentsNode.cmd_info,
                 .repair = RepairArgumentsBase.cmd_info,
+                .genesis_file_path = genesis_file_path_arg,
                 .overwrite_stake_for_testing = .{
                     .kind = .named,
                     .name_override = null,
@@ -1131,6 +1211,78 @@ const Cmd = struct {
             },
         };
     };
+
+    const LedgerSubCmd = struct {
+        action: ?union(enum) {
+            bounds,
+            retain: Retain,
+        },
+
+        const Retain = struct {
+            start_slot: ?Slot,
+            end_slot: ?Slot,
+        };
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Ledger utilities for inspecting and modifying the ledger database.",
+                .long =
+                \\Provides utilities for working with the ledger database:
+                \\
+                \\  bounds  - Print the min and max slot in the ledger
+                \\  retain  - Remove all slots from the ledger outside the specified range
+                \\
+                \\Use --validator-dir to specify the validator directory containing the ledger.
+                ,
+            },
+            .sub = .{
+                .action = .{
+                    .bounds = .{
+                        .help = .{
+                            .short = "Print the min and max slot in the ledger.",
+                            .long = null,
+                        },
+                        .sub = .{},
+                    },
+                    .retain = .{
+                        .help = .{
+                            .short = "Remove all slots from the ledger outside the specified range.",
+                            .long =
+                            \\Removes all slots from the ledger that are outside the range
+                            \\[start-slot, end-slot]. If start-slot is not specified, it defaults
+                            \\to the minimum slot in the ledger. If end-slot is not specified,
+                            \\it defaults to the maximum slot in the ledger.
+                            ,
+                        },
+                        .sub = .{
+                            .start_slot = .{
+                                .kind = .named,
+                                .name_override = "start-slot",
+                                .alias = .none,
+                                .default_value = null,
+                                .config = {},
+                                .help =
+                                \\The first slot to retain (inclusive). 
+                                \\Defaults to min slot in ledger.
+                                ,
+                            },
+                            .end_slot = .{
+                                .kind = .named,
+                                .name_override = "end-slot",
+                                .alias = .none,
+                                .default_value = null,
+                                .config = {},
+                                .help =
+                                \\The last slot to retain (inclusive). 
+                                \\Defaults to max slot in ledger.
+                                ,
+                            },
+                        },
+                    },
+                },
+            },
+        };
+    };
 };
 
 const AllocationMetrics = struct {
@@ -1141,6 +1293,95 @@ const AllocationMetrics = struct {
     allocated_bytes_sqlite: *Gauge(u64),
 };
 
+/// Ensures the validator directory exists. Create it if it does not.
+fn ensureValidatorDir(allocator: std.mem.Allocator, validator_dir: []const u8) ![]const u8 {
+    std.fs.cwd().access(validator_dir, .{}) catch |access_err| {
+        switch (access_err) {
+            error.FileNotFound => {
+                std.fs.cwd().makePath(validator_dir) catch |create_err| {
+                    std.debug.print(
+                        "Cannot create validator directory '{s}': {}",
+                        .{ validator_dir, create_err },
+                    );
+                    return create_err;
+                };
+            },
+            else => {
+                std.debug.print(
+                    "Cannot access validator directory '{s}': {}",
+                    .{ validator_dir, access_err },
+                );
+                return access_err;
+            },
+        }
+    };
+    return std.fs.realpathAlloc(allocator, validator_dir);
+}
+
+/// Ensures a genesis file is available by either using the provided path
+/// or downloading it from the network for the specified cluster.
+///
+/// Returns the path to the genesis file. If downloaded, the file is stored
+/// in `<validator_dir>/genesis.bin`.
+///
+/// TODO: The hash is NOT verified against the cluster's expected genesis hash.
+fn ensureGenesis(
+    allocator: std.mem.Allocator,
+    cfg: config.Cmd,
+    logger: Logger,
+) ![]const u8 {
+    // If explicit path provided, use it directly
+    if (try cfg.genesisFilePath()) |provided_path| {
+        logger.info().logf("Using provided genesis file: {s}", .{provided_path});
+        return try allocator.dupe(u8, provided_path);
+    }
+
+    // If genesis already exists in validator dir, use it
+    const existing_path = try std.fs.path.join(
+        allocator,
+        &.{ cfg.validator_dir, "genesis.bin" },
+    );
+    errdefer allocator.free(existing_path);
+    const maybe_genesis_file: ?std.fs.File = std.fs.cwd().openFile(
+        existing_path,
+        .{},
+    ) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    if (maybe_genesis_file != null) {
+        logger.info().logf("Using existing genesis file: {s}", .{existing_path});
+        maybe_genesis_file.?.close();
+        return existing_path;
+    }
+    allocator.free(existing_path);
+
+    // Determine cluster for genesis
+    const cluster = try cfg.getCluster() orelse {
+        logger.err().log(
+            \\No genesis file path provided and no cluster specified. 
+            \\Use --genesis-file-path or --cluster"
+        );
+        return error.GenesisPathNotProvided;
+    };
+
+    // Otherwise, download genesis from network
+    logger.info().logf("Downloading genesis from {s} cluster...", .{@tagName(cluster)});
+    const cluster_url = cluster.getRpcUrl() orelse @panic("No RPC Url!");
+    const genesis_path = downloadAndExtractGenesis(
+        allocator,
+        cluster_url,
+        cfg.validator_dir,
+        .from(logger),
+    ) catch |err| {
+        logger.err().logf("Failed to download genesis: {}", .{err});
+        return error.GenesisDownloadFailed;
+    };
+
+    logger.info().logf("Genesis downloaded to: {s}", .{genesis_path});
+    return genesis_path;
+}
+
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     const maybe_file, const logger = try spawnLogger(allocator, cfg);
@@ -1150,7 +1391,7 @@ fn identity(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     const keypair = try sig.identity.getOrInit(allocator, .from(logger));
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
-    logger.info().logf("Identity: {s}", .{pubkey});
+    logger.info().logf("Identity: {f}", .{pubkey});
 }
 
 /// entrypoint to run only gossip
@@ -1212,17 +1453,26 @@ fn validator(
 
     const allocator = gpa_metrics.allocator();
 
+    const genesis_file_path = try ensureGenesis(allocator, cfg, app_base.logger);
+    defer allocator.free(genesis_file_path);
+
     const repair_port: u16 = cfg.shred_network.repair_port;
     const turbine_recv_port: u16 = cfg.shred_network.turbine_recv_port;
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
+
+    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    defer allocator.free(ledger_dir);
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{
         .iterate = true,
     });
     defer snapshot_dir.close();
 
-    var gossip_votes = try sig.sync.Channel(sig.gossip.data.Vote).init(allocator);
+    var gossip_votes: sig.sync.Channel(sig.gossip.data.Vote) = try .init(allocator);
     defer gossip_votes.deinit();
+
+    var duplicate_shreds: sig.sync.Channel(sig.gossip.data.DuplicateShred) = try .init(allocator);
+    defer duplicate_shreds.deinit();
 
     var gossip_service = try startGossip(
         allocator,
@@ -1233,7 +1483,10 @@ fn validator(
             .{ .tag = .repair, .port = repair_port },
             .{ .tag = .turbine_recv, .port = turbine_recv_port },
         },
-        .{ .vote_collector = &gossip_votes },
+        .{
+            .vote_collector = &gossip_votes,
+            .duplicate_shred_listener = &duplicate_shreds,
+        },
     );
     defer {
         gossip_service.shutdown();
@@ -1291,9 +1544,7 @@ fn validator(
         snapshot_dir,
         snapshot_files,
         .{
-            .genesis_file_path = try cfg.genesisFilePath() orelse {
-                return error.GenesisPathNotProvided;
-            },
+            .genesis_file_path = genesis_file_path,
             .extract = if (cfg.accounts_db.skip_snapshot_validation)
                 .{ .entire_snapshot = &rooted_db }
             else
@@ -1301,6 +1552,12 @@ fn validator(
         },
     );
     defer loaded_snapshot.deinit();
+
+    const static_rpc_ctx: sig.rpc.methods.StaticHookContext = .{
+        .genesis_hash = loaded_snapshot.genesis_config.hash,
+    };
+
+    try app_base.rpc_hooks.set(allocator, &static_rpc_ctx);
 
     var unrooted_tracy: tracy.TracingAllocator = .{
         .name = "AccountsDB Unrooted",
@@ -1315,7 +1572,6 @@ fn validator(
     defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
-    const bank_fields = &collapsed_manifest.bank_fields;
 
     var ledger_tracy: tracy.TracingAllocator = .{
         .name = "Ledger",
@@ -1330,7 +1586,7 @@ fn validator(
     var ledger = try Ledger.init(
         ledger_tracy_metrics.allocator(),
         .from(app_base.logger),
-        sig.VALIDATOR_DIR ++ "ledger",
+        ledger_dir,
         app_base.metrics_registry,
     );
     defer ledger.deinit();
@@ -1348,85 +1604,20 @@ fn validator(
     const my_contact_info =
         sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
 
-    const epoch_schedule = bank_fields.epoch_schedule;
-    const epoch = bank_fields.epoch;
-
-    const staked_nodes = try collapsed_manifest.epochStakes(epoch);
-    var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
-    defer epoch_context_manager.deinit();
-    try epoch_context_manager.contexts.realign(epoch);
-    {
-        var staked_nodes_cloned = try staked_nodes.clone(gpa);
-        errdefer staked_nodes_cloned.deinit(gpa);
-
-        const leader_schedule = if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule|
-            leader_schedule[1].slot_leaders
-        else ls: {
-            // TODO: Implement feature gating for vote keyed leader schedule.
-            // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
-            // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
-            break :ls if (true)
-                try LeaderSchedule.fromVoteAccounts(
-                    allocator,
-                    epoch,
-                    epoch_schedule.slots_per_epoch,
-                    try collapsed_manifest.epochVoteAccounts(epoch),
-                )
-            else
-                try LeaderSchedule.fromStakedNodes(
-                    allocator,
-                    epoch,
-                    epoch_schedule.slots_per_epoch,
-                    staked_nodes,
-                );
-        };
-        errdefer allocator.free(leader_schedule);
-
-        try epoch_context_manager.put(epoch, .{
-            .staked_nodes = staked_nodes_cloned,
-            .leader_schedule = leader_schedule,
-        });
-    }
+    const feature_set = try loaded_snapshot.featureSet(allocator, &new_db);
+    var epoch_tracker = try sig.core.EpochTracker.initFromManifest(
+        allocator,
+        collapsed_manifest,
+        &feature_set,
+    );
+    defer epoch_tracker.deinit(allocator);
 
     const rpc_cluster_type = loaded_snapshot.genesis_config.cluster_type;
-    var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
+    const rpc_url = rpc_cluster_type.getRpcUrl() orelse @panic("No RPC Url for cluster type!");
+    var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{});
     defer rpc_client.deinit();
 
-    var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService.init(
-        allocator,
-        .from(app_base.logger),
-        &epoch_context_manager,
-        rpc_client,
-    );
-
-    const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
-        .{},
-        sig.adapter.RpcEpochContextService.run,
-        .{ &rpc_epoch_ctx_service, app_base.exit },
-    );
-
     const turbine_config = cfg.turbine;
-
-    // shred network
-    var shred_network_manager = try sig.shred_network.start(
-        cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
-        .{
-            .allocator = allocator,
-            .logger = .from(app_base.logger),
-            .registry = app_base.metrics_registry,
-            .random = prng.random(),
-            .ledger = &ledger,
-            .my_keypair = &app_base.my_keypair,
-            .exit = app_base.exit,
-            .gossip_table_rw = &gossip_service.gossip_table_rw,
-            .my_shred_version = &gossip_service.my_shred_version,
-            .epoch_context_mgr = &epoch_context_manager,
-            .my_contact_info = my_contact_info,
-            .n_retransmit_threads = turbine_config.num_retransmit_threads,
-            .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
-        },
-    );
-    defer shred_network_manager.deinit();
 
     // Vote account. if not provided, disable voting
     const maybe_vote_pubkey: ?Pubkey = if (cfg.voting_enabled) blk: {
@@ -1465,7 +1656,7 @@ fn validator(
         .account_store = .{ .accounts_db_two = &new_db },
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
-        .epoch_context_manager = &epoch_context_manager,
+        .epoch_tracker = &epoch_tracker,
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = voting_enabled,
@@ -1474,11 +1665,49 @@ fn validator(
     });
     defer replay_service_state.deinit(allocator);
 
+    const account_store = sig.accounts_db.AccountStore{
+        .accounts_db_two = &new_db,
+    };
+
+    try app_base.rpc_hooks.set(allocator, sig.rpc.methods.RpcHookContext{
+        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+        .epoch_tracker = &epoch_tracker,
+        .account_reader = account_store.reader(),
+    });
+
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
         if (maybe_vote_sockets) |*vs| vs else null,
         &gossip_votes,
+        &gossip_service.gossip_table_rw,
     );
+
+    // shred network
+    var shred_network_manager = try sig.shred_network.start(
+        cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
+        .{
+            .allocator = allocator,
+            .logger = .from(app_base.logger),
+            .registry = app_base.metrics_registry,
+            .random = prng.random(),
+            .ledger = &ledger,
+            .my_keypair = &app_base.my_keypair,
+            .exit = app_base.exit,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+            .my_shred_version = &gossip_service.my_shred_version,
+            .epoch_tracker = &epoch_tracker,
+            .my_contact_info = my_contact_info,
+            .n_retransmit_threads = turbine_config.num_retransmit_threads,
+            .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
+            .rpc_hooks = null,
+            .duplicate = if (replay_service_state.consensus) |consensus| .{
+                .shred_receiver = &duplicate_shreds,
+                .slots_sender = consensus.receivers.duplicate_slots,
+            } else null,
+            .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
+        },
+    );
+    defer shred_network_manager.deinit();
 
     const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
         try std.Thread.spawn(.{}, runRPCServer, .{
@@ -1493,7 +1722,6 @@ fn validator(
 
     if (rpc_server_thread) |thread| thread.join();
     replay_thread.join();
-    rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
     ledger_cleanup_service.join();
@@ -1551,14 +1779,24 @@ fn replayOffline(
 
     const allocator = gpa_metrics.allocator();
 
-    const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
+    const genesis_file_path = try ensureGenesis(allocator, cfg, app_base.logger);
+    defer allocator.free(genesis_file_path);
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(
+        cfg.accounts_db.snapshot_dir,
+        .{ .iterate = true },
+    );
     defer snapshot_dir.close();
+
+    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    defer allocator.free(ledger_dir);
 
     const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
 
-    const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
+    const rooted_file = try std.fs.path.joinZ(
+        allocator,
+        &.{ cfg.accounts_db.snapshot_dir, "accounts.db" },
+    );
     defer allocator.free(rooted_file);
 
     var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
@@ -1581,9 +1819,7 @@ fn replayOffline(
         snapshot_dir,
         snapshot_files,
         .{
-            .genesis_file_path = try cfg.genesisFilePath() orelse {
-                return error.GenesisPathNotProvided;
-            },
+            .genesis_file_path = genesis_file_path,
             .extract = if (cfg.accounts_db.skip_snapshot_validation)
                 .{ .entire_snapshot = &rooted_db }
             else
@@ -1605,20 +1841,6 @@ fn replayOffline(
     defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
-    const bank_fields = &collapsed_manifest.bank_fields;
-
-    // leader schedule
-    var leader_schedule_cache = LeaderScheduleCache.init(allocator, bank_fields.epoch_schedule);
-    if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule| {
-        try leader_schedule_cache.put(bank_fields.epoch, leader_schedule[1]);
-    } else {
-        const schedule_1 = try collapsed_manifest.leaderSchedule(allocator, null);
-        errdefer schedule_1.deinit();
-        try leader_schedule_cache.put(bank_fields.epoch, schedule_1);
-        const schedule_2 = try collapsed_manifest.leaderSchedule(allocator, bank_fields.epoch + 1);
-        errdefer schedule_2.deinit();
-        try leader_schedule_cache.put(bank_fields.epoch + 1, schedule_2);
-    }
 
     var ledger_tracy: tracy.TracingAllocator = .{
         .name = "Ledger",
@@ -1633,7 +1855,7 @@ fn replayOffline(
     var ledger = try Ledger.init(
         ledger_tracy_metrics.allocator(),
         .from(app_base.logger),
-        sig.VALIDATOR_DIR ++ "ledger",
+        ledger_dir,
         app_base.metrics_registry,
     );
     defer ledger.deinit();
@@ -1644,78 +1866,20 @@ fn replayOffline(
         app_base.exit,
     });
 
-    const epoch_schedule = bank_fields.epoch_schedule;
-    const epoch = bank_fields.epoch;
-
-    const staked_nodes = try collapsed_manifest.epochStakes(epoch);
-    var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
-    defer epoch_context_manager.deinit();
-    try epoch_context_manager.contexts.realign(epoch);
-    {
-        var staked_nodes_cloned = try staked_nodes.clone(gpa);
-        errdefer staked_nodes_cloned.deinit(gpa);
-
-        // TODO: Implement feature gating for vote keyed leader schedule.
-        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
-        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
-        const leader_schedule_0 = if (true)
-            try LeaderSchedule.fromVoteAccounts(
-                allocator,
-                epoch,
-                epoch_schedule.slots_per_epoch,
-                try collapsed_manifest.epochVoteAccounts(epoch),
-            )
-        else
-            try LeaderSchedule.fromStakedNodes(
-                allocator,
-                epoch,
-                epoch_schedule.slots_per_epoch,
-                staked_nodes,
-            );
-        errdefer allocator.free(leader_schedule_0);
-
-        try epoch_context_manager.put(epoch, .{
-            .staked_nodes = staked_nodes_cloned,
-            .leader_schedule = leader_schedule_0,
-        });
-    }
-    {
-        // TODO: This was a quick ugly fix to support single transitions. The proper fix requires
-        // correct fork tracking which is addressed in a follow up PR. https://github.com/Syndica/sig/pull/1113
-        var staked_nodes_cloned = try staked_nodes.clone(allocator);
-        errdefer staked_nodes_cloned.deinit(allocator);
-
-        // TODO: Implement feature gating for vote keyed leader schedule.
-        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/ledger/src/leader_schedule_utils.rs#L12
-        // [agave] https://github.com/anza-xyz/agave/blob/e468acf4da519171510f2ec982f70a0fd9eb2c8b/runtime/src/bank.rs#L4833
-        const leader_schedule_1 = if (true)
-            try LeaderSchedule.fromVoteAccounts(
-                allocator,
-                epoch + 1,
-                epoch_schedule.slots_per_epoch,
-                try collapsed_manifest.epochVoteAccounts(epoch + 1),
-            )
-        else
-            try LeaderSchedule.fromStakedNodes(
-                allocator,
-                epoch,
-                epoch_schedule.slots_per_epoch,
-                staked_nodes,
-            );
-        errdefer allocator.free(leader_schedule_1);
-
-        try epoch_context_manager.put(epoch + 1, .{
-            .staked_nodes = staked_nodes_cloned,
-            .leader_schedule = leader_schedule_1,
-        });
-    }
+    const feature_set = try loaded_snapshot.featureSet(allocator, &new_db);
+    var epoch_tracker = try sig.core.EpochTracker.initFromManifest(
+        allocator,
+        collapsed_manifest,
+        &feature_set,
+    );
+    defer epoch_tracker.deinit(allocator);
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db_two = &new_db },
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
-        .epoch_context_manager = &epoch_context_manager,
+        .epoch_tracker = &epoch_tracker,
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
         .voting_enabled = false,
@@ -1726,6 +1890,7 @@ fn replayOffline(
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
+        null,
         null,
         null,
     );
@@ -1745,11 +1910,16 @@ fn shredNetwork(
         app_base.deinit();
     }
 
-    const genesis_path = try cfg.genesisFilePath() orelse
-        return error.GenesisPathNotProvided;
-    const genesis_config = try GenesisConfig.init(allocator, genesis_path);
+    const genesis_file_path = try ensureGenesis(allocator, cfg, app_base.logger);
+    defer allocator.free(genesis_file_path);
+    const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
 
-    var rpc_client = try sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
+    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    defer allocator.free(ledger_dir);
+
+    const rpc_url = genesis_config.cluster_type.getRpcUrl() orelse
+        @panic("No RPC Url for cluster type!");
+    var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{});
     defer rpc_client.deinit();
 
     const shred_network_conf = cfg.shred_network.toConfig(
@@ -1759,7 +1929,7 @@ fn shredNetwork(
         },
     );
     app_base.logger.info().logf(
-        "Starting after assumed root slot: {?}",
+        "Starting after assumed root slot: {any}",
         .{shred_network_conf.root_slot},
     );
 
@@ -1776,20 +1946,34 @@ fn shredNetwork(
         allocator.destroy(gossip_service);
     }
 
-    var epoch_context_manager = try sig.adapter.EpochContextManager
-        .init(allocator, genesis_config.epoch_schedule);
-    var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService
-        .init(allocator, .from(app_base.logger), &epoch_context_manager, rpc_client);
+    var epoch_tracker = sig.core.EpochTracker.init(
+        .initFromGenesisConfig(&genesis_config),
+        shred_network_conf.root_slot,
+        genesis_config.epoch_schedule,
+    );
+    defer epoch_tracker.deinit(allocator);
+
+    var rpc_epoch_ctx_service = RpcLeaderScheduleService
+        .init(allocator, .from(app_base.logger), &epoch_tracker, rpc_client);
     const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
         .{},
-        sig.adapter.RpcEpochContextService.run,
+        RpcLeaderScheduleService.run,
         .{ &rpc_epoch_ctx_service, app_base.exit },
     );
+
+    var start = sig.time.Timer.start();
+    while (start.read().asSecs() < 30) {
+        const leader_schedules = epoch_tracker.getLeaderSchedules() catch {
+            std.Thread.sleep(1_000_000_000);
+            continue;
+        };
+        if (leader_schedules.next != null) break;
+    }
 
     var ledger = try Ledger.init(
         allocator,
         .from(app_base.logger),
-        sig.VALIDATOR_DIR ++ "ledger",
+        ledger_dir,
         app_base.metrics_registry,
     );
     defer ledger.deinit();
@@ -1800,10 +1984,10 @@ fn shredNetwork(
         app_base.exit,
     });
 
-    var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
+    var prng: std.Random.DefaultPrng = .init(@bitCast(std.time.timestamp()));
 
-    const my_contact_info =
-        sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
+    const my_contact_info: sig.gossip.data.ThreadSafeContactInfo =
+        .fromContactInfo(gossip_service.my_contact_info);
 
     // shred networking
     var shred_network_manager = try sig.shred_network.start(shred_network_conf, .{
@@ -1812,14 +1996,18 @@ fn shredNetwork(
         .registry = app_base.metrics_registry,
         .random = prng.random(),
         .ledger = &ledger,
-        .my_keypair = &app_base.my_keypair,
         .exit = app_base.exit,
+        .my_keypair = &app_base.my_keypair,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .my_shred_version = &gossip_service.my_shred_version,
-        .epoch_context_mgr = &epoch_context_manager,
+        .epoch_tracker = &epoch_tracker,
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,
+        .rpc_hooks = null,
+        // No consensus in the standalone mode, so duplicate slots are not reported.
+        .duplicate = null,
+        .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
     });
     defer shred_network_manager.deinit();
 
@@ -1920,6 +2108,9 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         app_base.deinit();
     }
 
+    const genesis_file_path = try ensureGenesis(allocator, cfg, .from(app_base.logger));
+    defer allocator.free(genesis_file_path);
+
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
@@ -1952,9 +2143,7 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         snapshot_dir,
         snapshot_files,
         .{
-            .genesis_file_path = try cfg.genesisFilePath() orelse {
-                return error.GenesisPathNotProvided;
-            },
+            .genesis_file_path = genesis_file_path,
             .extract = .{ .entire_snapshot_and_validate = &rooted_db },
         },
     );
@@ -1969,63 +2158,53 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         app_base.deinit();
     }
 
-    const root_slot, //
     const leader_schedule //
     = try getLeaderScheduleFromCli(allocator, cfg) orelse b: {
-        app_base.logger.info().log("Downloading a snapshot to calculate the leader schedule.");
+        const cluster_type = try cfg.getCluster() orelse
+            return error.ClusterNotProvided;
 
-        const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
-        var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
-        defer snapshot_dir.close();
+        const rpc_url = cluster_type.getRpcUrl() orelse @panic("No RPC Url for cluster type!");
+        var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{});
+        defer rpc_client.deinit();
 
-        const snapshot_files =
-            SnapshotFiles.find(allocator, snapshot_dir) catch |err| switch (err) {
-                error.NoFullSnapshotFileInfoFound => {
-                    app_base.logger.err().log(
-                        \\\ No snapshot found and no gossip service to download a snapshot from.
-                        \\\ Download using the `snapshot-download` command.
-                    );
-                    return err;
-                },
-                else => return err,
-            };
-
-        var loaded_snapshot = try loadSnapshot(
-            allocator,
-            .from(app_base.logger),
-            snapshot_dir,
-            snapshot_files,
-            .{
-                .genesis_file_path = try cfg.genesisFilePath() orelse {
-                    return error.GenesisPathNotProvided;
-                },
-                .extract = .metadata_only,
-            },
-        );
-        defer loaded_snapshot.deinit();
-
-        const bank_fields = &loaded_snapshot.collapsed_manifest.bank_fields;
-        _, const slot_index = bank_fields.epoch_schedule.getEpochAndSlotIndex(bank_fields.slot);
-        break :b .{
-            bank_fields.slot - slot_index,
-            try loaded_snapshot.collapsed_manifest.leaderSchedule(allocator, null),
+        const slot = blk: {
+            const response = try rpc_client.getSlot(.{});
+            defer response.deinit();
+            break :blk try response.result();
         };
-    };
 
-    var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
-    try leader_schedule.write(stdout.writer(), root_slot);
-    try stdout.flush();
+        const leader_schedule = blk: {
+            const response = try rpc_client.getLeaderSchedule(.{ .slot = slot });
+            defer response.deinit();
+
+            const rpc_schedule = (try response.result()).value;
+            break :blk try sig.core.leader_schedule.computeFromMap(
+                allocator,
+                &rpc_schedule,
+            );
+        };
+        break :b leader_schedule;
+    };
+    defer leader_schedule.deinit(allocator);
+
+    var buffer: [4096]u8 = undefined;
+    var stdout = std.fs.File.stdout().writer(&buffer);
+    try leader_schedule.write(&stdout.interface);
+    try stdout.interface.flush();
 }
 
 fn getLeaderScheduleFromCli(
     allocator: std.mem.Allocator,
     cfg: config.Cmd,
-) !?struct { Slot, LeaderSchedule } {
+) !?LeaderSchedule {
     return if (cfg.leader_schedule_path) |path|
         if (std.mem.eql(u8, "--", path))
-            try LeaderSchedule.read(allocator, std.io.getStdIn().reader())
+            try LeaderSchedule.read(allocator, std.fs.File.stdin().deprecatedReader())
         else
-            try LeaderSchedule.read(allocator, (try std.fs.cwd().openFile(path, .{})).reader())
+            try LeaderSchedule.read(
+                allocator,
+                (try std.fs.cwd().openFile(path, .{})).deprecatedReader(),
+            )
     else
         null;
 }
@@ -2042,8 +2221,9 @@ fn testTransactionSenderService(
     }
 
     // read genesis (used for leader schedule)
-    const genesis_file_path = try cfg.genesisFilePath() orelse
-        @panic("No genesis file path found: use -g or -n");
+    const genesis_file_path = try ensureGenesis(allocator, cfg, .from(app_base.logger));
+    defer allocator.free(genesis_file_path);
+
     const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
 
     // start gossip (used to get TPU ports of leaders)
@@ -2061,12 +2241,7 @@ fn testTransactionSenderService(
     }
 
     // define cluster of where to land transactions
-    const rpc_cluster: ClusterType = if (try cfg.gossip.getCluster()) |n| switch (n) {
-        .mainnet => .MainnetBeta,
-        .devnet => .Devnet,
-        .testnet => .Testnet,
-        .localnet => .LocalHost,
-    } else {
+    const rpc_cluster: ClusterType = try cfg.getCluster() orelse {
         @panic("cluster option (-c) not provided");
     };
     app_base.logger.warn().logf(
@@ -2096,7 +2271,8 @@ fn testTransactionSenderService(
     );
 
     // rpc is used to get blockhashes and other balance information
-    var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster, .{
+    const rpc_url = rpc_cluster.getRpcUrl() orelse @panic("No RPC Url for cluster type!");
+    var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{
         .logger = .from(app_base.logger),
     });
     defer rpc_client.deinit();
@@ -2190,6 +2366,94 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     );
 }
 
+/// Entrypoint for ledger utilities
+fn ledgerTool(
+    allocator: std.mem.Allocator,
+    cfg: config.Cmd,
+    action: std.meta.Child(@TypeOf(@as(Cmd.LedgerSubCmd, undefined).action)),
+) !void {
+    const maybe_file, const logger = try spawnLogger(allocator, cfg);
+    defer if (maybe_file) |file| file.close();
+    defer logger.deinit();
+
+    const stdout_file_writer = std.fs.File.stdout().writer(&.{});
+    var stdout = stdout_file_writer.interface;
+
+    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    defer allocator.free(ledger_dir);
+
+    var ledger_state = Ledger.init(allocator, .from(logger), ledger_dir, null) catch |err| {
+        logger.err().logf("Failed to open ledger at '{s}': {}", .{ ledger_dir, err });
+        return err;
+    };
+    defer ledger_state.deinit();
+
+    const reader = ledger_state.reader();
+
+    switch (action) {
+        .bounds => {
+            const lowest_slot = try reader.lowestSlot();
+            const highest_slot = try reader.highestSlot() orelse lowest_slot;
+            try stdout.print("Ledger bounds: {d} to {d}\n", .{ lowest_slot, highest_slot });
+        },
+        .retain => |retain_params| {
+            const lowest_slot = try reader.lowestSlot();
+            const highest_slot = try reader.highestSlot() orelse lowest_slot;
+
+            const start_slot = retain_params.start_slot orelse lowest_slot;
+            const end_slot = retain_params.end_slot orelse highest_slot;
+
+            if (start_slot > end_slot) {
+                logger.err().logf("Invalid range: start-slot ({d}) > end-slot ({d})", .{
+                    start_slot,
+                    end_slot,
+                });
+                return error.InvalidSlotRange;
+            }
+
+            try stdout.print("Current ledger bounds: [{d}, {d}]\n", .{
+                lowest_slot,
+                highest_slot,
+            });
+            try stdout.print("Retaining slots in range: [{d}, {d}]\n", .{
+                start_slot,
+                end_slot,
+            });
+
+            // Purge slots before start_slot
+            if (start_slot > lowest_slot) {
+                try stdout.print("Purging slots [{d}, {d})...\n", .{ lowest_slot, start_slot });
+                const did_purge = try sig.ledger.cleanup_service.purgeSlots(
+                    &ledger_state.db,
+                    lowest_slot,
+                    start_slot - 1,
+                );
+                if (did_purge) {
+                    try stdout.print("  Purged slots before {d}\n", .{start_slot});
+                }
+            }
+
+            // Purge slots after end_slot
+            if (end_slot < highest_slot) {
+                try stdout.print("Purging slots ({d}, {d}]...\n", .{ end_slot, highest_slot });
+                const did_purge = try sig.ledger.cleanup_service.purgeSlots(
+                    &ledger_state.db,
+                    end_slot + 1,
+                    highest_slot,
+                );
+                if (did_purge) {
+                    try stdout.print("  Purged slots after {d}\n", .{end_slot});
+                }
+            }
+
+            try stdout.print("Done. Retained slots in range [{d}, {d}]\n", .{
+                start_slot,
+                end_slot,
+            });
+        },
+    }
+}
+
 /// State that typically needs to be initialized at the start of the app,
 /// and deinitialized only when the app exits.
 const AppBase = struct {
@@ -2228,7 +2492,8 @@ const AppBase = struct {
         const my_keypair = try sig.identity.getOrInit(allocator, .from(logger));
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
-        const entrypoints = try cfg.gossip.getEntrypointAddrs(allocator);
+        const entrypoints = try cfg.gossip.getEntrypointAddrs(try cfg.getCluster(), allocator);
+        if (entrypoints.len == 0) logger.warn().log("no gossip entrypoints provided");
 
         const echo_data = try getShredAndIPFromEchoServer(.from(logger), entrypoints);
 
@@ -2415,7 +2680,7 @@ const ReplayAndConsensusServiceState = struct {
             account_store: sig.accounts_db.AccountStore,
             loaded_snapshot: *sig.accounts_db.snapshot.LoadedSnapshot,
             ledger: *Ledger,
-            epoch_context_manager: *sig.adapter.EpochContextManager,
+            epoch_tracker: *sig.core.EpochTracker,
             replay_threads: u32,
             disable_consensus: bool,
             voting_enabled: bool,
@@ -2427,11 +2692,6 @@ const ReplayAndConsensusServiceState = struct {
             const account_store = params.account_store;
             const manifest = &params.loaded_snapshot.collapsed_manifest;
             const bank_fields = &manifest.bank_fields;
-            const epoch = bank_fields.epoch;
-
-            const epoch_stakes_map = &manifest.bank_extra.versioned_epoch_stakes;
-            const epoch_stakes = epoch_stakes_map.get(epoch) orelse
-                return error.EpochStakesMissingFromSnapshot;
 
             const feature_set = try sig.replay.service.getActiveFeatures(
                 allocator,
@@ -2453,12 +2713,6 @@ const ReplayAndConsensusServiceState = struct {
             const hard_forks = try bank_fields.hard_forks.clone(allocator);
             errdefer hard_forks.deinit(allocator);
 
-            const current_epoch_constants: sig.core.EpochConstants = try .fromBankFields(
-                bank_fields,
-                try epoch_stakes.current.convert(allocator, .delegation),
-            );
-            errdefer current_epoch_constants.deinit(allocator);
-
             break :replay_state try .init(.{
                 .allocator = allocator,
                 .logger = .from(params.app_base.logger),
@@ -2473,21 +2727,18 @@ const ReplayAndConsensusServiceState = struct {
                         // For now, default to using the node keypair as the authorized voter
                         // (same as Agave's default behavior when no --authorized-voter is specified)
                         // ref https://github.com/anza-xyz/agave/blob/67a1cc9ef4222187820818d95325a0c8e700312f/validator/src/commands/run/execute.rs#L136-L138
-                        &.{params.app_base.my_keypair}
+                        (&params.app_base.my_keypair)[0..1]
                     else
                         &.{},
                 },
                 .account_store = account_store,
                 .ledger = params.ledger,
-                .epoch_schedule = bank_fields.epoch_schedule,
-                .slot_leaders = params.epoch_context_manager.slotLeaders(),
+                .epoch_tracker = params.epoch_tracker,
                 .root = .{
                     .slot = bank_fields.slot,
                     .constants = root_slot_constants,
                     .state = root_slot_state,
                 },
-                .current_epoch = epoch,
-                .current_epoch_constants = current_epoch_constants,
                 .hard_forks = hard_forks,
                 .replay_threads = params.replay_threads,
                 .stop_at_slot = params.stop_at_slot,
@@ -2540,6 +2791,7 @@ const ReplayAndConsensusServiceState = struct {
         app_base: *const AppBase,
         vote_sockets: ?*const replay.consensus.core.VoteSockets,
         gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
+        gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     ) !std.Thread {
         return try app_base.spawnService(
             "replay",
@@ -2560,6 +2812,7 @@ const ReplayAndConsensusServiceState = struct {
                     .senders = c.senders,
                     .receivers = c.receivers,
                     .vote_sockets = vote_sockets,
+                    .gossip_table = gossip_table,
                 } else null,
             },
         );
@@ -2576,7 +2829,7 @@ fn spawnLogger(
             else => return e,
         };
         try file.seekFromEnd(0);
-        break :blk .{ file, file.writer() };
+        break :blk .{ file, file.deprecatedWriter() };
     } else .{ null, null };
 
     var std_logger = try ChannelPrintLogger.init(.{
@@ -2640,10 +2893,13 @@ fn downloadSnapshot(
     defer if (maybe_inc_file) |inc_file| inc_file.close();
 }
 
-fn getTrustedValidators(allocator: std.mem.Allocator, cfg: config.Cmd) !?std.ArrayList(Pubkey) {
-    var trusted_validators: ?std.ArrayList(Pubkey) = null;
+fn getTrustedValidators(
+    allocator: std.mem.Allocator,
+    cfg: config.Cmd,
+) !?std.array_list.Managed(Pubkey) {
+    var trusted_validators: ?std.array_list.Managed(Pubkey) = null;
     if (cfg.gossip.trusted_validators.len > 0) {
-        trusted_validators = try std.ArrayList(Pubkey).initCapacity(
+        trusted_validators = try std.array_list.Managed(Pubkey).initCapacity(
             allocator,
             cfg.gossip.trusted_validators.len,
         );
@@ -2659,7 +2915,112 @@ pub const panic = std.debug.FullPanic(loggingPanic);
 fn loggingPanic(message: []const u8, first_trace_addr: ?usize) noreturn {
     std.debug.lockStdErr();
     defer std.debug.unlockStdErr();
-    const writer = std.io.getStdErr().writer();
+    const writer = std.fs.File.stderr().deprecatedWriter();
     sig.trace.logfmt.writeLog(writer, "panic", .@"error", .{}, "{s}", .{message}) catch {};
     std.debug.defaultPanic(message, first_trace_addr);
 }
+
+/// NOTE: This only populates the leader schedule, and leaves the epoch stake & features empty (ie ALL_DISABLED).
+const RpcLeaderScheduleService = struct {
+    allocator: std.mem.Allocator,
+    logger: RpcLeaderScheduleServiceLogger,
+    rpc_client: sig.rpc.Client,
+    epoch_tracker: *sig.core.EpochTracker,
+
+    const RpcLeaderScheduleServiceLogger = sig.trace.Logger(@typeName(RpcLeaderScheduleService));
+
+    fn init(
+        allocator: std.mem.Allocator,
+        logger: RpcLeaderScheduleServiceLogger,
+        epoch_tracker: *sig.core.EpochTracker,
+        rpc_client: sig.rpc.Client,
+    ) RpcLeaderScheduleService {
+        return .{
+            .allocator = allocator,
+            .logger = logger.withScope(@typeName(RpcLeaderScheduleService)),
+            .rpc_client = rpc_client,
+            .epoch_tracker = epoch_tracker,
+        };
+    }
+
+    fn run(self: *RpcLeaderScheduleService, exit: *std.atomic.Value(bool)) void {
+        var i: usize = 0;
+        while (!exit.load(.monotonic)) {
+            if (i % 1000 == 0) {
+                var result: anyerror!void = undefined;
+                for (0..3) |_| {
+                    result = self.refresh();
+                    if (result != error.EndOfStream) break;
+                }
+                result catch |e|
+                    self.logger.err().logf("failed to refresh epoch context via rpc: {}", .{e});
+            }
+            std.Thread.sleep(std.time.ns_per_s);
+            i += 1;
+        }
+    }
+
+    fn refresh(self: *RpcLeaderScheduleService) !void {
+        const response = try self.rpc_client.getSlot(.{});
+        defer response.deinit();
+        const slot = try response.result();
+
+        // Get the current epoch, and the epoch whose stakes were used to compute the leader schedule
+        // for the current epoch.
+        const epoch = self.epoch_tracker.epoch_schedule.getEpoch(slot);
+        const leader_schedule_epoch = self.epoch_tracker.epoch_schedule.getEpoch(
+            slot -| self.epoch_tracker.epoch_schedule.leader_schedule_slot_offset,
+        );
+
+        // Iterate from the leader schedule epoch to the current epoch, and populate any missing epochs in the epoch tracker.
+        for (leader_schedule_epoch..epoch + 1) |e| {
+            if (self.epoch_tracker.rooted_epochs.isNext(e)) {
+                const first_slot_in_epoch = self.epoch_tracker.epoch_schedule.getFirstSlotInEpoch(e);
+
+                // The leaders saved in epoch E, are the leaders which will be active in epoch E + 1.
+                // Therefore, we need to fetch the leader schedule for epoch E + 1.
+                // We store the leaders for epoch E + 1 in the epoch info for epoch E since they are
+                // computed using the stakes from epoch E.
+                const leaders = try self.getLeaderSchedule(
+                    first_slot_in_epoch +|
+                        self.epoch_tracker.epoch_schedule.leader_schedule_slot_offset,
+                    &self.epoch_tracker.epoch_schedule,
+                );
+
+                const entry = try self.allocator.create(sig.core.EpochInfo);
+                entry.* = .{
+                    .leaders = leaders,
+                    .stakes = .EMPTY,
+                    // TODO: if you need features here for whatever reason, you'll have to implement
+                    // some way to forward them from replay, or source them by some other means.
+                    .feature_set = .ALL_DISABLED,
+                };
+                entry.stakes.stakes.epoch = e;
+                errdefer {
+                    entry.deinit(self.allocator);
+                    self.allocator.destroy(entry);
+                }
+
+                try self.epoch_tracker.rooted_epochs.insert(self.allocator, e, entry);
+            }
+        }
+    }
+
+    fn getLeaderSchedule(
+        self: *RpcLeaderScheduleService,
+        slot: sig.core.Slot,
+        epoch_schedule: *const sig.core.EpochSchedule,
+    ) !LeaderSchedule {
+        const response = try self.rpc_client.getLeaderSchedule(.{ .slot = slot });
+        defer response.deinit();
+        const rpc_schedule = (try response.result()).value;
+        var leaders = try sig.core.leader_schedule.computeFromMap(
+            self.allocator,
+            &rpc_schedule,
+        );
+        const epoch = epoch_schedule.getEpoch(slot);
+        leaders.start = epoch_schedule.getFirstSlotInEpoch(epoch);
+        leaders.end = epoch_schedule.getLastSlotInEpoch(epoch);
+        return leaders;
+    }
+};

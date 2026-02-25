@@ -6,48 +6,48 @@
         "build.zig",
         "src",
     },
-    .minimum_zig_version = "0.14.1",
+    .minimum_zig_version = "0.15.2",
     .fingerprint = 0xce1f2b0e2866b810,
     .dependencies = .{
         .httpz = .{
-            .url = "git+https://github.com/karlseguin/http.zig#0ce9038e13c138423f68d95a475159039458e798",
-            .hash = "httpz-0.0.0-PNVzrJ-0BgAp8WPkVfsFGNPRlRpBoU-8w0LxMDXBp37t",
+            .url = "git+https://github.com/karlseguin/http.zig#9ef2ffe8d611ff2e1081e5cf39cb4632c145c5b9",
+            .hash = "httpz-0.0.0-PNVzrIowBwAFr_kqBN1W4KBMC2Ofutasj2ZfNAIcfTzF",
         },
         .zstd = .{
-            .url = "git+https://github.com/Syndica/zstd.zig#b03df5a8b1b4ea1423e8cb2701024f469faadb71",
-            .hash = "zstd-0.0.1-8QsqCeqhAABbGuDYc-yqJEj0qitvmq52AEg0puJT6FHu",
+            .url = "git+https://github.com/Syndica/zstd.zig#c90641875ffc026f57f86b9ed28c1b4833f83d0a",
+            .hash = "zstd-0.0.1-8QsqCTmhAAA-9ArKPxqvOt77ULmEr3xma_bbpeWm-b2u",
         },
         .rocksdb = .{
-            .url = "git+https://github.com/Syndica/rocksdb-zig#c36d983df405f20824945043a0c150330925b8cc",
-            .hash = "rocksdb-9.7.4-z_CUTobHAAC6pCdDXul51SoKId-lY6_Ni1QTtaU43tbN",
+            .url = "git+https://github.com/Syndica/rocksdb-zig#baceb67dc9c66e8ba40a83da3de3fd959b889e57",
+            .hash = "rocksdb-9.7.4-z_CUTg_HAABgQurZzAhpJL5Erij8ZnppTmy3g1LIM8br",
         },
         .lsquic = .{
-            .url = "git+https://github.com/Syndica/lsquic#3a062c7346e88b32ef7b203d3d3880b76335edc7",
-            .hash = "lsquic-0.1.0-oZGGDdOZHQFsyhwdJq9eAB2GFIPzpNm90y4-8ncaYNku",
+            .url = "git+https://github.com/Syndica/lsquic#af6eb40ae452949945d1ae299332af141156afb1",
+            .hash = "lsquic-4.4.0-oZGGDWvvEQFN7TuaRMwK0XPZyqHRhIF_URW14bo-4A8a",
         },
         .xev = .{
-            .url = "git+https://github.com/Syndica/libxev#c16162f0f9047f27d6230c548e1e25070b9be163",
-            .hash = "libxev-0.0.0-86vtcyQcEwAxRuv5vgdyq8LCRKHNGLgtKfS4KNHdic2V",
+            .url = "git+https://github.com/Syndica/libxev#6d5de49dde845e3045bac30b2018da32a4915c84",
+            .hash = "libxev-0.0.0-86vtczgdEwAKwvPWRNzuZMW7FuhDVdSbwgpJAJ0FmICg",
         },
         .prettytable = .{
-            .url = "git+https://github.com/dying-will-bullet/prettytable-zig#46b6ad9b5970def35fa43c9613cd244f28862fa9",
-            .hash = "prettytable-0.1.0-AAAAAM9TAQCY1ETJxxEsZkgedlW7U4mCnGfgSygKApIA",
+            .url = "git+https://github.com/dying-will-bullet/prettytable-zig#43e8fbbff4cbacbef195aa4fea281375a77c2026",
+            .hash = "prettytable-0.3.0--Be65yOGAQBntw96PFuz_YR5FcewxN1yOYuPUXb5NV9y",
         },
         .base58 = .{
-            .url = "git+https://github.com/Syndica/base58-zig#ed42a74253e71577680ca826ee8ba16631808f3f",
-            .hash = "base58-0.2.0-wW0iYDIxAABuG_QuEPHMJgn99CvMhTFzgYhGrneaMhdJ",
+            .url = "git+https://github.com/Syndica/base58-zig#2acfa605d23d4d565a7e5a8ff35ea4a827eaaab9",
+            .hash = "base58-0.2.0-wW0iYMIiAABft2x6NlD5mMmFx7-VWfHJq5EAgVQw068t",
         },
         .poseidon = .{
-            .url = "git+https://github.com/Rexicon226/zig-poseidon#5abbc1a7bb98a5f21fa30ef09ade3e31cb443b0b",
-            .hash = "poseidon-0.2.0-2qOpv8Z5DQBbu9NmlK3czDsJ2hPhazo-0D1AM4WqdSs2",
+            .url = "git+https://github.com/Rexicon226/zig-poseidon#b73e6ec762676a38bde76f7689eec0806aeeddaa",
+            .hash = "poseidon-0.2.0-2qOpvz-3DQBhqfX5onUg3vP2lkcljFPAkHiDEQFkdJCu",
         },
         .secp256k1 = .{
             .url = "git+https://github.com/Syndica/secp256k1-zig#24771ad4fbca40a2d0b9a7a2c8bb410e6e238249",
             .hash = "secp256k1-0.5.0-2oLmGRAHAACjbp4BBLAoCU6Sotb_gqChbYOIIvBejN0V",
         },
         .tracy = .{
-            .url = "git+https://github.com/Syndica/tracy-zig#fd2576ccbe1b2eff5557ad6d91f2834311c8009c",
-            .hash = "zig_tracy-0.13.0-4TLLRxFkAADP0fRkT2yR8jDk-2I4xg12GbfAF8Pgln_m",
+            .url = "git+https://github.com/Syndica/tracy-zig#a767a15d1b4d6d813e929cf352c2265ff97a16da",
+            .hash = "zig_tracy-0.13.0-4TLLR1ZkAAAKZh0Gimq4P-Hyyd3b38XfFecg00aAqIaR",
         },
         .webzockets = .{
             .path = "src/rpc/webzockets",
@@ -55,6 +55,14 @@
         .sqlite = .{
             .url = "https://www.sqlite.org/2025/sqlite-amalgamation-3490200.zip",
             .hash = "N-V-__8AAH-mpwB7g3MnqYU-ooUBF1t99RP27dZ9addtMVXD",
+        },
+        .blst = .{
+            .url = "git+https://github.com/supranational/blst#806515251de5cfb9761ad12eb2f2f151b1ad0277",
+            .hash = "blst-0.3.16-fvxk1c82MABYUm65ch0-wpo2CSs1x5TCuBLvgQng0uRC",
+        },
+        .bzip2 = .{
+            .url = "https://github.com/libarchive/bzip2/archive/refs/tags/bzip2-1.0.8.zip",
+            .hash = "N-V-__8AANChDwAITDmkzIqB-9m_iaOXSquhghM2-AqDFcX8",
         },
     },
 }

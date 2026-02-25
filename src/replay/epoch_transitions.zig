@@ -22,10 +22,8 @@ const Slot = sig.core.Slot;
 const SlotState = sig.core.SlotState;
 const SlotConstants = sig.core.SlotConstants;
 const StakesCache = sig.core.StakesCache;
-const EpochConstants = sig.core.EpochConstants;
 const FeatureSet = sig.core.FeatureSet;
-
-const EpochTracker = sig.replay.trackers.EpochTracker;
+const Rent = sig.runtime.sysvar.Rent;
 
 const beginPartitionedRewards = sig.replay.rewards.calculation.beginPartitionedRewards;
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
@@ -41,7 +39,7 @@ pub fn processNewEpoch(
     slot_constants: *SlotConstants,
     slot_state: *SlotState,
     slot_store: SlotAccountStore,
-    epoch_tracker: *EpochTracker,
+    epoch_tracker: *sig.core.EpochTracker,
 ) !void {
     try applyFeatureActivations(
         allocator,
@@ -49,19 +47,20 @@ pub fn processNewEpoch(
         slot_constants,
         slot_state,
         slot_store,
-        epoch_tracker,
         true, // allow_new_activations
     );
 
     try slot_state.stakes_cache.activateEpoch(
         allocator,
-        epoch_tracker.schedule.getEpoch(slot),
-        slot_constants.feature_set.newWarmupCooldownRateEpoch(&epoch_tracker.schedule),
+        epoch_tracker.epoch_schedule.getEpoch(slot),
+        slot_constants.feature_set.newWarmupCooldownRateEpoch(&epoch_tracker.epoch_schedule),
     );
 
     try updateEpochStakes(
         allocator,
         slot,
+        &slot_constants.ancestors,
+        &slot_constants.feature_set,
         &slot_state.stakes_cache,
         epoch_tracker,
     );
@@ -76,37 +75,31 @@ pub fn processNewEpoch(
     );
 }
 
-/// Update the epoch stakes for the leader schedule epoch corresponding to the given slot.
-/// If the epoch tracker does not contain an entry for the leader schedule epoch,
-/// we need to compute the epoch stakes and create a new EpochConstants entry. The
-/// leader schedule epoch is typically E + 1, where E is the current epoch.
-/// This ensures that the epoch constants are available at the point of transition.
 pub fn updateEpochStakes(
     allocator: Allocator,
     slot: Slot,
+    ancestors: *const Ancestors,
+    feature_set: *const FeatureSet,
     stakes_cache: *StakesCache,
-    epoch_tracker: *EpochTracker,
+    epoch_tracker: *sig.core.EpochTracker,
 ) !void {
-    const leader_schedule_epoch = epoch_tracker.schedule.getLeaderScheduleEpoch(slot);
-    if (epoch_tracker.epochs.contains(leader_schedule_epoch)) return;
-    const current = epoch_tracker.getForSlot(slot) orelse return error.EpochConstantsNotFound;
+    const epoch_info = epoch_tracker.getEpochInfoNoOffset(slot, ancestors) catch null;
+    if (epoch_info == null) {
+        const epoch_stakes = try getEpochStakes(
+            allocator,
+            epoch_tracker.epoch_schedule.getLeaderScheduleEpoch(slot),
+            stakes_cache,
+        );
+        errdefer epoch_stakes.deinit(allocator);
 
-    const epoch_stakes = try getEpochStakes(
-        allocator,
-        leader_schedule_epoch,
-        stakes_cache,
-    );
-    errdefer epoch_stakes.deinit(allocator);
-
-    try epoch_tracker.put(allocator, leader_schedule_epoch, .{
-        .hashes_per_tick = current.hashes_per_tick,
-        .ticks_per_slot = current.ticks_per_slot,
-        .ns_per_slot = current.ns_per_slot,
-        .genesis_creation_time = current.genesis_creation_time,
-        .slots_per_year = current.slots_per_year,
-        .stakes = epoch_stakes,
-        .rent_collector = current.rent_collector,
-    });
+        _ = try epoch_tracker.insertUnrootedEpochInfo(
+            allocator,
+            slot,
+            ancestors,
+            epoch_stakes,
+            feature_set,
+        );
+    }
 }
 
 /// Compute the epoch stakes for the given leader schedule epoch.
@@ -143,7 +136,9 @@ pub fn getEpochStakes(
             total_stake += stake_and_vote_account.stake;
 
             var vote_state = stake_and_vote_account.account.state;
-            if (vote_state.voters.getAuthorizedVoter(leader_schedule_epoch)) |authorized_voter| {
+            if (vote_state.authorized_voters.getAuthorizedVoter(
+                leader_schedule_epoch,
+            )) |authorized_voter| {
                 const node_vote_accounts = try node_id_to_vote_accounts.getOrPut(
                     allocator,
                     vote_state.node_pubkey,
@@ -181,7 +176,6 @@ pub fn applyFeatureActivations(
     slot_constants: *SlotConstants,
     slot_state: *SlotState,
     slot_store: SlotAccountStore,
-    epoch_tracker: *EpochTracker,
     allow_new_activations: bool,
 ) !void {
     // Iterate through the inactive features and:
@@ -212,16 +206,15 @@ pub fn applyFeatureActivations(
 
     slot_constants.reserved_accounts.update(feature_set, slot);
 
-    const epoch_constants = epoch_tracker.getMutablePtrForSlot(slot).?;
     if (new_feature_activations.active(.pico_inflation, slot)) {
         slot_constants.inflation = .PICO;
         slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
-        epoch_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.
+        slot_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.
     }
     if (feature_set.fullInflationFeaturesEnabled(slot, &new_feature_activations)) {
         slot_constants.inflation = .FULL;
         slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
-        epoch_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.
+        slot_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.
     }
 
     try applyBuiltinProgramFeatureTransitions(
@@ -229,7 +222,7 @@ pub fn applyFeatureActivations(
         slot,
         slot_state,
         slot_store,
-        epoch_constants,
+        &slot_constants.rent_collector.rent,
         feature_set,
         &new_feature_activations,
         allow_new_activations,
@@ -254,7 +247,7 @@ fn applyBuiltinProgramFeatureTransitions(
     slot: Slot,
     slot_state: *SlotState,
     slot_store: SlotAccountStore,
-    epoch_constants: *const EpochConstants,
+    rent: *const Rent,
     feature_set: *const FeatureSet,
     new_feature_activations: *const FeatureSet,
     allow_new_activations: bool,
@@ -270,7 +263,7 @@ fn applyBuiltinProgramFeatureTransitions(
                     slot,
                     slot_store,
                     &slot_state.capitalization,
-                    epoch_constants,
+                    rent,
                     feature_set,
                     builtin_program.program_id,
                     core_bpf_config,
@@ -317,7 +310,7 @@ fn applyBuiltinProgramFeatureTransitions(
                 slot,
                 slot_store,
                 &slot_state.capitalization,
-                epoch_constants,
+                rent,
                 feature_set,
                 builtin_program.program_id,
                 core_bpf_config,
@@ -343,7 +336,7 @@ fn migrateBuiltinProgramToCoreBpf(
     slot: Slot,
     slot_store: SlotAccountStore,
     capitalization: *Atomic(u64),
-    epoch_constants: *const EpochConstants,
+    rent: *const Rent,
     feature_set: *const FeatureSet,
     builtin_program_id: Pubkey,
     migration_config: builtin_programs.CoreBpfMigrationConfig,
@@ -439,7 +432,7 @@ fn migrateBuiltinProgramToCoreBpf(
             loader_v3.State{ .buffer = .{ .authority_address = target.program_data_address } },
             .{},
         ),
-        .lamports = @max(1, epoch_constants.rent_collector.rent.minimumBalance(
+        .lamports = @max(1, rent.minimumBalance(
             loader_v3.State.PROGRAM_SIZE,
         )),
         .rent_epoch = 0,
@@ -471,7 +464,7 @@ fn migrateBuiltinProgramToCoreBpf(
 
         break :blk .{
             .data = data,
-            .lamports = @max(1, epoch_constants.rent_collector.rent.minimumBalance(space)),
+            .lamports = @max(1, rent.minimumBalance(space)),
             .rent_epoch = 0,
             .owner = loader_v3.ID,
             .executable = false,
@@ -676,7 +669,6 @@ const TestEnvironment = struct {
     genesis_config: sig.core.GenesisConfig,
     db_context: sig.accounts_db.Two.TestContext,
     ancestors: Ancestors,
-    epoch_tracker: EpochTracker,
     slot_constants: SlotConstants,
     slot_state: SlotState,
 
@@ -690,13 +682,6 @@ const TestEnvironment = struct {
         var ancestors = Ancestors.EMPTY;
         errdefer ancestors.deinit(allocator);
 
-        var epoch_constants = EpochConstants.genesis(genesis_config);
-        errdefer epoch_constants.deinit(allocator);
-
-        var epoch_tracker: EpochTracker = .{ .schedule = .INIT };
-        errdefer epoch_tracker.deinit(allocator);
-        try epoch_tracker.put(allocator, 0, epoch_constants);
-
         var slot_constants = try SlotConstants.genesis(allocator, .DEFAULT);
         errdefer slot_constants.deinit(allocator);
 
@@ -707,7 +692,6 @@ const TestEnvironment = struct {
             .genesis_config = genesis_config,
             .db_context = db_context,
             .ancestors = ancestors,
-            .epoch_tracker = epoch_tracker,
             .slot_constants = slot_constants,
             .slot_state = slot_state,
         };
@@ -717,7 +701,6 @@ const TestEnvironment = struct {
         self.genesis_config.deinit(allocator);
         self.db_context.deinit();
         self.ancestors.deinit(allocator);
-        self.epoch_tracker.deinit(allocator);
         self.slot_constants.deinit(allocator);
         self.slot_state.deinit(allocator);
     }
@@ -769,82 +752,34 @@ const TestEnvironment = struct {
 
 test updateEpochStakes {
     const allocator = std.testing.allocator;
-    const VoteAccount = sig.core.stakes.VoteAccount;
-    const createTestVoteAccount = sig.runtime.program.vote.state.createTestVoteAccount;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    const leader_schedule_epoch: Epoch = 1;
+    var epoch_tracker = sig.core.EpochTracker.init(.default, 0, .INIT);
+    defer epoch_tracker.deinit(allocator);
+
     var stakes_cache = StakesCache.EMPTY;
     defer stakes_cache.deinit(allocator);
+    stakes_cache.stakes.private.v = try sig.core.stakes.randomStakes(allocator, random, .{});
 
-    var epoch_tracker: EpochTracker = .{ .schedule = .INIT };
-    defer epoch_tracker.deinit(allocator);
-    try epoch_tracker.put(
-        allocator,
-        0,
-        EpochConstants.genesis(sig.core.GenesisConfig.default(allocator)),
-    );
-
-    { // Empty stakes
-        try updateEpochStakes(
-            allocator,
-            0,
-            &stakes_cache,
-            &epoch_tracker,
-        );
-
-        const epoch_constants = epoch_tracker.getMutablePtrForSlot(1).?;
-        try std.testing.expectEqual(0, epoch_constants.stakes.total_stake);
-
-        _ = epoch_tracker.epochs.swapRemove(1);
-    }
-
-    // Insert some stakes
-    var expected_total_stake: u64 = 0;
-    {
-        const stakes, var stakes_lg = stakes_cache.stakes.writeWithLock();
-        defer stakes_lg.unlock();
-
-        for (0..5) |_| {
-            const raw_vote_account = try createTestVoteAccount(
-                allocator,
-                Pubkey.initRandom(random),
-                Pubkey.initRandom(random),
-                10,
-                1,
-                leader_schedule_epoch,
-            );
-            defer raw_vote_account.deinit(allocator);
-
-            const stake = random.intRangeAtMost(u64, 1, 1_000_000_000_000);
-            const vote_account = try VoteAccount.fromAccountSharedData(
-                allocator,
-                raw_vote_account,
-            );
-
-            expected_total_stake += stake;
-            try stakes.vote_accounts.vote_accounts.put(
-                allocator,
-                Pubkey.initRandom(random),
-                .{
-                    .stake = stake,
-                    .account = vote_account,
-                },
-            );
-        }
-    }
+    const ancestors = try Ancestors.initWithSlots(allocator, &.{0});
+    defer ancestors.deinit(allocator);
 
     { // Non-Empty stakes
         try updateEpochStakes(
             allocator,
-            1,
+            0,
+            &ancestors,
+            &.ALL_DISABLED,
             &stakes_cache,
             &epoch_tracker,
         );
-        const epoch_constants = epoch_tracker.get(1).?;
-        try std.testing.expectEqual(expected_total_stake, epoch_constants.stakes.total_stake);
+        const epoch_info = try epoch_tracker.unrooted_epochs.get(&ancestors);
+        try std.testing.expectEqual(
+            stakes_cache.stakes.private.v.epoch,
+            epoch_info.stakes.stakes.epoch,
+        );
     }
 }
 
@@ -892,6 +827,7 @@ test getEpochStakes {
             const vote_account = try VoteAccount.fromAccountSharedData(
                 allocator,
                 raw_vote_account,
+                null,
             );
 
             expected_total_stake += stake;
@@ -928,7 +864,7 @@ test "applyFeatureActivations: basic activations" {
         defer env.deinit(allocator);
         try env.ancestors.addSlot(allocator, slot);
 
-        const initial_rent_collector = env.epoch_tracker.getPtrForSlot(slot).?.rent_collector;
+        const initial_rent_collector = env.slot_constants.rent_collector;
         const initial_fee_rate_governor = env.slot_constants.fee_rate_governor;
 
         try applyFeatureActivations(
@@ -937,7 +873,6 @@ test "applyFeatureActivations: basic activations" {
             &env.slot_constants,
             &env.slot_state,
             env.slotAccountStore(slot),
-            &env.epoch_tracker,
             false,
         );
         try std.testing.expectEqual(
@@ -950,7 +885,7 @@ test "applyFeatureActivations: basic activations" {
         );
         try std.testing.expectEqual(
             initial_rent_collector.rent.burn_percent,
-            env.epoch_tracker.getPtrForSlot(slot).?.rent_collector.rent.burn_percent,
+            env.slot_constants.rent_collector.rent.burn_percent,
         );
 
         try env.insertFeatureAccount(allocator, slot, 1, .pico_inflation, null);
@@ -962,7 +897,6 @@ test "applyFeatureActivations: basic activations" {
             &env.slot_constants,
             &env.slot_state,
             env.slotAccountStore(slot),
-            &env.epoch_tracker,
             false,
         );
 
@@ -976,7 +910,7 @@ test "applyFeatureActivations: basic activations" {
         );
         try std.testing.expectEqual(
             initial_rent_collector.rent.burn_percent,
-            env.epoch_tracker.getPtrForSlot(slot).?.rent_collector.rent.burn_percent,
+            env.slot_constants.rent_collector.rent.burn_percent,
         );
 
         // Allow new activations
@@ -986,7 +920,6 @@ test "applyFeatureActivations: basic activations" {
             &env.slot_constants,
             &env.slot_state,
             env.slotAccountStore(slot),
-            &env.epoch_tracker,
             true,
         );
         try std.testing.expectEqual(0, env.slot_constants.feature_set.get(.pico_inflation));
@@ -997,7 +930,7 @@ test "applyFeatureActivations: basic activations" {
         try std.testing.expectEqual(50, env.slot_constants.fee_rate_governor.burn_percent);
         try std.testing.expectEqual(
             50,
-            env.epoch_tracker.getPtrForSlot(slot).?.rent_collector.rent.burn_percent,
+            env.slot_constants.rent_collector.rent.burn_percent,
         );
     }
 
@@ -1009,7 +942,7 @@ test "applyFeatureActivations: basic activations" {
         try env.ancestors.addSlot(allocator, slot);
 
         const initial_inflation = env.slot_constants.inflation;
-        const initial_rent_collector = env.epoch_tracker.getPtrForSlot(slot).?.rent_collector;
+        const initial_rent_collector = env.slot_constants.rent_collector;
         const initial_fee_rate_governor = env.slot_constants.fee_rate_governor;
 
         try env.insertFeatureAccount(allocator, slot, 1, .pico_inflation, 1);
@@ -1021,7 +954,6 @@ test "applyFeatureActivations: basic activations" {
             &env.slot_constants,
             &env.slot_state,
             env.slotAccountStore(slot),
-            &env.epoch_tracker,
             true,
         );
         try std.testing.expectEqual(1, env.slot_constants.feature_set.get(.pico_inflation));
@@ -1035,7 +967,7 @@ test "applyFeatureActivations: basic activations" {
         );
         try std.testing.expectEqual(
             initial_rent_collector.rent.burn_percent,
-            env.epoch_tracker.getPtrForSlot(slot).?.rent_collector.rent.burn_percent,
+            env.slot_constants.rent_collector.rent.burn_percent,
         );
     }
 
@@ -1057,7 +989,6 @@ test "applyFeatureActivations: basic activations" {
             &env.slot_constants,
             &env.slot_state,
             env.slotAccountStore(slot),
-            &env.epoch_tracker,
             true,
         );
         try std.testing.expectEqual(
@@ -1075,7 +1006,7 @@ test "applyFeatureActivations: basic activations" {
         try std.testing.expectEqual(50, env.slot_constants.fee_rate_governor.burn_percent);
         try std.testing.expectEqual(
             50,
-            env.epoch_tracker.getPtrForSlot(slot).?.rent_collector.rent.burn_percent,
+            env.slot_constants.rent_collector.rent.burn_percent,
         );
     }
 
@@ -1096,7 +1027,6 @@ test "applyFeatureActivations: basic activations" {
             &env.slot_constants,
             &env.slot_state,
             env.slotAccountStore(slot),
-            &env.epoch_tracker,
             true,
         );
         try std.testing.expectError(
@@ -1122,7 +1052,6 @@ test "applyFeatureActivations: basic activations" {
             &env.slot_constants,
             &env.slot_state,
             env.slotAccountStore(slot),
-            &env.epoch_tracker,
             true,
         );
         try std.testing.expectError(
@@ -1157,7 +1086,6 @@ test "applyFeatureActivations: Builtin Transitions" {
         &env.slot_constants,
         &env.slot_state,
         env.slotAccountStore(slot),
-        &env.epoch_tracker,
         true,
     );
 
@@ -1172,7 +1100,7 @@ test "applyFeatureActivations: Builtin Transitions" {
         slot,
         env.slotAccountStore(slot),
         &env.slot_state.capitalization,
-        env.epoch_tracker.getPtrForSlot(slot).?,
+        &env.slot_constants.rent_collector.rent,
         &env.slot_constants.feature_set,
         builtin_program.program_id,
         builtin_program.core_bpf_migration_config.?,
@@ -1195,7 +1123,7 @@ test "applyFeatureActivations: Builtin Transitions" {
         slot,
         env.slotAccountStore(slot),
         &env.slot_state.capitalization,
-        env.epoch_tracker.getPtrForSlot(slot).?,
+        &env.slot_constants.rent_collector.rent,
         &env.slot_constants.feature_set,
         builtin_program.program_id,
         builtin_program.core_bpf_migration_config.?,

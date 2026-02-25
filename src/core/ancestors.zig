@@ -72,6 +72,11 @@ pub const Ancestors = struct {
         return .{ .ancestors = try self.ancestors.clone(allocator) };
     }
 
+    pub fn last(self: *const Ancestors) Slot {
+        const keys = self.ancestors.keys();
+        return keys[keys.len - 1];
+    }
+
     pub fn subsetInto(
         self: *const Ancestors,
         max_slot: Slot,

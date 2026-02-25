@@ -1,5 +1,6 @@
 const std = @import("std");
 const tracy = @import("tracy");
+const std14 = @import("std14");
 const sig = @import("../sig.zig");
 
 const leb = std.leb;
@@ -144,12 +145,19 @@ pub const Transaction = struct {
         const msg_bytes_bounded = message.serializeBounded(version) catch return error.BadMessage;
         const msg_bytes = msg_bytes_bounded.constSlice();
 
-        const signatures = try allocator.alloc(Signature, keypairs.len);
+        // TODO: remove these allocations, we have well-known bounds on all the numbers
+        const signatures = try allocator.alloc(Signature, message.signature_count);
         errdefer allocator.free(signatures);
 
-        for (signatures, keypairs) |*signature, keypair| {
-            const msg_signature = keypair.sign(msg_bytes, null) catch return error.SigningError;
-            signature.* = .fromSignature(msg_signature);
+        // NOTE: The current only usecase is when we send votes, which *does* sign the same message twice.
+        const signing_keys = message.account_keys[0..message.signature_count];
+        for (signing_keys, 0..) |key, i| {
+            for (keypairs) |kp| {
+                const public_key: Pubkey = .fromPublicKey(&kp.public_key);
+                if (!key.equals(&public_key)) continue;
+                const msg_signature = kp.sign(msg_bytes, null) catch return error.SigningError;
+                signatures[i] = .fromSignature(msg_signature);
+            }
         }
 
         return .{
@@ -161,14 +169,14 @@ pub const Transaction = struct {
 
     pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
         std.debug.assert(data.signatures.len <= std.math.maxInt(u16));
-        try leb.writeULEB128(writer, @as(u16, @intCast(data.signatures.len)));
+        try leb.writeUleb128(writer, @as(u16, @intCast(data.signatures.len)));
         for (data.signatures) |sgn| try writer.writeAll(&sgn.toBytes());
         try data.msg.serialize(writer, data.version);
     }
 
     pub fn deserialize(limit_allocator: *sig.bincode.LimitAllocator, reader: anytype, _: sig.bincode.Params) !Transaction {
         const allocator = limit_allocator.allocator();
-        const signatures = try allocator.alloc(Signature, try leb.readULEB128(u16, reader));
+        const signatures = try allocator.alloc(Signature, try leb.readUleb128(u16, reader));
         errdefer allocator.free(signatures);
 
         for (signatures) |*sgn| sgn.* = .fromBytes(try reader.readBytesNoEof(Signature.SIZE));
@@ -457,8 +465,8 @@ pub const Message = struct {
     pub fn serializeBounded(
         self: Message,
         version: Version,
-    ) !std.BoundedArray(u8, Transaction.MAX_BYTES) {
-        var buf: std.BoundedArray(u8, Transaction.MAX_BYTES) = .{};
+    ) !std14.BoundedArray(u8, Transaction.MAX_BYTES) {
+        var buf: std14.BoundedArray(u8, Transaction.MAX_BYTES) = .{};
         try self.serialize(buf.writer(), version);
         return buf;
     }
@@ -472,20 +480,20 @@ pub const Message = struct {
 
         // WARN: Truncate okay if transaction is valid
         std.debug.assert(self.account_keys.len <= std.math.maxInt(u16));
-        try leb.writeULEB128(writer, @as(u16, @intCast(self.account_keys.len)));
+        try leb.writeUleb128(writer, @as(u16, @intCast(self.account_keys.len)));
         for (self.account_keys) |id| try writer.writeAll(&id.data);
 
         try writer.writeAll(&self.recent_blockhash.data);
 
         // WARN: Truncate okay if transaction is valid
         std.debug.assert(self.instructions.len <= std.math.maxInt(u16));
-        try leb.writeULEB128(writer, @as(u16, @intCast(self.instructions.len)));
+        try leb.writeUleb128(writer, @as(u16, @intCast(self.instructions.len)));
         for (self.instructions) |instr| try sig.bincode.write(writer, instr, .{});
 
         // WARN: Truncate okay if transaction is valid
         if (version != Version.legacy) {
             std.debug.assert(self.address_lookups.len <= std.math.maxInt(u16));
-            try leb.writeULEB128(writer, @as(u16, @intCast(self.address_lookups.len)));
+            try leb.writeUleb128(writer, @as(u16, @intCast(self.address_lookups.len)));
             for (self.address_lookups) |alt| try sig.bincode.write(writer, alt, .{});
         }
     }
@@ -496,7 +504,7 @@ pub const Message = struct {
         const readonly_signed_count = try reader.readByte();
         const readonly_unsigned_count = try reader.readByte();
 
-        const account_keys = try allocator.alloc(Pubkey, try leb.readULEB128(u16, reader));
+        const account_keys = try allocator.alloc(Pubkey, try leb.readUleb128(u16, reader));
         errdefer allocator.free(account_keys);
 
         for (account_keys) |*id| {
@@ -505,7 +513,7 @@ pub const Message = struct {
 
         const recent_blockhash: Hash = .{ .data = try reader.readBytesNoEof(Hash.SIZE) };
 
-        const instructions = try allocator.alloc(Instruction, try leb.readULEB128(u16, reader));
+        const instructions = try allocator.alloc(Instruction, try leb.readUleb128(u16, reader));
         errdefer allocator.free(instructions);
 
         for (instructions, 0..) |*instr, i| {
@@ -514,7 +522,7 @@ pub const Message = struct {
         }
         errdefer for (instructions) |instr| instr.deinit(allocator);
 
-        const address_lookups_len = if (version == .legacy) 0 else try leb.readULEB128(u16, reader);
+        const address_lookups_len = if (version == .legacy) 0 else try leb.readUleb128(u16, reader);
         const address_lookups = try allocator.alloc(AddressLookup, address_lookups_len);
         errdefer allocator.free(address_lookups);
 

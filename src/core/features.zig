@@ -5,6 +5,8 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const EpochSchedule = sig.core.EpochSchedule;
 
+const failing_allocator = sig.utils.allocators.failing.allocator(.{});
+
 const ZonInfo = struct {
     name: [:0]const u8,
     pubkey: [:0]const u8,
@@ -13,6 +15,14 @@ const ZonInfo = struct {
 };
 const features: []const ZonInfo = @import("features.zon");
 pub const NUM_FEATURES = features.len;
+
+/// The feature set identifier - first 4 bytes of SHA256 hash of all known feature pubkeys (sorted).
+/// This is used for client compatibility checks.
+///
+/// Generated at build time by `scripts/gen_feature_set_id.zig` to avoid comptime compiler issues.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/feature-set/src/lib.rs#L2318
+pub const FEATURE_SET_ID: u32 = @import("feature-set-id").FEATURE_SET_ID;
 
 pub const Feature = @Type(.{ .@"enum" = .{
     .tag_type = u64,
@@ -170,6 +180,13 @@ pub const Set = struct {
         }
     };
 };
+
+pub fn activationSlotFromAccount(account: sig.core.Account) !?u64 {
+    if (!account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) return null;
+    var feature_bytes = [_]u8{0} ** 9;
+    account.data.readAll(&feature_bytes);
+    return sig.bincode.readFromSlice(failing_allocator, ?u64, &feature_bytes, .{});
+}
 
 test "full inflation enabled" {
     var feature_set: Set = .ALL_DISABLED;

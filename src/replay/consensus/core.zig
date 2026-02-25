@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../../sig.zig");
 const replay = @import("../lib.zig");
 const tracy = @import("tracy");
@@ -14,12 +15,13 @@ pub const Logger = sig.trace.Logger("consensus");
 
 const Channel = sig.sync.Channel;
 const RwMux = sig.sync.RwMux;
+const ThreadPool = sig.sync.ThreadPool;
+
 const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
 
 const Ancestors = sig.core.Ancestors;
 const Epoch = sig.core.Epoch;
 const EpochSchedule = sig.core.EpochSchedule;
-const EpochStakesMap = sig.core.EpochStakesMap;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
@@ -70,7 +72,6 @@ const SwitchForkDecision = sig.consensus.replay_tower.SwitchForkDecision;
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
-const EpochTracker = sig.replay.trackers.EpochTracker;
 
 const AncestorDuplicateSlotToRepair = replay.consensus.cluster_sync.AncestorDuplicateSlotToRepair;
 const DuplicateConfirmedState = sig.replay.consensus.cluster_sync.DuplicateConfirmedState;
@@ -109,7 +110,6 @@ pub const TowerConsensus = struct {
     // Core consensus state
     fork_choice: HeaviestSubtreeForkChoice,
     replay_tower: ReplayTower,
-    latest_validator_votes: LatestValidatorVotes,
     status_cache: sig.core.StatusCache,
     slot_data: SlotData,
 
@@ -122,9 +122,6 @@ pub const TowerConsensus = struct {
     pub fn deinit(self: TowerConsensus, allocator: Allocator) void {
         self.replay_tower.deinit(allocator);
         self.fork_choice.deinit(allocator);
-
-        var latest_validator_votes = self.latest_validator_votes;
-        latest_validator_votes.deinit(allocator);
 
         self.slot_data.deinit(allocator);
         self.arena_state.promote(allocator).deinit();
@@ -155,7 +152,8 @@ pub const TowerConsensus = struct {
         );
         errdefer fork_choice.deinit(allocator);
 
-        const root_ref = deps.slot_tracker.get(deps.slot_tracker.root).?;
+        const root = deps.slot_tracker.root.load(.monotonic);
+        const root_ref = deps.slot_tracker.get(root).?;
         const root_ancestors = &root_ref.constants.ancestors;
 
         var tower: Tower = if (deps.identity.vote_account) |vote_account_address|
@@ -166,8 +164,8 @@ pub const TowerConsensus = struct {
                 vote_account_address,
             )
         else
-            .{ .root = deps.slot_tracker.root };
-        tower.setRoot(deps.slot_tracker.root);
+            .{ .root = root };
+        tower.setRoot(root);
 
         const replay_tower: ReplayTower = try .init(
             .from(deps.logger),
@@ -178,7 +176,7 @@ pub const TowerConsensus = struct {
         errdefer replay_tower.deinit(allocator);
 
         var vote_collector: sig.consensus.VoteCollector =
-            try .init(deps.now, deps.slot_tracker.root, deps.registry);
+            try .init(deps.now, root, deps.registry);
         errdefer vote_collector.deinit(allocator);
 
         return .{
@@ -188,7 +186,6 @@ pub const TowerConsensus = struct {
 
             .fork_choice = fork_choice,
             .replay_tower = replay_tower,
-            .latest_validator_votes = .empty,
             .status_cache = .DEFAULT,
             .slot_data = .empty,
 
@@ -207,7 +204,7 @@ pub const TowerConsensus = struct {
     ) !HeaviestSubtreeForkChoice {
         const root_slot, const root_hash = blk: {
             const root = slot_tracker.getRoot();
-            const root_slot = slot_tracker.root;
+            const root_slot = slot_tracker.root.load(.monotonic);
             const root_hash = root.state.hash.readCopy();
             break :blk .{ root_slot, root_hash.? };
         };
@@ -347,10 +344,12 @@ pub const TowerConsensus = struct {
         params: struct {
             account_store: AccountStore,
             ledger: *Ledger,
+            maybe_thread_pool: ?*ThreadPool = null,
             /// Scanned by the vote collector if provided.
             gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
+            gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
             slot_tracker: *SlotTracker,
-            epoch_tracker: *EpochTracker,
+            epoch_tracker: *sig.core.EpochTracker,
             progress_map: *ProgressMap,
             status_cache: ?*sig.core.StatusCache,
             senders: Senders,
@@ -413,7 +412,7 @@ pub const TowerConsensus = struct {
                 .result_writer = params.ledger.resultWriter(),
                 .slot_tracker = params.slot_tracker,
                 .progress = params.progress_map,
-                .latest_validator_votes = &self.latest_validator_votes,
+                .latest_validator_votes = &self.slot_data.latest_validator_votes,
                 .slot_data = &self.slot_data,
                 .duplicate_confirmed_slots = params.duplicate_confirmed_slots.items,
                 .gossip_verified_vote_hashes = params.gossip_verified_vote_hashes.items,
@@ -456,7 +455,7 @@ pub const TowerConsensus = struct {
         try self.executeProtocol(
             allocator,
             params.ledger,
-            null, // TODO
+            params.gossip_table,
             &ancestors,
             &descendants,
             params.slot_tracker,
@@ -468,6 +467,7 @@ pub const TowerConsensus = struct {
             params.vote_sockets,
             self.identity.vote_account,
             params.senders,
+            params.maybe_thread_pool,
         );
     }
 
@@ -511,7 +511,7 @@ pub const TowerConsensus = struct {
         ancestors: *const std.AutoArrayHashMapUnmanaged(Slot, Ancestors),
         descendants: *const std.AutoArrayHashMapUnmanaged(Slot, SortedSetUnmanaged(Slot)),
         slot_tracker: *SlotTracker,
-        epoch_tracker: *const EpochTracker,
+        epoch_tracker: *sig.core.EpochTracker,
         progress_map: *ProgressMap,
         status_cache: ?*sig.core.StatusCache,
         /// For reading the slot history account
@@ -520,31 +520,19 @@ pub const TowerConsensus = struct {
         vote_sockets: ?*const VoteSockets,
         vote_account: ?Pubkey,
         senders: Senders,
+        maybe_thread_pool: ?*ThreadPool,
     ) !void {
-        var zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.executeProtocol" });
-        defer zone.deinit();
-
-        var epoch_stakes_map: EpochStakesMap = .empty;
-        defer epoch_stakes_map.deinit(allocator);
-
-        try epoch_stakes_map.ensureTotalCapacity(allocator, epoch_tracker.epochs.count());
-
-        for (epoch_tracker.epochs.keys(), epoch_tracker.epochs.values()) |key, constants| {
-            epoch_stakes_map.putAssumeCapacity(key, constants.stakes);
-        }
-
         const newly_computed_consensus_slots = try computeConsensusInputs(
             allocator,
             self.logger,
             vote_account,
             ancestors,
             slot_tracker,
-            &epoch_tracker.schedule,
-            &epoch_stakes_map,
+            epoch_tracker,
             progress_map,
             &self.fork_choice,
             &self.replay_tower,
-            &self.latest_validator_votes,
+            &self.slot_data.latest_validator_votes,
         );
         defer allocator.free(newly_computed_consensus_slots);
         // For each of the newly computed consensus slots,
@@ -586,7 +574,7 @@ pub const TowerConsensus = struct {
             }
             // Update cluster with the duplicate confirmation status.
             // Analogous to [ReplayStage::mark_slots_duplicate_confirmed](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3876)
-            const root_slot = slot_tracker.root;
+            const root_slot = slot_tracker.root.load(.monotonic);
             for (duplicate_confirmed_forks.items) |duplicate_confirmed_fork| {
                 const slot, const frozen_hash = duplicate_confirmed_fork.tuple();
                 try self.handleDuplicateConfirmedFork(
@@ -605,8 +593,6 @@ pub const TowerConsensus = struct {
         const heaviest_slot_on_same_voted_fork =
             (try self.fork_choice.heaviestSlotOnSameVotedFork(&self.replay_tower)) orelse null;
 
-        const heaviest_epoch: Epoch = epoch_tracker.schedule.getEpoch(heaviest_slot);
-
         const now = sig.time.Instant.now();
         var last_vote_refresh_time: LastVoteRefreshTime = .{
             .last_refresh_time = now,
@@ -617,13 +603,12 @@ pub const TowerConsensus = struct {
             allocator,
             heaviest_slot,
             if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
-            heaviest_epoch,
             ancestors,
             descendants,
             progress_map,
-            &self.latest_validator_votes,
+            &self.slot_data.latest_validator_votes,
             &self.fork_choice,
-            &epoch_stakes_map,
+            epoch_tracker,
             account_store.reader(),
         );
         defer vote_and_reset_forks.deinit(allocator);
@@ -660,6 +645,7 @@ pub const TowerConsensus = struct {
                 voted.slot,
                 voted_hash,
                 slot_tracker,
+                &epoch_tracker.epoch_schedule,
                 epoch_tracker,
                 &self.replay_tower,
                 progress_map,
@@ -673,7 +659,14 @@ pub const TowerConsensus = struct {
                 gossip_table,
                 slot_leaders,
                 vote_sockets,
+                maybe_thread_pool,
             );
+
+            // Update the latest processed slot to the bank being voted on.
+            // This matches Agave's behavior: the processed slot is updated inside
+            // handle_votable_bank(), which is only called when vote_bank.is_some().
+            // See: https://github.com/anza-xyz/agave/blob/5e900421520a10933642d5e9a21e191a70f9b125/core/src/replay_stage.rs#L2683
+            slot_tracker.latest_processed_slot.set(voted.slot);
         }
 
         // Reset onto a fork
@@ -876,14 +869,14 @@ fn loadTower(
     // Validate that the account is owned by the vote program
     if (!vote_account.owner.equals(&sig.runtime.program.vote.ID)) {
         logger.err().logf(
-            "Invalid vote account owner. Expected: {}, Got: {}",
+            "Invalid vote account owner. Expected: {f}, Got: {f}",
             .{ sig.runtime.program.vote.ID, vote_account.owner },
         );
         return error.InvalidVoteAccountOwner;
     }
 
     logger.debug().logf(
-        "Vote account loaded: Pubkey={?}, Lamports={}, Owner={}, Data length={}",
+        "Vote account loaded: Pubkey={f}, Lamports={}, Owner={f}, Data length={}",
         .{
             vote_account_address,
             vote_account.lamports,
@@ -900,7 +893,7 @@ fn loadTower(
         .{},
     ) catch return error.BincodeError;
 
-    var vote_state = try versioned_state.convertToCurrent(allocator);
+    var vote_state = try versioned_state.convertToV4(allocator, null);
     defer vote_state.deinit(allocator);
 
     return try Tower.fromAccount(&vote_state);
@@ -943,7 +936,8 @@ fn handleVotableBank(
     vote_slot: Slot,
     vote_hash: Hash,
     slot_tracker: *SlotTracker,
-    epoch_tracker: *const EpochTracker,
+    epoch_schedule: *const EpochSchedule,
+    epoch_tracker: *sig.core.EpochTracker,
     replay_tower: *ReplayTower,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
@@ -956,6 +950,7 @@ fn handleVotableBank(
     gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
     maybe_sockets: ?*const VoteSockets,
+    maybe_thread_pool: ?*ThreadPool,
 ) !void {
     const maybe_new_root = try replay_tower.recordBankVote(
         allocator,
@@ -972,9 +967,11 @@ fn handleVotableBank(
             slot_tracker,
             progress,
             fork_choice,
+            epoch_tracker,
             account_store,
             status_cache,
             new_root,
+            maybe_thread_pool,
         );
     }
 
@@ -1001,7 +998,7 @@ fn handleVotableBank(
         replay_tower,
         account_store.reader(),
         slot_tracker,
-        epoch_tracker,
+        epoch_schedule,
     );
 
     switch (vote_tx_result) {
@@ -1066,7 +1063,7 @@ fn upcomingLeaderTpuVoteSockets(
             const leader_pubkey = leader_pubkey_ptr.*;
             const contact_info =
                 gossip_table.getThreadSafeContactInfo(leader_pubkey) orelse continue;
-            const socket_addr = contact_info.tpu_addr orelse continue;
+            const socket_addr = contact_info.tpu_vote_addr orelse continue;
             seen_sockets.putAssumeCapacity(socket_addr, {});
         }
     }
@@ -1124,7 +1121,10 @@ fn sendVoteToLeaders(
                 tpu_vote_socket,
                 sockets,
             ) catch |err| {
-                logger.err().logf("Failed to send vote to leader: {}", .{err});
+                logger.err().logf(
+                    "Failed to send vote to leader '{f}': {}",
+                    .{ tpu_vote_socket, err },
+                );
             };
         }
     } else {
@@ -1222,15 +1222,14 @@ fn sendVoteToGossip(
 
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
-    switch (vote_op) {
-        .push_vote => |push_vote_data| {
+    const signed_vote_data: sig.gossip.SignedGossipData = switch (vote_op) {
+        .push_vote => |push_vote_data| blk: {
             const tower_last = push_vote_data.last_tower_slot orelse return;
             // Find the oldest crds vote by wallclock that has a lower slot than `tower`
             // and recycle its vote-index. If the crds buffer is not full we instead add a new vote-index.
             const vote_index: u8 =
                 findVoteIndexToEvict(gossip_table, my_pubkey, tower_last) orelse return;
-
-            const vote_data = sig.gossip.data.GossipData{
+            break :blk .initSigned(&my_keypair, .{
                 .Vote = .{
                     vote_index,
                     .{
@@ -1240,38 +1239,29 @@ fn sendVoteToGossip(
                         .slot = 0, // will be set from transaction
                     },
                 },
-            };
-
-            const signed_vote_data = sig.gossip.data.SignedGossipData.initSigned(
-                &my_keypair,
-                vote_data,
-            );
-            _ = try gossip_table.insert(signed_vote_data, now);
+            });
         },
-        .refresh_vote => |refresh_vote_data| {
-            const vote_data = sig.gossip.data.GossipData{
-                .Vote = .{
-                    0, // tag
-                    .{
-                        .from = my_pubkey,
-                        .transaction = refresh_vote_data.tx,
-                        .wallclock = now,
-                        .slot = refresh_vote_data.last_voted_slot,
-                    },
+        .refresh_vote => |refresh_vote_data| .initSigned(&my_keypair, .{
+            .Vote = .{
+                0, // tag
+                .{
+                    .from = my_pubkey,
+                    .transaction = refresh_vote_data.tx,
+                    .wallclock = now,
+                    .slot = refresh_vote_data.last_voted_slot,
                 },
-            };
-
-            const signed_vote_data = sig.gossip.data.SignedGossipData.initSigned(
-                &my_keypair,
-                vote_data,
-            );
-            _ = try gossip_table.insert(signed_vote_data, now);
-        },
-    }
+            },
+        }),
+    };
+    _ = try gossip_table.insert(signed_vote_data, now);
 }
 
 // This processing currently runs on the same thread. If it proves to be a bottleneck
 // in practice, we can offload it to a dedicated thread.
+// If `maybe_my_keypair != null`, then `vote_op` will be inserted into `gossip_table_rw`,
+// taking ownership of the allocated resources (assumes it was allocated using the same
+// allocator as is used for the gossip table).
+// If an error is returned, then `vote_op` will not have had its ownership transferred.
 fn sendVote(
     logger: Logger,
     allocator: Allocator,
@@ -1292,6 +1282,14 @@ fn sendVote(
         .push_vote => |push_vote_data| push_vote_data.tx,
         .refresh_vote => |refresh_vote_data| refresh_vote_data.tx,
     };
+    vote_tx.validate() catch |err| std.debug.panic(
+        "({s}) sending invalid vote tx",
+        .{@errorName(err)},
+    );
+    vote_tx.verify() catch |err| std.debug.panic(
+        "({s}) sending vote tx with invalid signatures.",
+        .{@errorName(err)},
+    );
 
     // Send to upcoming leaders
     if (maybe_slot_leaders) |slot_leaders| {
@@ -1339,7 +1337,7 @@ fn generateVoteTx(
     replay_tower: *ReplayTower,
     account_reader: AccountReader,
     slot_tracker: *const SlotTracker,
-    epoch_tracker: *const EpochTracker,
+    epoch_schedule: *const EpochSchedule,
 ) !GenerateVoteTxResult {
     const logger = replay_tower.logger;
     if (authorized_voter_keypairs.len == 0) {
@@ -1399,7 +1397,7 @@ fn generateVoteTx(
     };
     defer vote_state_versions.deinit(allocator);
 
-    var vote_state = vote_state_versions.convertToCurrent(allocator) catch |err| {
+    var vote_state = vote_state_versions.convertToV4(allocator, null) catch |err| {
         logger.err().logf("Failed to convert vote state to current: {}", .{err});
         return .failed;
     };
@@ -1410,9 +1408,11 @@ fn generateVoteTx(
         return .hot_spare;
     }
 
-    const current_epoch = epoch_tracker.schedule.getEpoch(last_voted_slot);
+    const current_epoch = epoch_schedule.getEpoch(last_voted_slot);
 
-    const authorized_voter_pubkey = vote_state.voters.getAuthorizedVoter(current_epoch) orelse {
+    const authorized_voter_pubkey = vote_state.authorized_voters.getAuthorizedVoter(
+        current_epoch,
+    ) orelse {
         logger.err().logf("No authorized voter for epoch {}", .{current_epoch});
         return .failed;
     };
@@ -1456,9 +1456,13 @@ fn generateVoteTx(
     );
     defer vote_ix.deinit(allocator);
 
-    const blockhash = slot_info.state.hash.readCopy() orelse {
-        logger.warn().logf("Blockhash is null for slot {}", .{last_voted_slot});
-        return .failed;
+    const blockhash = blk: {
+        const bhq, var bhq_lg = slot_info.state.blockhash_queue.readWithLock();
+        defer bhq_lg.unlock();
+        break :blk bhq.last_hash orelse {
+            logger.warn().logf("Blockhash is null for slot {}", .{last_voted_slot});
+            return .failed;
+        };
     };
 
     const vote_tx_msg = try sig.core.transaction.Message.initCompile(
@@ -1585,9 +1589,11 @@ fn checkAndHandleNewRoot(
     slot_tracker: *SlotTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
+    epoch_tracker: *sig.core.EpochTracker,
     account_store: AccountStore,
     status_cache: ?*sig.core.StatusCache,
     new_root: Slot,
+    maybe_thread_pool: ?*ThreadPool,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "checkAndHandleNewRoot" });
     defer zone.deinit();
@@ -1603,12 +1609,18 @@ fn checkAndHandleNewRoot(
 
     try ledger.setRoots(rooted_slots);
 
+    try epoch_tracker.onSlotRooted(
+        allocator,
+        new_root,
+        &root_tracker.constants.ancestors,
+    );
+
     // Audit: The rest of the code maps to Self::handle_new_root in Agave.
     // Update the slot tracker.
     // Set new root.
-    slot_tracker.root = new_root;
+    slot_tracker.root.store(new_root, .monotonic);
     // Prune non rooted slots
-    slot_tracker.pruneNonRooted(allocator);
+    slot_tracker.pruneNonRooted(allocator, maybe_thread_pool);
 
     // Tell the status_cache about it for its tracking.
     if (status_cache) |sc| try sc.addRoot(allocator, new_root);
@@ -1660,7 +1672,7 @@ fn resetFork(
     reset_slot: Slot,
     last_reset_hash: Hash,
     last_blockhash: Hash,
-    last_reset_bank_descendants: std.ArrayList(Slot),
+    last_reset_bank_descendants: std.array_list.Managed(Slot),
 ) !void {
     _ = progress;
     _ = ledger;
@@ -1690,8 +1702,7 @@ fn computeConsensusInputs(
     my_vote_pubkey: ?Pubkey,
     ancestors: *const std.AutoArrayHashMapUnmanaged(u64, Ancestors),
     slot_tracker: *const SlotTracker,
-    epoch_schedule: *const EpochSchedule,
-    epoch_stakes_map: *const EpochStakesMap,
+    epoch_tracker: *const sig.core.EpochTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
     replay_tower: *const ReplayTower,
@@ -1735,8 +1746,7 @@ fn computeConsensusInputs(
             // This updates the internal state of fork_choice with the determined heaviest (best) fork to build on.
             try fork_choice.processLatestVotes(
                 allocator,
-                epoch_stakes_map,
-                epoch_schedule,
+                epoch_tracker,
                 latest_validator_votes,
             );
             const fork_stats = progress.getForkStats(slot) orelse return error.MissingForkStats;
@@ -1819,6 +1829,18 @@ const MAX_LOCKOUT_HISTORY = sig.consensus.tower.MAX_LOCKOUT_HISTORY;
 
 const createTestReplayTower = sig.consensus.replay_tower.createTestReplayTower;
 
+fn generateValidEmptyTx(gpa: std.mem.Allocator, prng: std.Random) !Transaction {
+    const kp: sig.identity.KeyPair = try .generateDeterministic(seed: {
+        var seed: [sig.identity.KeyPair.seed_length]u8 = undefined;
+        prng.bytes(&seed);
+        break :seed seed;
+    });
+    const message: sig.core.transaction.Message =
+        try .initCompile(gpa, &.{}, .fromPublicKey(&kp.public_key), .initRandom(prng), null);
+    errdefer message.deinit(gpa);
+    return try .initOwnedMessageWithSigningKeypairs(gpa, .legacy, message, &.{kp});
+}
+
 test "processResult and handleDuplicateConfirmedFork" {
     // TODO add assertions to this test
     const allocator = std.testing.allocator;
@@ -1830,7 +1852,11 @@ test "processResult and handleDuplicateConfirmedFork" {
     defer stubs.deinit();
 
     var replay_state = try stubs.stubbedState(allocator, .FOR_TESTS);
-    defer replay_state.deinit();
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit(allocator);
+        allocator.destroy(replay_state.epoch_tracker);
+    }
     replay_state.slot_tracker.get(0).?.state.hash.set(.{ .data = @splat(1) });
 
     var consensus: TowerConsensus = try .init(allocator, .{
@@ -1905,7 +1931,7 @@ test "cacheTowerStats - missing ancestor" {
 
     // Ensure the slot exists in the progress map so cacheTowerStats
     // progresses far enough to check ancestors.
-    const trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    const trees = try std14.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
     try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees },
@@ -1963,7 +1989,7 @@ test "cacheTowerStats - success sets flags and empty thresholds" {
     defer fixture.deinit(testing.allocator);
 
     // Ensure slot exists in progress and ancestors are populated for the root
-    const trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    const trees = try std14.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
     try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees },
@@ -1998,7 +2024,7 @@ test "cacheTowerStats - records failed threshold at depth 0" {
     defer fixture.deinit(testing.allocator);
 
     // Ensure slot exists in progress and ancestors populated
-    const trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    const trees = try std14.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
     try fixture.fillFork(
         testing.allocator,
         .{ .root = root, .data = trees },
@@ -2119,7 +2145,7 @@ test "maybeRefreshLastVote - latest landed vote newer than last vote" {
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    var trees1 = try std14.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
     trees1.appendSliceAssumeCapacity(&[3]TreeNode{
         .{ hash1, root },
         .{ hash2, hash1 },
@@ -2197,7 +2223,7 @@ test "maybeRefreshLastVote - non voting validator" {
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    var trees1 = try std14.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
     trees1.appendSliceAssumeCapacity(&[3]TreeNode{
         .{ hash1, root },
         .{ hash2, hash1 },
@@ -2277,7 +2303,7 @@ test "maybeRefreshLastVote - hotspare validator" {
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    var trees1 = try std14.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
     trees1.appendSliceAssumeCapacity(&[3]TreeNode{
         .{ hash1, root },
         .{ hash2, hash1 },
@@ -2357,7 +2383,7 @@ test "maybeRefreshLastVote - refresh interval not elapsed" {
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    var trees1 = try std14.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
     trees1.appendSliceAssumeCapacity(&[3]TreeNode{
         .{ hash1, root },
         .{ hash2, hash1 },
@@ -2440,7 +2466,7 @@ test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockh
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    var trees1 = try std14.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
     trees1.appendSliceAssumeCapacity(&[3]TreeNode{
         .{ hash1, root },
         .{ hash2, hash1 },
@@ -2503,25 +2529,26 @@ test "checkAndHandleNewRoot - missing slot" {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    const root = SlotAndHash{
+    const root_slot_and_hash = SlotAndHash{
         .slot = 0,
         .hash = Hash.initRandom(random),
     };
 
-    var fixture = try TestFixture.init(allocator, root);
+    // NOTE: TestFixture has its own SlotTracker as well. Unclear if that matters.
+    var fixture = try TestFixture.init(
+        allocator,
+        root_slot_and_hash,
+    );
     defer fixture.deinit(allocator);
 
     // Build a tracked slot set wrapped in RwMux
-    var slot_tracker: SlotTracker = .{
-        .root = root.slot,
-        .slots = .empty,
-    };
+    var slot_tracker: SlotTracker = try .initEmpty(testing.allocator, root_slot_and_hash.slot);
     defer slot_tracker.deinit(testing.allocator);
 
     {
         const constants: SlotConstants = try .genesis(allocator, .initRandom(random));
         errdefer constants.deinit(allocator);
-        try slot_tracker.put(testing.allocator, root.slot, .{
+        try slot_tracker.put(testing.allocator, root_slot_and_hash.slot, .{
             .constants = constants,
             .state = .GENESIS,
         });
@@ -2533,6 +2560,14 @@ test "checkAndHandleNewRoot - missing slot" {
     var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer test_state.deinit();
 
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        random,
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit(allocator);
+
     // Try to check a slot that doesn't exist in the tracker
     const result = checkAndHandleNewRoot(
         allocator,
@@ -2540,12 +2575,18 @@ test "checkAndHandleNewRoot - missing slot" {
         &slot_tracker,
         &fixture.progress,
         &fixture.fork_choice,
+        &epoch_tracker,
         .noop,
         null, // no need to update a StatusCache,
         123, // Non-existent slot
+        null, // no thread pool
     );
 
     try testing.expectError(error.MissingSlot, result);
+
+    // Verify slot trackers remain at initial state after failure
+    try testing.expectEqual(0, slot_tracker.getSlotForCommitment(.processed));
+    try testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 test "checkAndHandleNewRoot - missing hash" {
@@ -2561,12 +2602,9 @@ test "checkAndHandleNewRoot - missing hash" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    var slot_tracker2 = RwMux(SlotTracker).init(.{ .root = root.slot, .slots = .empty });
-    defer {
-        const ptr, var lg = slot_tracker2.writeWithLock();
-        defer lg.unlock();
-        ptr.deinit(allocator);
-    }
+    var slot_tracker2: SlotTracker = try .initEmpty(allocator, root.slot);
+    defer slot_tracker2.deinit(allocator);
+
     {
         const constants = try SlotConstants.genesis(allocator, .initRandom(random));
         errdefer constants.deinit(allocator);
@@ -2574,9 +2612,7 @@ test "checkAndHandleNewRoot - missing hash" {
         var state: SlotState = .GENESIS;
         errdefer state.deinit(allocator);
 
-        const ptr, var lg = slot_tracker2.writeWithLock();
-        defer lg.unlock();
-        try ptr.put(allocator, root.slot, .{
+        try slot_tracker2.put(allocator, root.slot, .{
             .constants = constants,
             .state = state,
         });
@@ -2588,24 +2624,38 @@ test "checkAndHandleNewRoot - missing hash" {
     var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer test_state.deinit();
 
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        random,
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit(allocator);
+
     // Try to check a slot that doesn't exist in the tracker
-    const slot_tracker2_ptr, var slot_tracker2_lg = slot_tracker2.writeWithLock();
-    defer slot_tracker2_lg.unlock();
     const result = checkAndHandleNewRoot(
         allocator,
         test_state.resultWriter(),
-        slot_tracker2_ptr,
+        &slot_tracker2,
         &fixture.progress,
         &fixture.fork_choice,
+        &epoch_tracker,
         .noop,
         null, // no need to update a StatusCache,
         root.slot, // Non-existent hash
+        null, // no thread pool
     );
 
     try testing.expectError(error.MissingHash, result);
+
+    // Verify slot trackers remain at initial state after failure
+    try testing.expectEqual(0, slot_tracker2.getSlotForCommitment(.processed));
+    try testing.expectEqual(0, slot_tracker2.getSlotForCommitment(.confirmed));
 }
 
 test "checkAndHandleNewRoot - empty slot tracker" {
+    const allocator = std.testing.allocator;
+
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
@@ -2617,34 +2667,42 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    const slot_tracker_val3: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
-    var slot_tracker3 = RwMux(SlotTracker).init(slot_tracker_val3);
-    defer {
-        const ptr, var lg = slot_tracker3.writeWithLock();
-        defer lg.unlock();
-        ptr.deinit(testing.allocator);
-    }
+    var slot_tracker3: SlotTracker = try .initEmpty(allocator, root.slot);
+    defer slot_tracker3.deinit(testing.allocator);
+
     var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
     defer registry.deinit();
 
     var test_state = try sig.ledger.tests.initTestLedger(testing.allocator, @src(), .noop);
     defer test_state.deinit();
 
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        random,
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit(allocator);
+
     // Try to check a slot that doesn't exist in the tracker
-    const slot_tracker3_ptr, var slot_tracker3_lg = slot_tracker3.writeWithLock();
-    defer slot_tracker3_lg.unlock();
     const result = checkAndHandleNewRoot(
         testing.allocator,
         test_state.resultWriter(),
-        slot_tracker3_ptr,
+        &slot_tracker3,
         &fixture.progress,
         &fixture.fork_choice,
+        &epoch_tracker,
         .noop,
         null, // no need to update a StatusCache,
         root.slot,
+        null, // no thread pool
     );
 
     try testing.expectError(error.EmptySlotTracker, result);
+
+    // Verify slot trackers remain at initial state after failure
+    try testing.expectEqual(0, slot_tracker3.getSlotForCommitment(.processed));
+    try testing.expectEqual(0, slot_tracker3.getSlotForCommitment(.confirmed));
 }
 
 test "checkAndHandleNewRoot - success" {
@@ -2672,7 +2730,7 @@ test "checkAndHandleNewRoot - success" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    var slot_tracker4 = RwMux(SlotTracker).init(.{ .root = root.slot, .slots = .empty });
+    var slot_tracker4 = RwMux(SlotTracker).init(try .initEmpty(allocator, root.slot));
     defer {
         const ptr, var lg = slot_tracker4.writeWithLock();
         defer lg.unlock();
@@ -2710,7 +2768,7 @@ test "checkAndHandleNewRoot - success" {
     }
 
     // Add some entries to progress map that should be removed
-    var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    var trees1 = try std14.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
     trees1.appendSliceAssumeCapacity(&[3]TreeNode{
         .{ hash1, root },
         .{ hash2, hash1 },
@@ -2729,6 +2787,14 @@ test "checkAndHandleNewRoot - success" {
     var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer test_state.deinit();
 
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        random,
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit(allocator);
+
     try testing.expectEqual(4, fixture.progress.map.count());
     try testing.expect(fixture.progress.map.contains(hash1.slot));
     {
@@ -2740,9 +2806,11 @@ test "checkAndHandleNewRoot - success" {
             slot_tracker4_ptr,
             &fixture.progress,
             &fixture.fork_choice,
+            &epoch_tracker,
             .noop,
             null, // no need to update a StatusCache,
             hash3.slot,
+            null, // no thread pool
         );
     }
 
@@ -2759,7 +2827,7 @@ test "checkAndHandleNewRoot - success" {
 }
 
 test "computeBankStats - child bank heavier" {
-    const allocator = std.testing.allocator;
+    const gpa = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
@@ -2768,19 +2836,19 @@ test "computeBankStats - child bank heavier" {
     const hash1 = SlotAndHash{ .slot = 1, .hash = Hash.initRandom(random) };
     const hash2 = SlotAndHash{ .slot = 2, .hash = Hash.initRandom(random) };
 
-    var fixture = try TestFixture.init(allocator, root);
-    defer fixture.deinit(allocator);
+    var fixture = try TestFixture.init(gpa, root);
+    defer fixture.deinit(gpa);
 
-    try fixture.fill_keys(allocator, random, 1);
+    try fixture.fill_keys(gpa, random, 1);
 
     // Create the tree of banks in a BankForks object
-    var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    var trees1 = try std14.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
     trees1.appendSliceAssumeCapacity(&[2]TreeNode{
         .{ hash1, root },
         .{ hash2, hash1 },
     });
     try fixture.fillFork(
-        allocator,
+        gpa,
         .{ .root = root, .data = trees1 },
         .active,
     );
@@ -2793,63 +2861,57 @@ test "computeBankStats - child bank heavier" {
         // try testing.expectEqual(@as(usize, 0), result.len);
     }
 
-    var frozen_slots = try fixture.slot_tracker.frozenSlots(
-        allocator,
-    );
-    defer frozen_slots.deinit(allocator);
-    errdefer frozen_slots.deinit(allocator);
+    var frozen_slots = try fixture.slot_tracker.frozenSlots(gpa);
+    defer frozen_slots.deinit(gpa);
+    errdefer frozen_slots.deinit(gpa);
 
-    // TODO move this into fixture?
-    const versioned_stakes = try testEpochStakes(
-        allocator,
-        fixture.vote_pubkeys.items,
-        10000,
-        random,
-    );
-    defer versioned_stakes.deinit(allocator);
-
-    const keys = versioned_stakes.stakes.vote_accounts.vote_accounts.keys();
-    for (keys) |key| {
-        var vote_account = versioned_stakes.stakes.vote_accounts.vote_accounts.getPtr(key).?;
-        try vote_account.account.state.votes.append(allocator, .{
-            .latency = 0,
-            .lockout = .{
-                .slot = 1,
-                .confirmation_count = 4,
-            },
-        });
-    }
-
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(allocator);
-    try epoch_stakes.put(allocator, 0, versioned_stakes);
+    var epoch_tracker: sig.core.EpochTracker = blk: {
+        const versioned_stakes = try testEpochStakes(
+            gpa,
+            fixture.vote_pubkeys.items,
+            10000,
+            random,
+        );
+        {
+            errdefer versioned_stakes.deinit(gpa);
+            for (versioned_stakes.stakes.vote_accounts.vote_accounts.values()) |*vote_account| {
+                try vote_account.account.state.votes.append(gpa, .{
+                    .latency = 0,
+                    .lockout = .{
+                        .slot = 1,
+                        .confirmation_count = 4,
+                    },
+                });
+            }
+        }
+        break :blk try .initWithEpochStakesOnlyForTest(gpa, &.{versioned_stakes});
+    };
+    defer epoch_tracker.deinit(gpa);
 
     var replay_tower = try createTestReplayTower(
         1,
         0.67,
     );
-    const epoch_schedule = EpochSchedule.INIT;
     var slot_tracker_rw1 = RwMux(SlotTracker).init(fixture.slot_tracker);
     const slot_tracker_rw1_ptr, var slot_tracker_rw1_lg = slot_tracker_rw1.writeWithLock();
     defer slot_tracker_rw1_lg.unlock();
     const newly_computed_consensus_slots = try computeConsensusInputs(
-        allocator,
+        gpa,
         .noop,
         my_node_pubkey,
         &fixture.ancestors,
         slot_tracker_rw1_ptr,
-        &epoch_schedule,
-        &epoch_stakes,
+        &epoch_tracker,
         &fixture.progress,
         &fixture.fork_choice,
         &replay_tower,
         &fixture.latest_validator_votes_for_frozen_banks,
     );
-    defer allocator.free(newly_computed_consensus_slots);
+    defer gpa.free(newly_computed_consensus_slots);
 
     // Sort frozen slots by slot number
-    const slot_list = try allocator.alloc(u64, frozen_slots.count());
-    defer allocator.free(slot_list);
+    const slot_list = try gpa.alloc(u64, frozen_slots.count());
+    defer gpa.free(slot_list);
     var i: usize = 0;
     for (frozen_slots.keys()) |slot| {
         slot_list[i] = slot;
@@ -2896,7 +2958,7 @@ test "computeBankStats - same weight selects lower slot" {
     const my_vote_pubkey = fixture.vote_pubkeys.items[0];
 
     // Create the tree: root -> 1, root -> 2
-    var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    var trees1 = try std14.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
     trees1.appendSliceAssumeCapacity(&[_]TreeNode{
         .{ hash1, root },
         .{ hash2, root },
@@ -2907,25 +2969,26 @@ test "computeBankStats - same weight selects lower slot" {
         .active,
     );
 
-    const versioned_stakes = try testEpochStakes(
+    const versioned_stakes_0 = try testEpochStakes(
         testing.allocator,
         fixture.vote_pubkeys.items,
         10000,
         random,
     );
-    defer versioned_stakes.deinit(testing.allocator);
+    var versioned_stakes_1 = try versioned_stakes_0.clone(testing.allocator);
+    versioned_stakes_1.stakes.epoch = 1;
 
-    var epoch_stakes = EpochStakesMap.empty;
-    defer epoch_stakes.deinit(testing.allocator);
-    try epoch_stakes.put(testing.allocator, 0, versioned_stakes);
-    try epoch_stakes.put(testing.allocator, 1, versioned_stakes);
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        testing.allocator,
+        &.{ versioned_stakes_0, versioned_stakes_1 },
+    );
+    defer epoch_tracker.deinit(testing.allocator);
 
     var replay_tower = try createTestReplayTower(
         1,
         0.67,
     );
 
-    const epoch_schedule = EpochSchedule.INIT;
     var slot_tracker_rw2 = RwMux(SlotTracker).init(fixture.slot_tracker);
     const slot_tracker_rw2_ptr, var slot_tracker_rw2_lg = slot_tracker_rw2.writeWithLock();
     defer slot_tracker_rw2_lg.unlock();
@@ -2935,8 +2998,7 @@ test "computeBankStats - same weight selects lower slot" {
         my_vote_pubkey,
         &fixture.ancestors,
         slot_tracker_rw2_ptr,
-        &epoch_schedule,
-        &epoch_stakes,
+        &epoch_tracker,
         &fixture.progress,
         &fixture.fork_choice,
         &replay_tower,
@@ -2981,7 +3043,6 @@ test "generateVoteTx - empty authorized voter keypairs returns non_voting" {
 
     const empty_keypairs = &[_]sig.identity.KeyPair{};
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
     const account_reader: AccountReader = .noop;
 
     const result = try generateVoteTx(
@@ -2993,7 +3054,7 @@ test "generateVoteTx - empty authorized voter keypairs returns non_voting" {
         &replay_tower,
         account_reader,
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3020,7 +3081,6 @@ test "generateVoteTx - no node keypair returns non_voting" {
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
     const account_reader: AccountReader = .noop;
 
     const result = try generateVoteTx(
@@ -3032,7 +3092,7 @@ test "generateVoteTx - no node keypair returns non_voting" {
         &replay_tower,
         account_reader,
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3061,7 +3121,6 @@ test "generateVoteTx - no last voted slot returns failed" {
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
     const account_reader: AccountReader = .noop;
 
     const result = try generateVoteTx(
@@ -3073,7 +3132,7 @@ test "generateVoteTx - no last voted slot returns failed" {
         &replay_tower,
         account_reader,
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3113,7 +3172,6 @@ test "generateVoteTx - slot not in tracker returns failed" {
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
     const account_reader: AccountReader = .noop;
 
     const result = try generateVoteTx(
@@ -3125,7 +3183,7 @@ test "generateVoteTx - slot not in tracker returns failed" {
         &replay_tower,
         account_reader,
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3165,7 +3223,6 @@ test "generateVoteTx - vote account not found returns failed" {
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
     const account_reader: AccountReader = .noop;
 
     const result = try generateVoteTx(
@@ -3177,7 +3234,7 @@ test "generateVoteTx - vote account not found returns failed" {
         &replay_tower,
         account_reader,
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3217,7 +3274,6 @@ test "generateVoteTx - invalid switch fork decision returns failed" {
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
     const account_reader: AccountReader = .noop;
 
     const result = try generateVoteTx(
@@ -3229,7 +3285,7 @@ test "generateVoteTx - invalid switch fork decision returns failed" {
         &replay_tower,
         account_reader,
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3240,22 +3296,44 @@ test "generateVoteTx - invalid switch fork decision returns failed" {
 }
 
 test "generateVoteTx - success with tower_sync vote" {
-    const allocator = testing.allocator;
-    var prng = std.Random.DefaultPrng.init(100);
-    const random = prng.random();
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
-    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
-    var fixture = try TestFixture.init(allocator, root);
-    defer fixture.deinit(allocator);
+    const root: SlotAndHash = .{
+        .slot = 0,
+        .hash = .initRandom(prng),
+    };
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    var slot_tracker: SlotTracker = blk: {
+        var constants: sig.core.SlotConstants = try .genesis(gpa, .DEFAULT);
+        errdefer constants.deinit(gpa);
+        constants.parent_slot = root.slot -| 1;
+
+        var state: sig.core.SlotState = .GENESIS;
+        errdefer state.deinit(gpa);
+        state.hash = .init(root.hash);
+
+        break :blk try .init(gpa, root.slot, .{
+            .constants = constants,
+            .state = state,
+        });
+    };
+    defer slot_tracker.deinit(gpa);
+
+    const blockhash: Hash = .initRandom(prng);
+    {
+        const bhq, var bhq_lg = slot_tracker.getRoot().state.blockhash_queue.writeWithLock();
+        defer bhq_lg.unlock();
+        try bhq.insertHash(gpa, blockhash, 6);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
-    defer replay_tower.deinit(allocator);
+    defer replay_tower.deinit(gpa);
 
     replay_tower.last_vote = .{
         .tower_sync = .{
-            .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
+            .lockouts = .fromOwnedSlice(try gpa.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
             })),
             .root = null,
@@ -3267,31 +3345,29 @@ test "generateVoteTx - success with tower_sync vote" {
 
     const node_kp = sig.identity.KeyPair.generate();
     const auth_voter_kp = sig.identity.KeyPair.generate();
-    const vote_account_pubkey = Pubkey.initRandom(random);
+    const vote_account_pubkey = Pubkey.initRandom(prng);
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
-
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Two.initTest(gpa);
     defer test_state.deinit();
     const db = &test_state.db;
 
-    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
-        allocator,
-        Pubkey.fromPublicKey(&node_kp.public_key),
-        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
-        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
+        gpa,
+        .fromPublicKey(&node_kp.public_key),
+        .fromPublicKey(&auth_voter_kp.public_key),
+        .fromPublicKey(&auth_voter_kp.public_key),
         0,
     );
-    defer vote_state.deinit(allocator);
+    defer vote_state.deinit(gpa);
 
-    const vote_account_data_buf = try allocator.alloc(
+    const vote_account_data_buf = try gpa.alloc(
         u8,
-        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+        sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
-    defer allocator.free(vote_account_data_buf);
+    defer gpa.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .v3 = vote_state },
         .{},
     );
     const vote_account = sig.runtime.AccountSharedData{
@@ -3302,54 +3378,72 @@ test "generateVoteTx - success with tower_sync vote" {
         .rent_epoch = 0,
     };
 
-    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
-    defer ancestors.deinit(allocator);
+    var ancestors: Ancestors = try .initWithSlots(gpa, &.{0});
+    defer ancestors.deinit(gpa);
 
     try db.put(0, vote_account_pubkey, vote_account);
     db.onSlotRooted(0, &ancestors);
 
     const result = try generateVoteTx(
-        allocator,
+        gpa,
         vote_account_pubkey,
         &.{auth_voter_kp},
         node_kp,
         .same_fork,
         &replay_tower,
         .{ .accounts_db_two = db },
-        &fixture.slot_tracker,
-        &epoch_tracker,
+        &slot_tracker,
+        &.INIT,
     );
-    errdefer switch (result) {
-        .tx => |tx| tx.deinit(allocator),
+    defer switch (result) {
+        .tx => |tx| tx.deinit(gpa),
         else => {},
     };
 
-    switch (result) {
-        .tx => |tx| {
-            defer tx.deinit(allocator);
-            try testing.expect(tx.signatures.len > 0);
-            try testing.expect(tx.msg.instructions.len > 0);
-            try testing.expectEqual(2, tx.signatures.len);
-        },
-        else => try testing.expect(false),
-    }
+    try std.testing.expectEqual(.tx, std.meta.activeTag(result));
+    const tx = result.tx;
+    try testing.expect(tx.signatures.len > 0);
+    try testing.expect(tx.msg.instructions.len > 0);
+    try testing.expectEqual(2, tx.signatures.len);
 }
 
 test "generateVoteTx - success with vote_state_update compacted" {
-    const allocator = testing.allocator;
-    var prng = std.Random.DefaultPrng.init(101);
-    const random = prng.random();
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
-    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
-    var fixture = try TestFixture.init(allocator, root);
-    defer fixture.deinit(allocator);
+    const root: SlotAndHash = .{
+        .slot = 0,
+        .hash = .initRandom(prng),
+    };
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    var slot_tracker: SlotTracker = blk: {
+        var constants: sig.core.SlotConstants = try .genesis(gpa, .DEFAULT);
+        errdefer constants.deinit(gpa);
+        constants.parent_slot = root.slot -| 1;
+
+        var state: sig.core.SlotState = .GENESIS;
+        errdefer state.deinit(gpa);
+        state.hash = .init(root.hash);
+
+        break :blk try .init(gpa, root.slot, .{
+            .constants = constants,
+            .state = state,
+        });
+    };
+    defer slot_tracker.deinit(gpa);
+
+    const blockhash: Hash = .initRandom(prng);
+    {
+        const bhq, var bhq_lg = slot_tracker.getRoot().state.blockhash_queue.writeWithLock();
+        defer bhq_lg.unlock();
+        try bhq.insertHash(gpa, blockhash, 6);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
-    defer replay_tower.deinit(allocator);
+    defer replay_tower.deinit(gpa);
 
-    const lockouts = try allocator.dupe(Lockout, &.{
+    const lockouts = try gpa.dupe(Lockout, &.{
         .{ .slot = 0, .confirmation_count = 1 },
     });
     replay_tower.last_vote = .{
@@ -3363,35 +3457,33 @@ test "generateVoteTx - success with vote_state_update compacted" {
 
     const node_kp = sig.identity.KeyPair.generate();
     const auth_voter_kp = sig.identity.KeyPair.generate();
-    const vote_account_pubkey = Pubkey.initRandom(random);
+    const vote_account_pubkey = Pubkey.initRandom(prng);
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
-
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Two.initTest(gpa);
     defer test_state.deinit();
     const db = &test_state.db;
 
-    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
-        allocator,
-        Pubkey.fromPublicKey(&node_kp.public_key),
-        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
-        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
+        gpa,
+        .fromPublicKey(&node_kp.public_key),
+        .fromPublicKey(&auth_voter_kp.public_key),
+        .fromPublicKey(&auth_voter_kp.public_key),
         0,
     );
-    defer vote_state.deinit(allocator);
+    defer vote_state.deinit(gpa);
 
-    const vote_account_data_buf = try allocator.alloc(
+    const vote_account_data_buf = try gpa.alloc(
         u8,
-        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+        sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
-    defer allocator.free(vote_account_data_buf);
+    defer gpa.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        VoteStateVersions{ .current = vote_state },
-        .{},
+        VoteStateVersions{ .v3 = vote_state },
+        .standard,
     );
 
-    const vote_account = sig.runtime.AccountSharedData{
+    const vote_account: sig.runtime.AccountSharedData = .{
         .lamports = 1000000,
         .data = vote_account_data,
         .owner = sig.runtime.program.vote.ID,
@@ -3399,55 +3491,73 @@ test "generateVoteTx - success with vote_state_update compacted" {
         .rent_epoch = 0,
     };
 
-    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
-    defer ancestors.deinit(allocator);
+    var ancestors: Ancestors = try .initWithSlots(gpa, &.{0});
+    defer ancestors.deinit(gpa);
 
     try db.put(0, vote_account_pubkey, vote_account);
     db.onSlotRooted(0, &ancestors);
 
     const result = try generateVoteTx(
-        allocator,
+        gpa,
         vote_account_pubkey,
         &.{auth_voter_kp},
         node_kp,
         .same_fork,
         &replay_tower,
         .{ .accounts_db_two = db },
-        &fixture.slot_tracker,
-        &epoch_tracker,
+        &slot_tracker,
+        &.INIT,
     );
-    errdefer switch (result) {
-        .tx => |tx| tx.deinit(allocator),
+    defer switch (result) {
+        .tx => |tx| tx.deinit(gpa),
         else => {},
     };
 
-    switch (result) {
-        .tx => |tx| {
-            defer tx.deinit(allocator);
-            try testing.expect(tx.signatures.len > 0);
-            try testing.expect(tx.msg.instructions.len > 0);
-        },
-        else => try testing.expect(false),
-    }
+    try std.testing.expectEqual(.tx, std.meta.activeTag(result));
+    const tx = result.tx;
+    try testing.expect(tx.signatures.len > 0);
+    try testing.expect(tx.msg.instructions.len > 0);
 }
 
 test "generateVoteTx - success with switch proof" {
-    const allocator = testing.allocator;
-    var prng = std.Random.DefaultPrng.init(102);
-    const random = prng.random();
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
-    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
-    var fixture = try TestFixture.init(allocator, root);
-    defer fixture.deinit(allocator);
+    const root: SlotAndHash = .{
+        .slot = 0,
+        .hash = .initRandom(prng),
+    };
 
-    fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
+    var slot_tracker: SlotTracker = blk: {
+        var constants: sig.core.SlotConstants = try .genesis(gpa, .DEFAULT);
+        errdefer constants.deinit(gpa);
+        constants.parent_slot = root.slot -| 1;
+
+        var state: sig.core.SlotState = .GENESIS;
+        errdefer state.deinit(gpa);
+        state.hash = .init(root.hash);
+
+        break :blk try .init(gpa, root.slot, .{
+            .constants = constants,
+            .state = state,
+        });
+    };
+    defer slot_tracker.deinit(gpa);
+
+    const blockhash: Hash = .initRandom(prng);
+    {
+        const bhq, var bhq_lg = slot_tracker.getRoot().state.blockhash_queue.writeWithLock();
+        defer bhq_lg.unlock();
+        try bhq.insertHash(gpa, blockhash, 7);
+    }
 
     var replay_tower = try createTestReplayTower(1, 0.67);
-    defer replay_tower.deinit(allocator);
+    defer replay_tower.deinit(gpa);
 
     replay_tower.last_vote = .{
         .tower_sync = .{
-            .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
+            .lockouts = .fromOwnedSlice(try gpa.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
             })),
             .root = null,
@@ -3459,31 +3569,29 @@ test "generateVoteTx - success with switch proof" {
 
     const node_kp = sig.identity.KeyPair.generate();
     const auth_voter_kp = sig.identity.KeyPair.generate();
-    const vote_account_pubkey = Pubkey.initRandom(random);
+    const vote_account_pubkey = Pubkey.initRandom(prng);
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
-
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Two.initTest(gpa);
     defer test_state.deinit();
     const db = &test_state.db;
 
-    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
-        allocator,
-        Pubkey.fromPublicKey(&node_kp.public_key),
-        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
-        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
+        gpa,
+        .fromPublicKey(&node_kp.public_key),
+        .fromPublicKey(&auth_voter_kp.public_key),
+        .fromPublicKey(&auth_voter_kp.public_key),
         0,
     );
-    defer vote_state.deinit(allocator);
+    defer vote_state.deinit(gpa);
 
-    const vote_account_data_buf = try allocator.alloc(
+    const vote_account_data_buf = try gpa.alloc(
         u8,
-        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+        sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
-    defer allocator.free(vote_account_data_buf);
+    defer gpa.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .v3 = vote_state },
         .{},
     );
 
@@ -3495,56 +3603,52 @@ test "generateVoteTx - success with switch proof" {
         .rent_epoch = 0,
     };
 
-    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
-    defer ancestors.deinit(allocator);
+    var ancestors: Ancestors = try .initWithSlots(gpa, &.{0});
+    defer ancestors.deinit(gpa);
 
     try db.put(0, vote_account_pubkey, vote_account);
     db.onSlotRooted(0, &ancestors);
 
-    const switch_proof_hash = Hash.initRandom(random);
+    const switch_proof_hash: Hash = .initRandom(prng);
     const result = try generateVoteTx(
-        allocator,
+        gpa,
         vote_account_pubkey,
         &.{auth_voter_kp},
         node_kp,
         .{ .switch_proof = switch_proof_hash },
         &replay_tower,
         .{ .accounts_db_two = db },
-        &fixture.slot_tracker,
-        &epoch_tracker,
+        &slot_tracker,
+        &.INIT,
     );
-    errdefer switch (result) {
-        .tx => |tx| tx.deinit(allocator),
+    defer switch (result) {
+        .tx => |tx| tx.deinit(gpa),
         else => {},
     };
 
-    switch (result) {
-        .tx => |tx| {
-            defer tx.deinit(allocator);
-            try testing.expect(tx.signatures.len > 0);
-            try testing.expect(tx.msg.instructions.len > 0);
-        },
-        else => try testing.expect(false),
-    }
+    try std.testing.expectEqual(.tx, std.meta.activeTag(result));
+    const tx = result.tx;
+    try std.testing.expect(tx.signatures.len > 0);
+    try std.testing.expect(tx.msg.instructions.len > 0);
 }
 
 test "generateVoteTx - hot spare validator returns hot_spare" {
-    const allocator = testing.allocator;
-    var prng = std.Random.DefaultPrng.init(103);
-    const random = prng.random();
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
-    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
-    var fixture = try TestFixture.init(allocator, root);
-    defer fixture.deinit(allocator);
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(prng) };
+    var fixture = try TestFixture.init(gpa, root);
+    defer fixture.deinit(gpa);
 
     fixture.slot_tracker.get(0).?.state.hash.set(root.hash);
 
     var replay_tower = try createTestReplayTower(1, 0.67);
-    defer replay_tower.deinit(allocator);
+    defer replay_tower.deinit(gpa);
 
     replay_tower.last_vote = .{
         .tower_sync = .{
-            .lockouts = .fromOwnedSlice(try allocator.dupe(Lockout, &.{
+            .lockouts = .fromOwnedSlice(try gpa.dupe(Lockout, &.{
                 .{ .slot = 0, .confirmation_count = 1 },
             })),
             .root = null,
@@ -3557,31 +3661,29 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
     const node_kp = sig.identity.KeyPair.generate();
     const different_node_kp = sig.identity.KeyPair.generate();
     const auth_voter_kp = sig.identity.KeyPair.generate();
-    const vote_account_pubkey = Pubkey.initRandom(random);
+    const vote_account_pubkey = Pubkey.initRandom(prng);
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
-
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Two.initTest(gpa);
     defer test_state.deinit();
     const db = &test_state.db;
 
-    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
-        allocator,
-        Pubkey.fromPublicKey(&different_node_kp.public_key),
-        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
-        Pubkey.fromPublicKey(&auth_voter_kp.public_key),
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
+        gpa,
+        .fromPublicKey(&different_node_kp.public_key),
+        .fromPublicKey(&auth_voter_kp.public_key),
+        .fromPublicKey(&auth_voter_kp.public_key),
         0,
     );
-    defer vote_state.deinit(allocator);
+    defer vote_state.deinit(gpa);
 
-    const vote_account_data_buf = try allocator.alloc(
+    const vote_account_data_buf = try gpa.alloc(
         u8,
-        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+        sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
-    defer allocator.free(vote_account_data_buf);
+    defer gpa.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .v3 = vote_state },
         .{},
     );
 
@@ -3593,14 +3695,14 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
         .rent_epoch = 0,
     };
 
-    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
-    defer ancestors.deinit(allocator);
+    var ancestors: Ancestors = try .initWithSlots(gpa, &.{0});
+    defer ancestors.deinit(gpa);
 
     try db.put(0, vote_account_pubkey, vote_account);
     db.onSlotRooted(0, &ancestors);
 
     const result = try generateVoteTx(
-        allocator,
+        gpa,
         vote_account_pubkey,
         &.{auth_voter_kp},
         node_kp,
@@ -3608,10 +3710,10 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
         &replay_tower,
         .{ .accounts_db_two = db },
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
-    errdefer switch (result) {
-        .tx => |tx| tx.deinit(allocator),
+    defer switch (result) {
+        .tx => |tx| tx.deinit(gpa),
         else => {},
     };
 
@@ -3649,13 +3751,11 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
     const actual_auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
 
-    const epoch_tracker: EpochTracker = .{ .schedule = .INIT, .epochs = .empty };
-
     var test_state = try sig.accounts_db.Two.initTest(allocator);
     defer test_state.deinit();
     const db = &test_state.db;
 
-    var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+    var vote_state = try sig.runtime.program.vote.state.createTestVoteStateV3(
         allocator,
         Pubkey.fromPublicKey(&node_kp.public_key),
         Pubkey.fromPublicKey(&actual_auth_voter_kp.public_key),
@@ -3666,12 +3766,12 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
 
     const vote_account_data_buf = try allocator.alloc(
         u8,
-        sig.runtime.program.vote.state.VoteState.MAX_VOTE_STATE_SIZE,
+        sig.runtime.program.vote.state.VoteStateV3.MAX_VOTE_STATE_SIZE,
     );
     defer allocator.free(vote_account_data_buf);
     const vote_account_data = try sig.bincode.writeToSlice(
         vote_account_data_buf,
-        VoteStateVersions{ .current = vote_state },
+        VoteStateVersions{ .v3 = vote_state },
         .{},
     );
 
@@ -3698,7 +3798,7 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
         &replay_tower,
         .{ .accounts_db_two = db },
         &fixture.slot_tracker,
-        &epoch_tracker,
+        &.INIT,
     );
     errdefer switch (result) {
         .tx => |tx| tx.deinit(allocator),
@@ -3709,98 +3809,114 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
 }
 
 test "sendVote - without gossip table does not send and does not throw" {
-    const allocator = testing.allocator;
+    const gpa = testing.allocator;
 
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = &[_]Pubkey{},
+        .start = 0,
+        .end = 0,
+    };
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
     );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| {
-            schedule.deinit();
-        }
-        leader_schedules.deinit();
-    }
 
-    const vote_op = VoteOp{
+    const vote_op: VoteOp = .{
         .push_vote = .{
-            .tx = Transaction.EMPTY,
+            .tx = .EMPTY,
             .last_tower_slot = 200,
         },
     };
 
-    sendVote(
+    // sendVote does not throw
+    try std.testing.expectEqual({}, sendVote(
         .noop,
-        allocator,
+        gpa,
         0,
         vote_op,
         null,
-        leader_schedule_cache.slotLeaders(),
-        sig.identity.KeyPair.generate(),
+        slot_leaders,
+        try .generateDeterministic(seed: {
+            var seed: [sig.identity.KeyPair.seed_length]u8 = undefined;
+            prng.bytes(&seed);
+            break :seed seed;
+        }),
         100,
         null,
-    ) catch unreachable; // sendVote does not throw
+    ));
 }
 
 test "sendVote - without keypair does not send and does not throw" {
-    const allocator = testing.allocator;
+    const gpa = testing.allocator;
 
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = &[_]Pubkey{},
+        .start = 0,
+        .end = 0,
+    };
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
     );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| {
-            schedule.deinit();
-        }
-        leader_schedules.deinit();
-    }
 
-    var gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    var gossip_table = try sig.gossip.GossipTable.init(gpa, gpa);
     defer gossip_table.deinit();
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
 
-    const vote_op = VoteOp{
+    const tx = try generateValidEmptyTx(gpa, prng);
+    defer tx.deinit(gpa);
+
+    const vote_op: VoteOp = .{
         .push_vote = .{
-            .tx = Transaction.EMPTY,
+            .tx = tx,
             .last_tower_slot = 200,
         },
     };
 
-    sendVote(
+    // sendVote does not throw
+    try std.testing.expectEqual({}, sendVote(
         .noop,
-        allocator,
+        gpa,
         0,
         vote_op,
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         null,
         200,
         null,
-    ) catch unreachable; // sendVote does not throw
+    ));
 }
 
 test "sendVote - without leader schedule does not send and does not throw" {
-    const allocator = testing.allocator;
+    const gpa = testing.allocator;
 
-    var gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var gossip_table = try sig.gossip.GossipTable.init(gpa, gpa);
     defer gossip_table.deinit();
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
 
-    const vote_op = VoteOp{
+    const tx = try generateValidEmptyTx(gpa, prng);
+    defer tx.deinit(gpa);
+
+    const vote_op: VoteOp = .{
         .push_vote = .{
-            .tx = Transaction.EMPTY,
+            .tx = tx,
             .last_tower_slot = 200,
         },
     };
 
-    sendVote(
+    // sendVote does not throw
+    try std.testing.expectEqual({}, sendVote(
         .noop,
-        allocator,
+        gpa,
         0,
         vote_op,
         &gossip_table_rw,
@@ -3808,53 +3924,37 @@ test "sendVote - without leader schedule does not send and does not throw" {
         null,
         300,
         null,
-    ) catch unreachable; // sendVote does not throw
+    ));
 }
 
 test "sendVote - sends to both gossip and upcoming leaders" {
-    const allocator = testing.allocator;
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
     const vote_slot: Slot = 100;
 
-    const vote_op = VoteOp{
-        .push_vote = .{
-            .tx = Transaction.EMPTY,
-            .last_tower_slot = vote_slot,
-        },
+    const leader_pubkey: Pubkey = .initRandom(prng);
+
+    const leaders = try gpa.alloc(Pubkey, 5);
+    @memset(leaders, leader_pubkey);
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-
-    const leader_pubkey = Pubkey.initRandom(std.crypto.random);
-
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
-    for (leader_schedule_slots) |*slot| {
-        slot.* = leader_pubkey;
-    }
-
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
+    defer leader_schedule.deinit(gpa);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
     );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| {
-            schedule.deinit();
-        }
-        leader_schedules.deinit();
-    }
 
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
-    };
-    try leader_schedule_cache.put(0, leader_schedule);
-
-    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    const gossip_table = try sig.gossip.GossipTable.init(gpa, gpa);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
     defer sig.sync.mux.deinitMux(&gossip_table_rw);
 
     var contact_info = sig.gossip.data.ContactInfo.init(
-        allocator,
+        gpa,
         leader_pubkey,
         sig.time.getWallclockMs(),
         0,
@@ -3886,17 +3986,26 @@ test "sendVote - sends to both gossip and upcoming leaders" {
         try testing.expectEqual(1, gossip_table_read.len());
     }
 
-    try sendVote(
+    const tx = try generateValidEmptyTx(gpa, prng);
+    sendVote(
         .noop,
-        allocator,
+        gpa,
         vote_slot,
-        vote_op,
+        .{
+            .push_vote = .{
+                .tx = tx,
+                .last_tower_slot = vote_slot,
+            },
+        },
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         my_keypair,
         400,
         null,
-    );
+    ) catch |err| {
+        tx.deinit(gpa);
+        return err;
+    };
 
     {
         const gossip_table_read, var lock = gossip_table_rw.readWithLock();
@@ -3912,54 +4021,38 @@ test "sendVote - sends to both gossip and upcoming leaders" {
 
         const vote_data = gossip_data.Vote[1];
         try testing.expectEqual(my_pubkey, vote_data.from);
-        try testing.expectEqual(Transaction.EMPTY, vote_data.transaction);
+        try testing.expectEqual(tx, vote_data.transaction);
     }
 }
 
 test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
-    const allocator = testing.allocator;
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
     const vote_slot: Slot = 100;
 
-    const vote_op = VoteOp{
-        .refresh_vote = .{
-            .tx = Transaction.EMPTY,
-            .last_voted_slot = vote_slot,
-        },
+    const leader_pubkey: Pubkey = .initRandom(prng);
+
+    const leaders = try gpa.alloc(Pubkey, 5);
+    @memset(leaders, leader_pubkey);
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-
-    const leader_pubkey = Pubkey.initRandom(std.crypto.random);
-
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
-    for (leader_schedule_slots) |*slot| {
-        slot.* = leader_pubkey;
-    }
-
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
+    defer leader_schedule.deinit(gpa);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
     );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| {
-            schedule.deinit();
-        }
-        leader_schedules.deinit();
-    }
 
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
-    };
-    try leader_schedule_cache.put(0, leader_schedule);
-
-    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    const gossip_table = try sig.gossip.GossipTable.init(gpa, gpa);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
     defer sig.sync.mux.deinitMux(&gossip_table_rw);
 
     var contact_info = sig.gossip.data.ContactInfo.init(
-        allocator,
+        gpa,
         leader_pubkey,
         sig.time.getWallclockMs(),
         0,
@@ -3991,17 +4084,26 @@ test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
         try testing.expectEqual(1, gossip_table_read.len());
     }
 
-    try sendVote(
+    const tx = try generateValidEmptyTx(gpa, prng);
+    sendVote(
         .noop,
-        allocator,
+        gpa,
         vote_slot,
-        vote_op,
+        .{
+            .refresh_vote = .{
+                .tx = tx,
+                .last_voted_slot = vote_slot,
+            },
+        },
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         my_keypair,
         500,
         null,
-    );
+    ) catch |err| {
+        tx.deinit(gpa);
+        return err;
+    };
 
     {
         const gossip_table_read, var lock = gossip_table_rw.readWithLock();
@@ -4019,57 +4121,41 @@ test "sendVote - refresh_vote sends to both gossip and upcoming leaders" {
 
         const vote_data = gossip_data.Vote[1];
         try testing.expectEqual(my_pubkey, vote_data.from);
-        try testing.expectEqual(Transaction.EMPTY, vote_data.transaction);
+        try testing.expectEqual(tx, vote_data.transaction);
     }
 }
 
 test "sendVote - falls back to self TPU when no leader sockets found" {
-    const allocator = testing.allocator;
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
     const vote_slot: Slot = 42;
 
-    const vote_op = VoteOp{
-        .push_vote = .{
-            .tx = Transaction.EMPTY,
-            .last_tower_slot = vote_slot,
-        },
+    const unknown_leader = Pubkey.initRandom(prng);
+
+    const leaders = try gpa.alloc(Pubkey, 5);
+    @memset(leaders, unknown_leader);
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-
-    const unknown_leader = Pubkey.initRandom(std.crypto.random);
-
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
-    for (leader_schedule_slots) |*slot| {
-        slot.* = unknown_leader;
-    }
-
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
+    defer leader_schedule.deinit(gpa);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
     );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| {
-            schedule.deinit();
-        }
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
-    };
-    try leader_schedule_cache.put(0, leader_schedule);
 
     const my_keypair = sig.identity.KeyPair.generate();
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
-    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    const gossip_table = try sig.gossip.GossipTable.init(gpa, gpa);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
     defer sig.sync.mux.deinitMux(&gossip_table_rw);
 
     var my_contact_info = sig.gossip.data.ContactInfo.init(
-        allocator,
+        gpa,
         my_pubkey,
         sig.time.getWallclockMs(),
         0,
@@ -4102,17 +4188,26 @@ test "sendVote - falls back to self TPU when no leader sockets found" {
     // NOTE: This test does not assert that a UDP packet was sent to the self TPU address;
     // it only validates the control flow indirectly by checking that the vote was inserted
     // into gossip. A socket capture or injection hook would be needed to assert the send.
-    try sendVote(
+    const tx = try generateValidEmptyTx(gpa, prng);
+    sendVote(
         .noop,
-        allocator,
+        gpa,
         vote_slot,
-        vote_op,
+        .{
+            .push_vote = .{
+                .tx = tx,
+                .last_tower_slot = vote_slot,
+            },
+        },
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         my_keypair,
         600,
         null,
-    );
+    ) catch |err| {
+        tx.deinit(gpa);
+        return err;
+    };
 
     {
         const gossip_table_read, var lock = gossip_table_rw.readWithLock();
@@ -4130,52 +4225,40 @@ test "sendVote - falls back to self TPU when no leader sockets found" {
 
         const vote_data = gossip_data.Vote[1];
         try testing.expectEqual(my_pubkey, vote_data.from);
-        try testing.expectEqual(Transaction.EMPTY, vote_data.transaction);
+        try testing.expectEqual(tx, vote_data.transaction);
     }
 }
 
 test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
-    const allocator = testing.allocator;
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
     const vote_slot: Slot = 100;
 
-    const vote_op: VoteOp = .{
-        .push_vote = .{
-            .tx = .EMPTY,
-            .last_tower_slot = vote_slot,
-        },
-    };
-
     // Prepare a leader schedule with a single repeating leader
-    const leader_pubkey: Pubkey = .initRandom(std.crypto.random);
+    const leader_pubkey: Pubkey = .initRandom(prng);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
-    for (leader_schedule_slots) |*slot| slot.* = leader_pubkey;
-
-    var leader_schedule_cache: sig.core.leader_schedule.LeaderScheduleCache = .init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| schedule.deinit();
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule: sig.core.leader_schedule.LeaderSchedule = .{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    const leaders = try gpa.alloc(Pubkey, 5);
+    @memset(leaders, leader_pubkey);
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(gpa);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     // Gossip table with leader ContactInfo having tpu_vote socket
-    const gossip_table: sig.gossip.GossipTable = try .init(allocator, allocator);
+    const gossip_table: sig.gossip.GossipTable = try .init(gpa, gpa);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
     defer sig.sync.mux.deinitMux(&gossip_table_rw);
 
     var leader_contact = sig.gossip.data.ContactInfo.init(
-        allocator,
+        gpa,
         leader_pubkey,
         sig.time.getWallclockMs(),
         0,
@@ -4201,17 +4284,26 @@ test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
     const sockets: VoteSockets = try .init();
     defer sockets.deinit();
 
-    try sendVote(
+    const tx = try generateValidEmptyTx(gpa, prng);
+    sendVote(
         .noop,
-        allocator,
+        gpa,
         vote_slot,
-        vote_op,
+        .{
+            .push_vote = .{
+                .tx = tx,
+                .last_tower_slot = vote_slot,
+            },
+        },
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         my_keypair,
         700,
         &sockets,
-    );
+    ) catch |err| {
+        tx.deinit(gpa);
+        return err;
+    };
 
     // Validate gossip received the vote
     {
@@ -4226,50 +4318,38 @@ test "sendVote - leaders path uses sockets (exercises sendVoteToLeaders)" {
 }
 
 test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
-    const allocator = testing.allocator;
+    const gpa = testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
 
     const vote_slot: Slot = 55;
 
-    const vote_op = VoteOp{
-        .push_vote = .{
-            .tx = Transaction.EMPTY,
-            .last_tower_slot = vote_slot,
-        },
-    };
-
     // Leader schedule points to an unknown leader; no leader ContactInfo in gossip
-    const unknown_leader = Pubkey.initRandom(std.crypto.random);
+    const unknown_leader = Pubkey.initRandom(prng);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 5);
-    for (leader_schedule_slots) |*slot| slot.* = unknown_leader;
-
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| schedule.deinit();
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    const leaders = try gpa.alloc(Pubkey, 5);
+    for (leaders) |*leader| leader.* = unknown_leader;
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(gpa);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     // Gossip table with our own ContactInfo having a TPU address
     const my_keypair = sig.identity.KeyPair.generate();
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
-    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    const gossip_table = try sig.gossip.GossipTable.init(gpa, gpa);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
     defer sig.sync.mux.deinitMux(&gossip_table_rw);
 
     var my_contact = sig.gossip.data.ContactInfo.init(
-        allocator,
+        gpa,
         my_pubkey,
         sig.time.getWallclockMs(),
         0,
@@ -4290,17 +4370,26 @@ test "sendVote - sendVoteToLeaders fallback to self TPU when leaders empty" {
     const sockets: VoteSockets = try .init();
     defer sockets.deinit();
 
-    try sendVote(
+    const tx = try generateValidEmptyTx(gpa, prng);
+    sendVote(
         .noop,
-        allocator,
+        gpa,
         vote_slot,
-        vote_op,
+        .{
+            .push_vote = .{
+                .tx = tx,
+                .last_tower_slot = vote_slot,
+            },
+        },
         &gossip_table_rw,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         my_keypair,
         800,
         &sockets,
-    );
+    ) catch |err| {
+        tx.deinit(gpa);
+        return err;
+    };
 
     {
         const gossip_table_read, var lock = gossip_table_rw.readWithLock();
@@ -4325,36 +4414,29 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
     const leader2_pubkey: Pubkey = .initRandom(prng);
     const leader3_pubkey: Pubkey = .initRandom(prng);
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 150);
-    for (leader_schedule_slots, 0..) |*slot, i| {
+    const leaders = try allocator.alloc(Pubkey, 150);
+    for (leaders, 0..) |*leader, i| {
         if (i >= vote_slot and i < vote_slot + 3) {
-            slot.* = switch (i - vote_slot) {
+            leader.* = switch (i - vote_slot) {
                 0 => leader1_pubkey,
                 1 => leader2_pubkey,
                 2 => leader3_pubkey,
                 else => unreachable,
             };
         } else {
-            slot.* = Pubkey.initRandom(std.crypto.random);
+            leader.* = Pubkey.initRandom(prng);
         }
     }
-
-    var leader_schedule_cache = sig.core.leader_schedule.LeaderScheduleCache.init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| schedule.deinit();
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(allocator);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
     var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
@@ -4429,7 +4511,7 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
         _ = try gossip_table_write.insert(leader3_ci, sig.time.getWallclockMs());
     }
 
-    const my_pubkey = Pubkey.initRandom(std.crypto.random);
+    const my_pubkey = Pubkey.initRandom(prng);
 
     const sockets: VoteSockets = try .init();
     defer sockets.deinit();
@@ -4439,7 +4521,7 @@ test "sendVoteToLeaders - sends to multiple upcoming leaders" {
         allocator,
         vote_slot,
         vote_tx,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         &gossip_table_rw,
         my_pubkey,
         &sockets,
@@ -4461,25 +4543,18 @@ test "sendVoteToLeaders - continues when sendVoteTransaction fails" {
     var prng: std.Random.DefaultPrng = .init(std.testing.random_seed);
     const leader_pubkey: Pubkey = .initRandom(prng.random());
 
-    const leader_schedule_slots = try allocator.alloc(Pubkey, 10);
-    for (leader_schedule_slots) |*slot| slot.* = leader_pubkey;
-
-    var leader_schedule_cache: sig.core.leader_schedule.LeaderScheduleCache = .init(
-        allocator,
-        .INIT,
-    );
-    defer {
-        const leader_schedules, var lg = leader_schedule_cache.leader_schedules.writeWithLock();
-        defer lg.unlock();
-        for (leader_schedules.values()) |schedule| schedule.deinit();
-        leader_schedules.deinit();
-    }
-
-    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_schedule_slots,
+    const leaders = try allocator.alloc(Pubkey, 10);
+    for (leaders) |*leader| leader.* = leader_pubkey;
+    var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .leaders = leaders,
+        .start = 0,
+        .end = 4,
     };
-    try leader_schedule_cache.put(0, leader_schedule);
+    defer leader_schedule.deinit(allocator);
+    const slot_leaders = sig.core.leader_schedule.SlotLeaders.init(
+        &leader_schedule,
+        sig.core.leader_schedule.LeaderSchedule.getLeaderOrNull,
+    );
 
     const gossip_table: sig.gossip.GossipTable = try .init(allocator, allocator);
     var gossip_table_rw: sig.sync.RwMux(sig.gossip.GossipTable) = .init(gossip_table);
@@ -4517,7 +4592,7 @@ test "sendVoteToLeaders - continues when sendVoteTransaction fails" {
         allocator,
         vote_slot,
         vote_tx,
-        leader_schedule_cache.slotLeaders(),
+        slot_leaders,
         &gossip_table_rw,
         null,
         &sockets,
@@ -4537,15 +4612,11 @@ test "sendVoteToLeaders - fallback handles missing self TPU data" {
     const vote_tx: Transaction = .EMPTY;
 
     const EmptySlotLeaders = struct {
-        const Self = @This();
-
-        fn get(_: *Self, _: Slot) ?Pubkey {
+        fn get(_: *@This(), _: Slot) ?Pubkey {
             return null;
         }
-
-        pub const empty: Self = .{};
     };
-    var slot_state = EmptySlotLeaders.empty;
+    var slot_state: EmptySlotLeaders = .{};
     const slot_leaders: sig.core.leader_schedule.SlotLeaders = .init(
         &slot_state,
         EmptySlotLeaders.get,
@@ -4767,16 +4838,18 @@ test "edge cases - duplicate slot" {
     defer dep_stubs.deinit();
 
     var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
-    defer replay_state.deinit();
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit(gpa);
+        gpa.destroy(replay_state.epoch_tracker);
+    }
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
-    std.debug.assert(slot_tracker.root == 0);
+    const root_slot0 = slot_tracker.root.load(.monotonic);
+    std.debug.assert(root_slot0 == 0);
 
-    const root_slot0 = slot_tracker.root;
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
-
-    std.debug.assert(root_slot0 == 0); // assert initial root value
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
@@ -4881,12 +4954,21 @@ test "edge cases - duplicate slot" {
 
     // run consensus
 
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        std.testing.allocator,
+        prng_state.random(),
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit(std.testing.allocator);
+
     try tower_consensus.process(gpa, .{
         .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_votes = null,
+        .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,
-        .epoch_tracker = &replay_state.epoch_tracker,
+        .epoch_tracker = &epoch_tracker,
         .progress_map = &replay_state.progress_map,
         .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
@@ -4926,16 +5008,18 @@ test "edge cases - duplicate confirmed slot" {
     defer dep_stubs.deinit();
 
     var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
-    defer replay_state.deinit();
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit(gpa);
+        gpa.destroy(replay_state.epoch_tracker);
+    }
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
-    std.debug.assert(slot_tracker.root == 0);
+    const root_slot0 = slot_tracker.root.load(.monotonic);
+    std.debug.assert(root_slot0 == 0);
 
-    const root_slot0 = slot_tracker.root;
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
-
-    std.debug.assert(root_slot0 == 0); // assert initial root value
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
@@ -5041,12 +5125,21 @@ test "edge cases - duplicate confirmed slot" {
 
     // run consensus
 
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        std.testing.allocator,
+        prng_state.random(),
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit(std.testing.allocator);
+
     try tower_consensus.process(gpa, .{
         .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_votes = null,
+        .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,
-        .epoch_tracker = &replay_state.epoch_tracker,
+        .epoch_tracker = &epoch_tracker,
         .progress_map = &replay_state.progress_map,
         .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
@@ -5086,20 +5179,22 @@ test "edge cases - gossip verified vote hashes" {
     defer dep_stubs.deinit();
 
     var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
-    defer replay_state.deinit();
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit(gpa);
+        gpa.destroy(replay_state.epoch_tracker);
+    }
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
-    std.debug.assert(slot_tracker.root == 0);
+    const root_slot0 = slot_tracker.root.load(.monotonic);
+    std.debug.assert(root_slot0 == 0); // assert initial root value
 
     var vote_collector: sig.consensus.vote_listener.VoteCollector =
-        try .init(.EPOCH_ZERO, slot_tracker.root, &registry);
+        try .init(.EPOCH_ZERO, root_slot0, &registry);
     defer vote_collector.deinit(gpa);
 
-    const root_slot0 = slot_tracker.root;
     const root_slot0_hash = slot_tracker.getRoot().state.hash.readCopy().?;
-
-    std.debug.assert(root_slot0 == 0); // assert initial root value
     std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
@@ -5213,12 +5308,21 @@ test "edge cases - gossip verified vote hashes" {
 
     // run consensus
 
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        std.testing.allocator,
+        prng_state.random(),
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit(std.testing.allocator);
+
     try tower_consensus.process(gpa, .{
         .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_votes = null,
+        .gossip_table = null,
         .slot_tracker = &replay_state.slot_tracker,
-        .epoch_tracker = &replay_state.epoch_tracker,
+        .epoch_tracker = &epoch_tracker,
         .progress_map = &replay_state.progress_map,
         .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
@@ -5237,8 +5341,11 @@ test "edge cases - gossip verified vote hashes" {
     try std.testing.expectEqualSlices(
         Pubkey,
         &.{ pk1, pk2 },
-        tower_consensus.latest_validator_votes.max_gossip_frozen_votes.keys(),
+        tower_consensus.slot_data.latest_validator_votes.max_gossip_frozen_votes.keys(),
     );
+
+    // Optimisic confirmation threshold not reached during this test.
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 // TODO: Re-implement tests for the new consolidated API
@@ -5279,16 +5386,19 @@ test "edge cases - gossip verified vote hashes" {
 //   - with empty/genesis state
 // - Set up the progress map
 test "vote on heaviest frozen descendant with no switch" {
-    const allocator = std.testing.allocator;
+    const gpa = std.testing.allocator;
 
-    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(gpa);
     defer registry.deinit();
 
-    var stubs = try sig.replay.service.DependencyStubs.init(allocator, .noop);
+    var stubs = try sig.replay.service.DependencyStubs.init(gpa, .noop);
     defer stubs.deinit();
 
     const root_slot: Slot = 0;
-    const root_consts = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+    const root_consts = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
     var root_state: sig.core.SlotState = .GENESIS;
 
     // Freeze root.
@@ -5296,35 +5406,35 @@ test "vote on heaviest frozen descendant with no switch" {
     {
         var bhq = root_state.blockhash_queue.write();
         defer bhq.unlock();
-        try bhq.mut().insertGenesisHash(allocator, root_state.hash.readCopy().?, 0);
+        try bhq.mut().insertGenesisHash(gpa, root_state.hash.readCopy().?, 0);
     }
 
     var slot_tracker = try SlotTracker.init(
-        allocator,
+        gpa,
         root_slot,
         .{
             .constants = root_consts,
             .state = root_state,
         },
     );
-    defer slot_tracker.deinit(allocator);
+    defer slot_tracker.deinit(gpa);
 
     // Add frozen descendant slot 1
     const slot_1: u64 = 1;
     const slot1_hash = Hash{ .data = .{slot_1} ** Hash.SIZE };
     {
-        var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
-        errdefer slot_constants.deinit(allocator);
+        var slot_constants = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
+        errdefer slot_constants.deinit(gpa);
         slot_constants.parent_slot = root_slot;
         slot_constants.parent_hash = root_state.hash.readCopy().?;
         slot_constants.block_height = 1;
 
         var slot_state: sig.core.SlotState = .GENESIS;
-        errdefer slot_state.deinit(allocator);
+        errdefer slot_state.deinit(gpa);
         slot_state.hash = .init(slot1_hash);
 
         try slot_tracker.put(
-            allocator,
+            gpa,
             slot_1,
             .{
                 .constants = slot_constants,
@@ -5333,26 +5443,21 @@ test "vote on heaviest frozen descendant with no switch" {
         );
     }
 
-    var epoch_tracker: EpochTracker = .{
-        .epochs = .empty,
-        .schedule = .INIT,
-    };
-    {
-        const epoch_consts = sig.core.EpochConstants.genesis(.default(allocator));
-        errdefer epoch_consts.deinit(allocator);
-        try epoch_tracker.epochs.put(allocator, root_slot, epoch_consts);
-    }
-    defer epoch_tracker.deinit(allocator);
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        gpa,
+        &.{.EMPTY_WITH_GENESIS},
+    );
+    defer epoch_tracker.deinit(gpa);
 
     // Add root and slot 1 entries into progress map.
     var progress = sig.consensus.ProgressMap.INIT;
-    defer progress.deinit(allocator);
+    defer progress.deinit(gpa);
     {
-        var fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        var fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
         fork_progress0.fork_stats.computed = true;
-        const fork_progress1 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
-        try progress.map.put(allocator, root_slot, fork_progress0);
-        try progress.map.put(allocator, slot_1, fork_progress1);
+        const fork_progress1 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
+        try progress.map.put(gpa, root_slot, fork_progress0);
+        try progress.map.put(gpa, slot_1, fork_progress1);
     }
 
     // Include a ReplayResult for slot 1 to drive processResult/fork-choice
@@ -5365,11 +5470,11 @@ test "vote on heaviest frozen descendant with no switch" {
         },
     };
 
-    var consensus = try TowerConsensus.init(allocator, .{
+    var consensus = try TowerConsensus.init(gpa, .{
         .logger = .noop,
         .identity = .{
             .vote_account = null,
-            .validator = .initRandom(std.crypto.random),
+            .validator = .initRandom(prng),
         },
         .signing = .{
             .node = null,
@@ -5381,7 +5486,7 @@ test "vote on heaviest frozen descendant with no switch" {
         .now = .EPOCH_ZERO,
         .registry = &registry,
     });
-    defer consensus.deinit(allocator);
+    defer consensus.deinit(gpa);
 
     try std.testing.expectEqual(null, consensus.replay_tower.lastVotedSlot());
     try std.testing.expectEqual(false, progress.getForkStats(slot_1).?.computed);
@@ -5389,16 +5494,17 @@ test "vote on heaviest frozen descendant with no switch" {
     try std.testing.expectEqual(.uninitialized, consensus.replay_tower.last_vote_tx_blockhash);
 
     var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
-    defer duplicate_confirmed_slots.deinit(allocator);
+    defer duplicate_confirmed_slots.deinit(gpa);
 
     var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
-    defer gossip_verified_vote_hashes.deinit(allocator);
+    defer gossip_verified_vote_hashes.deinit(gpa);
 
     // Component entry point being tested
-    try consensus.process(allocator, .{
+    try consensus.process(gpa, .{
         .account_store = stubs.accountStore(),
         .ledger = &stubs.ledger,
         .gossip_votes = null,
+        .gossip_table = null,
         .slot_tracker = &slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &progress,
@@ -5442,6 +5548,12 @@ test "vote on heaviest frozen descendant with no switch" {
     // 5. Assert forkchoice
     try std.testing.expectEqual(slot_1, consensus.fork_choice.heaviestOverallSlot().slot);
     try std.testing.expectEqual(slot1_hash, consensus.fork_choice.heaviestOverallSlot().hash);
+
+    // 6. Assert trackers
+    // processed slot is updated to slot_1 when the tower votes on it
+    try std.testing.expectEqual(slot_1, slot_tracker.getSlotForCommitment(.processed));
+    // confirmed slot remains at 0 (no optimistic confirmation votes processed)
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 // State setup
@@ -5458,16 +5570,19 @@ test "vote on heaviest frozen descendant with no switch" {
 //   - non-empty
 // - Set up the progress map
 test "vote accounts with landed votes populate bank stats" {
-    const allocator = std.testing.allocator;
+    const gpa = std.testing.allocator;
 
-    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(gpa);
     defer registry.deinit();
 
-    var stubs = try sig.replay.service.DependencyStubs.init(allocator, .noop);
+    var stubs = try sig.replay.service.DependencyStubs.init(gpa, .noop);
     defer stubs.deinit();
 
     const root_slot: Slot = 0;
-    const root_consts = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+    const root_consts = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
     var root_state: sig.core.SlotState = .GENESIS;
 
     // Freeze root.
@@ -5475,65 +5590,58 @@ test "vote accounts with landed votes populate bank stats" {
     {
         var bhq = root_state.blockhash_queue.write();
         defer bhq.unlock();
-        try bhq.mut().insertGenesisHash(allocator, root_state.hash.readCopy().?, 0);
+        try bhq.mut().insertGenesisHash(gpa, root_state.hash.readCopy().?, 0);
     }
 
     var slot_tracker = try SlotTracker.init(
-        allocator,
+        gpa,
         root_slot,
         .{
             .constants = root_consts,
             .state = root_state,
         },
     );
-    defer slot_tracker.deinit(allocator);
+    defer slot_tracker.deinit(gpa);
 
     // Add frozen descendant slot 1
     const slot_1: u64 = 1;
     const slot1_hash = Hash{ .data = .{2} ** Hash.SIZE };
     {
-        var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
-        errdefer slot_constants.deinit(allocator);
+        var slot_constants = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
+        errdefer slot_constants.deinit(gpa);
         slot_constants.parent_slot = root_slot;
         slot_constants.parent_hash = Hash.ZEROES;
         slot_constants.block_height = 1;
 
         var slot_state: sig.core.SlotState = .GENESIS;
-        errdefer slot_state.deinit(allocator);
+        errdefer slot_state.deinit(gpa);
         slot_state.hash = .init(slot1_hash);
 
         try slot_tracker.put(
-            allocator,
+            gpa,
             slot_1,
             .{ .constants = slot_constants, .state = slot_state },
         );
     }
 
-    var epoch_tracker: EpochTracker = .{
-        .epochs = .empty,
-        .schedule = .INIT,
-    };
-
     // NOTE: The core setup for this test
     // Seed epoch 0 constants with 6 vote accounts and landed votes
-    {
-        var prng = std.Random.DefaultPrng.init(12345);
-        const random = prng.random();
+    const epoch_stakes = blk: {
         const stake_per_account = 1000;
 
         const pubkey_count = 6;
-        const vote_pubkeys = try allocator.alloc(Pubkey, pubkey_count);
-        defer allocator.free(vote_pubkeys);
-        for (vote_pubkeys) |*k| k.* = Pubkey.initRandom(random);
+        const vote_pubkeys = try gpa.alloc(Pubkey, pubkey_count);
+        defer gpa.free(vote_pubkeys);
+        for (vote_pubkeys) |*k| k.* = .initRandom(prng);
 
         // Build EpochStakes with those vote accounts
         var epoch_stakes = try sig.consensus.fork_choice.testEpochStakes(
-            allocator,
+            gpa,
             vote_pubkeys,
             stake_per_account,
-            random,
+            prng,
         );
-        errdefer epoch_stakes.deinit(allocator);
+        errdefer epoch_stakes.deinit(gpa);
 
         // Inject landed votes for slot 1 into each vote account
         //
@@ -5546,43 +5654,44 @@ test "vote accounts with landed votes populate bank stats" {
             var vote_accounts = &epoch_stakes.stakes.vote_accounts.vote_accounts;
 
             for (vote_accounts.values()) |*vote_account| {
-                try vote_account.account.state.votes.append(allocator, .{
+                try vote_account.account.state.votes.append(gpa, .{
                     .latency = 0,
                     .lockout = .{ .slot = slot_1, .confirmation_count = 2 },
                 });
             }
         }
 
-        var epoch_consts = sig.core.EpochConstants.genesis(.default(allocator));
-        errdefer epoch_consts.deinit(allocator);
-        epoch_consts.stakes.deinit(allocator);
+        break :blk epoch_stakes;
+    };
+    errdefer epoch_stakes.deinit(gpa);
 
-        epoch_consts.stakes = epoch_stakes;
-        try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
-    }
-    defer epoch_tracker.deinit(allocator);
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        gpa,
+        &.{epoch_stakes},
+    );
+    defer epoch_tracker.deinit(gpa);
 
     {
-        const epoch_consts_ptr = epoch_tracker.epochs.getPtr(0).?;
+        const epoch_info = try epoch_tracker.getEpochInfo(0);
         const slot1_ref = slot_tracker.get(1).?;
         const stakes_ptr, var stakes_guard = slot1_ref.state.stakes_cache.stakes.writeWithLock();
         defer stakes_guard.unlock();
-        stakes_ptr.deinit(allocator);
+        stakes_ptr.deinit(gpa);
         stakes_ptr.* = try sig.core.bank.parseStakesForTest(
-            allocator,
-            &epoch_consts_ptr.stakes.stakes,
+            gpa,
+            &epoch_info.stakes.stakes,
         );
     }
 
     // Progress map for root and slot 1
     var progress = sig.consensus.ProgressMap.INIT;
-    defer progress.deinit(allocator);
+    defer progress.deinit(gpa);
     {
-        var fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        var fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
         fork_progress0.fork_stats.computed = true;
-        const fork_progress1 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
-        try progress.map.put(allocator, root_slot, fork_progress0);
-        try progress.map.put(allocator, slot_1, fork_progress1);
+        const fork_progress1 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
+        try progress.map.put(gpa, root_slot, fork_progress0);
+        try progress.map.put(gpa, slot_1, fork_progress1);
     }
 
     // ReplayResult for slot 1
@@ -5590,14 +5699,14 @@ test "vote accounts with landed votes populate bank stats" {
         .{ .slot = 1, .output = .{ .last_entry_hash = Hash{ .data = .{7} ** Hash.SIZE } } },
     };
 
-    var replay_votes_channel = try Channel(ParsedVote).create(allocator);
+    var replay_votes_channel = try Channel(ParsedVote).create(gpa);
     defer replay_votes_channel.destroy();
 
-    var consensus = try TowerConsensus.init(allocator, .{
+    var consensus = try TowerConsensus.init(gpa, .{
         .logger = .noop,
         .identity = .{
             .vote_account = null,
-            .validator = .initRandom(std.crypto.random),
+            .validator = .initRandom(prng),
         },
         .signing = .{
             .node = null,
@@ -5609,21 +5718,22 @@ test "vote accounts with landed votes populate bank stats" {
         .now = .EPOCH_ZERO,
         .registry = &registry,
     });
-    defer consensus.deinit(allocator);
+    defer consensus.deinit(gpa);
 
     try std.testing.expectEqual(0, progress.getForkStats(1).?.voted_stakes.count());
 
     var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
-    defer duplicate_confirmed_slots.deinit(allocator);
+    defer duplicate_confirmed_slots.deinit(gpa);
 
     var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
-    defer gossip_verified_vote_hashes.deinit(allocator);
+    defer gossip_verified_vote_hashes.deinit(gpa);
 
     // Component entry point being tested
-    try consensus.process(allocator, .{
+    try consensus.process(gpa, .{
         .account_store = stubs.accountStore(),
         .ledger = &stubs.ledger,
         .gossip_votes = null,
+        .gossip_table = null,
         .slot_tracker = &slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &progress,
@@ -5666,6 +5776,12 @@ test "vote accounts with landed votes populate bank stats" {
     // }
     try std.testing.expectEqual(6, stats1.lockout_intervals.map.get(5).?.items.len);
     try std.testing.expectEqual(slot_1, consensus.fork_choice.heaviestOverallSlot().slot);
+
+    // Assert trackers
+    // processed slot is updated to slot_1 when the tower votes on it
+    try std.testing.expectEqual(slot_1, slot_tracker.getSlotForCommitment(.processed));
+    // confirmed slot remains at 0 (no optimistic confirmation votes processed)
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 // Test case:
@@ -5725,20 +5841,23 @@ test "vote accounts with landed votes populate bank stats" {
 //     - Fork choice heaviest (slot 33) is on the rooted path
 // - Final: lastVotedSlot() == 33 (most recent vote tracked correctly)
 test "root advances after vote satisfies lockouts" {
-    const allocator = std.testing.allocator;
+    const gpa = std.testing.allocator;
 
-    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(gpa);
     defer registry.deinit();
 
-    var stubs = try sig.replay.service.DependencyStubs.init(allocator, .noop);
+    var stubs = try sig.replay.service.DependencyStubs.init(gpa, .noop);
     defer stubs.deinit();
 
     {
         const SlotHistory = sig.runtime.sysvar.SlotHistory;
-        const slot_history = try SlotHistory.init(allocator);
-        defer slot_history.deinit(allocator);
-        const data = try allocator.alloc(u8, SlotHistory.STORAGE_SIZE);
-        defer allocator.free(data);
+        const slot_history = try SlotHistory.init(gpa);
+        defer slot_history.deinit(gpa);
+        const data = try gpa.alloc(u8, SlotHistory.STORAGE_SIZE);
+        defer gpa.free(data);
         @memset(data, 0);
         _ = try sig.bincode.writeToSlice(data, slot_history, .{});
         const account = sig.runtime.AccountSharedData{
@@ -5753,14 +5872,14 @@ test "root advances after vote satisfies lockouts" {
     }
 
     const initial_root: Slot = 0;
-    const root_consts = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+    const root_consts = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
 
     var root_state: sig.core.SlotState = .GENESIS;
     root_state.hash.set(Hash.ZEROES);
     {
         var bhq = root_state.blockhash_queue.write();
         defer bhq.unlock();
-        try bhq.mut().insertGenesisHash(allocator, root_state.hash.readCopy().?, 0);
+        try bhq.mut().insertGenesisHash(gpa, root_state.hash.readCopy().?, 0);
     }
     // 34 because slots 0..33
     const chain_length = 34;
@@ -5770,73 +5889,64 @@ test "root advances after vote satisfies lockouts" {
         hashes[i] = Hash{ .data = .{@as(u8, @intCast(i % 256))} ** Hash.SIZE };
     }
 
-    var slot_tracker: SlotTracker = try .init(allocator, initial_root, .{
-        .constants = root_consts,
-        .state = root_state,
-    });
-    defer slot_tracker.deinit(allocator);
+    var slot_tracker: SlotTracker = try .init(
+        gpa,
+        initial_root,
+        .{ .constants = root_consts, .state = root_state },
+    );
+    defer slot_tracker.deinit(gpa);
 
-    var prng = std.Random.DefaultPrng.init(12345);
-    const random = prng.random();
-    const validator_vote_pubkey = Pubkey.initRandom(random);
+    const validator_vote_pubkey = Pubkey.initRandom(prng);
 
-    var epoch_tracker: EpochTracker = .{
-        .epochs = .empty,
-        .schedule = .INIT,
+    const epoch_stakes_0 = blk: {
+        const vote_pubkeys = try gpa.alloc(Pubkey, 1);
+        defer gpa.free(vote_pubkeys);
+        vote_pubkeys[0] = validator_vote_pubkey; // Use our validator's vote pubkey
+
+        var epoch_stakes = try sig.consensus.fork_choice.testEpochStakes(
+            gpa,
+            vote_pubkeys,
+            1000,
+            prng,
+        );
+        errdefer epoch_stakes.deinit(gpa);
+
+        break :blk epoch_stakes;
     };
 
-    {
-        const vote_pubkeys = try allocator.alloc(Pubkey, 1);
-        defer allocator.free(vote_pubkeys);
+    const epoch_stakes_1 = blk: {
+        const vote_pubkeys = try gpa.alloc(Pubkey, 1);
+        defer gpa.free(vote_pubkeys);
         vote_pubkeys[0] = validator_vote_pubkey; // Use our validator's vote pubkey
 
         var epoch_stakes = try sig.consensus.fork_choice.testEpochStakes(
-            allocator,
+            gpa,
             vote_pubkeys,
             1000,
-            random,
+            prng,
         );
-        errdefer epoch_stakes.deinit(allocator);
+        epoch_stakes.stakes.epoch = 1;
+        errdefer epoch_stakes.deinit(gpa);
 
-        var epoch_consts = sig.core.EpochConstants.genesis(.default(allocator));
-        errdefer epoch_consts.deinit(allocator);
-        epoch_consts.stakes.deinit(allocator);
-        epoch_consts.stakes = epoch_stakes;
+        break :blk epoch_stakes;
+    };
 
-        try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
-    }
-    {
-        const vote_pubkeys = try allocator.alloc(Pubkey, 1);
-        defer allocator.free(vote_pubkeys);
-        vote_pubkeys[0] = validator_vote_pubkey; // Use our validator's vote pubkey
-
-        var epoch_stakes = try sig.consensus.fork_choice.testEpochStakes(
-            allocator,
-            vote_pubkeys,
-            1000,
-            random,
-        );
-        errdefer epoch_stakes.deinit(allocator);
-
-        var epoch_consts = sig.core.EpochConstants.genesis(.default(allocator));
-        errdefer epoch_consts.deinit(allocator);
-        epoch_consts.stakes.deinit(allocator);
-        epoch_consts.stakes = epoch_stakes;
-
-        try epoch_tracker.epochs.put(allocator, 1, epoch_consts);
-    }
-    defer epoch_tracker.deinit(allocator);
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        gpa,
+        &.{ epoch_stakes_0, epoch_stakes_1 },
+    );
+    defer epoch_tracker.deinit(gpa);
 
     var progress = sig.consensus.ProgressMap.INIT;
-    defer progress.deinit(allocator);
+    defer progress.deinit(gpa);
 
     {
-        var fp = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        var fp = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
         fp.fork_stats.computed = true;
-        try progress.map.put(allocator, initial_root, fp);
+        try progress.map.put(gpa, initial_root, fp);
     }
 
-    var replay_votes_channel = try Channel(ParsedVote).create(allocator);
+    var replay_votes_channel = try Channel(ParsedVote).create(gpa);
     defer replay_votes_channel.destroy();
 
     const our_validator_stake: u64 = 1000;
@@ -5849,39 +5959,39 @@ test "root advances after vote satisfies lockouts" {
             const parent_hash = hashes[parent_slot];
             const slot_hash = hashes[slot];
 
-            var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+            var slot_constants = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
             slot_constants.parent_slot = parent_slot;
             slot_constants.parent_hash = parent_hash;
             slot_constants.block_height = slot;
 
-            slot_constants.ancestors.deinit(allocator);
+            slot_constants.ancestors.deinit(gpa);
             slot_constants.ancestors = .{};
             for (0..slot + 1) |ancestor_slot| {
-                try slot_constants.ancestors.ancestors.put(allocator, @intCast(ancestor_slot), {});
+                try slot_constants.ancestors.ancestors.put(gpa, @intCast(ancestor_slot), {});
             }
 
             var slot_state: sig.core.SlotState = .GENESIS;
             slot_state.hash = .init(slot_hash);
 
-            try slot_tracker.put(allocator, slot, .{
+            try slot_tracker.put(gpa, slot, .{
                 .constants = slot_constants,
                 .state = slot_state,
             });
         }
 
         {
-            var fp = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+            var fp = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
             fp.fork_stats.computed = true;
             fp.fork_stats.total_stake = our_validator_stake; // Set total stake to match epoch stakes
-            try progress.map.put(allocator, slot, fp);
+            try progress.map.put(gpa, slot, fp);
         }
     }
 
-    var consensus = try TowerConsensus.init(allocator, .{
+    var consensus = try TowerConsensus.init(gpa, .{
         .logger = .noop,
         .identity = .{
             .vote_account = null,
-            .validator = Pubkey.initRandom(std.crypto.random),
+            .validator = Pubkey.initRandom(prng),
         },
         .signing = .{
             .node = null,
@@ -5893,20 +6003,20 @@ test "root advances after vote satisfies lockouts" {
         .now = .EPOCH_ZERO,
         .registry = &registry,
     });
-    defer consensus.deinit(allocator);
+    defer consensus.deinit(gpa);
 
     var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
-    defer duplicate_confirmed_slots.deinit(allocator);
+    defer duplicate_confirmed_slots.deinit(gpa);
 
     var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
-    defer gossip_verified_vote_hashes.deinit(allocator);
+    defer gossip_verified_vote_hashes.deinit(gpa);
 
     for (1..32) |i| {
         const slot: Slot = @intCast(i);
-        _ = try consensus.replay_tower.recordBankVote(allocator, slot, hashes[slot]);
+        _ = try consensus.replay_tower.recordBankVote(gpa, slot, hashes[slot]);
 
         if (progress.map.getPtr(slot)) |prog| {
-            try prog.fork_stats.voted_stakes.put(allocator, slot, our_validator_stake);
+            try prog.fork_stats.voted_stakes.put(gpa, slot, our_validator_stake);
         }
     }
 
@@ -5931,10 +6041,11 @@ test "root advances after vote satisfies lockouts" {
             .{ .slot = 31, .output = .{ .last_entry_hash = hashes[31] } },
         };
 
-        try consensus.process(allocator, .{
+        try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -5955,34 +6066,34 @@ test "root advances after vote satisfies lockouts" {
         const parent_hash = hashes[parent_slot];
         const slot_hash = hashes[slot];
 
-        var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+        var slot_constants = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
         slot_constants.parent_slot = parent_slot;
         slot_constants.parent_hash = parent_hash;
         slot_constants.block_height = slot;
 
         // Set up ancestors: slot 32 should have ancestors 0 umtil 32
-        slot_constants.ancestors.deinit(allocator);
+        slot_constants.ancestors.deinit(gpa);
         slot_constants.ancestors = .{};
         for (0..slot + 1) |ancestor_slot| {
-            try slot_constants.ancestors.ancestors.put(allocator, @intCast(ancestor_slot), {});
+            try slot_constants.ancestors.ancestors.put(gpa, @intCast(ancestor_slot), {});
         }
 
         var slot_state: sig.core.SlotState = .GENESIS;
         slot_state.hash = .init(slot_hash);
 
-        try slot_tracker.put(allocator, slot, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(gpa, slot, .{ .constants = slot_constants, .state = slot_state });
     }
     {
-        var fp = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        var fp = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
         fp.fork_stats.computed = true;
         fp.fork_stats.total_stake = our_validator_stake;
 
         for (1..32) |prev_slot| {
-            try fp.fork_stats.voted_stakes.put(allocator, @intCast(prev_slot), our_validator_stake);
+            try fp.fork_stats.voted_stakes.put(gpa, @intCast(prev_slot), our_validator_stake);
         }
         fp.propagated_stats.is_leader_slot = true;
         fp.propagated_stats.is_propagated = true;
-        try progress.map.put(allocator, 32, fp);
+        try progress.map.put(gpa, 32, fp);
     }
 
     // Test
@@ -5993,10 +6104,11 @@ test "root advances after vote satisfies lockouts" {
             .{ .slot = 32, .output = .{ .last_entry_hash = hashes[32] } },
         };
 
-        try consensus.process(allocator, .{
+        try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -6019,7 +6131,7 @@ test "root advances after vote satisfies lockouts" {
             consensus.replay_tower.tower.votes.len,
         );
 
-        try std.testing.expectEqual(1, slot_tracker.root);
+        try std.testing.expectEqual(1, slot_tracker.root.load(.monotonic));
         // No longer tracking slot 0
         try std.testing.expect(!slot_tracker.contains(0));
         // Still tracking slot 1
@@ -6039,33 +6151,33 @@ test "root advances after vote satisfies lockouts" {
         const parent_hash = hashes[parent_slot];
         const slot_hash = hashes[slot];
 
-        var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+        var slot_constants = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
         slot_constants.parent_slot = parent_slot;
         slot_constants.parent_hash = parent_hash;
         slot_constants.block_height = slot;
 
-        slot_constants.ancestors.deinit(allocator);
+        slot_constants.ancestors.deinit(gpa);
         slot_constants.ancestors = .{};
         for (0..slot + 1) |ancestor_slot| {
-            try slot_constants.ancestors.ancestors.put(allocator, @intCast(ancestor_slot), {});
+            try slot_constants.ancestors.ancestors.put(gpa, @intCast(ancestor_slot), {});
         }
 
         var slot_state: sig.core.SlotState = .GENESIS;
         slot_state.hash = .init(slot_hash);
 
-        try slot_tracker.put(allocator, slot, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(gpa, slot, .{ .constants = slot_constants, .state = slot_state });
     }
     {
-        var fp = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        var fp = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
         fp.fork_stats.computed = true;
         fp.fork_stats.total_stake = our_validator_stake;
 
         for (1..33) |prev_slot| {
-            try fp.fork_stats.voted_stakes.put(allocator, @intCast(prev_slot), our_validator_stake);
+            try fp.fork_stats.voted_stakes.put(gpa, @intCast(prev_slot), our_validator_stake);
         }
         fp.propagated_stats.is_leader_slot = true;
         fp.propagated_stats.is_propagated = true;
-        try progress.map.put(allocator, 33, fp);
+        try progress.map.put(gpa, 33, fp);
     }
 
     // Test
@@ -6076,10 +6188,11 @@ test "root advances after vote satisfies lockouts" {
             .{ .slot = 33, .output = .{ .last_entry_hash = hashes[33] } },
         };
 
-        try consensus.process(allocator, .{
+        try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -6106,7 +6219,7 @@ test "root advances after vote satisfies lockouts" {
         const last_voted = consensus.replay_tower.tower.lastVotedSlot();
         try std.testing.expectEqual(33, last_voted);
 
-        try std.testing.expectEqual(2, slot_tracker.root);
+        try std.testing.expectEqual(2, slot_tracker.root.load(.monotonic));
         // No longer tracking slot 0
         try std.testing.expect(!slot_tracker.contains(0));
         // No longer tracking slot 1
@@ -6123,6 +6236,12 @@ test "root advances after vote satisfies lockouts" {
         try std.testing.expect(progress.map.get(2) != null);
         try std.testing.expectEqual(33, consensus.fork_choice.heaviestOverallSlot().slot);
     }
+
+    // Assert trackers
+    // processed slot is updated to slot 33 when the tower votes on it
+    try std.testing.expectEqual(33, slot_tracker.getSlotForCommitment(.processed));
+    // confirmed slot remains at 0 (no optimistic confirmation votes processed)
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 // Test case:
@@ -6146,20 +6265,23 @@ test "root advances after vote satisfies lockouts" {
 // - No new vote was recorded in the tower
 // - last_vote_tx_blockhash remains .non_voting
 test "vote refresh when no new vote available" {
-    const allocator = std.testing.allocator;
+    const gpa = std.testing.allocator;
 
-    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(gpa);
     defer registry.deinit();
 
-    var stubs = try sig.replay.service.DependencyStubs.init(allocator, .noop);
+    var stubs = try sig.replay.service.DependencyStubs.init(gpa, .noop);
     defer stubs.deinit();
 
     {
         const SlotHistory = sig.runtime.sysvar.SlotHistory;
-        const slot_history = try SlotHistory.init(allocator);
-        defer slot_history.deinit(allocator);
-        const data = try allocator.alloc(u8, SlotHistory.STORAGE_SIZE);
-        defer allocator.free(data);
+        const slot_history = try SlotHistory.init(gpa);
+        defer slot_history.deinit(gpa);
+        const data = try gpa.alloc(u8, SlotHistory.STORAGE_SIZE);
+        defer gpa.free(data);
         @memset(data, 0);
         _ = try sig.bincode.writeToSlice(data, slot_history, .{});
         const account = sig.runtime.AccountSharedData{
@@ -6174,67 +6296,63 @@ test "vote refresh when no new vote available" {
     }
 
     const root_slot: Slot = 0;
-    const root_consts = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+    const root_consts = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
     var root_state: sig.core.SlotState = .GENESIS;
 
     root_state.hash.set(Hash.ZEROES);
     {
         var bhq = root_state.blockhash_queue.write();
         defer bhq.unlock();
-        try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
+        try bhq.mut().insertGenesisHash(gpa, Hash.ZEROES, 0);
     }
 
-    var slot_tracker = try SlotTracker.init(allocator, root_slot, .{
-        .constants = root_consts,
-        .state = root_state,
-    });
-    defer slot_tracker.deinit(allocator);
+    var slot_tracker = try SlotTracker.init(
+        gpa,
+        root_slot,
+        .{ .constants = root_consts, .state = root_state },
+    );
+    defer slot_tracker.deinit(gpa);
 
     const slot1_hash = Hash{ .data = .{1} ** Hash.SIZE };
     {
-        var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
-        errdefer slot_constants.deinit(allocator);
+        var slot_constants = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
+        errdefer slot_constants.deinit(gpa);
         slot_constants.parent_slot = root_slot;
         slot_constants.parent_hash = Hash.ZEROES;
         slot_constants.block_height = 1;
 
         var slot_state: sig.core.SlotState = .GENESIS;
-        errdefer slot_state.deinit(allocator);
+        errdefer slot_state.deinit(gpa);
         slot_state.hash = .init(slot1_hash);
 
-        try slot_tracker.put(allocator, 1, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(gpa, 1, .{ .constants = slot_constants, .state = slot_state });
     }
 
-    var epoch_tracker: EpochTracker = .{
-        .epochs = .empty,
-        .schedule = .INIT,
-    };
-    {
-        const epoch_consts = sig.core.EpochConstants.genesis(.default(allocator));
-        errdefer epoch_consts.deinit(allocator);
-        try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
-    }
-    defer epoch_tracker.deinit(allocator);
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        gpa,
+        &.{.EMPTY_WITH_GENESIS},
+    );
+    defer epoch_tracker.deinit(gpa);
 
     var progress = sig.consensus.ProgressMap.INIT;
-    defer progress.deinit(allocator);
+    defer progress.deinit(gpa);
     {
-        var fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        var fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
         fork_progress0.fork_stats.computed = true;
-        var fork_progress1 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        var fork_progress1 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
         fork_progress1.fork_stats.computed = true;
-        try progress.map.put(allocator, 0, fork_progress0);
-        try progress.map.put(allocator, 1, fork_progress1);
+        try progress.map.put(gpa, 0, fork_progress0);
+        try progress.map.put(gpa, 1, fork_progress1);
     }
 
-    var replay_votes_channel = try Channel(ParsedVote).create(allocator);
+    var replay_votes_channel = try Channel(ParsedVote).create(gpa);
     defer replay_votes_channel.destroy();
 
-    var consensus = try TowerConsensus.init(allocator, .{
+    var consensus = try TowerConsensus.init(gpa, .{
         .logger = .noop,
         .identity = .{
             .vote_account = null,
-            .validator = .initRandom(std.crypto.random),
+            .validator = .initRandom(prng),
         },
         .signing = .{
             .node = null,
@@ -6246,22 +6364,24 @@ test "vote refresh when no new vote available" {
         .now = .EPOCH_ZERO,
         .registry = &registry,
     });
-    defer consensus.deinit(allocator);
+    defer consensus.deinit(gpa);
 
     var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
-    defer duplicate_confirmed_slots.deinit(allocator);
+    defer duplicate_confirmed_slots.deinit(gpa);
 
     var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
-    defer gossip_verified_vote_hashes.deinit(allocator);
+    defer gossip_verified_vote_hashes.deinit(gpa);
 
     {
         const results = [_]ReplayResult{
             .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
         };
-        try consensus.process(allocator, .{
+
+        try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -6284,10 +6404,12 @@ test "vote refresh when no new vote available" {
     // The Test
     {
         const empty_results: []const ReplayResult = &.{};
-        try consensus.process(allocator, .{
+
+        try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -6315,6 +6437,12 @@ test "vote refresh when no new vote available" {
     try std.testing.expectEqual(1, consensus.replay_tower.tower.votes.len);
 
     try std.testing.expectEqual(1, consensus.fork_choice.heaviestOverallSlot().slot);
+
+    // Assert trackers
+    // processed slot is updated to slot 1 when the tower votes on it
+    try std.testing.expectEqual(1, slot_tracker.getSlotForCommitment(.processed));
+    // confirmed slot remains at 0 (no optimistic confirmation votes processed)
+    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
 }
 
 // Test case:
@@ -6342,20 +6470,23 @@ test "vote refresh when no new vote available" {
 // - progress_map.getForkStats(1).?.duplicate_confirmed_hash == slot 1's hash
 // - consensus.slot_data.duplicate_confirmed_slots.get(1) == slot 1's hash
 test "detect and mark duplicate confirmed fork" {
-    const allocator = std.testing.allocator;
+    const gpa = std.testing.allocator;
 
-    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(gpa);
     defer registry.deinit();
 
-    var stubs = try sig.replay.service.DependencyStubs.init(allocator, .noop);
+    var stubs = try sig.replay.service.DependencyStubs.init(gpa, .noop);
     defer stubs.deinit();
 
     {
         const SlotHistory = sig.runtime.sysvar.SlotHistory;
-        const slot_history = try SlotHistory.init(allocator);
-        defer slot_history.deinit(allocator);
-        const data = try allocator.alloc(u8, SlotHistory.STORAGE_SIZE);
-        defer allocator.free(data);
+        const slot_history = try SlotHistory.init(gpa);
+        defer slot_history.deinit(gpa);
+        const data = try gpa.alloc(u8, SlotHistory.STORAGE_SIZE);
+        defer gpa.free(data);
         @memset(data, 0);
         _ = try sig.bincode.writeToSlice(data, slot_history, .{});
         const account = sig.runtime.AccountSharedData{
@@ -6370,89 +6501,82 @@ test "detect and mark duplicate confirmed fork" {
     }
 
     const root_slot: Slot = 0;
-    const root_consts = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+    const root_consts = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
     var root_state: sig.core.SlotState = .GENESIS;
 
     root_state.hash.set(Hash.ZEROES);
     {
         var bhq = root_state.blockhash_queue.write();
         defer bhq.unlock();
-        try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
+        try bhq.mut().insertGenesisHash(gpa, Hash.ZEROES, 0);
     }
 
-    var slot_tracker = try SlotTracker.init(allocator, root_slot, .{
-        .constants = root_consts,
-        .state = root_state,
-    });
-    defer slot_tracker.deinit(allocator);
+    var slot_tracker = try SlotTracker.init(
+        gpa,
+        root_slot,
+        .{ .constants = root_consts, .state = root_state },
+    );
+    defer slot_tracker.deinit(gpa);
 
     // Add frozen slot 1
     const slot1_hash = Hash{ .data = .{1} ** Hash.SIZE };
     {
-        var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
-        errdefer slot_constants.deinit(allocator);
+        var slot_constants = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
+        errdefer slot_constants.deinit(gpa);
         slot_constants.parent_slot = root_slot;
         slot_constants.parent_hash = Hash.ZEROES;
         slot_constants.block_height = 1;
 
         // Set up ancestors (include root for lockout logic)
-        slot_constants.ancestors.deinit(allocator);
+        slot_constants.ancestors.deinit(gpa);
         slot_constants.ancestors = .{};
-        try slot_constants.ancestors.ancestors.put(allocator, 0, {});
-        try slot_constants.ancestors.ancestors.put(allocator, 1, {});
+        try slot_constants.ancestors.ancestors.put(gpa, 0, {});
+        try slot_constants.ancestors.ancestors.put(gpa, 1, {});
 
         var slot_state: sig.core.SlotState = .GENESIS;
-        errdefer slot_state.deinit(allocator);
+        errdefer slot_state.deinit(gpa);
         slot_state.hash.set(slot1_hash);
 
-        try slot_tracker.put(allocator, 1, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(gpa, 1, .{ .constants = slot_constants, .state = slot_state });
     }
 
     const slot2_hash = Hash{ .data = .{2} ** Hash.SIZE };
     {
-        var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
-        errdefer slot_constants.deinit(allocator);
+        var slot_constants = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
+        errdefer slot_constants.deinit(gpa);
         slot_constants.parent_slot = 1;
         slot_constants.parent_hash = slot1_hash;
         slot_constants.block_height = 2;
 
         // Set up ancestors (include root for lockout logic)
-        slot_constants.ancestors.deinit(allocator);
+        slot_constants.ancestors.deinit(gpa);
         slot_constants.ancestors = .{};
-        try slot_constants.ancestors.ancestors.put(allocator, 0, {});
-        try slot_constants.ancestors.ancestors.put(allocator, 1, {});
-        try slot_constants.ancestors.ancestors.put(allocator, 2, {});
+        try slot_constants.ancestors.ancestors.put(gpa, 0, {});
+        try slot_constants.ancestors.ancestors.put(gpa, 1, {});
+        try slot_constants.ancestors.ancestors.put(gpa, 2, {});
 
         var slot_state: sig.core.SlotState = .GENESIS;
-        errdefer slot_state.deinit(allocator);
+        errdefer slot_state.deinit(gpa);
         slot_state.hash.set(slot2_hash);
 
-        try slot_tracker.put(allocator, 2, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(gpa, 2, .{ .constants = slot_constants, .state = slot_state });
     }
 
-    var epoch_tracker: EpochTracker = .{
-        .epochs = .empty,
-        .schedule = .INIT,
-    };
-
-    {
-        var prng = std.Random.DefaultPrng.init(12345);
-        const random = prng.random();
-
+    const epoch_stakes = blk: {
         // Create enough vote accounts to exceed duplicate threshold (53% of 1000)
         const pubkey_count = 6;
         const stake_per_account = 100; // Total = 600, but we'll have 5.3 accounts vote = 530 stake
-        const vote_pubkeys = try allocator.alloc(Pubkey, pubkey_count);
-        defer allocator.free(vote_pubkeys);
-        for (vote_pubkeys) |*k| k.* = Pubkey.initRandom(random);
+        const vote_pubkeys = try gpa.alloc(Pubkey, pubkey_count);
+        defer gpa.free(vote_pubkeys);
+        for (vote_pubkeys) |*k| k.* = Pubkey.initRandom(prng);
 
         var epoch_stakes = try sig.consensus.fork_choice.testEpochStakes(
-            allocator,
+            gpa,
             vote_pubkeys,
             stake_per_account,
-            random,
+            prng,
         );
-        errdefer epoch_stakes.deinit(allocator);
+        errdefer epoch_stakes.deinit(gpa);
 
         // SIMULATES BLOCK REPLAY: Inject landed votes for slot 1 into all 6 vote accounts
         // In a real validator, vote account state would be updated during:
@@ -6465,33 +6589,31 @@ test "detect and mark duplicate confirmed fork" {
             var vote_accounts = &epoch_stakes.stakes.vote_accounts.vote_accounts;
 
             for (vote_accounts.values()) |*vote_account| {
-                try vote_account.account.state.votes.append(allocator, .{
+                try vote_account.account.state.votes.append(gpa, .{
                     .latency = 0,
                     .lockout = .{ .slot = 1, .confirmation_count = 2 },
                 });
             }
         }
 
-        var epoch_consts = sig.core.EpochConstants.genesis(.default(allocator));
-        errdefer epoch_consts.deinit(allocator);
-        epoch_consts.stakes.deinit(allocator);
-        epoch_consts.stakes = epoch_stakes;
+        break :blk epoch_stakes;
+    };
 
-        try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
-    }
-    defer epoch_tracker.deinit(allocator);
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        gpa,
+        &.{epoch_stakes},
+    );
+    defer epoch_tracker.deinit(gpa);
 
     {
-        const epoch_consts_ptr = epoch_tracker.epochs.getPtr(0).?;
-
         {
             const slot1_ref = slot_tracker.get(1).?;
             const stakes_ptr, var stakes_guard = slot1_ref.state.stakes_cache.stakes.writeWithLock();
             defer stakes_guard.unlock();
-            stakes_ptr.deinit(allocator);
+            stakes_ptr.deinit(gpa);
             stakes_ptr.* = try sig.core.bank.parseStakesForTest(
-                allocator,
-                &epoch_consts_ptr.stakes.stakes,
+                gpa,
+                &epoch_stakes.stakes,
             );
         }
 
@@ -6499,37 +6621,37 @@ test "detect and mark duplicate confirmed fork" {
             const slot2_ref = slot_tracker.get(2).?;
             const stakes_ptr, var stakes_guard = slot2_ref.state.stakes_cache.stakes.writeWithLock();
             defer stakes_guard.unlock();
-            stakes_ptr.deinit(allocator);
+            stakes_ptr.deinit(gpa);
             stakes_ptr.* = try sig.core.bank.parseStakesForTest(
-                allocator,
-                &epoch_consts_ptr.stakes.stakes,
+                gpa,
+                &epoch_stakes.stakes,
             );
         }
     }
 
     var progress = sig.consensus.ProgressMap.INIT;
-    defer progress.deinit(allocator);
+    defer progress.deinit(gpa);
 
     {
-        var fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        var fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
         fork_progress0.fork_stats.computed = true;
         // Mark root as already duplicate-confirmed to skip it in detection loop
         fork_progress0.fork_stats.duplicate_confirmed_hash = Hash.ZEROES;
-        const fork_progress1 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
-        const fork_progress2 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
-        try progress.map.put(allocator, 0, fork_progress0);
-        try progress.map.put(allocator, 1, fork_progress1);
-        try progress.map.put(allocator, 2, fork_progress2);
+        const fork_progress1 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
+        const fork_progress2 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
+        try progress.map.put(gpa, 0, fork_progress0);
+        try progress.map.put(gpa, 1, fork_progress1);
+        try progress.map.put(gpa, 2, fork_progress2);
     }
 
-    var replay_votes_channel = try Channel(ParsedVote).create(allocator);
+    var replay_votes_channel = try Channel(ParsedVote).create(gpa);
     defer replay_votes_channel.destroy();
 
-    var consensus = try TowerConsensus.init(allocator, .{
+    var consensus = try TowerConsensus.init(gpa, .{
         .logger = .noop,
         .identity = .{
             .vote_account = null,
-            .validator = Pubkey.initRandom(std.crypto.random),
+            .validator = .initRandom(prng),
         },
         .signing = .{
             .node = null,
@@ -6541,13 +6663,13 @@ test "detect and mark duplicate confirmed fork" {
         .now = .EPOCH_ZERO,
         .registry = &registry,
     });
-    defer consensus.deinit(allocator);
+    defer consensus.deinit(gpa);
 
     var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
-    defer duplicate_confirmed_slots.deinit(allocator);
+    defer duplicate_confirmed_slots.deinit(gpa);
 
     var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
-    defer gossip_verified_vote_hashes.deinit(allocator);
+    defer gossip_verified_vote_hashes.deinit(gpa);
 
     // Verify slot 1 is not yet marked as duplicate-confirmed
     try std.testing.expect(progress.getForkStats(1).?.duplicate_confirmed_hash == null);
@@ -6559,10 +6681,12 @@ test "detect and mark duplicate confirmed fork" {
         const results = [_]ReplayResult{
             .{ .slot = 2, .output = .{ .last_entry_hash = slot2_hash } },
         };
-        try consensus.process(allocator, .{
+
+        try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -6613,20 +6737,23 @@ test "detect and mark duplicate confirmed fork" {
 // - consensus.slot_data.duplicate_slots contains slot 1
 // - Fork choice marks slot 1 as invalid candidate (checked via fork_choice state)
 test "detect and mark duplicate slot" {
-    const allocator = std.testing.allocator;
+    const gpa = std.testing.allocator;
 
-    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(gpa);
     defer registry.deinit();
 
-    var stubs = try sig.replay.service.DependencyStubs.init(allocator, .noop);
+    var stubs = try sig.replay.service.DependencyStubs.init(gpa, .noop);
     defer stubs.deinit();
 
     {
         const SlotHistory = sig.runtime.sysvar.SlotHistory;
-        const slot_history = try SlotHistory.init(allocator);
-        defer slot_history.deinit(allocator);
-        const data = try allocator.alloc(u8, SlotHistory.STORAGE_SIZE);
-        defer allocator.free(data);
+        const slot_history = try SlotHistory.init(gpa);
+        defer slot_history.deinit(gpa);
+        const data = try gpa.alloc(u8, SlotHistory.STORAGE_SIZE);
+        defer gpa.free(data);
         @memset(data, 0);
         _ = try sig.bincode.writeToSlice(data, slot_history, .{});
         const account = sig.runtime.AccountSharedData{
@@ -6641,71 +6768,67 @@ test "detect and mark duplicate slot" {
     }
 
     const root_slot: Slot = 0;
-    const root_consts = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+    const root_consts = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
     var root_state: sig.core.SlotState = .GENESIS;
 
     root_state.hash.set(Hash.ZEROES);
     {
         var bhq = root_state.blockhash_queue.write();
         defer bhq.unlock();
-        try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
+        try bhq.mut().insertGenesisHash(gpa, Hash.ZEROES, 0);
     }
 
-    var slot_tracker = try SlotTracker.init(allocator, root_slot, .{
-        .constants = root_consts,
-        .state = root_state,
-    });
-    defer slot_tracker.deinit(allocator);
+    var slot_tracker = try SlotTracker.init(
+        gpa,
+        root_slot,
+        .{ .constants = root_consts, .state = root_state },
+    );
+    defer slot_tracker.deinit(gpa);
 
     const slot1_hash = Hash{ .data = .{1} ** Hash.SIZE };
     {
-        var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
-        errdefer slot_constants.deinit(allocator);
+        var slot_constants = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
+        errdefer slot_constants.deinit(gpa);
         slot_constants.parent_slot = root_slot;
         slot_constants.parent_hash = Hash.ZEROES;
         slot_constants.block_height = 1;
 
-        slot_constants.ancestors.deinit(allocator);
+        slot_constants.ancestors.deinit(gpa);
         slot_constants.ancestors = .{};
-        try slot_constants.ancestors.ancestors.put(allocator, 0, {});
-        try slot_constants.ancestors.ancestors.put(allocator, 1, {});
+        try slot_constants.ancestors.ancestors.put(gpa, 0, {});
+        try slot_constants.ancestors.ancestors.put(gpa, 1, {});
 
         var slot_state: sig.core.SlotState = .GENESIS;
-        errdefer slot_state.deinit(allocator);
+        errdefer slot_state.deinit(gpa);
         slot_state.hash.set(slot1_hash);
 
-        try slot_tracker.put(allocator, 1, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(gpa, 1, .{ .constants = slot_constants, .state = slot_state });
     }
 
-    var epoch_tracker: EpochTracker = .{
-        .epochs = .empty,
-        .schedule = .INIT,
-    };
-    {
-        const epoch_consts = sig.core.EpochConstants.genesis(.default(allocator));
-        errdefer epoch_consts.deinit(allocator);
-        try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
-    }
-    defer epoch_tracker.deinit(allocator);
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        gpa,
+        &.{.EMPTY_WITH_GENESIS},
+    );
+    defer epoch_tracker.deinit(gpa);
 
     var progress = sig.consensus.ProgressMap.INIT;
-    defer progress.deinit(allocator);
+    defer progress.deinit(gpa);
     {
-        var fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        var fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
         fork_progress0.fork_stats.computed = true;
-        const fork_progress1 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
-        try progress.map.put(allocator, 0, fork_progress0);
-        try progress.map.put(allocator, 1, fork_progress1);
+        const fork_progress1 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
+        try progress.map.put(gpa, 0, fork_progress0);
+        try progress.map.put(gpa, 1, fork_progress1);
     }
 
-    var replay_votes_channel = try Channel(ParsedVote).create(allocator);
+    var replay_votes_channel = try Channel(ParsedVote).create(gpa);
     defer replay_votes_channel.destroy();
 
-    var consensus = try TowerConsensus.init(allocator, .{
+    var consensus = try TowerConsensus.init(gpa, .{
         .logger = .noop,
         .identity = .{
             .vote_account = null,
-            .validator = Pubkey.initRandom(std.crypto.random),
+            .validator = .initRandom(prng),
         },
         .signing = .{
             .node = null,
@@ -6717,13 +6840,13 @@ test "detect and mark duplicate slot" {
         .now = .EPOCH_ZERO,
         .registry = &registry,
     });
-    defer consensus.deinit(allocator);
+    defer consensus.deinit(gpa);
 
     var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
-    defer duplicate_confirmed_slots.deinit(allocator);
+    defer duplicate_confirmed_slots.deinit(gpa);
 
     var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
-    defer gossip_verified_vote_hashes.deinit(allocator);
+    defer gossip_verified_vote_hashes.deinit(gpa);
 
     try std.testing.expect(!consensus.slot_data.duplicate_slots.contains(1));
 
@@ -6738,10 +6861,12 @@ test "detect and mark duplicate slot" {
         const results = [_]ReplayResult{
             .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
         };
-        try consensus.process(allocator, .{
+
+        try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -6813,21 +6938,24 @@ test "detect and mark duplicate slot" {
 // Notes:
 // - The switch proof hash is Hash.ZEROES (generation not implemented, same as Agave).
 test "successful fork switch (switch_proof)" {
-    const allocator = std.testing.allocator;
+    const gpa = std.testing.allocator;
 
-    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(gpa);
     defer registry.deinit();
 
-    var stubs = try sig.replay.service.DependencyStubs.init(allocator, .noop);
+    var stubs = try sig.replay.service.DependencyStubs.init(gpa, .noop);
     defer stubs.deinit();
 
     {
         const SlotHistory = sig.runtime.sysvar.SlotHistory;
-        const slot_history = try SlotHistory.init(allocator);
-        defer slot_history.deinit(allocator);
+        const slot_history = try SlotHistory.init(gpa);
+        defer slot_history.deinit(gpa);
 
-        const data = try allocator.alloc(u8, SlotHistory.STORAGE_SIZE);
-        defer allocator.free(data);
+        const data = try gpa.alloc(u8, SlotHistory.STORAGE_SIZE);
+        defer gpa.free(data);
 
         @memset(data, 0);
 
@@ -6845,20 +6973,21 @@ test "successful fork switch (switch_proof)" {
 
     // Root 0
     const root_slot: Slot = 0;
-    const root_consts = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
+    const root_consts = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
     var root_state: sig.core.SlotState = .GENESIS;
     root_state.hash.set(Hash.ZEROES);
     {
         var bhq = root_state.blockhash_queue.write();
         defer bhq.unlock();
-        try bhq.mut().insertGenesisHash(allocator, Hash.ZEROES, 0);
+        try bhq.mut().insertGenesisHash(gpa, Hash.ZEROES, 0);
     }
 
     var slot_tracker = try SlotTracker.init(
-        allocator,
+        gpa,
         root_slot,
         .{ .constants = root_consts, .state = root_state },
     );
+    defer slot_tracker.deinit(gpa);
 
     // Build first child of root:
     //
@@ -6867,21 +6996,21 @@ test "successful fork switch (switch_proof)" {
     //     +-- slot 1 (A)
     const slot1_hash = Hash{ .data = .{1} ** Hash.SIZE };
     {
-        var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
-        errdefer slot_constants.deinit(allocator);
+        var slot_constants = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
+        errdefer slot_constants.deinit(gpa);
         slot_constants.parent_slot = 0;
         slot_constants.parent_hash = Hash.ZEROES;
         slot_constants.block_height = 1;
-        slot_constants.ancestors.deinit(allocator);
+        slot_constants.ancestors.deinit(gpa);
         slot_constants.ancestors = .{};
-        try slot_constants.ancestors.ancestors.put(allocator, 0, {});
-        try slot_constants.ancestors.ancestors.put(allocator, 1, {});
+        try slot_constants.ancestors.ancestors.put(gpa, 0, {});
+        try slot_constants.ancestors.ancestors.put(gpa, 1, {});
 
         var slot_state: sig.core.SlotState = .GENESIS;
-        errdefer slot_state.deinit(allocator);
+        errdefer slot_state.deinit(gpa);
         slot_state.hash.set(slot1_hash);
         try slot_tracker.put(
-            allocator,
+            gpa,
             1,
             .{ .constants = slot_constants, .state = slot_state },
         );
@@ -6896,20 +7025,20 @@ test "successful fork switch (switch_proof)" {
     //     +-- slot 1 (A)
     const slot2_hash = Hash{ .data = .{2} ** Hash.SIZE };
     {
-        var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
-        errdefer slot_constants.deinit(allocator);
+        var slot_constants = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
+        errdefer slot_constants.deinit(gpa);
         slot_constants.parent_slot = 0;
         slot_constants.parent_hash = Hash.ZEROES;
         slot_constants.block_height = 2;
-        slot_constants.ancestors.deinit(allocator);
+        slot_constants.ancestors.deinit(gpa);
         slot_constants.ancestors = .{};
-        try slot_constants.ancestors.ancestors.put(allocator, 0, {});
-        try slot_constants.ancestors.ancestors.put(allocator, 2, {});
+        try slot_constants.ancestors.ancestors.put(gpa, 0, {});
+        try slot_constants.ancestors.ancestors.put(gpa, 2, {});
 
         var slot_state: sig.core.SlotState = .GENESIS;
-        errdefer slot_state.deinit(allocator);
+        errdefer slot_state.deinit(gpa);
         slot_state.hash.set(slot2_hash);
-        try slot_tracker.put(allocator, 2, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(gpa, 2, .{ .constants = slot_constants, .state = slot_state });
     }
 
     // Add heavier sibling we’ll vote on:
@@ -6925,106 +7054,101 @@ test "successful fork switch (switch_proof)" {
     // With one prior vote on slot 1, lastLockedOutSlot = 1 + 2 = 3, so 4 is not locked out.
     const slot4_hash = Hash{ .data = .{4} ** Hash.SIZE };
     {
-        var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
-        errdefer slot_constants.deinit(allocator);
+        var slot_constants = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
+        errdefer slot_constants.deinit(gpa);
         slot_constants.parent_slot = 0;
         slot_constants.parent_hash = Hash.ZEROES;
         slot_constants.block_height = 4;
-        slot_constants.ancestors.deinit(allocator);
+        slot_constants.ancestors.deinit(gpa);
         slot_constants.ancestors = .{};
-        try slot_constants.ancestors.ancestors.put(allocator, 0, {});
-        try slot_constants.ancestors.ancestors.put(allocator, 4, {});
+        try slot_constants.ancestors.ancestors.put(gpa, 0, {});
+        try slot_constants.ancestors.ancestors.put(gpa, 4, {});
 
         var slot_state: sig.core.SlotState = .GENESIS;
-        errdefer slot_state.deinit(allocator);
+        errdefer slot_state.deinit(gpa);
         slot_state.hash.set(slot4_hash);
-        try slot_tracker.put(allocator, 4, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(gpa, 4, .{ .constants = slot_constants, .state = slot_state });
     }
 
-    var epoch_tracker: EpochTracker = .{
-        .epochs = .empty,
-        .schedule = .INIT,
-    };
-    var vote_pubkeys = try allocator.alloc(Pubkey, 5);
-    defer allocator.free(vote_pubkeys);
-    {
-        var prng = std.Random.DefaultPrng.init(98765);
-        const random = prng.random();
-        for (vote_pubkeys) |*k| k.* = Pubkey.initRandom(random);
+    const vote_pubkeys = try gpa.alloc(Pubkey, 5);
+    defer gpa.free(vote_pubkeys);
+    const epoch_stakes = blk: {
+        for (vote_pubkeys) |*k| k.* = Pubkey.initRandom(prng);
 
         var epoch_stakes = try sig.consensus.fork_choice.testEpochStakes(
-            allocator,
+            gpa,
             vote_pubkeys,
             100, // stake per account; total = 500
-            random,
+            prng,
         );
-        errdefer epoch_stakes.deinit(allocator);
+        errdefer epoch_stakes.deinit(gpa);
 
-        var epoch_consts = sig.core.EpochConstants.genesis(.default(allocator));
-        errdefer epoch_consts.deinit(allocator);
-        epoch_consts.stakes.deinit(allocator);
-        epoch_consts.stakes = epoch_stakes;
-        try epoch_tracker.epochs.put(allocator, 0, epoch_consts);
+        break :blk epoch_stakes;
+    };
 
-        const epoch_consts_ptr = epoch_tracker.epochs.getPtr(0).?;
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        gpa,
+        &.{epoch_stakes},
+    );
+    defer epoch_tracker.deinit(gpa);
 
+    {
         {
             const s1 = slot_tracker.get(1).?;
             const stakes_ptr1, var g1 = s1.state.stakes_cache.stakes.writeWithLock();
             defer g1.unlock();
-            stakes_ptr1.deinit(allocator);
+            stakes_ptr1.deinit(gpa);
             stakes_ptr1.* = try sig.core.bank.parseStakesForTest(
-                allocator,
-                &epoch_consts_ptr.stakes.stakes,
+                gpa,
+                &epoch_stakes.stakes,
             );
         }
         {
             const s2 = slot_tracker.get(2).?;
             const stakes_ptr2, var g2 = s2.state.stakes_cache.stakes.writeWithLock();
             defer g2.unlock();
-            stakes_ptr2.deinit(allocator);
+            stakes_ptr2.deinit(gpa);
             stakes_ptr2.* = try sig.core.bank.parseStakesForTest(
-                allocator,
-                &epoch_consts_ptr.stakes.stakes,
+                gpa,
+                &epoch_stakes.stakes,
             );
         }
         {
             const s4 = slot_tracker.get(4).?;
             const stakes_ptr4, var g4 = s4.state.stakes_cache.stakes.writeWithLock();
             defer g4.unlock();
-            stakes_ptr4.deinit(allocator);
+            stakes_ptr4.deinit(gpa);
             stakes_ptr4.* = try sig.core.bank.parseStakesForTest(
-                allocator,
-                &epoch_consts_ptr.stakes.stakes,
+                gpa,
+                &epoch_stakes.stakes,
             );
         }
     }
-    defer epoch_tracker.deinit(allocator);
 
     var progress = sig.consensus.ProgressMap.INIT;
-    defer progress.deinit(allocator);
+    defer progress.deinit(gpa);
     {
-        var fp0 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        var fp0 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
         fp0.fork_stats.computed = true;
-        const fp1 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
-        var fp2 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        const fp1 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
+        var fp2 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
         fp2.fork_stats.slot_hash = slot2_hash;
-        var fp4 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        var fp4 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
         fp4.fork_stats.slot_hash = slot4_hash;
-        try progress.map.put(allocator, 0, fp0);
-        try progress.map.put(allocator, 1, fp1);
-        try progress.map.put(allocator, 2, fp2);
-        try progress.map.put(allocator, 4, fp4);
+        try progress.map.put(gpa, 0, fp0);
+        try progress.map.put(gpa, 1, fp1);
+        try progress.map.put(gpa, 2, fp2);
+        try progress.map.put(gpa, 4, fp4);
     }
 
-    var replay_votes_channel = try Channel(ParsedVote).create(allocator);
+    var replay_votes_channel = try Channel(ParsedVote).create(gpa);
     defer replay_votes_channel.destroy();
 
-    var consensus = try TowerConsensus.init(allocator, .{
+    var consensus = try TowerConsensus.init(gpa, .{
         .logger = .noop,
         .identity = .{
             .vote_account = null,
-            .validator = Pubkey.initRandom(std.crypto.random),
+            .validator = .initRandom(prng),
         },
         .signing = .{
             .node = null,
@@ -7036,29 +7160,29 @@ test "successful fork switch (switch_proof)" {
         .now = .EPOCH_ZERO,
         .registry = &registry,
     });
-    defer consensus.deinit(allocator);
+    defer consensus.deinit(gpa);
 
     var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
-    defer duplicate_confirmed_slots.deinit(allocator);
+    defer duplicate_confirmed_slots.deinit(gpa);
 
     var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
-    defer gossip_verified_vote_hashes.deinit(allocator);
+    defer gossip_verified_vote_hashes.deinit(gpa);
 
-    _ = try consensus.replay_tower.recordBankVote(allocator, 1, slot1_hash);
+    _ = try consensus.replay_tower.recordBankVote(gpa, 1, slot1_hash);
 
     // Seed latest validator votes to support slot 4 (>38% of 500 = 190)
     for (vote_pubkeys[0..3]) |pk| {
         // Record the vote gotten via gossip.
-        _ = try consensus.latest_validator_votes.checkAddVote(
-            allocator,
+        _ = try consensus.slot_data.latest_validator_votes.checkAddVote(
+            gpa,
             pk,
             4,
             slot4_hash,
             .gossip,
         );
         // Record the vote gotten via replay.
-        _ = try consensus.latest_validator_votes.checkAddVote(
-            allocator,
+        _ = try consensus.slot_data.latest_validator_votes.checkAddVote(
+            gpa,
             pk,
             4,
             slot4_hash,
@@ -7071,44 +7195,44 @@ test "successful fork switch (switch_proof)" {
         std.AutoArrayHashMapUnmanaged(Slot, sig.utils.collections.SortedSetUnmanaged(Slot)).empty;
     defer {
         var it = ancestors_map.iterator();
-        while (it.next()) |entry| entry.value_ptr.deinit(allocator);
-        ancestors_map.deinit(allocator);
+        while (it.next()) |entry| entry.value_ptr.deinit(gpa);
+        ancestors_map.deinit(gpa);
         var it2 = descendants_map.iterator();
-        while (it2.next()) |entry| entry.value_ptr.deinit(allocator);
-        descendants_map.deinit(allocator);
+        while (it2.next()) |entry| entry.value_ptr.deinit(gpa);
+        descendants_map.deinit(gpa);
     }
 
-    try ancestors_map.ensureTotalCapacity(allocator, slot_tracker.slots.count());
-    try descendants_map.ensureTotalCapacity(allocator, slot_tracker.slots.count());
+    try ancestors_map.ensureTotalCapacity(gpa, slot_tracker.slots.count());
+    try descendants_map.ensureTotalCapacity(gpa, slot_tracker.slots.count());
     for (slot_tracker.slots.keys(), slot_tracker.slots.values()) |slot, info| {
         const slot_ancestors = &info.constants.ancestors.ancestors;
-        const gop = try ancestors_map.getOrPutValue(allocator, slot, .EMPTY);
+        const gop = try ancestors_map.getOrPutValue(gpa, slot, .EMPTY);
         if (!gop.found_existing) {
-            try gop.value_ptr.ancestors.ensureUnusedCapacity(allocator, slot_ancestors.count());
+            try gop.value_ptr.ancestors.ensureUnusedCapacity(gpa, slot_ancestors.count());
         }
         for (slot_ancestors.keys()) |a| {
-            try gop.value_ptr.addSlot(allocator, a);
-            const dg = try descendants_map.getOrPutValue(allocator, a, .empty);
-            try dg.value_ptr.put(allocator, slot);
+            try gop.value_ptr.addSlot(gpa, a);
+            const dg = try descendants_map.getOrPutValue(gpa, a, .empty);
+            try dg.value_ptr.put(gpa, slot);
         }
     }
 
-    const epoch_consts_ptr = epoch_tracker.epochs.getPtr(0).?;
-    const vote_accounts_map = &epoch_consts_ptr.stakes.stakes.vote_accounts.vote_accounts;
+    const epoch_info = try epoch_tracker.getEpochInfo(0);
+    const vote_accounts_map = &epoch_info.stakes.stakes.vote_accounts.vote_accounts;
     const total_stake: u64 = 500;
 
     // First, verify that we cannot switch to sibling slot 2 due to lockout
     // (with a single prior vote on 1, lastLockedOutSlot = 3, so 2 is locked out).
     {
         const decision2 = try consensus.replay_tower.makeCheckSwitchThresholdDecision(
-            allocator,
+            gpa,
             2,
             &ancestors_map,
             &descendants_map,
             &progress,
             total_stake,
             vote_accounts_map,
-            &consensus.latest_validator_votes,
+            &consensus.slot_data.latest_validator_votes,
             &consensus.fork_choice,
         );
         switch (decision2) {
@@ -7121,10 +7245,12 @@ test "successful fork switch (switch_proof)" {
         const results2 = [_]ReplayResult{
             .{ .slot = 2, .output = .{ .last_entry_hash = slot2_hash } },
         };
-        try consensus.process(allocator, .{
+
+        try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -7141,14 +7267,14 @@ test "successful fork switch (switch_proof)" {
     }
 
     const decision = try consensus.replay_tower.makeCheckSwitchThresholdDecision(
-        allocator,
+        gpa,
         4,
         &ancestors_map,
         &descendants_map,
         &progress,
         total_stake,
         vote_accounts_map,
-        &consensus.latest_validator_votes,
+        &consensus.slot_data.latest_validator_votes,
         &consensus.fork_choice,
     );
     switch (decision) {
@@ -7162,10 +7288,12 @@ test "successful fork switch (switch_proof)" {
         const results = [_]ReplayResult{
             .{ .slot = 4, .output = .{ .last_entry_hash = slot4_hash } },
         };
-        try consensus.process(allocator, .{
+
+        try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -7197,36 +7325,38 @@ test "successful fork switch (switch_proof)" {
         //            \
         //             +-- slot 5      [sibling with insufficient stake]
         //
-        var slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
-        errdefer slot_constants.deinit(allocator);
+        var slot_constants = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
+        errdefer slot_constants.deinit(gpa);
         slot_constants.parent_slot = 0;
         slot_constants.parent_hash = Hash.ZEROES;
         slot_constants.block_height = 5;
-        slot_constants.ancestors.deinit(allocator);
+        slot_constants.ancestors.deinit(gpa);
         slot_constants.ancestors = .{};
-        try slot_constants.ancestors.ancestors.put(allocator, 0, {});
-        try slot_constants.ancestors.ancestors.put(allocator, 5, {});
+        try slot_constants.ancestors.ancestors.put(gpa, 0, {});
+        try slot_constants.ancestors.ancestors.put(gpa, 5, {});
 
         var slot_state: sig.core.SlotState = .GENESIS;
-        errdefer slot_state.deinit(allocator);
+        errdefer slot_state.deinit(gpa);
         slot_state.hash.set(slot5_hash);
-        try slot_tracker.put(allocator, 5, .{ .constants = slot_constants, .state = slot_state });
+        try slot_tracker.put(gpa, 5, .{ .constants = slot_constants, .state = slot_state });
     }
     // Progress map entry for slot 5
     {
-        var fp5 = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        var fp5 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
         fp5.fork_stats.slot_hash = slot5_hash;
-        try progress.map.put(allocator, 5, fp5);
+        try progress.map.put(gpa, 5, fp5);
     }
     // Not seeding sufficient votes for slot 5.
     // This ensures it is below threshold so it cannot be switched to
     // Recompute bank stats for new frozen slot 5
     {
         const empty_results: []const ReplayResult = &.{};
-        try consensus.process(allocator, .{
+
+        try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -7247,38 +7377,38 @@ test "successful fork switch (switch_proof)" {
         std.AutoArrayHashMapUnmanaged(Slot, sig.utils.collections.SortedSetUnmanaged(Slot)).empty;
     defer {
         var it = ancestors_map2.iterator();
-        while (it.next()) |entry| entry.value_ptr.deinit(allocator);
-        ancestors_map2.deinit(allocator);
+        while (it.next()) |entry| entry.value_ptr.deinit(gpa);
+        ancestors_map2.deinit(gpa);
         var it2 = descendants_map2.iterator();
-        while (it2.next()) |entry| entry.value_ptr.deinit(allocator);
-        descendants_map2.deinit(allocator);
+        while (it2.next()) |entry| entry.value_ptr.deinit(gpa);
+        descendants_map2.deinit(gpa);
     }
 
-    try ancestors_map2.ensureTotalCapacity(allocator, slot_tracker.slots.count());
-    try descendants_map2.ensureTotalCapacity(allocator, slot_tracker.slots.count());
+    try ancestors_map2.ensureTotalCapacity(gpa, slot_tracker.slots.count());
+    try descendants_map2.ensureTotalCapacity(gpa, slot_tracker.slots.count());
     for (slot_tracker.slots.keys(), slot_tracker.slots.values()) |slot, info| {
         const slot_ancestors = &info.constants.ancestors.ancestors;
-        const gop = try ancestors_map2.getOrPutValue(allocator, slot, .EMPTY);
+        const gop = try ancestors_map2.getOrPutValue(gpa, slot, .EMPTY);
         if (!gop.found_existing) {
-            try gop.value_ptr.ancestors.ensureUnusedCapacity(allocator, slot_ancestors.count());
+            try gop.value_ptr.ancestors.ensureUnusedCapacity(gpa, slot_ancestors.count());
         }
         for (slot_ancestors.keys()) |a| {
-            try gop.value_ptr.addSlot(allocator, a);
-            const dg = try descendants_map2.getOrPutValue(allocator, a, .empty);
-            try dg.value_ptr.put(allocator, slot);
+            try gop.value_ptr.addSlot(gpa, a);
+            const dg = try descendants_map2.getOrPutValue(gpa, a, .empty);
+            try dg.value_ptr.put(gpa, slot);
         }
     }
 
     // Check switch threshold decision for slot 5 fails due to insufficient stake
     const decision5 = try consensus.replay_tower.makeCheckSwitchThresholdDecision(
-        allocator,
+        gpa,
         5,
         &ancestors_map2,
         &descendants_map2,
         &progress,
         total_stake,
         vote_accounts_map,
-        &consensus.latest_validator_votes,
+        &consensus.slot_data.latest_validator_votes,
         &consensus.fork_choice,
     );
     switch (decision5) {
@@ -7296,10 +7426,12 @@ test "successful fork switch (switch_proof)" {
                 .output = .{ .last_entry_hash = slot5_hash },
             },
         };
-        try consensus.process(allocator, .{
+
+        try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
             .gossip_votes = null,
+            .gossip_table = null,
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
@@ -7314,14 +7446,6 @@ test "successful fork switch (switch_proof)" {
         });
         try std.testing.expectEqual(4, consensus.replay_tower.lastVotedSlot());
     }
-
-    // Cleanup: free SlotTracker elements owned via slot_tracker_rw
-    for (slot_tracker.slots.values()) |element| {
-        element.state.deinit(allocator);
-        element.constants.deinit(allocator);
-        allocator.destroy(element);
-    }
-    slot_tracker.slots.deinit(allocator);
 }
 
 test "loadTower handles missing vote account" {

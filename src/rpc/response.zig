@@ -71,7 +71,9 @@ pub const Error = struct {
 
     // TODO: Replace data with structured data
     pub fn dataAsString(self: *const Error, allocator: std.mem.Allocator) ![]const u8 {
-        return std.json.stringifyAlloc(allocator, self.data.?, .{});
+        var w = std.io.Writer.Allocating.init(allocator);
+        try std.json.fmt(self.data.?, .{}).format(&w.writer);
+        return try w.toOwnedSlice();
     }
 
     pub fn eql(self: Error, other: Error) bool {
@@ -168,12 +170,13 @@ test testErrorCodeStringify {
 }
 
 fn testErrorCodeStringify(
-    options: std.json.StringifyOptions,
+    options: std.json.Stringify.Options,
     value: ErrorCode,
     expected: []const u8,
 ) !void {
     const allocator = std.testing.allocator;
-    const actual = try std.json.stringifyAlloc(allocator, value, options);
-    defer std.testing.allocator.free(actual);
-    try std.testing.expectEqualStrings(expected, actual);
+    var w = std.io.Writer.Allocating.init(allocator);
+    defer w.deinit();
+    try std.json.fmt(value, options).format(&w.writer);
+    try std.testing.expectEqualStrings(expected, w.written());
 }

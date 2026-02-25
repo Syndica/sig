@@ -5,12 +5,12 @@
 
     .fingerprint = 0x3c694f7003ef0582, // Changing this has security and trust implications.
 
-    .minimum_zig_version = "0.14.1",
+    .minimum_zig_version = "0.15.2",
 
     .dependencies = .{
         .libxev = .{
-            .url = "git+https://github.com/Syndica/libxev#c16162f0f9047f27d6230c548e1e25070b9be163",
-            .hash = "libxev-0.0.0-86vtcyQcEwAxRuv5vgdyq8LCRKHNGLgtKfS4KNHdic2V",
+            .url = "git+https://github.com/Syndica/libxev#6d5de49dde845e3045bac30b2018da32a4915c84",
+            .hash = "libxev-0.0.0-86vtczgdEwAKwvPWRNzuZMW7FuhDVdSbwgpJAJ0FmICg",
         },
     },
     .paths = .{

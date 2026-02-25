@@ -31,8 +31,8 @@ pub fn main() !void {
     const cmd = try parser.parse(
         gpa,
         "vm",
-        std.io.tty.detectConfig(std.io.getStdOut()),
-        std.io.getStdOut().writer(),
+        std.io.tty.detectConfig(.stdout()),
+        std.fs.File.stdout().deprecatedWriter(),
         argv[1..],
     ) orelse return;
     defer parser.free(gpa, cmd);
@@ -52,6 +52,7 @@ pub fn main() !void {
 
     var tc: TransactionContext = .{
         .allocator = gpa,
+        .programs_allocator = gpa,
         .feature_set = &FeatureSet.ALL_DISABLED,
         .epoch_stakes = &epoch_stakes,
         .sysvar_cache = &SysvarCache{},

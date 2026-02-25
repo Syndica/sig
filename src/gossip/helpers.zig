@@ -3,7 +3,7 @@ const sig = @import("../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
 const ContactInfo = sig.gossip.ContactInfo;
-const Cluster = sig.core.Cluster;
+const ClusterType = sig.core.ClusterType;
 const GossipService = sig.gossip.GossipService;
 const SocketAddr = sig.net.SocketAddr;
 const IpAddr = sig.net.IpAddr;
@@ -11,21 +11,20 @@ const IpAddr = sig.net.IpAddr;
 const resolveSocketAddr = sig.net.net.resolveSocketAddr;
 const getShredAndIPFromEchoServer = sig.net.echo.getShredAndIPFromEchoServer;
 const getWallclockMs = sig.time.getWallclockMs;
-const getClusterEntrypoints = sig.gossip.service.getClusterEntrypoints;
 
 /// inits a gossip client with the minimum required configuration
 /// relying on the cluster to provide the entrypoints
 pub fn initGossipFromCluster(
     allocator: std.mem.Allocator,
     logger: sig.trace.Logger("gossip"),
-    cluster: Cluster,
+    cluster: ClusterType,
     my_port: u16,
 ) !*GossipService {
     // gather entrypoints
-    var entrypoints = std.ArrayList(SocketAddr).init(allocator);
+    var entrypoints = std.array_list.Managed(SocketAddr).init(allocator);
     defer entrypoints.deinit();
 
-    const entrypoints_strs = getClusterEntrypoints(cluster);
+    const entrypoints_strs = cluster.getEntrypoints();
     for (entrypoints_strs) |entrypoint_str| {
         const socket_addr = try resolveSocketAddr(allocator, entrypoint_str);
         try entrypoints.append(socket_addr);

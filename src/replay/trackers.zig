@@ -4,12 +4,38 @@ const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
-const Epoch = sig.core.Epoch;
-const EpochConstants = sig.core.EpochConstants;
-const EpochSchedule = sig.core.EpochSchedule;
 const Slot = sig.core.Slot;
 const SlotConstants = sig.core.SlotConstants;
 const SlotState = sig.core.SlotState;
+const ThreadPool = sig.sync.ThreadPool;
+const Commitment = sig.rpc.methods.common.Commitment;
+
+pub const ForkChoiceProcessedSlot = struct {
+    slot: std.atomic.Value(Slot) = .init(0),
+
+    /// Set the current processed slot (heaviest fork tip).
+    /// Uses store() because this can decrease when the fork choice
+    /// switches to a different fork with a lower slot.
+    pub fn set(self: *ForkChoiceProcessedSlot, new_slot: Slot) void {
+        self.slot.store(new_slot, .monotonic);
+    }
+
+    pub fn get(self: *const ForkChoiceProcessedSlot) Slot {
+        return self.slot.load(.monotonic);
+    }
+};
+
+pub const OptimisticallyConfirmedSlot = struct {
+    slot: std.atomic.Value(Slot) = .init(0),
+
+    pub fn update(self: *OptimisticallyConfirmedSlot, new_slot: Slot) void {
+        _ = self.slot.fetchMax(new_slot, .monotonic);
+    }
+
+    pub fn get(self: *const OptimisticallyConfirmedSlot) Slot {
+        return self.slot.load(.monotonic);
+    }
+};
 
 /// Central registry that tracks high-level info about slots and how they fork.
 ///
@@ -23,17 +49,41 @@ const SlotState = sig.core.SlotState;
 /// will end as soon as the items are removed.
 pub const SlotTracker = struct {
     slots: std.AutoArrayHashMapUnmanaged(Slot, *Element),
-    root: Slot,
+    latest_processed_slot: ForkChoiceProcessedSlot,
+    latest_confirmed_slot: OptimisticallyConfirmedSlot,
+    root: std.atomic.Value(Slot),
+    wg: *std.Thread.WaitGroup,
 
     pub const Element = struct {
         constants: SlotConstants,
         state: SlotState,
+        destroy_task: ThreadPool.Task = .{ .callback = runDestroy },
+        pruned_wg: ?*std.Thread.WaitGroup = null,
+        allocator: ?Allocator = null,
 
         fn toRef(self: *Element) Reference {
             return .{
                 .constants = &self.constants,
                 .state = &self.state,
             };
+        }
+
+        fn destroy(self: *Element, allocator: Allocator) void {
+            self.constants.deinit(allocator);
+            self.state.deinit(allocator);
+            allocator.destroy(self);
+        }
+
+        fn runDestroy(task: *ThreadPool.Task) void {
+            const zone = tracy.Zone.init(@src(), .{ .name = "SlotTracker.Element.destroy" });
+            defer zone.deinit();
+
+            const self: *Element = @alignCast(@fieldParentPtr("destroy_task", task));
+            const wg = self.pruned_wg.?; // read it out of self, as this will destroy(self)
+            defer wg.finish();
+
+            const allocator = self.allocator.?;
+            self.destroy(allocator);
         }
     };
 
@@ -42,16 +92,25 @@ pub const SlotTracker = struct {
         state: *SlotState,
     };
 
+    pub fn initEmpty(allocator: Allocator, root_slot: Slot) !SlotTracker {
+        const wg = try allocator.create(std.Thread.WaitGroup);
+        wg.* = .{};
+        return .{
+            .root = .init(root_slot),
+            .slots = .empty,
+            .latest_processed_slot = .{},
+            .latest_confirmed_slot = .{},
+            .wg = wg,
+        };
+    }
+
     pub fn init(
         allocator: std.mem.Allocator,
         root_slot: Slot,
         /// ownership is transferred to this function, except in the case of an error return
         slot_init: Element,
     ) std.mem.Allocator.Error!SlotTracker {
-        var self: SlotTracker = .{
-            .root = root_slot,
-            .slots = .empty,
-        };
+        var self: SlotTracker = try .initEmpty(allocator, root_slot);
         errdefer self.deinit(allocator);
 
         try self.put(allocator, root_slot, slot_init);
@@ -61,12 +120,11 @@ pub const SlotTracker = struct {
     }
 
     pub fn deinit(self: SlotTracker, allocator: Allocator) void {
+        self.wg.wait();
+        allocator.destroy(self.wg);
+
         var slots = self.slots;
-        for (slots.values()) |element| {
-            element.constants.deinit(allocator);
-            element.state.deinit(allocator);
-            allocator.destroy(element);
-        }
+        for (slots.values()) |element| element.destroy(allocator);
         slots.deinit(allocator);
     }
 
@@ -87,6 +145,14 @@ pub const SlotTracker = struct {
     pub fn get(self: *const SlotTracker, slot: Slot) ?Reference {
         const elem = self.slots.get(slot) orelse return null;
         return elem.toRef();
+    }
+
+    pub fn getSlotForCommitment(self: *const SlotTracker, commitment: Commitment) Slot {
+        return switch (commitment) {
+            .processed => self.latest_processed_slot.get(),
+            .confirmed => self.latest_confirmed_slot.get(),
+            .finalized => self.root.load(.monotonic),
+        };
     }
 
     pub const GetOrPutResult = struct {
@@ -117,7 +183,7 @@ pub const SlotTracker = struct {
     }
 
     pub fn getRoot(self: *const SlotTracker) Reference {
-        return self.get(self.root).?; // root slot's bank must exist
+        return self.get(self.root.load(.monotonic)).?; // root slot's bank must exist
     }
 
     pub fn contains(self: *const SlotTracker, slot: Slot) bool {
@@ -129,6 +195,8 @@ pub const SlotTracker = struct {
         allocator: Allocator,
     ) Allocator.Error![]const Slot {
         var list = try std.ArrayListUnmanaged(Slot).initCapacity(allocator, self.slots.count());
+        errdefer list.deinit(allocator);
+
         for (self.slots.keys(), self.slots.values()) |slot, value| {
             if (!value.state.isFrozen()) {
                 list.appendAssumeCapacity(slot);
@@ -183,22 +251,39 @@ pub const SlotTracker = struct {
     /// Analogous to [prune_non_rooted](https://github.com/anza-xyz/agave/blob/441258229dfed75e45be8f99c77865f18886d4ba/runtime/src/bank_forks.rs#L591)
     //  TODO Revisit: Currently this removes all slots less than the rooted slot.
     // In Agave, only the slots not in the root path are removed.
-    pub fn pruneNonRooted(self: *SlotTracker, allocator: Allocator) void {
+    pub fn pruneNonRooted(
+        self: *SlotTracker,
+        allocator: Allocator,
+        maybe_thread_pool: ?*ThreadPool,
+    ) void {
         const zone = tracy.Zone.init(@src(), .{ .name = "SlotTracker.pruneNonRooted" });
         defer zone.deinit();
 
         defer tracy.plot(u32, "slots tracked", @intCast(self.slots.count()));
 
+        var destroy_batch = ThreadPool.Batch{};
+        defer if (maybe_thread_pool) |thread_pool| {
+            self.wg.startMany(destroy_batch.len);
+            thread_pool.schedule(destroy_batch);
+        };
+
         var slice = self.slots.entries.slice();
         var index: usize = 0;
+        const root = self.root.load(.monotonic);
         while (index < slice.len) {
-            if (slice.items(.key)[index] < self.root) {
+            if (slice.items(.key)[index] < root) {
                 const element = slice.items(.value)[index];
-                element.state.deinit(allocator);
-                element.constants.deinit(allocator);
-                allocator.destroy(element);
                 self.slots.swapRemoveAt(index);
                 slice = self.slots.entries.slice();
+
+                // Destroy element inline, or destroy in ThreadPool if provided.
+                if (maybe_thread_pool) |_| {
+                    element.pruned_wg = self.wg;
+                    element.allocator = allocator;
+                    destroy_batch.push(.from(&element.destroy_task));
+                } else {
+                    element.destroy(allocator);
+                }
             } else {
                 index += 1;
             }
@@ -214,6 +299,16 @@ pub const SlotTree = struct {
 
     const List = std.ArrayListUnmanaged;
     const min_age = 32;
+
+    /// Returns the highest slot among all fork tips (leaves).
+    /// In bypass mode (without ForkChoice), this represents the "processed" slot.
+    pub fn tip(self: *const SlotTree) Slot {
+        var max_slot: Slot = self.root.slot;
+        for (self.leaves.items) |leaf| {
+            max_slot = @max(max_slot, leaf.slot);
+        }
+        return max_slot;
+    }
 
     pub fn deinit(const_self: SlotTree, allocator: Allocator) void {
         var self = const_self;
@@ -428,45 +523,6 @@ pub const SlotTree = struct {
     };
 };
 
-pub const EpochTracker = struct {
-    epochs: std.AutoArrayHashMapUnmanaged(Epoch, EpochConstants) = .empty,
-    schedule: EpochSchedule,
-
-    pub fn deinit(self: EpochTracker, allocator: Allocator) void {
-        var epochs = self.epochs;
-        for (epochs.values()) |ec| ec.deinit(allocator);
-        epochs.deinit(allocator);
-    }
-
-    pub fn get(self: *const EpochTracker, epoch: Epoch) ?EpochConstants {
-        return self.epochs.get(epoch);
-    }
-
-    pub fn getForSlot(self: *const EpochTracker, slot: Slot) ?EpochConstants {
-        return self.epochs.get(self.schedule.getEpoch(slot));
-    }
-
-    /// lifetime ends as soon as the map is modified
-    pub fn getPtrForSlot(self: *const EpochTracker, slot: Slot) ?*const EpochConstants {
-        return self.epochs.getPtr(self.schedule.getEpoch(slot));
-    }
-
-    // lifetime ends as soon as the map is modified
-    pub fn getMutablePtrForSlot(self: *EpochTracker, slot: Slot) ?*EpochConstants {
-        return self.epochs.getPtr(self.schedule.getEpoch(slot));
-    }
-
-    pub fn put(
-        self: *EpochTracker,
-        allocator: Allocator,
-        epoch: Epoch,
-        epoch_constants: EpochConstants,
-    ) Allocator.Error!void {
-        try self.epochs.ensureUnusedCapacity(allocator, 1);
-        self.epochs.putAssumeCapacity(epoch, epoch_constants);
-    }
-};
-
 fn testDummySlotConstants(slot: Slot) SlotConstants {
     return .{
         .parent_slot = slot - 1,
@@ -480,36 +536,50 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .empty,
         .inflation = .DEFAULT,
+        .rent_collector = .DEFAULT,
     };
 }
 
 test "SlotTracker.prune removes all slots less than root" {
     const allocator = std.testing.allocator;
     const root_slot: Slot = 4;
-    var tracker: SlotTracker = try .init(allocator, root_slot, .{
-        .constants = testDummySlotConstants(root_slot),
-        .state = .GENESIS,
-    });
-    defer tracker.deinit(allocator);
 
-    // Add slots 1, 2, 3, 4, 5
-    for (1..6) |slot| {
-        const gop = try tracker.getOrPut(allocator, slot, .{
-            .constants = testDummySlotConstants(slot),
-            .state = .GENESIS,
-        });
-        if (gop.found_existing) std.debug.assert(slot == root_slot);
+    var pool = ThreadPool.init(.{ .max_threads = 1 });
+    defer {
+        pool.shutdown();
+        pool.deinit();
     }
 
-    // Prune slots less than root (4)
-    tracker.pruneNonRooted(allocator);
+    for ([_]?*ThreadPool{ null, &pool }) |maybe_thread_pool| {
+        var tracker: SlotTracker = try .init(allocator, root_slot, .{
+            .constants = testDummySlotConstants(root_slot),
+            .state = .GENESIS,
+        });
+        defer tracker.deinit(allocator);
 
-    // Only slots 4 and 5 should remain
-    try std.testing.expect(tracker.contains(4));
-    try std.testing.expect(tracker.contains(5));
-    try std.testing.expect(!tracker.contains(1));
-    try std.testing.expect(!tracker.contains(2));
-    try std.testing.expect(!tracker.contains(3));
+        // Add slots 1, 2, 3, 4, 5
+        for (1..6) |slot| {
+            const gop = try tracker.getOrPut(allocator, slot, .{
+                .constants = testDummySlotConstants(slot),
+                .state = .GENESIS,
+            });
+            if (gop.found_existing) std.debug.assert(slot == root_slot);
+        }
+
+        // Prune slots less than root (4)
+        tracker.pruneNonRooted(allocator, maybe_thread_pool);
+
+        // Only slots 4 and 5 should remain
+        try std.testing.expect(tracker.contains(4));
+        try std.testing.expect(tracker.contains(5));
+        try std.testing.expect(!tracker.contains(1));
+        try std.testing.expect(!tracker.contains(2));
+        try std.testing.expect(!tracker.contains(3));
+
+        try std.testing.expectEqual(0, tracker.getSlotForCommitment(Commitment.processed));
+        try std.testing.expectEqual(0, tracker.getSlotForCommitment(Commitment.confirmed));
+        try std.testing.expectEqual(4, tracker.getSlotForCommitment(Commitment.finalized));
+    }
 }
 
 test "SlotTree: if no forks, root follows 32 behind latest" {

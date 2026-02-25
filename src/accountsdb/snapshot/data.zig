@@ -509,12 +509,13 @@ pub const Manifest = struct {
         allocator: std.mem.Allocator,
         file: std.fs.File,
     ) !Manifest {
-        const size = (try file.stat()).size;
-        const contents = try file.readToEndAllocOptions(allocator, size, size, @alignOf(u8), null);
+        const stat = try file.stat();
+        const size = stat.size;
+        const contents = try file.readToEndAllocOptions(allocator, size, size, .@"1", null);
         defer allocator.free(contents);
 
         var fbs = std.io.fixedBufferStream(contents);
-        return try decodeFromBincode(allocator, fbs.reader());
+        return bincode.read(allocator, Manifest, fbs.reader(), .{ .allocation_limit = 2 << 30 });
     }
 
     pub fn decodeFromBincode(
@@ -553,25 +554,6 @@ pub const Manifest = struct {
             &es.current.stakes.vote_accounts.vote_accounts
         else
             return error.NoEpochStakes;
-    }
-
-    /// Returns the leader schedule for an arbitrary epoch.
-    /// Only works if the bank is aware of the staked nodes for that epoch.
-    pub fn leaderSchedule(
-        self: *const Manifest,
-        allocator: std.mem.Allocator,
-        /// Default is the bank's epoch.
-        custom_epoch: ?Epoch,
-    ) !sig.core.leader_schedule.LeaderSchedule {
-        const epoch = custom_epoch orelse self.bank_fields.epoch;
-        const slots_in_epoch =
-            self.bank_fields.epoch_schedule.getSlotsInEpoch(self.bank_fields.epoch);
-        const staked_nodes = try self.epochStakes(epoch);
-        return .{
-            .allocator = allocator,
-            .slot_leaders = try sig.core.leader_schedule.LeaderSchedule
-                .fromStakedNodes(allocator, epoch, slots_in_epoch, staked_nodes),
-        };
     }
 };
 
@@ -736,7 +718,7 @@ pub const StatusCache = struct {
     }
 
     pub fn readFromFile(allocator: std.mem.Allocator, file: std.fs.File) !StatusCache {
-        return decodeFromBincode(allocator, file.reader());
+        return decodeFromBincode(allocator, file.deprecatedReader());
     }
 
     pub fn decodeFromBincode(
@@ -824,10 +806,12 @@ pub const FullSnapshotFileInfo = struct {
 
     pub fn snapshotArchiveName(self: FullSnapshotFileInfo) SnapshotArchiveNameStr {
         const b58_str = self.hash.base58String();
-        return SnapshotArchiveNameFmtSpec.fmt(.{
-            .slot = self.slot,
-            .hash = sig.utils.fmt.boundedString(&b58_str),
-        });
+        var out: SnapshotArchiveNameStr = .{};
+        std.fmt.format(out.writer(), "snapshot-{d}-{s}.tar.zst", .{
+            self.slot,
+            b58_str.constSlice(),
+        }) catch unreachable;
+        return out;
     }
 
     pub const ParseFileNameTarZstError = ParseFileBaseNameError || error{
@@ -956,12 +940,13 @@ pub const IncrementalSnapshotFileInfo = struct {
 
     pub fn snapshotArchiveName(self: IncrementalSnapshotFileInfo) SnapshotArchiveNameStr {
         const b58_str = self.hash.base58String();
-
-        return SnapshotArchiveNameFmtSpec.fmt(.{
-            .base_slot = self.base_slot,
-            .slot = self.slot,
-            .hash = sig.utils.fmt.boundedString(&b58_str),
-        });
+        var out: SnapshotArchiveNameStr = .{};
+        std.fmt.format(out.writer(), "incremental-snapshot-{d}-{d}-{s}.tar.zst", .{
+            self.base_slot,
+            self.slot,
+            b58_str.constSlice(),
+        }) catch unreachable;
+        return out;
     }
 
     pub const ParseFileNameTarZstError = ParseFileBaseNameError || error{
@@ -1133,7 +1118,7 @@ pub const SnapshotFiles = struct {
 
         var dir_iter = search_dir.iterate();
         while (try dir_iter.next()) |dir_entry| {
-            if (dir_entry.kind != .file) continue;
+            if (dir_entry.kind != .file and dir_entry.kind != .sym_link) continue;
             const filename = dir_entry.name;
 
             if (IncrementalSnapshotFileInfo.parseFileNameTarZst(filename)) |_incremental| {
@@ -1215,7 +1200,7 @@ pub const FullAndIncrementalManifest = struct {
             const rel_path = rel_path_bounded.constSlice();
 
             logger.info().logf(
-                "reading *full* snapshot fields from: {s}",
+                "reading *full* snapshot fields from: {f}",
                 .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)},
             );
 
@@ -1233,7 +1218,7 @@ pub const FullAndIncrementalManifest = struct {
             );
             const rel_path = rel_path_bounded.constSlice();
             logger.info().logf(
-                "reading *incremental* snapshot fields from: {s}",
+                "reading *incremental* snapshot fields from: {f}",
                 .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)},
             );
 

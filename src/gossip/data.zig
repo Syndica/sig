@@ -4,7 +4,7 @@ const sig = @import("../sig.zig");
 const testing = std.testing;
 const bincode = sig.bincode;
 
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const SocketAddr = sig.net.SocketAddr;
 const Hash = sig.core.Hash;
@@ -236,7 +236,10 @@ pub const GossipData = union(GossipDataTag) {
     LegacyVersion: LegacyVersion,
     Version: Version,
     NodeInstance: NodeInstance,
-    DuplicateShred: struct { u16, DuplicateShred },
+    DuplicateShred: struct {
+        u16, // shred index
+        DuplicateShred,
+    },
     SnapshotHashes: SnapshotHashes,
     ContactInfo: ContactInfo,
     // https://github.com/anza-xyz/agave/commit/0a3810854fa4a11b0841c548dcbc0ada311b8830
@@ -1037,28 +1040,7 @@ pub const NodeInstance = struct {
     }
 };
 
-fn ShredTypeConfig() bincode.FieldConfig(ShredType) {
-    const S = struct {
-        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
-            try bincode.write(writer, @intFromEnum(data), params);
-            return;
-        }
-    };
-
-    return bincode.FieldConfig(ShredType){
-        .serializer = S.serialize,
-    };
-}
-
-pub const ShredType = enum(u8) {
-    Data = 0b1010_0101,
-    Code = 0b0101_1010,
-
-    pub const BincodeSize = u8;
-
-    /// Enables bincode serializer to serialize this data into a single byte instead of 4.
-    pub const @"!bincode-config" = ShredTypeConfig();
-};
+pub const ShredType = sig.ledger.shred.ShredType;
 
 pub const DuplicateShred = struct {
     from: Pubkey,
@@ -1069,7 +1051,7 @@ pub const DuplicateShred = struct {
     // Serialized DuplicateSlotProof split into chunks.
     num_chunks: u8,
     chunk_index: u8,
-    chunk: []u8,
+    chunk: []const u8,
 
     pub fn clone(self: *const DuplicateShred, allocator: std.mem.Allocator) error{OutOfMemory}!DuplicateShred {
         return .{
@@ -1094,12 +1076,12 @@ pub const DuplicateShred = struct {
         const num_chunks = random.intRangeAtMost(u8, 5, 100);
         const chunk_index = random.intRangeAtMost(u8, 0, num_chunks - 1);
 
-        return DuplicateShred{
-            .from = Pubkey.initRandom(random),
+        return .{
+            .from = .initRandom(random),
             .wallclock = getWallclockMs(),
             .slot = random.int(u64),
             .shred_index = random.int(u32),
-            .shred_type = ShredType.Data,
+            .shred_type = .data,
             .num_chunks = num_chunks,
             .chunk_index = chunk_index,
             .chunk = &slice,
@@ -1500,20 +1482,22 @@ pub const ThreadSafeContactInfo = struct {
     tpu_addr: ?SocketAddr,
     tvu_addr: ?SocketAddr,
     tpu_quic_addr: ?SocketAddr,
+    tpu_vote_addr: ?SocketAddr,
 
     pub fn initRandom(
         random: std.Random,
         pubkey: Pubkey,
         shred_version: u16,
-    ) !ThreadSafeContactInfo {
+    ) ThreadSafeContactInfo {
         return .{
             .pubkey = pubkey,
             .shred_version = shred_version,
-            .gossip_addr = SocketAddr.initRandom(random),
-            .rpc_addr = SocketAddr.initRandom(random),
-            .tpu_addr = SocketAddr.initRandom(random),
-            .tvu_addr = SocketAddr.initRandom(random),
-            .tpu_quic_addr = SocketAddr.initRandom(random),
+            .gossip_addr = .initRandom(random),
+            .rpc_addr = .initRandom(random),
+            .tpu_addr = .initRandom(random),
+            .tvu_addr = .initRandom(random),
+            .tpu_quic_addr = .initRandom(random),
+            .tpu_vote_addr = .initRandom(random),
         };
     }
 
@@ -1526,6 +1510,7 @@ pub const ThreadSafeContactInfo = struct {
             .tpu_addr = contact_info.getSocket(.tpu),
             .tvu_addr = contact_info.getSocket(.turbine_recv),
             .tpu_quic_addr = contact_info.getSocket(.tpu_quic),
+            .tpu_vote_addr = contact_info.getSocket(.tpu_vote),
         };
     }
 
@@ -1538,6 +1523,7 @@ pub const ThreadSafeContactInfo = struct {
             .tpu_addr = legacy_contact_info.tpu,
             .tvu_addr = legacy_contact_info.turbine_recv,
             .tpu_quic_addr = null,
+            .tpu_vote_addr = legacy_contact_info.tpu_vote,
         };
     }
 };
@@ -1612,7 +1598,7 @@ pub const RestartLastVotedForkSlots = struct {
 };
 
 pub const SlotsOffsets = union(enum(u32)) {
-    RunLengthEncoding: std.ArrayList(u16),
+    RunLengthEncoding: std.array_list.Managed(u16),
     RawOffsets: RawOffsets,
 
     pub fn clone(self: *const SlotsOffsets, allocator: std.mem.Allocator) error{OutOfMemory}!SlotsOffsets {
@@ -1799,7 +1785,7 @@ test "contact info bincode serialize matches rust bincode" {
     }
 
     // Check that the serialized bytes match the rust serialized bytes
-    var buf = std.ArrayList(u8).init(testing.allocator);
+    var buf = std.array_list.Managed(u8).init(testing.allocator);
     bincode.write(buf.writer(), sig_contact_info, bincode.Params.standard) catch unreachable;
     defer buf.deinit();
     try testing.expect(std.mem.eql(u8, &rust_contact_info_serialized_bytes, buf.items));
@@ -1832,7 +1818,7 @@ test "ContactInfo bincode roundtrip maintains data integrity" {
     const ci2 = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
     defer ci2.deinit();
 
-    var buf = std.ArrayList(u8).init(testing.allocator);
+    var buf = std.array_list.Managed(u8).init(testing.allocator);
     bincode.write(buf.writer(), ci2, bincode.Params.standard) catch unreachable;
     defer buf.deinit();
 
@@ -1845,7 +1831,7 @@ test "SocketEntry serializer works" {
     comptime std.debug.assert(@intFromEnum(SocketTag.rpc_pubsub) == 3);
     const se: SocketEntry = .{ .key = .rpc_pubsub, .index = 3, .offset = 30304 };
 
-    var buf = std.ArrayList(u8).init(testing.allocator);
+    var buf = std.array_list.Managed(u8).init(testing.allocator);
     defer buf.deinit();
     try bincode.write(buf.writer(), se, bincode.Params.standard);
 

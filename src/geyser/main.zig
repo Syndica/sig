@@ -129,8 +129,8 @@ pub fn main() !void {
     const cmd = try parser.parse(
         gpa,
         "geyser",
-        std.io.tty.detectConfig(std.io.getStdOut()),
-        std.io.getStdOut().writer(),
+        std.io.tty.detectConfig(.stdout()),
+        std.fs.File.stdout().deprecatedWriter(),
         argv[1..],
     ) orelse return;
     defer parser.free(gpa, cmd);
@@ -197,12 +197,12 @@ pub fn csvDump(allocator: std.mem.Allocator, config: Cmd.Csv) !void {
     // owner filters
     var owner_pubkeys = try getOwnerFilters(allocator, config.owner_accounts);
     defer owner_pubkeys.deinit(allocator);
-    logger.info().logf("owner filters: {s}", .{owner_pubkeys.keys()});
+    logger.info().logf("owner filters: {any}", .{owner_pubkeys.keys()});
 
     // account filters
     var account_pubkeys = try getAccountFilters(allocator, config.accounts);
     defer account_pubkeys.deinit(allocator);
-    logger.info().logf("account filters: {s}", .{account_pubkeys.keys()});
+    logger.info().logf("account filters: {any}", .{account_pubkeys.keys()});
 
     // csv file to dump to
     const dump_csv_path = sig.VALIDATOR_DIR ++ "accounts.csv";
@@ -284,7 +284,7 @@ pub fn csvDump(allocator: std.mem.Allocator, config: Cmd.Csv) !void {
             // build the csv row
             const x = try std.fmt.bufPrint(
                 csv_string[offset..],
-                "{d};{s};{s};{any}\n",
+                "{d};{f};{f};{any}\n",
                 .{ account_payload.slot, pubkey, account.owner, account.data },
             );
             offset += x.len;

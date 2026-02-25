@@ -6,7 +6,7 @@ const tracy = @import("tracy");
 const bincode = sig.bincode;
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.Random;
@@ -659,7 +659,7 @@ test "RepairService sends repair request to gossip peer" {
     );
 
     var tracker: BasicShredTracker = undefined;
-    try tracker.init(std.testing.allocator, 13579, .noop, &registry);
+    try tracker.init(std.testing.allocator, 13579, .noop, &registry, false);
     defer tracker.deinit();
 
     var service: RepairService = blk: {

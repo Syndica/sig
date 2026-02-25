@@ -14,7 +14,7 @@ const Pubkey = sig.core.Pubkey;
 const UnixTimestamp = sig.core.UnixTimestamp;
 const Rent = sig.runtime.sysvar.Rent;
 
-pub const String = std.ArrayList(u8);
+pub const String = std.array_list.Managed(u8);
 
 pub const RustDuration = struct {
     secs: u64,
@@ -250,17 +250,51 @@ pub const Inflation = struct {
     }
 };
 
-/// Analogous to [ClusterType](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/genesis_config.rs#L46)
+/// Analogous to [ClusterType](https://github.com/anza-xyz/solana-sdk/blob/a467058aabc453c7d749a4993c56df293d1d75c3/cluster-type/src/lib.rs#L19)
 /// Explicit numbers are added to ensure we don't mess up the order of the fields and break bincode reading.
-pub const ClusterType = union(enum(u8)) {
-    Testnet = 0,
-    MainnetBeta = 1,
-    Devnet = 2,
-    Development = 3,
-    LocalHost,
-    Custom: struct {
-        url: []const u8,
-    },
+pub const ClusterType = enum(u8) {
+    testnet = 0,
+    mainnet = 1,
+    devnet = 2,
+    development = 3,
+
+    /// Returns entrypoints for public clusters, null for development.
+    /// For development this returns an empty list, because the caller
+    /// must provide entrypoints manually.
+    pub fn getEntrypoints(self: ClusterType) []const []const u8 {
+        return switch (self) {
+            .mainnet => &.{
+                "entrypoint.mainnet-beta.solana.com:8001",
+                "entrypoint2.mainnet-beta.solana.com:8001",
+                "entrypoint3.mainnet-beta.solana.com:8001",
+                "entrypoint4.mainnet-beta.solana.com:8001",
+                "entrypoint5.mainnet-beta.solana.com:8001",
+            },
+            .testnet => &.{
+                "entrypoint.testnet.solana.com:8001",
+                "entrypoint2.testnet.solana.com:8001",
+                "entrypoint3.testnet.solana.com:8001",
+            },
+            .devnet => &.{
+                "entrypoint.devnet.solana.com:8001",
+                "entrypoint2.devnet.solana.com:8001",
+                "entrypoint3.devnet.solana.com:8001",
+                "entrypoint4.devnet.solana.com:8001",
+                "entrypoint5.devnet.solana.com:8001",
+            },
+            .development => &.{},
+        };
+    }
+
+    /// Returns the RPC URL for this cluster.
+    pub fn getRpcUrl(self: ClusterType) ?[]const u8 {
+        return switch (self) {
+            .mainnet => "https://api.mainnet-beta.solana.com",
+            .testnet => "https://api.testnet.solana.com",
+            .devnet => "https://api.devnet.solana.com",
+            .development => null,
+        };
+    }
 };
 
 /// Analogous to [GenesisConfig](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/genesis_config.rs#L93)
@@ -270,7 +304,7 @@ pub const GenesisConfig = struct {
     // initial accounts
     accounts: AutoHashMap(Pubkey, Account),
     // /// built-in programs
-    native_instruction_processors: std.ArrayList(struct { String, Pubkey }),
+    native_instruction_processors: std.array_list.Managed(struct { String, Pubkey }),
     /// accounts for network rewards, these do not count towards capitalization
     rewards_pools: AutoHashMap(Pubkey, Account),
     ticks_per_slot: u64,
@@ -290,12 +324,28 @@ pub const GenesisConfig = struct {
     epoch_schedule: EpochSchedule,
     /// network runlevel
     cluster_type: ClusterType,
+    /// hash of the serialized genesis config, computed after deserialization
+    hash: sig.core.Hash = sig.core.Hash.ZEROES,
+
+    pub const @"!bincode-config:hash" = bincode.FieldConfig(sig.core.Hash){ .skip = true };
 
     pub fn init(allocator: Allocator, genesis_path: []const u8) !GenesisConfig {
-        var file = try std.fs.cwd().openFile(genesis_path, .{});
+        const file = try std.fs.cwd().openFile(genesis_path, .{});
         defer file.close();
 
-        return try bincode.read(allocator, GenesisConfig, file.reader(), .{});
+        // Read the entire file to compute hash from raw bytes
+        const file_bytes = try file.readToEndAlloc(allocator, 100 * 1024 * 1024); // 100 MB max
+        defer allocator.free(file_bytes);
+
+        // Compute hash from original file bytes
+        // [agave] https://github.com/anza-xyz/solana-sdk/blob/f2d15de6f7a1715ff806f0c39bba8f64bf6a587d/genesis-config/src/lib.rs#L144
+        var hash_bytes: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(file_bytes, &hash_bytes, .{});
+
+        // Parse the genesis config from the bytes
+        var config = try bincode.readFromSlice(allocator, GenesisConfig, file_bytes, .{});
+        config.hash.data = hash_bytes;
+        return config;
     }
 
     pub fn default(allocator: Allocator) GenesisConfig {
@@ -312,7 +362,7 @@ pub const GenesisConfig = struct {
             .fee_rate_governor = .DEFAULT,
             .rent = .INIT,
             .epoch_schedule = .INIT,
-            .cluster_type = .Development,
+            .cluster_type = .development,
         };
     }
 
@@ -352,7 +402,7 @@ test "genesis_config deserialize development config" {
     const config = try GenesisConfig.init(allocator, genesis_path);
     defer config.deinit(allocator);
 
-    try std.testing.expectEqual(ClusterType.Development, config.cluster_type);
+    try std.testing.expectEqual(ClusterType.development, config.cluster_type);
 }
 
 test "genesis_config deserialize testnet config" {
@@ -362,7 +412,11 @@ test "genesis_config deserialize testnet config" {
     const config = try GenesisConfig.init(allocator, genesis_path);
     defer config.deinit(allocator);
 
-    try std.testing.expectEqual(ClusterType.Testnet, config.cluster_type);
+    try std.testing.expectEqual(ClusterType.testnet, config.cluster_type);
+    try std.testing.expectEqualStrings(
+        "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY",
+        config.hash.base58String().constSlice(),
+    );
 }
 
 test "genesis_config deserialize devnet config" {
@@ -372,7 +426,11 @@ test "genesis_config deserialize devnet config" {
     const config = try GenesisConfig.init(allocator, genesis_path);
     defer config.deinit(allocator);
 
-    try std.testing.expectEqual(ClusterType.Devnet, config.cluster_type);
+    try std.testing.expectEqual(ClusterType.devnet, config.cluster_type);
+    try std.testing.expectEqualStrings(
+        "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+        config.hash.base58String().constSlice(),
+    );
 }
 
 test "genesis_config deserialize mainnet config" {
@@ -382,7 +440,11 @@ test "genesis_config deserialize mainnet config" {
     const config = try GenesisConfig.init(allocator, genesis_path);
     defer config.deinit(allocator);
 
-    try std.testing.expectEqual(ClusterType.MainnetBeta, config.cluster_type);
+    try std.testing.expectEqual(ClusterType.mainnet, config.cluster_type);
+    try std.testing.expectEqualStrings(
+        "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+        config.hash.base58String().constSlice(),
+    );
 }
 
 test "inflation" {

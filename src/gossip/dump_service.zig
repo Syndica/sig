@@ -71,11 +71,11 @@ pub const GossipDumpService = struct {
                 const encoded = encoded_buf[0..encoded_len];
 
                 try writer.print(
-                    "{s},{s},{s},{},",
+                    "{s},{f},{s},{},",
                     .{ @tagName(val.data), val.id(), encoded, val.wallclock() },
                 );
                 if (val.data.gossipAddr()) |addr| {
-                    try addr.toAddress().format("", .{}, writer);
+                    try writer.print("{f}", .{addr.toAddress()});
                 }
                 try writer.writeAll(",");
                 if (val.data.shredVersion()) |shred| {

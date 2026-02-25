@@ -322,8 +322,8 @@ pub fn RecycleFBA(config: struct {
         bytes_allocator: Allocator,
         // this does the data allocations (data is returned from alloc)
         fba_allocator: std.heap.FixedBufferAllocator,
-        // recycling depot
-        records: std.ArrayList(Record),
+        // recycling depot (uses Managed ArrayList which stores allocator)
+        records: std.array_list.Managed(Record),
         // for thread safety
         mux: std.Thread.Mutex = .{},
 
@@ -339,7 +339,7 @@ pub fn RecycleFBA(config: struct {
         pub fn init(allocator_config: AllocatorConfig, n_bytes: u64) !Self {
             const buf = try allocator_config.bytes_allocator.alloc(u8, n_bytes);
             const fba_allocator = std.heap.FixedBufferAllocator.init(buf);
-            const records = std.ArrayList(Record).init(allocator_config.records_allocator);
+            const records = std.array_list.Managed(Record).init(allocator_config.records_allocator);
 
             return .{
                 .bytes_allocator = allocator_config.bytes_allocator,
@@ -519,7 +519,7 @@ pub fn RecycleFBA(config: struct {
 
         /// collapses adjacent free records into a single record
         pub fn tryCollapse(self: *Self) void {
-            var new_records = std.ArrayList(Record).init(self.bytes_allocator);
+            var new_records = std.array_list.Managed(Record).init(self.bytes_allocator);
             var last_was_free = false;
 
             for (self.records.items) |record| {
@@ -551,9 +551,9 @@ pub const BatchAllocator = struct {
     backing_allocator: Allocator,
     batch_size: usize,
     last_batch: Atomic(?*Batch) = Atomic(?*Batch).init(null),
-    new_batch_lock: std.Thread.RwLock = .{},
+    new_batch_lock: sig.sync.RwLock = .{},
     new_batch_waiters: Atomic(usize) = Atomic(usize).init(0),
-    new_batch_wait_lock: std.Thread.RwLock = .{},
+    new_batch_wait_lock: sig.sync.RwLock = .{},
 
     const Self = @This();
 
@@ -691,7 +691,7 @@ pub const BatchAllocator = struct {
         // create new batch
         const batch_bytes = self.backing_allocator
             .rawAlloc(batch_size, .fromByteUnits(@alignOf(Batch)), ret_addr) orelse return null;
-        const new_batch: *Batch = @alignCast(@ptrCast(batch_bytes));
+        const new_batch: *Batch = @ptrCast(@alignCast(batch_bytes));
         new_batch.* = Batch{
             .fba = FixedBufferAllocator.init(batch_bytes[@sizeOf(Batch)..batch_size]),
             .num_allocs = Atomic(usize).init(1),
@@ -943,7 +943,7 @@ pub const DiskMemoryAllocator = struct {
     }
 
     fn logFailure(self: Self, err: anyerror, file_name: []const u8) void {
-        self.logger.err().logf("Disk Memory Allocator error: {s}, filepath: {s}", .{
+        self.logger.err().logf("Disk Memory Allocator error: {s}, filepath: {f}", .{
             @errorName(err), sig.utils.fmt.tryRealPath(self.dir, file_name),
         });
     }
@@ -1076,7 +1076,7 @@ test "recycle buffer: freeUnused" {
     const bytes2 = try allocator.alloc(50);
     defer allocator.free(bytes2.ptr);
 
-    const expected_ptr: [*]X = @alignCast(@ptrCast(&bytes[50]));
+    const expected_ptr: [*]X = @ptrCast(@alignCast(&bytes[50]));
     try std.testing.expectEqual(expected_ptr, bytes2.ptr);
 }
 
@@ -1202,7 +1202,7 @@ test "disk allocator on arraylists" {
             tmp_dir.access("bin_0", .{}),
         ); // this should not exist
 
-        var disk_account_refs = try std.ArrayList(u8).initCapacity(dma, 1);
+        var disk_account_refs = try std.array_list.Managed(u8).initCapacity(dma, 1);
         defer disk_account_refs.deinit();
 
         disk_account_refs.appendAssumeCapacity(19);
@@ -1433,7 +1433,7 @@ fn fuzzAllocator(
     subject: Allocator,
 ) Allocator.Error!void {
     // all existing allocations from the allocator
-    var allocations = std.ArrayList(struct { usize, []u8 }).init(params.allocator);
+    var allocations = std.array_list.Managed(struct { usize, []u8 }).init(params.allocator);
     defer {
         for (allocations.items) |pair| {
             const item_id, const item = pair;

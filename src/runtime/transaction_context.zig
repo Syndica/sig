@@ -1,5 +1,6 @@
 const std = @import("std");
 const tracy = @import("tracy");
+const std14 = @import("std14");
 const sig = @import("../sig.zig");
 
 const program = sig.runtime.program;
@@ -34,6 +35,8 @@ pub const MAX_INSTRUCTION_STACK_DEPTH = 5;
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L192
 pub const TransactionContext = struct {
     allocator: std.mem.Allocator,
+    /// Allocator for ProgramMap entries that must outlive the transaction's arena.
+    programs_allocator: std.mem.Allocator,
 
     /// The slot number this transaction is being executed in. Used for feature gate activations.
     slot: sig.core.Slot,
@@ -59,7 +62,7 @@ pub const TransactionContext = struct {
     accounts: []TransactionContextAccount,
 
     /// Used by CPI to access serialized account metadata.
-    serialized_accounts: std.BoundedArray(
+    serialized_accounts: std14.BoundedArray(
         SerializedAccountMetadata,
         InstructionInfo.MAX_ACCOUNT_METAS,
     ) = .{},
@@ -97,12 +100,12 @@ pub const TransactionContext = struct {
     prev_blockhash: Hash,
     prev_lamports_per_signature: u64,
 
-    pub const InstructionStack = std.BoundedArray(
+    pub const InstructionStack = std14.BoundedArray(
         InstructionContext,
         MAX_INSTRUCTION_STACK_DEPTH,
     );
 
-    pub const InstructionTrace = std.BoundedArray(struct {
+    pub const InstructionTrace = std14.BoundedArray(struct {
         ixn_info: InstructionInfo,
         depth: u8,
     }, MAX_INSTRUCTION_TRACE_LENGTH);
@@ -217,7 +220,7 @@ pub const TransactionContext = struct {
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L493
 pub const TransactionReturnData = struct {
     program_id: Pubkey = Pubkey.ZEROES,
-    data: std.BoundedArray(u8, MAX_RETURN_DATA) = .{},
+    data: std14.BoundedArray(u8, MAX_RETURN_DATA) = .{},
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/95764e268fe33a19819e6f9f411ff9e732cbdf0d/cpi/src/lib.rs#L329
     pub const MAX_RETURN_DATA: usize = 1024;

@@ -51,7 +51,7 @@ pub const HttpPostFetcher = struct {
         allocator: std.mem.Allocator,
         request: []const u8,
     ) Error![]const u8 {
-        var response = std.ArrayList(u8).init(allocator);
+        var response = std.array_list.Managed(u8).init(allocator);
         errdefer response.deinit();
 
         var last_error: ?Error = null;
@@ -87,9 +87,12 @@ pub const HttpPostFetcher = struct {
     pub fn fetchOnce(
         self: *HttpPostFetcher,
         request_payload: []const u8,
-        response_payload: *std.ArrayList(u8),
+        response_payload: *std.array_list.Managed(u8),
     ) ErrorReturn(std.http.Client.fetch)!std.http.Client.FetchResult {
-        return self.http_client.fetch(.{
+        var buf: [1024]u8 = undefined;
+        var writer = response_payload.writer().adaptToNewApi(&buf);
+
+        const result = try self.http_client.fetch(.{
             .location = .{ .url = self.base_url },
             .method = .POST,
             .headers = .{
@@ -101,9 +104,11 @@ pub const HttpPostFetcher = struct {
                 },
             },
             .payload = request_payload,
-            .response_storage = .{ .dynamic = response_payload },
-            .max_append_size = 100 * 1024 * 1024,
+            .response_writer = &writer.new_interface,
         });
+
+        try writer.new_interface.flush();
+        return result;
     }
 
     fn restartHttpClient(self: *HttpPostFetcher) void {

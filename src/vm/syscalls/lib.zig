@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../../sig.zig");
 
 pub const cpi = @import("cpi.zig");
@@ -57,6 +58,9 @@ pub const Syscall = enum {
     sol_curve_multiscalar_mul,
     sol_alt_bn128_group_op,
     sol_alt_bn128_compression,
+
+    sol_curve_decompress,
+    sol_curve_pairing_map,
 
     sol_get_clock_sysvar,
     sol_get_epoch_schedule_sysvar,
@@ -149,6 +153,9 @@ pub const Syscall = enum {
         .sol_alt_bn128_group_op = ecc.altBn128GroupOp,
         .sol_alt_bn128_compression = ecc.altBn128Compression,
 
+        .sol_curve_decompress = ecc.curveDecompress,
+        .sol_curve_pairing_map = ecc.curvePairingMap,
+
         .sol_get_clock_sysvar = sysvar.getClock,
         .sol_get_epoch_schedule_sysvar = sysvar.getEpochSchedule,
         .sol_get_fees_sysvar = sysvar.getFees,
@@ -192,6 +199,9 @@ pub const Syscall = enum {
         .sol_curve_multiscalar_mul = .{ .feature = .curve25519_syscall_enabled },
         .sol_alt_bn128_group_op = .{ .feature = .enable_alt_bn128_syscall },
         .sol_alt_bn128_compression = .{ .feature = .enable_alt_bn128_compression_syscall },
+
+        .sol_curve_decompress = .{ .feature = .enable_bls12_381_syscall },
+        .sol_curve_pairing_map = .{ .feature = .enable_bls12_381_syscall },
 
         .sol_get_fees_sysvar = .{ .feature = .disable_fees_sysvar, .invert = true },
         .sol_get_last_restart_slot = .{ .feature = .last_restart_slot_sysvar },
@@ -260,7 +270,7 @@ pub fn logPubkey(
     );
     const pubkey: Pubkey = @bitCast(pubkey_bytes[0..@sizeOf(Pubkey)].*);
 
-    try stable_log.programLog(tc, "{}", .{pubkey});
+    try stable_log.programLog(tc, "{f}", .{pubkey});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L58-L80
@@ -714,7 +724,7 @@ fn translateAndCheckProgramAddressInputs(
     seeds_len: u64,
     program_id_addr: u64,
     check_aligned: bool,
-) Error!struct { Pubkey, std.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) } {
+) Error!struct { Pubkey, std14.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) } {
     const untranslated_seeds = try memory_map.translateSlice(
         memory.VmSlice,
         .constant,
@@ -726,7 +736,7 @@ fn translateAndCheckProgramAddressInputs(
         return SyscallError.BadSeeds; // PubkeyError.MaxSeedLengthExceeded
     }
 
-    var seeds: std.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) = .{};
+    var seeds: std14.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) = .{};
     for (untranslated_seeds) |untranslated_seed| {
         if (untranslated_seed.len > pubkey_utils.MAX_SEED_LEN) return SyscallError.BadSeeds;
         seeds.appendAssumeCapacity(try memory_map.translateSlice(
@@ -772,7 +782,7 @@ fn callProgramAddressSyscall(
     var out_address = Pubkey.ZEROES;
 
     // Setup in/out params.
-    var regions = std.ArrayList(memory.Region).init(allocator);
+    var regions = std.array_list.Managed(memory.Region).init(allocator);
     defer regions.deinit();
     try regions.appendSlice(&.{
         memory.Region.init(.constant, std.mem.asBytes(&program_id), program_id_addr),
@@ -781,7 +791,7 @@ fn callProgramAddressSyscall(
     });
 
     // Setup slice of VmSlices
-    var seed_slices = std.ArrayList(memory.VmSlice).init(allocator);
+    var seed_slices = std.array_list.Managed(memory.VmSlice).init(allocator);
     defer seed_slices.deinit();
     for (seeds, 0..) |seed, i| {
         const vm_addr = seed_data_addr +| (i *% 0x100000000);

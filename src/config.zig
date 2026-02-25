@@ -15,9 +15,16 @@ pub const Cmd = struct {
 
     test_transaction_sender: TestTransactionSender = .{},
 
+    validator_dir: []const u8 = sig.VALIDATOR_DIR,
     max_shreds: u64 = 5_000_000,
     leader_schedule_path: ?[]const u8 = null,
-    genesis_file_path: ?[]const u8 = null,
+    /// This is only populated if there is a value provided on the CLI. If you
+    /// need to determine the genesis file path from the configuration, don't
+    /// use this field. Use the `genesisFilePath` method which checks the
+    /// CLI-provided path first before falling back to default based on the
+    /// cluster.
+    cli_provided_genesis_file_path: ?[]const u8 = null,
+    cluster: ?[]const u8 = null,
     // general config
     log_filters: sig.trace.Filters = .debug,
     log_file: ?[]const u8 = null,
@@ -31,15 +38,49 @@ pub const Cmd = struct {
     vote_account: ?[]const u8 = null,
     stop_at_slot: ?sig.core.Slot = null,
 
-    pub fn genesisFilePath(self: Cmd) error{UnknownCluster}!?[]const u8 {
-        return if (self.genesis_file_path) |provided_path|
-            provided_path
-        else if (try self.gossip.getCluster()) |n| switch (n) {
+    pub fn getCluster(self: Cmd) error{UnknownCluster}!?sig.core.ClusterType {
+        return if (self.cluster) |cluster_str|
+            std.meta.stringToEnum(sig.core.ClusterType, cluster_str) orelse error.UnknownCluster
+        else
+            null;
+    }
+
+    pub fn genesisFilePath(self: Cmd) !?[]const u8 {
+        if (self.cli_provided_genesis_file_path) |provided_path|
+            return provided_path;
+
+        const local_path = if (try self.getCluster()) |cluster| switch (cluster) {
             .mainnet => "data/genesis-files/mainnet_genesis.bin",
             .devnet => "data/genesis-files/devnet_genesis.bin",
             .testnet => "data/genesis-files/testnet_genesis.bin",
-            .localnet => null, // no default genesis file for localhost
-        } else null;
+            .development => return null,
+        } else return null;
+
+        const genesis_file = std.fs.cwd().openFile(local_path, .{}) catch {
+            return null;
+        };
+        genesis_file.close();
+
+        return local_path;
+    }
+
+    /// Derives a path relative to validator_dir if the param equals the default value.
+    /// This is used to allow paths like snapshot_dir and geyser.pipe_path to be relative
+    /// to validator_dir when using their default values, while still allowing explicit
+    /// overrides.
+    /// TODO:
+    ///     - remove alloc by using fixed-size buffers for paths
+    ///     - https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=156092227)
+    pub fn derivePathFromValidatorDir(
+        self: Cmd,
+        allocator: std.mem.Allocator,
+        param_value: []const u8,
+        comptime default_suffix: []const u8,
+    ) ![]const u8 {
+        if (std.mem.eql(u8, param_value, sig.VALIDATOR_DIR ++ default_suffix)) {
+            return try std.fs.path.join(allocator, &.{ self.validator_dir, default_suffix });
+        }
+        return try allocator.dupe(u8, param_value);
     }
 };
 
@@ -70,6 +111,7 @@ pub const ShredNetwork = struct {
     turbine_recv_port: u16 = 8002,
     no_retransmit: bool = true,
     dump_shred_tracker: bool = false,
+    log_finished_slots: bool = false,
 
     /// Converts from the CLI args into the `shred_network.start` parameters
     pub fn toConfig(self: ShredNetwork, fallback_slot: sig.core.Slot) ShredNetworkConfig {
@@ -79,6 +121,7 @@ pub const ShredNetwork = struct {
             .turbine_recv_port = self.turbine_recv_port,
             .retransmit = !self.no_retransmit,
             .dump_shred_tracker = self.dump_shred_tracker,
+            .log_finished_slots = self.log_finished_slots,
         };
     }
 };
@@ -116,7 +159,6 @@ pub const Gossip = struct {
     host: ?[]const u8 = null,
     port: u16 = 8001,
     entrypoints: []const []const u8 = &.{},
-    cluster: ?[]const u8 = null,
     spy_node: bool = false,
     dump: bool = false,
     trusted_validators: []const []const u8 = &.{},
@@ -139,30 +181,23 @@ pub const Gossip = struct {
         };
     }
 
-    pub fn getCluster(self: Gossip) error{UnknownCluster}!?sig.core.Cluster {
-        return if (self.cluster) |cluster_str|
-            std.meta.stringToEnum(sig.core.Cluster, cluster_str) orelse
-                error.UnknownCluster
-        else
-            null;
-    }
-
     pub fn getEntrypointAddrs(
         self: Gossip,
+        cluster: ?sig.core.ClusterType,
         allocator: std.mem.Allocator,
     ) ![]sig.net.SocketAddr {
         var entrypoint_set = std.AutoArrayHashMap(sig.net.SocketAddr, void).init(allocator);
         defer entrypoint_set.deinit();
 
-        // add cluster entrypoints
-        if (try self.getCluster()) |cluster| {
-            for (sig.gossip.getClusterEntrypoints(cluster)) |entrypoint| {
+        // add cluster entrypoints (only for public clusters)
+        if (cluster) |c| {
+            for (c.getEntrypoints()) |entrypoint| {
                 const socket_addr = try resolveSocketAddr(allocator, entrypoint);
                 try entrypoint_set.put(socket_addr, {});
             }
         }
 
-        // add config entrypoints
+        // add user-provided entrypoints
         for (self.entrypoints) |entrypoint| {
             const socket_addr = sig.net.SocketAddr.parse(entrypoint) catch brk: {
                 break :brk try resolveSocketAddr(allocator, entrypoint);
