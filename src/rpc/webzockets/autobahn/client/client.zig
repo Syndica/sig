@@ -30,6 +30,7 @@ const AutobahnRunner = struct {
     allocator: std.mem.Allocator,
     current_case: usize,
     total_cases: usize,
+    case_count_retries: usize,
     conn: AutobahnClient.Conn,
     client: AutobahnClient,
     handler: AutobahnClientHandler,
@@ -45,6 +46,7 @@ const AutobahnRunner = struct {
             .allocator = allocator,
             .current_case = 1,
             .total_cases = 0,
+            .case_count_retries = 0,
             // conn and client are transient, initialized/deinit'd per interaction
             .conn = undefined,
             .client = undefined,
@@ -112,11 +114,28 @@ const AutobahnRunner = struct {
         const was_opened = self.handler.opened;
         log.debug("onConnectionDone: phase={s}, opened={}", .{ @tagName(self.phase), was_opened });
         if (was_opened) {
+            self.handler.opened = false;
             self.conn.deinit();
         }
 
         if (self.phase == .get_case_count and self.total_cases == 0) {
-            log.err("getCaseCount failed: no cases returned from fuzzingserver.", .{});
+            // Need retry here since server may respond but is not ready yet and returns 0 cases
+            const max_retries = 20;
+            if (self.case_count_retries < max_retries) {
+                self.case_count_retries += 1;
+                log.warn("getCaseCount returned 0 cases, retrying ({d}/{d})...", .{
+                    self.case_count_retries,
+                    max_retries,
+                });
+                // Blocking sleep here is fine since we're only one using event loop
+                // and previous connection is already closed
+                std.Thread.sleep(std.time.ns_per_s);
+                self.getCaseCount() catch |err| {
+                    log.err("getCaseCount retry failed: {}", .{err});
+                };
+            } else {
+                log.err("getCaseCount failed after {d} retries.", .{max_retries});
+            }
             return;
         }
 
@@ -316,7 +335,7 @@ fn run(allocator: std.mem.Allocator) !void {
                 attempt + 1,
                 max_retries,
             });
-            std.time.sleep(3 * std.time.ns_per_s);
+            std.Thread.sleep(3 * std.time.ns_per_s);
             continue;
         };
         stream.close();

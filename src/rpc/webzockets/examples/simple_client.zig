@@ -36,9 +36,9 @@ const ClientHandler = struct {
 
     pub fn onWriteComplete(self: *ClientHandler, _: *SimpleClient.Conn) void {
         if (self.sent_copy) |buf| {
-            std.debug.print("Write complete ({d} masked bytes): 0x{}\n", .{
+            std.debug.print("Write complete ({d} masked bytes): 0x{x}\n", .{
                 buf.len,
-                std.fmt.fmtSliceHexLower(buf),
+                buf,
             });
             self.allocator.free(buf);
             self.sent_copy = null;
