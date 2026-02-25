@@ -247,6 +247,7 @@ pub const TransactionStatusMetaBuilder = struct {
             .writable = try allocator.dupe(sig.core.Pubkey, loaded_addresses.writable),
             .readonly = try allocator.dupe(sig.core.Pubkey, loaded_addresses.readonly),
         };
+        errdefer allocator.free(owned_loaded_addresses);
 
         return TransactionStatusMeta{
             .status = processed_tx.err,
