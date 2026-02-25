@@ -18,7 +18,12 @@ pub const Cmd = struct {
     validator_dir: []const u8 = sig.VALIDATOR_DIR,
     max_shreds: u64 = 5_000_000,
     leader_schedule_path: ?[]const u8 = null,
-    genesis_file_path: ?[]const u8 = null,
+    /// This is only populated if there is a value provided on the CLI. If you
+    /// need to determine the genesis file path from the configuration, don't
+    /// use this field. Use the `genesisFilePath` method which checks the
+    /// CLI-provided path first before falling back to default based on the
+    /// cluster.
+    cli_provided_genesis_file_path: ?[]const u8 = null,
     cluster: ?[]const u8 = null,
     // general config
     log_filters: sig.trace.Filters = .debug,
@@ -41,7 +46,7 @@ pub const Cmd = struct {
     }
 
     pub fn genesisFilePath(self: Cmd) !?[]const u8 {
-        if (self.genesis_file_path) |provided_path|
+        if (self.cli_provided_genesis_file_path) |provided_path|
             return provided_path;
 
         const local_path = if (try self.getCluster()) |cluster| switch (cluster) {
