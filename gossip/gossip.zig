@@ -14,12 +14,12 @@ pub fn main() !void {
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
 
-    const gossip_port = 8001;
+    const gossip_port = 8002;
     const keypair: KeyPair = .generate();
     const entrypoints: []const []const u8 = &.{
         "entrypoint.testnet.solana.com:8001",
-        "entrypoint2.testnet.solana.com:8001",
-        "entrypoint3.testnet.solana.com:8001",
+        // "entrypoint2.testnet.solana.com:8001",
+        // "entrypoint3.testnet.solana.com:8001",
     };
 
     const echo: EchoResponse, const entry_addr: std.net.Address = for (entrypoints) |entrypoint| {
@@ -39,10 +39,8 @@ pub fn main() !void {
 
             const stream = std.net.Stream{ .handle = socket };
             try bincode.write(stream.writer(), EchoMessage{
-                ._hidden_header = 0,
                 .tcp_ports = @splat(0),
                 .udp_ports = .{ 0, 0, 0, 0 },
-                ._hidden_trailer = '\n',
             });
 
             const echo = 
@@ -56,20 +54,24 @@ pub fn main() !void {
         .wallclock = undefined, // set during signing
         .created = realtime(),
         .shred_version = echo.shred_version orelse 0,
-        .version = .{
-            .major = 0,
-            .minor = 0,
-            .patch = 0,
-            .commit = null,
-        },
+        .major = .{ .value = 0 },
+        .minor = .{ .value = 0 },
+        .patch = .{ .value = 0 },
+        .commit = 0,
         .feature_set = 0,
-        .client_id = @enumFromInt(0),
-        .ips = &.{ echo.addr },
-        .sockets = &.{ .{ .key = .gossip, .idx = 0, .port = gossip_port } },
-        .extensions = &.{},
+        .client_id = .{ .value = 0 },
+        .ips = .{ .items = &.{ echo.addr } },
+        .sockets = .{ .items = &.{ .{ .key = .gossip, .idx = 0, .port_offset = .{ .value = gossip_port } } } },
+        .extensions = .{ .items = &.{} },
     };
 
-    try runGossip(gpa, entry_addr, keypair, my_contact_info);
+    // _ = entry_addr;
+    const e_addr = entry_addr;
+
+    // _ = entry_addr;
+    // const e_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 8001);
+
+    try runGossip(gpa, e_addr, keypair, my_contact_info);
 }
 
 fn runGossip(
@@ -116,10 +118,39 @@ fn runGossip(
     // Initial state
     {
         // add our contact into to table.
-        _ = try tableInsert(&table, &hashes, try signData(keypair, .{ .contact_info = my_ci }));
+        const signed_ci = try signData(keypair, .{ .contact_info = my_ci });
+        _ = try tableInsert(&table, &hashes, signed_ci);
 
         // send out ping so entry responds with pong of their pubkey
-        _ = try sendPing(socket, entry_addr, keypair, prng.random()); 
+        // _ = try sendPing(socket, entry_addr, keypair, prng.random());
+        
+        try sendGossipMessage(socket, entry_addr, .{ .push_message = .{
+            .from = my_ci.from,
+            .values = &.{ signed_ci },
+        }});
+
+        // try sendGossipMessage(socket, entry_addr, .{ .push_message = .{
+        //     .from = my_ci.from,
+        //     .values = &.{ try signData(keypair, .{
+        //         .version = .{
+        //             .from = my_ci.from,
+        //             .wallclock = undefined, // set during signData
+        //             .version = my_ci.version,
+        //             .feature_set = my_ci.feature_set,
+        //         } }),
+        //     },
+        // }});
+        // try sendGossipMessage(socket, entry_addr, .{ .push_message = .{
+        //     .from = my_ci.from,
+        //     .values = &.{ try signData(keypair, .{
+        //         .node_instance = .{
+        //             .from = my_ci.from,
+        //             .wallclock = undefined, // set during signData
+        //             .created = my_ci.created,
+        //             .token = prng.random().int(u64),
+        //         } }), 
+        //     },
+        // }});
     }
     
     var pull_request_timer: Timestamp = 0;
@@ -167,7 +198,13 @@ fn runGossip(
                 keys: []u64,
                 words: []u64,
             }) = .{};
-            defer filters.deinit(gpa);
+            defer {
+                for (filters.items) |f| {
+                    gpa.free(f.keys);
+                    gpa.free(f.words);
+                }
+                filters.deinit(gpa);
+            }
             for (0..@as(u64, 1) << mask_bits) |_| {
                 const keys = try gpa.alloc(u64, num_keys);
                 for (keys) |*k| k.* = prng.random().int(u64);
@@ -202,8 +239,10 @@ fn runGossip(
                 try sendGossipMessage(socket, addr, .{ .pull_request = .{
                     .filter = .{
                         .keys = f.keys,
-                        .has_words = @intFromBool(f.words.len > 0),
-                        .words = f.words,
+                        .words = .{
+                            .bits = f.words,
+                            .len = num_bits,
+                        },
                         .num_bits = n_bits,
                     },
                     .mask = mask,
@@ -277,7 +316,7 @@ fn runGossip(
         std.log.debug("recv:{} addr:{} entry:{}", .{n, addr, entry_addr});
         
         var fbs = std.io.fixedBufferStream(buf[0..n]);
-        var alloc_buf: [MTU] u8 = undefined;
+        var alloc_buf: [8192]u8 = undefined;
         var fba = std.heap.FixedBufferAllocator.init(&alloc_buf);
         const msg = bincode.read(fba.allocator(), fbs.reader(), GossipMessage) catch |e| {
             if (@errorReturnTrace()) |t| std.debug.dumpStackTrace(t.*);
@@ -349,6 +388,7 @@ fn tableInsert(
 ) !struct{ GossipKey, u8 } {
     const tag = std.meta.activeTag(value.data);
     const wallclock: Timestamp, const key: GossipKey = switch (value.data) {
+        .contact_info => |ci| .{ ci.wallclock.value, .{ .from = ci.from, .tag = .contact_info, .idx = 0 } },
         inline .vote, .epoch_slots, .duplicate_shred => |v| //
             .{ v.wallclock, .{ .from = v.from, .tag = tag, .idx = v.index } },
         inline else => |v| .{ v.wallclock, .{ .from = v.from, .tag = tag, .idx = 0 } },
@@ -567,14 +607,17 @@ fn sendGossipMessage(socket: std.posix.socket_t, addr: std.net.Address, msg: Gos
 fn getGossipAddr(contact_info_data: CrdsData) !SocketAddr {
     switch (contact_info_data) {
         .legacy_contact_info => |ci| return ci.gossip,
-        .contact_info => |ci| for (ci.sockets) |s| {
-            if (s.key != .gossip) continue;
-            if (s.idx >= ci.ips.len) return error.InvalidContactInfo;
-            return switch (ci.ips[s.idx]) {
-                .v4 => |ip| .{ .v4 = .{ .ip = ip, .port = s.port } },
-                .v6 => |ip| .{ .v6 = .{ .ip = ip, .port = s.port } },
-            };
-        } else return error.InvalidContactInfo,
+        .contact_info => |ci| {
+            var port: u16 = 0;
+            for (ci.sockets.items) |s| {
+                port += s.port_offset.value;
+                return switch (ci.ips.items[s.idx]) {
+                    .v4 => |ip| return .{ .v4 = .{ .ip = ip, .port = port } },
+                    .v6 => |ip| return .{ .v6 = .{ .ip = ip, .port = port } },
+                };
+            }
+            return error.InvalidContactInfo;
+        },
         else => return error.InvalidContactInfo,
     }
 }
@@ -584,13 +627,18 @@ fn signData(keypair: KeyPair, data_: CrdsData) !CrdsValue {
     switch (std.meta.activeTag(data)) {
         inline else => |tag| {
             @field(data, @tagName(tag)).from = .{ .data = keypair.public_key.bytes };
-            @field(data, @tagName(tag)).wallclock = realtime();
+            switch (@TypeOf(@field(data, @tagName(tag)).wallclock)) {
+                VarInt(u64) => @field(data, @tagName(tag)).wallclock = .{ .value = realtime() },
+                u64 => @field(data, @tagName(tag)).wallclock = realtime(),
+                else => @compileError("invalid wallclock field"),
+            }
         }
     }
 
     var buf: [MTU]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     try bincode.write(fbs.writer(), data);
+
     return .{
         .signature = .fromBytes((try keypair.sign(fbs.getWritten(), null)).toBytes()),
         .data = data,
@@ -603,18 +651,25 @@ fn realtime() u64 {
 
 const bincode = struct {
     fn read(gpa: std.mem.Allocator, reader: anytype, comptime T: type) !T {
+        std.debug.print(" reading {s}\n", .{@typeName(T)});
         switch (@typeInfo(T)) {
             .int => return reader.readInt(T, .little),
             .array => |info| {
+                comptime std.debug.assert(@typeInfo(info.child) == .int);
                 var v: T = undefined;
-                for (0..info.len) |i| v[i] = try read(gpa, reader, info.child);
+                _ = try reader.readAll(std.mem.asBytes(&v));
                 return v;
             },
             .pointer => |info| {
                 comptime std.debug.assert(info.size == .slice);
                 const n = try reader.readInt(u64, .little);
                 const slice = try gpa.alloc(info.child, n);
-                for (0..n) |i| slice[i] = try read(gpa, reader, info.child);
+                switch (@typeInfo(info.child)) {
+                    .int => _ = try reader.readAll(std.mem.sliceAsBytes(slice)),
+                    else => {
+                        for (0..n) |i| slice[i] = try read(gpa, reader, info.child);
+                    },
+                }
                 return slice;
             },
             .optional => |info| switch (try reader.readByte()) {
@@ -632,6 +687,7 @@ const bincode = struct {
                 },
             },
             .@"struct" => |info| {
+                if (@hasDecl(T, "bincodeRead")) return T.bincodeRead(gpa, reader);
                 var v: T = undefined;
                 inline for (info.fields) |f| @field(v, f.name) = try read(gpa, reader, f.type);
                 return v;
@@ -644,7 +700,10 @@ const bincode = struct {
         const T = @TypeOf(value);
         switch (@typeInfo(T)) {
             .int => try writer.writeInt(T, value, .little),
-            .array => for (value) |v| try write(writer, v),
+            .array => {
+                comptime std.debug.assert(@typeInfo(@TypeOf(value[0])) == .int);
+                try writer.writeAll(std.mem.asBytes(&value));
+            },
             .pointer => |info| {
                 comptime std.debug.assert(info.size == .slice);
                 try write(writer, @as(u64, value.len));
@@ -662,6 +721,7 @@ const bincode = struct {
                 },
             },
             .@"struct" => |info| {
+                if (@hasDecl(T, "bincodeWrite")) return value.bincodeWrite(writer);
                 inline for (info.fields) |f| try write(writer, @field(value, f.name));
             },
             else => @compileError("invalid bincode type"),
@@ -669,14 +729,37 @@ const bincode = struct {
     }
 };
 
+fn VarInt(comptime T: type) type {
+    return struct {
+        value: T,
+
+        pub fn bincodeRead(_: std.mem.Allocator, reader: anytype) !@This() {
+            var v: T = 0;
+            var i: std.math.Log2Int(T) = 0;
+            while (true) : (i += 7) {
+                const b = try reader.readByte();
+                v |= @as(T, b) << i;
+                if (b & 0x80 == 0) return .{ .value = v };
+            }
+        }
+
+        pub fn bincodeWrite(self: @This(), writer: anytype) !void {
+            var v = self.value;
+            while (v > (v & 0x7f)) : (v >>= 7)
+                try writer.writeByte(@intCast((v & 0x7f) | 0x80));
+            try writer.writeByte(@as(u7, @intCast(v)));
+        }
+    };
+}
+
 const Timestamp = u64;
 const ShredVersion = u16;
 
 const EchoMessage = struct {
-    _hidden_header: u32,
+    _hidden_http_header: u32 = 0,
     tcp_ports: [4]u16,
     udp_ports: [4]u16,
-    _hidden_trailer: u8,
+    _hidden_trailer: u8 = '\n',
 };
 
 const EchoResponse = struct {
@@ -691,35 +774,10 @@ const IpAddr = union(enum(u32)) {
 };
 
 const GossipMessage = union(enum(u32)) {
-    pull_request: struct {
-        filter: struct {
-            keys: []const u64,
-            has_words: u8,
-            words: []const u64,
-            num_bits: u64,
-        },
-        mask: u64,
-        mask_bits: u32,
-        contact_info: CrdsValue,
-    },
-    pull_response: struct {
-        from: Pubkey,
-        values: []const CrdsValue,
-    },
-    push_message: struct {
-        from: Pubkey,
-        values: []const CrdsValue,
-    },
-    prune_message: struct {
-        from: Pubkey,
-        data: struct {
-            pubkey: Pubkey,
-            prunes: []const Pubkey,
-            signature: Signature,
-            dest: Pubkey,
-            wallclock: Timestamp,
-        },
-    },
+    pull_request: PullRequest,
+    pull_response: PullResponse,
+    push_message: PushMessage,
+    prune_message: PruneMessage,
     ping_message: struct {
         from: Pubkey,
         token: [32]u8,
@@ -732,152 +790,237 @@ const GossipMessage = union(enum(u32)) {
     },
 };
 
+const PruneMessage = struct {
+    from: Pubkey,
+    data: struct {
+        pubkey: Pubkey,
+        prunes: []const Pubkey,
+        signature: Signature,
+        dest: Pubkey,
+        wallclock: Timestamp,
+    },
+};
+
+const PullResponse = struct {
+    from: Pubkey,
+    values: []const CrdsValue,
+};
+
+const PushMessage = struct {
+    from: Pubkey,
+    values: []const CrdsValue,
+};
+
+const PullRequest = struct {
+    filter: struct {
+        keys: []const u64,
+        words: BitVec(u64),
+        num_bits: u64,
+    },
+    mask: u64,
+    mask_bits: u32,
+    contact_info: CrdsValue,
+};
+
 const CrdsValue = struct {
     signature: Signature,
     data: CrdsData,
 };
 
-const CrdsData = union(enum(u32)) {
-    legacy_contact_info: struct {
-        from: Pubkey,
-        gossip: SocketAddr,
-        tvu: SocketAddr,
-        tvu_quic: SocketAddr,
-        serve_repair_quic: SocketAddr,
-        tpu: SocketAddr,
-        tpu_forwards: SocketAddr,
-        tpu_vote: SocketAddr,
-        rpc: SocketAddr,
-        rpc_pubsub: SocketAddr,
-        serve_repair: SocketAddr,
-        wallclock: Timestamp,
-        shred_version: ShredVersion,
-    },
-    vote: struct {
-        index: u8,
-        from: Pubkey,
-        transaction: struct {
-            signatures: []const Signature,
-            message: struct {
-                num_signatures: u8,
-                num_readonly_signed: u8,
-                num_readonly_unsigned: u8,
-                accounts: []const Pubkey,
-                recent_blockhash: Hash,
-                instructions: []const struct {
-                    program_id: u8,
-                    accounts: []const u8,
-                    data: []const u8,
-                },
-            },
-        },
-        wallclock: Timestamp,
-        slot: Slot,
-    },
-    lowest_slot: struct {
-        index: u8,
-        from: Pubkey,
-        _root: Slot, // deprecated
-        lowest: Slot,
-        _slots: []const Slot, // deprecated
-        _stashes: []const struct { // deprecated
-            first_slot: Slot,
-            compression: enum(u32) {
-                uncompressed,
-                gzip,
-                bzip2,
-            },
-            bytes: []const u8,
-        },
-        wallclock: Timestamp,
-    },
-    legacy_snapshot_hashes: AccountHashes,
-    account_hashes: AccountHashes,
-    epoch_slots: struct {
-        index: u8,
-        from: Pubkey,
-        slots: []const union(enum(u32)) {
-            flate2: struct {
-                first_slot: Slot,
-                num_slots: u64,
-                compressed: []const u8,
-            },
-            uncompressed: struct {
-                first_slot: Slot,
-                num_slots: u64,
-                has_slots: u8,
-                slots: []const u8,
-            },
-        },
-        wallclock: Timestamp,
-    },
-    legacy_version: struct {
-        from: Pubkey,
-        wallclock: Timestamp,
-        version: Version,
-    },
-    version: struct {
-        from: Pubkey,
-        wallclock: Timestamp,
-        version: Version,
-        feature_set: u32,
-    },
-    node_instance: struct {
-        from: Pubkey,
-        wallclock: Timestamp,
-        created: Timestamp,
-        token: u64,
-    },
-    duplicate_shred: struct {
-        index: u16,
-        from: Pubkey,
-        wallclock: Timestamp,
-        slot: Slot,
-        _unused: u32,
-        _shred_type: enum(u32) {
-            data = 0b10100101,
-            code = 0b01011010,
-        },
-        num_chunks: u8,
-        chunk_idx: u8,
-        chunk: []const u8,
-    },
-    snapshot_hashes: struct {
-        from: Pubkey,
-        full: SlotAndHash,
-        incremental: []const SlotAndHash,
-        wallclock: Timestamp,
-    },
-    contact_info: ContactInfo,
-    restart_last_voted_fork_slots: struct {
-        from: Pubkey,
-        wallclock: Timestamp,
-        offsets: []const union(enum(u32)) {
-            rle: []const u16,
-            raw: struct {
-                has_items: u8,
-                items: []const u8,
-            },
-        },
-        last_voted: SlotAndHash,
-        shred_version: ShredVersion,
-    },
-    restart_heaviest_fork: struct {
-        from: Pubkey,
-        wallclock: Timestamp,
-    },
+const LegacyContactInfo = struct {
+    from: Pubkey,
+    gossip: SocketAddr,
+    tvu: SocketAddr,
+    tvu_quic: SocketAddr,
+    serve_repair_quic: SocketAddr,
+    tpu: SocketAddr,
+    tpu_forwards: SocketAddr,
+    tpu_vote: SocketAddr,
+    rpc: SocketAddr,
+    rpc_pubsub: SocketAddr,
+    serve_repair: SocketAddr,
+    wallclock: Timestamp,
+    shred_version: ShredVersion,
 };
 
-const ContactInfo = struct {
+const Vote = struct {
+    index: u8,
+    from: Pubkey,
+    transaction: struct {
+        signatures: []const Signature,
+        message: struct {
+            num_signatures: u8,
+            num_readonly_signed: u8,
+            num_readonly_unsigned: u8,
+            accounts: []const Pubkey,
+            recent_blockhash: Hash,
+            instructions: []const struct {
+                program_id: u8,
+                accounts: []const u8,
+                data: []const u8,
+            },
+        },
+    },
+    wallclock: Timestamp,
+    slot: Slot,
+};
+
+const LowestSlot = struct {
+    index: u8,
+    from: Pubkey,
+    _root: Slot, // deprecated
+    lowest: Slot,
+    _slots: []const Slot, // deprecated
+    _stashes: []const struct { // deprecated
+        first_slot: Slot,
+        compression: enum(u32) {
+            uncompressed,
+            gzip,
+            bzip2,
+        },
+        bytes: []const u8,
+    },
+    wallclock: Timestamp,
+};
+
+const EpochSlots = struct {
+    index: u8,
+    from: Pubkey,
+    slots: []const union(enum(u32)) {
+        flate2: Flate2,
+        uncompressed: Uncompressed,
+    },
+    wallclock: Timestamp,
+};
+
+const Flate2 = struct {
+    first_slot: Slot,
+    num_slots: u64,
+    compressed: []const u8,
+};
+
+const Uncompressed = struct {
+    first_slot: Slot,
+    num_slots: u64,
+    slots: BitVec(u8),
+};
+
+const LegacyVersion = struct {
+    from: Pubkey,
+    wallclock: Timestamp,
+    version: Version,
+};
+
+const LegacyVersion2 = struct {
+    from: Pubkey,
+    wallclock: Timestamp,
+    version: Version,
+    feature_set: u32,
+}; 
+
+const NodeInstance = struct {
     from: Pubkey,
     wallclock: Timestamp,
     created: Timestamp,
+    token: u64,
+};
+
+const DuplicateShred = struct {
+    index: u16,
+    from: Pubkey,
+    wallclock: Timestamp,
+    slot: Slot,
+    _unused: u32,
+    _shred_type: enum(u8) {
+        data = 0b10100101,
+        code = 0b01011010,
+    },
+    num_chunks: u8,
+    chunk_idx: u8,
+    chunk: []const u8,
+};
+
+const SnapshotHashes = struct {
+    from: Pubkey,
+    full: SlotAndHash,
+    incremental: []const SlotAndHash,
+    wallclock: Timestamp,
+};
+
+const RestartLast = struct {
+    from: Pubkey,
+    wallclock: Timestamp,
+    offsets: []const union(enum(u32)) {
+        rle: []const VarInt(u16),
+        raw: BitVec(u8),
+    },
+    last_voted: SlotAndHash,
     shred_version: ShredVersion,
-    version: Version,
+};
+
+const RestartHeaviest = struct {
+    from: Pubkey,
+    wallclock: Timestamp,
+    last_slot: SlotAndHash,
+    observed_stake: u64,
+    shred_version: ShredVersion,
+};
+
+const CrdsData = union(enum(u32)) {
+    legacy_contact_info: LegacyContactInfo,
+    vote: Vote,
+    lowest_slot: LowestSlot,
+    legacy_snapshot_hashes: AccountHashes,
+    account_hashes: AccountHashes,
+    epoch_slots: EpochSlots,
+    legacy_version: LegacyVersion,
+    version: LegacyVersion2,
+    node_instance: NodeInstance,
+    duplicate_shred: DuplicateShred,
+    snapshot_hashes: SnapshotHashes,
+    contact_info: ContactInfo,
+    restart_last_voted_fork_slots: RestartLast,
+    restart_heaviest_fork: RestartHeaviest,
+};
+
+fn BitVec(comptime T: type) type {
+    return struct {
+        bits: ?[]const T,
+        len: u64,
+    };
+}
+
+fn ShortVec(comptime T: type) type {
+    return struct {
+        items: []const T,
+
+        pub fn bincodeRead(gpa: std.mem.Allocator, reader: anytype) !@This() {
+            const len = try bincode.read(gpa, reader, VarInt(u16));
+            const items = try gpa.alloc(T, len.value);
+            for (items) |*v| v.* = try bincode.read(gpa, reader, T);
+            return .{ .items = items };
+        }
+
+        pub fn bincodeWrite(self: @This(), writer: anytype) !void {
+            try bincode.write(writer, VarInt(u16){ .value = @intCast(self.items.len) });
+            for (self.items) |v| try bincode.write(writer, v); 
+        }
+    };
+}
+
+const ContactInfo = struct {
+    from: Pubkey,
+    wallclock: VarInt(Timestamp),
+    created: Timestamp,
+    shred_version: ShredVersion,
+    major: VarInt(u16),
+    minor: VarInt(u16),
+    patch: VarInt(u16),
+    commit: u32,
     feature_set: u32,
-    client_id: enum(u16) { _ },
-    ips: []const IpAddr,
-    sockets: []const struct {
+    client_id: VarInt(u16),
+    ips: ShortVec(IpAddr),
+    sockets: ShortVec(struct {
         key: enum(u8) {
             gossip,
             serve_repair_quic,
@@ -894,9 +1037,9 @@ const ContactInfo = struct {
             tpu_vote_quic,
         },
         idx: u8,
-        port: u16,
-    },
-    extensions: []const struct{},
+        port_offset: VarInt(u16),
+    }),
+    extensions: ShortVec(struct{}),
 };
 
 const SocketAddr = union(enum(u32)) {
