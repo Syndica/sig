@@ -1,7 +1,8 @@
 const std = @import("std");
 const Build = std.Build;
+const zig_zon = @import("build.zig.zon");
 
-const sig_version = std.SemanticVersion.parse(@import("build.zig.zon").version) catch unreachable;
+const sig_version = std.SemanticVersion.parse(zig_zon.version) catch unreachable;
 
 const LedgerDB = enum {
     rocksdb,
