@@ -147,8 +147,8 @@ fn handleGetOrHead(
                         .status = .ok,
                         .keep_alive = false,
                     }) catch |err| switch (err) {
-                        error.ConnectionResetByPeer => return,
-                        else => return error.SystemIoError,
+                        error.WriteFailed => return,
+                        error.HttpExpectationFailed => return error.SystemIoError,
                     };
                     return;
                 },
