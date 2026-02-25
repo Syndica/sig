@@ -258,7 +258,9 @@ pub const TransactionStatusMetaBuilder = struct {
             .log_messages = log_messages,
             .pre_token_balances = pre_token_balances,
             .post_token_balances = post_token_balances,
-            .rewards = null, // Transaction-level rewards are not typically populated
+            // NOTE: rewards are not populated at all by agave
+            // [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/rpc/src/transaction_status_service.rs#L190
+            .rewards = null,
             .loaded_addresses = owned_loaded_addresses,
             .return_data = return_data,
             .compute_units_consumed = compute_units_consumed,
