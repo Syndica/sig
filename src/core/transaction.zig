@@ -410,7 +410,7 @@ pub const Message = struct {
     pub fn isMaybeWritable(
         self: Message,
         i: usize,
-        reserved_account_keys: ?*const std.AutoHashMapUnmanaged(Pubkey, void),
+        reserved_account_keys: ?*const sig.utils.collections.PubkeyMap(void),
     ) bool {
         return (self.isWritableIndex(i) and
             !self.isAccountMaybeReserved(i, reserved_account_keys) and
@@ -434,7 +434,7 @@ pub const Message = struct {
     pub fn isAccountMaybeReserved(
         self: Message,
         i: usize,
-        reserved_account_keys: ?*const std.AutoHashMapUnmanaged(Pubkey, void),
+        reserved_account_keys: ?*const sig.utils.collections.PubkeyMap(void),
     ) bool {
         if (reserved_account_keys) |keys| {
             if (i >= self.account_keys.len) return false;

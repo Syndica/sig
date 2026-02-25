@@ -16,7 +16,7 @@ pub fn init(
     allocator: std.mem.Allocator,
     message: Message,
     loaded_addresses: sig.ledger.transaction_status.LoadedAddresses,
-    reserved_account_keys: *const std.AutoHashMapUnmanaged(Pubkey, void),
+    reserved_account_keys: *const sig.utils.collections.PubkeyMap(void),
 ) !LoadedMessage {
     var loaded_message = LoadedMessage{
         .message = message,
@@ -37,7 +37,7 @@ pub fn deinit(
 fn setIsWritableAccountCache(
     self: *LoadedMessage,
     allocator: std.mem.Allocator,
-    reserved_account_keys: *const std.AutoHashMapUnmanaged(Pubkey, void),
+    reserved_account_keys: *const sig.utils.collections.PubkeyMap(void),
 ) !void {
     const account_keys_len = self.accountKeys().len();
     for (0..account_keys_len) |i| {
@@ -97,7 +97,7 @@ fn isWritableIndex(
 fn isWritableInternal(
     self: LoadedMessage,
     key_index: usize,
-    reserved_account_keys: *const std.AutoHashMapUnmanaged(Pubkey, void),
+    reserved_account_keys: *const sig.utils.collections.PubkeyMap(void),
 ) bool {
     if (!self.isWritableIndex(key_index)) return false;
     return if (self.accountKeys().get(key_index)) |key|

@@ -15,7 +15,6 @@ const JsonValue = std.json.Value;
 const ObjectMap = std.json.ObjectMap;
 
 pub const AccountKeys = @import("AccountKeys.zig");
-pub const ReservedAccountKeys = @import("ReservedAccountKeys.zig");
 pub const LoadedMessage = @import("LoadedMessage.zig");
 
 const vote_program = sig.runtime.program.vote;

@@ -1548,7 +1548,7 @@ pub const BlockHookContext = struct {
     slot_tracker: *const sig.replay.trackers.SlotTracker,
 
     const SlotTrackerRef = sig.replay.trackers.SlotTracker.Reference;
-    const ReservedAccountKeys = parse_instruction.ReservedAccountKeys;
+    const ReservedAccounts = sig.core.ReservedAccounts;
 
     pub fn getBlock(
         self: @This(),
@@ -1904,7 +1904,7 @@ pub const BlockHookContext = struct {
     ) !GetBlock.Response.UiMessage {
         switch (encoding) {
             .jsonParsed => {
-                var reserved_account_keys = try ReservedAccountKeys.newAllActivated(allocator);
+                var reserved_account_keys = try ReservedAccounts.initAllActivated(allocator);
                 errdefer reserved_account_keys.deinit(allocator);
                 const account_keys = parse_instruction.AccountKeys.init(
                     message.account_keys,
@@ -2021,7 +2021,7 @@ pub const BlockHookContext = struct {
     ) !GetBlock.Response.UiMessage {
         switch (encoding) {
             .jsonParsed => {
-                var reserved_account_keys = try ReservedAccountKeys.newAllActivated(allocator);
+                var reserved_account_keys = try ReservedAccounts.initAllActivated(allocator);
                 defer reserved_account_keys.deinit(allocator);
                 const account_keys = parse_instruction.AccountKeys.init(
                     message.account_keys,
@@ -2031,7 +2031,7 @@ pub const BlockHookContext = struct {
                     allocator,
                     message,
                     meta.loaded_addresses,
-                    &reserved_account_keys.active,
+                    &reserved_account_keys.map,
                 );
                 defer loaded_message.deinit(allocator);
 
@@ -2083,7 +2083,7 @@ pub const BlockHookContext = struct {
     fn parseLegacyMessageAccounts(
         allocator: Allocator,
         message: sig.core.transaction.Message,
-        reserved_account_keys: *const parse_instruction.ReservedAccountKeys,
+        reserved_account_keys: *const sig.core.ReservedAccounts,
     ) ![]const GetBlock.Response.ParsedAccount {
         var accounts = try allocator.alloc(
             GetBlock.Response.ParsedAccount,
@@ -2092,7 +2092,7 @@ pub const BlockHookContext = struct {
         for (message.account_keys, 0..) |account_key, i| {
             accounts[i] = .{
                 .pubkey = account_key,
-                .writable = message.isMaybeWritable(i, &reserved_account_keys.active),
+                .writable = message.isMaybeWritable(i, &reserved_account_keys.map),
                 .signer = message.isSigner(i),
                 .source = .transaction,
             };
@@ -2242,7 +2242,7 @@ pub const BlockHookContext = struct {
         allocator: Allocator,
         transaction: sig.core.Transaction,
     ) !GetBlock.Response.EncodedTransaction {
-        var reserved_account_keys = try ReservedAccountKeys.newAllActivated(allocator);
+        var reserved_account_keys = try ReservedAccounts.initAllActivated(allocator);
         return .{ .accounts = .{
             .signatures = try allocator.dupe(Signature, transaction.signatures),
             .accountKeys = try parseLegacyMessageAccounts(
@@ -2265,7 +2265,7 @@ pub const BlockHookContext = struct {
             tx_with_meta.transaction.version,
             max_supported_version,
         );
-        const reserved_account_keys = try parse_instruction.ReservedAccountKeys.newAllActivated(
+        const reserved_account_keys = try ReservedAccounts.initAllActivated(
             allocator,
         );
 
@@ -2279,7 +2279,7 @@ pub const BlockHookContext = struct {
                 allocator,
                 tx_with_meta.transaction.msg,
                 tx_with_meta.meta.loaded_addresses,
-                &reserved_account_keys.active,
+                &reserved_account_keys.map,
             )),
         };
 
