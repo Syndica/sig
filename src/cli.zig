@@ -55,6 +55,9 @@
 //! `foo file/path --arg=a`, but not `foo --arg=a file/path`.
 
 const std = @import("std");
+const std14 = @import("std14");
+
+const countingWriter = std14.countingWriter;
 
 // -- API -- //
 
@@ -242,7 +245,7 @@ pub fn ArgumentInfoGroup(comptime S: type) type {
             .type = ArgumentInfo(s_field.type),
             .default_value_ptr = null,
             .is_comptime = false,
-            .alignment = 0,
+            .alignment = @alignOf(ArgumentInfo(s_field.type)),
         };
     }
 
@@ -1341,13 +1344,15 @@ fn CmdHelper(
                 }
             }.adaptedWriteFn,
         );
+
         fn adaptedSetColor(
             writer_adapted: AdaptedHelpWriter,
             tty_config: std.io.tty.Config,
             color: std.io.tty.Color,
         ) WriteHelpError!void {
-            tty_config.setColor(writer_adapted, color) catch |err| switch (err) {
-                error.HelpWriteFail => |e| return e,
+            var writer = writer_adapted.adaptToNewApi(&.{});
+            tty_config.setColor(&writer.new_interface, color) catch |err| switch (err) {
+                error.WriteFailed => return error.HelpWriteFail,
                 error.Unexpected => return error.TtyFail,
             };
         }
@@ -1502,7 +1507,7 @@ fn CmdHelper(
                 try writer.writeByteNTimes(' ', 2);
 
                 // write argument alias & name
-                var cw = std.io.countingWriter(writer);
+                var cw = countingWriter(writer);
                 try writeArgumentNameWithDefault(null, arg_name, cw.writer());
                 max_name_alias_width = @max(max_name_alias_width, cw.bytes_written);
 
@@ -1557,7 +1562,7 @@ fn CmdHelper(
                 try writer.writeByteNTimes(' ', 2);
 
                 // write argument alias & name
-                var cw = std.io.countingWriter(writer);
+                var cw = countingWriter(writer);
                 try writeArgumentNameWithDefault(
                     arg_info.alias,
                     @tagName(arg_tag),
@@ -1700,7 +1705,7 @@ fn computeCmdAndArgBasicInfo(
             .type = FieldType,
             .default_value_ptr = null,
             .is_comptime = false,
-            .alignment = 0,
+            .alignment = @alignOf(FieldType),
         };
     }
 
@@ -1728,7 +1733,7 @@ fn UnionArgDescSubMap(comptime U: type) type {
             .type = CommandInfo(u_field.type),
             .default_value_ptr = null,
             .is_comptime = false,
-            .alignment = 0,
+            .alignment = @alignOf(CommandInfo(u_field.type)),
         };
     }
 
@@ -1897,20 +1902,21 @@ inline fn renderArgumentDefaultValue(
     writer: anytype,
 ) !bool {
     const T = @TypeOf(default_value);
-    const value, const fmt_str = if (T == []const u8)
-        .{ std.zig.fmtEscapes(default_value), "" }
-    else switch (@typeInfo(T)) {
-        .bool => .{ default_value, "any" },
-        .@"enum" => .{ @tagName(default_value), "s" },
-        .int => .{ default_value, "d" },
+    try writer.writeAll("(default: ");
+    if (T == []const u8) {
+        try std.fmt.format(writer, "{f}", .{std.zig.fmtString(default_value)});
+    } else switch (@typeInfo(T)) {
+        .bool => try std.fmt.format(writer, "{any}", .{default_value}),
+        .@"enum" => try std.fmt.format(writer, "{s}", .{@tagName(default_value)}),
+        .int => try std.fmt.format(writer, "{d}", .{default_value}),
         .optional => |optional| {
             if (@typeInfo(optional.child) == .optional) return false;
+            // Close the "(default: " we already wrote, then return the inner result
+            try writer.writeAll(")");
             return renderArgumentDefaultValue(default_value orelse return false, writer);
         },
         else => return false,
-    };
-    try writer.writeAll("(default: ");
-    try std.fmt.formatType(value, fmt_str, .{}, writer, 8);
+    }
     try writer.writeAll(")");
     return true;
 }

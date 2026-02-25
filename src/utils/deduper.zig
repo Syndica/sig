@@ -14,7 +14,7 @@ const uintLessThanRust = sig.rand.weighted_shuffle.uintLessThanRust;
 pub fn Deduper(comptime n_hashers: usize, comptime T: type) type {
     return struct {
         num_bits: u64,
-        bits: std.ArrayList(AtomicU64),
+        bits: std.array_list.Managed(AtomicU64),
         state: [n_hashers]AHashSeed,
         last_reset_instant: Instant,
         masked_count: AtomicU64,
@@ -25,7 +25,7 @@ pub fn Deduper(comptime n_hashers: usize, comptime T: type) type {
             num_bits: u64,
         ) !Deduper(n_hashers, T) {
             const size: usize = @intCast((num_bits + 63) / 64);
-            var bits = try std.ArrayList(AtomicU64).initCapacity(allocator, size);
+            var bits = try std.array_list.Managed(AtomicU64).initCapacity(allocator, size);
             for (0..size) |_| bits.appendAssumeCapacity(AtomicU64.init(0));
             var state: [n_hashers]AHashSeed = undefined;
             for (0..n_hashers) |i| state[i] = AHashSeed.initRandom(rand);

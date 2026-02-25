@@ -3,8 +3,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const Mutex = std.Thread.Mutex;
-const RwLock = std.Thread.RwLock;
-const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
+const RwLock = sig.sync.RwLock;
 
 const assert = std.debug.assert;
 const testing = std.testing;
@@ -155,7 +154,7 @@ pub fn RwMux(comptime T: type) type {
         const Self = @This();
 
         const Inner = struct {
-            r: DefaultRwLock,
+            r: RwLock,
             v: T,
         };
 
@@ -163,7 +162,7 @@ pub fn RwMux(comptime T: type) type {
         pub fn init(val: T) Self {
             return Self{
                 .private = .{
-                    .r = DefaultRwLock{},
+                    .r = RwLock{},
                     .v = val,
                 },
             };

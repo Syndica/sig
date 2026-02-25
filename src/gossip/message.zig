@@ -93,7 +93,7 @@ pub fn sanitizeWallclock(wallclock: u64) !void {
 test "push message serialization is predictable" {
     var prng = DefaultPrng.init(std.testing.random_seed);
     const pubkey = Pubkey.initRandom(prng.random());
-    var values = std.ArrayList(SignedGossipData).init(std.testing.allocator);
+    var values = std.array_list.Managed(SignedGossipData).init(std.testing.allocator);
     defer values.deinit();
 
     const msg = GossipMessage{ .PushMessage = .{ pubkey, values.items } };

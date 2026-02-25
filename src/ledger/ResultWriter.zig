@@ -7,7 +7,7 @@ pub const ledger_mod = @import("lib.zig");
 
 // std
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 
 // sig common
 const Hash = sig.core.Hash;
@@ -598,7 +598,7 @@ test "setDuplicateConfirmedSlotsAndHashes" {
 
     for (duplicate_confirmed_slot_hashes) |pair| {
         const slot, const expected_hash = pair;
-        errdefer std.log.err("error occured for {}:{}", .{ slot, expected_hash });
+        errdefer std.log.err("error occured for {}:{f}", .{ slot, expected_hash });
 
         const actual_fhv_opt: ?ledger_mod.meta.FrozenHashVersioned =
             try state.db.get(allocator, ledger_mod.schema.schema.bank_hash, slot);

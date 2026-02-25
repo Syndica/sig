@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 const tracy = @import("tracy");
@@ -126,7 +127,11 @@ pub const BufferPool = struct {
         if (num_frames == 0 or num_frames == 1) return error.InvalidArgument;
 
         // Alignment of frames is good for read performance (and necessary if we want to use O_DIRECT.)
-        const frames = try allocator.alignedAlloc(Frame, std.heap.page_size_min, num_frames);
+        const frames = try allocator.alignedAlloc(
+            Frame,
+            std.mem.Alignment.fromByteUnits(std.heap.page_size_min),
+            num_frames,
+        );
         errdefer allocator.free(frames);
 
         var frame_manager = try FrameManager.init(allocator, num_frames);
@@ -575,7 +580,7 @@ pub const FrameManager = struct {
 ///    eviction when no free frames can be made available is illegal behaviour.
 pub const HierarchicalFIFO = struct {
     pub const Key = FrameIndex;
-    pub const Fifo = std.fifo.LinearFifo(FrameIndex, .Slice);
+    pub const Fifo = std14.LinearFifo(FrameIndex);
 
     pub const InQueue = enum(u8) { none, small, main, ghost }; // u8 required for extern usage
 
@@ -1497,7 +1502,7 @@ test "AccountDataHandle bincode" {
     defer allocator.free(read_data);
 
     {
-        var serialised_from_slice = std.ArrayList(u8).init(allocator);
+        var serialised_from_slice = std.array_list.Managed(u8).init(allocator);
         defer serialised_from_slice.deinit();
 
         try bincode.write(serialised_from_slice.writer(), read_data, .{});
@@ -1518,7 +1523,7 @@ test "AccountDataHandle bincode" {
     }
 
     {
-        var serialised_from_handle = std.ArrayList(u8).init(allocator);
+        var serialised_from_handle = std.array_list.Managed(u8).init(allocator);
         defer serialised_from_handle.deinit();
 
         try bincode.write(serialised_from_handle.writer(), read, .{});

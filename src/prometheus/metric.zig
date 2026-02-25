@@ -1,7 +1,6 @@
 const std = @import("std");
 const prometheus = @import("lib.zig");
 
-const fmt = std.fmt;
 const mem = std.mem;
 const testing = std.testing;
 
@@ -12,7 +11,7 @@ pub const Metric = struct {
     pub const Error =
         std.mem.Allocator.Error ||
         std.posix.WriteError ||
-        std.http.Server.Response.WriteError;
+        std.io.Writer.Error;
 
     pub const Result = union(enum) {
         counter: u64,
@@ -38,7 +37,7 @@ pub const Metric = struct {
         allocator: mem.Allocator,
         writer: anytype,
         name: []const u8,
-    ) (@TypeOf(writer).Error || Error)!void {
+    ) (std.io.Writer.Error || Error)!void {
         const result = try self.getResultFn(self, allocator);
         defer result.deinit(allocator);
 
@@ -64,14 +63,14 @@ pub const Metric = struct {
 
                 if (name_and_labels.labels.len > 0) {
                     for (v.buckets) |bucket| {
-                        try writer.print("{s}_bucket{{{s},le=\"{s}\"}} {d:.6}\n", .{
+                        try writer.print("{s}_bucket{{{s},le=\"{f}\"}} {d:.6}\n", .{
                             name_and_labels.name,
                             name_and_labels.labels,
                             floatMetric(bucket.upper_bound),
                             bucket.cumulative_count,
                         });
                     }
-                    try writer.print("{s}_sum{{{s}}} {:.6}\n", .{
+                    try writer.print("{s}_sum{{{s}}} {f}\n", .{
                         name_and_labels.name,
                         name_and_labels.labels,
                         floatMetric(v.sum),
@@ -83,13 +82,13 @@ pub const Metric = struct {
                     });
                 } else {
                     for (v.buckets) |bucket| {
-                        try writer.print("{s}_bucket{{le=\"{s}\"}} {d:.6}\n", .{
+                        try writer.print("{s}_bucket{{le=\"{f}\"}} {d:.6}\n", .{
                             name_and_labels.name,
                             floatMetric(bucket.upper_bound),
                             bucket.cumulative_count,
                         });
                     }
-                    try writer.print("{s}_sum {:.6}\n", .{
+                    try writer.print("{s}_sum {f}\n", .{
                         name_and_labels.name,
                         floatMetric(v.sum),
                     });
@@ -117,18 +116,13 @@ pub fn floatMetric(value: anytype) struct {
 
     pub fn format(
         self: @This(),
-        comptime _: []const u8,
-        options: fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+        writer: *std.io.Writer,
+    ) std.io.Writer.Error!void {
         const as_int: u64 = @intFromFloat(self.value);
         if (@as(f64, @floatFromInt(as_int)) == self.value) {
-            try fmt.formatInt(as_int, 10, .lower, options, writer);
+            try writer.print("{d}", .{as_int});
         } else {
-            const str_size = fmt.format_float.bufferSize(.decimal, @TypeOf(value));
-            var buf: [str_size]u8 = undefined;
-            const output = try fmt.formatFloat(&buf, self.value, .{ .mode = .decimal });
-            try fmt.formatBuf(output, options, writer);
+            try writer.print("{d}", .{self.value});
         }
     }
 } {

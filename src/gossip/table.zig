@@ -450,9 +450,9 @@ pub const GossipTable = struct {
         pubkey: *const Pubkey,
         shred_version: u16,
         minumum_insertion_timestamp: u64,
-    ) !std.ArrayList(ThreadSafeContactInfo) {
+    ) !std.array_list.Managed(ThreadSafeContactInfo) {
         var contact_info_iter = self.contactInfoIterator(minumum_insertion_timestamp);
-        var peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(
+        var peers = try std.array_list.Managed(ThreadSafeContactInfo).initCapacity(
             allocator,
             self.contact_infos.count(),
         );
@@ -541,7 +541,7 @@ pub const GossipTable = struct {
         alloc: std.mem.Allocator,
         mask: u64,
         mask_bits: u64,
-    ) error{OutOfMemory}!std.ArrayList(usize) {
+    ) error{OutOfMemory}!std.array_list.Managed(usize) {
         const indexs = try self.shards.find(alloc, mask, @intCast(mask_bits));
         return indexs;
     }
@@ -735,7 +735,7 @@ pub const GossipTable = struct {
         const labels = self.store.keys();
 
         // allocate here so SwapRemove doesnt mess with us
-        var labels_to_remove = std.ArrayList(GossipKey).init(self.allocator);
+        var labels_to_remove = std.array_list.Managed(GossipKey).init(self.allocator);
         defer labels_to_remove.deinit();
 
         for (drop_pubkeys) |pubkey| {
@@ -777,10 +777,10 @@ pub const GossipTable = struct {
         self: *Self,
         now: u64,
         timeout: u64,
-    ) error{OutOfMemory}!std.ArrayList(GossipKey) {
+    ) error{OutOfMemory}!std.array_list.Managed(GossipKey) {
         const cutoff_timestamp = now -| timeout;
 
-        var old_labels = std.ArrayList(GossipKey).init(self.allocator);
+        var old_labels = std.array_list.Managed(GossipKey).init(self.allocator);
         errdefer old_labels.deinit();
 
         next_key: for (self.pubkey_to_values.keys()) |key| {
@@ -852,14 +852,14 @@ pub const GossipTable = struct {
 
 pub const HashTimeQueue = struct {
     // TODO: benchmark other structs?
-    queue: std.ArrayList(HashAndTime),
+    queue: std.array_list.Managed(HashAndTime),
     allocator: std.mem.Allocator,
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .queue = std.ArrayList(HashAndTime).init(allocator),
+            .queue = std.array_list.Managed(HashAndTime).init(allocator),
             .allocator = allocator,
         };
     }
@@ -893,7 +893,7 @@ pub const HashTimeQueue = struct {
 
         // remove values up to i
         if (i > 0) {
-            var new_queue = try std.ArrayList(HashAndTime).initCapacity(
+            var new_queue = try std.array_list.Managed(HashAndTime).initCapacity(
                 self.allocator,
                 length - i,
             );
@@ -904,8 +904,8 @@ pub const HashTimeQueue = struct {
         }
     }
 
-    pub fn getValues(self: *const Self) error{OutOfMemory}!std.ArrayList(Hash) {
-        var hashes = try std.ArrayList(Hash).initCapacity(self.allocator, self.len());
+    pub fn getValues(self: *const Self) error{OutOfMemory}!std.array_list.Managed(Hash) {
+        var hashes = try std.array_list.Managed(Hash).initCapacity(self.allocator, self.len());
         for (self.queue.items) |data| {
             hashes.appendAssumeCapacity(data.hash);
         }
@@ -971,7 +971,7 @@ test "trim pruned values" {
     const N_VALUES = 10;
     const N_TRIM_VALUES = 5;
 
-    var values = std.ArrayList(SignedGossipData).init(std.testing.allocator);
+    var values = std.array_list.Managed(SignedGossipData).init(std.testing.allocator);
     defer values.deinit();
 
     for (0..N_VALUES) |_| {

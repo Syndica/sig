@@ -21,7 +21,7 @@ pub fn initGossipFromCluster(
     my_port: u16,
 ) !*GossipService {
     // gather entrypoints
-    var entrypoints = std.ArrayList(SocketAddr).init(allocator);
+    var entrypoints = std.array_list.Managed(SocketAddr).init(allocator);
     defer entrypoints.deinit();
 
     const entrypoints_strs = cluster.getEntrypoints();

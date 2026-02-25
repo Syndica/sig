@@ -795,9 +795,9 @@ test "GossipDuplicateShredHandler: cacheRootInfo populates and uses cached stake
     const num_nodes = total_entries / entries_per_node;
 
     // Create many nodes - half with high stake (node1), half with low stake (node3)
-    var high_stake_nodes = std.ArrayList(Pubkey).init(gpa);
+    var high_stake_nodes = std.array_list.Managed(Pubkey).init(gpa);
     defer high_stake_nodes.deinit();
-    var low_stake_nodes = std.ArrayList(Pubkey).init(gpa);
+    var low_stake_nodes = std.array_list.Managed(Pubkey).init(gpa);
     defer low_stake_nodes.deinit();
 
     // Generate nodes and add them to cached_staked_nodes

@@ -19,17 +19,20 @@ export fn sol_compat_shred_parse_v1(
     const allocator = std.heap.c_allocator;
 
     const in_slice = in_ptr[0..in_size];
-    const shred_binary = ShredBinary.decode(in_slice, allocator) catch return 0;
-    defer shred_binary.deinit();
+    var reader: std.Io.Reader = .fixed(in_slice);
+    var shred_binary = ShredBinary.decode(&reader, allocator) catch return 0;
+    defer shred_binary.deinit(allocator);
 
-    const shred = Shred.fromPayload(allocator, shred_binary.data.getSlice()) catch null;
+    const shred = Shred.fromPayload(allocator, shred_binary.data) catch null;
     defer if (shred) |s| s.deinit();
 
     var result: AcceptsShred = .{ .valid = shred != null };
-    defer result.deinit();
+    defer result.deinit(allocator);
 
-    const result_bytes = try result.encode(allocator);
-    defer allocator.free(result_bytes);
+    var writer: std.Io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+    try result.encode(&writer.writer, allocator);
+    const result_bytes = writer.written();
 
     const out_slice = out_ptr[0..out_size.*];
     if (result_bytes.len > out_slice.len) {

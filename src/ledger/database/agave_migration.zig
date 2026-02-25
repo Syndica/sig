@@ -43,7 +43,7 @@ const agave_meta = struct {
             self: *const agave_meta.SlotMeta,
             allocator: std.mem.Allocator,
         ) !sig_meta.SlotMeta {
-            const child_slots: std.ArrayList(Slot) = .{
+            const child_slots: std.array_list.Managed(Slot) = .{
                 .items = self.child_slots,
                 .capacity = self.child_slots.len,
                 .allocator = std.testing.failing_allocator,

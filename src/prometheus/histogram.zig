@@ -2,7 +2,7 @@ const std = @import("std");
 const prometheus = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const Atomic = std.atomic.Value;
 
 const Metric = prometheus.metric.Metric;

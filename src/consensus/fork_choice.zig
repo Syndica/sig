@@ -91,7 +91,7 @@ const ForkInfo = struct {
             // clear the latest invalid ancestor
             if (latest_duplicate_ancestor <= newly_duplicate_ancestor) {
                 logger.info().logf(
-                    \\ Fork choice for {} clearing latest invalid ancestor
+                    \\ Fork choice for {f} clearing latest invalid ancestor
                     \\ {} because {} was duplicate confirmed
                 ,
                     .{ my_key, latest_duplicate_ancestor, newly_duplicate_ancestor },
@@ -125,7 +125,7 @@ const ForkInfo = struct {
         // If the condition is met, update the latest duplicate ancestor
         if (should_update) {
             logger.info().logf(
-                "Fork choice for {} setting latest duplicate ancestor from {?} to {}",
+                "Fork choice for {f} setting latest duplicate ancestor from {any} to {}",
                 .{ my_key, self.latest_duplicate_ancestor, newly_duplicate_ancestor },
             );
             self.latest_duplicate_ancestor = newly_duplicate_ancestor;
@@ -614,7 +614,7 @@ pub const ForkChoice = struct {
         self.last_root_time = .now();
 
         // Log the new root update
-        self.logger.info().logf("fork_choice: new root set to slot={} hash={}", .{
+        self.logger.info().logf("fork_choice: new root set to slot={} hash={f}", .{
             new_root.slot,
             new_root.hash,
         });
@@ -669,7 +669,7 @@ pub const ForkChoice = struct {
         self.tree_root = root_parent;
 
         // Log the new root parent update
-        self.logger.info().logf("fork_choice: new root parent set to slot={} hash={}", .{
+        self.logger.info().logf("fork_choice: new root parent set to slot={} hash={f}", .{
             root_parent.slot,
             root_parent.hash,
         });
@@ -1264,7 +1264,7 @@ pub const ForkChoice = struct {
         // Update the fork info with the aggregated values
         if (is_duplicate_confirmed and !fork_info.is_duplicate_confirmed) {
             self.logger.info().logf(
-                "Fork choice setting {} to duplicate confirmed",
+                "Fork choice setting {f} to duplicate confirmed",
                 .{slot_hash_key},
             );
             fork_info.setDuplicateConfirmed();

@@ -67,18 +67,21 @@ fn downloadGenesisArchive(
     var client = std.http.Client{ .allocator = allocator };
     defer client.deinit();
 
-    var response_body = std.ArrayList(u8).init(allocator);
+    var response_body = std.array_list.Managed(u8).init(allocator);
     errdefer response_body.deinit();
+
+    var buf: [1024]u8 = undefined;
+    var writer = response_body.writer().adaptToNewApi(&buf);
 
     const result = client.fetch(.{
         .location = .{ .url = url },
         .method = .GET,
-        .response_storage = .{ .dynamic = &response_body },
-        .max_append_size = 100 * 1024 * 1024, // 100MB max
+        .response_writer = &writer.new_interface,
     }) catch |err| {
         logger.err().logf("Failed to fetch genesis archive: {}", .{err});
         return error.HttpRequestFailed;
     };
+    writer.new_interface.flush() catch return error.HttpRequestFailed;
 
     if (result.status != .ok) {
         logger.err().logf("HTTP request failed with status: {}", .{result.status});
@@ -99,7 +102,7 @@ fn decompressBz2(allocator: Allocator, compressed_data: []const u8) DownloadErro
         const result = bzip2.BZ2_bzBuffToBuffDecompress(
             decompressed.ptr,
             &dest_len,
-            @constCast(@ptrCast(compressed_data.ptr)),
+            @ptrCast(@constCast(compressed_data.ptr)),
             @intCast(compressed_data.len),
             0, // small: 0 = use normal algorithm
             0, // verbosity: 0 = quiet
@@ -141,10 +144,10 @@ fn extractGenesisFromTar(
     };
     defer dir.close();
 
-    var fbs = std.io.fixedBufferStream(tar_data);
+    var fbs = std.io.Reader.fixed(tar_data);
     var file_name_buf: [std.fs.max_path_bytes]u8 = undefined;
     var link_name_buf: [std.fs.max_path_bytes]u8 = undefined;
-    var tar_iter = std.tar.iterator(fbs.reader(), .{
+    var tar_iter = std.tar.Iterator.init(&fbs, .{
         .file_name_buffer = &file_name_buf,
         .link_name_buffer = &link_name_buf,
     });
@@ -167,14 +170,16 @@ fn extractGenesisFromTar(
 
         var buf: [8192]u8 = undefined;
         while (true) {
-            const bytes_read = file.reader().read(&buf) catch {
-                return error.TarExtractError;
-            };
-            if (bytes_read == 0) break;
-            out_file.writeAll(buf[0..bytes_read]) catch |err| {
+            var writer = out_file.writer(&buf);
+            const bytes_read = tar_iter.reader.stream(
+                &writer.interface,
+                .limited(file.size),
+            ) catch |err| {
                 logger.err().logf("Failed to write genesis.bin: {}", .{err});
                 return error.TarExtractError;
             };
+            writer.interface.flush() catch return error.TarExtractError;
+            if (bytes_read == 0) break;
         }
 
         return std.fs.path.join(allocator, &.{ output_dir, DEFAULT_GENESIS_FILE }) catch

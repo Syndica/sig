@@ -1,5 +1,6 @@
 //! [agave] Analogous to https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L1
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../../../sig.zig");
 const vote_program = @import("lib.zig");
 const builtin = @import("builtin");
@@ -170,7 +171,7 @@ pub fn serializeCompactVoteStateUpdate(
 ) anyerror!void {
     // Calculate lockout offsets
     var slot = data.root orelse 0;
-    var lockouts = std.BoundedArray(struct {
+    var lockouts = std14.BoundedArray(struct {
         Slot,
         u8,
     }, MAX_LOCKOUT_HISTORY){};
@@ -281,7 +282,7 @@ pub const TowerSync = struct {
 pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params) anyerror!void {
     // Calculate lockout offsets
     var slot = data.root orelse 0;
-    var lockouts = std.BoundedArray(struct {
+    var lockouts = std14.BoundedArray(struct {
         Slot,
         u8,
     }, MAX_LOCKOUT_HISTORY){};
@@ -420,7 +421,7 @@ pub const AuthorizedVoters = struct {
         allocator: Allocator,
         current_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!bool {
-        var expired_keys = std.ArrayList(Epoch).init(allocator);
+        var expired_keys = std.array_list.Managed(Epoch).init(allocator);
         defer expired_keys.deinit();
 
         var voter_iter = self.voters.iterator();
@@ -451,13 +452,13 @@ pub const AuthorizedVoters = struct {
         current_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!void {
         const min_epoch = if (current_epoch > 0) current_epoch - 1 else 0;
-        var expired_keys = std.ArrayList(Epoch).init(allocator);
-        defer expired_keys.deinit();
+        var expired_keys: std.ArrayList(Epoch) = .{};
+        defer expired_keys.deinit(allocator);
 
         var voter_iter = self.voters.iterator();
         while (voter_iter.next()) |entry| {
             if (entry.key_ptr.* < min_epoch) {
-                try expired_keys.append(entry.key_ptr.*);
+                try expired_keys.append(allocator, entry.key_ptr.*);
             }
         }
 
@@ -1457,7 +1458,7 @@ pub const VoteStateV3 = struct {
         else
             0;
 
-        var recent_vote_slots = std.ArrayList(Slot).init(allocator);
+        var recent_vote_slots = std.array_list.Managed(Slot).init(allocator);
         defer recent_vote_slots.deinit();
 
         for (vote.slots) |slot| {
@@ -1666,7 +1667,7 @@ pub const VoteStateV3 = struct {
         // index into the slot_hashes, starting at the oldest known slot hash
         var slot_hashes_index = slot_hash_entries.len;
         // The maximum number of elements is bounded by the maximum instruction size possible.
-        var lockouts_to_filter: std.BoundedArray(
+        var lockouts_to_filter: std14.BoundedArray(
             u64,
             sig.vm.syscalls.cpi.MAX_DATA_LEN / @sizeOf(u64),
         ) = .{};
@@ -3464,7 +3465,7 @@ test "state.VoteStateV3 process new vote too many votes" {
     var vote_state: VoteStateV3 = .DEFAULT;
     defer vote_state.deinit(allocator);
 
-    var bad_votes = std.ArrayList(Lockout).init(allocator);
+    var bad_votes = std.array_list.Managed(Lockout).init(allocator);
     defer bad_votes.deinit();
 
     var slot: usize = 0;
@@ -5348,7 +5349,7 @@ fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
     const last_proposed = proposed_slots_and_lockouts[proposed_slots_and_lockouts.len - 1];
     const latest_slot_in_history = @max(last_proposed.slot, earliest_slot_in_history);
 
-    var slots = std.ArrayList(Slot).init(allocator);
+    var slots = std.array_list.Managed(Slot).init(allocator);
     defer slots.deinit();
 
     const first = if (current_vote_state_slots.len > 0)
@@ -5419,7 +5420,7 @@ fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
     try std.testing.expectEqual(null, another_maybe_error);
     try std.testing.expectEqual(expected_root, vote_state.root_slot);
 
-    var actual_lockouts = try std.ArrayList(Lockout).initCapacity(
+    var actual_lockouts = try std.array_list.Managed(Lockout).initCapacity(
         allocator,
         vote_state.votes.items.len,
     );
@@ -5442,7 +5443,7 @@ fn recentVotes(
     }
     const start = vote_state.votes.items.len -| MAX_RECENT_VOTES;
 
-    var votes = try std.ArrayList(Vote).initCapacity(
+    var votes = try std.array_list.Managed(Vote).initCapacity(
         allocator,
         vote_state.votes.items.len - start,
     );

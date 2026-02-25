@@ -108,11 +108,11 @@ pub fn init(
     else
         0;
 
-    const heap = try allocator.alignedAlloc(u8, 16, heap_size);
+    const heap = try allocator.alignedAlloc(u8, .fromByteUnits(16), heap_size);
     @memset(heap, 0);
     errdefer allocator.free(heap);
 
-    const stack = try allocator.alignedAlloc(u8, 16, stack_size);
+    const stack = try allocator.alignedAlloc(u8, .fromByteUnits(16), stack_size);
     @memset(stack, 0);
     errdefer allocator.free(stack);
 

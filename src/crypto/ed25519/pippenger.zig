@@ -3,6 +3,7 @@
 //! See Section 4. of <https://eprint.iacr.org/2012/549.pdf>
 
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../../sig.zig");
 const crypto = std.crypto;
 const Ed25519 = crypto.ecc.Edwards25519;
@@ -84,8 +85,8 @@ pub fn mulMultiRuntime(
         else => unreachable,
     };
 
-    var scalars: std.BoundedArray([64]i8, max_elements) = .{};
-    var points: std.BoundedArray(CachedPoint, max_elements) = .{};
+    var scalars: std14.BoundedArray([64]i8, max_elements) = .{};
+    var points: std14.BoundedArray(CachedPoint, max_elements) = .{};
 
     for (compressed_scalars) |s| {
         scalars.appendAssumeCapacity(asRadix2w(s, w));

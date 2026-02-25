@@ -26,7 +26,7 @@ slots: []SlotIndex,
 pub const SlotIndex = struct {
     // TODO: it's possible for us to pre-populate a SlotIndex with pubkeys (and null values) in
     // advance of replaying the slot, which would let us drop this mutex entirely.
-    lock: std.Thread.RwLock,
+    lock: sig.sync.RwLock,
     slot: Slot,
     is_empty: Atomic(bool),
     entries: sig.utils.collections.PubkeyMap(AccountSharedData),

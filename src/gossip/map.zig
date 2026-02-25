@@ -318,7 +318,7 @@ test "repeat add+remove" {
     var map = GossipMap{};
     defer map.deinit(std.testing.allocator);
 
-    var keys = std.ArrayList(GossipKey).init(std.testing.allocator);
+    var keys = std.array_list.Managed(GossipKey).init(std.testing.allocator);
     defer keys.deinit();
 
     for (0..20) |_| {

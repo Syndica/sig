@@ -3,7 +3,7 @@ const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
 
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const Hash = sig.core.Hash;
@@ -26,7 +26,7 @@ pub fn buildGossipPullFilters(
     alloc: std.mem.Allocator,
     random: std.Random,
     gossip_table_rw: *RwMux(GossipTable),
-    failed_pull_hashes: *const ArrayList(Hash),
+    failed_pull_hashes: *const std.array_list.Managed(Hash),
     bloom_size: usize,
     max_n_filters: usize,
 ) error{ NotEnoughSignedGossipDatas, OutOfMemory }!ArrayList(GossipPullFilter) {
@@ -285,7 +285,7 @@ test "building pull filters" {
     // build filters
     var gossip_table_rw = RwMux(GossipTable).init(gossip_table);
 
-    const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
+    const failed_pull_hashes = std.array_list.Managed(Hash).init(std.testing.allocator);
     var filters = try buildGossipPullFilters(
         std.testing.allocator,
         random,

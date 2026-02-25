@@ -1,4 +1,5 @@
 const std = @import("std");
+const std14 = @import("std14");
 const sig = @import("../../sig.zig");
 const replay = @import("../lib.zig");
 const tracy = @import("tracy");
@@ -502,8 +503,8 @@ fn processAncestorHashesDuplicateSlots(
         const slot_to_repair = ancestor_dupe_slot_to_repair.slot_to_repair;
         const epoch_slots_frozen_slot, const epoch_slots_frozen_hash = slot_to_repair.tuple();
         logger.warn().logf(
-            "{} ReplayStage notified of duplicate slot from ancestor hashes service but we " ++
-                "observed as {s}: {}",
+            "{f} ReplayStage notified of duplicate slot from ancestor hashes service but we " ++
+                "observed as {s}: {f}",
             .{
                 pubkey,
                 if (request_type == .popular_pruned) "pruned" else "dead",
@@ -577,7 +578,7 @@ fn processDuplicateConfirmedSlots(
             if (!prev_hash.eql(duplicate_confirmed_hash)) {
                 std.debug.panic(
                     \\Additional duplicate confirmed notification for slot {} with a different hash.
-                    \\prev_hash: {} duplicate_confirmed_hash {}
+                    \\prev_hash: {f} duplicate_confirmed_hash {f}
                 ,
                     .{ confirmed_slot, prev_hash, duplicate_confirmed_hash },
                 );
@@ -688,14 +689,14 @@ fn processDuplicateSlots(
 ) !void {
     const MAX_BATCH_SIZE = 1024;
 
-    var new_duplicate_slots: std.BoundedArray(Slot, MAX_BATCH_SIZE) = .{};
+    var new_duplicate_slots: std14.BoundedArray(Slot, MAX_BATCH_SIZE) = .{};
     while (new_duplicate_slots.unusedCapacitySlice().len != 0) {
         const new_duplicate_slot = duplicate_slots_receiver.tryReceive() orelse break;
         new_duplicate_slots.appendAssumeCapacity(new_duplicate_slot);
     }
 
     const root_slot, const slots_hashes = blk: {
-        var slots_hashes: std.BoundedArray(?Hash, MAX_BATCH_SIZE) = .{};
+        var slots_hashes: std14.BoundedArray(?Hash, MAX_BATCH_SIZE) = .{};
         for (new_duplicate_slots.constSlice()) |duplicate_slot| {
             slots_hashes.appendAssumeCapacity(hash: {
                 const bf_elem = slot_tracker.slots.get(duplicate_slot) orelse break :hash null;
@@ -762,8 +763,8 @@ fn getDuplicateConfirmedHash(
     if (maybe_duplicate_confirmed_hash) |duplicate_confirmed_hash| {
         if (!slot_frozen_hash.eql(duplicate_confirmed_hash)) {
             logger.err().logf(
-                "For slot {}, the gossip duplicate confirmed hash {}, is not equal" ++
-                    "to the confirmed hash we replayed: {}",
+                "For slot {}, the gossip duplicate confirmed hash {f}, is not equal" ++
+                    "to the confirmed hash we replayed: {f}",
                 .{ slot, duplicate_confirmed_hash, slot_frozen_hash },
             );
         }
@@ -836,8 +837,8 @@ pub const check_slot_agrees_with_cluster = struct {
                         // Modify fork choice rule to exclude our version from being voted
                         // on and also repair the correct version
                         logger.warn().logf(
-                            "Cluster duplicate confirmed slot {} with hash {}, " ++
-                                "but our version has hash {}",
+                            "Cluster duplicate confirmed slot {} with hash {f}, " ++
+                                "but our version has hash {f}",
                             .{ slot, duplicate_confirmed_hash, frozen_hash },
                         );
                         // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
@@ -864,8 +865,8 @@ pub const check_slot_agrees_with_cluster = struct {
                     } else {
                         // The epoch slots hash does not match our frozen hash.
                         logger.warn().logf(
-                            "EpochSlots sample returned slot {} with hash {}, " ++
-                                "but our version has hash {}",
+                            "EpochSlots sample returned slot {} with hash {f}, " ++
+                                "but our version has hash {f}",
                             .{ slot, epoch_slots_frozen_hash, frozen_hash },
                         );
                         // If the slot is not already pruned notify fork choice to mark as invalid
@@ -949,7 +950,7 @@ pub const check_slot_agrees_with_cluster = struct {
                 // If the cluster duplicate confirmed some version of this slot, then
                 // there's another version of our dead slot
                 logger.warn().logf(
-                    "Cluster duplicate confirmed slot {} with hash {}, but we marked slot dead",
+                    "Cluster duplicate confirmed slot {} with hash {f}, but we marked slot dead",
                     .{ slot, duplicate_confirmed_hash },
                 );
                 // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
@@ -976,8 +977,8 @@ pub const check_slot_agrees_with_cluster = struct {
                     // Modify fork choice rule to exclude our version from being voted
                     // on and also repair the correct version
                     logger.warn().logf(
-                        "Cluster duplicate confirmed slot {} with hash {}," ++
-                            " but our version has hash {}",
+                        "Cluster duplicate confirmed slot {} with hash {f}," ++
+                            " but our version has hash {f}",
                         .{ slot, duplicate_confirmed_hash, frozen_hash },
                     );
                     // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
@@ -1180,8 +1181,8 @@ pub const check_slot_agrees_with_cluster = struct {
             if (maybe_duplicate_confirmed_hash) |duplicate_confirmed_hash| {
                 if (!epoch_slots_frozen_hash.eql(duplicate_confirmed_hash)) {
                     logger.warn().logf(
-                        "EpochSlots sample returned slot {} with hash {}, " ++
-                            "but we already saw duplicate confirmation on hash: {}",
+                        "EpochSlots sample returned slot {} with hash {f}, " ++
+                            "but we already saw duplicate confirmation on hash: {f}",
                         .{ slot, epoch_slots_frozen_hash, duplicate_confirmed_hash },
                     );
                 }
@@ -1197,8 +1198,8 @@ pub const check_slot_agrees_with_cluster = struct {
                 } else {
                     // The epoch slots hash does not match our frozen hash.
                     logger.warn().logf(
-                        "EpochSlots sample returned slot {} with hash {}, " ++
-                            "but our version has hash {}",
+                        "EpochSlots sample returned slot {} with hash {f}, " ++
+                            "but our version has hash {f}",
                         .{ slot, epoch_slots_frozen_hash, slot_frozen_hash },
                     );
                     if (!is_popular_pruned) {
@@ -1214,7 +1215,7 @@ pub const check_slot_agrees_with_cluster = struct {
             .dead => {
                 // Cluster sample found a hash for our dead slot, we must have the wrong version
                 logger.warn().logf(
-                    "EpochSlots sample returned slot {} with hash {}, " ++
+                    "EpochSlots sample returned slot {} with hash {f}, " ++
                         "but we marked slot dead",
                     .{ slot, epoch_slots_frozen_hash },
                 );
@@ -1225,7 +1226,7 @@ pub const check_slot_agrees_with_cluster = struct {
                 std.debug.assert(is_popular_pruned);
                 // The cluster sample found the troublesome slot which caused this fork to be pruned
                 logger.warn().logf(
-                    "EpochSlots sample returned slot {} with hash {}, " ++
+                    "EpochSlots sample returned slot {} with hash {f}, " ++
                         "but we have pruned it due to incorrect ancestry",
                     .{ slot, epoch_slots_frozen_hash },
                 );
@@ -1295,7 +1296,7 @@ const state_change = struct {
             .hash = frozen_hash,
         }) orelse {
             logger.err().logf(
-                "frozen '{{ .slot = {}, .hash = {} }}' must exist in fork choice",
+                "frozen '{{ .slot = {}, .hash = {f} }}' must exist in fork choice",
                 .{ frozen_slot, frozen_hash },
             );
             return error.FrozenSlotNotInForkChoice;
