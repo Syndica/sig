@@ -160,7 +160,7 @@ pub fn Client(comptime Handler: type, comptime read_buf_size: usize) type {
 
         /// Start connecting to the WebSocket server.
         pub fn connect(self: *ClientSelf) !void {
-            log.debug("connect: address={}, path={s}", .{ self.config.address, self.config.path });
+            log.debug("connect: address={f}, path={s}", .{ self.config.address, self.config.path });
 
             self.socket = try xev.TCP.init(self.config.address);
 

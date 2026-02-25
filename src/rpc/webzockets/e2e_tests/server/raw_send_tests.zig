@@ -140,9 +140,7 @@ test "raw send batched messages" {
         .allocator = testing.allocator,
         .expected_messages = 3,
         .resume_threshold = 1, // resume immediately — server sends everything at once
-        .results = std.ArrayList(
-            clients.PauseUntilBufferedClientHandler.RecvResult,
-        ).init(testing.allocator),
+        .results = .empty,
     };
     defer handler.deinit();
 

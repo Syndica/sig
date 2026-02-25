@@ -114,10 +114,10 @@ test "incremental request (chunked with delays)" {
     const chunk2_end = chunk1_end + ((request.len - chunk1_end) / 2);
 
     try stream.writeAll(request[0..chunk1_end]);
-    std.time.sleep(10 * std.time.ns_per_ms);
+    std.Thread.sleep(10 * std.time.ns_per_ms);
 
     try stream.writeAll(request[chunk1_end..chunk2_end]);
-    std.time.sleep(10 * std.time.ns_per_ms);
+    std.Thread.sleep(10 * std.time.ns_per_ms);
 
     try stream.writeAll(request[chunk2_end..]);
 
@@ -153,7 +153,7 @@ test "byte-by-byte request" {
 
     for (request) |byte| {
         try stream.writeAll(&.{byte});
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 
     // Read the 101 response.
@@ -198,7 +198,7 @@ test "bare LF headers (no \\r\\n) doesn't crash server" {
     try expectClosed(stream);
 
     // Verify the server is still functional after handling the malformed request.
-    std.time.sleep(50 * std.time.ns_per_ms);
+    std.Thread.sleep(50 * std.time.ns_per_ms);
     try verifyServerFunctional(ts.port);
 }
 
@@ -227,7 +227,7 @@ test "fully bare LF request (no \\r\\n at all) doesn't crash server" {
     try expectClosed(stream);
 
     // Verify the server is still functional after handling the malformed request.
-    std.time.sleep(50 * std.time.ns_per_ms);
+    std.Thread.sleep(50 * std.time.ns_per_ms);
     try verifyServerFunctional(ts.port);
 }
 
@@ -246,7 +246,7 @@ test "partial request then disconnect" {
     }
 
     // Give the server time to clean up the aborted handshake
-    std.time.sleep(50 * std.time.ns_per_ms);
+    std.Thread.sleep(50 * std.time.ns_per_ms);
 
     // Verify the server is still functional after the aborted handshake
     try verifyServerFunctional(ts.port);

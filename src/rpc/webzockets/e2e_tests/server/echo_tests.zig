@@ -146,7 +146,7 @@ test "multiple messages in sequence" {
     };
     var handler: clients.SequenceHandler = .{
         .messages = &messages,
-        .results = std.ArrayList(clients.SequenceHandler.RecvResult).init(testing.allocator),
+        .results = .empty,
         .allocator = testing.allocator,
     };
     defer handler.deinit();

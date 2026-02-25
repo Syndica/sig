@@ -350,7 +350,7 @@ fn acceptAndStall(listener: std.posix.socket_t, mode: StallMode) void {
         },
     }
 
-    std.time.sleep(500 * std.time.ns_per_ms);
+    std.Thread.sleep(500 * std.time.ns_per_ms);
 }
 
 /// Thread function: accept one connection, read the upgrade request, extract

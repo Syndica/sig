@@ -284,7 +284,7 @@ pub const SequenceHandler = struct {
         for (self.results.items) |item| {
             self.allocator.free(item.data);
         }
-        self.results.deinit();
+        self.results.deinit(self.allocator);
         if (self.sent_data) |data| {
             self.allocator.free(data);
             self.sent_data = null;
@@ -320,7 +320,7 @@ pub const SequenceHandler = struct {
 
     pub fn onMessage(self: *SequenceHandler, conn: anytype, message: ws.Message) void {
         const copy = self.allocator.dupe(u8, message.data) catch return;
-        self.results.append(.{ .data = copy, .len = message.data.len }) catch {
+        self.results.append(self.allocator, .{ .data = copy, .len = message.data.len }) catch {
             self.allocator.free(copy);
             return;
         };
@@ -372,7 +372,7 @@ pub const RawSendOnOpenHandler = struct {
         for (self.results.items) |item| {
             self.allocator.free(item.data);
         }
-        self.results.deinit();
+        self.results.deinit(self.allocator);
         if (self.sent_buf) |buf| {
             self.allocator.free(buf);
             self.sent_buf = null;
@@ -421,7 +421,7 @@ pub const RawSendOnOpenHandler = struct {
 
     pub fn onMessage(self: *RawSendOnOpenHandler, conn: anytype, message: ws.Message) void {
         const copy = self.allocator.dupe(u8, message.data) catch return;
-        self.results.append(.{ .data = copy, .msg_type = message.type }) catch {
+        self.results.append(self.allocator, .{ .data = copy, .msg_type = message.type }) catch {
             self.allocator.free(copy);
             return;
         };
@@ -468,7 +468,7 @@ pub const PauseUntilBufferedClientHandler = struct {
         for (self.results.items) |item| {
             self.allocator.free(item.data);
         }
-        self.results.deinit();
+        self.results.deinit(self.allocator);
     }
 
     pub fn onOpen(self: *PauseUntilBufferedClientHandler, conn: anytype) void {
@@ -493,7 +493,7 @@ pub const PauseUntilBufferedClientHandler = struct {
         }
 
         const copy = self.allocator.dupe(u8, message.data) catch return;
-        self.results.append(.{ .data = copy }) catch {
+        self.results.append(self.allocator, .{ .data = copy }) catch {
             self.allocator.free(copy);
             return;
         };
@@ -533,7 +533,7 @@ pub const PauseMidStreamClientHandler = struct {
         for (self.results.items) |item| {
             self.allocator.free(item.data);
         }
-        self.results.deinit();
+        self.results.deinit(self.allocator);
 
         if (self.sent_data) |data| {
             self.allocator.free(data);
@@ -565,7 +565,7 @@ pub const PauseMidStreamClientHandler = struct {
             conn.resumeReads();
             return;
         };
-        self.results.append(.{ .data = copy }) catch {
+        self.results.append(self.allocator, .{ .data = copy }) catch {
             self.allocator.free(copy);
             conn.resumeReads();
             return;
@@ -635,7 +635,7 @@ pub const ReentrancyDetectClientHandler = struct {
         for (self.results.items) |item| {
             self.allocator.free(item.data);
         }
-        self.results.deinit();
+        self.results.deinit(self.allocator);
     }
 
     pub fn onOpen(self: *ReentrancyDetectClientHandler, conn: anytype) void {
@@ -664,7 +664,7 @@ pub const ReentrancyDetectClientHandler = struct {
         defer self.in_on_message = false;
 
         const copy = self.allocator.dupe(u8, message.data) catch return;
-        self.results.append(.{ .data = copy }) catch {
+        self.results.append(self.allocator, .{ .data = copy }) catch {
             self.allocator.free(copy);
             return;
         };

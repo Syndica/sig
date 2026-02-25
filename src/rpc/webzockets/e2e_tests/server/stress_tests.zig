@@ -93,9 +93,7 @@ test "many concurrent echo clients" {
 
             contexts[loop_idx].handlers[client_idx] = .{
                 .messages = msg_specs,
-                .results = std.ArrayList(
-                    clients.SequenceHandler.RecvResult,
-                ).init(testing.allocator),
+                .results = .empty,
                 .allocator = testing.allocator,
             };
 
@@ -173,7 +171,7 @@ test "rapid message burst" {
 
     var handler: clients.SequenceHandler = .{
         .messages = &specs,
-        .results = std.ArrayList(clients.SequenceHandler.RecvResult).init(testing.allocator),
+        .results = .empty,
         .allocator = testing.allocator,
     };
     defer handler.deinit();
@@ -405,9 +403,7 @@ test "randomized concurrent echo" {
 
             loop_states[loop_idx].handlers[client_idx] = .{
                 .messages = msg_specs,
-                .results = std.ArrayList(
-                    clients.SequenceHandler.RecvResult,
-                ).init(allocator),
+                .results = .empty,
                 .allocator = allocator,
             };
 

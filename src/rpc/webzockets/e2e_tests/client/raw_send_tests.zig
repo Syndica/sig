@@ -21,7 +21,7 @@ test "raw send text (client)" {
     };
     var handler: clients.RawSendOnOpenHandler = .{
         .frames = &frames,
-        .results = std.ArrayList(clients.RawSendOnOpenHandler.RecvResult).init(testing.allocator),
+        .results = .empty,
         .allocator = testing.allocator,
         .csprng = &env.csprng,
     };
@@ -59,7 +59,7 @@ test "raw send binary (client)" {
     };
     var handler: clients.RawSendOnOpenHandler = .{
         .frames = &frames,
-        .results = std.ArrayList(clients.RawSendOnOpenHandler.RecvResult).init(testing.allocator),
+        .results = .empty,
         .allocator = testing.allocator,
         .csprng = &env.csprng,
     };
@@ -98,7 +98,7 @@ test "raw send batched messages (client)" {
     };
     var handler: clients.RawSendOnOpenHandler = .{
         .frames = &frames,
-        .results = std.ArrayList(clients.RawSendOnOpenHandler.RecvResult).init(testing.allocator),
+        .results = .empty,
         .allocator = testing.allocator,
         .csprng = &env.csprng,
     };

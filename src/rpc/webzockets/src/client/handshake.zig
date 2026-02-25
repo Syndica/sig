@@ -99,7 +99,7 @@ pub fn ClientHandshake(comptime Context: type) type {
 
         /// Begin the handshake: generate key, build request, write to socket.
         pub fn start(self: *ClientHandshakeSelf, address: std.net.Address, path: []const u8) void {
-            log.debug("start: address={}, path={s}", .{ address, path });
+            log.debug("start: address={f}, path={s}", .{ address, path });
 
             var raw_key: [16]u8 = undefined;
             self.csprng.fill(&raw_key);

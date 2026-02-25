@@ -110,7 +110,7 @@ pub fn Connection(
             const on_bytes_read = @hasDecl(Handler, "onBytesRead");
         };
 
-        pub const List = std.DoublyLinkedList(*ConnectionSelf);
+        pub const List = std.DoublyLinkedList;
 
         pub const Config = struct {
             /// Maximum total size of a reassembled fragmented message.

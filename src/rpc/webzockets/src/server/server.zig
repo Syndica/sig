@@ -337,7 +337,8 @@ pub fn Server(
             var it = self.active_connections.first;
             while (it) |node| {
                 it = node.next;
-                node.data.close(.going_away, "");
+                const conn: *ConnImpl = @fieldParentPtr("node", node);
+                conn.close(.going_away, "");
             }
 
             // Check if already drained (no connections, listen close may fire synchronously)

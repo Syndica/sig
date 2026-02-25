@@ -259,7 +259,7 @@ pub fn Handshake(
                 },
             );
 
-            conn.node = .{ .data = conn };
+            conn.node = .{};
             self.server.active_connections.append(&conn.node);
             conn.start(0, leftover.len);
         }

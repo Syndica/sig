@@ -195,7 +195,7 @@ pub fn writeRequest(
     var fbs = std.io.fixedBufferStream(buf);
     const w = fbs.writer();
     w.print("GET {s} HTTP/1.1\r\n", .{path}) catch return error.BufferTooSmall;
-    w.print("Host: {}\r\n", .{address}) catch return error.BufferTooSmall;
+    w.print("Host: {f}\r\n", .{address}) catch return error.BufferTooSmall;
     w.writeAll("Upgrade: websocket\r\n") catch return error.BufferTooSmall;
     w.writeAll("Connection: Upgrade\r\n") catch return error.BufferTooSmall;
     w.print("Sec-WebSocket-Key: {s}\r\n", .{key}) catch return error.BufferTooSmall;

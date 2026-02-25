@@ -53,7 +53,7 @@ pub fn Reader(comptime role: types.Role) type {
         /// Opcode of the first fragment in an in-progress fragmented message (null if none).
         fragment_opcode: ?types.Opcode,
         /// Accumulator for fragmented message payloads.
-        fragment_buf: std.ArrayListUnmanaged(u8),
+        fragment_buf: std.ArrayList(u8),
 
         const ReaderSelf = @This();
 

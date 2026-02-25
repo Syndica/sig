@@ -22,9 +22,7 @@ test "sequential processing of server burst" {
         .allocator = testing.allocator,
         .expected_messages = messages.len,
         .resume_threshold = 21,
-        .results = std.ArrayList(
-            clients.PauseUntilBufferedClientHandler.RecvResult,
-        ).init(testing.allocator),
+        .results = .empty,
     };
     defer handler.deinit();
 
@@ -68,9 +66,7 @@ test "pause mid-stream stops dispatch then delivers on resume" {
         .allocator = testing.allocator,
         .expected_messages = messages.len,
         .resume_threshold = 28,
-        .results = std.ArrayList(
-            clients.PauseMidStreamClientHandler.RecvResult,
-        ).init(testing.allocator),
+        .results = .empty,
     };
     defer handler.deinit();
 
@@ -111,9 +107,7 @@ test "close while client is paused" {
         .allocator = testing.allocator,
         .expected_messages = 0,
         .resume_threshold = 15,
-        .results = std.ArrayList(
-            clients.PauseUntilBufferedClientHandler.RecvResult,
-        ).init(testing.allocator),
+        .results = .empty,
     };
     defer handler.deinit();
 
@@ -150,9 +144,7 @@ test "no re-entrant onMessage dispatch" {
     var handler: clients.ReentrancyDetectClientHandler = .{
         .allocator = testing.allocator,
         .resume_threshold = 15,
-        .results = std.ArrayList(
-            clients.ReentrancyDetectClientHandler.RecvResult,
-        ).init(testing.allocator),
+        .results = .empty,
     };
     defer handler.deinit();
 
@@ -201,9 +193,7 @@ test "buffer fills while paused (small read buffer)" {
         .allocator = testing.allocator,
         .expected_messages = msg_count,
         .resume_threshold = 256,
-        .results = std.ArrayList(
-            clients.PauseUntilBufferedClientHandler.RecvResult,
-        ).init(testing.allocator),
+        .results = .empty,
     };
     defer handler.deinit();
 

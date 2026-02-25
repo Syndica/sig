@@ -50,7 +50,7 @@ test "idle timeout: activity resets timer" {
     // Send messages at 50ms intervals for ~500ms, well past idle timeout
     var i: usize = 0;
     while (i < 10) : (i += 1) {
-        std.time.sleep(50 * std.time.ns_per_ms);
+        std.Thread.sleep(50 * std.time.ns_per_ms);
         var msg = "ping".*;
         try client.write(&msg);
 
