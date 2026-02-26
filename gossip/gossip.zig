@@ -192,8 +192,31 @@ fn runGossip(
     
     var pull_request_timer: Timestamp = 0;
     var push_message_timer: Timestamp = 0;
+    var dump_timer: Timestamp = 0;
+    var timer = try std.time.Timer.start();
     while (true) {
         const now = realtime();
+
+        if (dump_timer <= now) {
+            dump_timer = now + (1 * 1000); // every 5s
+
+            var file = try std.fs.cwd().createFile("gossip_dump.txt", .{});
+            defer file.close();
+
+            var w = std.io.bufferedWriter(file.writer());
+            try w.writer().print("Elapsed: {} (peers:{})\n\n", .{std.fmt.fmtDuration(timer.read()), peers.count()});
+
+            for (peers.keys(), peers.values()) |pubkey, peer| {
+                try w.writer().print("Contact({}, {})\n", .{pubkey, peer.addr});
+                // const v = table.getPtr(.{ .from = pubkey, .tag = .contact_info, .idx = 0 }) orelse continue;
+                // var _fbs = std.io.fixedBufferStream(v.value[0..v.len]);
+                // var _fba = std.heap.FixedBufferAllocator.init(value_buf);
+                // const value = try bincode.read(_fba.allocator(), _fbs.reader(), CrdsValue);
+                // const sock_addr = getGossipAddr(value.data) catch continue;
+                // const addr
+            }
+            try w.flush();
+        }
 
         if (push_message_timer <= now) b: {
             push_message_timer = now + (7 * 1000); // every 7s
@@ -207,7 +230,7 @@ fn runGossip(
             std.log.debug("Sending push contact_info", .{});
             const ci_value = try signData(keypair, .{ .contact_info = my_ci });
             _ = try tableInsert(&table, &hashes, ci_value);
-            try sendPushes(socket, &peers, prng.random(), keypair, ci_value);
+            try sendPushes(socket, &peers, prng.random(), keypair, &.{ ci_value }, now);
         }
 
         if (pull_request_timer <= now) {
@@ -329,10 +352,15 @@ fn runGossip(
             while (i < peers.values().len) {
                 const p: *GossipPeer = &peers.values()[i];
                 
-                const cutoff = now -| (15 * 1000);
-                if (@min(p.last_contact, p.last_pong) <= cutoff) {
-                    std.log.debug("removing dead peer {}:{}", .{peers.keys()[i], p.addr});
-                    peers.swapRemoveAt(i);
+                if (p.last_pong <= now -| (30 * 1000)) {
+                    std.log.debug("removing dead peer from no Pongs {}:{}", .{peers.keys()[i], p.addr});
+                    removePeer(&table, &peers, i);
+                    continue;
+                }
+
+                if (p.last_contact <= now -| (60 * 1000)) {
+                    std.log.debug("removing dead peer from no ContactInfo {}:{}", .{peers.keys()[i], p.addr});
+                    removePeer(&table, &peers, i);
                     continue;
                 }
 
@@ -419,7 +447,7 @@ fn runGossip(
                 }
 
                 // Pull Response with values
-                const p = try getOrCreatePeer(socket, &peers, from, addr, prng.random(), keypair, now);
+                const p = try getOrCreatePeer(socket, &table, &peers, from, addr, prng.random(), keypair, now);
                 try sendGossipMessage(socket, p.addr, .{ .pull_response = .{
                     .from = my_ci.from,
                     .values = values.constSlice(),
@@ -459,6 +487,10 @@ fn runGossip(
                         prng.random(),
                         now,
                     );
+                }
+
+                if (msg == .push_message) {
+                    try sendPushes(socket, &peers, prng.random(), keypair, add.values, now);
                 }
             },
             .prune_message => |prune| {
@@ -511,7 +543,7 @@ fn runGossip(
                 std.log.debug("Ping(from:{})", .{ping.from});
 
                 // Important to add the peer here.
-                const p = try getOrCreatePeer(socket, &peers, ping.from, addr, prng.random(), keypair, now);
+                const p = try getOrCreatePeer(socket, &table, &peers, ping.from, addr, prng.random(), keypair, now);
 
                 const hash = Hash.initMany(&.{ "SOLANA_PING_PONG", &ping.token });
                 try sendGossipMessage(socket, p.addr, .{ .pong_message = .{
@@ -528,7 +560,7 @@ fn runGossip(
 
                 std.log.debug("Pong(from:{})", .{pong.from});
 
-                const p = try getOrCreatePeer(socket, &peers, pong.from, addr, prng.random(), keypair, now);
+                const p = try getOrCreatePeer(socket, &table, &peers, pong.from, addr, prng.random(), keypair, now);
                 p.last_pong = now;
             },
         }
@@ -614,8 +646,8 @@ fn onNewValue(
     now: Timestamp,
 ) !void {
     const key, const wallclock = getGossipKey(value.data);
-
-    _ = wallclock; // Seems like a lot of the values are expired.
+    
+    // Seems like a lot of the EpochValues would be expired based on this.
     // if (wallclock <= (now -| (30 * 1000))) {
     //     std.log.err("expired value {} ({} < {})", .{std.meta.activeTag(value.data), wallclock, now});
     //     return;
@@ -626,17 +658,21 @@ fn onNewValue(
         return e;
     };
 
-    if (dups == 0) b: {
-        const sock_addr: SocketAddr = getGossipAddr(value.data) catch break :b;
+    std.log.debug("Inserted {s} from {}", .{@tagName(std.meta.activeTag(value.data)), key.from});
+
+    if (getGossipAddr(value.data) catch null) |sock_addr| {
         const addr: std.net.Address = switch (sock_addr) {
             .v4 => |s| .initIp4(s.ip, s.port),
             .v6 => |s| .initIp6(s.ip, s.port, 0, 0),
         };
 
-        const p = try getOrCreatePeer(socket, peers, key.from, addr, rng, keypair, now);
-        p.last_contact = now;
+        const p = try getOrCreatePeer(socket, table, peers, key.from, addr, rng, keypair, now);
+        p.last_contact = wallclock;
         p.addr = addr;
     }
+
+    // _ = dups;
+    // _ = sender;
 
     const min_dupes_until_prune = 2; // allow dupes before pruning caller (for redundancy)
     if (dups > min_dupes_until_prune) {
@@ -779,6 +815,7 @@ fn findOldest(slice: anytype, comptime ts_field: []const u8) usize {
 
 fn getOrCreatePeer(
     socket: std.posix.socket_t,
+    table: *GossipTable,
     peers: *GossipPeers,
     pubkey: Pubkey,
     addr: std.net.Address,
@@ -790,7 +827,7 @@ fn getOrCreatePeer(
         if (peers.getPtr(pubkey)) |p| return p;
         const i = findOldest(peers.values(), "last_contact");
         std.log.debug("evicting peer {}:{}", .{peers.keys()[i], peers.values()[i].addr});
-        peers.swapRemoveAt(i);
+        removePeer(table, peers, i);
     }
 
     const gop = peers.getOrPutAssumeCapacity(pubkey);
@@ -807,6 +844,14 @@ fn getOrCreatePeer(
     }
         try maybePingPeer(socket, gop.value_ptr, keypair, rng, now);
     return gop.value_ptr;
+}
+
+fn removePeer(table: *GossipTable, peers: *GossipPeers, i: usize) void {
+    const pubkey = peers.keys()[i];
+    peers.swapRemoveAt(i);
+
+    // TODO: remove all all values with its key
+    _ = table.swapRemove(.{ .from = pubkey, .tag = .contact_info, .idx = 0 });
 }
 
 fn maybePingPeer(
@@ -830,21 +875,70 @@ fn sendPushes(
     peers: *const GossipPeers,
     rng: std.Random,
     keypair: KeyPair,
-    value: CrdsValue,
+    values: []const CrdsValue,
+    now: Timestamp,
 ) !void {
-    const from = switch (value.data) {
-        inline else => |v| v.from,
-    };
-    
     const max_push_fanout = 6;
-    const active_peers = getActivePeers(max_push_fanout, peers, from, rng);
+    var active: std.BoundedArray(*const GossipPeer, max_push_fanout) = .{};
 
-    for (active_peers.constSlice()) |addr| {
-        try sendGossipMessage(socket, addr, .{ .push_message = .{
-            .from = .{ .data = keypair.public_key.bytes },
-            .values = &.{ value }, // TODO: batch multiple values per peer based on prunes
-        }});
+    const all_peers = peers.values();
+    if (all_peers.len == 0) return;
+
+    var i = rng.uintLessThan(usize, all_peers.len);
+    for (0..all_peers.len) |_| {
+        const peer = &all_peers[i];
+        defer i = (i + 1) % all_peers.len;
+        active.append(peer) catch break;
     }
+
+    var pushed: std.BoundedArray(CrdsValue, 256) = .{};
+    for (active.constSlice()) |peer| {
+        for (values) |value| {
+            const key, const wallclock = getGossipKey(value.data);
+            if (wallclock <= (now -| (30 * 1000)) or wallclock >= (now +| (30 * 1000)))
+                continue;
+            if (Bloom.contains(&peer.pruned.keys, &peer.pruned.words, &key.from.data))
+                continue;
+
+            pushed.appendAssumeCapacity(value);
+
+            var buf: [MTU]u8 = undefined;
+            var fbs = std.io.fixedBufferStream(&buf);
+            bincode.write(fbs.writer(), GossipMessage{ .push_message = .{
+                .from = .fromPublicKey(&keypair.public_key),
+                .values = pushed.constSlice(),
+            }}) catch {
+                pushed.len -= 1;
+                try sendGossipMessage(socket, peer.addr, .{ .push_message = .{
+                    .from = .fromPublicKey(&keypair.public_key),
+                    .values = pushed.constSlice(),
+                }});
+
+                pushed.len = 0;
+                pushed.appendAssumeCapacity(value);
+            };
+        }
+
+        if (pushed.len > 0) {
+            try sendGossipMessage(socket, peer.addr, .{ .push_message = .{
+                .from = .fromPublicKey(&keypair.public_key),
+                .values = pushed.constSlice(),
+            }});
+        }
+    }
+
+    // const from = switch (value.data) {
+    //     inline else => |v| v.from,
+    // };
+    
+    
+
+    // for (active_peers.constSlice()) |addr| {
+    //     try sendGossipMessage(socket, addr, .{ .push_message = .{
+    //         .from = .{ .data = keypair.public_key.bytes },
+    //         .values = &.{ value }, // TODO: batch multiple values per peer based on prunes
+    //     }});
+    // }
 }
 
 fn getActivePeers(
