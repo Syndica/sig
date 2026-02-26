@@ -1623,11 +1623,20 @@ pub const BlockHookContext = struct {
         // Confirmed path uses getCompleteBlock (no cleanup check, slot may not be rooted yet).
         const reader = self.ledger.reader();
         const latest_confirmed_slot = self.slot_tracker.getSlotForCommitment(.confirmed);
-        const block = if (params.slot <= latest_confirmed_slot) try reader.getRootedBlock(
+        const block = if (params.slot <= latest_confirmed_slot) reader.getRootedBlock(
             allocator,
             params.slot,
             true,
-        ) else if (commitment == .confirmed) try reader.getCompleteBlock(
+        ) catch |err| switch (err) {
+            // NOTE: we try getCompletedBlock incase SlotTracker has seen the slot
+            // but ledger has not yet rooted it
+            error.SlotNotRooted => try reader.getCompleteBlock(
+                allocator,
+                params.slot,
+                true,
+            ),
+            else => return err,
+        } else if (commitment == .confirmed) try reader.getCompleteBlock(
             allocator,
             params.slot,
             true,
