@@ -11,7 +11,6 @@ const Pubkey = sig.core.Pubkey;
 const RyuF64 = account_codec.RyuF64;
 const StakeStateV2 = sig.runtime.program.stake.state.StakeStateV2;
 const Stringified = account_codec.Stringified;
-const RyuF64 = account_codec.RyuF64;
 
 /// Parses a stake account's data into a `StakeAccountType` for JSON encoding in RPC responses.
 pub fn parseStake(
