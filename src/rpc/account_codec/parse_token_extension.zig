@@ -777,8 +777,8 @@ const KeyValuePair = struct {
 
     pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginArray();
-        try jw.write(self.key.inner.constSlice());
-        try jw.write(self.value.inner.constSlice());
+        try jw.write(self.key.constSlice());
+        try jw.write(self.value.constSlice());
         try jw.endArray();
     }
 };
@@ -861,8 +861,7 @@ fn readBorshString(
     if (offset.* + str_len > data.len) return null;
     if (str_len > max_len) return null;
 
-    var result: JsonString(max_len) = .{ .inner = .{} };
-    result.inner.appendSliceAssumeCapacity(data[offset.*..][0..str_len]);
+    const result: JsonString(max_len) = .fromSlice(data[offset.*..][0..str_len]);
     offset.* += str_len;
 
     return result;
@@ -891,8 +890,8 @@ fn buildTokenMetadataBytes(
     symbol: []const u8,
     uri: []const u8,
     additional_metadata: []const struct { key: []const u8, value: []const u8 },
-) std.BoundedArray(u8, 4096) {
-    var buf: std.BoundedArray(u8, 4096) = .{};
+) JsonString(4096) {
+    var buf: JsonString(4096) = .init();
 
     // update_authority: OptionalNonZeroPubkey (32 bytes)
     if (update_authority) |auth| {
@@ -949,7 +948,7 @@ test "rpc.account_codec.parse_token_extension: token_metadata empty additional_m
             try std.testing.expectEqualStrings("Test Token", tm.name.constSlice());
             try std.testing.expectEqualStrings("TEST", tm.symbol.constSlice());
             try std.testing.expectEqualStrings("https://example.com/token.json", tm.uri.constSlice());
-            try std.testing.expectEqual(@as(usize, 0), tm.additionalMetadata.len());
+            try std.testing.expectEqual(@as(usize, 0), tm.additionalMetadata.len);
         },
         else => try std.testing.expect(false),
     }
@@ -973,7 +972,7 @@ test "rpc.account_codec.parse_token_extension: token_metadata single pair" {
     switch (result.?) {
         .token_metadata => |tm| {
             try std.testing.expect(tm.updateAuthority == null);
-            try std.testing.expectEqual(@as(usize, 1), tm.additionalMetadata.len());
+            try std.testing.expectEqual(@as(usize, 1), tm.additionalMetadata.len);
             const pair = tm.additionalMetadata.get(0);
             try std.testing.expectEqualStrings("trait_type", pair.key.constSlice());
             try std.testing.expectEqualStrings("Background", pair.value.constSlice());
@@ -1004,7 +1003,7 @@ test "rpc.account_codec.parse_token_extension: token_metadata multiple pairs" {
 
     switch (result.?) {
         .token_metadata => |tm| {
-            try std.testing.expectEqual(@as(usize, 3), tm.additionalMetadata.len());
+            try std.testing.expectEqual(@as(usize, 3), tm.additionalMetadata.len);
             const meta = tm.additionalMetadata;
             try std.testing.expectEqualStrings("trait_type", meta.get(0).key.constSlice());
             try std.testing.expectEqualStrings("Background", meta.get(0).value.constSlice());
@@ -1021,7 +1020,7 @@ test "rpc.account_codec.parse_token_extension: token_metadata too many pairs ret
     const mint = Pubkey{ .data = [_]u8{1} ** 32 };
 
     // Build bytes with 33 pairs (exceeds limit of 32)
-    var buf: std.BoundedArray(u8, 8192) = .{};
+    var buf: JsonString(8192) = .{};
 
     // update_authority: 32 zero bytes
     buf.appendNTimesAssumeCapacity(0, 32);
@@ -1056,7 +1055,7 @@ test "rpc.account_codec.parse_token_extension: token_metadata too many pairs ret
 test "rpc.account_codec.parse_token_extension: token_metadata key too long returns null" {
     const mint = Pubkey{ .data = [_]u8{1} ** 32 };
 
-    var buf: std.BoundedArray(u8, 4096) = .{};
+    var buf: JsonString(4096) = .{};
 
     // update_authority: 32 zero bytes
     buf.appendNTimesAssumeCapacity(0, 32);
@@ -1087,7 +1086,7 @@ test "rpc.account_codec.parse_token_extension: token_metadata key too long retur
 test "rpc.account_codec.parse_token_extension: token_metadata value too long returns null" {
     const mint = Pubkey{ .data = [_]u8{1} ** 32 };
 
-    var buf: std.BoundedArray(u8, 4096) = .{};
+    var buf: JsonString(4096) = .{};
 
     // update_authority: 32 zero bytes
     buf.appendNTimesAssumeCapacity(0, 32);
@@ -1136,12 +1135,12 @@ test "rpc.account_codec.parse_token_extension: token_metadata JSON output" {
     switch (result.?) {
         .token_metadata => |tm| {
             var json_buf: [2048]u8 = undefined;
-            var fbs = std.io.fixedBufferStream(&json_buf);
-            var jw = std.json.writeStream(fbs.writer(), .{});
+            var out: std.io.Writer = .fixed(&json_buf);
+            var jw: std.json.Stringify = .{ .writer = &out };
 
             try jw.write(tm);
 
-            const json_output = fbs.getWritten();
+            const json_output = out.buffered();
             // Verify JSON contains expected structure
             const expected = "\"additionalMetadata\":[[\"trait_type\",\"Background\"]" ++
                 ",[\"value\",\"Blue\"]]";
@@ -1156,14 +1155,14 @@ test "rpc.account_codec.parse_token_extension: parseExtensions TLV iteration" {
     {
         const empty: []const u8 = &.{};
         const result = parseExtensions(empty);
-        try std.testing.expectEqual(@as(usize, 0), result.len());
+        try std.testing.expectEqual(@as(usize, 0), result.len);
     }
 
     // Test data with only discriminator (no extensions)
     {
         const disc_only: []const u8 = &.{0x01}; // discriminator byte
         const result = parseExtensions(disc_only);
-        try std.testing.expectEqual(@as(usize, 0), result.len());
+        try std.testing.expectEqual(@as(usize, 0), result.len);
     }
 
     // Test single extension: MintCloseAuthority (type=3, len=32)
@@ -1174,7 +1173,7 @@ test "rpc.account_codec.parse_token_extension: parseExtensions TLV iteration" {
         std.mem.writeInt(u16, data[3..5], 32, .little); // length
         @memset(data[5..37], 0xAA); // pubkey bytes
         const result = parseExtensions(&data);
-        try std.testing.expectEqual(@as(usize, 1), result.len());
+        try std.testing.expectEqual(@as(usize, 1), result.len);
         switch (result.get(0)) {
             .mint_close_authority => |mca| try std.testing.expect(mca.closeAuthority != null),
             else => try std.testing.expect(false),
@@ -1194,7 +1193,7 @@ test "rpc.account_codec.parse_token_extension: parseExtensions TLV iteration" {
         std.mem.writeInt(u16, data[39..41], 1, .little);
         data[41] = 1; // initialized state
         const result = parseExtensions(&data);
-        try std.testing.expectEqual(@as(usize, 2), result.len());
+        try std.testing.expectEqual(@as(usize, 2), result.len);
     }
 
     // Test uninitialized extension type (0) stops parsing
@@ -1207,7 +1206,7 @@ test "rpc.account_codec.parse_token_extension: parseExtensions TLV iteration" {
         std.mem.writeInt(u16, data[5..7], 3, .little);
         std.mem.writeInt(u16, data[7..9], 0, .little);
         const result = parseExtensions(&data);
-        try std.testing.expectEqual(@as(usize, 0), result.len());
+        try std.testing.expectEqual(@as(usize, 0), result.len);
     }
 
     // Test malformed TLV (length exceeds data) - graceful degradation
@@ -1217,7 +1216,7 @@ test "rpc.account_codec.parse_token_extension: parseExtensions TLV iteration" {
         std.mem.writeInt(u16, data[1..3], 3, .little); // type
         std.mem.writeInt(u16, data[3..5], 100, .little); // length > remaining
         const result = parseExtensions(&data);
-        try std.testing.expectEqual(@as(usize, 0), result.len());
+        try std.testing.expectEqual(@as(usize, 0), result.len);
     }
 
     // Test unknown extension type -> unparseable_extension
@@ -1228,7 +1227,7 @@ test "rpc.account_codec.parse_token_extension: parseExtensions TLV iteration" {
         std.mem.writeInt(u16, data[3..5], 4, .little);
         @memset(data[5..9], 0x00);
         const result = parseExtensions(&data);
-        try std.testing.expectEqual(@as(usize, 1), result.len());
+        try std.testing.expectEqual(@as(usize, 1), result.len);
         try std.testing.expect(result.get(0) == .unparseable_extension);
     }
 }
@@ -1597,36 +1596,36 @@ test "rpc.account_codec.parse_token_extension: extractFromMint helpers" {
 
 test "rpc.account_codec.parse_token_extension: UiExtension jsonStringify" {
     var json_buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&json_buf);
-    var jw = std.json.writeStream(fbs.writer(), .{});
+    var out: std.io.Writer = .fixed(&json_buf);
+    var jw: std.json.Stringify = .{ .writer = &out };
 
     // Test unit variants
     {
         const ext: UiExtension = .immutable_owner;
         try ext.jsonStringify(&jw);
-        const output = fbs.getWritten();
+        const output = out.buffered();
         const needle = "\"extension\":\"immutableOwner\"";
         try std.testing.expect(std.mem.indexOf(u8, output, needle) != null);
     }
 
     // Reset buffer
-    fbs.reset();
-    jw = std.json.writeStream(fbs.writer(), .{});
+    out.end = 0;
+    jw = .{ .writer = &out };
     {
         const ext: UiExtension = .non_transferable;
         try ext.jsonStringify(&jw);
-        const output = fbs.getWritten();
+        const output = out.buffered();
         const needle = "\"extension\":\"nonTransferable\"";
         try std.testing.expect(std.mem.indexOf(u8, output, needle) != null);
     }
 
     // Test extension with state
-    fbs.reset();
-    jw = std.json.writeStream(fbs.writer(), .{});
+    out.end = 0;
+    jw = .{ .writer = &out };
     {
         const ext: UiExtension = .{ .default_account_state = .{ .accountState = .frozen } };
         try ext.jsonStringify(&jw);
-        const output = fbs.getWritten();
+        const output = out.buffered();
         const ext_needle = "\"extension\":\"defaultAccountState\"";
         try std.testing.expect(std.mem.indexOf(u8, output, ext_needle) != null);
         const state_needle = "\"accountState\":\"frozen\"";
@@ -1634,8 +1633,8 @@ test "rpc.account_codec.parse_token_extension: UiExtension jsonStringify" {
     }
 
     // Test transfer_fee_config JSON
-    fbs.reset();
-    jw = std.json.writeStream(fbs.writer(), .{});
+    out.end = 0;
+    jw = .{ .writer = &out };
     {
         const ext: UiExtension = .{ .transfer_fee_config = .{
             .transferFeeConfigAuthority = null,
@@ -1645,7 +1644,7 @@ test "rpc.account_codec.parse_token_extension: UiExtension jsonStringify" {
             .newerTransferFee = .{ .epoch = 11, .maximumFee = 600, .transferFeeBasisPoints = 150 },
         } };
         try ext.jsonStringify(&jw);
-        const output = fbs.getWritten();
+        const output = out.buffered();
         const ext_needle = "\"extension\":\"transferFeeConfig\"";
         try std.testing.expect(std.mem.indexOf(u8, output, ext_needle) != null);
         const amt_needle = "\"withheldAmount\":1000";
@@ -1655,15 +1654,15 @@ test "rpc.account_codec.parse_token_extension: UiExtension jsonStringify" {
     }
 
     // Test confidential extension with base64 fields
-    fbs.reset();
-    jw = std.json.writeStream(fbs.writer(), .{});
+    out.end = 0;
+    jw = .{ .writer = &out };
     {
         const withheld_bytes = [_]u8{0xAA} ** 64;
         const ext: UiExtension = .{ .confidential_transfer_fee_amount = .{
             .withheldAmount = Base64Encoded(64).init(&withheld_bytes),
         } };
         try ext.jsonStringify(&jw);
-        const output = fbs.getWritten();
+        const output = out.buffered();
         const ext_needle = "\"extension\":\"confidentialTransferFeeAmount\"";
         try std.testing.expect(std.mem.indexOf(u8, output, ext_needle) != null);
         const amt_needle = "\"withheldAmount\":";

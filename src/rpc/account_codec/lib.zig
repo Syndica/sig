@@ -47,7 +47,7 @@ pub const DataSlice = struct {
 /// a parsed JSON object, or a base64 fallback string when jsonParsed parsing fails.
 pub const AccountData = union(enum) {
     encoded: struct { []const u8, AccountEncoding },
-    jsonParsed: std.json.Value,
+    jsonParsed: []const u8,
 
     /// This field is only set when the request object asked for `jsonParsed` encoding,
     /// and the server couldn't find a parser, therefore falling back to returning
@@ -73,7 +73,11 @@ pub const AccountData = union(enum) {
     ) @TypeOf(jw.*).Error!void {
         switch (self) {
             .encoded => |pair| try jw.write(pair),
-            .jsonParsed => |map| try jw.write(map),
+            .jsonParsed => |json_str| {
+                try jw.beginWriteRaw();
+                try jw.writer.writeAll(json_str);
+                jw.endWriteRaw();
+            },
             // Fallback must return array format ["data", "base64"] like testnet
             .json_parsed_base64_fallback => |str| {
                 try jw.write(.{ str, AccountEncoding.base64 });
@@ -98,12 +102,10 @@ pub const AccountData = union(enum) {
                 source,
                 options,
             ) },
-            .object_begin => .{ .jsonParsed = try std.json.innerParse(
-                std.json.Value,
-                allocator,
-                source,
-                options,
-            ) },
+            .object_begin => {
+                const val = try std.json.innerParse(std.json.Value, allocator, source, options);
+                return .{ .jsonParsed = try std.json.Stringify.valueAlloc(allocator, val, .{}) };
+            },
             .string => .{ .json_parsed_base64_fallback = try std.json.innerParse(
                 []const u8,
                 allocator,
@@ -155,19 +157,13 @@ pub fn encodeJsonParsed(
     };
 
     if (maybe_parsed_account) |parsed| {
-        const json_str = try std.json.stringifyAlloc(
+        const json_str = try std.json.Stringify.valueAlloc(
             arena.allocator(),
             parsed,
             .{},
         );
-        const json_parsed = try std.json.parseFromSliceLeaky(
-            std.json.Value,
-            allocator,
-            json_str,
-            .{},
-        );
         return .{
-            .jsonParsed = json_parsed,
+            .jsonParsed = json_str,
         };
     }
 
@@ -265,6 +261,13 @@ fn encodeAccountData(
         .@"base64+zstd" => {
             var stream = sig.utils.base64.EncodingStream.init(std.base64.standard.Encoder);
             const base64_ctx = stream.writerCtx(writer);
+            const base64_writer = base64_ctx.writer();
+
+            // TODO: Implement native std.io.Writer for base64.EncodingStream.WriterCtx
+            // to remove use of this adapter and avoid double buffering.
+            var adapter_buf: [256]u8 = undefined;
+            var adapter = base64_writer.adaptToNewApi(&adapter_buf);
+
             const compressor = try zstd.Compressor.init(.{});
             defer compressor.deinit();
 
@@ -277,8 +280,9 @@ fn encodeAccountData(
                 zstd.Compressor.recommOutSize(),
             );
             defer allocator.free(zstd_out_buf);
+
             var zstd_ctx = zstd.writerCtx(
-                base64_ctx.writer(),
+                &adapter.new_interface,
                 &compressor,
                 zstd_out_buf,
             );
@@ -287,7 +291,9 @@ fn encodeAccountData(
             while (iter.nextFrame()) |frame_slice| {
                 try zstd_ctx.writer().writeAll(frame_slice);
             }
+
             try zstd_ctx.finish();
+            try adapter.new_interface.flush();
             try base64_ctx.flush();
         },
         .jsonParsed => unreachable, // handled in encodeJsonParsed
@@ -347,64 +353,76 @@ pub fn Base64Encoded(comptime len: usize) type {
     };
 }
 
-/// Wrapper for BoundedArray(u8, N) that serializes as a JSON string.
-/// BoundedArray by default serializes as {"buffer": ..., "len": N}, but we want just the string.
+/// Wrapper for byte arrays that serialize as JSON strings without base64 encoding.
 pub fn JsonString(comptime max_len: usize) type {
     return struct {
-        inner: std.BoundedArray(u8, max_len),
+        inner: [max_len]u8 = undefined,
+        len: usize = 0,
 
         const Self = @This();
 
-        pub fn init(slice: []const u8) Self {
-            var result: Self = .{ .inner = .{} };
-            result.inner.appendSliceAssumeCapacity(slice);
+        // stack allocate the buffer and initialize len to 0. The caller can then use appendSliceAssumeCapacity
+        pub fn init() Self {
+            return .{ .inner = undefined, .len = 0 };
+        }
+
+        pub fn fromSlice(slice: []const u8) Self {
+            var result = Self{};
+            @memcpy(result.inner[0..slice.len], slice);
+            result.len = slice.len;
             return result;
         }
 
-        pub fn fromBounded(bounded: std.BoundedArray(u8, max_len)) Self {
-            return .{ .inner = bounded };
+        pub fn constSlice(self: *const Self) []const u8 {
+            return self.inner[0..self.len];
         }
 
-        pub fn constSlice(self: *const Self) []const u8 {
-            return self.inner.constSlice();
+        pub fn appendSliceAssumeCapacity(self: *Self, items: []const u8) void {
+            @memcpy(self.inner[self.len..][0..items.len], items);
+            self.len += items.len;
+        }
+
+        pub fn appendNTimesAssumeCapacity(self: *Self, value: u8, n: usize) void {
+            @memset(self.inner[self.len..][0..n], value);
+            self.len += n;
         }
 
         pub fn jsonStringify(self: Self, jw: anytype) @TypeOf(jw.*).Error!void {
-            try jw.write(self.inner.constSlice());
+            try jw.write(self.constSlice());
         }
     };
 }
 
-/// Wrapper for BoundedArray(T, N) that serializes as a JSON array.
-/// BoundedArray by default serializes as {"buffer": ..., "len": N}, but we want just the array.
+/// Wrapper for arrays of items that serialize as JSON arrays.
 pub fn JsonArray(comptime T: type, comptime max_len: usize) type {
     return struct {
-        inner: std.BoundedArray(T, max_len) = .{},
+        inner: [max_len]T = undefined,
+        len: usize = 0,
 
         const Self = @This();
 
-        pub fn len(self: *const Self) usize {
-            return self.inner.len;
-        }
-
         pub fn get(self: *const Self, index: usize) T {
-            return self.inner.get(index);
+            return self.inner[index];
         }
 
         pub fn constSlice(self: *const Self) []const T {
-            return self.inner.constSlice();
+            return self.inner[0..self.len];
         }
 
         pub fn append(self: *Self, item: T) error{Overflow}!void {
-            return self.inner.append(item);
+            if (self.len >= max_len) return error.Overflow;
+            self.inner[self.len] = item;
+            self.len += 1;
         }
 
         pub fn appendAssumeCapacity(self: *Self, item: T) void {
-            return self.inner.appendAssumeCapacity(item);
+            std.debug.assert(self.len < max_len);
+            self.inner[self.len] = item;
+            self.len += 1;
         }
 
         pub fn jsonStringify(self: Self, jw: anytype) @TypeOf(jw.*).Error!void {
-            try jw.write(self.inner.constSlice());
+            try jw.write(self.constSlice());
         }
     };
 }

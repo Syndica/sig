@@ -186,12 +186,12 @@ fn writeBase64DataTuple(jw: anytype, bytecode: []const u8) @TypeOf(jw.*).Error!v
     try jw.beginArray();
     // Stream base64-encoded bytecode directly to underlying writer
     try jw.beginWriteRaw();
-    try jw.stream.writeByte('"');
+    try jw.writer.writeByte('"');
     var base64_stream = sig.utils.base64.EncodingStream.init(std.base64.standard.Encoder);
-    const ctx = base64_stream.writerCtx(jw.stream);
+    const ctx = base64_stream.writerCtx(jw.writer);
     try ctx.writer().writeAll(bytecode);
     try ctx.flush();
-    try jw.stream.writeByte('"');
+    try jw.writer.writeByte('"');
     jw.endWriteRaw();
     // Second element: encoding type
     try jw.write("base64");

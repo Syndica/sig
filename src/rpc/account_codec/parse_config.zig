@@ -157,7 +157,7 @@ pub const UiConfig = struct {
         try jw.objectField("configData");
         // Write raw JSON verbatim (no quotes, no escaping)
         try jw.beginWriteRaw();
-        try jw.stream.writeAll(self.configData);
+        try jw.writer.writeAll(self.configData);
         jw.endWriteRaw();
         try jw.endObject();
     }

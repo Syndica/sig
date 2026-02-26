@@ -16,6 +16,7 @@ const ParseError = account_codec.ParseError;
 // Re-use types from lib.zig and parse_nonce.zig
 const UiFeeCalculator = @import("parse_nonce.zig").UiFeeCalculator;
 const Stringified = account_codec.Stringified;
+const JsonArray = account_codec.JsonArray;
 
 /// Parse a sysvar account by its pubkey.
 /// Returns null if the pubkey doesn't match any known sysvar.
@@ -59,8 +60,7 @@ pub fn parseSysvar(
             .{},
         ) catch
             return ParseError.InvalidAccountData;
-        const max_entries = sysvar.RecentBlockhashes.MAX_ENTRIES;
-        var entries: std.BoundedArray(UiRecentBlockhashesEntry, max_entries) = .{};
+        var entries: UiRecentBlockhashes = .{};
         for (blockhashes.entries.constSlice()) |entry| {
             entries.appendAssumeCapacity(UiRecentBlockhashesEntry{
                 .blockhash = entry.blockhash,
@@ -70,7 +70,7 @@ pub fn parseSysvar(
             });
         }
         return SysvarAccountType{
-            .recent_blockhashes = UiRecentBlockhashes{ .entries = entries },
+            .recent_blockhashes = entries,
         };
     } else if (pubkey.equals(&sysvar.Rent.ID)) {
         const rent = bincode.read(allocator, sysvar.Rent, reader, .{}) catch
@@ -99,7 +99,7 @@ pub fn parseSysvar(
             .{},
         ) catch
             return ParseError.InvalidAccountData;
-        var entries: std.BoundedArray(UiSlotHashEntry, sysvar.SlotHashes.MAX_ENTRIES) = .{};
+        var entries: UiSlotHashes = .{};
         for (slot_hashes.entries.constSlice()) |entry| {
             entries.appendAssumeCapacity(UiSlotHashEntry{
                 .slot = entry.slot,
@@ -107,7 +107,7 @@ pub fn parseSysvar(
             });
         }
         return SysvarAccountType{
-            .slot_hashes = UiSlotHashes{ .entries = entries },
+            .slot_hashes = entries,
         };
     } else if (pubkey.equals(&sysvar.SlotHistory.ID)) {
         const slot_history = bincode.read(
@@ -134,7 +134,7 @@ pub fn parseSysvar(
             .{},
         ) catch
             return ParseError.InvalidAccountData;
-        var entries: std.BoundedArray(UiStakeHistoryEntry, sysvar.StakeHistory.MAX_ENTRIES) = .{};
+        var entries: UiStakeHistory = .{};
         for (stake_history.entries.constSlice()) |entry| {
             entries.appendAssumeCapacity(UiStakeHistoryEntry{
                 .epoch = entry.epoch,
@@ -146,7 +146,7 @@ pub fn parseSysvar(
             });
         }
         return SysvarAccountType{
-            .stake_history = UiStakeHistory{ .entries = entries },
+            .stake_history = entries,
         };
     } else if (pubkey.equals(&sysvar.LastRestartSlot.ID)) {
         const last_restart = bincode.read(
@@ -255,13 +255,10 @@ pub const UiRewards = struct {
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs#L169
-pub const UiRecentBlockhashes = struct {
-    entries: std.BoundedArray(UiRecentBlockhashesEntry, sysvar.RecentBlockhashes.MAX_ENTRIES),
-
-    pub fn jsonStringify(self: UiRecentBlockhashes, jw: anytype) @TypeOf(jw.*).Error!void {
-        try jw.write(self.entries.constSlice());
-    }
-};
+pub const UiRecentBlockhashes = JsonArray(
+    UiRecentBlockhashesEntry,
+    sysvar.RecentBlockhashes.MAX_ENTRIES,
+);
 
 pub const UiRecentBlockhashesEntry = struct {
     blockhash: Hash,
@@ -269,13 +266,10 @@ pub const UiRecentBlockhashesEntry = struct {
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs#L176
-pub const UiSlotHashes = struct {
-    entries: std.BoundedArray(UiSlotHashEntry, sysvar.SlotHashes.MAX_ENTRIES),
-
-    pub fn jsonStringify(self: UiSlotHashes, jw: anytype) @TypeOf(jw.*).Error!void {
-        try jw.write(self.entries.constSlice());
-    }
-};
+pub const UiSlotHashes = JsonArray(
+    UiSlotHashEntry,
+    sysvar.SlotHashes.MAX_ENTRIES,
+);
 
 pub const UiSlotHashEntry = struct {
     slot: Slot,
@@ -295,24 +289,18 @@ pub const UiSlotHistory = struct {
         // Agave formats bits as a string of MAX_ENTRIES 0s and 1s using Debug format.
         // We stream-write this to avoid allocating 1MB+ string.
         try jw.beginWriteRaw();
-        try jw.stream.writeByte('"');
+        try jw.writer.writeByte('"');
         for (0..sig.runtime.sysvar.SlotHistory.MAX_ENTRIES) |i| {
-            try jw.stream.writeByte(if (self.bits.isSet(i)) '1' else '0');
+            try jw.writer.writeByte(if (self.bits.isSet(i)) '1' else '0');
         }
-        try jw.stream.writeByte('"');
+        try jw.writer.writeByte('"');
         jw.endWriteRaw();
         try jw.endObject();
     }
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs#L199
-pub const UiStakeHistory = struct {
-    entries: std.BoundedArray(UiStakeHistoryEntry, sysvar.StakeHistory.MAX_ENTRIES),
-
-    pub fn jsonStringify(self: UiStakeHistory, jw: anytype) @TypeOf(jw.*).Error!void {
-        try jw.write(self.entries.constSlice());
-    }
-};
+pub const UiStakeHistory = JsonArray(UiStakeHistoryEntry, sysvar.StakeHistory.MAX_ENTRIES);
 
 pub const UiStakeHistoryEntry = struct {
     epoch: Epoch,
@@ -434,7 +422,7 @@ test "rpc.account_codec.parse_sysvar: parse sysvars" {
 
         try std.testing.expect(result != null);
         try std.testing.expect(result.? == .recent_blockhashes);
-        const entries = result.?.recent_blockhashes.entries.constSlice();
+        const entries = result.?.recent_blockhashes.constSlice();
         try std.testing.expectEqual(@as(usize, 1), entries.len);
         try std.testing.expectEqualStrings(
             hash.base58String().constSlice(),
@@ -505,7 +493,7 @@ test "rpc.account_codec.parse_sysvar: parse sysvars" {
 
         try std.testing.expect(result != null);
         try std.testing.expect(result.? == .slot_hashes);
-        const entries = result.?.slot_hashes.entries.constSlice();
+        const entries = result.?.slot_hashes.constSlice();
         try std.testing.expectEqual(@as(usize, 1), entries.len);
         try std.testing.expectEqual(@as(Slot, 1), entries[0].slot);
         try std.testing.expectEqual(hash, entries[0].hash);
@@ -557,7 +545,7 @@ test "rpc.account_codec.parse_sysvar: parse sysvars" {
 
         try std.testing.expect(result != null);
         try std.testing.expect(result.? == .stake_history);
-        const entries = result.?.stake_history.entries.constSlice();
+        const entries = result.?.stake_history.constSlice();
         try std.testing.expectEqual(@as(usize, 1), entries.len);
         try std.testing.expectEqual(@as(Epoch, 1), entries[0].epoch);
         try std.testing.expectEqual(@as(u64, 10), entries[0].stakeHistory.effective);
