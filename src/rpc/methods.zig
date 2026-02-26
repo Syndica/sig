@@ -889,11 +889,23 @@ pub const GetBlock = struct {
                 try jw.write(self.decimals);
                 if (self.uiAmount) |ua| {
                     try jw.objectField("uiAmount");
-                    try jw.write(ua);
+                    try writeExactFloat(jw, ua);
                 }
                 try jw.objectField("uiAmountString");
                 try jw.write(self.uiAmountString);
                 try jw.endObject();
+            }
+
+            /// Write an f64 as a JSON number matching Rust's serde_json output.
+            /// Zig's std.json serializes 3.0 as "3e0", but serde serializes it as "3.0".
+            fn writeExactFloat(jw: anytype, value: f64) !void {
+                var buf: [64]u8 = undefined;
+                const result = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+                if (std.mem.indexOf(u8, result, ".") == null) {
+                    try jw.print("{s}.0", .{result});
+                } else {
+                    try jw.print("{s}", .{result});
+                }
             }
         };
 

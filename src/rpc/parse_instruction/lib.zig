@@ -3288,12 +3288,12 @@ fn tokenAmountToUiAmount(allocator: Allocator, amount: u64, decimals: u8) !JsonV
     // Calculate UI amount
     if (decimals == 0) {
         const ui_amount_str = try std.fmt.allocPrint(allocator, "{d}", .{amount});
-        try obj.put("uiAmount", .{ .float = @floatFromInt(amount) });
+        try obj.put("uiAmount", .{ .number_string = try exactFloat(allocator, @floatFromInt(amount)) });
         try obj.put("uiAmountString", .{ .string = ui_amount_str });
     } else {
         const divisor: f64 = std.math.pow(f64, 10.0, @floatFromInt(decimals));
         const ui_amount: f64 = @as(f64, @floatFromInt(amount)) / divisor;
-        try obj.put("uiAmount", .{ .float = ui_amount });
+        try obj.put("uiAmount", .{ .number_string = try exactFloat(allocator, ui_amount) });
         const ui_amount_str = try sig.runtime.spl_token.realNumberStringTrimmed(
             allocator,
             amount,
@@ -3303,6 +3303,19 @@ fn tokenAmountToUiAmount(allocator: Allocator, amount: u64, decimals: u8) !JsonV
     }
 
     return .{ .object = obj };
+}
+
+/// Format an f64 as a JSON number string matching Rust's serde_json output.
+/// Zig's std.json serializes 3.0 as "3e0", but serde serializes it as "3.0".
+fn exactFloat(allocator: Allocator, value: f64) ![]const u8 {
+    var buf: [64]u8 = undefined;
+    const result = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    // {d} format omits the decimal point for whole numbers (e.g. "3" instead of "3.0").
+    // Append ".0" to match serde's behavior of always including a decimal for floats.
+    if (std.mem.indexOf(u8, result, ".") == null) {
+        return std.fmt.allocPrint(allocator, "{s}.0", .{result});
+    }
+    return allocator.dupe(u8, result);
 }
 
 /// Format a UI amount with the specified number of decimal places.

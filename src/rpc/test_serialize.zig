@@ -647,7 +647,7 @@ test "UiTransactionTokenBalance serialization" {
         },
     };
     try expectJsonStringify(
-        \\{"accountIndex":2,"mint":"11111111111111111111111111111111","owner":"11111111111111111111111111111111","programId":"11111111111111111111111111111111","uiTokenAmount":{"amount":"1000000","decimals":6,"uiAmount":1,"uiAmountString":"1"}}
+        \\{"accountIndex":2,"mint":"11111111111111111111111111111111","owner":"11111111111111111111111111111111","programId":"11111111111111111111111111111111","uiTokenAmount":{"amount":"1000000","decimals":6,"uiAmount":1.0,"uiAmountString":"1"}}
     , token_balance);
 }
 
