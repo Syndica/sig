@@ -7,9 +7,6 @@ test {
 const common = @import("../common.zig");
 const bk = @import("binkode");
 
-const ShredType = @import("shred/shred_type.zig").ShredType;
-const ShredConstants = @import("shred/ShredConstants.zig");
-
 const Allocator = std.mem.Allocator;
 
 const Packet = common.net.Packet;
@@ -378,6 +375,17 @@ pub const DataShred = struct {
     pub fn retransmitterSignature(self: DataShred) !Signature {
         return Generic.retransmitterSignature(self);
     }
+};
+
+pub const ShredType = enum(u8) {
+    code = 0b0101_1010,
+    data = 0b1010_0101,
+};
+
+const ShredConstants = struct {
+    max_per_slot: usize,
+    payload_size: usize,
+    headers_size: usize,
 };
 
 /// Analogous to [Shred trait](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/ledger/src/shred/traits.rs#L6)
