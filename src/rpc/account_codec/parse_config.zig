@@ -8,6 +8,7 @@ const Pubkey = sig.core.Pubkey;
 const bincode = sig.bincode;
 const shortvec = bincode.shortvec;
 const ParseError = account_codec.ParseError;
+const RyuF64 = account_codec.RyuF64;
 const ids = sig.runtime.ids;
 
 /// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/validator_info.rs#L7
@@ -47,7 +48,7 @@ fn parseStakeConfig(allocator: Allocator, data: []const u8) ParseError!?ConfigAc
         return ParseError.InvalidAccountData;
     return ConfigAccountType{
         .stake_config = UiStakeConfig{
-            .warmupCooldownRate = stake_config.warmup_cooldown_rate,
+            .warmupCooldownRate = RyuF64.init(stake_config.warmup_cooldown_rate),
             .slashPenalty = stake_config.slash_penalty,
         },
     };
@@ -135,7 +136,7 @@ const ValidatorInfo = struct {
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_config.rs#L59-L63
 pub const UiStakeConfig = struct {
-    warmupCooldownRate: f64,
+    warmupCooldownRate: RyuF64,
     slashPenalty: u8,
 };
 
@@ -226,7 +227,7 @@ test "rpc.account_codec.parse_config: parse config accounts" {
         try std.testing.expect(result.? == .stake_config);
 
         const ui_stake = result.?.stake_config;
-        try std.testing.expectEqual(@as(f64, 0.25), ui_stake.warmupCooldownRate);
+        try std.testing.expectEqual(@as(f64, 0.25), ui_stake.warmupCooldownRate.value);
         try std.testing.expectEqual(@as(u8, 12), ui_stake.slashPenalty);
     }
 

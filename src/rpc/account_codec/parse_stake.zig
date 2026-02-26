@@ -10,6 +10,7 @@ const StakeStateV2 = sig.runtime.program.stake.state.StakeStateV2;
 const ParseError = account_codec.ParseError;
 
 const Stringified = account_codec.Stringified;
+const RyuF64 = account_codec.RyuF64;
 
 /// Parses a stake account's data into a `StakeAccountType` for JSON encoding in RPC responses.
 pub fn parseStake(
@@ -41,7 +42,9 @@ pub fn parseStake(
                         .stake = .init(s.stake.delegation.stake),
                         .activationEpoch = .init(s.stake.delegation.activation_epoch),
                         .deactivationEpoch = .init(s.stake.delegation.deactivation_epoch),
-                        .warmupCooldownRate = s.stake.delegation.deprecated_warmup_cooldown_rate,
+                        .warmupCooldownRate = RyuF64.init(
+                            s.stake.delegation.deprecated_warmup_cooldown_rate,
+                        ),
                     },
                     .creditsObserved = s.stake.credits_observed,
                 },
@@ -136,7 +139,7 @@ pub const UiDelegation = struct {
     stake: Stringified(u64),
     activationEpoch: Stringified(u64),
     deactivationEpoch: Stringified(u64),
-    warmupCooldownRate: f64,
+    warmupCooldownRate: RyuF64,
 };
 
 // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_stake.rs#L142-L209
@@ -266,7 +269,7 @@ test "rpc.account_codec.parse_stake: parse stake accounts" {
         try std.testing.expectEqual(@as(u64, 2), ui_stake.delegation.activationEpoch.value);
         const deact = ui_stake.delegation.deactivationEpoch.value;
         try std.testing.expectEqual(std.math.maxInt(u64), deact);
-        try std.testing.expectEqual(@as(f64, 0.25), ui_stake.delegation.warmupCooldownRate);
+        try std.testing.expectEqual(@as(f64, 0.25), ui_stake.delegation.warmupCooldownRate.value);
         try std.testing.expectEqual(@as(u64, 10), ui_stake.creditsObserved);
     }
 

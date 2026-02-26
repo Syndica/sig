@@ -10,6 +10,7 @@ const ParseError = account_codec.ParseError;
 const AccountState = account_codec.AccountState;
 const JsonArray = account_codec.JsonArray;
 const JsonString = account_codec.JsonString;
+const RyuF64 = account_codec.RyuF64;
 
 const UiExtension = parse_token_extension.UiExtension;
 const InterestBearingConfigData = parse_token_extension.InterestBearingConfigData;
@@ -450,7 +451,7 @@ pub const UiTokenAmount = struct {
     pub fn jsonStringify(self: UiTokenAmount, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("uiAmount");
-        if (self.ui_amount) |a| try jw.write(a) else try jw.write(null);
+        if (self.ui_amount) |a| try RyuF64.init(a).jsonStringify(jw) else try jw.write(null);
         try jw.objectField("decimals");
         try jw.write(self.decimals);
         try jw.objectField("amount");

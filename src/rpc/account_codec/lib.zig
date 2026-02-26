@@ -332,6 +332,30 @@ pub fn Stringified(comptime T: type) type {
     };
 }
 
+/// Wrapper for f64 values that serializes to JSON matching Rust's ryu formatting
+/// used by serde_json in Agave. Ensures whole-number floats include ".0"
+/// (e.g., 1.0 instead of 1) for JSON round-trip fidelity.
+/// See: https://github.com/dtolnay/ryu/blob/1.0.5/src/pretty/mod.rs#L52-L118
+pub const RyuF64 = struct {
+    value: f64,
+
+    pub fn init(value: f64) RyuF64 {
+        return .{ .value = value };
+    }
+
+    pub fn jsonStringify(self: RyuF64, jw: anytype) @TypeOf(jw.*).Error!void {
+        var buf: [64]u8 = undefined;
+        const formatted = std.fmt.bufPrint(&buf, "{d}", .{self.value}) catch unreachable;
+        if (std.mem.indexOfScalar(u8, formatted, '.') == null) {
+            buf[formatted.len] = '.';
+            buf[formatted.len + 1] = '0';
+            try jw.print("{s}", .{buf[0 .. formatted.len + 2]});
+        } else {
+            try jw.print("{s}", .{formatted});
+        }
+    }
+};
+
 /// Wrapper for fixed-size byte arrays that serialize as base64 strings.
 pub fn Base64Encoded(comptime len: usize) type {
     return struct {
