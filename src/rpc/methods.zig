@@ -863,7 +863,8 @@ pub const RpcHookContext = struct {
         // last_valid_block_height = block_height + MAX_PROCESSING_AGE - age
         // where MAX_PROCESSING_AGE = MAX_RECENT_BLOCKHASHES / 2 = 150
         const age = bq.getHashAge(last_hash) orelse return error.SlotNotAvailable;
-        const max_processing_age: u64 = sig.core.blockhash_queue.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2;
+        const BQ = sig.core.blockhash_queue.BlockhashQueue;
+        const max_processing_age: u64 = BQ.MAX_RECENT_BLOCKHASHES / 2;
         const last_valid_block_height = slot_ref.constants.block_height + max_processing_age - age;
 
         // Allocate the base58 string so it outlives the function scope.
