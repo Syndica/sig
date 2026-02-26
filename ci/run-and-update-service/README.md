@@ -5,7 +5,7 @@ Install sig as a long running service on a linux system, and periodically have i
 Dependencies:
 - docker
 - docker-compose
-- zig 0.14.1
+- zig 0.15.2
 - zstd
 - aws-cli
 
