@@ -95,12 +95,11 @@ pub fn parseVote(
         .blockRevenueCollector = vote_state.block_revenue_collector,
         .blockRevenueCommissionBps = vote_state.block_revenue_commission_bps,
         .pendingDelegatorRewards = .{ .value = vote_state.pending_delegator_rewards },
-        .blsPubkeyCompressed = if (vote_state.bls_pubkey_compressed) |bytes|
-            JsonString(BLS_PUBLIC_KEY_BASE58_MAX_SIZE).fromBounded(
-                base58.Table.BITCOIN.encodeArray(BLS_PUBLIC_KEY_COMPRESSED_SIZE, bytes),
-            )
-        else
-            null,
+        .blsPubkeyCompressed = if (vote_state.bls_pubkey_compressed) |bytes| blk: {
+            var encoded_buf: [BLS_PUBLIC_KEY_BASE58_MAX_SIZE]u8 = undefined;
+            const len = base58.Table.BITCOIN.encode(&encoded_buf, &bytes);
+            break :blk JsonString(BLS_PUBLIC_KEY_BASE58_MAX_SIZE).fromSlice(encoded_buf[0..len]);
+        } else null,
     };
 
     return VoteAccountType{
@@ -316,12 +315,12 @@ test "rpc.account_codec.parse_vote: parse vote accounts" {
         };
 
         var buf: [256]u8 = undefined;
-        var stream = std.io.fixedBufferStream(&buf);
-        var jw = std.json.writeStream(stream.writer(), .{});
+        var out: std.io.Writer = .fixed(&buf);
+        var jw: std.json.Stringify = .{ .writer = &out };
 
         try jw.write(ui_landed_vote);
 
-        const json_output = stream.getWritten();
+        const json_output = out.buffered();
 
         // Parse the JSON to verify structure
         const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_output, .{});

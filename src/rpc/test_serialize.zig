@@ -111,8 +111,16 @@ test GetAccountInfo {
         try std.testing.expectEqual(@as(u64, 1169280), value.lamports);
         try std.testing.expectEqual(@as(u64, 80), value.space);
 
-        // Verify the data is a jsonParsed std.json.Value
-        const json_val = value.data.jsonParsed;
+        // Verify the data is a jsonParsed pre-serialized JSON string
+        const json_str = value.data.jsonParsed;
+        const parsed_json = try std.json.parseFromSlice(
+            std.json.Value,
+            std.testing.allocator,
+            json_str,
+            .{},
+        );
+        defer parsed_json.deinit();
+        const json_val = parsed_json.value;
         try std.testing.expect(json_val == .object);
         const obj = json_val.object;
         try std.testing.expectEqualStrings("nonce", obj.get("program").?.string);

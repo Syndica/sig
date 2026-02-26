@@ -340,7 +340,7 @@ pub const UiTokenAccount = struct {
             try jw.objectField("rentExemptReserve");
             try jw.write(r);
         }
-        if (self.extensions.len() > 0) {
+        if (self.extensions.len > 0) {
             try jw.objectField("extensions");
             try jw.write(self.extensions);
         }
@@ -370,7 +370,7 @@ pub const UiMint = struct {
         try jw.write(self.isInitialized);
         try jw.objectField("freezeAuthority");
         try jw.write(self.freezeAuthority);
-        if (self.extensions.len() > 0) {
+        if (self.extensions.len > 0) {
             try jw.objectField("extensions");
             try jw.write(self.extensions);
         }
@@ -468,11 +468,11 @@ pub const UiTokenAmount = struct {
 ///   formatTokenAmount(123, 6) → "0.000123"
 ///   formatTokenAmount(0, 6) → "0"
 fn formatTokenAmount(amount: u64, decimals: u8) JsonString(40) {
-    var buf: JsonString(40) = .{ .inner = .{} };
+    var buf: JsonString(40) = .init();
 
     if (decimals == 0) {
-        const written = std.fmt.bufPrint(&buf.inner.buffer, "{d}", .{amount}) catch unreachable;
-        buf.inner.len = @intCast(written.len);
+        const written = std.fmt.bufPrint(&buf.inner, "{d}", .{amount}) catch unreachable;
+        buf.len = @intCast(written.len);
         return buf;
     }
 
@@ -480,28 +480,28 @@ fn formatTokenAmount(amount: u64, decimals: u8) JsonString(40) {
     // e.g., amount=123, decimals=6 → "0000123" → "0.000123"
     const min_len = decimals + 1;
     const written = std.fmt.bufPrint(
-        &buf.inner.buffer,
+        &buf.inner,
         "{d:0>[1]}",
         .{ amount, min_len },
     ) catch unreachable;
-    buf.inner.len = @intCast(written.len);
+    buf.len = @intCast(written.len);
 
     // Insert decimal point at position (len - decimals)
-    const decimal_pos = buf.inner.len - decimals;
+    const decimal_pos = buf.len - decimals;
     // Shift right to make room for decimal point
-    const src = buf.inner.buffer[decimal_pos..buf.inner.len];
-    const dst = buf.inner.buffer[decimal_pos + 1 .. buf.inner.len + 1];
+    const src = buf.inner[decimal_pos..buf.len];
+    const dst = buf.inner[decimal_pos + 1 .. buf.len + 1];
     std.mem.copyBackwards(u8, dst, src);
-    buf.inner.buffer[decimal_pos] = '.';
-    buf.inner.len += 1;
+    buf.inner[decimal_pos] = '.';
+    buf.len += 1;
 
     // Trim trailing zeros
-    while (buf.inner.len > 0 and buf.inner.buffer[buf.inner.len - 1] == '0') {
-        buf.inner.len -= 1;
+    while (buf.len > 0 and buf.inner[buf.len - 1] == '0') {
+        buf.len -= 1;
     }
     // Trim trailing decimal point
-    if (buf.inner.len > 0 and buf.inner.buffer[buf.inner.len - 1] == '.') {
-        buf.inner.len -= 1;
+    if (buf.len > 0 and buf.inner[buf.len - 1] == '.') {
+        buf.len -= 1;
     }
 
     return buf;
@@ -548,18 +548,18 @@ fn interestBearingAmountToUi(
     const scaled_amount = @as(f64, @floatFromInt(amount)) * total_scale;
 
     // Format with decimals precision, then trim
-    var buf: JsonString(40) = .{ .inner = .{} };
+    var buf: JsonString(40) = .init();
     if (std.math.isInf(scaled_amount)) {
-        buf.inner.appendSliceAssumeCapacity("inf");
+        buf.appendSliceAssumeCapacity("inf");
     } else {
         // Format with fixed decimals precision
         const written = std.fmt.bufPrint(
-            &buf.inner.buffer,
+            &buf.inner,
             "{d:.[1]}",
             .{ scaled_amount, decimals },
         ) catch return null;
-        buf.inner.len = @intCast(written.len);
-        trimUiAmountStringInPlace(&buf.inner, decimals);
+        buf.len = @intCast(written.len);
+        trimUiAmountStringInPlace(&buf, decimals);
     }
 
     // ui_amount as f64
@@ -596,17 +596,17 @@ fn scaledAmountToUi(
     const ui_value = truncated / divisor;
 
     // Format
-    var buf: JsonString(40) = .{ .inner = .{} };
+    var buf: JsonString(40) = .init();
     if (std.math.isInf(ui_value)) {
-        buf.inner.appendSliceAssumeCapacity("inf");
+        buf.appendSliceAssumeCapacity("inf");
     } else {
         const written = std.fmt.bufPrint(
-            &buf.inner.buffer,
+            &buf.inner,
             "{d:.[1]}",
             .{ ui_value, decimals },
         ) catch unreachable;
-        buf.inner.len = @intCast(written.len);
-        trimUiAmountStringInPlace(&buf.inner, decimals);
+        buf.len = @intCast(written.len);
+        trimUiAmountStringInPlace(&buf, decimals);
     }
 
     return .{
@@ -619,14 +619,14 @@ fn scaledAmountToUi(
 }
 
 /// Trim trailing zeros and decimal point from a formatted number string.
-fn trimUiAmountStringInPlace(buf: *std.BoundedArray(u8, 40), decimals: u8) void {
+fn trimUiAmountStringInPlace(buf: *JsonString(40), decimals: u8) void {
     if (decimals == 0) return;
     // Trim trailing zeros
-    while (buf.len > 0 and buf.buffer[buf.len - 1] == '0') {
+    while (buf.len > 0 and buf.inner[buf.len - 1] == '0') {
         buf.len -= 1;
     }
     // Trim trailing decimal point
-    if (buf.len > 0 and buf.buffer[buf.len - 1] == '.') {
+    if (buf.len > 0 and buf.inner[buf.len - 1] == '.') {
         buf.len -= 1;
     }
 }
@@ -990,7 +990,7 @@ test "rpc.account_codec.parse_token: basic extension parsing" {
         data[171] = 0;
 
         const extensions = parseExtensions(data[TokenAccount.LEN..]);
-        try std.testing.expectEqual(1, extensions.len());
+        try std.testing.expectEqual(1, extensions.len);
         try std.testing.expectEqual(UiExtension.immutable_owner, extensions.get(0));
     }
 
@@ -1020,7 +1020,7 @@ test "rpc.account_codec.parse_token: basic extension parsing" {
         data[176] = 0;
 
         const extensions = parseExtensions(data[TokenAccount.LEN..]);
-        try std.testing.expectEqual(2, extensions.len());
+        try std.testing.expectEqual(2, extensions.len);
         try std.testing.expectEqual(UiExtension.immutable_owner, extensions.get(0));
 
         const memo = extensions.get(1);
@@ -1050,7 +1050,7 @@ test "rpc.account_codec.parse_token: basic extension parsing" {
         data[171] = 0;
 
         const extensions = parseExtensions(data[TokenAccount.LEN..]);
-        try std.testing.expectEqual(1, extensions.len());
+        try std.testing.expectEqual(1, extensions.len);
         try std.testing.expectEqual(UiExtension.unparseable_extension, extensions.get(0));
     }
 
@@ -1058,7 +1058,7 @@ test "rpc.account_codec.parse_token: basic extension parsing" {
     {
         const data: [1]u8 = .{0};
         const extensions = parseExtensions(&data);
-        try std.testing.expect(extensions.len() == 0);
+        try std.testing.expect(extensions.len == 0);
     }
 }
 
@@ -1178,7 +1178,7 @@ test "rpc.account_codec.parse_token: token account with extensions" {
                 try std.testing.expectEqual(@as(u8, 2), ui_multisig.numRequiredSigners);
                 try std.testing.expectEqual(@as(u8, 3), ui_multisig.numValidSigners);
                 try std.testing.expect(ui_multisig.isInitialized);
-                try std.testing.expectEqual(@as(usize, 3), ui_multisig.signers.len());
+                try std.testing.expectEqual(@as(usize, 3), ui_multisig.signers.len);
                 const s1_str = signer1.base58String().constSlice();
                 const s2_str = signer2.base58String().constSlice();
                 const s3_str = signer3.base58String().constSlice();
@@ -1295,7 +1295,7 @@ test "rpc.account_codec.parse_token: token account with extensions conformance" 
             try std.testing.expectEqual(@as(u64, 42), ui_account.tokenAmount.amount);
             try std.testing.expectEqual(AccountState.initialized, ui_account.state);
             // Verify extensions
-            try std.testing.expectEqual(@as(usize, 2), ui_account.extensions.len());
+            try std.testing.expectEqual(@as(usize, 2), ui_account.extensions.len);
             try std.testing.expectEqual(UiExtension.immutable_owner, ui_account.extensions.get(0));
 
             switch (ui_account.extensions.get(1)) {
@@ -1342,7 +1342,7 @@ test "rpc.account_codec.parse_token: mint with extensions conformance" {
             try std.testing.expectEqual(@as(u8, 3), ui_mint.decimals);
             try std.testing.expect(ui_mint.isInitialized);
             // Verify extension
-            try std.testing.expectEqual(@as(usize, 1), ui_mint.extensions.len());
+            try std.testing.expectEqual(@as(usize, 1), ui_mint.extensions.len);
             switch (ui_mint.extensions.get(0)) {
                 .mint_close_authority => |mca| {
                     try std.testing.expect(mca.closeAuthority != null);
