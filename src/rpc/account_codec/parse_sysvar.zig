@@ -16,6 +16,7 @@ const ParseError = account_codec.ParseError;
 // Re-use types from lib.zig and parse_nonce.zig
 const UiFeeCalculator = @import("parse_nonce.zig").UiFeeCalculator;
 const Stringified = account_codec.Stringified;
+const RyuF64 = account_codec.RyuF64;
 const JsonArray = account_codec.JsonArray;
 
 /// Parse a sysvar account by its pubkey.
@@ -78,7 +79,7 @@ pub fn parseSysvar(
         return SysvarAccountType{
             .rent = UiRent{
                 .lamportsPerByteYear = Stringified(u64).init(rent.lamports_per_byte_year),
-                .exemptionThreshold = rent.exemption_threshold,
+                .exemptionThreshold = RyuF64.init(rent.exemption_threshold),
                 .burnPercent = rent.burn_percent,
             },
         };
@@ -88,7 +89,7 @@ pub fn parseSysvar(
         const bits = reader.readInt(u64, .little) catch return ParseError.InvalidAccountData;
         return SysvarAccountType{
             .rewards = UiRewards{
-                .validatorPointValue = @bitCast(bits),
+                .validatorPointValue = RyuF64.init(@bitCast(bits)),
             },
         };
     } else if (pubkey.equals(&sysvar.SlotHashes.ID)) {
@@ -245,13 +246,13 @@ pub const UiFees = struct {
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs#L143
 pub const UiRent = struct {
     lamportsPerByteYear: Stringified(u64),
-    exemptionThreshold: f64,
+    exemptionThreshold: RyuF64,
     burnPercent: u8,
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs#L159
 pub const UiRewards = struct {
-    validatorPointValue: f64,
+    validatorPointValue: RyuF64,
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs#L169
@@ -453,7 +454,7 @@ test "rpc.account_codec.parse_sysvar: parse sysvars" {
         try std.testing.expect(result.? == .rent);
         const ui_rent = result.?.rent;
         try std.testing.expectEqual(@as(u64, 10), ui_rent.lamportsPerByteYear.value);
-        try std.testing.expectEqual(@as(f64, 2.0), ui_rent.exemptionThreshold);
+        try std.testing.expectEqual(@as(f64, 2.0), ui_rent.exemptionThreshold.value);
         try std.testing.expectEqual(@as(u8, 5), ui_rent.burnPercent);
     }
 
@@ -474,7 +475,7 @@ test "rpc.account_codec.parse_sysvar: parse sysvars" {
 
         try std.testing.expect(result != null);
         try std.testing.expect(result.? == .rewards);
-        try std.testing.expectEqual(@as(f64, 0.0), result.?.rewards.validatorPointValue);
+        try std.testing.expectEqual(@as(f64, 0.0), result.?.rewards.validatorPointValue.value);
     }
 
     // SlotHashes sysvar (one entry)
