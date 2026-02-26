@@ -683,7 +683,7 @@ pub const VoteStateVersions = union(enum(u32)) {
     /// vote_pubkey: when provided, used as inflation_rewards_collector default for old versions.
     ///
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
-    fn convertToV4(
+    pub fn convertToV4(
         self: VoteStateVersions,
         /// must be the allocator used to allocate self
         allocator: Allocator,

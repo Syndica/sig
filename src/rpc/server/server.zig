@@ -354,6 +354,7 @@ test "serveSpawn getAccountInfo" {
                 .base58 => return error.UnsupportedEncoding,
                 .@"base64+zstd" => return error.UnsupportedEncoding,
                 .jsonParsed => return error.UnsupportedEncoding,
+                .binary => return error.UnsupportedEncoding,
             };
 
             return .{
