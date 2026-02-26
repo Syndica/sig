@@ -2,22 +2,23 @@
 /// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token.rs
 const std = @import("std");
 const sig = @import("../../sig.zig");
-const account_codec = @import("lib.zig");
 const parse_token_extension = @import("parse_token_extension.zig");
 
-const Pubkey = sig.core.Pubkey;
-const ParseError = account_codec.ParseError;
+const account_codec = sig.rpc.account_codec;
+
 const AccountState = account_codec.AccountState;
+const InterestBearingConfigData = parse_token_extension.InterestBearingConfigData;
 const JsonArray = account_codec.JsonArray;
 const JsonString = account_codec.JsonString;
+const ParseError = account_codec.ParseError;
+const Pubkey = sig.core.Pubkey;
 const RyuF64 = account_codec.RyuF64;
-
-const UiExtension = parse_token_extension.UiExtension;
-const InterestBearingConfigData = parse_token_extension.InterestBearingConfigData;
 const ScaledUiAmountConfigData = parse_token_extension.ScaledUiAmountConfigData;
+const UiExtension = parse_token_extension.UiExtension;
+
+const parseExtensions = parse_token_extension.parseExtensions;
 
 const MAX_EXTENSIONS = parse_token_extension.MAX_EXTENSIONS;
-const parseExtensions = parse_token_extension.parseExtensions;
 
 /// Index of the account state byte in TokenAccount.
 /// Offset 108 = mint(32) + owner(32) + amount(8) + delegate(36) = 108
@@ -198,12 +199,14 @@ pub const SplTokenAdditionalData = struct {
 /// SPL Token Mint account layout (82 bytes).
 /// [spl] https://github.com/solana-program/token-2022/blob/main/interface/src/state.rs#L49-L94
 pub const Mint = struct {
-    pub const LEN: usize = 82;
     mint_authority: ?Pubkey,
     supply: u64,
     decimals: u8,
     is_initialized: bool,
     freeze_authority: ?Pubkey,
+
+    pub const LEN: usize = 82;
+
     pub fn unpack(data: []const u8) ParseError!Mint {
         if (data.len < LEN) return ParseError.InvalidAccountData;
         return Mint{
@@ -219,7 +222,6 @@ pub const Mint = struct {
 /// SPL Token Account layout (165 bytes).
 /// [spl] https://github.com/solana-program/token-2022/blob/main/interface/src/state.rs#L146-L195
 pub const TokenAccount = struct {
-    pub const LEN: usize = 165;
     mint: Pubkey,
     owner: Pubkey,
     amount: u64,
@@ -228,6 +230,8 @@ pub const TokenAccount = struct {
     is_native: ?u64,
     delegated_amount: u64,
     close_authority: ?Pubkey,
+
+    pub const LEN: usize = 165;
 
     pub fn unpack(data: []const u8) ParseError!TokenAccount {
         if (data.len < LEN) return ParseError.InvalidAccountData;
@@ -249,12 +253,14 @@ pub const TokenAccount = struct {
 /// SPL Token Multisig layout (355 bytes).
 /// [spl] https://github.com/solana-program/token-2022/blob/main/interface/src/state.rs#L235-L270
 pub const Multisig = struct {
-    pub const LEN: usize = 355;
-    pub const MAX_SIGNERS: usize = 11;
     m: u8,
     n: u8,
     is_initialized: bool,
     signers: [MAX_SIGNERS]Pubkey,
+
+    pub const LEN: usize = 355;
+    pub const MAX_SIGNERS: usize = 11;
+
     pub fn unpack(data: []const u8) ParseError!Multisig {
         if (data.len != LEN) return ParseError.InvalidAccountData;
         var signers: [MAX_SIGNERS]Pubkey = undefined;

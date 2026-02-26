@@ -857,7 +857,7 @@ pub const AccountHookContext = struct {
             if (slot < min_slot) return error.RpcMinContextSlotNotMet;
         }
 
-        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotFound;
+        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
         const slot_reader = self.account_reader.forSlot(&ref.constants.ancestors);
         const account = try slot_reader.get(allocator, params.pubkey) orelse return .{
             .context = .{ .slot = slot },
@@ -866,7 +866,13 @@ pub const AccountHookContext = struct {
         defer account.deinit(allocator);
 
         const data: GetAccountInfo.Response.Value.Data = if (encoding == .jsonParsed)
-            try account_codec.encodeJsonParsed(allocator, params.pubkey, account, slot_reader)
+            try account_codec.encodeJsonParsed(
+                allocator,
+                params.pubkey,
+                account,
+                slot_reader,
+                config.dataSlice,
+            )
         else
             try account_codec.encodeStandard(allocator, account, encoding, config.dataSlice);
 

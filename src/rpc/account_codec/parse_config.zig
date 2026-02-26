@@ -2,14 +2,16 @@
 /// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_config.rs
 const std = @import("std");
 const sig = @import("../../sig.zig");
-const account_codec = @import("lib.zig");
-const Allocator = std.mem.Allocator;
-const Pubkey = sig.core.Pubkey;
+
+const account_codec = sig.rpc.account_codec;
 const bincode = sig.bincode;
-const shortvec = bincode.shortvec;
-const ParseError = account_codec.ParseError;
-const RyuF64 = account_codec.RyuF64;
 const ids = sig.runtime.ids;
+const shortvec = bincode.shortvec;
+
+const Allocator = std.mem.Allocator;
+const ParseError = account_codec.ParseError;
+const Pubkey = sig.core.Pubkey;
+const RyuF64 = account_codec.RyuF64;
 
 /// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/validator_info.rs#L7
 const VALIDATOR_INFO_ID: Pubkey = .parse("Va1idator1nfo111111111111111111111111111111");
@@ -169,7 +171,7 @@ pub const ConfigAccountType = union(enum) {
     stake_config: UiStakeConfig,
     validator_info: UiConfig,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: ConfigAccountType, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("type");
         switch (self) {
@@ -182,7 +184,7 @@ pub const ConfigAccountType = union(enum) {
         try jw.endObject();
     }
 
-    fn typeNameFromTag(comptime tag: std.meta.Tag(@This())) []const u8 {
+    fn typeNameFromTag(comptime tag: std.meta.Tag(ConfigAccountType)) []const u8 {
         return switch (tag) {
             .stake_config => "stakeConfig",
             .validator_info => "validatorInfo",
