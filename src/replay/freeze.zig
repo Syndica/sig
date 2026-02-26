@@ -86,6 +86,8 @@ pub const FreezeParams = struct {
                 .collected_transaction_fees = state.collected_transaction_fees.load(.monotonic),
                 .collected_priority_fees = state.collected_priority_fees.load(.monotonic),
                 .ledger = ledger,
+                .reward_status = &state.reward_status,
+                .block_height = constants.block_height,
             },
         };
     }
@@ -146,6 +148,9 @@ const FinalizeStateParams = struct {
     collected_priority_fees: u64,
 
     ledger: *sig.ledger.Ledger,
+
+    reward_status: *const rewards.EpochRewardStatus,
+    block_height: u64,
 };
 
 /// Updates some accounts and other shared state to finish up the slot execution.
@@ -177,6 +182,8 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
         params.collected_transaction_fees,
         params.collected_priority_fees,
         params.ledger,
+        params.reward_status,
+        params.block_height,
     );
 
     // Run incinerator
@@ -198,8 +205,9 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
 }
 
 /// Burn and payout the appropriate portions of collected fees.
-/// Pushes fee reward to the block rewards list if fees were distributed to the leader.
-/// Matches Agave's fee distribution in `runtime/src/bank/fee_distribution.rs`.
+/// Records all rewards (fee, vote, staking) and num_partitions to the blockstore.
+/// Matches Agave's fee distribution in `runtime/src/bank/fee_distribution.rs`
+/// and reward recording in `get_rewards_and_num_partitions`.
 fn distributeTransactionFees(
     allocator: Allocator,
     account_store: AccountStore,
@@ -211,6 +219,8 @@ fn distributeTransactionFees(
     collected_transaction_fees: u64,
     collected_priority_fees: u64,
     ledger: *sig.ledger.Ledger,
+    epoch_reward_status: *const rewards.EpochRewardStatus,
+    block_height: u64,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "distributeTransactionFees" });
     defer zone.deinit();
@@ -239,20 +249,84 @@ fn distributeTransactionFees(
             else => return err,
         };
 
-        try ledger.db.put(sig.ledger.schema.schema.rewards, slot, .{
-            .rewards = &.{.{
-                .pubkey = collector_id,
-                .lamports = @intCast(payout_result.payout_amount),
-                .post_balance = payout_result.post_balance,
-                .reward_type = .fee,
-                .commission = null,
-            }},
+        const fee_reward: sig.ledger.meta.Reward = .{
+            .pubkey = collector_id,
+            .lamports = @intCast(payout_result.payout_amount),
+            .post_balance = payout_result.post_balance,
+            .reward_type = .fee,
+            .commission = null,
+        };
 
-            .num_partitions = null, // num_partitions - TODO: implement for epoch rewards
+        const keyed_rewards, const num_partitions = try getRewardsAndNumPartitions(
+            allocator,
+            epoch_reward_status,
+            block_height,
+            fee_reward,
+        );
+        defer allocator.free(keyed_rewards);
+
+        try ledger.db.put(sig.ledger.schema.schema.rewards, slot, .{
+            .rewards = keyed_rewards,
+            .num_partitions = num_partitions,
         });
     }
 
     _ = capitalization.fetchSub(burn, .monotonic);
+}
+
+/// Collect all rewards for this slot and determine num_partitions.
+/// Matches Agave's `get_rewards_and_num_partitions`.
+///
+/// On an epoch boundary block: returns vote rewards + fee reward + num_partitions.
+/// On a distribution block: returns distributed stake rewards + fee reward.
+/// On other blocks: returns just the fee reward.
+fn getRewardsAndNumPartitions(
+    allocator: Allocator,
+    epoch_reward_status: *const rewards.EpochRewardStatus,
+    block_height: u64,
+    fee_reward: sig.ledger.meta.Reward,
+) !struct { []const sig.ledger.meta.Reward, ?u64 } {
+    switch (epoch_reward_status.*) {
+        .active => |active| {
+            // The epoch boundary block is the one right before distribution starts.
+            // calculation.zig sets: distribution_starting_blockheight = block_height + 1
+            const is_epoch_boundary = (block_height + 1 == active.distribution_start_block_height);
+
+            if (is_epoch_boundary) {
+                // Epoch boundary: record vote rewards + fee reward + num_partitions.
+                const vote_entries = active.all_vote_rewards.entries;
+                const num_partitions: u64 = if (active.partitioned_indices) |pi|
+                    pi.entries.len
+                else
+                    0;
+
+                const all_rewards = try allocator.alloc(sig.ledger.meta.Reward, 1 + vote_entries.len);
+                all_rewards[0] = fee_reward;
+                for (vote_entries, 1..) |vr, i| {
+                    all_rewards[i] = .{
+                        .pubkey = vr.vote_pubkey,
+                        .lamports = @intCast(vr.rewards.lamports),
+                        .post_balance = vr.rewards.post_balance,
+                        .reward_type = .voting,
+                        .commission = vr.rewards.commission,
+                    };
+                }
+                return .{ all_rewards, num_partitions };
+            } else {
+                // Distribution block: record distributed stake rewards + fee reward.
+                const all_rewards = try allocator.alloc(sig.ledger.meta.Reward, 1 + active.distributed_rewards.items.len);
+                all_rewards[0] = fee_reward;
+                @memcpy(all_rewards[1..], active.distributed_rewards.items);
+                return .{ all_rewards, null };
+            }
+        },
+        .inactive => {},
+    }
+
+    // Non-epoch-reward block: just the fee reward.
+    const all_rewards = try allocator.alloc(sig.ledger.meta.Reward, 1);
+    all_rewards[0] = fee_reward;
+    return .{ all_rewards, null };
 }
 
 /// Attempt to pay the payout to the collector.

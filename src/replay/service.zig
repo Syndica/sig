@@ -454,9 +454,6 @@ pub fn newSlotFromParent(
     var state = try SlotState.fromFrozenParent(allocator, parent_state);
     errdefer state.deinit(allocator);
 
-    const epoch_reward_status = parent_state.reward_status.clone();
-    errdefer epoch_reward_status.deinit(allocator);
-
     var ancestors = try parent_constants.ancestors.clone(allocator);
     errdefer ancestors.deinit(allocator);
 
