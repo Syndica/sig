@@ -1,15 +1,18 @@
 const std = @import("std");
+const Build = std.Build;
 
-pub fn build(b: *std.Build) !void {
+pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     const test_step = b.step("test", "Run unit tests");
     const fmt_check_step = b.addFmt(.{ .check = true, .paths = &.{ "src/", "build.zig" } });
     const ci_step = b.step("ci", "Run all checks used for CI");
+    const check_step = b.step("check", "Check step.");
     ci_step.dependOn(test_step);
     ci_step.dependOn(b.getInstallStep());
     ci_step.dependOn(&fmt_check_step.step);
+    check_step.dependOn(b.getInstallStep());
 
     const tracy = b.dependency("tracy", .{
         .target = target,
@@ -98,39 +101,45 @@ pub fn build(b: *std.Build) !void {
     };
 
     // build + link services
-    {
-        const services_dir = try b.build_root.handle.openDir("src/services", .{ .iterate = true });
-        var iter = services_dir.iterate();
-        while (try iter.next()) |entry| {
-            if (entry.kind != .file) continue;
-            if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+    inline for (@import("src/services.zon")) |service_name| {
+        const service_mod = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("src/services").path(b, service_name ++ ".zig"),
+            .single_threaded = true,
+            .omit_frame_pointer = false,
+        });
+        service_mod.addImport("common", common);
+        service_mod.addImport("start", start_service);
+        service_mod.addImport("tracy", tracy);
 
-            const service_name = str: {
-                var splitter = std.mem.splitScalar(u8, entry.name, '.');
-                break :str splitter.next() orelse unreachable;
-            };
+        const lib_svc = b.addLibrary(.{
+            .name = service_name,
+            .root_module = service_mod,
+            .use_llvm = true,
+        });
+        sig_init.linkLibrary(lib_svc);
 
-            const service_mod = b.createModule(.{
-                .target = target,
-                .optimize = optimize,
-                .root_source_file = b.path("src/services/").path(b, entry.name),
-                .single_threaded = true,
-                .omit_frame_pointer = false,
-            });
-            service_mod.addImport("common", common);
-            service_mod.addImport("start", start_service);
-            service_mod.addImport("tracy", tracy);
-
-            const lib_svc = b.addLibrary(.{
-                .name = service_name,
-                .root_module = service_mod,
-                .use_llvm = true,
-            });
-            sig_init.linkLibrary(lib_svc);
-
-            const service_tests = b.addTest(.{ .root_module = service_mod, .name = service_name });
-            const service_tests_run = b.addRunArtifact(service_tests);
-            test_step.dependOn(&service_tests_run.step);
-        }
+        const service_tests = b.addTest(.{ .root_module = service_mod, .name = service_name });
+        const service_tests_run = b.addRunArtifact(service_tests);
+        test_step.dependOn(&service_tests_run.step);
     }
+
+    const validate_services_list_exe = b.addExecutable(.{
+        .name = "validate_services_list",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("scripts/validate_services_list.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+            .imports = &.{
+                .{
+                    .name = "services",
+                    .module = b.createModule(.{ .root_source_file = b.path("src/services.zon") }),
+                },
+            },
+        }),
+    });
+    const validate_services_list_run = b.addRunArtifact(validate_services_list_exe);
+    validate_services_list_run.addDirectoryArg(b.path("src/services"));
+    b.getInstallStep().dependOn(&validate_services_list_run.step);
 }
