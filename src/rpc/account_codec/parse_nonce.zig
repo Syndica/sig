@@ -2,14 +2,14 @@
 /// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_nonce.rs
 const std = @import("std");
 const sig = @import("../../sig.zig");
-const account_codec = @import("lib.zig");
+
+const account_codec = sig.rpc.account_codec;
+const nonce = sig.runtime.nonce;
 
 const Allocator = std.mem.Allocator;
-const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.hash.Hash;
-const nonce = sig.runtime.nonce;
 const ParseError = account_codec.ParseError;
-
+const Pubkey = sig.core.Pubkey;
 const Stringified = account_codec.Stringified;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/account-decoder/src/parse_nonce.rs#L8

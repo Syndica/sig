@@ -1,20 +1,21 @@
 /// This module provides encoding and decoding of Solana accounts for RPC responses.
 /// Supports `jsonParsed`, `base58`, `base64`, and `base64+zstd` encodings.
 const std = @import("std");
-const sig = @import("../../sig.zig");
 const base58 = @import("base58");
 const zstd = @import("zstd");
-const Pubkey = sig.core.Pubkey;
+const sig = @import("../../sig.zig");
 
-const parse_vote = @import("parse_vote.zig");
-const parse_stake = @import("parse_stake.zig");
-const parse_nonce = @import("parse_nonce.zig");
 const parse_address_lookup_table = @import("parse_account_lookup_table.zig");
 const parse_bpf_upgradeable_loader = @import("parse_bpf_upgradeable_loader.zig");
-const parse_sysvar = @import("parse_sysvar.zig");
 const parse_config = @import("parse_config.zig");
+const parse_nonce = @import("parse_nonce.zig");
+const parse_stake = @import("parse_stake.zig");
+const parse_sysvar = @import("parse_sysvar.zig");
 const parse_token = @import("parse_token.zig");
 const parse_token_extension = @import("parse_token_extension.zig");
+const parse_vote = @import("parse_vote.zig");
+
+const Pubkey = sig.core.Pubkey;
 
 /// [agave] Maximum input length for base58 encoding.
 /// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/lib.rs#L42
@@ -128,6 +129,7 @@ pub fn encodeJsonParsed(
     pubkey: sig.core.Pubkey,
     account: sig.core.Account,
     slot_reader: sig.accounts_db.SlotAccountReader,
+    data_slice: ?DataSlice,
 ) !AccountData {
     // Build additional data for token accounts, fetch mint and clock for Token-2022 responses.
     const additional_data = buildTokenAdditionalData(
@@ -137,15 +139,10 @@ pub fn encodeJsonParsed(
     );
 
     var account_data_iter = account.data.iterator();
-    // Use an arena for parse_account's intermediate allocations (e.g. addresses,
-    // votes, epoch_credits, bytecode) which are only needed until JSON serialization
-    // is complete.
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
 
     // Try to parse based on owner program
-    const maybe_parsed_account = parse_account(
-        arena.allocator(),
+    const maybe_parsed_account = parseAccount(
+        allocator,
         pubkey,
         account.owner,
         account_data_iter.reader(),
@@ -158,7 +155,7 @@ pub fn encodeJsonParsed(
 
     if (maybe_parsed_account) |parsed| {
         const json_str = try std.json.Stringify.valueAlloc(
-            arena.allocator(),
+            allocator,
             parsed,
             .{},
         );
@@ -168,16 +165,20 @@ pub fn encodeJsonParsed(
     }
 
     // Fallback: encode as base64 string when jsonParsed fails.
-    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/lib.rs#L81-L88
-    // When parse_account_data_v3 fails, AGave falls back to base64 encoding.
+    // [agave] https://github.com/anza-xyz/agave/blob/8803776abe/rpc/src/rpc.rs#L2504-L2509
+    // SPL token accounts ignore data_slice in the fallback path because
+    // get_parsed_token_account hardcodes it to None.
+    const is_spl_token = sig.runtime.ids.SPL_TOKEN_PROGRAM_ID.equals(&account.owner) or
+        sig.runtime.ids.SPL_TOKEN_2022_PROGRAM_ID.equals(&account.owner);
+    const fallback_slice = if (is_spl_token) null else data_slice;
     var encoded = try std.ArrayListUnmanaged(u8).initCapacity(
         allocator,
         // If jsonParsed fails, we fallback to base64 encoding, so we need to allocate
         // enough capacity for the encoded string here.
-        std.base64.standard.Encoder.calcSize(account.data.len()),
+        estimateEncodedSize(account, .base64, fallback_slice),
     );
     errdefer encoded.deinit(allocator);
-    try encodeAccountData(allocator, account, .base64, null, encoded.writer(allocator));
+    try encodeAccountData(allocator, account, .base64, fallback_slice, encoded.writer(allocator));
     return .{ .json_parsed_base64_fallback = try encoded.toOwnedSlice(allocator) };
 }
 
@@ -551,7 +552,7 @@ pub const AccountState = enum(u8) {
     frozen = 2,
 };
 
-pub fn parse_account(
+pub fn parseAccount(
     allocator: std.mem.Allocator,
     pubkey: Pubkey,
     program_id: Pubkey,
@@ -723,7 +724,7 @@ test "rpc.account_codec.lib: parse account" {
         const data = [_]u8{ 0, 1, 2, 3, 4, 5, 6, 7 };
         var stream = std.io.fixedBufferStream(&data);
 
-        const result = try parse_account(
+        const result = try parseAccount(
             allocator,
             pubkey,
             unknown_program_id,
@@ -833,7 +834,7 @@ test "rpc.account_codec.lib: parse account" {
 
         var stream = std.io.fixedBufferStream(data);
 
-        const result = try parse_account(
+        const result = try parseAccount(
             allocator,
             vote_pubkey,
             sig.runtime.program.vote.ID,
@@ -887,7 +888,7 @@ test "rpc.account_codec.lib: parse account" {
 
         var stream = std.io.fixedBufferStream(data);
 
-        const result = try parse_account(
+        const result = try parseAccount(
             allocator,
             stake_pubkey,
             sig.runtime.program.stake.ID,

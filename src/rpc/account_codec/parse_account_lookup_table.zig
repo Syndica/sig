@@ -2,16 +2,18 @@
 /// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs
 const std = @import("std");
 const sig = @import("../../sig.zig");
-const account_codec = @import("lib.zig");
 
-const Allocator = std.mem.Allocator;
-const Pubkey = sig.core.Pubkey;
-const AddressLookupTable = sig.runtime.program.address_lookup_table.AddressLookupTable;
-const ParseError = account_codec.ParseError;
+const account_codec = sig.rpc.account_codec;
 const address_lookup_table = sig.runtime.program.address_lookup_table;
-const LOOKUP_TABLE_META_SIZE = address_lookup_table.state.LOOKUP_TABLE_META_SIZE;
-const ProgramState = address_lookup_table.ProgramState;
+
+const AddressLookupTable = sig.runtime.program.address_lookup_table.AddressLookupTable;
+const Allocator = std.mem.Allocator;
 const LookupTableMeta = address_lookup_table.LookupTableMeta;
+const ParseError = account_codec.ParseError;
+const ProgramState = address_lookup_table.ProgramState;
+const Pubkey = sig.core.Pubkey;
+
+const LOOKUP_TABLE_META_SIZE = address_lookup_table.state.LOOKUP_TABLE_META_SIZE;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L7-L20
 ///
@@ -67,7 +69,7 @@ pub const LookupTableAccountType = union(enum) {
         try jw.endObject();
     }
 
-    fn typeNameFromTag(comptime tag: std.meta.Tag(@This())) []const u8 {
+    fn typeNameFromTag(comptime tag: std.meta.Tag(LookupTableAccountType)) []const u8 {
         return switch (tag) {
             .uninitialized => "uninitialized",
             .lookup_table => "lookupTable",

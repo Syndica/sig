@@ -2,22 +2,22 @@
 /// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs
 const std = @import("std");
 const sig = @import("../../sig.zig");
-const account_codec = @import("lib.zig");
+const parse_nonce = @import("parse_nonce.zig");
+
+const account_codec = sig.rpc.account_codec;
+const bincode = sig.bincode;
+const sysvar = sig.runtime.sysvar;
 
 const Allocator = std.mem.Allocator;
-const Pubkey = sig.core.Pubkey;
-const Hash = sig.core.Hash;
-const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
-const sysvar = sig.runtime.sysvar;
-const bincode = sig.bincode;
-const ParseError = account_codec.ParseError;
-
-// Re-use types from lib.zig and parse_nonce.zig
-const UiFeeCalculator = @import("parse_nonce.zig").UiFeeCalculator;
-const Stringified = account_codec.Stringified;
-const RyuF64 = account_codec.RyuF64;
+const Hash = sig.core.Hash;
 const JsonArray = account_codec.JsonArray;
+const ParseError = account_codec.ParseError;
+const Pubkey = sig.core.Pubkey;
+const RyuF64 = account_codec.RyuF64;
+const Slot = sig.core.Slot;
+const Stringified = account_codec.Stringified;
+const UiFeeCalculator = parse_nonce.UiFeeCalculator;
 
 /// Parse a sysvar account by its pubkey.
 /// Returns null if the pubkey doesn't match any known sysvar.

@@ -2,15 +2,15 @@
 /// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_stake.rs
 const std = @import("std");
 const sig = @import("../../sig.zig");
-const account_codec = @import("lib.zig");
+
+const account_codec = sig.rpc.account_codec;
 
 const Allocator = std.mem.Allocator;
-const Pubkey = sig.core.Pubkey;
-const StakeStateV2 = sig.runtime.program.stake.state.StakeStateV2;
 const ParseError = account_codec.ParseError;
-
-const Stringified = account_codec.Stringified;
+const Pubkey = sig.core.Pubkey;
 const RyuF64 = account_codec.RyuF64;
+const StakeStateV2 = sig.runtime.program.stake.state.StakeStateV2;
+const Stringified = account_codec.Stringified;
 
 /// Parses a stake account's data into a `StakeAccountType` for JSON encoding in RPC responses.
 pub fn parseStake(

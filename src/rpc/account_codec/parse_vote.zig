@@ -1,21 +1,21 @@
 /// Types for parsing a vote account for RPC responses using the `jsonParsed` encoding.
 /// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_vote.rs
 const std = @import("std");
-const sig = @import("../../sig.zig");
 const base58 = @import("base58");
-const account_codec = @import("lib.zig");
+const sig = @import("../../sig.zig");
+
+const account_codec = sig.rpc.account_codec;
+const vote_program = sig.runtime.program.vote;
 
 const Allocator = std.mem.Allocator;
-const Pubkey = sig.core.Pubkey;
-const vote_program = sig.runtime.program.vote;
-const ParseError = account_codec.ParseError;
 const JsonString = account_codec.JsonString;
+const ParseError = account_codec.ParseError;
+const Pubkey = sig.core.Pubkey;
 
 const BLS_PUBLIC_KEY_COMPRESSED_SIZE = vote_program.state.BLS_PUBLIC_KEY_COMPRESSED_SIZE;
 const BLS_PUBLIC_KEY_BASE58_MAX_SIZE = base58.encodedMaxSize(BLS_PUBLIC_KEY_COMPRESSED_SIZE);
 
 /// Parses a vote account's data into a `VoteAccountType` for JSON encoding in RPC responses.
-/// TODO: somehow enforce arena allocation for all allocations here?
 pub fn parseVote(
     allocator: Allocator,
     // std.io.Reader
@@ -38,6 +38,7 @@ pub fn parseVote(
         UiLandedVote,
         vote_state.votes.items.len,
     );
+    errdefer allocator.free(votes);
     for (vote_state.votes.items, 0..) |vote, i| {
         votes[i] = UiLandedVote{
             .latency = vote.latency,
@@ -50,6 +51,7 @@ pub fn parseVote(
         UiAuthorizedVoter,
         vote_state.authorized_voters.len(),
     );
+    errdefer allocator.free(auth_voters);
 
     const voter_keys = vote_state.authorized_voters.voters.keys();
     const voter_values = vote_state.authorized_voters.voters.values();
@@ -64,6 +66,7 @@ pub fn parseVote(
         UiEpochCredits,
         vote_state.epoch_credits.items.len,
     );
+    errdefer allocator.free(epoch_credits);
     for (epoch_credits, vote_state.epoch_credits.items) |*ec, vote_state_ec| {
         ec.* = UiEpochCredits{
             .epoch = vote_state_ec.epoch,

@@ -2,14 +2,15 @@
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token_extension.rs#L22
 const std = @import("std");
 const sig = @import("../../sig.zig");
-const account_codec = @import("lib.zig");
+
+const account_codec = sig.rpc.account_codec;
 const base64 = std.base64.standard;
 
-const Pubkey = sig.core.Pubkey;
 const AccountState = account_codec.AccountState;
 const Base64Encoded = account_codec.Base64Encoded;
-const JsonString = account_codec.JsonString;
 const JsonArray = account_codec.JsonArray;
+const JsonString = account_codec.JsonString;
+const Pubkey = sig.core.Pubkey;
 
 /// TLV parsing constants for Token-2022 extensions.
 /// TLV layout: 2 bytes type (ExtensionType as u16) + 2 bytes length (Length as u16) + value
@@ -154,7 +155,7 @@ pub const UiExtension = union(enum) {
     confidential_transfer_account: UiConfidentialTransferAccount,
     token_metadata: UiTokenMetadata,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: UiExtension, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginObject();
         try jw.objectField("extension");
         switch (self) {
@@ -169,7 +170,7 @@ pub const UiExtension = union(enum) {
         try jw.endObject();
     }
 
-    fn typeNameFromTag(comptime tag: std.meta.Tag(@This())) []const u8 {
+    fn typeNameFromTag(comptime tag: std.meta.Tag(UiExtension)) []const u8 {
         return switch (tag) {
             .uninitialized => "uninitialized",
             .immutable_owner => "immutableOwner",
@@ -775,7 +776,7 @@ const KeyValuePair = struct {
     key: JsonString(64),
     value: JsonString(256),
 
-    pub fn jsonStringify(self: @This(), jw: anytype) @TypeOf(jw.*).Error!void {
+    pub fn jsonStringify(self: KeyValuePair, jw: anytype) @TypeOf(jw.*).Error!void {
         try jw.beginArray();
         try jw.write(self.key.constSlice());
         try jw.write(self.value.constSlice());

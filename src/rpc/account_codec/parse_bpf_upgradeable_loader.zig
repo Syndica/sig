@@ -2,12 +2,13 @@
 /// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_bpf_loader.rs
 const std = @import("std");
 const sig = @import("../../sig.zig");
-const account_codec = @import("lib.zig");
+
+const account_codec = sig.rpc.account_codec;
 
 const Allocator = std.mem.Allocator;
+const ParseError = account_codec.ParseError;
 const Pubkey = sig.core.Pubkey;
 const State = sig.runtime.program.bpf_loader.v3.State;
-const ParseError = account_codec.ParseError;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_bpf_loader.rs#L13
 pub fn parseBpfUpgradeableLoader(
@@ -67,7 +68,6 @@ pub fn parseBpfUpgradeableLoader(
     };
 }
 
-// TODO: do we need this? does reader provide a typed read?
 fn readPubkey(reader: anytype) !Pubkey {
     var bytes: [Pubkey.SIZE]u8 = undefined;
     const n = try reader.readAll(&bytes);
@@ -125,7 +125,7 @@ pub const BpfUpgradeableLoaderAccountType = union(enum) {
         try jw.endObject();
     }
 
-    fn typeNameFromTag(comptime tag: std.meta.Tag(@This())) []const u8 {
+    fn typeNameFromTag(comptime tag: std.meta.Tag(BpfUpgradeableLoaderAccountType)) []const u8 {
         return switch (tag) {
             .uninitialized => "uninitialized",
             .buffer => "buffer",
