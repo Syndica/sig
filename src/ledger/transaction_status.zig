@@ -56,16 +56,17 @@ pub const TransactionStatusMeta = struct {
         allocator.free(self.pre_balances);
         allocator.free(self.post_balances);
         if (self.log_messages) |log_messages| allocator.free(log_messages);
-        inline for (.{
-            self.inner_instructions,
-            self.pre_token_balances,
-            self.post_token_balances,
-            self.rewards,
-        }) |maybe_slice| {
+        if (self.inner_instructions) |inner| {
+            for (inner) |item| item.deinit(allocator);
+            allocator.free(inner);
+        }
+        inline for (.{ self.pre_token_balances, self.post_token_balances }) |maybe_slice| {
             if (maybe_slice) |slice| {
+                for (slice) |item| item.deinit(allocator);
                 allocator.free(slice);
             }
         }
+        if (self.rewards) |rewards| allocator.free(rewards);
         self.loaded_addresses.deinit(allocator);
         if (self.return_data) |it| it.deinit(allocator);
     }

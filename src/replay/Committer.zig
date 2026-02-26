@@ -288,7 +288,7 @@ fn writeTransactionStatus(
         FallbackAccountReader,
         mint_reader,
     );
-    defer if (pre_token_balances) |balances| {
+    errdefer if (pre_token_balances) |balances| {
         for (balances) |b| b.deinit(allocator);
         allocator.free(balances);
     };
@@ -302,7 +302,7 @@ fn writeTransactionStatus(
         FallbackAccountReader,
         mint_reader,
     );
-    defer if (post_token_balances) |balances| {
+    errdefer if (post_token_balances) |balances| {
         for (balances) |b| b.deinit(allocator);
         allocator.free(balances);
     };
