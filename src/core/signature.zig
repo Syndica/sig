@@ -89,4 +89,15 @@ pub const Signature = extern struct {
         else
             error.UnexpectedToken;
     }
+
+    pub fn jsonParseFromValue(
+        _: std.mem.Allocator,
+        source: std.json.Value,
+        _: std.json.ParseOptions,
+    ) std.json.ParseFromValueError!Signature {
+        return switch (source) {
+            .string => |str| parseRuntime(str) catch error.InvalidNumber,
+            else => error.UnexpectedToken,
+        };
+    }
 };
