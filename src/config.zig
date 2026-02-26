@@ -153,6 +153,10 @@ pub const AccountsDB = struct {
     max_number_of_snapshot_download_attempts: u64 = 1_000,
     /// skip the validation of the snapshot
     skip_snapshot_validation: bool = false,
+    /// when true, save/restore the initial accounts.db to/from accounts.db.init for fast debug cycles:
+    /// - first run (no accounts.db.init): loads snapshot normally, then copies accounts.db -> accounts.db.init
+    /// - subsequent runs (accounts.db.init exists): copies accounts.db.init -> accounts.db, skips db population
+    dbg_db_init: bool = false,
 };
 
 pub const Gossip = struct {
