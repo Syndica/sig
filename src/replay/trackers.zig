@@ -166,7 +166,9 @@ pub const SlotTracker = struct {
         try slots.ensureUnusedCapacity(allocator, 1);
         const elem = try allocator.create(Element);
         elem.* = slot_init;
-        slots.putAssumeCapacity(slot, elem);
+        const gop = slots.getOrPutAssumeCapacity(slot);
+        if (gop.found_existing) gop.value_ptr.*.releaseRef();
+        gop.value_ptr.* = elem;
     }
 
     pub fn get(self: *SlotTracker, slot: Slot) ?Reference {
