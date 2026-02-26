@@ -57,7 +57,8 @@ pub const LeaderSchedule = extern struct {
                 error.EndOfStream => break,
                 error.StreamTooLong => return error.InvalidPubkey,
             };
-            const node_pk = Pubkey.parseRuntime(std.mem.trim(u8, node_str, " ")) catch return error.InvalidPubkey;
+            const node_pk = Pubkey.parseRuntime(std.mem.trim(u8, node_str, " ")) catch
+                return error.InvalidPubkey;
 
             schedule.leaders[i] = node_pk;
 

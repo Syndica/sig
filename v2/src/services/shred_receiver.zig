@@ -61,7 +61,6 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         };
 
         verifyShred(packet, ro.leader_schedule, &verified_roots) catch |err| {
-            _ = err catch {};
             std.log.debug("failed to verify shred: {}", .{err});
             continue;
         };

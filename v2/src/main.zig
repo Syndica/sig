@@ -1,5 +1,4 @@
 const std = @import("std");
-const tracy = @import("tracy");
 
 test {
     _ = std.testing.refAllDecls(@This());
@@ -86,7 +85,15 @@ pub fn main() !void {
     };
 
     switch (config.sandboxing_mode) {
-        .sandboxed => try services.spawnAndWait(allocator, service_instances, shared_regions),
-        .threaded => try services.spawnAndWaitNoSandbox(allocator, service_instances, shared_regions),
+        .sandboxed => try services.spawnAndWait(
+            allocator,
+            service_instances,
+            shared_regions,
+        ),
+        .threaded => try services.spawnAndWaitNoSandbox(
+            allocator,
+            service_instances,
+            shared_regions,
+        ),
     }
 }
