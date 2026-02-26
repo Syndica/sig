@@ -14,10 +14,12 @@ const GetBlockHeight = methods.GetBlockHeight;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
 const GetGenesisHash = methods.GetGenesisHash;
+const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSlot = methods.GetSlot;
+const GetTransactionCount = methods.GetTransactionCount;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
 
@@ -179,7 +181,23 @@ test GetGenesisHash {
 }
 
 // TODO: test getHealth()
-// TODO: test getHighestSnapshotSlot()
+test GetHighestSnapshotSlot {
+    try testRequest(.getHighestSnapshotSlot, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getHighestSnapshotSlot","params":[]}
+    );
+    try testResponse(GetHighestSnapshotSlot, .{ .result = .{
+        .full = 100,
+        .incremental = 110,
+    } },
+        \\{"jsonrpc":"2.0","result":{"full":100,"incremental":110},"id":1}
+    );
+    try testResponse(GetHighestSnapshotSlot, .{ .result = .{
+        .full = 100,
+        .incremental = null,
+    } },
+        \\{"jsonrpc":"2.0","result":{"full":100},"id":1}
+    );
+}
 // TODO: test getIdentity()
 // TODO: test getInflationGovernor()
 // TODO: test getInflationRate()
@@ -273,7 +291,14 @@ test GetSlot {
 // TODO: test getTokenLargestAccounts()
 // TODO: test getTokenSupply()
 // TODO: test getTransaction()
-// TODO: test getTransactionCount()
+test GetTransactionCount {
+    try testRequest(.getTransactionCount, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getTransactionCount","params":[]}
+    );
+    try testResponse(GetTransactionCount, .{ .result = 268651537 },
+        \\{"jsonrpc":"2.0","result":268651537,"id":1}
+    );
+}
 // TODO: test getVoteAccounts()
 // TODO: test isBlockhashValid()
 // TODO: test minimumLedgerSlot()

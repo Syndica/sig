@@ -899,6 +899,7 @@ test "insertion out of order" {
 
     try std.testing.expectEqual({}, simple_store.put(1, .ZEROES, .EMPTY));
     try std.testing.expectEqual({}, real_store.put(1, .ZEROES, .EMPTY));
+    try ancestor_set.addSlot(allocator, 1);
 
     const slot_to_try_write_while_rooted = slot: {
         const slots = simple_state.slot_map.keys();
