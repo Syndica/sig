@@ -70,8 +70,11 @@ pub const SlotTracker = struct {
             return .{ .element = self };
         }
 
+        fn releaseRef(self: *Element) void {
+            if (self.rc.release()) self.destroy();
+        }
+
         fn destroy(self: *Element) void {
-            if (!self.rc.release()) return;
             const allocator = self.allocator;
             self.constants.deinit(allocator);
             self.state.deinit(allocator);
@@ -86,7 +89,7 @@ pub const SlotTracker = struct {
             const wg = self.pruned_wg.?; // read it out of self, as this will destroy(self)
             defer wg.finish();
 
-            self.destroy();
+            self.releaseRef();
         }
     };
 
@@ -102,7 +105,7 @@ pub const SlotTracker = struct {
         }
 
         pub fn release(self: Reference) void {
-            self.element.destroy();
+            self.element.releaseRef();
         }
     };
 
@@ -331,7 +334,7 @@ pub const SlotTracker = struct {
                     element.pruned_wg = self.wg;
                     destroy_batch.push(.from(&element.destroy_task));
                 } else {
-                    element.destroy();
+                    element.releaseRef();
                 }
             } else {
                 index += 1;
