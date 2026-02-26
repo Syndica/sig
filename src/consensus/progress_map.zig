@@ -1236,31 +1236,35 @@ test "ProgressMap memory ownership" {
 }
 
 test "ForkProgress.init" {
-    const allocator = std.testing.allocator;
+    const gpa = std.testing.allocator;
 
-    var prng: std.Random.DefaultPrng = .init(3744);
-    const random = prng.random();
+    var prng_state: std.Random.DefaultPrng = .init(3744);
+    const prng = prng_state.random();
 
     const now: sig.time.Instant = .now();
-    var bank_data: sig.core.BankFields = try .initRandom(allocator, random, 128);
-    defer bank_data.deinit(allocator);
-    bank_data.hash = .ZEROES;
+    var bank_fields: sig.core.BankFields = try .initRandom(gpa, prng, 128);
+    defer bank_fields.deinit(gpa);
+    bank_fields.hash = .ZEROES;
 
-    const slot = bank_data.slot;
+    const runtime_state: sig.core.bank.RuntimeState =
+        try .fromManifestFields(gpa, .noop, &bank_fields, &.INIT_EOF);
+    defer runtime_state.deinit(gpa);
+
+    const slot = bank_fields.slot;
     const slot_consts: sig.core.SlotConstants =
-        try .fromBankFields(allocator, &bank_data, .ALL_DISABLED);
-    defer slot_consts.deinit(allocator);
+        try .fromRuntimeState(gpa, &runtime_state);
+    defer slot_consts.deinit(gpa);
 
     var slot_state: sig.core.SlotState =
-        try .fromBankFieldsForTest(allocator, &bank_data, null);
-    defer slot_state.deinit(allocator);
+        try .fromBankFieldsForTest(gpa, &bank_fields, null);
+    defer slot_state.deinit(gpa);
 
     const slot_info: replay.trackers.SlotTracker.Reference = .{
         .constants = &slot_consts,
         .state = &slot_state,
     };
 
-    const epoch_stakes = bank_data.epoch_stakes.get(bank_data.epoch).?;
+    const epoch_stakes = bank_fields.epoch_stakes.get(bank_fields.epoch).?;
 
     const vsi: ValidatorStakeInfo = .{
         .validator_vote_pubkey = slot_consts.collector_id,
@@ -1272,8 +1276,8 @@ test "ForkProgress.init" {
     };
 
     var expected_propagated_validators: PubkeyArraySet = .{};
-    defer expected_propagated_validators.deinit(allocator);
-    try expected_propagated_validators.put(allocator, vsi.validator_vote_pubkey.?, {});
+    defer expected_propagated_validators.deinit(gpa);
+    try expected_propagated_validators.put(gpa, vsi.validator_vote_pubkey.?, {});
 
     const expected_fork_stats = stats: {
         var fork_stats: ForkStats = .EMPTY_ZEROES;
@@ -1316,12 +1320,12 @@ test "ForkProgress.init" {
         },
     };
 
-    var expected_child = try expected.clone(allocator);
-    defer expected_child.deinit(allocator);
+    var expected_child = try expected.clone(gpa);
+    defer expected_child.deinit(gpa);
     expected_child.propagated_stats.prev_leader_slot = slot;
     expected_child.num_blocks_on_fork += 1;
 
-    const actual_init: ForkProgress = try .init(allocator, .{
+    const actual_init: ForkProgress = try .init(gpa, .{
         .now = now,
         .last_entry = bhq_last_hash.?,
         .prev_leader_slot = null,
@@ -1329,9 +1333,9 @@ test "ForkProgress.init" {
         .num_blocks_on_fork = 15,
         .num_dropped_blocks_on_fork = 16,
     });
-    defer actual_init.deinit(allocator);
+    defer actual_init.deinit(gpa);
 
-    const actual_init_from_bank: ForkProgress = try .initFromInfo(allocator, .{
+    const actual_init_from_bank: ForkProgress = try .initFromInfo(gpa, .{
         .slot_info = slot_info,
         .epoch_stakes = &epoch_stakes,
         .now = now,
@@ -1341,9 +1345,9 @@ test "ForkProgress.init" {
         .num_blocks_on_fork = 15,
         .num_dropped_blocks_on_fork = 16,
     });
-    defer actual_init_from_bank.deinit(allocator);
+    defer actual_init_from_bank.deinit(gpa);
 
-    const actual_init_from_parent: ForkProgress = try .initFromParent(allocator, .{
+    const actual_init_from_parent: ForkProgress = try .initFromParent(gpa, .{
         .now = now,
         .slot = slot + 1,
         .parent_slot = slot,
@@ -1359,7 +1363,7 @@ test "ForkProgress.init" {
             .epoch_authorized_voters = .empty,
         },
     });
-    defer actual_init_from_parent.deinit(allocator);
+    defer actual_init_from_parent.deinit(gpa);
 
     const override = struct {
         pub fn compare(a: anytype, b: @TypeOf(a)) !bool {

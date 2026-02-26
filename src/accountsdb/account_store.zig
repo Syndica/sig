@@ -268,6 +268,8 @@ pub const SlotAccountStore = union(enum) {
 pub const SlotAccountReader = union(enum) {
     accounts_db: struct { *AccountsDB, *const Ancestors },
     accounts_db_two: struct { *accounts_db.Two, *const Ancestors },
+    /// Similar to `accounts_db_two`, but only including rooted slots.
+    accounts_db_two_rooted: *const accounts_db.Two.Rooted,
     /// Contains many versions of accounts and becomes fork-aware using
     /// ancestors, like accountsdb.
     thread_safe_map: struct { *ThreadSafeAccountMap, *const Ancestors },
@@ -278,32 +280,36 @@ pub const SlotAccountReader = union(enum) {
     account_shared_data_map: *const sig.utils.collections.PubkeyMap(AccountSharedData),
     noop,
 
-    pub fn get(self: SlotAccountReader, alloc: std.mem.Allocator, address: Pubkey) !?Account {
+    pub fn get(self: SlotAccountReader, gpa: std.mem.Allocator, address: Pubkey) !?Account {
         return switch (self) {
             .accounts_db => |pair| {
                 const db, const ancestors = pair;
                 const account = try db.getAccountWithAncestors(
-                    alloc,
+                    gpa,
                     &address,
                     ancestors,
                 ) orelse return null;
                 if (account.lamports == 0) {
-                    account.deinit(alloc);
+                    account.deinit(gpa);
                     return null;
                 }
                 return account;
             },
             .accounts_db_two => |pair| {
-                const account = try pair[0].get(
-                    alloc,
-                    address,
-                    pair[1],
-                ) orelse return null;
+                const account = try pair[0].get(gpa, address, pair[1]) orelse return null;
                 if (account.lamports == 0) {
-                    account.deinit(alloc);
+                    account.deinit(gpa);
                     return null;
                 }
                 return account;
+            },
+            .accounts_db_two_rooted => |rooted| {
+                const account = try rooted.get(gpa, address) orelse return null;
+                if (account.lamports == 0) {
+                    account.deinit(gpa);
+                    return null;
+                }
+                return account.toOwnedAccount();
             },
             .thread_safe_map => |pair| pair[0].get(address, pair[1]),
             .account_map => |pair| pair.get(address),

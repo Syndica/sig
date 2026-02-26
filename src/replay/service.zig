@@ -1084,10 +1084,18 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
         .{ .current = try epoch_stakes.clone(fba.allocator()) },
     );
 
+    const runtime_state: sig.core.bank.RuntimeState = try .fromManifestFields(
+        allocator,
+        dep_stubs.accountReader().forSlot(&manifest.bank_fields.ancestors),
+        &manifest.bank_fields,
+        &manifest.bank_extra,
+    );
+    defer runtime_state.deinit(allocator);
+
     // init replay
     var replay_state = try dep_stubs.mockedState(
         allocator,
-        &manifest,
+        &runtime_state,
         config.num_threads,
     );
     defer {
@@ -1281,45 +1289,31 @@ pub const DependencyStubs = struct {
     fn mockedState(
         self: *DependencyStubs,
         allocator: std.mem.Allocator,
-        collapsed_manifest: *const sig.accounts_db.snapshot.Manifest,
+        runtime_state: *const sig.core.bank.RuntimeState,
         num_threads: u32,
     ) !ReplayState {
-        const bank_fields = &collapsed_manifest.bank_fields;
-
-        const feature_set = try sig.replay.service.getActiveFeatures(
-            allocator,
-            .{ .accounts_db_two = .{ &self.accounts_db_state.db, &bank_fields.ancestors } },
-            bank_fields.slot,
-        );
-
         var epoch_tracker = try allocator.create(sig.core.EpochTracker);
         errdefer allocator.destroy(epoch_tracker);
 
-        epoch_tracker.* = try sig.core.EpochTracker.initFromManifest(
+        epoch_tracker.* = try .initFromRuntimeState(
             allocator,
-            collapsed_manifest,
-            &feature_set,
+            runtime_state,
         );
         errdefer epoch_tracker.deinit(allocator);
 
-        const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
-            allocator,
-            bank_fields,
-            feature_set,
-        );
+        const root_slot_constants: sig.core.SlotConstants =
+            try .fromRuntimeState(allocator, runtime_state);
         errdefer root_slot_constants.deinit(allocator);
 
-        const lt_hash = collapsed_manifest.bank_extra.accounts_lt_hash;
-
-        const account_store = sig.accounts_db.AccountStore{
+        const account_store: sig.accounts_db.AccountStore = .{
             .accounts_db_two = &self.accounts_db_state.db,
         };
-        const account_reader = account_store.reader().forSlot(&bank_fields.ancestors);
-        var root_slot_state =
-            try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash, account_reader);
+        const account_reader = account_store.reader().forSlot(&runtime_state.ancestors);
+        var root_slot_state: sig.core.SlotState =
+            try .fromRuntimeState(allocator, runtime_state, account_reader);
         errdefer root_slot_state.deinit(allocator);
 
-        const hard_forks = try bank_fields.hard_forks.clone(allocator);
+        const hard_forks = try runtime_state.hard_forks.clone(allocator);
         errdefer hard_forks.deinit(allocator);
 
         return try .init(.{
@@ -1337,7 +1331,7 @@ pub const DependencyStubs = struct {
             .ledger = &self.ledger,
             .epoch_tracker = epoch_tracker,
             .root = .{
-                .slot = bank_fields.slot,
+                .slot = runtime_state.slot,
                 .constants = root_slot_constants,
                 .state = root_slot_state,
             },

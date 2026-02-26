@@ -36,7 +36,7 @@ pub const ClusterConfig = struct {
         .hashes_per_tick = null,
     };
 
-    fn initFromBankFields(fields: sig.core.BankFields) ClusterConfig {
+    pub fn initFromBankFields(fields: *const sig.core.BankFields) ClusterConfig {
         const seconds_per_year: f64 = (365.242_199 * 24.0 * 60.0 * 60.0);
         const slots_per_second = fields.slots_per_year / seconds_per_year;
         const ticks_per_second: u8 = @intFromFloat(
@@ -127,33 +127,31 @@ pub const EpochTracker = struct {
         };
     }
 
-    pub fn initFromManifest(
+    pub fn initFromRuntimeState(
         allocator: Allocator,
-        manifest: *const sig.accounts_db.snapshot.Manifest,
-        feature_set: *const FeatureSet,
+        runtime_state: *const sig.core.bank.RuntimeState,
     ) !EpochTracker {
-        const slot = manifest.bank_fields.slot;
-        const epoch_schedule = manifest.bank_fields.epoch_schedule;
+        const slot = runtime_state.slot;
+        const epoch_schedule = runtime_state.epoch_schedule;
+        const epoch_stakes_map = &runtime_state.versioned_epoch_stakes;
 
-        var epoch_tracker = sig.core.EpochTracker.init(
-            .initFromBankFields(manifest.bank_fields),
-            slot,
-            epoch_schedule,
-        );
+        var epoch_tracker: sig.core.EpochTracker =
+            .init(runtime_state.cluster_config, slot, epoch_schedule);
         errdefer epoch_tracker.deinit(allocator);
 
-        const epoch_stakes_map = manifest.bank_extra.versioned_epoch_stakes;
-        const min_epoch = std.mem.min(Epoch, manifest.bank_extra.versioned_epoch_stakes.keys());
-        const max_epoch = std.mem.max(Epoch, manifest.bank_extra.versioned_epoch_stakes.keys());
+        const min_epoch: Epoch, //
+        const max_epoch: Epoch //
+        = std.mem.minMax(Epoch, epoch_stakes_map.keys());
         for (min_epoch..max_epoch + 1) |epoch| {
-            const stakes = (epoch_stakes_map.get(epoch) orelse continue).current;
+            const versioned_epoch_stakes = epoch_stakes_map.getPtr(epoch) orelse continue;
+            const stakes = &versioned_epoch_stakes.current;
             const epoch_stakes = try stakes.convert(allocator, .delegation);
             errdefer epoch_stakes.deinit(allocator);
             try epoch_tracker.insertRootedEpochInfo(
                 allocator,
                 epoch_stakes.stakes.epoch,
                 epoch_stakes,
-                feature_set,
+                &runtime_state.feature_set,
             );
         }
 

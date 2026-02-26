@@ -181,11 +181,17 @@ pub const Set = struct {
     };
 };
 
-pub fn activationSlotFromAccount(account: sig.core.Account) !?u64 {
+pub const ActivationSlotFromAccountError = error{BincodeFailed};
+pub fn activationSlotFromAccount(account: sig.core.Account) ActivationSlotFromAccountError!?u64 {
     if (!account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) return null;
-    var feature_bytes = [_]u8{0} ** 9;
+    var feature_bytes: [9]u8 = @splat(0);
     account.data.readAll(&feature_bytes);
-    return sig.bincode.readFromSlice(failing_allocator, ?u64, &feature_bytes, .{});
+    return sig.bincode.readFromSlice(
+        failing_allocator,
+        ?u64,
+        &feature_bytes,
+        .standard,
+    ) catch return error.BincodeFailed;
 }
 
 test "full inflation enabled" {

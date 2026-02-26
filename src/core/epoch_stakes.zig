@@ -47,11 +47,12 @@ pub const VersionedEpochStakes = union(enum(u32)) {
         random: std.Random,
         max_list_entries: usize,
     ) Allocator.Error!VersionedEpochStakes {
-        return .{ .current = try EpochStakesGeneric(.stake).initRandom(
-            allocator,
-            random,
-            max_list_entries,
-        ) };
+        return .{
+            .current = try .initRandom(allocator, random, .{
+                .epoch = null,
+                .max_list_entries = max_list_entries,
+            }),
+        };
     }
 };
 

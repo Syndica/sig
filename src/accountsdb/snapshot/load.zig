@@ -23,44 +23,14 @@ const FullAndIncrementalManifest = sig.accounts_db.snapshot.FullAndIncrementalMa
 const Logger = sig.trace.Logger("accountsdb.snapshot.load");
 
 pub const LoadedSnapshot = struct {
-    allocator: Allocator,
     combined_manifest: snapshot.FullAndIncrementalManifest,
     collapsed_manifest: snapshot.Manifest,
     genesis_config: GenesisConfig,
 
-    pub fn deinit(self: *LoadedSnapshot) void {
-        self.combined_manifest.deinit(self.allocator);
-        self.collapsed_manifest.deinit(self.allocator);
-        self.genesis_config.deinit(self.allocator);
-    }
-
-    pub fn featureSet(
-        self: *LoadedSnapshot,
-        allocator: Allocator,
-        accounts_db: *sig.accounts_db.Two,
-    ) !FeatureSet {
-        const ancestors = self.collapsed_manifest.bank_fields.ancestors;
-
-        var feature_set = FeatureSet.ALL_DISABLED;
-        var inactive_iterator = feature_set.iterator(
-            self.collapsed_manifest.bank_fields.slot,
-            .inactive,
-        );
-        while (inactive_iterator.next()) |feature| {
-            const feature_id = features.map.get(feature).key;
-            if (try accounts_db.get(
-                allocator,
-                feature_id,
-                &ancestors,
-            )) |feature_account| {
-                defer feature_account.deinit(allocator);
-                if (try features.activationSlotFromAccount(feature_account)) |activation_slot| {
-                    feature_set.setSlot(feature, activation_slot);
-                }
-            }
-        }
-
-        return feature_set;
+    pub fn deinit(self: *const LoadedSnapshot, gpa: std.mem.Allocator) void {
+        self.combined_manifest.deinit(gpa);
+        self.collapsed_manifest.deinit(gpa);
+        self.genesis_config.deinit(gpa);
     }
 };
 
@@ -246,7 +216,6 @@ pub fn loadSnapshot(
         logger.info().log("metadata loading done...");
 
         return .{
-            .allocator = allocator,
             .combined_manifest = combined_manifest,
             .collapsed_manifest = collapsed_manifest,
             .genesis_config = genesis_config,
@@ -278,7 +247,6 @@ pub fn loadSnapshot(
     logger.info().log("accounts-db setup done...");
 
     return .{
-        .allocator = allocator,
         .combined_manifest = combined_manifest,
         .collapsed_manifest = collapsed_manifest,
         .genesis_config = genesis_config,
@@ -604,7 +572,7 @@ test loadSnapshot {
             .extract = .metadata_only,
         },
     );
-    metadata_only.deinit();
+    metadata_only.deinit(allocator);
 
     const rooted_path = try std.fs.path.joinZ(allocator, &.{ path, "accounts.db" });
     defer allocator.free(rooted_path);
@@ -622,5 +590,5 @@ test loadSnapshot {
             .extract = .{ .entire_snapshot_and_validate = &rooted_db },
         },
     );
-    loaded_snapshot.deinit();
+    loaded_snapshot.deinit(allocator);
 }

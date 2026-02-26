@@ -112,33 +112,33 @@ pub const SlotConstants = struct {
     /// Rent collector
     rent_collector: RentCollector,
 
-    pub fn fromBankFields(
-        allocator: Allocator,
-        bank_fields: *const BankFields,
-        feature_set: FeatureSet,
+    pub fn fromRuntimeState(
+        gpa: Allocator,
+        runtime_state: *const RuntimeState,
     ) Allocator.Error!SlotConstants {
-        const ancestors = try bank_fields.ancestors.clone(allocator);
-        errdefer ancestors.deinit(allocator);
+        const ancestors = try runtime_state.ancestors.clone(gpa);
+        errdefer ancestors.deinit(gpa);
 
-        const reserved_accounts = try ReservedAccounts.initForSlot(
-            allocator,
-            &feature_set,
-            bank_fields.slot,
+        const reserved_accounts: ReservedAccounts = try .initForSlot(
+            gpa,
+            &runtime_state.feature_set,
+            runtime_state.slot,
         );
-        errdefer reserved_accounts.deinit(allocator);
+        errdefer reserved_accounts.deinit(gpa);
+
         return .{
-            .parent_slot = bank_fields.parent_slot,
-            .parent_hash = bank_fields.parent_hash,
-            .parent_lt_hash = null,
-            .block_height = bank_fields.block_height,
-            .collector_id = bank_fields.collector_id,
-            .max_tick_height = bank_fields.max_tick_height,
-            .fee_rate_governor = bank_fields.fee_rate_governor,
+            .parent_slot = runtime_state.parent_slot,
+            .parent_hash = runtime_state.parent_hash,
+            .parent_lt_hash = runtime_state.parent_lt_hash,
+            .block_height = runtime_state.block_height,
+            .collector_id = runtime_state.collector_id,
+            .max_tick_height = runtime_state.max_tick_height,
+            .fee_rate_governor = runtime_state.fee_rate_governor,
             .ancestors = ancestors,
-            .feature_set = feature_set,
+            .feature_set = runtime_state.feature_set,
             .reserved_accounts = reserved_accounts,
-            .inflation = bank_fields.inflation,
-            .rent_collector = bank_fields.rent_collector,
+            .inflation = runtime_state.inflation,
+            .rent_collector = runtime_state.rent_collector,
         };
     }
 
@@ -248,31 +248,30 @@ pub const SlotState = struct {
         .reward_status = .inactive,
     };
 
-    pub fn fromBankFields(
-        allocator: Allocator,
-        bank_fields: *const BankFields,
-        lt_hash: ?LtHash,
+    pub fn fromRuntimeState(
+        gpa: Allocator,
+        runtime_state: *const sig.core.bank.RuntimeState,
         account_reader: SlotAccountReader,
     ) !SlotState {
-        const blockhash_queue = try bank_fields.blockhash_queue.clone(allocator);
-        errdefer blockhash_queue.deinit(allocator);
+        const blockhash_queue = try runtime_state.blockhash_queue.clone(gpa);
+        errdefer blockhash_queue.deinit(gpa);
 
-        const stakes = try parseStakes(allocator, &bank_fields.stakes, account_reader);
-        errdefer stakes.deinit(allocator);
+        const stakes = try parseStakes(gpa, &runtime_state.stakes, account_reader);
+        errdefer stakes.deinit(gpa);
 
         return .{
             .blockhash_queue = .init(blockhash_queue),
-            .hash = .init(bank_fields.hash),
-            .capitalization = .init(bank_fields.capitalization),
-            .transaction_count = .init(bank_fields.transaction_count),
-            .signature_count = .init(bank_fields.signature_count),
-            .tick_height = .init(bank_fields.tick_height),
-            .collected_rent = .init(bank_fields.collected_rent),
-            .accounts_lt_hash = .init(lt_hash),
+            .hash = .init(runtime_state.hash),
+            .capitalization = .init(runtime_state.capitalization),
+            .transaction_count = .init(runtime_state.transaction_count),
+            .signature_count = .init(runtime_state.signature_count),
+            .tick_height = .init(runtime_state.tick_height),
+            .collected_rent = .init(runtime_state.collected_rent),
+            .accounts_lt_hash = .init(runtime_state.accounts_lt_hash),
             .stakes_cache = .{ .stakes = .init(stakes) },
-            .collected_transaction_fees = .init(0),
-            .collected_priority_fees = .init(0),
-            .reward_status = .inactive,
+            .collected_transaction_fees = .init(runtime_state.collected_transaction_fees),
+            .collected_priority_fees = .init(runtime_state.collected_priority_fees),
+            .reward_status = runtime_state.reward_status,
         };
     }
 
@@ -918,4 +917,165 @@ test parseStakes {
         );
         try std.testing.expectError(error.VoteAccountNotCached, parsed_stakes);
     }
+}
+
+pub const RuntimeState = struct {
+    slot: Slot,
+    hash: Hash,
+    accounts_lt_hash: sig.core.LtHash,
+
+    parent_slot: Slot,
+    parent_hash: Hash,
+    parent_lt_hash: ?sig.core.LtHash,
+
+    feature_set: sig.core.FeatureSet,
+    epoch_schedule: sig.core.EpochSchedule,
+    cluster_config: sig.core.epoch_tracker.ClusterConfig,
+    fee_rate_governor: sig.core.FeeRateGovernor,
+    inflation: sig.core.Inflation,
+    rent_collector: sig.core.RentCollector,
+
+    block_height: u64,
+    collector_id: Pubkey,
+    max_tick_height: u64,
+    capitalization: u64,
+    transaction_count: u64,
+    signature_count: u64,
+    tick_height: u64,
+    collected_rent: u64,
+    collected_transaction_fees: u64,
+    collected_priority_fees: u64,
+
+    ancestors: sig.core.Ancestors,
+    versioned_epoch_stakes: std.AutoArrayHashMapUnmanaged(Epoch, sig.core.VersionedEpochStakes),
+    blockhash_queue: sig.core.BlockhashQueue,
+    stakes: sig.core.Stakes(.delegation),
+    reward_status: sig.replay.rewards.EpochRewardStatus,
+    hard_forks: sig.core.HardForks,
+
+    pub fn deinit(self: *const RuntimeState, gpa: std.mem.Allocator) void {
+        self.ancestors.deinit(gpa);
+        sig.utils.collections.deinitMapAndValues(gpa, self.versioned_epoch_stakes);
+        self.blockhash_queue.deinit(gpa);
+        self.stakes.deinit(gpa);
+        self.reward_status.deinit(gpa);
+    }
+
+    pub fn fromManifestFields(
+        gpa: std.mem.Allocator,
+        accounts_db: sig.accounts_db.SlotAccountReader,
+        bank_fields: *const sig.core.BankFields,
+        bank_extra: *const sig.accounts_db.snapshot.data.ExtraFields,
+    ) (std.mem.Allocator.Error || GetFeatureSetError)!RuntimeState {
+        const slot = bank_fields.slot;
+        const feature_set = try getFeatureSet(gpa, accounts_db, slot);
+
+        const ancestors = try bank_fields.ancestors.clone(gpa);
+        errdefer ancestors.deinit(gpa);
+
+        const versioned_epoch_stakes = try sig.utils.collections.cloneMapAndValues(
+            gpa,
+            bank_extra.versioned_epoch_stakes,
+        );
+        errdefer sig.utils.collections.deinitMapAndValues(gpa, versioned_epoch_stakes);
+
+        const blockhash_queue = try bank_fields.blockhash_queue.clone(gpa);
+        errdefer blockhash_queue.deinit(gpa);
+
+        const stakes = try bank_fields.stakes.clone(gpa);
+        errdefer stakes.deinit(gpa);
+
+        const hard_forks = try bank_fields.hard_forks.clone(gpa);
+        defer hard_forks.deinit(gpa);
+
+        return .{
+            .slot = slot,
+            .hash = bank_fields.hash,
+            .accounts_lt_hash = bank_extra.accounts_lt_hash,
+
+            .parent_slot = bank_fields.parent_slot,
+            .parent_hash = bank_fields.parent_hash,
+            .parent_lt_hash = null,
+
+            .feature_set = feature_set,
+            .epoch_schedule = bank_fields.epoch_schedule,
+            .cluster_config = .initFromBankFields(bank_fields),
+            .fee_rate_governor = bank_fields.fee_rate_governor,
+            .inflation = bank_fields.inflation,
+            .rent_collector = bank_fields.rent_collector,
+
+            .block_height = bank_fields.block_height,
+            .collector_id = bank_fields.collector_id,
+            .max_tick_height = bank_fields.max_tick_height,
+            .capitalization = bank_fields.capitalization,
+            .transaction_count = bank_fields.transaction_count,
+            .signature_count = bank_fields.signature_count,
+            .tick_height = bank_fields.tick_height,
+            .collected_rent = bank_fields.collected_rent,
+            .collected_transaction_fees = 0,
+            .collected_priority_fees = 0,
+
+            .ancestors = ancestors,
+            .versioned_epoch_stakes = versioned_epoch_stakes,
+            .blockhash_queue = blockhash_queue,
+            .stakes = stakes,
+            .reward_status = .inactive,
+            .hard_forks = hard_forks,
+        };
+    }
+
+    pub fn reservedAccounts(
+        self: RuntimeState,
+        gpa: std.mem.Allocator,
+    ) std.mem.Allocator.Error!sig.core.ReservedAccounts {
+        return try .initForSlot(gpa, self.feature_set, self.slot);
+    }
+
+    const GetFeatureSetError =
+        std.mem.Allocator.Error ||
+        sig.core.features.ActivationSlotFromAccountError ||
+        error{GetAccountError};
+    fn getFeatureSet(
+        gpa: std.mem.Allocator,
+        accounts_db: sig.accounts_db.SlotAccountReader,
+        slot: Slot,
+    ) GetFeatureSetError!sig.core.FeatureSet {
+        var feature_set: sig.core.FeatureSet = .ALL_DISABLED;
+        var inactive_iterator = feature_set.iterator(slot, .inactive);
+        while (inactive_iterator.next()) |feature| {
+            const feature_id = sig.core.features.map.get(feature).key;
+
+            const feature_account =
+                (accounts_db.get(gpa, feature_id) catch return error.GetAccountError) orelse
+                continue;
+            defer feature_account.deinit(gpa);
+
+            const activation_slot =
+                try sig.core.features.activationSlotFromAccount(feature_account) orelse
+                continue;
+            feature_set.setSlot(feature, activation_slot);
+        }
+        return feature_set;
+    }
+};
+
+test RuntimeState {
+    const gpa = std.testing.allocator;
+
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    const bank_fields: sig.core.BankFields = try .initRandom(gpa, prng, 16);
+    defer bank_fields.deinit(gpa);
+
+    const extra_fields: sig.accounts_db.snapshot.data.ExtraFields = try .initRandom(gpa, prng, 16);
+    defer extra_fields.deinit(gpa);
+
+    const runtime_state: RuntimeState = try .fromManifestFields(
+        gpa,
+        .noop,
+        &bank_fields,
+        &extra_fields,
+    );
+    defer runtime_state.deinit(gpa);
 }

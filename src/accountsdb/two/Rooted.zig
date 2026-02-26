@@ -121,7 +121,7 @@ pub fn count(self: *const Rooted) u64 {
 /// TODO: we really don't want to be doing these clones, so some other solution would be good.
 /// TODO: getBatched() to SELECT from multiple pubkeys
 pub fn get(
-    self: *Rooted,
+    self: *const Rooted,
     allocator: std.mem.Allocator,
     address: Pubkey,
 ) error{OutOfMemory}!?AccountSharedData {

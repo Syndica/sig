@@ -1551,7 +1551,7 @@ fn validator(
                 .{ .entire_snapshot_and_validate = &rooted_db },
         },
     );
-    defer loaded_snapshot.deinit();
+    defer loaded_snapshot.deinit(allocator);
 
     const static_rpc_ctx: sig.rpc.methods.StaticHookContext = .{
         .genesis_hash = loaded_snapshot.genesis_config.hash,
@@ -1570,8 +1570,6 @@ fn validator(
 
     var new_db: sig.accounts_db.Two = try .init(unrooted_tracy_metrics.allocator(), rooted_db);
     defer new_db.deinit();
-
-    const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
 
     var ledger_tracy: tracy.TracingAllocator = .{
         .name = "Ledger",
@@ -1601,15 +1599,24 @@ fn validator(
     var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
 
     // shred networking
-    const my_contact_info =
-        sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(gossip_service.my_contact_info);
+    const my_contact_info: sig.gossip.data.ThreadSafeContactInfo =
+        .fromContactInfo(gossip_service.my_contact_info);
 
-    const feature_set = try loaded_snapshot.featureSet(allocator, &new_db);
-    var epoch_tracker = try sig.core.EpochTracker.initFromManifest(
+    const runtime_state_init: sig.core.bank.RuntimeState = try .fromManifestFields(
         allocator,
-        collapsed_manifest,
-        &feature_set,
+        .{
+            .accounts_db_two = .{
+                &new_db,
+                &loaded_snapshot.collapsed_manifest.bank_fields.ancestors,
+            },
+        },
+        &loaded_snapshot.collapsed_manifest.bank_fields,
+        &loaded_snapshot.collapsed_manifest.bank_extra,
     );
+    defer runtime_state_init.deinit(allocator);
+
+    var epoch_tracker: sig.core.EpochTracker =
+        try .initFromRuntimeState(allocator, &runtime_state_init);
     defer epoch_tracker.deinit(allocator);
 
     const rpc_cluster_type = loaded_snapshot.genesis_config.cluster_type;
@@ -1654,7 +1661,7 @@ fn validator(
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db_two = &new_db },
-        .loaded_snapshot = &loaded_snapshot,
+        .runtime_state = &runtime_state_init,
         .ledger = &ledger,
         .epoch_tracker = &epoch_tracker,
         .replay_threads = cfg.replay_threads,
@@ -1826,7 +1833,7 @@ fn replayOffline(
                 .{ .entire_snapshot_and_validate = &rooted_db },
         },
     );
-    defer loaded_snapshot.deinit();
+    defer loaded_snapshot.deinit(allocator);
 
     var unrooted_tracy: tracy.TracingAllocator = .{
         .name = "AccountsDB Unrooted",
@@ -1839,8 +1846,6 @@ fn replayOffline(
 
     var new_db: sig.accounts_db.Two = try .init(unrooted_tracy_metrics.allocator(), rooted_db);
     defer new_db.deinit();
-
-    const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
 
     var ledger_tracy: tracy.TracingAllocator = .{
         .name = "Ledger",
@@ -1866,18 +1871,26 @@ fn replayOffline(
         app_base.exit,
     });
 
-    const feature_set = try loaded_snapshot.featureSet(allocator, &new_db);
-    var epoch_tracker = try sig.core.EpochTracker.initFromManifest(
+    const runtime_state_init: sig.core.bank.RuntimeState = try .fromManifestFields(
         allocator,
-        collapsed_manifest,
-        &feature_set,
+        .{
+            .accounts_db_two = .{
+                &new_db,
+                &loaded_snapshot.collapsed_manifest.bank_fields.ancestors,
+            },
+        },
+        &loaded_snapshot.collapsed_manifest.bank_fields,
+        &loaded_snapshot.collapsed_manifest.bank_extra,
     );
+    defer runtime_state_init.deinit(allocator);
+    var epoch_tracker: sig.core.EpochTracker =
+        try .initFromRuntimeState(allocator, &runtime_state_init);
     defer epoch_tracker.deinit(allocator);
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db_two = &new_db },
-        .loaded_snapshot = &loaded_snapshot,
+        .runtime_state = &runtime_state_init,
         .ledger = &ledger,
         .epoch_tracker = &epoch_tracker,
         .replay_threads = cfg.replay_threads,
@@ -2147,7 +2160,7 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
             .extract = .{ .entire_snapshot_and_validate = &rooted_db },
         },
     );
-    defer loaded_snapshot.deinit();
+    defer loaded_snapshot.deinit(allocator);
 }
 
 /// entrypoint to print the leader schedule and then exit
@@ -2678,7 +2691,8 @@ const ReplayAndConsensusServiceState = struct {
         params: struct {
             app_base: *const AppBase,
             account_store: sig.accounts_db.AccountStore,
-            loaded_snapshot: *sig.accounts_db.snapshot.LoadedSnapshot,
+            // loaded_snapshot: *sig.accounts_db.snapshot.LoadedSnapshot,
+            runtime_state: *const sig.core.bank.RuntimeState,
             ledger: *Ledger,
             epoch_tracker: *sig.core.EpochTracker,
             replay_threads: u32,
@@ -2690,27 +2704,18 @@ const ReplayAndConsensusServiceState = struct {
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
             const account_store = params.account_store;
-            const manifest = &params.loaded_snapshot.collapsed_manifest;
-            const bank_fields = &manifest.bank_fields;
-
-            const feature_set = try sig.replay.service.getActiveFeatures(
-                allocator,
-                account_store.reader().forSlot(&bank_fields.ancestors),
-                bank_fields.slot,
-            );
+            const runtime_state = params.runtime_state;
 
             const root_slot_constants: sig.core.SlotConstants =
-                try .fromBankFields(allocator, bank_fields, feature_set);
+                try .fromRuntimeState(allocator, runtime_state);
             errdefer root_slot_constants.deinit(allocator);
 
-            const lt_hash = manifest.bank_extra.accounts_lt_hash;
-
-            const account_reader = account_store.reader().forSlot(&bank_fields.ancestors);
+            const account_reader = account_store.reader().forSlot(&runtime_state.ancestors);
             var root_slot_state: sig.core.SlotState =
-                try .fromBankFields(allocator, bank_fields, lt_hash, account_reader);
+                try .fromRuntimeState(allocator, runtime_state, account_reader);
             errdefer root_slot_state.deinit(allocator);
 
-            const hard_forks = try bank_fields.hard_forks.clone(allocator);
+            const hard_forks = try runtime_state.hard_forks.clone(allocator);
             errdefer hard_forks.deinit(allocator);
 
             break :replay_state try .init(.{
@@ -2735,7 +2740,7 @@ const ReplayAndConsensusServiceState = struct {
                 .ledger = params.ledger,
                 .epoch_tracker = params.epoch_tracker,
                 .root = .{
-                    .slot = bank_fields.slot,
+                    .slot = runtime_state.slot,
                     .constants = root_slot_constants,
                     .state = root_slot_state,
                 },
