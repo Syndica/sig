@@ -70,6 +70,23 @@ jobs:
       - run:
           name: Check style in conformance
           command: python scripts/style.py --check conformance/src
+      - run:
+          name: Check style in v2
+          command: python scripts/style.py --check v2/src
+
+  v2_checks:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - run:
+          name: CI
+          command: |
+            sudo apt update && sudo apt install wget -y
+            ./scripts/proxy_workaround.sh workspace/zig/zig
+            cd v2/
+            ../workspace/zig/zig build ci --summary all
 
   check_docs:
     executor: python-executor
@@ -369,6 +386,9 @@ workflows:
           name: setup_zig_linux
           target: "x86_64-linux"
       - lint:
+          requires:
+            - setup_zig_linux
+      - v2_checks:
           requires:
             - setup_zig_linux
       - build_linux_release:
