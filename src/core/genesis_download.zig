@@ -67,28 +67,32 @@ fn downloadGenesisArchive(
     var client = std.http.Client{ .allocator = allocator };
     defer client.deinit();
 
-    var response_body = std.array_list.Managed(u8).init(allocator);
-    errdefer response_body.deinit();
-
-    var buf: [1024]u8 = undefined;
-    var writer = response_body.writer().adaptToNewApi(&buf);
+    var response = std.io.Writer.Allocating.init(allocator);
+    errdefer response.deinit();
 
     const result = client.fetch(.{
         .location = .{ .url = url },
         .method = .GET,
-        .response_writer = &writer.new_interface,
+        .response_writer = &response.writer,
+        .headers = .{
+            .accept_encoding = .{
+                .override = "identity",
+            },
+            .user_agent = .{
+                .override = "sig/0.1",
+            },
+        },
     }) catch |err| {
         logger.err().logf("Failed to fetch genesis archive: {}", .{err});
         return error.HttpRequestFailed;
     };
-    writer.new_interface.flush() catch return error.HttpRequestFailed;
 
     if (result.status != .ok) {
         logger.err().logf("HTTP request failed with status: {}", .{result.status});
         return error.HttpRequestFailed;
     }
 
-    return response_body.toOwnedSlice() catch return error.OutOfMemory;
+    return try response.toOwnedSlice();
 }
 
 /// Decompresses bz2 data using libbz2
@@ -169,17 +173,22 @@ fn extractGenesisFromTar(
         defer out_file.close();
 
         var buf: [8192]u8 = undefined;
-        while (true) {
-            var writer = out_file.writer(&buf);
-            const bytes_read = tar_iter.reader.stream(
-                &writer.interface,
-                .limited(file.size),
-            ) catch |err| {
-                logger.err().logf("Failed to write genesis.bin: {}", .{err});
-                return error.TarExtractError;
-            };
-            writer.interface.flush() catch return error.TarExtractError;
-            if (bytes_read == 0) break;
+        var writer = out_file.writer(&buf);
+        const bytes_read = tar_iter.reader.stream(
+            &writer.interface,
+            .limited(file.size),
+        ) catch |err| {
+            logger.err().logf("Failed to write genesis.bin: {}", .{err});
+            return error.TarExtractError;
+        };
+        writer.interface.flush() catch return error.TarExtractError;
+
+        if (bytes_read != file.size) {
+            logger.err().logf(
+                "Incomplete genesis extraction: expected {d} bytes, got {d}",
+                .{ file.size, bytes_read },
+            );
+            return error.TarExtractError;
         }
 
         return std.fs.path.join(allocator, &.{ output_dir, DEFAULT_GENESIS_FILE }) catch
@@ -188,4 +197,78 @@ fn extractGenesisFromTar(
 
     logger.err().log("genesis.bin not found in archive");
     return error.GenesisNotFoundInArchive;
+}
+
+fn buildTarWithFiles(
+    allocator: Allocator,
+    files: []const struct { path: []const u8, contents: []const u8 },
+) ![]u8 {
+    var tar = std.array_list.Managed(u8).init(allocator);
+    errdefer tar.deinit();
+
+    const writer = tar.writer();
+    for (files) |file| {
+        try sig.utils.tar.writeTarHeader(writer, .regular, file.path, file.contents.len);
+        try writer.writeAll(file.contents);
+        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(file.contents.len));
+    }
+    try writer.writeAll(&sig.utils.tar.sentinel_blocks);
+
+    return tar.toOwnedSlice();
+}
+
+test "extractGenesisFromTar writes exactly genesis.bin bytes" {
+    const allocator = std.testing.allocator;
+    const genesis_contents = "genesis-content";
+
+    const tar_data = try buildTarWithFiles(allocator, &.{
+        .{ .path = "bootstrap/genesis.bin", .contents = genesis_contents },
+        .{ .path = "bootstrap/extra.bin", .contents = "extra-content" },
+    });
+    defer allocator.free(tar_data);
+
+    const output_dir = try std.fmt.allocPrint(
+        allocator,
+        "zig-cache/tmp/genesis_download_test_{d}",
+        .{std.time.nanoTimestamp()},
+    );
+    defer allocator.free(output_dir);
+    std.fs.cwd().makePath(output_dir) catch {};
+    defer std.fs.cwd().deleteTree(output_dir) catch {};
+
+    const genesis_path = try extractGenesisFromTar(allocator, tar_data, output_dir, .noop);
+    defer allocator.free(genesis_path);
+
+    const extracted = try std.fs.cwd().readFileAlloc(allocator, genesis_path, 1024 * 1024);
+    defer allocator.free(extracted);
+
+    try std.testing.expectEqualSlices(u8, genesis_contents, extracted);
+}
+
+test "extractGenesisFromTar fails on incomplete genesis payload" {
+    const allocator = std.testing.allocator;
+
+    var tar = std.array_list.Managed(u8).init(allocator);
+    defer tar.deinit();
+
+    const writer = tar.writer();
+    try sig.utils.tar.writeTarHeader(writer, .regular, "genesis.bin", 10);
+    try writer.writeAll("abc");
+
+    const tar_data = try tar.toOwnedSlice();
+    defer allocator.free(tar_data);
+
+    const output_dir = try std.fmt.allocPrint(
+        allocator,
+        "zig-cache/tmp/genesis_download_test_{d}",
+        .{std.time.nanoTimestamp()},
+    );
+    defer allocator.free(output_dir);
+    std.fs.cwd().makePath(output_dir) catch {};
+    defer std.fs.cwd().deleteTree(output_dir) catch {};
+
+    try std.testing.expectError(
+        error.TarExtractError,
+        extractGenesisFromTar(allocator, tar_data, output_dir, .noop),
+    );
 }
