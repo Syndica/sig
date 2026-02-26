@@ -203,17 +203,26 @@ fn runGossip(
             var file = try std.fs.cwd().createFile("gossip_dump.txt", .{});
             defer file.close();
 
-            var w = std.io.bufferedWriter(file.writer());
-            try w.writer().print("Elapsed: {} (peers:{})\n\n", .{std.fmt.fmtDuration(timer.read()), peers.count()});
+            var cis: usize = 0;
+            for (table.keys()) |k| cis += @intFromBool(k.tag == .contact_info);
 
-            for (peers.keys(), peers.values()) |pubkey, peer| {
-                try w.writer().print("Contact({}, {})\n", .{pubkey, peer.addr});
+            var w = std.io.bufferedWriter(file.writer());
+            try w.writer().print("Elapsed: {} (peers:{}, contacts:{})\n", .{std.fmt.fmtDuration(timer.read()), peers.count(), cis});
+
+            for (table.values()) |*v| {
                 // const v = table.getPtr(.{ .from = pubkey, .tag = .contact_info, .idx = 0 }) orelse continue;
-                // var _fbs = std.io.fixedBufferStream(v.value[0..v.len]);
-                // var _fba = std.heap.FixedBufferAllocator.init(value_buf);
-                // const value = try bincode.read(_fba.allocator(), _fbs.reader(), CrdsValue);
-                // const sock_addr = getGossipAddr(value.data) catch continue;
-                // const addr
+                var _fbs = std.io.fixedBufferStream(v.value[0..v.len]);
+                var _fba = std.heap.FixedBufferAllocator.init(value_buf);
+                const value = try bincode.read(_fba.allocator(), _fbs.reader(), CrdsValue);
+                const sock_addr = getGossipAddr(value.data) catch continue;
+                const addr: std.net.Address = switch (sock_addr) {
+                    .v4 => |s| .initIp4(s.ip, s.port),
+                    .v6 => |s| .initIp6(s.ip, s.port, 0, 0),
+                };
+                const pubkey = switch (value.data) {
+                    inline else => |vv| vv.from,
+                };
+                try w.writer().print("Contact({}, {})\n", .{pubkey, addr});
             }
             try w.flush();
         }
@@ -847,11 +856,12 @@ fn getOrCreatePeer(
 }
 
 fn removePeer(table: *GossipTable, peers: *GossipPeers, i: usize) void {
-    const pubkey = peers.keys()[i];
+    // const pubkey = peers.keys()[i];
     peers.swapRemoveAt(i);
+    _ = table;
 
     // TODO: remove all all values with its key
-    _ = table.swapRemove(.{ .from = pubkey, .tag = .contact_info, .idx = 0 });
+    // _ = table.swapRemove(.{ .from = pubkey, .tag = .contact_info, .idx = 0 });
 }
 
 fn maybePingPeer(
