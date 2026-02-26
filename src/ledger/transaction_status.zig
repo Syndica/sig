@@ -243,11 +243,14 @@ pub const TransactionStatusMetaBuilder = struct {
         errdefer allocator.free(owned_post_balances);
 
         // Copy loaded addresses
+        const writable = try allocator.dupe(Pubkey, loaded_addresses.writable);
+        errdefer allocator.free(writable);
+        const readonly = try allocator.dupe(Pubkey, loaded_addresses.readonly);
+        errdefer allocator.free(readonly);
         const owned_loaded_addresses = LoadedAddresses{
-            .writable = try allocator.dupe(sig.core.Pubkey, loaded_addresses.writable),
-            .readonly = try allocator.dupe(sig.core.Pubkey, loaded_addresses.readonly),
+            .writable = writable,
+            .readonly = readonly,
         };
-        errdefer allocator.free(owned_loaded_addresses);
 
         return TransactionStatusMeta{
             .status = processed_tx.err,

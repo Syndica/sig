@@ -208,12 +208,56 @@ fn writeTransactionStatus(
         }
     }
 
-    // Extract loaded addresses from address lookup tables if present
-    // For now, we use empty loaded addresses since the transaction resolution
-    // already expanded the lookup table addresses into the accounts list
+    const num_static_addresses = transaction.transaction.msg.account_keys.len;
+
+    // Count loaded addresses
+    var num_loaded_writable: usize = 0;
+    var num_loaded_readonly: usize = 0;
+    for (transaction.transaction.msg.address_lookups) |lookup| {
+        num_loaded_writable += lookup.writable_indexes.len;
+        num_loaded_readonly += lookup.readonly_indexes.len;
+    }
+
+    // Populate loaded addresses and address_signatures index keys
+    var writable_keys = try ArrayListUnmanaged(Pubkey).initCapacity(
+        allocator,
+        num_static_addresses + num_loaded_writable,
+    );
+    defer writable_keys.deinit(allocator);
+    var readonly_keys = try ArrayListUnmanaged(Pubkey).initCapacity(
+        allocator,
+        num_static_addresses + num_loaded_readonly,
+    );
+    defer readonly_keys.deinit(allocator);
+    var loaded_writable_keys = try ArrayListUnmanaged(Pubkey).initCapacity(
+        allocator,
+        num_loaded_writable,
+    );
+    defer loaded_writable_keys.deinit(allocator);
+    var loaded_readonly_keys = try ArrayListUnmanaged(Pubkey).initCapacity(
+        allocator,
+        num_loaded_readonly,
+    );
+    defer loaded_readonly_keys.deinit(allocator);
+    for (
+        transaction.accounts.items(.pubkey),
+        transaction.accounts.items(.is_writable),
+        0..,
+    ) |pubkey, is_writable, index| {
+        const is_loaded = index >= num_static_addresses;
+
+        if (is_writable) {
+            writable_keys.appendAssumeCapacity(pubkey);
+            if (is_loaded) loaded_writable_keys.appendAssumeCapacity(pubkey);
+        } else {
+            readonly_keys.appendAssumeCapacity(pubkey);
+            if (is_loaded) loaded_readonly_keys.appendAssumeCapacity(pubkey);
+        }
+    }
+
     const loaded_addresses = LoadedAddresses{
-        .writable = &.{},
-        .readonly = &.{},
+        .writable = loaded_writable_keys.items,
+        .readonly = loaded_readonly_keys.items,
     };
 
     // Collect token balances
@@ -273,30 +317,7 @@ fn writeTransactionStatus(
         pre_token_balances,
         post_token_balances,
     );
-    errdefer status.deinit(allocator);
-
-    // Extract writable and readonly keys for address_signatures index
-    var writable_keys = try ArrayListUnmanaged(Pubkey).initCapacity(
-        allocator,
-        transaction.accounts.items(.pubkey).len,
-    );
-    defer writable_keys.deinit(allocator);
-    var readonly_keys = try ArrayListUnmanaged(Pubkey).initCapacity(
-        allocator,
-        transaction.accounts.items(.pubkey).len,
-    );
-    defer readonly_keys.deinit(allocator);
-
-    for (
-        transaction.accounts.items(.pubkey),
-        transaction.accounts.items(.is_writable),
-    ) |pubkey, is_writable| {
-        if (is_writable) {
-            try writable_keys.append(allocator, pubkey);
-        } else {
-            try readonly_keys.append(allocator, pubkey);
-        }
-    }
+    defer status.deinit(allocator);
 
     // Write to ledger
     const result_writer = ledger.resultWriter();
@@ -345,7 +366,7 @@ fn collectPostTokenBalances(
                 .owner = parsed.owner,
                 .amount = parsed.amount,
                 .program_id = written_account.account.owner,
-            }) catch {};
+            }) catch {}; // this is ok since tx_result.writes and result.len are the same
         }
     }
 
@@ -364,41 +385,41 @@ const FallbackAccountReader = struct {
     /// Allocates and owns the data buffer.
     const StubAccount = struct {
         data: DataHandle,
-        allocator: Allocator,
 
         const DataHandle = struct {
             slice: []const u8,
+
             pub fn constSlice(self: DataHandle) []const u8 {
                 return self.slice;
             }
         };
 
-        pub fn deinit(self: StubAccount, _: Allocator) void {
-            self.allocator.free(self.data.slice);
+        pub fn deinit(self: StubAccount, allocator: Allocator) void {
+            allocator.free(self.data.slice);
         }
     };
 
-    pub fn get(self: FallbackAccountReader, pubkey: Pubkey, alloc: Allocator) !?StubAccount {
+    pub fn get(self: FallbackAccountReader, allocator: Allocator, pubkey: Pubkey) !?StubAccount {
         // Check transaction writes first
         for (self.writes) |*account| {
             if (account.pubkey.equals(&pubkey)) {
-                const data_copy = try alloc.dupe(u8, account.account.data);
+                const data_copy = try allocator.dupe(u8, account.account.data);
+                errdefer allocator.free(data_copy);
                 return StubAccount{
                     .data = .{ .slice = data_copy },
-                    .allocator = alloc,
                 };
             }
         }
 
         // Fall back to account store (e.g. for mint accounts not modified in this tx)
         if (self.account_store_reader) |reader| {
-            const account = try reader.get(alloc, pubkey) orelse return null;
-            defer account.deinit(alloc);
-            const data_copy = try account.data.readAllAllocate(alloc);
-            return StubAccount{
-                .data = .{ .slice = data_copy },
-                .allocator = alloc,
-            };
+            const account = try reader.get(allocator, pubkey) orelse return null;
+            defer account.deinit(allocator);
+            const data_copy = try account.data.readAllAllocate(allocator);
+            errdefer allocator.free(data_copy);
+            return StubAccount{ .data = .{
+                .slice = data_copy,
+            } };
         }
 
         return null;

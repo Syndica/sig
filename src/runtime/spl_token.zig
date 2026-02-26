@@ -417,7 +417,7 @@ fn getMintDecimals(
     }
 
     // Fetch mint account
-    const mint_account = account_reader.get(mint, allocator) catch {
+    const mint_account = account_reader.get(allocator, mint) catch {
         return error.MintNotFound;
     };
     defer if (mint_account) |acct| acct.deinit(allocator);
@@ -1273,7 +1273,7 @@ const MockAccountReader = struct {
         try self.mint_data.put(mint, data);
     }
 
-    pub fn get(self: MockAccountReader, pubkey: Pubkey, allocator: Allocator) !?MockAccount {
+    pub fn get(self: MockAccountReader, allocator: Allocator, pubkey: Pubkey) !?MockAccount {
         const data = self.mint_data.get(pubkey) orelse return null;
         return MockAccount{
             .data = .{ .slice = try allocator.dupe(u8, &data) },
