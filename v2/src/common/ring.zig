@@ -81,16 +81,6 @@ pub fn Ring(N: comptime_int, T: type) type {
                     .writer => []T,
                 };
 
-                pub fn into(self: *@This(), slice: []const T) void {
-                    defer self.markUsed(@intCast(slice.len));
-                    std.debug.assert(self.count == slice.len);
-
-                    const back = self.first();
-                    const front = self.second();
-                    @memcpy(back, slice[0..back.len]);
-                    @memcpy(front, slice[back.len..][0..front.len]);
-                }
-
                 pub fn one(self: @This()) switch (mode) {
                     .reader => *const T,
                     .writer => *T,
