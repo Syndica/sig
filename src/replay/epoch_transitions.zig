@@ -777,7 +777,8 @@ test updateEpochStakes {
             &stakes_cache,
             &epoch_tracker,
         );
-        const epoch_info = try epoch_tracker.unrooted_epochs.get(&ancestors);
+        const epoch_info = try epoch_tracker.unrooted_epochs.getEpochInfoRef(&ancestors);
+        defer epoch_info.release();
         try std.testing.expectEqual(
             stakes_cache.stakes.private.v.epoch,
             epoch_info.stakes.stakes.epoch,

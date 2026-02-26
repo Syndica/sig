@@ -90,9 +90,8 @@ pub const DuplicateShredHandler = struct {
                         const epoch_tracker = self.epoch_tracker orelse break :feature false;
                         const root_slot = epoch_tracker.root_slot.load(.monotonic);
                         const root_epoch = epoch_tracker.epoch_schedule.getEpoch(root_slot);
-                        var lock = epoch_tracker.rooted_epochs.read();
-                        defer lock.unlock();
-                        const epoch_info = lock.get().get(root_epoch) catch break :feature false;
+                        const epoch_info = epoch_tracker.getEpochInfo(root_epoch) catch
+                            break :feature false;
                         defer epoch_info.release();
                         const feature_slot = epoch_info.feature_set.get(
                             .chained_merkle_conflict_duplicate_proofs,

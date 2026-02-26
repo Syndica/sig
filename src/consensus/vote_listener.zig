@@ -41,20 +41,17 @@ pub const SlotDataProvider = struct {
         return self.epoch_tracker.epoch_schedule.getEpoch(slot);
     }
 
-    fn getSlotAncestorsPtr(
+    fn getSlotRef(
         self: *const SlotDataProvider,
         slot: Slot,
-    ) ?*const sig.core.Ancestors {
-        if (self.slot_tracker.get(slot)) |ref| {
-            defer ref.release();
-            return &ref.constants().ancestors;
-        } else return null;
+    ) ?SlotTracker.Reference {
+        return self.slot_tracker.get(slot);
     }
 
     fn getEpochTotalStake(self: *const SlotDataProvider, epoch: u64) ?u64 {
         var lock = self.epoch_tracker.rooted_epochs.read();
         defer lock.unlock();
-        const epoch_info = lock.get().get(epoch) catch return null;
+        const epoch_info = lock.get().getEpochInfoRef(epoch) catch return null;
         defer epoch_info.release();
         return epoch_info.stakes.total_stake;
     }
@@ -382,11 +379,14 @@ pub const VoteCollector = struct {
 
         if (self.last_process_root.elapsed().asMillis() > DEFAULT_MS_PER_SLOT) {
             const confirmation_verifier = &self.confirmation_verifier;
+            const slot_ref = slot_data_provider.getSlotRef(root_slot).?; // must exist for the root slot
+            defer slot_ref.release();
+
             const unrooted_optimistic_slots =
                 try confirmation_verifier.verifyForUnrootedOptimisticSlots(allocator, ledger, .{
                     .slot = root_slot,
                     .hash = root_hash,
-                    .ancestors = slot_data_provider.getSlotAncestorsPtr(root_slot).?, // must exist for the root slot
+                    .ancestors = &slot_ref.constants().ancestors,
                 });
             defer allocator.free(unrooted_optimistic_slots);
 

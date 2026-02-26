@@ -188,7 +188,7 @@ pub const EpochTracker = struct {
         );
         var lock = self.rooted_epochs.read();
         defer lock.unlock();
-        return try lock.get().get(epoch);
+        return try lock.get().getEpochInfoRef(epoch);
     }
 
     /// The returned EpochInfo has its RC incremented. Caller MUST call release() when done.
@@ -201,9 +201,9 @@ pub const EpochTracker = struct {
         {
             var lock = self.rooted_epochs.read();
             defer lock.unlock();
-            if (lock.get().get(epoch)) |info| return info else |_| {}
+            if (lock.get().getEpochInfoRef(epoch)) |info| return info else |_| {}
         }
-        return self.unrooted_epochs.get(ancestors);
+        return self.unrooted_epochs.getEpochInfoRef(ancestors);
     }
 
     /// Get leader schedules for the current root slot.
@@ -531,7 +531,9 @@ const RootedEpochBuffer = struct {
         self.root.store(epoch, .monotonic);
     }
 
-    pub fn get(
+    /// Returns a ref-counted reference to the EpochInfo for the given epoch.
+    /// Must release the reference when done.
+    pub fn getEpochInfoRef(
         self: *const RootedEpochBuffer,
         epoch: Epoch,
     ) !*const EpochInfo {
@@ -615,13 +617,14 @@ const UnrootedEpochBuffer = struct {
         return info_ptr;
     }
 
-    pub fn get(
+    /// Get a ref-counted reference to an epoch info. Must be released after use.
+    pub fn getEpochInfoRef(
         self: *const UnrootedEpochBuffer,
         ancestors: *const Ancestors,
     ) !*const EpochInfo {
         for (&self.buf) |maybe_entry|
             if (maybe_entry) |entry|
-                if (ancestors.containsSlot(entry.slot)) return entry.info;
+                if (ancestors.containsSlot(entry.slot)) return entry.info.acquire();
         return error.ForkNotFound;
     }
 
@@ -658,7 +661,7 @@ test RootedEpochBuffer {
     for (0..buffer.buf.len * 2) |epoch| {
         try std.testing.expectError(
             error.EpochNotFound,
-            buffer.get(epoch),
+            buffer.getEpochInfoRef(epoch),
         );
     }
 
@@ -732,12 +735,12 @@ test RootedEpochBuffer {
     }
 
     // Check get outside of range fails
-    try std.testing.expectError(error.EpochNotFound, buffer.get(epoch - 4));
-    try std.testing.expectError(error.EpochNotFound, buffer.get(epoch + 1));
+    try std.testing.expectError(error.EpochNotFound, buffer.getEpochInfoRef(epoch - 4));
+    try std.testing.expectError(error.EpochNotFound, buffer.getEpochInfoRef(epoch + 1));
 
     // Check that we can get all 4 inserted epochs
     for (epoch - 3..epoch + 1) |epoch_i| {
-        const info = try buffer.get(epoch_i);
+        const info = try buffer.getEpochInfoRef(epoch_i);
         defer info.release();
         try std.testing.expectEqual(epoch_i, info.stakes.stakes.epoch);
     }
@@ -749,7 +752,7 @@ test RootedEpochBuffer {
         allocator.free(expected);
     }
     for (epoch - 2..epoch + 1, 0..) |epoch_i, i| {
-        const info = try buffer.get(epoch_i);
+        const info = try buffer.getEpochInfoRef(epoch_i);
         defer info.release();
         expected[i] = .{
             .allocator = allocator,
@@ -778,7 +781,7 @@ test RootedEpochBuffer {
 
     // Check that only the oldest epoch has been overwritten
     for (epoch - 3..epoch, expected) |epoch_i, expected_info| {
-        const info = try buffer.get(epoch_i);
+        const info = try buffer.getEpochInfoRef(epoch_i);
         defer info.release();
         try std.testing.expectEqualSlices(
             Pubkey,
@@ -816,7 +819,7 @@ test UnrootedEpochBuffer {
     // Get and take on empty buffer fails
     try std.testing.expectError(
         error.ForkNotFound,
-        buffer.get(&branch),
+        buffer.getEpochInfoRef(&branch),
     );
     try std.testing.expectError(
         error.ForkNotFound,
@@ -843,7 +846,7 @@ test UnrootedEpochBuffer {
     // Get and take without matching fork fails
     try std.testing.expectError(
         error.ForkNotFound,
-        buffer.get(&branch),
+        buffer.getEpochInfoRef(&branch),
     );
     try std.testing.expectError(
         error.ForkNotFound,
@@ -852,7 +855,8 @@ test UnrootedEpochBuffer {
 
     // Add slot 9 to ancestors and check get and take succeed
     try branch.addSlot(allocator, 9);
-    const fetched_info = try buffer.get(&branch);
+    const fetched_info = try buffer.getEpochInfoRef(&branch);
+    defer fetched_info.release();
     const taken_info = try buffer.take(&branch);
     try std.testing.expectEqual(epoch_info_ptr, fetched_info);
     try std.testing.expectEqual(epoch_info_ptr, taken_info);
@@ -860,7 +864,7 @@ test UnrootedEpochBuffer {
     taken_info.release();
     try std.testing.expectError(
         error.ForkNotFound,
-        buffer.get(&branch),
+        buffer.getEpochInfoRef(&branch),
     );
 }
 
@@ -885,9 +889,12 @@ test EpochTracker {
     {
         var lock = epoch_tracker.rooted_epochs.read();
         defer lock.unlock();
-        try std.testing.expectError(error.EpochNotFound, lock.get().get(0));
+        try std.testing.expectError(error.EpochNotFound, lock.get().getEpochInfoRef(0));
     }
-    try std.testing.expectError(error.ForkNotFound, epoch_tracker.unrooted_epochs.get(&.EMPTY));
+    try std.testing.expectError(
+        error.ForkNotFound,
+        epoch_tracker.unrooted_epochs.getEpochInfoRef(&.EMPTY),
+    );
 
     // Fill the buffers with epochs by inserting and then rooting the first slot for 10 epochs
     for (0..10) |epoch| {
@@ -918,16 +925,16 @@ test EpochTracker {
         var lock = epoch_tracker.rooted_epochs.read();
         defer lock.unlock();
         const buf = lock.get();
-        const info_6 = try buf.get(6);
+        const info_6 = try buf.getEpochInfoRef(6);
         defer info_6.release();
         try std.testing.expectEqual(6, info_6.stakes.stakes.epoch);
-        const info_7 = try buf.get(7);
+        const info_7 = try buf.getEpochInfoRef(7);
         defer info_7.release();
         try std.testing.expectEqual(7, info_7.stakes.stakes.epoch);
-        const info_8 = try buf.get(8);
+        const info_8 = try buf.getEpochInfoRef(8);
         defer info_8.release();
         try std.testing.expectEqual(8, info_8.stakes.stakes.epoch);
-        const info_9 = try buf.get(9);
+        const info_9 = try buf.getEpochInfoRef(9);
         defer info_9.release();
         try std.testing.expectEqual(9, info_9.stakes.stakes.epoch);
     }
@@ -984,10 +991,11 @@ test EpochTracker {
     );
 
     // Check that the pointers returned from insert match the pointers returned from get
-    for (0..4) |i| try std.testing.expectEqual(
-        insert_ptrs[i],
-        try epoch_tracker.unrooted_epochs.get(&branches[i]),
-    );
+    for (0..4) |i| {
+        const got = try epoch_tracker.unrooted_epochs.getEpochInfoRef(&branches[i]);
+        defer got.release();
+        try std.testing.expectEqual(insert_ptrs[i], got);
+    }
 
     // Check that another insert hits max forks
     fail_stakes.stakes.epoch = epoch_schedule.getEpoch(branches[4].last());
@@ -1006,14 +1014,13 @@ test EpochTracker {
     for (0..4) |i| {
         const expected_ptr = insert_ptrs[i];
         if (i != 2) {
-            try std.testing.expectEqual(
-                expected_ptr,
-                try epoch_tracker.unrooted_epochs.get(&branches[i]),
-            );
+            const got = try epoch_tracker.unrooted_epochs.getEpochInfoRef(&branches[i]);
+            defer got.release();
+            try std.testing.expectEqual(expected_ptr, got);
         } else {
             var lock = epoch_tracker.rooted_epochs.read();
             defer lock.unlock();
-            const got = try lock.get().get(epoch_schedule.getEpoch(branches[i].last()));
+            const got = try lock.get().getEpochInfoRef(epoch_schedule.getEpoch(branches[i].last()));
             defer got.release();
             try std.testing.expectEqual(expected_ptr, got);
         }
