@@ -10,6 +10,7 @@ const GetAccountInfo = sig.rpc.methods.GetAccountInfo;
 const GetBalance = sig.rpc.methods.GetBalance;
 const GetTokenAccountBalance = sig.rpc.methods.GetTokenAccountBalance;
 const GetTokenSupply = sig.rpc.methods.GetTokenSupply;
+const GetMultipleAccounts = sig.rpc.methods.GetMultipleAccounts;
 
 const AccountEncoding = account_codec.AccountEncoding;
 const CommitmentSlotConfig = sig.rpc.methods.common.CommitmentSlotConfig;
@@ -225,5 +226,62 @@ pub fn getTokenSupply(
     return .{
         .context = .{ .slot = slot },
         .value = ui_token_amount,
+    };
+}
+
+pub fn getMultipleAccounts(
+    self: @This(),
+    arena: std.mem.Allocator,
+    params: GetMultipleAccounts,
+) !GetMultipleAccounts.Response {
+    if (params.pubkeys.len > GetMultipleAccounts.MAX_PUBKEYS) {
+        return error.TooManyInputs;
+    }
+    const config = params.config orelse GetAccountInfo.Config{};
+    const commitment = config.commitment orelse .finalized;
+    const encoding = config.encoding orelse AccountEncoding.base64;
+    const slot = self.slot_tracker.getSlotForCommitment(commitment);
+    if (config.minContextSlot) |min_slot| {
+        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+    }
+    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
+    const values = try arena.alloc(?GetAccountInfo.Response.Value, params.pubkeys.len);
+
+    for (params.pubkeys, values) |pubkey, *value| {
+        const account = try slot_reader.get(arena, pubkey) orelse {
+            value.* = null;
+            continue;
+        };
+        const data: account_codec.AccountData = if (encoding == .jsonParsed)
+            try account_codec.encodeJsonParsed(
+                arena,
+                pubkey,
+                account,
+                slot_reader,
+                config.dataSlice,
+            )
+        else
+            try account_codec.encodeStandard(
+                arena,
+                account,
+                encoding,
+                config.dataSlice,
+            );
+        value.* = .{
+            .data = data,
+            .executable = account.executable,
+            .lamports = account.lamports,
+            .owner = account.owner,
+            .rentEpoch = account.rent_epoch,
+            .space = account.data.len(),
+        };
+    }
+
+    return .{
+        .context = .{
+            .slot = slot,
+        },
+        .value = values,
     };
 }
