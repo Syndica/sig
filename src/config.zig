@@ -132,8 +132,6 @@ pub const AccountsDB = struct {
     num_threads_snapshot_load: u32 = 0,
     /// number of threads to unpack snapshot from .tar.zstd
     num_threads_snapshot_unpack: u16 = 0,
-    /// use disk based index for accounts index
-    use_disk_index: bool = false,
     /// force unpacking a fresh snapshot even if an accounts/ dir exists
     force_unpack_snapshot: bool = false,
     /// minmum download speed in megabytes per second to download a snapshot from

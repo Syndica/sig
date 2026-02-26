@@ -596,7 +596,6 @@ const Cmd = struct {
     };
 
     const AccountsDbArgumentsBase = struct {
-        use_disk_index: bool,
         n_threads_snapshot_load: u32,
         n_threads_snapshot_unpack: u16,
         force_unpack_snapshot: bool,
@@ -604,14 +603,6 @@ const Cmd = struct {
         dbg_db_init: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
-            .use_disk_index = .{
-                .kind = .named,
-                .name_override = null,
-                .alias = .none,
-                .default_value = false,
-                .config = {},
-                .help = "use disk-memory for the account index",
-            },
             .n_threads_snapshot_load = .{
                 .kind = .named,
                 .name_override = null,
@@ -659,7 +650,6 @@ const Cmd = struct {
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
-            cfg.accounts_db.use_disk_index = args.use_disk_index;
             cfg.accounts_db.num_threads_snapshot_load = args.n_threads_snapshot_load;
             cfg.accounts_db.num_threads_snapshot_unpack = args.n_threads_snapshot_unpack;
             cfg.accounts_db.force_unpack_snapshot = args.force_unpack_snapshot;
