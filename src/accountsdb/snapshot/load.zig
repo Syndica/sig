@@ -12,7 +12,6 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const ThreadPool = sig.sync.ThreadPool;
 const Rooted = sig.accounts_db.Two.Rooted;
-const features = sig.core.features;
 const GenesisConfig = sig.core.GenesisConfig;
 const FeatureSet = sig.core.features.Set;
 const StatusCache = sig.accounts_db.snapshot.StatusCache;
@@ -39,27 +38,20 @@ pub const LoadedSnapshot = struct {
         allocator: Allocator,
         accounts_db: *sig.accounts_db.Two,
     ) !FeatureSet {
-        const ancestors = self.collapsed_manifest.bank_fields.ancestors;
-
         var feature_set = FeatureSet.ALL_DISABLED;
-        var inactive_iterator = feature_set.iterator(
+        const account_store = accountsdb.SlotAccountStore{ .accounts_db_two = .{
+            accounts_db,
             self.collapsed_manifest.bank_fields.slot,
-            .inactive,
+            &self.collapsed_manifest.bank_fields.ancestors,
+        } };
+        try sig.replay.epoch_transitions.computeFeatureSet(
+            false,
+            allocator,
+            self.collapsed_manifest.bank_fields.slot,
+            account_store,
+            &feature_set,
+            .noop,
         );
-        while (inactive_iterator.next()) |feature| {
-            const feature_id = features.map.get(feature).key;
-            if (try accounts_db.get(
-                allocator,
-                feature_id,
-                &ancestors,
-            )) |feature_account| {
-                defer feature_account.deinit(allocator);
-                if (try features.activationSlotFromAccount(feature_account)) |activation_slot| {
-                    feature_set.setSlot(feature, activation_slot);
-                }
-            }
-        }
-
         return feature_set;
     }
 };

@@ -26,7 +26,10 @@ const FeatureSet = sig.core.FeatureSet;
 const Rent = sig.runtime.sysvar.Rent;
 
 const beginPartitionedRewards = sig.replay.rewards.calculation.beginPartitionedRewards;
+const updateRent = sig.replay.update_sysvar.updateRent;
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
+
+pub const Logger = sig.trace.Logger("epoch_transitions");
 
 /// Process a new epoch. This includes:
 /// 1. Apply feature activations.
@@ -40,6 +43,7 @@ pub fn processNewEpoch(
     slot_state: *SlotState,
     slot_store: SlotAccountStore,
     epoch_tracker: *sig.core.EpochTracker,
+    logger: Logger,
 ) !void {
     try applyFeatureActivations(
         allocator,
@@ -47,7 +51,7 @@ pub fn processNewEpoch(
         slot_constants,
         slot_state,
         slot_store,
-        true, // allow_new_activations
+        logger,
     );
 
     try slot_state.stakes_cache.activateEpoch(
@@ -164,6 +168,67 @@ pub fn getEpochStakes(
     };
 }
 
+/// Iterate through the inactive features and:
+/// 1. Try and load the feature account from the accounts db.
+/// 2. If the account exists, check if it has been activated already.
+/// 3. If it has been activated, add it to the active set.
+/// 4. If it has not been activated, and new activations are allowed,
+///    add it to the active set and activate it by setting the slot
+///    and writing it back to the accounts db.
+pub fn computeFeatureSet(
+    comptime allow_new_activations: bool,
+    allocator: Allocator,
+    slot: Slot,
+    slot_store: SlotAccountStore,
+    feature_set: *FeatureSet,
+    logger: Logger,
+) !if (allow_new_activations) FeatureSet else void {
+    // Iterate through the inactive features and:
+    // 1. Try and load the feature account from the accounts db.
+    // 2. If the account exists, check if it has been activated already.
+    // 3. If it has been activated, add it to the active set.
+    // 4. If it has not been activated, and new activations are allowed,
+    //    add it to the active set and activate it by setting the slot
+    //    and writing it back to the accounts db.
+    var new_activations = FeatureSet.ALL_DISABLED;
+    var inactive_iterator = feature_set.iterator(slot, .inactive);
+    while (inactive_iterator.next()) |feature| {
+        const feature_id = features.map.get(feature).key;
+
+        const feature_account = try slot_store.reader().get(allocator, feature_id) orelse continue;
+        defer feature_account.deinit(allocator);
+
+        switch (try features.activationStateFromAccount(feature_account)) {
+            .activated => |activation_slot| if (slot >= activation_slot) feature_set.setSlot(
+                feature,
+                activation_slot,
+            ),
+            .pending => if (allow_new_activations) {
+                feature_set.setSlot(feature, slot);
+                new_activations.setSlot(feature, slot);
+
+                const new_data = try allocator.alloc(u8, 9);
+                defer allocator.free(new_data);
+                const maybe_slot: ?Slot = slot;
+                _ = try sig.bincode.writeToSlice(new_data, maybe_slot, .{});
+
+                try slot_store.put(feature_id, .{
+                    .lamports = feature_account.lamports,
+                    .data = new_data,
+                    .owner = feature_account.owner,
+                    .executable = feature_account.executable,
+                    .rent_epoch = feature_account.rent_epoch,
+                });
+
+                logger.info().logf("Feature {} activated at slot {}", .{ feature, slot });
+            },
+            .invalid => continue,
+        }
+    }
+
+    if (allow_new_activations) return new_activations;
+}
+
 /// Apply feature activations at the given slot.
 /// Activated features are stored in feature accounts with a non-null activation slot.
 /// Pending feature activations are stored in feature accounts with a null activation slot.
@@ -176,7 +241,7 @@ pub fn applyFeatureActivations(
     slot_constants: *SlotConstants,
     slot_state: *SlotState,
     slot_store: SlotAccountStore,
-    allow_new_activations: bool,
+    logger: Logger,
 ) !void {
     // Iterate through the inactive features and:
     // 1. Try and load the feature account from the accounts db.
@@ -185,33 +250,41 @@ pub fn applyFeatureActivations(
     // 4. If it has not been activated, and new activations are allowed,
     //    add it to the active set and activate it by setting the slot
     //    and writing it back to the accounts db.
-    const feature_set = &slot_constants.feature_set;
-    var new_feature_activations = FeatureSet.ALL_DISABLED;
-    var inactive_iterator = feature_set.iterator(slot, .inactive);
-    while (inactive_iterator.next()) |feature| {
-        const feature_id: Pubkey = features.map.get(feature).key;
-        if (try slot_store.reader().get(allocator, feature_id)) |feature_account| {
-            defer feature_account.deinit(allocator);
-            if (try featureActivationSlotFromAccount(feature_account)) |activation_slot| {
-                feature_set.setSlot(feature, activation_slot);
-            } else if (allow_new_activations) {
-                feature_set.setSlot(feature, slot);
-                new_feature_activations.setSlot(feature, slot);
-                const account = try AccountSharedData.fromAccount(allocator, &feature_account);
-                defer allocator.free(account.data);
-                try slot_store.put(feature_id, account);
-            }
-        }
-    }
+    const feature_set: *FeatureSet = &slot_constants.feature_set;
+    const new_activations: FeatureSet = try computeFeatureSet(
+        true, // allow_new_activations
+        allocator,
+        slot,
+        slot_store,
+        feature_set,
+        logger,
+    );
 
     slot_constants.reserved_accounts.update(feature_set, slot);
 
-    if (new_feature_activations.active(.pico_inflation, slot)) {
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L5328-L5332
+    if (new_activations.active(.deprecate_rent_exemption_threshold, slot)) {
+        slot_constants.rent_collector.rent.lamports_per_byte_year =
+            @intFromFloat(
+                @as(f64, @floatFromInt(slot_constants.rent_collector.rent.lamports_per_byte_year)) *
+                    slot_constants.rent_collector.rent.exemption_threshold,
+            );
+        slot_constants.rent_collector.rent.exemption_threshold = 1.0;
+        try updateRent(allocator, slot_constants.rent_collector.rent, .{
+            .slot = slot,
+            .slot_store = slot_store,
+            .capitalization = &slot_state.capitalization,
+            .rent = &slot_constants.rent_collector.rent,
+        });
+    }
+
+    if (new_activations.active(.pico_inflation, slot)) {
         slot_constants.inflation = .PICO;
         slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
         slot_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.
     }
-    if (feature_set.fullInflationFeaturesEnabled(slot, &new_feature_activations)) {
+
+    if (feature_set.fullInflationFeaturesEnabled(slot, &new_activations)) {
         slot_constants.inflation = .FULL;
         slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
         slot_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.
@@ -224,16 +297,16 @@ pub fn applyFeatureActivations(
         slot_store,
         &slot_constants.rent_collector.rent,
         feature_set,
-        &new_feature_activations,
-        allow_new_activations,
+        &new_activations,
+        true,
     );
 
-    if (new_feature_activations.active(.raise_block_limits_to_100m, slot)) {
+    if (new_activations.active(.raise_block_limits_to_100m, slot)) {
         // TODO: Implement once cost tracker is added
         // https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=149549898
         return error.RaiseBlockLimitsTo100MActivationNotImplemented;
     }
-    if (new_feature_activations.active(.raise_account_cu_limit, slot)) {
+    if (new_activations.active(.raise_account_cu_limit, slot)) {
         // TODO: Implement once cost tracker is added
         // https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=149549898
         return error.RaiseAccountCuLimitActivationNotImplemented;
@@ -528,13 +601,6 @@ fn migrateBuiltinProgramToCoreBpf(
     // add it to SlotState and updated everywhere.
     // Issue: https://github.com/orgs/Syndica/projects/2?pane=issue&itemId=149662657&issue=Syndica%7Csig%7C1176
     // if (delta_size > 0) { accounts_data_size_delta_off_chain += delta_size }
-}
-
-fn featureActivationSlotFromAccount(account: Account) !?u64 {
-    if (!account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) return null;
-    var feature_bytes = [_]u8{0} ** 9;
-    account.data.readAll(&feature_bytes);
-    return bincode.readFromSlice(failing_allocator, ?u64, &feature_bytes, .{});
 }
 
 fn putAndUpdateCapitalization(
@@ -857,6 +923,58 @@ test getEpochStakes {
 test "applyFeatureActivations: basic activations" {
     const allocator = std.testing.allocator;
 
+    { // Test deprecate rent exemption threshold activation - new activation
+        const slot: Slot = 0;
+
+        var env = try TestEnvironment.init(allocator);
+        defer env.deinit(allocator);
+        try env.ancestors.addSlot(allocator, slot);
+
+        const initial_rent_collector = env.slot_constants.rent_collector;
+
+        try applyFeatureActivations(
+            allocator,
+            slot,
+            &env.slot_constants,
+            &env.slot_state,
+            env.slotAccountStore(slot),
+            .noop,
+        );
+        try std.testing.expectEqual(
+            initial_rent_collector.rent.lamports_per_byte_year,
+            env.slot_constants.rent_collector.rent.lamports_per_byte_year,
+        );
+        try std.testing.expectEqual(
+            initial_rent_collector.rent.exemption_threshold,
+            env.slot_constants.rent_collector.rent.exemption_threshold,
+        );
+
+        try env.insertFeatureAccount(allocator, slot, 1, .deprecate_rent_exemption_threshold, null);
+        try applyFeatureActivations(
+            allocator,
+            slot,
+            &env.slot_constants,
+            &env.slot_state,
+            env.slotAccountStore(slot),
+            .noop,
+        );
+        try std.testing.expectEqual(
+            0,
+            env.slot_constants.feature_set.get(.deprecate_rent_exemption_threshold),
+        );
+        try std.testing.expectEqual(
+            @as(u64, @intFromFloat(
+                @as(f64, @floatFromInt(initial_rent_collector.rent.lamports_per_byte_year)) *
+                    initial_rent_collector.rent.exemption_threshold,
+            )),
+            env.slot_constants.rent_collector.rent.lamports_per_byte_year,
+        );
+        try std.testing.expectEqual(
+            1.0,
+            env.slot_constants.rent_collector.rent.exemption_threshold,
+        );
+    }
+
     { // Test PICO inflation activation - new activation
         const slot: Slot = 0;
 
@@ -873,7 +991,7 @@ test "applyFeatureActivations: basic activations" {
             &env.slot_constants,
             &env.slot_state,
             env.slotAccountStore(slot),
-            false,
+            .noop,
         );
         try std.testing.expectEqual(
             sig.core.genesis_config.Inflation.DEFAULT,
@@ -889,38 +1007,13 @@ test "applyFeatureActivations: basic activations" {
         );
 
         try env.insertFeatureAccount(allocator, slot, 1, .pico_inflation, null);
-
-        // Don't allow new activations
         try applyFeatureActivations(
             allocator,
             slot,
             &env.slot_constants,
             &env.slot_state,
             env.slotAccountStore(slot),
-            false,
-        );
-
-        try std.testing.expectEqual(
-            sig.core.genesis_config.Inflation.DEFAULT,
-            env.slot_constants.inflation,
-        );
-        try std.testing.expectEqual(
-            initial_fee_rate_governor.burn_percent,
-            env.slot_constants.fee_rate_governor.burn_percent,
-        );
-        try std.testing.expectEqual(
-            initial_rent_collector.rent.burn_percent,
-            env.slot_constants.rent_collector.rent.burn_percent,
-        );
-
-        // Allow new activations
-        try applyFeatureActivations(
-            allocator,
-            slot,
-            &env.slot_constants,
-            &env.slot_state,
-            env.slotAccountStore(slot),
-            true,
+            .noop,
         );
         try std.testing.expectEqual(0, env.slot_constants.feature_set.get(.pico_inflation));
         try std.testing.expectEqual(
@@ -935,7 +1028,7 @@ test "applyFeatureActivations: basic activations" {
     }
 
     { // Test PICO inflation activation - already activated
-        const slot: Slot = 0;
+        const slot: Slot = 1;
 
         var env = try TestEnvironment.init(allocator);
         defer env.deinit(allocator);
@@ -946,15 +1039,13 @@ test "applyFeatureActivations: basic activations" {
         const initial_fee_rate_governor = env.slot_constants.fee_rate_governor;
 
         try env.insertFeatureAccount(allocator, slot, 1, .pico_inflation, 1);
-
-        // Allow new activations
         try applyFeatureActivations(
             allocator,
             slot,
             &env.slot_constants,
             &env.slot_state,
             env.slotAccountStore(slot),
-            true,
+            .noop,
         );
         try std.testing.expectEqual(1, env.slot_constants.feature_set.get(.pico_inflation));
         try std.testing.expectEqual(
@@ -981,15 +1072,13 @@ test "applyFeatureActivations: basic activations" {
         // Test full inflation activation - feature slot 1
         try env.insertFeatureAccount(allocator, slot, 1, .full_inflation_mainnet_enable, null);
         try env.insertFeatureAccount(allocator, slot, 1, .full_inflation_mainnet_vote, null);
-
-        // Allow new activations
         try applyFeatureActivations(
             allocator,
             slot,
             &env.slot_constants,
             &env.slot_state,
             env.slotAccountStore(slot),
-            true,
+            .noop,
         );
         try std.testing.expectEqual(
             0,
@@ -1019,15 +1108,13 @@ test "applyFeatureActivations: basic activations" {
 
         // Test full inflation activation - feature slot 1
         try env.insertFeatureAccount(allocator, slot, 1, .raise_block_limits_to_100m, null);
-
-        // Allow new activations
         const err = applyFeatureActivations(
             allocator,
             slot,
             &env.slot_constants,
             &env.slot_state,
             env.slotAccountStore(slot),
-            true,
+            .noop,
         );
         try std.testing.expectError(
             error.RaiseBlockLimitsTo100MActivationNotImplemented,
@@ -1044,15 +1131,13 @@ test "applyFeatureActivations: basic activations" {
 
         // Test full inflation activation - feature slot 1
         try env.insertFeatureAccount(allocator, slot, 1, .raise_account_cu_limit, null);
-
-        // Allow new activations
         const err = applyFeatureActivations(
             allocator,
             slot,
             &env.slot_constants,
             &env.slot_state,
             env.slotAccountStore(slot),
-            true,
+            .noop,
         );
         try std.testing.expectError(
             error.RaiseAccountCuLimitActivationNotImplemented,
@@ -1086,7 +1171,7 @@ test "applyFeatureActivations: Builtin Transitions" {
         &env.slot_constants,
         &env.slot_state,
         env.slotAccountStore(slot),
-        true,
+        .noop,
     );
 
     // Get the builtin program info
