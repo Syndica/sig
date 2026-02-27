@@ -28,5 +28,9 @@
                 .{ .name = .shred_recv_config, .access = .readonly },
             },
         },
+        .{
+            .name = .observability,
+            .regions = .{},
+        },
     },
 }
