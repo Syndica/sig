@@ -3288,7 +3288,10 @@ fn tokenAmountToUiAmount(allocator: Allocator, amount: u64, decimals: u8) !JsonV
     // Calculate UI amount
     if (decimals == 0) {
         const ui_amount_str = try std.fmt.allocPrint(allocator, "{d}", .{amount});
-        try obj.put("uiAmount", .{ .number_string = try exactFloat(allocator, @floatFromInt(amount)) });
+        try obj.put("uiAmount", .{ .number_string = try exactFloat(
+            allocator,
+            @floatFromInt(amount),
+        ) });
         try obj.put("uiAmountString", .{ .string = ui_amount_str });
     } else {
         const divisor: f64 = std.math.pow(f64, 10.0, @floatFromInt(decimals));

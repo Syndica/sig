@@ -285,6 +285,8 @@ pub fn loadAndExecuteTransaction(
                 transaction,
                 &compute_budget_limits,
                 loaded_accounts_data_size,
+                env.feature_set,
+                env.slot,
             );
             return .{
                 .ok = .{
@@ -366,11 +368,13 @@ pub fn loadAndExecuteTransaction(
     // Pass only the raw executed compute units (compute_limit - compute_meter remaining).
     // Signature costs (transaction + precompile) are computed inside the cost model,
     // matching Agave's architecture.
-    // [agave] https://github.com/anza-xyz/agave/blob/main/cost-model/src/cost_model.rs#L61
+    // [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/cost-model/src/cost_model.rs#L61
     const tx_cost = cost_model.calculateCostForExecutedTransaction(
         transaction,
         executed_transaction.total_cost(),
         loaded_accounts.loaded_accounts_data_size,
+        env.feature_set,
+        env.slot,
     );
 
     return .{

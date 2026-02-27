@@ -300,7 +300,10 @@ fn getRewardsAndNumPartitions(
                 else
                     0;
 
-                const all_rewards = try allocator.alloc(sig.ledger.meta.Reward, 1 + vote_entries.len);
+                const all_rewards = try allocator.alloc(
+                    sig.ledger.meta.Reward,
+                    1 + vote_entries.len,
+                );
                 all_rewards[0] = fee_reward;
                 for (vote_entries, 1..) |vr, i| {
                     all_rewards[i] = .{
@@ -314,7 +317,10 @@ fn getRewardsAndNumPartitions(
                 return .{ all_rewards, num_partitions };
             } else {
                 // Distribution block: record distributed stake rewards + fee reward.
-                const all_rewards = try allocator.alloc(sig.ledger.meta.Reward, 1 + active.distributed_rewards.items.len);
+                const all_rewards = try allocator.alloc(
+                    sig.ledger.meta.Reward,
+                    1 + active.distributed_rewards.items.len,
+                );
                 all_rewards[0] = fee_reward;
                 @memcpy(all_rewards[1..], active.distributed_rewards.items);
                 return .{ all_rewards, null };

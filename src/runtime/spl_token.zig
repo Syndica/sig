@@ -61,7 +61,7 @@ pub const ParsedTokenAccount = struct {
         ) catch return null;
         if (state == .uninitialized) return null;
 
-        return ParsedTokenAccount{
+        return .{
             .mint = Pubkey{ .data = data[MINT_OFFSET..][0..32].* },
             .owner = Pubkey{ .data = data[OWNER_OFFSET..][0..32].* },
             .amount = std.mem.readInt(u64, data[AMOUNT_OFFSET..][0..8], .little),
@@ -83,7 +83,7 @@ pub const ParsedMint = struct {
         const is_initialized = data[MINT_IS_INITIALIZED_OFFSET] != 0;
         if (!is_initialized) return null;
 
-        return ParsedMint{
+        return .{
             .decimals = data[MINT_DECIMALS_OFFSET],
             .is_initialized = true,
         };
@@ -169,13 +169,13 @@ pub fn resolveTokenBalances(
     mint_decimals_cache: *MintDecimalsCache,
     comptime AccountReaderType: type,
     account_reader: AccountReaderType,
-) ?[]TransactionTokenBalance {
+) error{OutOfMemory}!?[]TransactionTokenBalance {
     if (raw_balances.len == 0) return null;
 
-    var result = std.ArrayList(TransactionTokenBalance).initCapacity(
+    var result = try std.ArrayList(TransactionTokenBalance).initCapacity(
         allocator,
         raw_balances.len,
-    ) catch return null;
+    );
     errdefer {
         for (result.items) |item| item.deinit(allocator);
         result.deinit(allocator);
@@ -192,23 +192,23 @@ pub fn resolveTokenBalances(
         ) catch continue; // Skip tokens with missing mints
 
         // Format the token amount
-        const ui_token_amount = formatTokenAmount(
+        const ui_token_amount = try formatTokenAmount(
             allocator,
             raw.amount,
             decimals,
-        ) catch return null;
+        );
         errdefer ui_token_amount.deinit(allocator);
 
-        result.append(allocator, .{
+        result.appendAssumeCapacity(.{
             .account_index = raw.account_index,
             .mint = raw.mint,
             .owner = raw.owner,
             .program_id = raw.program_id,
             .ui_token_amount = ui_token_amount,
-        }) catch return null;
+        });
     }
 
-    return result.toOwnedSlice(allocator) catch return null;
+    return try result.toOwnedSlice(allocator);
 }
 
 /// Cache for mint decimals to avoid repeated lookups
@@ -254,7 +254,7 @@ pub fn formatTokenAmount(
     const ui_amount_string = try realNumberStringTrimmed(allocator, amount, decimals);
     errdefer allocator.free(ui_amount_string);
 
-    return UiTokenAmount{
+    return .{
         .ui_amount = ui_amount,
         .decimals = decimals,
         .amount = amount_str,
@@ -412,21 +412,15 @@ fn getMintDecimals(
     mint: Pubkey,
 ) error{ OutOfMemory, MintNotFound }!u8 {
     // Check cache first
-    if (cache.get(mint)) |decimals| {
-        return decimals;
-    }
+    if (cache.get(mint)) |decimals| return decimals;
 
     // Fetch mint account
-    const mint_account = account_reader.get(allocator, mint) catch {
-        return error.MintNotFound;
-    };
+    const mint_account = account_reader.get(allocator, mint) catch return error.MintNotFound;
     defer if (mint_account) |acct| acct.deinit(allocator);
 
     if (mint_account) |acct| {
         const data = acct.data.constSlice();
-        const parsed_mint = ParsedMint.parse(data) orelse {
-            return error.MintNotFound;
-        };
+        const parsed_mint = ParsedMint.parse(data) orelse return error.MintNotFound;
 
         // Cache the result
         try cache.put(mint, parsed_mint.decimals);
@@ -1333,7 +1327,7 @@ test "resolveTokenBalances - empty raw balances returns null" {
     defer reader.deinit();
 
     const raw = RawTokenBalances{};
-    const result = resolveTokenBalances(allocator, raw, &cache, MockAccountReader, reader);
+    const result = try resolveTokenBalances(allocator, raw, &cache, MockAccountReader, reader);
     try std.testing.expectEqual(@as(?[]TransactionTokenBalance, null), result);
 }
 
@@ -1365,7 +1359,7 @@ test "resolveTokenBalances - resolves token balances with mint lookup" {
         .program_id = ids.TOKEN_2022_PROGRAM_ID,
     });
 
-    const result = resolveTokenBalances(allocator, raw, &cache, MockAccountReader, reader).?;
+    const result = (try resolveTokenBalances(allocator, raw, &cache, MockAccountReader, reader)).?;
     defer {
         for (result) |item| item.deinit(allocator);
         allocator.free(result);
@@ -1416,7 +1410,7 @@ test "resolveTokenBalances - skips tokens with missing mints" {
         .program_id = ids.TOKEN_PROGRAM_ID,
     });
 
-    const result = resolveTokenBalances(allocator, raw, &cache, MockAccountReader, reader).?;
+    const result = (try resolveTokenBalances(allocator, raw, &cache, MockAccountReader, reader)).?;
     defer {
         for (result) |item| item.deinit(allocator);
         allocator.free(result);

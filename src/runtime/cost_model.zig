@@ -3,8 +3,8 @@
 /// cost_units is used for block capacity planning and fee calculations.
 ///
 /// See Agave's cost model:
-/// - https://github.com/anza-xyz/agave/blob/main/cost-model/src/block_cost_limits.rs
-/// - https://github.com/anza-xyz/agave/blob/main/cost-model/src/cost_model.rs
+/// - https://github.com/anza-xyz/agave/blob/v3.1.8/cost-model/src/block_cost_limits.rs
+/// - https://github.com/anza-xyz/agave/blob/v3.1.8/cost-model/src/cost_model.rs
 const std = @import("std");
 const sig = @import("../sig.zig");
 
@@ -14,7 +14,7 @@ const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
 
 // Block cost limit constants from Agave's block_cost_limits.rs
-// https://github.com/anza-xyz/agave/blob/main/cost-model/src/block_cost_limits.rs
+// https://github.com/anza-xyz/agave/blob/v3.1.8/cost-model/src/block_cost_limits.rs
 
 /// Number of compute units for one signature verification.
 pub const SIGNATURE_COST: u64 = 720;
@@ -111,18 +111,20 @@ pub const UsageCostDetails = struct {
 /// When the `stop_use_static_simple_vote_tx_cost` feature is inactive,
 /// simple vote transactions use a static cost of 3428 CU.
 ///
-/// See: https://github.com/anza-xyz/agave/blob/main/cost-model/src/cost_model.rs
+/// See: https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/cost-model/src/cost_model.rs#L37
 pub fn calculateTransactionCost(
     transaction: *const RuntimeTransaction,
     compute_budget_limits: *const ComputeBudgetLimits,
     loaded_accounts_data_size: u32,
-    // feature_set: *const FeatureSet,
-    // slot: Slot,
+    feature_set: *const FeatureSet,
+    slot: Slot,
 ) TransactionCost {
     return calculateTransactionCostInternal(
         transaction,
         compute_budget_limits.compute_unit_limit,
         loaded_accounts_data_size,
+        feature_set,
+        slot,
     );
 }
 
@@ -132,16 +134,20 @@ pub fn calculateTransactionCost(
 /// the actual compute units consumed rather than using the budget limit.
 /// This matches Agave's `calculate_cost_for_executed_transaction`.
 ///
-/// See: https://github.com/anza-xyz/agave/blob/main/cost-model/src/cost_model.rs#L66
+/// See: https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/cost-model/src/cost_model.rs#L61
 pub fn calculateCostForExecutedTransaction(
     transaction: *const RuntimeTransaction,
     actual_programs_execution_cost: u64,
     loaded_accounts_data_size: u32,
+    feature_set: *const FeatureSet,
+    slot: Slot,
 ) TransactionCost {
     return calculateTransactionCostInternal(
         transaction,
         actual_programs_execution_cost,
         loaded_accounts_data_size,
+        feature_set,
+        slot,
     );
 }
 
@@ -149,13 +155,26 @@ pub fn calculateCostForExecutedTransaction(
 /// Includes transaction signatures AND precompile instruction signatures.
 /// Mirrors Agave's `CostModel::get_signature_cost()`.
 /// See: https://github.com/anza-xyz/agave/blob/eb30856ca804831f30d96f034a1cabd65c96184a/cost-model/src/cost_model.rs#L148
-fn getSignatureCost(transaction: *const RuntimeTransaction) u64 {
+fn getSignatureCost(
+    transaction: *const RuntimeTransaction,
+    feature_set: *const FeatureSet,
+    slot: Slot,
+) u64 {
     const precompiles = sig.runtime.program.precompiles;
+
+    const ed25519_verify_cost = if (feature_set.active(.ed25519_precompile_verify_strict, slot))
+        precompiles.ED25519_VERIFY_STRICT_COST
+    else
+        precompiles.ED25519_VERIFY_COST;
+
+    const secp256r1_verify_cost = if (feature_set.active(.enable_secp256r1_precompile, slot))
+        precompiles.SECP256R1_VERIFY_COST
+    else
+        0;
 
     var n_secp256k1_instruction_signatures: u64 = 0;
     var n_ed25519_instruction_signatures: u64 = 0;
-    // TODO: add secp256r1 when enable_secp256r1_precompile feature is active
-    // var n_secp256r1_instruction_signatures: u64 = 0;
+    var n_secp256r1_instruction_signatures: u64 = 0;
 
     for (transaction.instructions) |instruction| {
         if (instruction.instruction_data.len == 0) continue;
@@ -167,16 +186,15 @@ fn getSignatureCost(transaction: *const RuntimeTransaction) u64 {
         if (program_id.equals(&precompiles.ed25519.ID)) {
             n_ed25519_instruction_signatures +|= instruction.instruction_data[0];
         }
-        // TODO: uncomment when secp256r1 feature is active
-        // if (program_id.equals(&precompiles.secp256r1.ID)) {
-        //     n_secp256r1_instruction_signatures +|= instruction.instruction_data[0];
-        // }
+        if (program_id.equals(&precompiles.secp256r1.ID)) {
+            n_secp256r1_instruction_signatures +|= instruction.instruction_data[0];
+        }
     }
 
     return transaction.signature_count *| precompiles.SIGNATURE_COST +|
         n_secp256k1_instruction_signatures *| precompiles.SECP256K1_VERIFY_COST +|
-        n_ed25519_instruction_signatures *| precompiles.ED25519_VERIFY_COST;
-    // TODO: +| n_secp256r1_instruction_signatures *| precompiles.SECP256R1_VERIFY_COST
+        n_ed25519_instruction_signatures *| ed25519_verify_cost +|
+        n_secp256r1_instruction_signatures *| secp256r1_verify_cost;
 }
 
 /// Internal calculation function used by both pre-execution and post-execution cost calculation.
@@ -184,23 +202,19 @@ fn calculateTransactionCostInternal(
     transaction: *const RuntimeTransaction,
     programs_execution_cost: u64,
     loaded_accounts_data_size: u32,
-    // feature_set: *const FeatureSet,
-    // slot: Slot,
+    feature_set: *const FeatureSet,
+    slot: Slot,
 ) TransactionCost {
-    // _ = feature_set;
-    // _ = slot;
-    // Check if we should use static simple vote cost
-    // TODO: implement this in the future
-    // const use_static_vote_cost = !feature_set.active(.stop_use_static_simple_vote_tx_cost, slot);
-    const use_static_vote_cost = true;
+    // Check if we should remove simple vote cost
+    const remove_simple_vote_cost = feature_set.active(.remove_simple_vote_from_cost_model, slot);
 
-    if (transaction.isSimpleVoteTransaction() and use_static_vote_cost) {
+    if (transaction.isSimpleVoteTransaction() and !remove_simple_vote_cost) {
         return .{ .simple_vote = {} };
     }
 
     // Dynamic calculation
     // 1. Signature cost: includes transaction sigs + precompile sigs (ed25519, secp256k1, secp256r1)
-    const signature_cost = getSignatureCost(transaction);
+    const signature_cost = getSignatureCost(transaction, feature_set, slot);
 
     // 2. Write lock cost: 300 CU per writable account
     var write_lock_count: u64 = 0;
