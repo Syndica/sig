@@ -1261,7 +1261,7 @@ test "ForkProgress.init" {
     };
     defer slot_element.constants.deinit(allocator);
     defer slot_element.state.deinit(allocator);
-    const slot_info: replay.trackers.SlotTracker.Reference = slot_element.toRef().?;
+    const slot_info: replay.trackers.SlotTracker.Reference = slot_element.toRef();
     defer slot_info.release();
 
     const epoch_stakes = bank_data.epoch_stakes.get(bank_data.epoch).?;
