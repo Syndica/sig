@@ -402,7 +402,7 @@ pub const ForkChoice = struct {
         self: *ForkChoice,
         allocator: std.mem.Allocator,
         pubkey_votes: []const PubkeyVote,
-        epoch_tracker: *const sig.core.EpochTracker,
+        epoch_tracker: *sig.core.EpochTracker,
     ) (std.mem.Allocator.Error || error{MultipleVotesForPubKey})!SlotAndHash {
         const noop_ctx: struct {
             pub fn addSlotStake(_: @This(), slot_hash_key: SlotAndHash, stake: u64) !void {
@@ -447,7 +447,7 @@ pub const ForkChoice = struct {
         self: *ForkChoice,
         allocator: std.mem.Allocator,
         pubkey_votes: []const PubkeyVote,
-        epoch_tracker: *const sig.core.EpochTracker,
+        epoch_tracker: *sig.core.EpochTracker,
         /// Expects a value with methods:
         /// * `fn subtractSlotStake(ctx, slot_hash_key: SlotAndHash, stake: u64) !void`
         /// * `fn aggregateSlot(ctx, slot_hash_key: SlotAndHash) !void`
@@ -500,6 +500,7 @@ pub const ForkChoice = struct {
                 const stake_update = stake_update: {
                     const epoch_info = epoch_tracker.getEpochInfo(old_latest_vote_slot) catch
                         break :stake_update 0;
+                    defer epoch_info.release();
                     const stake_and_vote_account =
                         epoch_info.stakes.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
                         break :stake_update 0;
@@ -525,6 +526,7 @@ pub const ForkChoice = struct {
             const stake_update: u64 = stake_update: {
                 const epoch_info = epoch_tracker.getEpochInfo(new_vote_slot_hash.slot) catch
                     break :stake_update 0;
+                defer epoch_info.release();
                 const stake_and_vote_account =
                     epoch_info.stakes.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
                     break :stake_update 0;
@@ -1413,7 +1415,7 @@ pub const ForkChoice = struct {
     pub fn processLatestVotes(
         self: *ForkChoice,
         allocator: std.mem.Allocator,
-        epoch_tracker: *const sig.core.EpochTracker,
+        epoch_tracker: *sig.core.EpochTracker,
         latest_validator_votes: *LatestValidatorVotes,
     ) !void {
         const root = self.tree_root.slot;
@@ -2881,7 +2883,7 @@ const UpdateOperation = union(enum) {
 
 fn expectAddVotesUpdateOps(
     fork_choice: *ForkChoice,
-    epoch_tracker: *const sig.core.EpochTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     pubkey_votes: []const PubkeyVote,
     expected_slots_and_ops: []const struct { Slot, UpdateOperation },
 ) !void {

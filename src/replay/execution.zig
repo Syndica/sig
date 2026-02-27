@@ -404,8 +404,8 @@ const PreparedSlot = union(enum) {
 /// - [confirm_slot](https://github.com/anza-xyz/agave/blob/d79257e5f4afca4d092793f7a1e854cd5ccd6be9/ledger/src/blockstore_processor.rs#L1486)
 fn prepareSlot(
     state: *ReplayState,
-    slot_tracker: *const SlotTracker,
-    epoch_tracker: *const sig.core.EpochTracker,
+    slot_tracker: *SlotTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     slot: Slot,
 ) !PreparedSlot {
     var zone = tracy.Zone.init(@src(), .{ .name = "prepareSlot" });
@@ -420,12 +420,14 @@ fn prepareSlot(
     }
 
     const epoch_info = try epoch_tracker.getEpochInfo(slot);
+    defer epoch_info.release();
     const slot_info = slot_tracker.get(slot) orelse return error.MissingSlot;
+    defer slot_info.release();
 
-    const i_am_leader = slot_info.constants.collector_id.equals(&state.identity.validator);
+    const i_am_leader = slot_info.constants().collector_id.equals(&state.identity.validator);
 
     if (!progress_get_or_put.found_existing) {
-        const parent_slot = slot_info.constants.parent_slot;
+        const parent_slot = slot_info.constants().parent_slot;
         const parent = state.progress_map.getForkProgress(parent_slot) orelse
             return error.MissingParentProgress;
 
@@ -433,8 +435,8 @@ fn prepareSlot(
             .slot = slot,
             .parent_slot = parent_slot,
             .parent = parent,
-            .slot_hash = slot_info.state.hash.readCopy(),
-            .last_entry = slot_info.state.blockhash_queue.readField("last_hash") orelse
+            .slot_hash = slot_info.state().hash.readCopy(),
+            .last_entry = slot_info.state().blockhash_queue.readField("last_hash") orelse
                 return error.MissingLastHash,
             .i_am_leader = i_am_leader,
             .epoch_stakes = &epoch_info.stakes,
@@ -490,16 +492,16 @@ fn prepareSlot(
     };
 
     const tick_height =
-        slot_info.state.tick_height.fetchAdd(core.entry.tickCount(entries), .monotonic);
+        slot_info.state().tick_height.fetchAdd(core.entry.tickCount(entries), .monotonic);
 
     const new_rate_activation_epoch =
-        if (slot_info.constants.feature_set.get(.reduce_stake_warmup_cooldown)) |active_slot|
+        if (slot_info.constants().feature_set.get(.reduce_stake_warmup_cooldown)) |active_slot|
             epoch_tracker.epoch_schedule.getEpoch(active_slot)
         else
             null;
 
     const slot_account_reader = state.account_store.reader()
-        .forSlot(&slot_info.constants.ancestors);
+        .forSlot(&slot_info.constants().ancestors);
 
     // TODO: Avoid the need to read this from accountsdb. We could broaden the
     // scope of the sysvar cache, add this to slot constants, or implement
@@ -513,7 +515,7 @@ fn prepareSlot(
     const resolved_txns = try replay.resolve_lookup.resolveBlock(state.allocator, entries, .{
         .slot = slot,
         .account_reader = slot_account_reader,
-        .reserved_accounts = &slot_info.constants.reserved_accounts,
+        .reserved_accounts = &slot_info.constants().reserved_accounts,
         .slot_hashes = slot_hashes,
     });
     errdefer {
@@ -524,12 +526,12 @@ fn prepareSlot(
     var svm_gateway = try SvmGateway.init(state.allocator, .{
         .slot = slot,
         .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
-        .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,
-        .blockhash_queue = &slot_info.state.blockhash_queue,
-        .account_store = state.account_store.forSlot(slot, &slot_info.constants.ancestors),
-        .ancestors = &slot_info.constants.ancestors,
-        .feature_set = slot_info.constants.feature_set,
-        .rent_collector = &slot_info.constants.rent_collector,
+        .lamports_per_signature = slot_info.constants().fee_rate_governor.lamports_per_signature,
+        .blockhash_queue = &slot_info.state().blockhash_queue,
+        .account_store = state.account_store.forSlot(slot, &slot_info.constants().ancestors),
+        .ancestors = &slot_info.constants().ancestors,
+        .feature_set = slot_info.constants().feature_set,
+        .rent_collector = &slot_info.constants().rent_collector,
         .epoch_stakes = &epoch_info.stakes,
         .status_cache = &state.status_cache,
     });
@@ -537,16 +539,16 @@ fn prepareSlot(
 
     const committer = replay.Committer{
         .logger = .from(state.logger),
-        .slot_state = slot_info.state,
+        .slot_state = slot_info.state(),
         .status_cache = &state.status_cache,
-        .stakes_cache = &slot_info.state.stakes_cache,
+        .stakes_cache = &slot_info.state().stakes_cache,
         .new_rate_activation_epoch = new_rate_activation_epoch,
         .replay_votes_sender = state.replay_votes_channel,
     };
 
     const verify_ticks_params = replay.execution.VerifyTicksParams{
         .tick_height = tick_height,
-        .max_tick_height = slot_info.constants.max_tick_height,
+        .max_tick_height = slot_info.constants().max_tick_height,
         .hashes_per_tick = epoch_tracker.cluster.hashes_per_tick,
         .slot = slot,
         .slot_is_full = slot_is_full,
@@ -916,19 +918,24 @@ test "prepareSlot: empty and dead slots are handled correctly" {
     }
 
     const root = state.slot_tracker.get(0);
+    defer if (root) |r| r.release();
 
     const constants, const slot_state = try sig.replay.service.newSlotFromParent(
         allocator,
         .{ .accounts_db_two = &dep_stubs.accounts_db_state.db },
         state.epoch_tracker.cluster.ticks_per_slot,
         0,
-        root.?.constants,
-        root.?.state,
+        root.?.constants(),
+        root.?.state(),
         .ZEROES,
         1,
     );
 
-    try state.slot_tracker.put(allocator, 1, .{ .constants = constants, .state = slot_state });
+    try state.slot_tracker.put(allocator, 1, .{
+        .constants = constants,
+        .state = slot_state,
+        .allocator = allocator,
+    });
 
     try std.testing.expectEqual(
         .empty,

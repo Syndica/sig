@@ -717,9 +717,9 @@ pub const common = struct {
 };
 
 pub const RpcHookContext = struct {
-    slot_tracker: *const sig.replay.trackers.SlotTracker,
-    epoch_tracker: *const sig.core.EpochTracker,
+    slot_tracker: *sig.replay.trackers.SlotTracker,
     account_reader: sig.accounts_db.AccountReader,
+    epoch_tracker: *sig.core.EpochTracker,
 
     // Limit the length of the `epoch_credits` array for each validator in a `get_vote_accounts`
     // response.
@@ -750,6 +750,7 @@ pub const RpcHookContext = struct {
 
         // Get the state for the requested commitment slot.
         const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        defer slot_ref.release();
 
         // Setup config consts for the request.
         const delinquent_distance = config.delinquentSlotDistance orelse
@@ -759,6 +760,7 @@ pub const RpcHookContext = struct {
 
         // Get epoch info for epochVoteAccounts check
         const epoch_constants = try self.epoch_tracker.getEpochInfo(slot);
+        defer epoch_constants.release();
         const epoch_stakes = epoch_constants.stakes.stakes;
         const epoch_vote_accounts = &epoch_stakes.vote_accounts.vote_accounts;
 
@@ -774,7 +776,7 @@ pub const RpcHookContext = struct {
         }
 
         // Access stakes cache (takes read lock).
-        const stakes, var stakes_guard = slot_ref.state.stakes_cache.stakes.readWithLock();
+        const stakes, var stakes_guard = slot_ref.state().stakes_cache.stakes.readWithLock();
         defer stakes_guard.unlock();
         const vote_accounts_map = &stakes.vote_accounts.vote_accounts;
         for (vote_accounts_map.keys(), vote_accounts_map.values()) |vote_pk, stake_and_vote| {
@@ -870,8 +872,9 @@ pub const RpcHookContext = struct {
         }
 
         // Get slot reference to access ancestors
-        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-        const slot_reader = self.account_reader.forSlot(&ref.constants.ancestors);
+        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        defer slot_ref.release();
+        const slot_reader = self.account_reader.forSlot(&slot_ref.constants().ancestors);
 
         // Look up account
         const maybe_account = try slot_reader.get(allocator, params.pubkey);

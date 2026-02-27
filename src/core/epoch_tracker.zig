@@ -12,6 +12,8 @@ const EpochSchedule = sig.core.epoch_schedule.EpochSchedule;
 const EpochStakes = sig.core.EpochStakes;
 const FeatureSet = sig.core.features.Set;
 const Pubkey = sig.core.Pubkey;
+const ReferenceCounter = sig.sync.ReferenceCounter;
+const RwMux = sig.sync.RwMux;
 const Slot = sig.core.Slot;
 const LeaderSchedules = sig.core.leader_schedule.LeaderSchedules;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
@@ -91,7 +93,8 @@ pub const EpochTracker = struct {
 
     /// Ring buffer of the last 4 rooted epoch stakes.
     /// New epoch stakes are added when the first slot of a new epoch is rooted by consensus.
-    rooted_epochs: RootedEpochBuffer,
+    /// Protected by RwMux for thread-safe access (writes happen ~once per epoch).
+    rooted_epochs: RwMux(RootedEpochBuffer),
 
     /// Unrooted epoch stakes buffer.
     /// Holds epoch stakes for forks which have crossed an epoch boundary but are not yet rooted.
@@ -122,7 +125,7 @@ pub const EpochTracker = struct {
             .cluster = cluster,
             .root_slot = .init(root_slot),
             .epoch_schedule = epoch_schedule,
-            .rooted_epochs = .{},
+            .rooted_epochs = .init(.{}),
             .unrooted_epochs = .{},
         };
     }
@@ -160,8 +163,10 @@ pub const EpochTracker = struct {
         return epoch_tracker;
     }
 
-    pub fn deinit(self: *const EpochTracker, allocator: Allocator) void {
-        self.rooted_epochs.deinit(allocator);
+    pub fn deinit(self: *EpochTracker, allocator: Allocator) void {
+        var lock = self.rooted_epochs.write();
+        lock.mut().deinit(allocator);
+        lock.unlock();
         self.unrooted_epochs.deinit(allocator);
     }
 
@@ -172,38 +177,61 @@ pub const EpochTracker = struct {
     /// If the slot is in Epoch 10, then this function will return an EpochInfo which was saved
     /// at the beginning of Epoch 9, and contains stakes from the end of Epoch 8.
     /// IF the slot is in Epoch 10, then EpochInfo.stakes.stakes.epoch wil be 9
+    ///
+    /// The returned EpochInfo has its RC incremented. Caller MUST call release() when done.
     pub fn getEpochInfo(
-        self: *const EpochTracker,
+        self: *EpochTracker,
         slot: Slot,
     ) !*const EpochInfo {
         const epoch = self.epoch_schedule.getEpoch(
             slot -| self.epoch_schedule.leader_schedule_slot_offset,
         );
-        return try self.rooted_epochs.get(epoch);
+        var lock = self.rooted_epochs.read();
+        defer lock.unlock();
+        return try lock.get().getEpochInfoRef(epoch);
     }
 
+    /// The returned EpochInfo has its RC incremented. Caller MUST call release() when done.
     pub fn getEpochInfoNoOffset(
-        self: *const EpochTracker,
+        self: *EpochTracker,
         slot: Slot,
         ancestors: *const Ancestors,
     ) !*const EpochInfo {
         const epoch = self.epoch_schedule.getEpoch(slot);
-        return self.rooted_epochs.get(epoch) catch self.unrooted_epochs.get(ancestors);
+        {
+            var lock = self.rooted_epochs.read();
+            defer lock.unlock();
+            if (lock.get().getEpochInfoRef(epoch)) |info| return info else |_| {}
+        }
+        return self.unrooted_epochs.getEpochInfoRef(ancestors);
     }
 
-    pub fn getLeaderSchedules(self: *const EpochTracker) !LeaderSchedules {
+    /// Get leader schedules for the current root slot.
+    ///
+    /// Each EpochInfo returned via the LeaderSchedules has its RC incremented.
+    /// Caller MUST call releaseLeaderSchedules() when done.
+    pub fn getLeaderSchedules(self: *EpochTracker) !LeaderSchedulesWithEpochInfos {
         const slot = self.root_slot.load(.monotonic);
+
         const epoch_info = try self.getEpochInfo(slot);
+        errdefer epoch_info.release();
+
         const prev_epoch_info = self.getEpochInfo(
             slot -| self.epoch_schedule.leader_schedule_slot_offset,
         ) catch null;
+        errdefer if (prev_epoch_info) |info| info.release();
+
         const next_epoch_info = self.getEpochInfo(
             slot +| self.epoch_schedule.leader_schedule_slot_offset,
         ) catch null;
+
         return .{
-            .curr = epoch_info.leaders,
-            .prev = if (prev_epoch_info) |info| info.leaders else null,
-            .next = if (next_epoch_info) |info| info.leaders else null,
+            .leader_schedules = .{
+                .curr = epoch_info.leaders,
+                .prev = if (prev_epoch_info) |info| info.leaders else null,
+                .next = if (next_epoch_info) |info| info.leaders else null,
+            },
+            .epoch_infos = .{ epoch_info, prev_epoch_info, next_epoch_info },
         };
     }
 
@@ -214,27 +242,27 @@ pub const EpochTracker = struct {
         ancestors: *const Ancestors,
     ) !void {
         const epoch = self.epoch_schedule.getEpoch(slot);
-        if (self.rooted_epochs.isNext(epoch))
+        const is_next = blk: {
+            var lock = self.rooted_epochs.read();
+            defer lock.unlock();
+            break :blk lock.get().isNext(epoch);
+        };
+        if (is_next)
             try self.onFirstSlotInEpochRooted(allocator, epoch, ancestors);
         self.root_slot.store(slot, .monotonic);
     }
 
     fn onFirstSlotInEpochRooted(
         self: *EpochTracker,
-        allocator: Allocator,
+        _: Allocator,
         epoch: Epoch,
         ancestors: *const Ancestors,
     ) !void {
         const entry = try self.unrooted_epochs.take(ancestors);
-        errdefer {
-            entry.deinit(allocator);
-            allocator.destroy(entry);
-        }
-        try self.rooted_epochs.insert(
-            allocator,
-            epoch,
-            entry,
-        );
+        errdefer entry.release();
+        var lock = self.rooted_epochs.write();
+        defer lock.unlock();
+        try lock.mut().insert(epoch, entry);
     }
 
     pub fn insertRootedEpochInfo(
@@ -260,11 +288,14 @@ pub const EpochTracker = struct {
         errdefer allocator.destroy(epoch_info_ptr);
 
         epoch_info_ptr.* = .{
+            .allocator = allocator,
             .leaders = leaders,
             .stakes = epoch_stakes,
             .feature_set = feature_set.*,
         };
-        try self.rooted_epochs.insert(allocator, epoch, epoch_info_ptr);
+        var lock = self.rooted_epochs.write();
+        defer lock.unlock();
+        try lock.mut().insert(epoch, epoch_info_ptr);
     }
 
     pub fn insertUnrootedEpochInfo(
@@ -278,7 +309,12 @@ pub const EpochTracker = struct {
         const epoch = self.epoch_schedule.getEpoch(slot);
         const leader_schedule_epoch = self.epoch_schedule.getLeaderScheduleEpoch(slot);
         if (epoch != epoch_stakes.stakes.epoch) return error.InvalidInsert;
-        if (!self.rooted_epochs.isNext(epoch)) return error.InvalidInsert;
+        const is_next = blk: {
+            var lock = self.rooted_epochs.read();
+            defer lock.unlock();
+            break :blk lock.get().isNext(epoch);
+        };
+        if (!is_next) return error.InvalidInsert;
 
         const leaders = try LeaderSchedule.init(
             allocator,
@@ -294,6 +330,7 @@ pub const EpochTracker = struct {
             slot,
             ancestors,
             .{
+                .allocator = allocator,
                 .leaders = leaders,
                 .stakes = epoch_stakes,
                 .feature_set = feature_set.*,
@@ -325,7 +362,9 @@ pub const EpochTracker = struct {
             );
             errdefer epoch_info_ptr.deinit(allocator);
 
-            try self.rooted_epochs.insert(allocator, epoch_i, epoch_info_ptr);
+            var lock = self.rooted_epochs.write();
+            defer lock.unlock();
+            try lock.mut().insert(epoch_i, epoch_info_ptr);
         }
 
         return self;
@@ -352,6 +391,7 @@ pub const EpochTracker = struct {
             errdefer allocator.destroy(epoch_info_ptr);
 
             epoch_info_ptr.* = .{
+                .allocator = allocator,
                 .leaders = .{
                     .leaders = &.{},
                     .start = 0,
@@ -360,10 +400,26 @@ pub const EpochTracker = struct {
                 .stakes = stakes,
                 .feature_set = .ALL_DISABLED,
             };
-            try self.rooted_epochs.insert(allocator, stakes.stakes.epoch, epoch_info_ptr);
+            var lock = self.rooted_epochs.write();
+            defer lock.unlock();
+            try lock.mut().insert(stakes.stakes.epoch, epoch_info_ptr);
         }
 
         return self;
+    }
+};
+
+/// Wrapper around `LeaderSchedules` that holds RC references to the underlying
+/// `EpochInfo`s. Callers must call `release()` when done using the leader schedules.
+pub const LeaderSchedulesWithEpochInfos = struct {
+    leader_schedules: LeaderSchedules,
+    /// The EpochInfo references whose RC was incremented (curr, prev, next).
+    epoch_infos: [3]?*const EpochInfo,
+
+    pub fn release(self: *const LeaderSchedulesWithEpochInfos) void {
+        for (self.epoch_infos) |maybe_info| {
+            if (maybe_info) |info| info.release();
+        }
     }
 };
 
@@ -371,18 +427,44 @@ pub const EpochInfo = struct {
     leaders: LeaderSchedule,
     stakes: EpochStakes,
     feature_set: sig.core.FeatureSet,
+    rc: ReferenceCounter = .init,
+    allocator: Allocator,
 
     pub fn deinit(self: *const EpochInfo, allocator: Allocator) void {
         self.leaders.deinit(allocator);
         self.stakes.deinit(allocator);
     }
 
+    /// Increment the reference count. Returns self for convenience.
+    /// The caller must call `release()` when done using this EpochInfo.
+    pub fn acquire(self: *const EpochInfo) *const EpochInfo {
+        // Safety: rc is an atomic field, so we can cast away const for the acquire op.
+        const rc_ptr: *ReferenceCounter = @constCast(&self.rc);
+        const acquired = rc_ptr.acquire();
+        std.debug.assert(acquired); // must not acquire a dead EpochInfo
+        return self;
+    }
+
+    /// Decrement the reference count. If this was the last reference,
+    /// deinit the EpochInfo and free the allocation using the stored allocator.
+    pub fn release(self: *const EpochInfo) void {
+        // Safety: rc is an atomic field, so we can cast away const for the release op.
+        const rc_ptr: *ReferenceCounter = @constCast(&self.rc);
+        if (rc_ptr.release()) {
+            const alloc = self.allocator;
+            self.deinit(alloc);
+            alloc.destroy(@constCast(self));
+        }
+    }
+
     fn init(
+        allocator: Allocator,
         leaders: LeaderSchedule,
         stakes: EpochStakes,
         feature_set: sig.core.FeatureSet,
     ) EpochInfo {
         return .{
+            .allocator = allocator,
             .leaders = leaders,
             .stakes = stakes,
             .feature_set = feature_set,
@@ -408,7 +490,7 @@ pub const EpochInfo = struct {
         });
         errdefer leaders.deinit(allocator);
 
-        return .init(leaders, stakes, .ALL_DISABLED);
+        return .init(allocator, leaders, stakes, .ALL_DISABLED);
     }
 };
 
@@ -423,12 +505,11 @@ const RootedEpochBuffer = struct {
     buf: [4]?*const EpochInfo = @splat(null),
     root: Atomic(Epoch) = .init(0),
 
-    fn deinit(self: *const RootedEpochBuffer, allocator: Allocator) void {
+    fn deinit(self: *const RootedEpochBuffer, _: Allocator) void {
         var buf = self.buf;
         for (&buf) |*maybe_entry| {
             if (maybe_entry.*) |entry| {
-                entry.deinit(allocator);
-                allocator.destroy(entry);
+                entry.release();
             }
             maybe_entry.* = null;
         }
@@ -436,7 +517,6 @@ const RootedEpochBuffer = struct {
 
     pub fn insert(
         self: *RootedEpochBuffer,
-        allocator: Allocator,
         epoch: Epoch,
         value: *const EpochInfo,
     ) !void {
@@ -444,15 +524,16 @@ const RootedEpochBuffer = struct {
 
         const index = epoch % self.buf.len;
         if (self.buf[index]) |old_value| {
-            old_value.deinit(allocator);
-            allocator.destroy(old_value);
+            old_value.release();
         }
 
         self.buf[index] = value;
         self.root.store(epoch, .monotonic);
     }
 
-    pub fn get(
+    /// Returns a ref-counted reference to the EpochInfo for the given epoch.
+    /// Must release the reference when done.
+    pub fn getEpochInfoRef(
         self: *const RootedEpochBuffer,
         epoch: Epoch,
     ) !*const EpochInfo {
@@ -468,10 +549,13 @@ const RootedEpochBuffer = struct {
             epoch + self.buf.len <= root_epoch or
             self.buf[epoch % self.buf.len] == null) return error.EpochNotFound;
 
-        const epoch_at_index = self.buf[epoch % self.buf.len].?.stakes.stakes.epoch;
+        const entry = self.buf[epoch % self.buf.len].?;
+        const epoch_at_index = entry.stakes.stakes.epoch;
         if (epoch != epoch_at_index) return error.EpochOverwritten;
 
-        return self.buf[epoch % self.buf.len].?;
+        // Increment RC so the caller can safely use the pointer after the lock is released.
+        // Caller must call release() when done.
+        return entry.acquire();
     }
 
     pub fn isNext(self: *const RootedEpochBuffer, epoch: Epoch) bool {
@@ -490,12 +574,11 @@ const UnrootedEpochBuffer = struct {
 
     pub const MAX_FORKS = 4;
 
-    fn deinit(self: *const UnrootedEpochBuffer, allocator: Allocator) void {
+    fn deinit(self: *const UnrootedEpochBuffer, _: Allocator) void {
         var buf = self.buf;
         for (&buf) |*maybe_entry| {
             if (maybe_entry.*) |entry| {
-                entry.info.deinit(allocator);
-                allocator.destroy(entry.info);
+                entry.info.release();
             }
             maybe_entry.* = null;
         }
@@ -515,8 +598,7 @@ const UnrootedEpochBuffer = struct {
             const entry_epoch = entry.info.stakes.stakes.epoch;
             if (epoch > entry_epoch) {
                 // Entry occupied by old epoch, we can overwrite it.
-                entry.info.deinit(allocator);
-                allocator.destroy(entry.info);
+                entry.info.release();
                 break i;
             } else if (epoch == entry_epoch) {
                 // Entry occupied by an existing fork.
@@ -535,13 +617,14 @@ const UnrootedEpochBuffer = struct {
         return info_ptr;
     }
 
-    pub fn get(
+    /// Get a ref-counted reference to an epoch info. Must be released after use.
+    pub fn getEpochInfoRef(
         self: *const UnrootedEpochBuffer,
         ancestors: *const Ancestors,
     ) !*const EpochInfo {
         for (&self.buf) |maybe_entry|
             if (maybe_entry) |entry|
-                if (ancestors.containsSlot(entry.slot)) return entry.info;
+                if (ancestors.containsSlot(entry.slot)) return entry.info.acquire();
         return error.ForkNotFound;
     }
 
@@ -578,7 +661,7 @@ test RootedEpochBuffer {
     for (0..buffer.buf.len * 2) |epoch| {
         try std.testing.expectError(
             error.EpochNotFound,
-            buffer.get(epoch),
+            buffer.getEpochInfoRef(epoch),
         );
     }
 
@@ -593,12 +676,12 @@ test RootedEpochBuffer {
             .schedule = epoch_schedule,
         },
     );
-    try buffer.insert(allocator, epoch, info_0);
+    try buffer.insert(epoch, info_0);
 
     // Check that duplicate insert fails
     try std.testing.expectError(
         error.InvalidInsert,
-        buffer.insert(allocator, epoch, info_0),
+        buffer.insert(epoch, info_0),
     );
 
     // Insert epoch 1 leader schedule
@@ -612,12 +695,12 @@ test RootedEpochBuffer {
             .schedule = epoch_schedule,
         },
     );
-    try buffer.insert(allocator, epoch, info_1);
+    try buffer.insert(epoch, info_1);
 
     // Check that non-monotonic insert fails
     try std.testing.expectError(
         error.InvalidInsert,
-        buffer.insert(allocator, epoch, info_0),
+        buffer.insert(epoch, info_0),
     );
 
     // Check that skipping an epoch insert fails
@@ -630,13 +713,10 @@ test RootedEpochBuffer {
             .schedule = epoch_schedule,
         },
     );
-    defer {
-        info_3.deinit(allocator);
-        allocator.destroy(info_3);
-    }
+    defer info_3.release();
     try std.testing.expectError(
         error.InvalidInsert,
-        buffer.insert(allocator, epoch, info_3),
+        buffer.insert(epoch, info_3),
     );
 
     // Insert 4 epochs
@@ -651,16 +731,17 @@ test RootedEpochBuffer {
                 .schedule = epoch_schedule,
             },
         );
-        try buffer.insert(allocator, epoch, info);
+        try buffer.insert(epoch, info);
     }
 
     // Check get outside of range fails
-    try std.testing.expectError(error.EpochNotFound, buffer.get(epoch - 4));
-    try std.testing.expectError(error.EpochNotFound, buffer.get(epoch + 1));
+    try std.testing.expectError(error.EpochNotFound, buffer.getEpochInfoRef(epoch - 4));
+    try std.testing.expectError(error.EpochNotFound, buffer.getEpochInfoRef(epoch + 1));
 
     // Check that we can get all 4 inserted epochs
     for (epoch - 3..epoch + 1) |epoch_i| {
-        const info = try buffer.get(epoch_i);
+        const info = try buffer.getEpochInfoRef(epoch_i);
+        defer info.release();
         try std.testing.expectEqual(epoch_i, info.stakes.stakes.epoch);
     }
 
@@ -671,8 +752,10 @@ test RootedEpochBuffer {
         allocator.free(expected);
     }
     for (epoch - 2..epoch + 1, 0..) |epoch_i, i| {
-        const info = try buffer.get(epoch_i);
+        const info = try buffer.getEpochInfoRef(epoch_i);
+        defer info.release();
         expected[i] = .{
+            .allocator = allocator,
             .leaders = .{
                 .leaders = try allocator.dupe(Pubkey, info.leaders.leaders),
                 .start = info.leaders.start,
@@ -694,11 +777,12 @@ test RootedEpochBuffer {
             .schedule = epoch_schedule,
         },
     );
-    try buffer.insert(allocator, epoch, info_6);
+    try buffer.insert(epoch, info_6);
 
     // Check that only the oldest epoch has been overwritten
     for (epoch - 3..epoch, expected) |epoch_i, expected_info| {
-        const info = try buffer.get(epoch_i);
+        const info = try buffer.getEpochInfoRef(epoch_i);
+        defer info.release();
         try std.testing.expectEqualSlices(
             Pubkey,
             expected_info.leaders.leaders,
@@ -735,7 +819,7 @@ test UnrootedEpochBuffer {
     // Get and take on empty buffer fails
     try std.testing.expectError(
         error.ForkNotFound,
-        buffer.get(&branch),
+        buffer.getEpochInfoRef(&branch),
     );
     try std.testing.expectError(
         error.ForkNotFound,
@@ -748,19 +832,21 @@ test UnrootedEpochBuffer {
         random,
         .{ .epoch = 1, .schedule = epoch_schedule },
     );
-    defer epoch_info.deinit(allocator);
+    // insert takes ownership of the epoch_info value (copies into a new allocation)
     const epoch_info_ptr = try buffer.insert(
         allocator,
         9,
         &branch,
         epoch_info,
     );
-    defer allocator.destroy(epoch_info_ptr);
+    // The original epoch_info's leaders/stakes are now owned by the inserted copy,
+    // so we should NOT deinit the stack copy. The insert created a new heap allocation
+    // with its own RC. We just need to make sure the buffer cleans it up or we take it.
 
     // Get and take without matching fork fails
     try std.testing.expectError(
         error.ForkNotFound,
-        buffer.get(&branch),
+        buffer.getEpochInfoRef(&branch),
     );
     try std.testing.expectError(
         error.ForkNotFound,
@@ -769,13 +855,16 @@ test UnrootedEpochBuffer {
 
     // Add slot 9 to ancestors and check get and take succeed
     try branch.addSlot(allocator, 9);
-    const fetched_info = try buffer.get(&branch);
+    const fetched_info = try buffer.getEpochInfoRef(&branch);
+    defer fetched_info.release();
     const taken_info = try buffer.take(&branch);
     try std.testing.expectEqual(epoch_info_ptr, fetched_info);
     try std.testing.expectEqual(epoch_info_ptr, taken_info);
+    // taken_info now owns the only reference, release it
+    taken_info.release();
     try std.testing.expectError(
         error.ForkNotFound,
-        buffer.get(&branch),
+        buffer.getEpochInfoRef(&branch),
     );
 }
 
@@ -797,8 +886,15 @@ test EpochTracker {
     // Only the root slot is set
     try std.testing.expectEqual(31, epoch_tracker.root_slot.load(.monotonic));
     try std.testing.expectError(error.EpochNotFound, epoch_tracker.getEpochInfo(0));
-    try std.testing.expectError(error.EpochNotFound, epoch_tracker.rooted_epochs.get(0));
-    try std.testing.expectError(error.ForkNotFound, epoch_tracker.unrooted_epochs.get(&.EMPTY));
+    {
+        var lock = epoch_tracker.rooted_epochs.read();
+        defer lock.unlock();
+        try std.testing.expectError(error.EpochNotFound, lock.get().getEpochInfoRef(0));
+    }
+    try std.testing.expectError(
+        error.ForkNotFound,
+        epoch_tracker.unrooted_epochs.getEpochInfoRef(&.EMPTY),
+    );
 
     // Fill the buffers with epochs by inserting and then rooting the first slot for 10 epochs
     for (0..10) |epoch| {
@@ -825,10 +921,23 @@ test EpochTracker {
 
     // Check that the root slot is 9 * 32 and epochs 6, 7, 8, 9 are available
     try std.testing.expectEqual(9 * 32, epoch_tracker.root_slot.load(.monotonic));
-    try std.testing.expectEqual(6, (try epoch_tracker.rooted_epochs.get(6)).stakes.stakes.epoch);
-    try std.testing.expectEqual(7, (try epoch_tracker.rooted_epochs.get(7)).stakes.stakes.epoch);
-    try std.testing.expectEqual(8, (try epoch_tracker.rooted_epochs.get(8)).stakes.stakes.epoch);
-    try std.testing.expectEqual(9, (try epoch_tracker.rooted_epochs.get(9)).stakes.stakes.epoch);
+    {
+        var lock = epoch_tracker.rooted_epochs.read();
+        defer lock.unlock();
+        const buf = lock.get();
+        const info_6 = try buf.getEpochInfoRef(6);
+        defer info_6.release();
+        try std.testing.expectEqual(6, info_6.stakes.stakes.epoch);
+        const info_7 = try buf.getEpochInfoRef(7);
+        defer info_7.release();
+        try std.testing.expectEqual(7, info_7.stakes.stakes.epoch);
+        const info_8 = try buf.getEpochInfoRef(8);
+        defer info_8.release();
+        try std.testing.expectEqual(8, info_8.stakes.stakes.epoch);
+        const info_9 = try buf.getEpochInfoRef(9);
+        defer info_9.release();
+        try std.testing.expectEqual(9, info_9.stakes.stakes.epoch);
+    }
 
     // Empty stakes for failing inserts
     var fail_stakes = try sig.core.stakes.randomEpochStakes(
@@ -882,10 +991,11 @@ test EpochTracker {
     );
 
     // Check that the pointers returned from insert match the pointers returned from get
-    for (0..4) |i| try std.testing.expectEqual(
-        insert_ptrs[i],
-        try epoch_tracker.unrooted_epochs.get(&branches[i]),
-    );
+    for (0..4) |i| {
+        const got = try epoch_tracker.unrooted_epochs.getEpochInfoRef(&branches[i]);
+        defer got.release();
+        try std.testing.expectEqual(insert_ptrs[i], got);
+    }
 
     // Check that another insert hits max forks
     fail_stakes.stakes.epoch = epoch_schedule.getEpoch(branches[4].last());
@@ -901,13 +1011,20 @@ test EpochTracker {
     try epoch_tracker.onSlotRooted(allocator, branches[2].last(), &branches[2]);
 
     // Check that the pointers returned from insert match the pointers returned from get
-    for (0..4) |i| try std.testing.expectEqual(
-        insert_ptrs[i],
-        if (i != 2)
-            try epoch_tracker.unrooted_epochs.get(&branches[i])
-        else
-            try epoch_tracker.rooted_epochs.get(epoch_schedule.getEpoch(branches[i].last())),
-    );
+    for (0..4) |i| {
+        const expected_ptr = insert_ptrs[i];
+        if (i != 2) {
+            const got = try epoch_tracker.unrooted_epochs.getEpochInfoRef(&branches[i]);
+            defer got.release();
+            try std.testing.expectEqual(expected_ptr, got);
+        } else {
+            var lock = epoch_tracker.rooted_epochs.read();
+            defer lock.unlock();
+            const got = try lock.get().getEpochInfoRef(epoch_schedule.getEpoch(branches[i].last()));
+            defer got.release();
+            try std.testing.expectEqual(expected_ptr, got);
+        }
+    }
 
     // Check we can't insert unrooted if the epoch is already rooted
     try std.testing.expectError(error.InvalidInsert, epoch_tracker.insertUnrootedEpochInfo(

@@ -84,7 +84,9 @@ pub fn updateEpochStakes(
     epoch_tracker: *sig.core.EpochTracker,
 ) !void {
     const epoch_info = epoch_tracker.getEpochInfoNoOffset(slot, ancestors) catch null;
-    if (epoch_info == null) {
+    if (epoch_info) |info| {
+        info.release();
+    } else {
         const epoch_stakes = try getEpochStakes(
             allocator,
             epoch_tracker.epoch_schedule.getLeaderScheduleEpoch(slot),
@@ -775,7 +777,8 @@ test updateEpochStakes {
             &stakes_cache,
             &epoch_tracker,
         );
-        const epoch_info = try epoch_tracker.unrooted_epochs.get(&ancestors);
+        const epoch_info = try epoch_tracker.unrooted_epochs.getEpochInfoRef(&ancestors);
+        defer epoch_info.release();
         try std.testing.expectEqual(
             stakes_cache.stakes.private.v.epoch,
             epoch_info.stakes.stakes.epoch,

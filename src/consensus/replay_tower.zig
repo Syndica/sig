@@ -1400,7 +1400,7 @@ pub const ReplayTower = struct {
         progress: *const ProgressMap,
         latest_validator_votes: *const LatestValidatorVotes,
         fork_choice: *const HeaviestSubtreeForkChoice,
-        epoch_tracker: *const sig.core.EpochTracker,
+        epoch_tracker: *sig.core.EpochTracker,
         /// For reading the slot history account
         account_reader: sig.accounts_db.AccountReader,
     ) !SelectVoteAndResetForkResult {
@@ -1410,6 +1410,7 @@ pub const ReplayTower = struct {
 
         const epoch_info = epoch_tracker.getEpochInfo(heaviest_slot) catch
             return error.ForkStatsNotFound;
+        defer epoch_info.release();
         // Check switch threshold conditions
         const initial_decision = try self.checkSwitchThreshold(
             allocator,
@@ -5440,7 +5441,7 @@ pub const TestFixture = struct {
         allocator: std.mem.Allocator,
         root: SlotAndHash,
     ) !TestFixture {
-        const slot_tracker: SlotTracker = blk: {
+        var slot_tracker: SlotTracker = blk: {
             var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
             errdefer constants.deinit(allocator);
             constants.parent_slot = root.slot -| 1;
@@ -5452,7 +5453,7 @@ pub const TestFixture = struct {
             break :blk try .init(
                 allocator,
                 root.slot,
-                .{ .constants = constants, .state = state },
+                .{ .constants = constants, .state = state, .allocator = allocator },
             );
         };
         errdefer slot_tracker.deinit(allocator);
@@ -5572,7 +5573,7 @@ pub const TestFixture = struct {
                 try self.slot_tracker.put(
                     allocator,
                     tree[0].slot,
-                    .{ .constants = constants, .state = state },
+                    .{ .constants = constants, .state = state, .allocator = allocator },
                 );
             }
 
@@ -5592,7 +5593,8 @@ pub const TestFixture = struct {
             if (frozen_state == .frozen) {
                 // new_bank.freeze();
                 const new_slot = self.slot_tracker.get(parent_slot) orelse continue;
-                new_slot.state.hash = .init(parent_hash);
+                defer new_slot.release();
+                new_slot.state().hash = .init(parent_hash);
                 const fork_state = self.progress.getForkStats(parent_slot) orelse continue;
                 fork_state.slot_hash = parent_hash;
             }
