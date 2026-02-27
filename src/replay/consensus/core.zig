@@ -893,7 +893,7 @@ fn loadTower(
         .{},
     ) catch return error.BincodeError;
 
-    var vote_state = try versioned_state.convertToV4(allocator, null);
+    const vote_state = try versioned_state.convertToVoteState(allocator, null, false);
     defer vote_state.deinit(allocator);
 
     return try Tower.fromAccount(&vote_state);
@@ -1395,22 +1395,20 @@ fn generateVoteTx(
         logger.err().logf("Failed to deserialize vote state versions: {}", .{err});
         return .failed;
     };
-    defer vote_state_versions.deinit(allocator);
-
-    var vote_state = vote_state_versions.convertToV4(allocator, null) catch |err| {
+    var vote_state = vote_state_versions.convertToVoteState(allocator, null, false) catch |err| {
         logger.err().logf("Failed to convert vote state to current: {}", .{err});
         return .failed;
     };
     defer vote_state.deinit(allocator);
 
     const node_pubkey = Pubkey.fromPublicKey(&node_kp.public_key);
-    if (!vote_state.node_pubkey.equals(&node_pubkey)) {
+    if (!vote_state.nodePubkey().equals(&node_pubkey)) {
         return .hot_spare;
     }
 
     const current_epoch = epoch_schedule.getEpoch(last_voted_slot);
 
-    const authorized_voter_pubkey = vote_state.authorized_voters.getAuthorizedVoter(
+    const authorized_voter_pubkey = vote_state.authorizedVotersMut().getAuthorizedVoter(
         current_epoch,
     ) orelse {
         logger.err().logf("No authorized voter for epoch {}", .{current_epoch});
@@ -2875,7 +2873,7 @@ test "computeBankStats - child bank heavier" {
         {
             errdefer versioned_stakes.deinit(gpa);
             for (versioned_stakes.stakes.vote_accounts.vote_accounts.values()) |*vote_account| {
-                try vote_account.account.state.votes.append(gpa, .{
+                try vote_account.account.state.votesMut().append(gpa, .{
                     .latency = 0,
                     .lockout = .{
                         .slot = 1,
@@ -5654,7 +5652,7 @@ test "vote accounts with landed votes populate bank stats" {
             var vote_accounts = &epoch_stakes.stakes.vote_accounts.vote_accounts;
 
             for (vote_accounts.values()) |*vote_account| {
-                try vote_account.account.state.votes.append(gpa, .{
+                try vote_account.account.state.votesMut().append(gpa, .{
                     .latency = 0,
                     .lockout = .{ .slot = slot_1, .confirmation_count = 2 },
                 });
@@ -6589,7 +6587,7 @@ test "detect and mark duplicate confirmed fork" {
             var vote_accounts = &epoch_stakes.stakes.vote_accounts.vote_accounts;
 
             for (vote_accounts.values()) |*vote_account| {
-                try vote_account.account.state.votes.append(gpa, .{
+                try vote_account.account.state.votesMut().append(gpa, .{
                     .latency = 0,
                     .lockout = .{ .slot = 1, .confirmation_count = 2 },
                 });

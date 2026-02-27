@@ -158,10 +158,12 @@ pub const VoteStateV4 = struct {
         };
     }
 
-    pub fn deinit(self: *VoteStateV4, allocator: Allocator) void {
-        self.votes.deinit(allocator);
+    pub fn deinit(self: *const VoteStateV4, allocator: Allocator) void {
+        var votes = self.votes;
+        votes.deinit(allocator);
         self.authorized_voters.deinit(allocator);
-        self.epoch_credits.deinit(allocator);
+        var epoch_credits = self.epoch_credits;
+        epoch_credits.deinit(allocator);
     }
 
     pub fn clone(self: VoteStateV4, allocator: Allocator) Allocator.Error!VoteStateV4 {
