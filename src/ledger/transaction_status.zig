@@ -272,7 +272,8 @@ pub const TransactionStatusMetaBuilder = struct {
         };
     }
 
-    /// Extract log messages from a LogCollector into an owned slice.
+    /// Extract log messages from a LogCollector. Returns a caller-owned slice
+    /// of string slices that point into the LogCollector's memory.
     fn extractLogMessages(
         allocator: Allocator,
         log_collector: LogCollector,
