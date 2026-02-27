@@ -145,10 +145,10 @@ pub const SlotTracker = struct {
         allocator.destroy(self.wg);
 
         var slots_lg = self.slots.write();
+        defer slots_lg.unlock();
         const slots = slots_lg.mut();
         for (slots.values()) |element| element.destroy();
         slots.deinit(allocator);
-        slots_lg.unlock();
     }
 
     pub fn put(
