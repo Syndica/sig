@@ -1,5 +1,5 @@
-/// Types for parsing config accounts for RPC responses using the `jsonParsed` encoding.
-/// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_config.rs
+//! Types for parsing config accounts for RPC responses using the `jsonParsed` encoding.
+//! [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_config.rs
 const std = @import("std");
 const sig = @import("../../sig.zig");
 

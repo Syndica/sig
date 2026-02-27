@@ -1,5 +1,5 @@
-/// Types for parsing BPF upgradeable loader accounts for RPC responses using the `jsonParsed` encoding.
-/// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_bpf_loader.rs
+//! Types for parsing BPF upgradeable loader accounts for RPC responses using the `jsonParsed` encoding.
+//! [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_bpf_loader.rs
 const std = @import("std");
 const sig = @import("../../sig.zig");
 

@@ -1,5 +1,5 @@
-/// This module provides encoding and decoding of Solana accounts for RPC responses.
-/// Supports `jsonParsed`, `base58`, `base64`, and `base64+zstd` encodings.
+//! This module provides encoding and decoding of Solana accounts for RPC responses.
+//! Supports `jsonParsed`, `base58`, `base64`, and `base64+zstd` encodings.
 const std = @import("std");
 const base58 = @import("base58");
 const zstd = @import("zstd");

@@ -1,5 +1,5 @@
-/// Types for parsing a stake account for RPC responses using the `jsonParsed` encoding.
-/// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_stake.rs
+//! Types for parsing a stake account for RPC responses using the `jsonParsed` encoding.
+//! [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_stake.rs
 const std = @import("std");
 const sig = @import("../../sig.zig");
 

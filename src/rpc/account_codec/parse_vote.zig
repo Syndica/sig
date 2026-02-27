@@ -1,5 +1,5 @@
-/// Types for parsing a vote account for RPC responses using the `jsonParsed` encoding.
-/// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_vote.rs
+//! Types for parsing a vote account for RPC responses using the `jsonParsed` encoding.
+//! [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_vote.rs
 const std = @import("std");
 const base58 = @import("base58");
 const sig = @import("../../sig.zig");
