@@ -23,7 +23,7 @@ const MAX_EXTENSIONS = parse_token_extension.MAX_EXTENSIONS;
 /// Index of the account state byte in TokenAccount.
 /// Offset 108 = mint(32) + owner(32) + amount(8) + delegate(36) = 108
 /// [spl] https://github.com/solana-program/token-2022/blob/main/interface/src/generic_token_account.rs#L56
-const ACCOUNT_INITIALIZED_INDEX: usize = 108;
+pub const ACCOUNT_INITIALIZED_INDEX: usize = 108;
 
 /// Parse an SPL Token account.
 /// Returns null if:
