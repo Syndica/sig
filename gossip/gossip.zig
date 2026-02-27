@@ -401,7 +401,7 @@ fn runGossip(
             continue;
         }
 
-        std.log.debug("msg: {}\n", .{std.meta.activeTag(msg)});
+        // std.log.debug("msg: {}\n", .{std.meta.activeTag(msg)});
         
 
         switch (msg) {
@@ -428,6 +428,7 @@ fn runGossip(
                     keypair,
                     prng.random(),
                     now,
+                    my_ci,
                 );
 
                 const mask = @as(u64, 1) << (std.math.cast(u6, pr.mask_bits) orelse continue);
@@ -456,7 +457,7 @@ fn runGossip(
                 }
 
                 // Pull Response with values
-                const p = try getOrCreatePeer(socket, &table, &peers, from, addr, prng.random(), keypair, now);
+                const p = try getOrCreatePeer(socket, &table, &hashes, &peers, from, addr, prng.random(), keypair, now, my_ci);
                 try sendGossipMessage(socket, p.addr, .{ .pull_response = .{
                     .from = my_ci.from,
                     .values = values.constSlice(),
@@ -495,6 +496,7 @@ fn runGossip(
                         keypair,
                         prng.random(),
                         now,
+                        my_ci,
                     );
                 }
 
@@ -533,11 +535,12 @@ fn runGossip(
                 };
 
                 std.log.debug("PruneMessage(from:{}, prunes:{any})", .{from, prune.data.prunes});
-
-                const p = peers.getPtr(from) orelse {
-                    std.log.err("prune to untracked peer: {}", .{from});
-                    continue;
-                };
+                
+                const p = try getOrCreatePeer(socket, &table, &hashes, &peers, from, addr, prng.random(), keypair, now, my_ci);
+                // const p = peers.getPtr(from) orelse {
+                //     std.log.err("prune to untracked peer: {}", .{from});
+                //     continue;
+                // };
 
                 for (prune.data.prunes) |pruned_pubkey| {
                     Bloom.add(&p.pruned.keys, &p.pruned.words, &pruned_pubkey.data);
@@ -552,7 +555,7 @@ fn runGossip(
                 std.log.debug("Ping(from:{})", .{ping.from});
 
                 // Important to add the peer here.
-                const p = try getOrCreatePeer(socket, &table, &peers, ping.from, addr, prng.random(), keypair, now);
+                const p = try getOrCreatePeer(socket, &table, &hashes, &peers, ping.from, addr, prng.random(), keypair, now, my_ci);
 
                 const hash = Hash.initMany(&.{ "SOLANA_PING_PONG", &ping.token });
                 try sendGossipMessage(socket, p.addr, .{ .pong_message = .{
@@ -569,7 +572,7 @@ fn runGossip(
 
                 std.log.debug("Pong(from:{})", .{pong.from});
 
-                const p = try getOrCreatePeer(socket, &table, &peers, pong.from, addr, prng.random(), keypair, now);
+                const p = try getOrCreatePeer(socket, &table, &hashes, &peers, pong.from, addr, prng.random(), keypair, now, my_ci);
                 p.last_pong = now;
             },
         }
@@ -653,6 +656,7 @@ fn onNewValue(
     keypair: KeyPair,
     rng: std.Random,
     now: Timestamp,
+    my_ci: ContactInfo,
 ) !void {
     const key, const wallclock = getGossipKey(value.data);
     
@@ -675,7 +679,7 @@ fn onNewValue(
             .v6 => |s| .initIp6(s.ip, s.port, 0, 0),
         };
 
-        const p = try getOrCreatePeer(socket, table, peers, key.from, addr, rng, keypair, now);
+        const p = try getOrCreatePeer(socket, table, hashes, peers, key.from, addr, rng, keypair, now, my_ci);
         p.last_contact = wallclock;
         p.addr = addr;
     }
@@ -825,12 +829,14 @@ fn findOldest(slice: anytype, comptime ts_field: []const u8) usize {
 fn getOrCreatePeer(
     socket: std.posix.socket_t,
     table: *GossipTable,
+    hashes: *GossipHashes,
     peers: *GossipPeers,
     pubkey: Pubkey,
     addr: std.net.Address,
     rng: std.Random,
     keypair: KeyPair,
     now: Timestamp,
+    my_ci: ContactInfo,
 ) !*GossipPeer {
     if (peers.count() == peers.capacity()) {
         if (peers.getPtr(pubkey)) |p| return p;
@@ -850,8 +856,25 @@ fn getOrCreatePeer(
         };
         rng.bytes(std.mem.asBytes(&gop.value_ptr.pruned.keys));
         @memset(&gop.value_ptr.pruned.words, 0);
-    }
+
         try maybePingPeer(socket, gop.value_ptr, keypair, rng, now);
+
+        _ = hashes;
+        
+        try sendGossipMessage(socket, addr, .{ .pull_request = .{
+            .filter = .{
+                .keys = &.{ rng.int(u64) },
+                .words = .{
+                    .bits = &.{ 0 },
+                    .len = 64,
+                },
+                .num_bits = 0,
+            },
+            .mask = 0,
+            .mask_bits = 0,
+            .contact_info = try signData(keypair, .{ .contact_info = my_ci }),
+        }});
+    }
     return gop.value_ptr;
 }
 
