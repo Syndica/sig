@@ -342,6 +342,7 @@ pub const TransactionStatusMetaBuilder = struct {
             } else if (entry.depth > 1) {
                 // This is an inner instruction (CPI)
                 const inner = try convertToInnerInstruction(allocator, entry.ixn_info, entry.depth);
+                errdefer inner.deinit(allocator);
                 try current_inner.append(allocator, inner);
             }
         }

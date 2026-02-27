@@ -791,12 +791,6 @@ pub const GetBlock = struct {
                 else
                     null;
 
-                // Duplicate log messages (original memory will be freed with block.deinit)
-                const log_messages = if (meta.log_messages) |logs|
-                    try allocator.dupe([]const u8, logs)
-                else
-                    &.{};
-
                 const rewards: ?[]UiReward = if (show_rewards) rewards: {
                     if (meta.rewards) |rewards| {
                         const converted = try allocator.alloc(UiReward, rewards.len);
@@ -814,7 +808,7 @@ pub const GetBlock = struct {
                     .preBalances = try allocator.dupe(u64, meta.pre_balances),
                     .postBalances = try allocator.dupe(u64, meta.post_balances),
                     .innerInstructions = .{ .value = inner_instructions },
-                    .logMessages = .{ .value = log_messages },
+                    .logMessages = .{ .value = meta.log_messages orelse &.{} },
                     .preTokenBalances = .{ .value = pre_token_balances },
                     .postTokenBalances = .{ .value = post_token_balances },
                     .rewards = if (rewards) |r| .{ .value = r } else .none,

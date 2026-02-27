@@ -30,10 +30,11 @@ pub fn transfer(
     to: Pubkey,
     lamports: u64,
 ) error{OutOfMemory}!sig.core.Instruction {
-    const accounts = try allocator.alloc(InstructionAccount, 2);
+    const accounts = try allocator.dupe(InstructionAccount, &.{
+        .{ .pubkey = from, .is_signer = true, .is_writable = true },
+        .{ .pubkey = to, .is_signer = false, .is_writable = true },
+    });
     errdefer allocator.free(accounts);
-    accounts[0] = .{ .pubkey = from, .is_signer = true, .is_writable = true };
-    accounts[1] = .{ .pubkey = to, .is_signer = false, .is_writable = true };
 
     return try sig.core.Instruction.initUsingBincodeAlloc(
         allocator,
@@ -50,9 +51,12 @@ pub fn allocate(
     pubkey: Pubkey,
     space: u64,
 ) error{OutOfMemory}!sig.core.Instruction {
-    const accounts = try allocator.alloc(InstructionAccount, 1);
+    const accounts = try allocator.dupe(InstructionAccount, &.{.{
+        .pubkey = pubkey,
+        .is_signer = true,
+        .is_writable = true,
+    }});
     errdefer allocator.free(accounts);
-    accounts[0] = .{ .pubkey = pubkey, .is_signer = true, .is_writable = true };
 
     return try sig.core.Instruction.initUsingBincodeAlloc(
         allocator,
@@ -69,9 +73,12 @@ pub fn assign(
     pubkey: Pubkey,
     owner: Pubkey,
 ) error{OutOfMemory}!sig.core.Instruction {
-    const accounts = try allocator.alloc(InstructionAccount, 1);
+    const accounts = try allocator.dupe(InstructionAccount, &.{.{
+        .pubkey = pubkey,
+        .is_signer = true,
+        .is_writable = true,
+    }});
     errdefer allocator.free(accounts);
-    accounts[0] = .{ .pubkey = pubkey, .is_signer = true, .is_writable = true };
 
     return try sig.core.Instruction.initUsingBincodeAlloc(
         allocator,
