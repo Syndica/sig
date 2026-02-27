@@ -15,7 +15,6 @@ const JsonValue = std.json.Value;
 const ObjectMap = std.json.ObjectMap;
 
 pub const AccountKeys = @import("AccountKeys.zig");
-pub const ReservedAccountKeys = @import("ReservedAccountKeys.zig");
 pub const LoadedMessage = @import("LoadedMessage.zig");
 
 const vote_program = sig.runtime.program.vote;
@@ -223,10 +222,7 @@ pub const ParsedInstruction = struct {
     pub fn jsonStringify(self: ParsedInstruction, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("parsed");
-        // // Write pre-serialized JSON raw
-        // try jw.beginWriteRaw();
         try jw.write(self.parsed);
-        // jw.endWriteRaw();
         try jw.objectField("program");
         try jw.write(self.program);
         try jw.objectField("programId");
