@@ -10,6 +10,7 @@ const Slot = sig.core.Slot;
 const Ancestors = sig.core.Ancestors;
 const Account = sig.core.Account;
 const AccountSharedData = sig.runtime.AccountSharedData;
+const PubkeyMap = sig.utils.collections.PubkeyMap;
 
 const Db = @This();
 
@@ -169,6 +170,26 @@ pub fn slotModifiedIterator(self: *Db, slot: Slot) ?SlotModifiedIterator {
     return .{
         .slot = entry,
         .cursor = 0,
+    };
+}
+
+pub const OwnerQuery = struct {
+    rooted_iter: Rooted.OwnerIterator,
+    unrooted_map: PubkeyMap(Unrooted.AccountWithSlot),
+
+    pub fn deinit(self: *OwnerQuery, allocator: std.mem.Allocator) void {
+        self.rooted_iter.deinit();
+        self.unrooted_map.deinit(allocator);
+    }
+};
+
+pub fn ownerQuery(self: *Db, owner: Pubkey, ancestors: *const Ancestors) !OwnerQuery {
+    var unrooted_map = try self.unrooted.getByOwner(self.allocator, owner, ancestors);
+    errdefer unrooted_map.deinit(self.allocator);
+    const rooted_iter = self.rooted.getByOwner(owner);
+    return .{
+        .rooted_iter = rooted_iter,
+        .unrooted_map = unrooted_map,
     };
 }
 
