@@ -1247,16 +1247,17 @@ test "ForkProgress.init" {
     bank_data.hash = .ZEROES;
 
     const slot = bank_data.slot;
-    const slot_consts: sig.core.SlotConstants =
-        try .fromBankFields(allocator, &bank_data, .ALL_DISABLED);
-
-    var slot_state: sig.core.SlotState =
-        try .fromBankFieldsForTest(allocator, &bank_data, null);
-
-    var slot_element: replay.trackers.SlotTracker.Element = .{
-        .constants = slot_consts,
-        .state = slot_state,
-        .allocator = allocator,
+    var slot_element: replay.trackers.SlotTracker.Element = blk: {
+        const consts: sig.core.SlotConstants =
+            try .fromBankFields(allocator, &bank_data, .ALL_DISABLED);
+        errdefer consts.deinit(allocator);
+        const state: sig.core.SlotState =
+            try .fromBankFieldsForTest(allocator, &bank_data, null);
+        break :blk .{
+            .constants = consts,
+            .state = state,
+            .allocator = allocator,
+        };
     };
     defer slot_element.constants.deinit(allocator);
     defer slot_element.state.deinit(allocator);
@@ -1266,10 +1267,10 @@ test "ForkProgress.init" {
     const epoch_stakes = bank_data.epoch_stakes.get(bank_data.epoch).?;
 
     const vsi: ValidatorStakeInfo = .{
-        .validator_vote_pubkey = slot_consts.collector_id,
+        .validator_vote_pubkey = slot_element.constants.collector_id,
         .stake = stake: {
             const vote_accounts = &epoch_stakes.stakes.vote_accounts;
-            break :stake vote_accounts.getDelegatedStake(slot_consts.collector_id);
+            break :stake vote_accounts.getDelegatedStake(slot_element.constants.collector_id);
         },
         .total_epoch_stake = epoch_stakes.total_stake,
     };
@@ -1280,12 +1281,12 @@ test "ForkProgress.init" {
 
     const expected_fork_stats = stats: {
         var fork_stats: ForkStats = .EMPTY_ZEROES;
-        fork_stats.slot_hash = slot_state.hash.readCopy().?;
+        fork_stats.slot_hash = slot_element.state.hash.readCopy().?;
         break :stats fork_stats;
     };
 
     const bhq_last_hash = bhq_lh: {
-        const bhq, var bhq_lg = slot_state.blockhash_queue.readWithLock();
+        const bhq, var bhq_lg = slot_element.state.blockhash_queue.readWithLock();
         defer bhq_lg.unlock();
         break :bhq_lh bhq.last_hash;
     };
@@ -1338,7 +1339,7 @@ test "ForkProgress.init" {
         .slot_info = slot_info,
         .epoch_stakes = &epoch_stakes,
         .now = now,
-        .validator_identity = &slot_consts.collector_id,
+        .validator_identity = &slot_element.constants.collector_id,
         .validator_vote_pubkey = vsi.validator_vote_pubkey,
         .prev_leader_slot = null,
         .num_blocks_on_fork = 15,
@@ -1352,7 +1353,7 @@ test "ForkProgress.init" {
         .parent_slot = slot,
         .parent = &actual_init,
         .validator_vote_pubkey = vsi.validator_vote_pubkey,
-        .slot_hash = slot_state.hash.readCopy(),
+        .slot_hash = slot_element.state.hash.readCopy(),
         .last_entry = bhq_last_hash.?,
         .i_am_leader = true,
         .epoch_stakes = &.{
