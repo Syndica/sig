@@ -472,29 +472,31 @@ pub const GossipService = struct {
         }
     }
 
+    const VerifyError = error{ DeserializeFail, SanitizeFail, VerifyFail };
+
     fn verifyMessage(
         allocator: std.mem.Allocator,
         logger: Logger,
         packet: *const Packet,
-    ) error{ DeserializeFail, SanitizeFail, VerifyFail }!GossipMessage {
+    ) VerifyError!GossipMessage {
         const message = bincode.readFromSlice(
             allocator,
             GossipMessage,
             packet.data(),
             .standard,
         ) catch |e| {
-            logger.err().logf("packet_verify: failed to deserialize: {s}", .{@errorName(e)});
+            logger.warn().logf("packet_verify: failed to deserialize: {s}", .{@errorName(e)});
             return error.DeserializeFail;
         };
         errdefer bincode.free(allocator, message);
 
         message.sanitize() catch |e| {
-            logger.err().logf("packet_verify: failed to sanitize: {s}", .{@errorName(e)});
+            logger.warn().logf("packet_verify: failed to sanitize: {s}", .{@errorName(e)});
             return error.SanitizeFail;
         };
 
         message.verifySignature() catch |e| {
-            logger.err().logf(
+            logger.warn().logf(
                 "packet_verify: failed to verify signature from {f}: {s}",
                 .{ packet.addr, @errorName(e) },
             );
@@ -535,7 +537,10 @@ pub const GossipService = struct {
                     self.logger,
                     &packet,
                 ) catch |err| switch (err) {
-                    error.DeserializeFail, error.SanitizeFail, error.VerifyFail => continue,
+                    error.DeserializeFail, error.SanitizeFail, error.VerifyFail => {
+                        self.metrics.invalid_packets.observe(err);
+                        continue;
+                    },
                 };
                 errdefer bincode.free(self.gossip_data_allocator, message);
                 try self.verified_incoming_channel.send(.{
@@ -2069,6 +2074,7 @@ pub const GossipMetrics = struct {
     gossip_packets_received_total: *Counter,
     gossip_packets_verified_total: *Counter,
     gossip_packets_processed_total: *Counter,
+    invalid_packets: *sig.prometheus.VariantCounter(GossipService.VerifyError),
 
     ping_messages_recv: *Counter,
     pong_messages_recv: *Counter,
