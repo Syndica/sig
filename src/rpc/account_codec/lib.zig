@@ -122,6 +122,23 @@ pub const AccountData = union(enum) {
     }
 };
 
+/// Encodes account data using the specified encoding.
+/// Dispatches to `encodeJsonParsed` or `encodeStandard` based on the encoding parameter.
+/// This is the common entry point used by `getAccountInfo` and `getProgramAccounts`.
+pub fn encodeAccount(
+    allocator: std.mem.Allocator,
+    pubkey: Pubkey,
+    account: sig.core.Account,
+    encoding: AccountEncoding,
+    slot_reader: sig.accounts_db.SlotAccountReader,
+    data_slice: ?DataSlice,
+) !AccountData {
+    return if (encoding == .jsonParsed)
+        encodeJsonParsed(allocator, pubkey, account, slot_reader, data_slice)
+    else
+        encodeStandard(allocator, account, encoding, data_slice);
+}
+
 /// Handles jsonParsed encoding with fallback to base64.
 /// Attempts program-specific parsing; falls back to base64 if no parser is found.
 pub fn encodeJsonParsed(
