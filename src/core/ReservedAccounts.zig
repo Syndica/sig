@@ -37,7 +37,16 @@ pub fn initForSlot(
     slot: Slot,
 ) Allocator.Error!ReservedAccounts {
     var reserved_accounts = try init(allocator);
+    errdefer reserved_accounts.deinit(allocator);
     reserved_accounts.update(feature_set, slot);
+    return reserved_accounts;
+}
+
+pub fn initAllActivated(allocator: Allocator) Allocator.Error!ReservedAccounts {
+    var reserved_accounts = ReservedAccounts{ .map = .empty };
+    errdefer reserved_accounts.deinit(allocator);
+    try reserved_accounts.map.ensureTotalCapacity(allocator, ACCOUNTS.len);
+    for (ACCOUNTS) |account| reserved_accounts.map.putAssumeCapacity(account.pubkey, {});
     return reserved_accounts;
 }
 
@@ -55,7 +64,7 @@ pub fn update(
     }
 }
 
-const ACCOUNTS: []const struct { pubkey: Pubkey, feature: ?Feature } = &.{
+const ACCOUNTS = [_]struct { pubkey: Pubkey, feature: ?Feature }{
     // zig fmt: off
     .{ .pubkey = sig.runtime.program.address_lookup_table.ID,  .feature = .add_new_reserved_account_keys },
     .{ .pubkey = sig.runtime.program.bpf_loader.v1.ID,         .feature = null },

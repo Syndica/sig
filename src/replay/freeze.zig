@@ -5,6 +5,7 @@ const tracy = @import("tracy");
 
 const core = sig.core;
 const features = sig.core.features;
+const rewards = sig.replay.rewards;
 
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
@@ -49,6 +50,7 @@ pub const FreezeParams = struct {
         constants: *const SlotConstants,
         slot: Slot,
         blockhash: Hash,
+        ledger: *sig.ledger.Ledger,
     ) FreezeParams {
         return .{
             .logger = logger,
@@ -83,6 +85,9 @@ pub const FreezeParams = struct {
                 .collector_id = constants.collector_id,
                 .collected_transaction_fees = state.collected_transaction_fees.load(.monotonic),
                 .collected_priority_fees = state.collected_priority_fees.load(.monotonic),
+                .ledger = ledger,
+                .reward_status = &state.reward_status,
+                .block_height = constants.block_height,
             },
         };
     }
@@ -141,6 +146,11 @@ const FinalizeStateParams = struct {
     collector_id: Pubkey,
     collected_transaction_fees: u64,
     collected_priority_fees: u64,
+
+    ledger: *sig.ledger.Ledger,
+
+    reward_status: *const rewards.EpochRewardStatus,
+    block_height: u64,
 };
 
 /// Updates some accounts and other shared state to finish up the slot execution.
@@ -171,6 +181,9 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
         params.collector_id,
         params.collected_transaction_fees,
         params.collected_priority_fees,
+        params.ledger,
+        params.reward_status,
+        params.block_height,
     );
 
     // Run incinerator
@@ -192,6 +205,9 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
 }
 
 /// Burn and payout the appropriate portions of collected fees.
+/// Records all rewards (fee, vote, staking) and num_partitions to the blockstore.
+/// Matches Agave's fee distribution in `runtime/src/bank/fee_distribution.rs`
+/// and reward recording in `get_rewards_and_num_partitions`.
 fn distributeTransactionFees(
     allocator: Allocator,
     account_store: AccountStore,
@@ -202,6 +218,9 @@ fn distributeTransactionFees(
     collector_id: Pubkey,
     collected_transaction_fees: u64,
     collected_priority_fees: u64,
+    ledger: *sig.ledger.Ledger,
+    epoch_reward_status: *const rewards.EpochRewardStatus,
+    block_height: u64,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "distributeTransactionFees" });
     defer zone.deinit();
@@ -211,7 +230,7 @@ fn distributeTransactionFees(
     const payout = total_fees -| burn;
 
     if (payout > 0) blk: {
-        const post_balance = tryPayoutFees(
+        const payout_result = tryPayoutFees(
             allocator,
             account_store,
             account_reader,
@@ -229,14 +248,100 @@ fn distributeTransactionFees(
             },
             else => return err,
         };
-        // TODO: record rewards returned by tryPayoutFees
-        _ = post_balance;
+
+        const fee_reward: sig.ledger.meta.Reward = .{
+            .pubkey = collector_id,
+            .lamports = @intCast(payout_result.payout_amount),
+            .post_balance = payout_result.post_balance,
+            .reward_type = .fee,
+            .commission = null,
+        };
+
+        const keyed_rewards, const num_partitions = try getRewardsAndNumPartitions(
+            allocator,
+            epoch_reward_status,
+            block_height,
+            fee_reward,
+        );
+        defer allocator.free(keyed_rewards);
+
+        try ledger.db.put(sig.ledger.schema.schema.rewards, slot, .{
+            .rewards = keyed_rewards,
+            .num_partitions = num_partitions,
+        });
     }
 
     _ = capitalization.fetchSub(burn, .monotonic);
 }
 
+/// Collect all rewards for this slot and determine num_partitions.
+/// Matches Agave's `get_rewards_and_num_partitions`.
+///
+/// On an epoch boundary block: returns vote rewards + fee reward + num_partitions.
+/// On a distribution block: returns distributed stake rewards + fee reward.
+/// On other blocks: returns just the fee reward.
+fn getRewardsAndNumPartitions(
+    allocator: Allocator,
+    epoch_reward_status: *const rewards.EpochRewardStatus,
+    block_height: u64,
+    fee_reward: sig.ledger.meta.Reward,
+) !struct { []const sig.ledger.meta.Reward, ?u64 } {
+    switch (epoch_reward_status.*) {
+        .active => |active| {
+            // The epoch boundary block is the one right before distribution starts.
+            // calculation.zig sets: distribution_starting_blockheight = block_height + 1
+            const is_epoch_boundary = (block_height + 1 == active.distribution_start_block_height);
+
+            if (is_epoch_boundary) {
+                // Epoch boundary: record vote rewards + fee reward + num_partitions.
+                const vote_entries = active.all_vote_rewards.entries;
+                const num_partitions: u64 = if (active.partitioned_indices) |pi|
+                    pi.entries.len
+                else
+                    0;
+
+                const all_rewards = try allocator.alloc(
+                    sig.ledger.meta.Reward,
+                    1 + vote_entries.len,
+                );
+                all_rewards[0] = fee_reward;
+                for (vote_entries, 1..) |vr, i| {
+                    all_rewards[i] = .{
+                        .pubkey = vr.vote_pubkey,
+                        .lamports = @intCast(vr.rewards.lamports),
+                        .post_balance = vr.rewards.post_balance,
+                        .reward_type = .voting,
+                        .commission = vr.rewards.commission,
+                    };
+                }
+                return .{ all_rewards, num_partitions };
+            } else {
+                // Distribution block: record distributed stake rewards + fee reward.
+                const all_rewards = try allocator.alloc(
+                    sig.ledger.meta.Reward,
+                    1 + active.distributed_rewards.items.len,
+                );
+                all_rewards[0] = fee_reward;
+                @memcpy(all_rewards[1..], active.distributed_rewards.items);
+                return .{ all_rewards, null };
+            }
+        },
+        .inactive => {},
+    }
+
+    // Non-epoch-reward block: just the fee reward.
+    const all_rewards = try allocator.alloc(sig.ledger.meta.Reward, 1);
+    all_rewards[0] = fee_reward;
+    return .{ all_rewards, null };
+}
+
 /// Attempt to pay the payout to the collector.
+/// Returns the payout amount and post-balance on success.
+const PayoutResult = struct {
+    payout_amount: u64,
+    post_balance: u64,
+};
+
 fn tryPayoutFees(
     allocator: Allocator,
     account_store: AccountStore,
@@ -245,7 +350,7 @@ fn tryPayoutFees(
     slot: Slot,
     collector_id: Pubkey,
     payout: u64,
-) !u64 {
+) !PayoutResult {
     var fee_collector_account =
         if (try account_reader.get(allocator, collector_id)) |old_account| blk: {
             defer old_account.deinit(allocator);
@@ -272,7 +377,10 @@ fn tryPayoutFees(
     // duplicates fee_collector_account, so we need to free it.
     try account_store.put(slot, collector_id, fee_collector_account);
 
-    return fee_collector_account.lamports;
+    return PayoutResult{
+        .payout_amount = payout,
+        .post_balance = fee_collector_account.lamports,
+    };
 }
 
 pub const HashSlotParams = struct {
@@ -538,6 +646,12 @@ test "freezeSlot: trivial e2e merkle hash test" {
         tp.shutdown();
         tp.deinit();
     }
+    var ledger, var ledger_dir = try sig.ledger.Ledger.initForTest(allocator);
+    defer {
+        ledger.deinit();
+        ledger_dir.cleanup();
+    }
+
     try freezeSlot(allocator, .init(
         .FOR_TESTS,
         account_store,
@@ -546,6 +660,7 @@ test "freezeSlot: trivial e2e merkle hash test" {
         &constants,
         0,
         .ZEROES,
+        &ledger,
     ));
 
     try std.testing.expectEqual(
@@ -595,6 +710,12 @@ test "freezeSlot: trivial e2e lattice hash test" {
     var state: SlotState = .GENESIS;
     defer state.deinit(allocator);
 
+    var ledger, var ledger_dir = try sig.ledger.Ledger.initForTest(allocator);
+    defer {
+        ledger.deinit();
+        ledger_dir.cleanup();
+    }
+
     try freezeSlot(allocator, .init(
         .FOR_TESTS,
         account_store,
@@ -603,6 +724,7 @@ test "freezeSlot: trivial e2e lattice hash test" {
         &constants,
         0,
         .ZEROES,
+        &ledger,
     ));
 
     try std.testing.expectEqual(

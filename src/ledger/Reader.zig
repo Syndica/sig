@@ -1519,7 +1519,6 @@ pub const VersionedConfirmedBlock = struct {
 
     pub fn deinit(self: @This(), allocator: Allocator) void {
         for (self.transactions) |it| it.deinit(allocator);
-        for (self.rewards) |it| it.deinit(allocator);
         allocator.free(self.transactions);
         allocator.free(self.rewards);
     }
@@ -1548,7 +1547,7 @@ const ConfirmedTransactionWithStatusMeta = struct {
     block_time: ?UnixTimestamp,
 };
 
-const TransactionWithStatusMeta = union(enum) {
+pub const TransactionWithStatusMeta = union(enum) {
     // Very old transactions may be missing metadata
     missing_metadata: Transaction,
     // Versioned stored transaction always have metadata
@@ -2498,6 +2497,7 @@ test getTransactionStatus {
         .loaded_addresses = .{},
         .return_data = .{},
         .compute_units_consumed = 1000,
+        .cost_units = null,
     };
 
     // insert transaction status and root it
@@ -2689,6 +2689,7 @@ test getConfirmedSignaturesForAddress {
         .loaded_addresses = .{},
         .return_data = .{},
         .compute_units_consumed = 1000,
+        .cost_units = null,
     };
     try write_batch.put(schema.transaction_status, .{ sig1, slot }, status_meta);
 

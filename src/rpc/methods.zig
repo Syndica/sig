@@ -11,10 +11,13 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const rpc = @import("lib.zig");
+const base58 = @import("base58");
+const parse_instruction = @import("parse_instruction/lib.zig");
 
 const Allocator = std.mem.Allocator;
 const ParseOptions = std.json.ParseOptions;
 
+const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
@@ -302,18 +305,682 @@ pub const GetHealth = struct {
 };
 
 pub const GetBlock = struct {
-    config: ?Config = null,
+    /// The slot to get the block for (first positional argument)
+    slot: Slot,
+    encoding_or_config: ?EncodingOrConfig = null,
 
     pub const Config = struct {
+        /// Only `confirmed` and `finalized` are supported. `processed` is rejected.
         commitment: ?common.Commitment = null,
-        encoding: ?enum { json, jsonParsed, base58, base64 } = null,
-        transactionDetails: ?[]const u8 = null,
-        maxSupportedTransactionVersion: ?u64 = null,
+        encoding: ?common.TransactionEncoding = null,
+        transactionDetails: ?common.TransactionDetails = null,
+        maxSupportedTransactionVersion: ?u8 = null,
         rewards: ?bool = null,
+
+        pub fn getCommitment(self: Config) common.Commitment {
+            return self.commitment orelse Commitment.finalized;
+        }
+
+        pub fn getEncoding(self: Config) common.TransactionEncoding {
+            return self.encoding orelse common.TransactionEncoding.json;
+        }
+
+        pub fn getTransactionDetails(self: Config) common.TransactionDetails {
+            return self.transactionDetails orelse common.TransactionDetails.full;
+        }
+
+        pub fn getMaxSupportedTransactionVersion(self: Config) u8 {
+            return self.maxSupportedTransactionVersion orelse 0;
+        }
+
+        pub fn getRewards(self: Config) bool {
+            return self.rewards orelse true;
+        }
     };
 
-    // TODO: response
-    pub const Response = noreturn;
+    /// RPC spec allows either a config or just an encoding
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/rpc-client-types/src/config.rs#L233
+    pub const EncodingOrConfig = union(enum) {
+        encoding: common.TransactionEncoding,
+        config: Config,
+
+        pub fn jsonParseFromValue(
+            allocator: std.mem.Allocator,
+            source: std.json.Value,
+            options: std.json.ParseOptions,
+        ) std.json.ParseFromValueError!EncodingOrConfig {
+            return switch (source) {
+                .string => |s| .{
+                    .encoding = std.meta.stringToEnum(common.TransactionEncoding, s) orelse
+                        return error.InvalidEnumTag,
+                },
+                .object => .{ .config = try std.json.innerParseFromValue(
+                    Config,
+                    allocator,
+                    source,
+                    options,
+                ) },
+                else => error.UnexpectedToken,
+            };
+        }
+
+        pub fn jsonStringify(self: EncodingOrConfig, jw: anytype) !void {
+            switch (self) {
+                .encoding => |enc| try jw.write(@tagName(enc)),
+                .config => |c| try jw.write(c),
+            }
+        }
+    };
+
+    pub fn resolveConfig(self: GetBlock) Config {
+        const eoc = self.encoding_or_config orelse return Config{};
+        return switch (eoc) {
+            .encoding => |enc| Config{
+                .encoding = enc,
+            },
+            .config => |c| c,
+        };
+    }
+
+    /// Response for getBlock RPC method (UiConfirmedBlock equivalent)
+    pub const Response = struct {
+        /// The blockhash of the previous block
+        previousBlockhash: Hash,
+        /// The blockhash of this block
+        blockhash: Hash,
+        /// The slot of the parent block
+        parentSlot: u64,
+        /// Transactions in the block (present when transactionDetails is full or accounts)
+        transactions: ?[]const EncodedTransactionWithStatusMeta = null,
+        /// Transaction signatures (present when transactionDetails is signatures)
+        signatures: ?[]const Signature = null,
+        /// Block rewards (present when rewards=true, which is the default)
+        rewards: ?[]const UiReward = null,
+        /// Number of reward partitions (if applicable)
+        numRewardPartitions: ?u64 = null,
+        /// Estimated production time as Unix timestamp (seconds since epoch)
+        blockTime: ?i64 = null,
+        /// Block height
+        blockHeight: ?u64 = null,
+
+        pub fn jsonStringify(self: Response, jw: anytype) !void {
+            try jw.beginObject();
+            if (self.blockHeight) |h| {
+                try jw.objectField("blockHeight");
+                try jw.write(h);
+            }
+            if (self.blockTime) |t| {
+                try jw.objectField("blockTime");
+                try jw.write(t);
+            }
+            try jw.objectField("blockhash");
+            try jw.write(self.blockhash);
+            try jw.objectField("parentSlot");
+            try jw.write(self.parentSlot);
+            try jw.objectField("previousBlockhash");
+            try jw.write(self.previousBlockhash);
+            if (self.rewards) |r| {
+                try jw.objectField("rewards");
+                try jw.write(r);
+            }
+            if (self.transactions) |txs| {
+                try jw.objectField("transactions");
+                try jw.write(txs);
+            }
+            if (self.signatures) |sigs| {
+                try jw.objectField("signatures");
+                try jw.write(sigs);
+            }
+            try jw.endObject();
+        }
+
+        /// Write a `[]const u8` as a JSON array of integers instead of a string.
+        /// Zig's JSON writer treats `[]const u8` as a string, but Agave's serde
+        /// serializes `Vec<u8>` as an array of integers (e.g. `[0, 1, 4]`).
+        fn writeU8SliceAsIntArray(slice: []const u8, jw: anytype) !void {
+            try jw.beginArray();
+            for (slice) |byte| {
+                try jw.write(byte);
+            }
+            try jw.endArray();
+        }
+
+        /// Encoded transaction with status metadata for RPC response.
+        pub const EncodedTransactionWithStatusMeta = struct {
+            /// The transaction - either base64 encoded binary or JSON structure
+            transaction: EncodedTransaction,
+            /// Transaction status metadata
+            meta: ?UiTransactionStatusMeta = null,
+            /// Transaction version ("legacy" or version number)
+            version: ?TransactionVersion = null,
+
+            pub const TransactionVersion = union(enum) {
+                legacy,
+                number: u8,
+
+                pub fn jsonStringify(self: TransactionVersion, jw: anytype) !void {
+                    switch (self) {
+                        .legacy => try jw.write("legacy"),
+                        .number => |n| try jw.write(n),
+                    }
+                }
+            };
+
+            pub fn jsonStringify(self: EncodedTransactionWithStatusMeta, jw: anytype) !void {
+                try jw.beginObject();
+                if (self.meta) |m| {
+                    try jw.objectField("meta");
+                    try jw.write(m);
+                }
+                try jw.objectField("transaction");
+                try jw.write(self.transaction);
+                if (self.version) |v| {
+                    try jw.objectField("version");
+                    try v.jsonStringify(jw);
+                }
+                try jw.endObject();
+            }
+        };
+
+        /// Encoded transaction - can be either base64/base58 binary or JSON structure.
+        /// For base64/base58: serializes as [data, encoding] array
+        /// For JSON: serializes as object with signatures and message
+        pub const EncodedTransaction = union(enum) {
+            legacy_binary: []const u8,
+            /// Binary encoding: [base64_data, "base64"] or [base58_data, "base58"]
+            binary: struct {
+                data: []const u8,
+                encoding: enum { base58, base64 },
+
+                pub fn jsonStringify(self: @This(), jw: anytype) !void {
+                    try jw.beginArray();
+                    try jw.write(self.data);
+                    try jw.write(@tagName(self.encoding));
+                    try jw.endArray();
+                }
+            },
+            /// JSON encoding: object with signatures and message
+            json: struct {
+                signatures: []const Signature,
+                message: UiMessage,
+            },
+            accounts: struct {
+                signatures: []const Signature,
+                accountKeys: []const ParsedAccount,
+            },
+
+            pub fn jsonStringify(self: EncodedTransaction, jw: anytype) !void {
+                switch (self) {
+                    .legacy_binary => |b| try jw.write(b),
+                    .binary => |b| try b.jsonStringify(jw),
+                    .json => |j| try jw.write(j),
+                    .accounts => |a| try jw.write(a),
+                }
+            }
+        };
+
+        pub const UiMessage = union(enum) {
+            parsed: UiParsedMessage,
+            raw: UiRawMessage,
+
+            pub fn jsonStringify(self: UiMessage, jw: anytype) !void {
+                switch (self) {
+                    .parsed => |p| try jw.write(p),
+                    .raw => |r| try jw.write(r),
+                }
+            }
+        };
+
+        pub const UiParsedMessage = struct {
+            account_keys: []const ParsedAccount,
+            recent_blockhash: Hash,
+            instructions: []const parse_instruction.UiInstruction,
+            address_table_lookups: ?[]const AddressTableLookup = null,
+
+            pub fn jsonStringify(self: UiParsedMessage, jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("accountKeys");
+                try jw.write(self.account_keys);
+                try jw.objectField("recentBlockhash");
+                try jw.write(self.recent_blockhash);
+                try jw.objectField("instructions");
+                try jw.write(self.instructions);
+                if (self.address_table_lookups) |atl| {
+                    try jw.objectField("addressTableLookups");
+                    try jw.write(atl);
+                }
+                try jw.endObject();
+            }
+        };
+
+        pub const UiRawMessage = struct {
+            header: struct {
+                numRequiredSignatures: u8,
+                numReadonlySignedAccounts: u8,
+                numReadonlyUnsignedAccounts: u8,
+            },
+            account_keys: []const Pubkey,
+            recent_blockhash: Hash,
+            instructions: []const parse_instruction.UiCompiledInstruction,
+            address_table_lookups: ?[]const AddressTableLookup = null,
+
+            pub fn jsonStringify(self: UiRawMessage, jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("accountKeys");
+                try jw.write(self.account_keys);
+                try jw.objectField("header");
+                try jw.write(self.header);
+                try jw.objectField("recentBlockhash");
+                try jw.write(self.recent_blockhash);
+                try jw.objectField("instructions");
+                try jw.write(self.instructions);
+                if (self.address_table_lookups) |atl| {
+                    try jw.objectField("addressTableLookups");
+                    try jw.write(atl);
+                }
+                try jw.endObject();
+            }
+        };
+
+        /// JSON-encoded message
+        pub const EncodedMessage = struct {
+            accountKeys: []const Pubkey,
+            header: MessageHeader,
+            recentBlockhash: Hash,
+            instructions: []const EncodedInstruction,
+            addressTableLookups: ?[]const AddressTableLookup = null,
+
+            pub fn jsonStringify(self: EncodedMessage, jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("accountKeys");
+                try jw.write(self.accountKeys);
+                try jw.objectField("header");
+                try jw.write(self.header);
+                try jw.objectField("recentBlockhash");
+                try jw.write(self.recentBlockhash);
+                try jw.objectField("instructions");
+                try jw.write(self.instructions);
+                if (self.addressTableLookups) |atl| {
+                    try jw.objectField("addressTableLookups");
+                    try jw.write(atl);
+                }
+                try jw.endObject();
+            }
+        };
+
+        pub const MessageHeader = struct {
+            numRequiredSignatures: u8,
+            numReadonlySignedAccounts: u8,
+            numReadonlyUnsignedAccounts: u8,
+        };
+
+        pub const EncodedInstruction = struct {
+            programIdIndex: u8,
+            accounts: []const u8,
+            data: []const u8,
+            stackHeight: ?u32 = null,
+
+            pub fn jsonStringify(self: EncodedInstruction, jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("programIdIndex");
+                try jw.write(self.programIdIndex);
+                try jw.objectField("accounts");
+                try writeU8SliceAsIntArray(self.accounts, jw);
+                try jw.objectField("data");
+                try jw.write(self.data);
+                if (self.stackHeight) |sh| {
+                    try jw.objectField("stackHeight");
+                    try jw.write(sh);
+                }
+                try jw.endObject();
+            }
+        };
+
+        pub const AddressTableLookup = struct {
+            accountKey: Pubkey,
+            writableIndexes: []const u8,
+            readonlyIndexes: []const u8,
+
+            pub fn jsonStringify(self: AddressTableLookup, jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("accountKey");
+                try jw.write(self.accountKey);
+                try jw.objectField("readonlyIndexes");
+                try writeU8SliceAsIntArray(self.readonlyIndexes, jw);
+                try jw.objectField("writableIndexes");
+                try writeU8SliceAsIntArray(self.writableIndexes, jw);
+                try jw.endObject();
+            }
+        };
+
+        /// Account key with metadata (for jsonParsed and accounts modes)
+        pub const ParsedAccount = struct {
+            pubkey: Pubkey,
+            writable: bool,
+            signer: bool,
+            source: ParsedAccountSource,
+
+            pub fn jsonStringify(self: ParsedAccount, jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("pubkey");
+                try jw.write(self.pubkey);
+                try jw.objectField("signer");
+                try jw.write(self.signer);
+                try jw.objectField("source");
+                try jw.write(@tagName(self.source));
+                try jw.objectField("writable");
+                try jw.write(self.writable);
+                try jw.endObject();
+            }
+        };
+
+        pub const ParsedAccountSource = enum {
+            transaction,
+            lookupTable,
+        };
+
+        /// UI representation of transaction status metadata
+        pub const UiTransactionStatusMeta = struct {
+            err: ?sig.ledger.transaction_status.TransactionError = null,
+            status: UiTransactionResultStatus,
+            fee: u64,
+            preBalances: []const u64,
+            postBalances: []const u64,
+            innerInstructions: JsonSkippable([]const parse_instruction.UiInnerInstructions) = .{
+                .value = &.{},
+            },
+            logMessages: JsonSkippable([]const []const u8) = .{
+                .value = &.{},
+            },
+            preTokenBalances: JsonSkippable([]const UiTransactionTokenBalance) = .{
+                .value = &.{},
+            },
+            postTokenBalances: JsonSkippable([]const UiTransactionTokenBalance) = .{
+                .value = &.{},
+            },
+            rewards: JsonSkippable([]const UiReward) = .{ .value = &.{} },
+            loadedAddresses: JsonSkippable(UiLoadedAddresses) = .skip,
+            returnData: JsonSkippable(UiTransactionReturnData) = .skip,
+            computeUnitsConsumed: JsonSkippable(u64) = .skip,
+            costUnits: JsonSkippable(u64) = .skip,
+
+            pub fn jsonStringify(self: UiTransactionStatusMeta, jw: anytype) !void {
+                try jw.beginObject();
+                if (self.computeUnitsConsumed != .skip) {
+                    try jw.objectField("computeUnitsConsumed");
+                    try jw.write(self.computeUnitsConsumed);
+                }
+                if (self.costUnits != .skip) {
+                    try jw.objectField("costUnits");
+                    try jw.write(self.costUnits);
+                }
+                try jw.objectField("err");
+                try jw.write(self.err);
+                try jw.objectField("fee");
+                try jw.write(self.fee);
+                if (self.innerInstructions != .skip) {
+                    try jw.objectField("innerInstructions");
+                    try jw.write(self.innerInstructions);
+                }
+                if (self.loadedAddresses != .skip) {
+                    try jw.objectField("loadedAddresses");
+                    try jw.write(self.loadedAddresses);
+                }
+                if (self.logMessages != .skip) {
+                    try jw.objectField("logMessages");
+                    try jw.write(self.logMessages);
+                }
+                try jw.objectField("postBalances");
+                try jw.write(self.postBalances);
+                try jw.objectField("postTokenBalances");
+                try jw.write(self.postTokenBalances);
+                try jw.objectField("preBalances");
+                try jw.write(self.preBalances);
+                try jw.objectField("preTokenBalances");
+                try jw.write(self.preTokenBalances);
+                if (self.returnData != .skip) {
+                    try jw.objectField("returnData");
+                    try jw.write(self.returnData);
+                }
+                if (self.rewards != .skip) {
+                    try jw.objectField("rewards");
+                    try jw.write(self.rewards);
+                }
+                try jw.objectField("status");
+                try jw.write(self.status);
+                try jw.endObject();
+            }
+
+            pub fn from(
+                allocator: Allocator,
+                meta: sig.ledger.meta.TransactionStatusMeta,
+                show_rewards: bool,
+            ) !UiTransactionStatusMeta {
+                // Build status field
+                const status: UiTransactionResultStatus = if (meta.status) |err|
+                    .{ .Ok = null, .Err = err }
+                else
+                    .{ .Ok = .{}, .Err = null };
+
+                // Convert inner instructions
+                const inner_instructions = if (meta.inner_instructions) |iis|
+                    try BlockHookContext.convertInnerInstructions(allocator, iis)
+                else
+                    &.{};
+
+                // Convert token balances
+                const pre_token_balances = if (meta.pre_token_balances) |balances|
+                    try BlockHookContext.convertTokenBalances(allocator, balances)
+                else
+                    &.{};
+
+                const post_token_balances = if (meta.post_token_balances) |balances|
+                    try BlockHookContext.convertTokenBalances(allocator, balances)
+                else
+                    &.{};
+
+                // Convert loaded addresses
+                const loaded_addresses = try BlockHookContext.convertLoadedAddresses(
+                    allocator,
+                    meta.loaded_addresses,
+                );
+
+                // Convert return data
+                const return_data = if (meta.return_data) |rd|
+                    try BlockHookContext.convertReturnData(allocator, rd)
+                else
+                    null;
+
+                const rewards: ?[]UiReward = if (show_rewards) rewards: {
+                    if (meta.rewards) |rewards| {
+                        const converted = try allocator.alloc(UiReward, rewards.len);
+                        for (rewards, 0..) |reward, i| {
+                            converted[i] = try UiReward.fromLedgerReward(reward);
+                        }
+                        break :rewards converted;
+                    } else break :rewards &.{};
+                } else null;
+
+                return .{
+                    .err = meta.status,
+                    .status = status,
+                    .fee = meta.fee,
+                    .preBalances = try allocator.dupe(u64, meta.pre_balances),
+                    .postBalances = try allocator.dupe(u64, meta.post_balances),
+                    .innerInstructions = .{ .value = inner_instructions },
+                    .logMessages = .{ .value = meta.log_messages orelse &.{} },
+                    .preTokenBalances = .{ .value = pre_token_balances },
+                    .postTokenBalances = .{ .value = post_token_balances },
+                    .rewards = if (rewards) |r| .{ .value = r } else .none,
+                    .loadedAddresses = .{ .value = loaded_addresses },
+                    .returnData = if (return_data) |rd| .{ .value = rd } else .skip,
+                    .computeUnitsConsumed = if (meta.compute_units_consumed) |cuc| .{
+                        .value = cuc,
+                    } else .skip,
+                    .costUnits = if (meta.cost_units) |cu| .{ .value = cu } else .skip,
+                };
+            }
+        };
+
+        /// Transaction result status for RPC compatibility.
+        /// Serializes as `{"Ok": null}` on success or `{"Err": <error>}` on failure.
+        pub const UiTransactionResultStatus = struct {
+            Ok: ?struct {} = null,
+            Err: ?sig.ledger.transaction_status.TransactionError = null,
+
+            pub fn jsonStringify(self: UiTransactionResultStatus, jw: anytype) !void {
+                try jw.beginObject();
+                if (self.Err) |err| {
+                    try jw.objectField("Err");
+                    try jw.write(err);
+                } else {
+                    try jw.objectField("Ok");
+                    try jw.write(null);
+                }
+                try jw.endObject();
+            }
+        };
+
+        /// Token balance for RPC response (placeholder)
+        pub const UiTransactionTokenBalance = struct {
+            accountIndex: u8,
+            mint: Pubkey,
+            owner: ?Pubkey = null,
+            programId: ?Pubkey = null,
+            uiTokenAmount: UiTokenAmount,
+
+            pub fn jsonStringify(self: UiTransactionTokenBalance, jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("accountIndex");
+                try jw.write(self.accountIndex);
+                try jw.objectField("mint");
+                try jw.write(self.mint);
+                if (self.owner) |o| {
+                    try jw.objectField("owner");
+                    try jw.write(o);
+                }
+                if (self.programId) |p| {
+                    try jw.objectField("programId");
+                    try jw.write(p);
+                }
+                try jw.objectField("uiTokenAmount");
+                try jw.write(self.uiTokenAmount);
+                try jw.endObject();
+            }
+        };
+
+        pub const UiTokenAmount = struct {
+            amount: []const u8,
+            decimals: u8,
+            uiAmount: ?f64 = null,
+            uiAmountString: []const u8,
+
+            pub fn jsonStringify(self: UiTokenAmount, jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("amount");
+                try jw.write(self.amount);
+                try jw.objectField("decimals");
+                try jw.write(self.decimals);
+                if (self.uiAmount) |ua| {
+                    try jw.objectField("uiAmount");
+                    try writeExactFloat(jw, ua);
+                }
+                try jw.objectField("uiAmountString");
+                try jw.write(self.uiAmountString);
+                try jw.endObject();
+            }
+
+            /// Write an f64 as a JSON number matching Rust's serde_json output.
+            /// Zig's std.json serializes 3.0 as "3e0", but serde serializes it as "3.0".
+            fn writeExactFloat(jw: anytype, value: f64) !void {
+                var buf: [64]u8 = undefined;
+                const result = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+                if (std.mem.indexOf(u8, result, ".") == null) {
+                    try jw.print("{s}.0", .{result});
+                } else {
+                    try jw.print("{s}", .{result});
+                }
+            }
+        };
+
+        pub const UiLoadedAddresses = struct {
+            readonly: []const Pubkey,
+            writable: []const Pubkey,
+        };
+
+        pub const UiTransactionReturnData = struct {
+            programId: Pubkey,
+            data: struct { []const u8, enum { base64 } },
+
+            pub fn jsonStringify(self: UiTransactionReturnData, jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("programId");
+                try jw.write(self.programId);
+                try jw.objectField("data");
+                try jw.beginArray();
+                try jw.write(self.data.@"0");
+                try jw.write(@tagName(self.data.@"1"));
+                try jw.endArray();
+                try jw.endObject();
+            }
+        };
+
+        pub const UiReward = struct {
+            /// The public key of the account that received the reward (base-58 encoded)
+            pubkey: Pubkey,
+            /// Number of lamports credited or debited
+            lamports: i64,
+            /// Account balance in lamports after the reward was applied
+            postBalance: u64,
+            /// Type of reward
+            rewardType: ?RewardType = null,
+            /// Vote account commission when reward was credited (for voting/staking rewards)
+            commission: ?u8 = null,
+
+            pub const RewardType = enum {
+                Fee,
+                Rent,
+                Staking,
+                Voting,
+
+                pub fn jsonStringify(self: RewardType, jw: anytype) !void {
+                    try jw.write(@tagName(self));
+                }
+            };
+
+            pub fn jsonStringify(self: UiReward, jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("pubkey");
+                try jw.write(self.pubkey);
+                try jw.objectField("lamports");
+                try jw.write(self.lamports);
+                try jw.objectField("postBalance");
+                try jw.write(self.postBalance);
+                try jw.objectField("rewardType");
+                try jw.write(self.rewardType);
+                try jw.objectField("commission");
+                try jw.write(self.commission);
+                try jw.endObject();
+            }
+
+            pub fn fromLedgerReward(
+                reward: sig.ledger.meta.Reward,
+            ) !UiReward {
+                return .{
+                    .pubkey = reward.pubkey,
+                    .lamports = reward.lamports,
+                    .postBalance = reward.post_balance,
+                    .rewardType = if (reward.reward_type) |rt| switch (rt) {
+                        .fee => RewardType.Fee,
+                        .rent => RewardType.Rent,
+                        .staking => RewardType.Staking,
+                        .voting => RewardType.Voting,
+                    } else null,
+                    .commission = reward.commission,
+                };
+            }
+        };
+    };
 };
 
 pub const GetBlockCommitment = struct {
@@ -714,6 +1381,21 @@ pub const common = struct {
         /// Shred version
         shredVersion: ?u16 = null,
     };
+
+    pub const TransactionEncoding = enum {
+        binary,
+        base58,
+        base64,
+        json,
+        jsonParsed,
+    };
+
+    pub const TransactionDetails = enum {
+        full,
+        accounts,
+        signatures,
+        none,
+    };
 };
 
 pub const RpcHookContext = struct {
@@ -895,10 +1577,1198 @@ pub const StaticHookContext = struct {
     genesis_hash: sig.core.Hash,
 
     pub fn getGenesisHash(
-        self: *const @This(),
+        self: *const StaticHookContext,
         _: std.mem.Allocator,
         _: GetGenesisHash,
     ) !GetGenesisHash.Response {
         return .{ .hash = self.genesis_hash };
     }
 };
+
+/// RPC hook context for block-related methods.
+/// Requires access to the Ledger and SlotTracker for commitment checks.
+pub const BlockHookContext = struct {
+    ledger: *sig.ledger.Ledger,
+    slot_tracker: *const sig.replay.trackers.SlotTracker,
+
+    const SlotTrackerRef = sig.replay.trackers.SlotTracker.Reference;
+    const ReservedAccounts = sig.core.ReservedAccounts;
+
+    pub fn getBlock(
+        self: BlockHookContext,
+        allocator: std.mem.Allocator,
+        params: GetBlock,
+    ) !GetBlock.Response {
+        const config = params.resolveConfig();
+        const commitment = config.getCommitment();
+        const transaction_details = config.getTransactionDetails();
+        const show_rewards = config.getRewards();
+        const encoding = config.getEncoding();
+        const max_supported_version = config.getMaxSupportedTransactionVersion();
+
+        // Reject processed commitment (Agave behavior: only confirmed and finalized supported)
+        if (commitment == .processed) {
+            return error.ProcessedNotSupported;
+        }
+
+        // Get block from ledger.
+        // Finalized path uses getRootedBlock (adds checkLowestCleanupSlot + isRoot checks,
+        // matching Agave's get_rooted_block).
+        // Confirmed path uses getCompleteBlock (no cleanup check, slot may not be rooted yet).
+        const reader = self.ledger.reader();
+        const latest_confirmed_slot = self.slot_tracker.getSlotForCommitment(.confirmed);
+        const block = if (params.slot <= latest_confirmed_slot) reader.getRootedBlock(
+            allocator,
+            params.slot,
+            true,
+        ) catch |err| switch (err) {
+            // NOTE: we try getCompletedBlock incase SlotTracker has seen the slot
+            // but ledger has not yet rooted it
+            error.SlotNotRooted => try reader.getCompleteBlock(
+                allocator,
+                params.slot,
+                true,
+            ),
+            else => return err,
+        } else if (commitment == .confirmed) try reader.getCompleteBlock(
+            allocator,
+            params.slot,
+            true,
+        ) else return error.BlockNotAvailable;
+
+        return try encodeBlockWithOptions(allocator, block, encoding, .{
+            .tx_details = transaction_details,
+            .show_rewards = show_rewards,
+            .max_supported_version = max_supported_version,
+        });
+    }
+
+    /// Encode transactions and/or signatures based on the requested options.
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L332
+    fn encodeBlockWithOptions(
+        allocator: Allocator,
+        block: sig.ledger.Reader.VersionedConfirmedBlock,
+        encoding: common.TransactionEncoding,
+        options: struct {
+            tx_details: common.TransactionDetails,
+            show_rewards: bool,
+            max_supported_version: ?u8,
+        },
+    ) !GetBlock.Response {
+        const transactions, const signatures = blk: switch (options.tx_details) {
+            .none => break :blk .{ null, null },
+            .full => {
+                const transactions = try allocator.alloc(
+                    GetBlock.Response.EncodedTransactionWithStatusMeta,
+                    block.transactions.len,
+                );
+                errdefer allocator.free(transactions);
+
+                for (block.transactions, 0..) |tx_with_meta, i| {
+                    transactions[i] = try encodeTransactionWithStatusMeta(
+                        allocator,
+                        .{ .complete = tx_with_meta },
+                        encoding,
+                        options.max_supported_version,
+                        options.show_rewards,
+                    );
+                }
+
+                break :blk .{ transactions, null };
+            },
+            .signatures => {
+                const sigs = try allocator.alloc(Signature, block.transactions.len);
+                errdefer allocator.free(sigs);
+
+                for (block.transactions, 0..) |tx_with_meta, i| {
+                    if (tx_with_meta.transaction.signatures.len == 0) {
+                        return error.InvalidTransaction;
+                    }
+                    sigs[i] = tx_with_meta.transaction.signatures[0];
+                }
+
+                break :blk .{ null, sigs };
+            },
+            .accounts => {
+                const transactions = try allocator.alloc(
+                    GetBlock.Response.EncodedTransactionWithStatusMeta,
+                    block.transactions.len,
+                );
+                errdefer allocator.free(transactions);
+
+                for (block.transactions, 0..) |tx_with_meta, i| {
+                    transactions[i] = try buildJsonAccounts(
+                        allocator,
+                        .{ .complete = tx_with_meta },
+                        options.max_supported_version,
+                        options.show_rewards,
+                    );
+                }
+
+                break :blk .{ transactions, null };
+            },
+        };
+
+        return .{
+            .blockhash = block.blockhash,
+            .previousBlockhash = block.previous_blockhash,
+            .parentSlot = block.parent_slot,
+            .transactions = transactions,
+            .signatures = signatures,
+            .rewards = if (options.show_rewards) try convertRewards(
+                allocator,
+                block.rewards,
+            ) else null,
+            .numRewardPartitions = block.num_partitions,
+            .blockTime = block.block_time,
+            .blockHeight = block.block_height,
+        };
+    }
+
+    /// Validates that the transaction version is supported by the provided max version
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L496
+    fn validateVersion(
+        version: sig.core.transaction.Version,
+        max_supported_version: ?u8,
+    ) !?GetBlock.Response.EncodedTransactionWithStatusMeta.TransactionVersion {
+        if (max_supported_version) |max_version| switch (version) {
+            .legacy => return .legacy,
+            // TODO: update this to use the version number
+            // that would be stored inside the version enum
+            .v0 => if (max_version >= 0) {
+                return .{ .number = 0 };
+            } else return error.UnsupportedTransactionVersion,
+        } else switch (version) {
+            .legacy => return null,
+            .v0 => return error.UnsupportedTransactionVersion,
+        }
+    }
+
+    /// Encode a transaction with its metadata for the RPC response.
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L452
+    fn encodeTransactionWithStatusMeta(
+        allocator: std.mem.Allocator,
+        tx_with_meta: sig.ledger.Reader.TransactionWithStatusMeta,
+        encoding: common.TransactionEncoding,
+        max_supported_version: ?u8,
+        show_rewards: bool,
+    ) !GetBlock.Response.EncodedTransactionWithStatusMeta {
+        return switch (tx_with_meta) {
+            .missing_metadata => |tx| .{
+                .version = null,
+                .transaction = try encodeTransactionWithoutMeta(
+                    allocator,
+                    tx,
+                    encoding,
+                ),
+                .meta = null,
+            },
+            .complete => |vtx| try encodeVersionedTransactionWithStatusMeta(
+                allocator,
+                vtx,
+                encoding,
+                max_supported_version,
+                show_rewards,
+            ),
+        };
+    }
+
+    /// Encode a transaction missing metadata
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L708
+    fn encodeTransactionWithoutMeta(
+        allocator: std.mem.Allocator,
+        transaction: sig.core.Transaction,
+        encoding: common.TransactionEncoding,
+    ) !GetBlock.Response.EncodedTransaction {
+        switch (encoding) {
+            .binary => {
+                const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
+                defer allocator.free(bincode_bytes);
+
+                var base58_str = try allocator.alloc(u8, base58.encodedMaxSize(bincode_bytes.len));
+                const encoded_len = base58.Table.BITCOIN.encode(
+                    base58_str,
+                    bincode_bytes,
+                );
+
+                return .{ .legacy_binary = base58_str[0..encoded_len] };
+            },
+            .base58 => {
+                const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
+                defer allocator.free(bincode_bytes);
+
+                var base58_str = try allocator.alloc(u8, base58.encodedMaxSize(bincode_bytes.len));
+                const encoded_len = base58.Table.BITCOIN.encode(
+                    base58_str,
+                    bincode_bytes,
+                );
+
+                return .{ .binary = .{
+                    .data = base58_str[0..encoded_len],
+                    .encoding = .base58,
+                } };
+            },
+            .base64 => {
+                const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
+                defer allocator.free(bincode_bytes);
+
+                const encoded_len = std.base64.standard.Encoder.calcSize(bincode_bytes.len);
+                const base64_buf = try allocator.alloc(u8, encoded_len);
+                _ = std.base64.standard.Encoder.encode(base64_buf, bincode_bytes);
+
+                return .{ .binary = .{
+                    .data = base64_buf,
+                    .encoding = .base64,
+                } };
+            },
+            .json, .jsonParsed => |enc| return .{ .json = .{
+                .signatures = try allocator.dupe(Signature, transaction.signatures),
+                .message = try encodeLegacyTransactionMessage(
+                    allocator,
+                    transaction.msg,
+                    enc,
+                ),
+            } },
+        }
+    }
+
+    /// Encode a full versioned transaction
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L520
+    fn encodeVersionedTransactionWithStatusMeta(
+        allocator: std.mem.Allocator,
+        tx_with_meta: sig.ledger.Reader.VersionedTransactionWithStatusMeta,
+        encoding: common.TransactionEncoding,
+        max_supported_version: ?u8,
+        show_rewards: bool,
+    ) !GetBlock.Response.EncodedTransactionWithStatusMeta {
+        const version = try validateVersion(
+            tx_with_meta.transaction.version,
+            max_supported_version,
+        );
+        return .{
+            .transaction = try encodeVersionedTransactionWithMeta(
+                allocator,
+                tx_with_meta.transaction,
+                tx_with_meta.meta,
+                encoding,
+            ),
+            .meta = switch (encoding) {
+                .jsonParsed => try parseUiTransactionStatusMeta(
+                    allocator,
+                    tx_with_meta.meta,
+                    tx_with_meta.transaction.msg.account_keys,
+                    show_rewards,
+                ),
+                else => try GetBlock.Response.UiTransactionStatusMeta.from(
+                    allocator,
+                    tx_with_meta.meta,
+                    show_rewards,
+                ),
+            },
+            .version = version,
+        };
+    }
+
+    /// Encode a transaction with its metadata
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L632
+    fn encodeVersionedTransactionWithMeta(
+        allocator: std.mem.Allocator,
+        transaction: sig.core.Transaction,
+        meta: sig.ledger.transaction_status.TransactionStatusMeta,
+        encoding: common.TransactionEncoding,
+    ) !GetBlock.Response.EncodedTransaction {
+        switch (encoding) {
+            .binary => {
+                const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
+                defer allocator.free(bincode_bytes);
+
+                var base58_str = try allocator.alloc(u8, base58.encodedMaxSize(bincode_bytes.len));
+                const encoded_len = base58.Table.BITCOIN.encode(
+                    base58_str,
+                    bincode_bytes,
+                );
+
+                return .{ .legacy_binary = base58_str[0..encoded_len] };
+            },
+            .base58 => {
+                const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
+                defer allocator.free(bincode_bytes);
+
+                var base58_str = try allocator.alloc(u8, base58.encodedMaxSize(bincode_bytes.len));
+                const encoded_len = base58.Table.BITCOIN.encode(
+                    base58_str,
+                    bincode_bytes,
+                );
+
+                return .{ .binary = .{
+                    .data = base58_str[0..encoded_len],
+                    .encoding = .base58,
+                } };
+            },
+            .base64 => {
+                const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
+                defer allocator.free(bincode_bytes);
+
+                const encoded_len = std.base64.standard.Encoder.calcSize(bincode_bytes.len);
+                const base64_buf = try allocator.alloc(u8, encoded_len);
+                _ = std.base64.standard.Encoder.encode(base64_buf, bincode_bytes);
+
+                return .{ .binary = .{
+                    .data = base64_buf,
+                    .encoding = .base64,
+                } };
+            },
+            .json => return try jsonEncodeVersionedTransaction(
+                allocator,
+                transaction,
+            ),
+            .jsonParsed => return .{ .json = .{
+                .signatures = try allocator.dupe(Signature, transaction.signatures),
+                .message = switch (transaction.version) {
+                    .legacy => try encodeLegacyTransactionMessage(
+                        allocator,
+                        transaction.msg,
+                        .jsonParsed,
+                    ),
+                    .v0 => try jsonEncodeV0TransactionMessageWithMeta(
+                        allocator,
+                        transaction.msg,
+                        meta,
+                        .jsonParsed,
+                    ),
+                },
+            } },
+        }
+    }
+
+    /// Encode a transaction to JSON format with its metadata
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L663
+    fn jsonEncodeVersionedTransaction(
+        allocator: std.mem.Allocator,
+        transaction: sig.core.Transaction,
+    ) !GetBlock.Response.EncodedTransaction {
+        return .{ .json = .{
+            .signatures = try allocator.dupe(Signature, transaction.signatures),
+            .message = switch (transaction.version) {
+                .legacy => try encodeLegacyTransactionMessage(allocator, transaction.msg, .json),
+                .v0 => try jsonEncodeV0TransactionMessage(allocator, transaction.msg),
+            },
+        } };
+    }
+
+    /// Encode a legacy transaction message
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L743
+    fn encodeLegacyTransactionMessage(
+        allocator: std.mem.Allocator,
+        message: sig.core.transaction.Message,
+        encoding: common.TransactionEncoding,
+    ) !GetBlock.Response.UiMessage {
+        switch (encoding) {
+            .jsonParsed => {
+                var reserved_account_keys = try ReservedAccounts.initAllActivated(allocator);
+                errdefer reserved_account_keys.deinit(allocator);
+                const account_keys = parse_instruction.AccountKeys.init(
+                    message.account_keys,
+                    null,
+                );
+
+                var instructions = try allocator.alloc(
+                    parse_instruction.UiInstruction,
+                    message.instructions.len,
+                );
+                for (message.instructions, 0..) |ix, i| {
+                    instructions[i] = try parse_instruction.parseUiInstruction(
+                        allocator,
+                        .{
+                            .program_id_index = ix.program_index,
+                            .accounts = ix.account_indexes,
+                            .data = ix.data,
+                        },
+                        &account_keys,
+                        1,
+                    );
+                }
+                return .{ .parsed = .{
+                    .account_keys = try parseLegacyMessageAccounts(
+                        allocator,
+                        message,
+                        &reserved_account_keys,
+                    ),
+                    .recent_blockhash = message.recent_blockhash,
+                    .instructions = instructions,
+                    .address_table_lookups = null,
+                } };
+            },
+            else => {
+                var instructions = try allocator.alloc(
+                    parse_instruction.UiCompiledInstruction,
+                    message.instructions.len,
+                );
+                for (message.instructions, 0..) |ix, i| {
+                    instructions[i] = .{
+                        .programIdIndex = ix.program_index,
+                        .accounts = try allocator.dupe(u8, ix.account_indexes),
+                        .data = blk: {
+                            var ret = try allocator.alloc(u8, base58.encodedMaxSize(ix.data.len));
+                            break :blk ret[0..base58.Table.BITCOIN.encode(ret, ix.data)];
+                        },
+                        .stackHeight = 1,
+                    };
+                }
+
+                return .{ .raw = .{
+                    .header = .{
+                        .numRequiredSignatures = message.signature_count,
+                        .numReadonlySignedAccounts = message.readonly_signed_count,
+                        .numReadonlyUnsignedAccounts = message.readonly_unsigned_count,
+                    },
+                    .account_keys = try allocator.dupe(Pubkey, message.account_keys),
+                    .recent_blockhash = message.recent_blockhash,
+                    .instructions = instructions,
+                    .address_table_lookups = null,
+                } };
+            },
+        }
+    }
+
+    /// Encode a v0 transaction message to JSON format
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L859
+    fn jsonEncodeV0TransactionMessage(
+        allocator: std.mem.Allocator,
+        message: sig.core.transaction.Message,
+    ) !GetBlock.Response.UiMessage {
+        var instructions = try allocator.alloc(
+            parse_instruction.UiCompiledInstruction,
+            message.instructions.len,
+        );
+        for (message.instructions, 0..) |ix, i| {
+            instructions[i] = .{
+                .programIdIndex = ix.program_index,
+                .accounts = try allocator.dupe(u8, ix.account_indexes),
+                .data = blk: {
+                    var ret = try allocator.alloc(u8, base58.encodedMaxSize(ix.data.len));
+                    break :blk ret[0..base58.Table.BITCOIN.encode(ret, ix.data)];
+                },
+                .stackHeight = 1,
+            };
+        }
+
+        var address_table_lookups = try allocator.alloc(
+            GetBlock.Response.AddressTableLookup,
+            message.address_lookups.len,
+        );
+        for (message.address_lookups, 0..) |lookup, i| {
+            address_table_lookups[i] = .{
+                .accountKey = lookup.table_address,
+                .writableIndexes = try allocator.dupe(u8, lookup.writable_indexes),
+                .readonlyIndexes = try allocator.dupe(u8, lookup.readonly_indexes),
+            };
+        }
+
+        return .{ .raw = .{
+            .header = .{
+                .numRequiredSignatures = message.signature_count,
+                .numReadonlySignedAccounts = message.readonly_signed_count,
+                .numReadonlyUnsignedAccounts = message.readonly_unsigned_count,
+            },
+            .account_keys = try allocator.dupe(Pubkey, message.account_keys),
+            .recent_blockhash = message.recent_blockhash,
+            .instructions = instructions,
+            .address_table_lookups = address_table_lookups,
+        } };
+    }
+
+    /// Encode a v0 transaction message with metadata to JSON format
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L824
+    fn jsonEncodeV0TransactionMessageWithMeta(
+        allocator: std.mem.Allocator,
+        message: sig.core.transaction.Message,
+        meta: sig.ledger.transaction_status.TransactionStatusMeta,
+        encoding: common.TransactionEncoding,
+    ) !GetBlock.Response.UiMessage {
+        switch (encoding) {
+            .jsonParsed => {
+                var reserved_account_keys = try ReservedAccounts.initAllActivated(allocator);
+                defer reserved_account_keys.deinit(allocator);
+                const account_keys = parse_instruction.AccountKeys.init(
+                    message.account_keys,
+                    null,
+                );
+                var loaded_message = try parse_instruction.LoadedMessage.init(
+                    allocator,
+                    message,
+                    meta.loaded_addresses,
+                    &reserved_account_keys.map,
+                );
+                defer loaded_message.deinit(allocator);
+
+                var instructions = try allocator.alloc(
+                    parse_instruction.UiInstruction,
+                    message.instructions.len,
+                );
+                for (message.instructions, 0..) |ix, i| {
+                    instructions[i] = try parse_instruction.parseUiInstruction(
+                        allocator,
+                        .{
+                            .program_id_index = ix.program_index,
+                            .accounts = ix.account_indexes,
+                            .data = ix.data,
+                        },
+                        &account_keys,
+                        1,
+                    );
+                }
+
+                var address_table_lookups = try allocator.alloc(
+                    GetBlock.Response.AddressTableLookup,
+                    message.address_lookups.len,
+                );
+                for (message.address_lookups, 0..) |lookup, i| {
+                    address_table_lookups[i] = .{
+                        .accountKey = lookup.table_address,
+                        .writableIndexes = try allocator.dupe(u8, lookup.writable_indexes),
+                        .readonlyIndexes = try allocator.dupe(u8, lookup.readonly_indexes),
+                    };
+                }
+
+                return .{ .parsed = .{
+                    .account_keys = try parseV0MessageAccounts(allocator, loaded_message),
+                    .recent_blockhash = message.recent_blockhash,
+                    .instructions = instructions,
+                    .address_table_lookups = address_table_lookups,
+                } };
+            },
+            else => |_| return try jsonEncodeV0TransactionMessage(
+                allocator,
+                message,
+            ),
+        }
+    }
+
+    /// Parse account keys for a legacy transaction message
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_accounts.rs#L7
+    fn parseLegacyMessageAccounts(
+        allocator: Allocator,
+        message: sig.core.transaction.Message,
+        reserved_account_keys: *const ReservedAccounts,
+    ) ![]const GetBlock.Response.ParsedAccount {
+        var accounts = try allocator.alloc(
+            GetBlock.Response.ParsedAccount,
+            message.account_keys.len,
+        );
+        for (message.account_keys, 0..) |account_key, i| {
+            accounts[i] = .{
+                .pubkey = account_key,
+                .writable = message.isMaybeWritable(i, &reserved_account_keys.map),
+                .signer = message.isSigner(i),
+                .source = .transaction,
+            };
+        }
+        return accounts;
+    }
+
+    /// Parse account keys for a versioned transaction message
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_accounts.rs#L21
+    fn parseV0MessageAccounts(
+        allocator: Allocator,
+        message: parse_instruction.LoadedMessage,
+    ) ![]const GetBlock.Response.ParsedAccount {
+        const account_keys = message.accountKeys();
+        const total_len = account_keys.len();
+        var accounts = try allocator.alloc(GetBlock.Response.ParsedAccount, total_len);
+
+        for (0..total_len) |i| {
+            const account_key = account_keys.get(i).?;
+            accounts[i] = .{
+                .pubkey = account_key,
+                .writable = message.isWritable(i),
+                .signer = message.isSigner(i),
+                .source = if (i < message.message.account_keys.len) .transaction else .lookupTable,
+            };
+        }
+        return accounts;
+    }
+
+    /// Parse transaction and its metadata into the UiTransactionStatusMeta format for the jsonParsed encoding
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L200
+    fn parseUiTransactionStatusMeta(
+        allocator: std.mem.Allocator,
+        meta: sig.ledger.transaction_status.TransactionStatusMeta,
+        static_keys: []const Pubkey,
+        show_rewards: bool,
+    ) !GetBlock.Response.UiTransactionStatusMeta {
+        const account_keys = parse_instruction.AccountKeys.init(
+            static_keys,
+            meta.loaded_addresses,
+        );
+
+        // Build status field
+        const status: GetBlock.Response.UiTransactionResultStatus = if (meta.status) |err|
+            .{ .Ok = null, .Err = err }
+        else
+            .{ .Ok = .{}, .Err = null };
+
+        // Convert inner instructions
+        const inner_instructions: []const parse_instruction.UiInnerInstructions = blk: {
+            if (meta.inner_instructions) |iis| {
+                var inner_instructions = try allocator.alloc(
+                    parse_instruction.UiInnerInstructions,
+                    iis.len,
+                );
+                for (iis, 0..) |ii, i| {
+                    inner_instructions[i] = try parse_instruction.parseUiInnerInstructions(
+                        allocator,
+                        ii,
+                        &account_keys,
+                    );
+                }
+                break :blk inner_instructions;
+            } else break :blk &.{};
+        };
+
+        // Convert token balances
+        const pre_token_balances = if (meta.pre_token_balances) |balances|
+            try convertTokenBalances(allocator, balances)
+        else
+            &.{};
+
+        const post_token_balances = if (meta.post_token_balances) |balances|
+            try convertTokenBalances(allocator, balances)
+        else
+            &.{};
+
+        // Convert return data
+        const return_data = if (meta.return_data) |rd|
+            try convertReturnData(allocator, rd)
+        else
+            null;
+
+        // Duplicate log messages (original memory will be freed with block.deinit)
+        const log_messages: []const []const u8 = if (meta.log_messages) |logs| blk: {
+            const duped = try allocator.alloc([]const u8, logs.len);
+            for (logs, 0..) |log, i| {
+                duped[i] = try allocator.dupe(u8, log);
+            }
+            break :blk duped;
+        } else &.{};
+
+        const rewards = if (show_rewards) try convertRewards(
+            allocator,
+            meta.rewards,
+        ) else &.{};
+
+        return .{
+            .err = meta.status,
+            .status = status,
+            .fee = meta.fee,
+            .preBalances = try allocator.dupe(u64, meta.pre_balances),
+            .postBalances = try allocator.dupe(u64, meta.post_balances),
+            .innerInstructions = .{ .value = inner_instructions },
+            .logMessages = .{ .value = log_messages },
+            .preTokenBalances = .{ .value = pre_token_balances },
+            .postTokenBalances = .{ .value = post_token_balances },
+            .rewards = .{ .value = rewards },
+            .loadedAddresses = .skip,
+            .returnData = if (return_data) |rd| .{ .value = rd } else .skip,
+            .computeUnitsConsumed = if (meta.compute_units_consumed) |cuc| .{
+                .value = cuc,
+            } else .skip,
+            .costUnits = if (meta.cost_units) |cu| .{ .value = cu } else .skip,
+        };
+    }
+
+    /// Encode a transaction for transactionDetails=accounts
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L477
+    fn buildJsonAccounts(
+        allocator: Allocator,
+        tx_with_meta: sig.ledger.Reader.TransactionWithStatusMeta,
+        max_supported_version: ?u8,
+        show_rewards: bool,
+    ) !GetBlock.Response.EncodedTransactionWithStatusMeta {
+        switch (tx_with_meta) {
+            .missing_metadata => |tx| return .{
+                .version = null,
+                .transaction = try buildTransactionJsonAccounts(
+                    allocator,
+                    tx,
+                ),
+                .meta = null,
+            },
+            .complete => |vtx| return try buildJsonAccountsWithMeta(
+                allocator,
+                vtx,
+                max_supported_version,
+                show_rewards,
+            ),
+        }
+    }
+
+    /// Parse json accounts for a transaction without metadata
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L733
+    fn buildTransactionJsonAccounts(
+        allocator: Allocator,
+        transaction: sig.core.Transaction,
+    ) !GetBlock.Response.EncodedTransaction {
+        var reserved_account_keys = try ReservedAccounts.initAllActivated(allocator);
+        return .{ .accounts = .{
+            .signatures = try allocator.dupe(Signature, transaction.signatures),
+            .accountKeys = try parseLegacyMessageAccounts(
+                allocator,
+                transaction.msg,
+                &reserved_account_keys,
+            ),
+        } };
+    }
+
+    /// Parse json accounts for a versioned transaction with metadata
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L555
+    fn buildJsonAccountsWithMeta(
+        allocator: std.mem.Allocator,
+        tx_with_meta: sig.ledger.Reader.VersionedTransactionWithStatusMeta,
+        max_supported_version: ?u8,
+        show_rewards: bool,
+    ) !GetBlock.Response.EncodedTransactionWithStatusMeta {
+        const version = try validateVersion(
+            tx_with_meta.transaction.version,
+            max_supported_version,
+        );
+        const reserved_account_keys = try ReservedAccounts.initAllActivated(
+            allocator,
+        );
+
+        const account_keys = switch (tx_with_meta.transaction.version) {
+            .legacy => try parseLegacyMessageAccounts(
+                allocator,
+                tx_with_meta.transaction.msg,
+                &reserved_account_keys,
+            ),
+            .v0 => try parseV0MessageAccounts(allocator, try parse_instruction.LoadedMessage.init(
+                allocator,
+                tx_with_meta.transaction.msg,
+                tx_with_meta.meta.loaded_addresses,
+                &reserved_account_keys.map,
+            )),
+        };
+
+        return .{
+            .transaction = .{ .accounts = .{
+                .signatures = try allocator.dupe(Signature, tx_with_meta.transaction.signatures),
+                .accountKeys = account_keys,
+            } },
+            .meta = try buildSimpleUiTransactionStatusMeta(
+                allocator,
+                tx_with_meta.meta,
+                show_rewards,
+            ),
+            .version = version,
+        };
+    }
+
+    /// Build a simplified UiTransactionStatusMeta with only the fields required for transactionDetails=accounts
+    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L168
+    fn buildSimpleUiTransactionStatusMeta(
+        allocator: std.mem.Allocator,
+        meta: sig.ledger.transaction_status.TransactionStatusMeta,
+        show_rewards: bool,
+    ) !GetBlock.Response.UiTransactionStatusMeta {
+        return .{
+            .err = meta.status,
+            .status = if (meta.status) |err|
+                .{ .Ok = null, .Err = err }
+            else
+                .{ .Ok = .{}, .Err = null },
+            .fee = meta.fee,
+            .preBalances = try allocator.dupe(u64, meta.pre_balances),
+            .postBalances = try allocator.dupe(u64, meta.post_balances),
+            .innerInstructions = .skip,
+            .logMessages = .skip,
+            .preTokenBalances = .{ .value = if (meta.pre_token_balances) |balances|
+                try BlockHookContext.convertTokenBalances(allocator, balances)
+            else
+                &.{} },
+            .postTokenBalances = .{ .value = if (meta.post_token_balances) |balances|
+                try BlockHookContext.convertTokenBalances(allocator, balances)
+            else
+                &.{} },
+            .rewards = if (show_rewards) rewards: {
+                if (meta.rewards) |rewards| {
+                    const converted = try allocator.alloc(GetBlock.Response.UiReward, rewards.len);
+                    for (rewards, 0..) |reward, i| {
+                        converted[i] = try GetBlock.Response.UiReward.fromLedgerReward(reward);
+                    }
+                    break :rewards .{ .value = converted };
+                } else break :rewards .{ .value = &.{} };
+            } else .skip,
+            .loadedAddresses = .skip,
+            .returnData = .skip,
+            .computeUnitsConsumed = .skip,
+            .costUnits = .skip,
+        };
+    }
+
+    /// Convert inner instructions to wire format.
+    fn convertInnerInstructions(
+        allocator: std.mem.Allocator,
+        inner_instructions: []const sig.ledger.transaction_status.InnerInstructions,
+    ) ![]const parse_instruction.UiInnerInstructions {
+        const result = try allocator.alloc(
+            parse_instruction.UiInnerInstructions,
+            inner_instructions.len,
+        );
+        errdefer allocator.free(result);
+
+        for (inner_instructions, 0..) |ii, i| {
+            const instructions = try allocator.alloc(
+                parse_instruction.UiInstruction,
+                ii.instructions.len,
+            );
+            errdefer allocator.free(instructions);
+
+            for (ii.instructions, 0..) |inner_ix, j| {
+                const data_str = blk: {
+                    var ret = try allocator.alloc(
+                        u8,
+                        base58.encodedMaxSize(inner_ix.instruction.data.len),
+                    );
+                    break :blk ret[0..base58.Table.BITCOIN.encode(
+                        ret,
+                        inner_ix.instruction.data,
+                    )];
+                };
+
+                instructions[j] = .{ .compiled = .{
+                    .programIdIndex = inner_ix.instruction.program_id_index,
+                    .accounts = try allocator.dupe(u8, inner_ix.instruction.accounts),
+                    .data = data_str,
+                    .stackHeight = inner_ix.stack_height,
+                } };
+            }
+
+            result[i] = .{
+                .index = ii.index,
+                .instructions = instructions,
+            };
+        }
+
+        return result;
+    }
+
+    /// Convert token balances to wire format.
+    fn convertTokenBalances(
+        allocator: std.mem.Allocator,
+        balances: []const sig.ledger.transaction_status.TransactionTokenBalance,
+    ) ![]const GetBlock.Response.UiTransactionTokenBalance {
+        const result = try allocator.alloc(
+            GetBlock.Response.UiTransactionTokenBalance,
+            balances.len,
+        );
+        errdefer allocator.free(result);
+
+        for (balances, 0..) |b, i| {
+            result[i] = .{
+                .accountIndex = b.account_index,
+                .mint = b.mint,
+                .owner = b.owner,
+                .programId = b.program_id,
+                .uiTokenAmount = .{
+                    .amount = try allocator.dupe(u8, b.ui_token_amount.amount),
+                    .decimals = b.ui_token_amount.decimals,
+                    .uiAmount = b.ui_token_amount.ui_amount,
+                    .uiAmountString = try allocator.dupe(u8, b.ui_token_amount.ui_amount_string),
+                },
+            };
+        }
+
+        return result;
+    }
+
+    /// Convert loaded addresses to wire format.
+    fn convertLoadedAddresses(
+        allocator: std.mem.Allocator,
+        loaded: sig.ledger.transaction_status.LoadedAddresses,
+    ) !GetBlock.Response.UiLoadedAddresses {
+        return .{
+            .writable = try allocator.dupe(Pubkey, loaded.writable),
+            .readonly = try allocator.dupe(Pubkey, loaded.readonly),
+        };
+    }
+
+    /// Convert return data to wire format.
+    fn convertReturnData(
+        allocator: std.mem.Allocator,
+        return_data: sig.ledger.transaction_status.TransactionReturnData,
+    ) !GetBlock.Response.UiTransactionReturnData {
+        // Base64 encode the return data
+        const encoded_len = std.base64.standard.Encoder.calcSize(return_data.data.len);
+        const base64_data = try allocator.alloc(u8, encoded_len);
+        _ = std.base64.standard.Encoder.encode(base64_data, return_data.data);
+
+        return .{
+            .programId = return_data.program_id,
+            .data = .{ base64_data, .base64 },
+        };
+    }
+
+    /// Convert internal reward format to RPC response format.
+    fn convertRewards(
+        allocator: std.mem.Allocator,
+        internal_rewards: ?[]const sig.ledger.meta.Reward,
+    ) ![]const GetBlock.Response.UiReward {
+        if (internal_rewards == null) return &.{};
+        const rewards_value = internal_rewards orelse return &.{};
+        const rewards = try allocator.alloc(GetBlock.Response.UiReward, rewards_value.len);
+        errdefer allocator.free(rewards);
+
+        for (rewards_value, 0..) |r, i| {
+            rewards[i] = try GetBlock.Response.UiReward.fromLedgerReward(r);
+        }
+        return rewards;
+    }
+
+    fn convertBlockRewards(
+        allocator: std.mem.Allocator,
+        block_rewards: *const sig.replay.rewards.BlockRewards,
+    ) ![]const GetBlock.Response.UiReward {
+        const items = block_rewards.items();
+        const rewards = try allocator.alloc(GetBlock.Response.UiReward, items.len);
+        errdefer allocator.free(rewards);
+
+        for (items, 0..) |r, i| {
+            rewards[i] = .{
+                .pubkey = r.pubkey,
+                .lamports = r.reward_info.lamports,
+                .postBalance = r.reward_info.post_balance,
+                .rewardType = switch (r.reward_info.reward_type) {
+                    .fee => .Fee,
+                    .rent => .Rent,
+                    .staking => .Staking,
+                    .voting => .Voting,
+                },
+                .commission = r.reward_info.commission,
+            };
+        }
+        return rewards;
+    }
+};
+
+fn JsonSkippable(comptime T: type) type {
+    return union(enum) {
+        value: T,
+        none,
+        skip,
+
+        pub fn jsonStringify(self: JsonSkippable(T), jw: anytype) !void {
+            switch (self) {
+                .value => |v| try jw.write(v),
+                .none => try jw.write(null),
+                .skip => {},
+            }
+        }
+    };
+}
+
+// ============================================================================
+// Tests for private BlockHookContext functions
+// ============================================================================
+
+test "validateVersion - legacy with max_supported_version" {
+    const result = try BlockHookContext.validateVersion(.legacy, 0);
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.? == .legacy);
+}
+
+test "validateVersion - v0 with max_supported_version >= 0" {
+    const result = try BlockHookContext.validateVersion(.v0, 0);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqual(@as(u8, 0), result.?.number);
+}
+
+test "validateVersion - legacy without max_supported_version returns null" {
+    const result = try BlockHookContext.validateVersion(.legacy, null);
+    try std.testing.expect(result == null);
+}
+
+test "validateVersion - v0 without max_supported_version errors" {
+    const result = BlockHookContext.validateVersion(.v0, null);
+    try std.testing.expectError(error.UnsupportedTransactionVersion, result);
+}
+
+test "buildSimpleUiTransactionStatusMeta - basic" {
+    const allocator = std.testing.allocator;
+    const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
+    const result = try BlockHookContext.buildSimpleUiTransactionStatusMeta(allocator, meta, false);
+    defer {
+        allocator.free(result.preBalances);
+        allocator.free(result.postBalances);
+    }
+
+    // Basic fields
+    try std.testing.expectEqual(@as(u64, 0), result.fee);
+    try std.testing.expect(result.err == null);
+    // innerInstructions and logMessages should be skipped for accounts mode
+    try std.testing.expect(result.innerInstructions == .skip);
+    try std.testing.expect(result.logMessages == .skip);
+    // show_rewards false → skip
+    try std.testing.expect(result.rewards == .skip);
+}
+
+test "buildSimpleUiTransactionStatusMeta - show_rewards true with empty rewards" {
+    const allocator = std.testing.allocator;
+    const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
+    const result = try BlockHookContext.buildSimpleUiTransactionStatusMeta(allocator, meta, true);
+    defer {
+        allocator.free(result.preBalances);
+        allocator.free(result.postBalances);
+    }
+
+    // show_rewards true but meta.rewards is null → empty value
+    try std.testing.expect(result.rewards == .value);
+}
+
+test "encodeLegacyTransactionMessage - json encoding" {
+    const allocator = std.testing.allocator;
+
+    const msg = sig.core.transaction.Message{
+        .signature_count = 1,
+        .readonly_signed_count = 0,
+        .readonly_unsigned_count = 1,
+        .account_keys = &.{ Pubkey.ZEROES, Pubkey{ .data = [_]u8{0xFF} ** 32 } },
+        .recent_blockhash = Hash.ZEROES,
+        .instructions = &.{},
+        .address_lookups = &.{},
+    };
+
+    const result = try BlockHookContext.encodeLegacyTransactionMessage(allocator, msg, .json);
+    // Result should be a raw message
+    const raw = result.raw;
+
+    try std.testing.expectEqual(@as(u8, 1), raw.header.numRequiredSignatures);
+    try std.testing.expectEqual(@as(u8, 0), raw.header.numReadonlySignedAccounts);
+    try std.testing.expectEqual(@as(u8, 1), raw.header.numReadonlyUnsignedAccounts);
+    try std.testing.expectEqual(@as(usize, 2), raw.account_keys.len);
+    try std.testing.expectEqual(@as(usize, 0), raw.instructions.len);
+    // Legacy should have no address table lookups
+    try std.testing.expect(raw.address_table_lookups == null);
+
+    allocator.free(raw.account_keys);
+}
+
+test "jsonEncodeV0TransactionMessage - with address lookups" {
+    const allocator = std.testing.allocator;
+
+    const msg = sig.core.transaction.Message{
+        .signature_count = 1,
+        .readonly_signed_count = 0,
+        .readonly_unsigned_count = 0,
+        .account_keys = &.{Pubkey.ZEROES},
+        .recent_blockhash = Hash.ZEROES,
+        .instructions = &.{},
+        .address_lookups = &.{.{
+            .table_address = Pubkey{ .data = [_]u8{0xAA} ** 32 },
+            .writable_indexes = &[_]u8{ 0, 1 },
+            .readonly_indexes = &[_]u8{2},
+        }},
+    };
+
+    const result = try BlockHookContext.jsonEncodeV0TransactionMessage(allocator, msg);
+    const raw = result.raw;
+
+    try std.testing.expectEqual(@as(usize, 1), raw.account_keys.len);
+    // V0 should have address table lookups
+    try std.testing.expect(raw.address_table_lookups != null);
+    try std.testing.expectEqual(@as(usize, 1), raw.address_table_lookups.?.len);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 0, 1 },
+        raw.address_table_lookups.?[0].writableIndexes,
+    );
+    try std.testing.expectEqualSlices(u8, &.{2}, raw.address_table_lookups.?[0].readonlyIndexes);
+
+    // Clean up
+    allocator.free(raw.account_keys);
+    for (raw.address_table_lookups.?) |atl| {
+        allocator.free(atl.writableIndexes);
+        allocator.free(atl.readonlyIndexes);
+    }
+    allocator.free(raw.address_table_lookups.?);
+}
+
+test "encodeLegacyTransactionMessage - base64 encoding" {
+    const allocator = std.testing.allocator;
+
+    const msg = sig.core.transaction.Message{
+        .signature_count = 1,
+        .readonly_signed_count = 0,
+        .readonly_unsigned_count = 1,
+        .account_keys = &.{ Pubkey{ .data = [_]u8{0x11} ** 32 }, Pubkey.ZEROES },
+        .recent_blockhash = Hash.ZEROES,
+        .instructions = &.{},
+        .address_lookups = &.{},
+    };
+
+    // Non-json encodings fall through to the else branch producing raw messages
+    const result = try BlockHookContext.encodeLegacyTransactionMessage(allocator, msg, .base64);
+    const raw = result.raw;
+
+    try std.testing.expectEqual(@as(u8, 1), raw.header.numRequiredSignatures);
+    try std.testing.expectEqual(@as(usize, 2), raw.account_keys.len);
+    try std.testing.expect(raw.address_table_lookups == null);
+
+    allocator.free(raw.account_keys);
+}
+
+test "encodeTransactionWithoutMeta - base64 encoding" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
+    const allocator = arena.allocator();
+    const tx = sig.core.Transaction.EMPTY;
+
+    const result = try BlockHookContext.encodeTransactionWithoutMeta(allocator, tx, .base64);
+    const binary = result.binary;
+
+    try std.testing.expect(binary.encoding == .base64);
+    // base64 encoded data should be non-empty (even empty tx has some bincode overhead)
+    try std.testing.expect(binary.data.len > 0);
+}
+
+test "encodeTransactionWithoutMeta - json encoding" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
+    const allocator = arena.allocator();
+    const tx = sig.core.Transaction.EMPTY;
+
+    const result = try BlockHookContext.encodeTransactionWithoutMeta(allocator, tx, .json);
+    const json = result.json;
+
+    // Should produce a json result with signatures and message
+    try std.testing.expectEqual(@as(usize, 0), json.signatures.len);
+    // Message should be a raw (non-parsed) message for legacy
+    const raw = json.message.raw;
+    try std.testing.expectEqual(@as(u8, 0), raw.header.numRequiredSignatures);
+    try std.testing.expect(raw.address_table_lookups == null);
+}
+
+test "encodeTransactionWithoutMeta - base58 encoding" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
+    const allocator = arena.allocator();
+    const tx = sig.core.Transaction.EMPTY;
+
+    const result = try BlockHookContext.encodeTransactionWithoutMeta(allocator, tx, .base58);
+    const binary = result.binary;
+
+    try std.testing.expect(binary.encoding == .base58);
+    try std.testing.expect(binary.data.len > 0);
+}
+
+test "encodeTransactionWithoutMeta - legacy binary encoding" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
+    const allocator = arena.allocator();
+    const tx = sig.core.Transaction.EMPTY;
+
+    const result = try BlockHookContext.encodeTransactionWithoutMeta(allocator, tx, .binary);
+    const legacy_binary = result.legacy_binary;
+
+    try std.testing.expect(legacy_binary.len > 0);
+}

@@ -67,11 +67,13 @@ pub const ComputeBudgetLimits = struct {
         .loaded_accounts_bytes = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES,
     };
 
-    pub fn intoComputeBudget(self: ComputeBudgetLimits) sig.runtime.ComputeBudget {
-        // TODO: It would make sense for us to perform a similar refactor to Agave,
-        // and split up into seperate cost and budget structs. We hardcode SIMD-339
-        // false here, since there is no other "good" alternative without a refactor.
-        var default = sig.runtime.ComputeBudget.init(self.compute_unit_limit, false);
+    pub fn intoComputeBudget(
+        self: ComputeBudgetLimits,
+        feature_set: *const sig.core.FeatureSet,
+        slot: sig.core.Slot,
+    ) sig.runtime.ComputeBudget {
+        const simd_0339_active = feature_set.active(.increase_cpi_account_info_limit, slot);
+        var default = sig.runtime.ComputeBudget.init(self.compute_unit_limit, simd_0339_active);
         default.heap_size = self.heap_size;
         return default;
     }

@@ -9,6 +9,7 @@ const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
 const VoteAccount = sig.core.stakes.VoteAccount;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
+const Reward = sig.ledger.transaction_status.Reward;
 
 pub const calculation = @import("calculation.zig");
 pub const distribution = @import("distribution.zig");
@@ -189,31 +190,45 @@ pub const EpochRewardStatus = union(enum) {
     active: struct {
         distribution_start_block_height: u64,
         all_stake_rewards: PartitionedStakeRewards,
+        all_vote_rewards: PartitionedVoteRewards,
         partitioned_indices: ?PartitionedIndices,
+        /// Per-slot rewards from the most recent partition distribution.
+        distributed_rewards: std.ArrayListUnmanaged(Reward),
     },
     inactive,
 
-    pub fn deinit(self: EpochRewardStatus, allocator: Allocator) void {
-        switch (self) {
-            .active => |active| {
+    pub fn deinit(self: *EpochRewardStatus, allocator: Allocator) void {
+        switch (self.*) {
+            .active => |*active| {
                 active.all_stake_rewards.deinit(allocator);
+                active.all_vote_rewards.deinit(allocator);
                 if (active.partitioned_indices) |pi| pi.deinit(allocator);
+                active.distributed_rewards.deinit(allocator);
             },
             .inactive => {},
         }
     }
 
     pub fn clone(self: EpochRewardStatus) EpochRewardStatus {
-        return switch (self) {
-            .active => |active| .{ .active = .{
+        const active = switch (self) {
+            .active => |active| active,
+            .inactive => return .inactive,
+        };
+
+        return .{
+            .active = .{
                 .distribution_start_block_height = active.distribution_start_block_height,
                 .all_stake_rewards = active.all_stake_rewards.getAcquire(),
+                .all_vote_rewards = active.all_vote_rewards.getAcquire(),
                 .partitioned_indices = if (active.partitioned_indices) |pi|
                     pi.getAcquire()
                 else
                     null,
-            } },
-            .inactive => .inactive,
+                // Each slot owns its own distributed_rewards list. The parent's
+                // buffer must not be shared, as the parent may be freed (rooted)
+                // while this slot is still alive, causing use-after-free.
+                .distributed_rewards = .empty,
+            },
         };
     }
 };

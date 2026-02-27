@@ -46,7 +46,10 @@ pub fn executeNativeCpiInstruction(
     signers: []const Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
     const instruction_info = try prepareCpiInstructionInfo(tc, instruction, signers);
-    defer instruction_info.deinit(tc.allocator);
+    // NOTE: We don't call instruction_info.deinit() here because the InstructionInfo is stored
+    // in the instruction_trace (by value copy in pushInstruction). The trace needs the account_metas
+    // memory to remain valid until the transaction completes. Cleanup happens in
+    // TransactionContext.deinit() which iterates over the trace and deinits each CPI entry.
 
     try executeInstruction(allocator, tc, instruction_info);
 }
@@ -156,12 +159,14 @@ fn processNextInstruction(
             return InstructionError.UnsupportedProgramId;
     };
 
-    const builtin = program.PRECOMPILE.get(&builtin_id) orelse blk: {
+    const builtin, const is_precompile = if (program.PRECOMPILE.get(&builtin_id)) |builtin|
+        .{ builtin, true }
+    else blk: {
         // Only clear the return data if it is a native program.
         const builtin = program.NATIVE.get(&builtin_id) orelse
             return InstructionError.UnsupportedProgramId;
         tc.return_data.data.len = 0;
-        break :blk builtin;
+        break :blk .{ builtin, false };
     };
 
     // Emulate Agave's program_map by checking the feature gates here.
@@ -170,14 +175,19 @@ fn processNextInstruction(
         return InstructionError.UnsupportedProgramId;
     };
 
-    // Invoke the program and log the result
-    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/invoke_context.rs#L549
-    // [fd] https://github.com/firedancer-io/firedancer/blob/913e47274b135963fe8433a1e94abb9b42ce6253/src/flamenco/runtime/fd_executor.c#L1347-L1359
-    try stable_log.programInvoke(
-        ic.tc,
-        program_id,
-        ic.tc.instruction_stack.len,
-    );
+    // NOTE: Precompiles do not log invocations because they are not considered "programs" in the same sense as BPF or native programs, and they may be called by other programs which would already log the invocation.
+    // Additionally, some precompiles are used for utility functions that may be called frequently, and logging every invocation could lead to excessive log spam.
+    // For example, the Keccak256 precompile is often used for hashing in other programs, and logging every call to it would generate a large number of logs that may not be useful for end users.
+    if (!is_precompile) {
+        // Invoke the program and log the result
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/invoke_context.rs#L549
+        // [fd] https://github.com/firedancer-io/firedancer/blob/913e47274b135963fe8433a1e94abb9b42ce6253/src/flamenco/runtime/fd_executor.c#L1347-L1359
+        try stable_log.programInvoke(
+            ic.tc,
+            program_id,
+            ic.tc.instruction_stack.len,
+        );
+    }
 
     {
         const program_execute = tracy.Zone.init(@src(), .{ .name = "runtime: execute program" });
@@ -188,7 +198,7 @@ fn processNextInstruction(
             // This approach to failure logging is used to prevent requiring all native programs to return
             // an ExecutionError. Instead, native programs return an InstructionError, and more granular
             // failure logging for bpf programs is handled in the BPF executor.
-            if (err != InstructionError.ProgramFailedToComplete) {
+            if (err != InstructionError.ProgramFailedToComplete and !is_precompile) {
                 try stable_log.programFailure(
                     ic.tc,
                     program_id,
@@ -199,11 +209,13 @@ fn processNextInstruction(
         };
     }
 
-    // Log the success, if the execution did not return an error.
-    try stable_log.programSuccess(
-        ic.tc,
-        program_id,
-    );
+    if (!is_precompile) {
+        // Log the success, if the execution did not return an error.
+        try stable_log.programSuccess(
+            ic.tc,
+            program_id,
+        );
+    }
 }
 
 /// Pop an instruction from the instruction stack\
@@ -337,6 +349,13 @@ pub fn prepareCpiInstructionInfo(
         break :blk program_account_meta.index_in_transaction;
     };
 
+    // Clone instruction data so the trace preserves each CPI's data independently.
+    // Without this, multiple CPI trace entries can alias the same VM memory region,
+    // causing all entries to reflect the last CPI's data.
+    // [agave] Uses Cow::Owned(instruction.data) for CPI instructions.
+    const owned_data = try tc.allocator.dupe(u8, callee.data);
+    errdefer tc.allocator.free(owned_data);
+
     return .{
         .program_meta = .{
             .pubkey = callee.program_id,
@@ -344,8 +363,8 @@ pub fn prepareCpiInstructionInfo(
         },
         .account_metas = deduped_account_metas,
         .dedupe_map = dedupe_map,
-        .instruction_data = callee.data,
-        .owned_instruction_data = false,
+        .instruction_data = owned_data,
+        .owned_instruction_data = true,
         .initial_account_lamports = 0,
     };
 }
@@ -373,7 +392,7 @@ test pushInstruction {
         deinitAccountMap(cache, allocator);
     }
 
-    var instruction_info = try testing.createInstructionInfo(
+    const instruction_info = try testing.createInstructionInfo(
         &tc,
         system_program.ID,
         system_program.Instruction{
@@ -386,7 +405,12 @@ test pushInstruction {
             .{ .index_in_transaction = 1 },
         },
     );
-    defer instruction_info.deinit(allocator);
+    // NOTE: instruction_info is not deinitialized here because it gets copied into
+    // tc.instruction_trace multiple times (sharing the same account_metas memory).
+    // The trace entry with depth > 1 will be cleaned up by tc.deinit(), which frees
+    // the shared account_metas. The depth == 1 entry is not cleaned up by tc.deinit()
+    // (as it's considered owned externally), but since both share the same memory,
+    // it's already freed when the depth > 1 entry is cleaned up.
 
     // Success
     try pushInstruction(&tc, instruction_info);

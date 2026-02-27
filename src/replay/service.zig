@@ -31,6 +31,8 @@ const SlotTree = replay.trackers.SlotTree;
 const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 
+const schema = sig.ledger.schema.schema;
+
 const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 
 pub const Logger = sig.trace.Logger("replay");
@@ -408,7 +410,7 @@ pub fn trackNewSlots(
                 ),
             );
 
-            try updateSysvarsForNewSlot(
+            const clock = try updateSysvarsForNewSlot(
                 allocator,
                 account_store,
                 epoch_tracker,
@@ -417,6 +419,8 @@ pub fn trackNewSlots(
                 slot,
                 hard_forks,
             );
+            try ledger.db.put(schema.blocktime, slot, clock.unix_timestamp);
+            try ledger.db.put(schema.block_height, slot, constants.block_height);
 
             try slot_tracker.put(allocator, slot, .{ .constants = constants, .state = state });
             try slot_tree.record(allocator, slot, constants.parent_slot);
@@ -449,9 +453,6 @@ pub fn newSlotFromParent(
 
     var state = try SlotState.fromFrozenParent(allocator, parent_state);
     errdefer state.deinit(allocator);
-
-    const epoch_reward_status = parent_state.reward_status.clone();
-    errdefer epoch_reward_status.deinit(allocator);
 
     var ancestors = try parent_constants.ancestors.clone(allocator);
     errdefer ancestors.deinit(allocator);
@@ -576,6 +577,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     slot_info.constants,
                     slot,
                     last_entry_hash,
+                    state.ledger,
                 ));
                 processed_a_slot = true;
             } else {

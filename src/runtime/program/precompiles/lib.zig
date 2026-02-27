@@ -22,6 +22,10 @@ pub const SIGNATURE_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 24;
 pub const SECP256K1_VERIFY_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 223;
 /// Number of compute units for one ed25519 signature verification.
 pub const ED25519_VERIFY_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 76;
+/// Number of compute units for one ed25519 strict signature verification.
+pub const ED25519_VERIFY_STRICT_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 80;
+/// Number of compute units for one secp256r1 signature verification.
+pub const SECP256R1_VERIFY_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 160;
 
 pub const PRECOMPILES = [_]Precompile{
     .{
@@ -66,8 +70,7 @@ pub fn verifyPrecompilesComputeCost(
         }
     }
 
-    return transaction.msg.signature_count *| SIGNATURE_COST +|
-        n_secp256k1_instruction_signatures *| SECP256K1_VERIFY_COST +|
+    return n_secp256k1_instruction_signatures *| SECP256K1_VERIFY_COST +|
         n_ed25519_instruction_signatures *| ED25519_VERIFY_COST;
 }
 
@@ -273,9 +276,9 @@ test "verify cost" {
         .signatures = &.{},
     };
 
-    const expected_cost = 1 *| SIGNATURE_COST +| 1 *| ED25519_VERIFY_COST;
-    // cross-checked with agave (FeatureSet::default())
-    try std.testing.expectEqual(3000, expected_cost);
+    const expected_cost = ED25519_VERIFY_COST;
+    // ED25519_VERIFY_COST = 2280 (30 * 76), non-strict ed25519 verification cost
+    try std.testing.expectEqual(2280, ED25519_VERIFY_COST);
 
     const compute_units = verifyPrecompilesComputeCost(ed25519_tx, &.ALL_DISABLED);
     try std.testing.expectEqual(expected_cost, compute_units);
