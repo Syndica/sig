@@ -24,6 +24,11 @@ pub const BlockhashQueue = struct {
 
     pub const MAX_RECENT_BLOCKHASHES = 300;
 
+    /// Maximum age of a blockhash that is still considered valid for processing transactions.
+    /// This is half of MAX_RECENT_BLOCKHASHES.
+    /// Analogous to [MAX_PROCESSING_AGE](https://github.com/anza-xyz/solana-clock/blob/main/src/lib.rs)
+    pub const MAX_PROCESSING_AGE: usize = MAX_RECENT_BLOCKHASHES / 2;
+
     pub const BlockhashInfo = struct {
         lamports_per_signature: u64,
         index: u64,

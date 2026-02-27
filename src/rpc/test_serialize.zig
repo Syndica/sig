@@ -20,6 +20,7 @@ const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSlot = methods.GetSlot;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
+const IsBlockhashValid = methods.IsBlockhashValid;
 
 const Response = rpc.response.Response;
 
@@ -275,7 +276,37 @@ test GetSlot {
 // TODO: test getTransaction()
 // TODO: test getTransactionCount()
 // TODO: test getVoteAccounts()
-// TODO: test isBlockhashValid()
+
+test IsBlockhashValid {
+    try testRequest(
+        .isBlockhashValid,
+        .{ .blockhash = sig.core.Hash.parse("J7rBdM6AecPDEZp8aPq5iPSNKVkU5Q76F3oAV4eW5wsW") },
+        \\{"jsonrpc":"2.0","id":1,"method":"isBlockhashValid","params":["J7rBdM6AecPDEZp8aPq5iPSNKVkU5Q76F3oAV4eW5wsW"]}
+        ,
+    );
+    try testRequest(
+        .isBlockhashValid,
+        .{
+            .blockhash = sig.core.Hash.parse("J7rBdM6AecPDEZp8aPq5iPSNKVkU5Q76F3oAV4eW5wsW"),
+            .config = .{ .commitment = .processed },
+        },
+        \\{"jsonrpc":"2.0","id":1,"method":"isBlockhashValid","params":["J7rBdM6AecPDEZp8aPq5iPSNKVkU5Q76F3oAV4eW5wsW",{"commitment":"processed","minContextSlot":null}]}
+        ,
+    );
+    try testResponse(IsBlockhashValid, .{ .result = .{
+        .context = .{ .slot = 309275334, .apiVersion = "2.1.6" },
+        .value = true,
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275334},"value":true},"id":1}
+    );
+    try testResponse(IsBlockhashValid, .{ .result = .{
+        .context = .{ .slot = 309275334, .apiVersion = "2.1.6" },
+        .value = false,
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275334},"value":false},"id":1}
+    );
+}
+
 // TODO: test minimumLedgerSlot()
 // TODO: test requestAirdrop()
 // TODO: test sendTransaction()
