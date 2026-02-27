@@ -43,6 +43,10 @@ pub fn isZeroed(self: AccountSharedData) bool {
     return std.mem.allEqual(u8, self.data, 0);
 }
 
+pub fn isDeleted(self: AccountSharedData) bool {
+    return self.lamports == 0; // TODO: any other conditions for this?
+}
+
 pub fn deinit(self: *const AccountSharedData, allocator: std.mem.Allocator) void {
     allocator.free(self.data);
 }
