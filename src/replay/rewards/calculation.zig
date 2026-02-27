@@ -25,7 +25,6 @@ const StakeHistory = sig.runtime.sysvar.StakeHistory;
 const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
 const VoteStateV3 = sig.runtime.program.vote.state.VoteStateV3;
 const VoteStateV4 = sig.runtime.program.vote.state.VoteStateV4;
-const VoteState = sig.runtime.program.vote.state.VoteState;
 
 const PreviousEpochInflationRewards = sig.replay.rewards.PreviousEpochInflationRewards;
 const VoteRewards = sig.replay.rewards.VoteRewards;
