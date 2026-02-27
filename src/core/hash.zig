@@ -125,6 +125,10 @@ pub const Hash = extern struct {
         };
     }
 
+    pub fn jsonStringify(self: Hash, jw: anytype) !void {
+        try jw.write(self.base58String().constSlice());
+    }
+
     /// Intended to be used in tests.
     pub fn initRandom(random: std.Random) Hash {
         var data: [SIZE]u8 = undefined;

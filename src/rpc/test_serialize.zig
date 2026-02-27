@@ -67,6 +67,7 @@ test GetAccountInfo {
         \\{"jsonrpc":"2.0","id":1,"method":"getAccountInfo","params":["Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm"]}
         ,
     );
+
     try testResponse(
         GetAccountInfo,
         .{ .result = .{
@@ -92,6 +93,48 @@ test GetAccountInfo {
         \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275280},"value":null},"id":1}
         ,
     );
+
+    // Test jsonParsed response deserialization (object_begin branch).
+    // Uses std.json.Value as generic representation on the client side.
+    {
+        const response_json =
+            \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275280},"value":{"data":{"program":"nonce","parsed":{"type":"initialized","info":{"authority":"5CZKcm98vSbMwBPRBMF6VkaFtyZfCsjLBbGygQiGGqmJ","blockhash":"4N7Mz3MHMTFgrF2FawpFE42PerjEfyPnsmPSWRxoCon3","feeCalculator":{"lamportsPerSignature":"5000"}}},"space":80},"executable":false,"lamports":1169280,"owner":"11111111111111111111111111111111","rentEpoch":18446744073709551615,"space":80}},"id":1}
+        ;
+        const response = try Response(GetAccountInfo.Response).fromJson(std.testing.allocator, response_json);
+        defer response.deinit();
+        const res: GetAccountInfo.Response = try response.result();
+        try std.testing.expectEqual(@as(u64, 309275280), res.context.slot);
+        try std.testing.expectEqualStrings("2.1.6", res.context.apiVersion);
+
+        const value = res.value.?;
+        try std.testing.expectEqual(false, value.executable);
+        try std.testing.expectEqual(@as(u64, 1169280), value.lamports);
+        try std.testing.expectEqual(@as(u64, 80), value.space);
+
+        // Verify the data is a jsonParsed pre-serialized JSON string
+        const json_str = value.data.jsonParsed;
+        const parsed_json = try std.json.parseFromSlice(
+            std.json.Value,
+            std.testing.allocator,
+            json_str,
+            .{},
+        );
+        defer parsed_json.deinit();
+        const json_val = parsed_json.value;
+        try std.testing.expect(json_val == .object);
+        const obj = json_val.object;
+        try std.testing.expectEqualStrings("nonce", obj.get("program").?.string);
+        try std.testing.expectEqual(@as(i64, 80), obj.get("space").?.integer);
+
+        // Verify nested parsed content
+        const parsed = obj.get("parsed").?.object;
+        try std.testing.expectEqualStrings("initialized", parsed.get("type").?.string);
+        const info = parsed.get("info").?.object;
+        try std.testing.expectEqualStrings(
+            "5CZKcm98vSbMwBPRBMF6VkaFtyZfCsjLBbGygQiGGqmJ",
+            info.get("authority").?.string,
+        );
+    }
 }
 
 test GetBalance {

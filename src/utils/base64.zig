@@ -1,5 +1,15 @@
 const std = @import("std");
 
+/// Extracts the error type from a writer, supporting both struct writer types
+/// (e.g. `GenericWriter`) that have `.Error` and pointer-to-writer types
+/// (e.g. `*std.io.Writer`) where `.Error` is on the child type.
+fn WriterError(comptime T: type) type {
+    return switch (@typeInfo(T)) {
+        .pointer => |p| p.child.Error,
+        else => T.Error,
+    };
+}
+
 /// Tool for writing a series of non-contiguous bytes to a contiguous
 /// stream, encoded as base64 data.
 pub const EncodingStream = struct {
@@ -22,9 +32,9 @@ pub const EncodingStream = struct {
     /// Flushes any buffered writes to the writer, writing the trailing padding character if needed.
     pub fn flush(
         self: *EncodingStream,
-        /// `std.io.AnyWriter` | `std.io.GenericWriter(...)`
+        /// `std.io.GenericWriter(...)` | `*std.io.Writer`
         dst_writer: anytype,
-    ) @TypeOf(dst_writer).Error!void {
+    ) WriterError(@TypeOf(dst_writer))!void {
         const trail = self.trail_buf[0..self.trail_len];
 
         var encoded_trail_buf: [4]u8 = undefined;
@@ -38,10 +48,10 @@ pub const EncodingStream = struct {
     /// Returns the number of bytes which were actually written.
     pub fn write(
         self: *EncodingStream,
-        /// `std.io.AnyWriter` | `std.io.GenericWriter(...)`
+        /// `std.io.GenericWriter(...)` | `*std.io.Writer`
         dst_writer: anytype,
         bytes: []const u8,
-    ) @TypeOf(dst_writer).Error!usize {
+    ) WriterError(@TypeOf(dst_writer))!usize {
         if (bytes.len == 0) return 0;
 
         if (self.trail_len == 3) {
@@ -91,22 +101,24 @@ pub const EncodingStream = struct {
     }
 
     pub fn WriterCtx(comptime Inner: type) type {
+        const InnerError = WriterError(Inner);
+
         return struct {
             stream: *EncodingStream,
             inner: Inner,
             const Self = @This();
 
-            pub const Writer = std.io.GenericWriter(Self, Inner.Error, writeFn);
+            pub const Writer = std.io.GenericWriter(Self, InnerError, writeFn);
 
             pub fn writer(self: Self) Writer {
                 return .{ .context = self };
             }
 
-            pub fn flush(self: Self) Inner.Error!void {
+            pub fn flush(self: Self) InnerError!void {
                 try self.stream.flush(self.inner);
             }
 
-            fn writeFn(self: Self, bytes: []const u8) Inner.Error!usize {
+            fn writeFn(self: Self, bytes: []const u8) InnerError!usize {
                 return self.stream.write(self.inner, bytes);
             }
         };
