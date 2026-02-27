@@ -403,7 +403,7 @@ pub const GetBlock = struct {
         /// Block height
         blockHeight: ?u64 = null,
 
-        pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        pub fn jsonStringify(self: Response, jw: anytype) !void {
             try jw.beginObject();
             if (self.blockHeight) |h| {
                 try jw.objectField("blockHeight");
@@ -458,7 +458,7 @@ pub const GetBlock = struct {
                 legacy,
                 number: u8,
 
-                pub fn jsonStringify(self: @This(), jw: anytype) !void {
+                pub fn jsonStringify(self: TransactionVersion, jw: anytype) !void {
                     switch (self) {
                         .legacy => try jw.write("legacy"),
                         .number => |n| try jw.write(n),
@@ -466,7 +466,7 @@ pub const GetBlock = struct {
                 }
             };
 
-            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            pub fn jsonStringify(self: EncodedTransactionWithStatusMeta, jw: anytype) !void {
                 try jw.beginObject();
                 if (self.meta) |m| {
                     try jw.objectField("meta");
@@ -509,7 +509,7 @@ pub const GetBlock = struct {
                 accountKeys: []const ParsedAccount,
             },
 
-            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            pub fn jsonStringify(self: EncodedTransaction, jw: anytype) !void {
                 switch (self) {
                     .legacy_binary => |b| try jw.write(b),
                     .binary => |b| try b.jsonStringify(jw),
@@ -523,7 +523,7 @@ pub const GetBlock = struct {
             parsed: UiParsedMessage,
             raw: UiRawMessage,
 
-            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            pub fn jsonStringify(self: UiMessage, jw: anytype) !void {
                 switch (self) {
                     .parsed => |p| try jw.write(p),
                     .raw => |r| try jw.write(r),
@@ -537,7 +537,7 @@ pub const GetBlock = struct {
             instructions: []const parse_instruction.UiInstruction,
             address_table_lookups: ?[]const AddressTableLookup = null,
 
-            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            pub fn jsonStringify(self: UiParsedMessage, jw: anytype) !void {
                 try jw.beginObject();
                 try jw.objectField("accountKeys");
                 try jw.write(self.account_keys);
@@ -564,7 +564,7 @@ pub const GetBlock = struct {
             instructions: []const parse_instruction.UiCompiledInstruction,
             address_table_lookups: ?[]const AddressTableLookup = null,
 
-            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            pub fn jsonStringify(self: UiRawMessage, jw: anytype) !void {
                 try jw.beginObject();
                 try jw.objectField("accountKeys");
                 try jw.write(self.account_keys);
@@ -590,7 +590,7 @@ pub const GetBlock = struct {
             instructions: []const EncodedInstruction,
             addressTableLookups: ?[]const AddressTableLookup = null,
 
-            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            pub fn jsonStringify(self: EncodedMessage, jw: anytype) !void {
                 try jw.beginObject();
                 try jw.objectField("accountKeys");
                 try jw.write(self.accountKeys);
@@ -620,7 +620,7 @@ pub const GetBlock = struct {
             data: []const u8,
             stackHeight: ?u32 = null,
 
-            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            pub fn jsonStringify(self: EncodedInstruction, jw: anytype) !void {
                 try jw.beginObject();
                 try jw.objectField("programIdIndex");
                 try jw.write(self.programIdIndex);
@@ -641,7 +641,7 @@ pub const GetBlock = struct {
             writableIndexes: []const u8,
             readonlyIndexes: []const u8,
 
-            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            pub fn jsonStringify(self: AddressTableLookup, jw: anytype) !void {
                 try jw.beginObject();
                 try jw.objectField("accountKey");
                 try jw.write(self.accountKey);
@@ -660,7 +660,7 @@ pub const GetBlock = struct {
             signer: bool,
             source: ParsedAccountSource,
 
-            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            pub fn jsonStringify(self: ParsedAccount, jw: anytype) !void {
                 try jw.beginObject();
                 try jw.objectField("pubkey");
                 try jw.write(self.pubkey);
@@ -704,7 +704,7 @@ pub const GetBlock = struct {
             computeUnitsConsumed: JsonSkippable(u64) = .skip,
             costUnits: JsonSkippable(u64) = .skip,
 
-            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            pub fn jsonStringify(self: UiTransactionStatusMeta, jw: anytype) !void {
                 try jw.beginObject();
                 if (self.computeUnitsConsumed != .skip) {
                     try jw.objectField("computeUnitsConsumed");
@@ -828,7 +828,7 @@ pub const GetBlock = struct {
             Ok: ?struct {} = null,
             Err: ?sig.ledger.transaction_status.TransactionError = null,
 
-            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            pub fn jsonStringify(self: UiTransactionResultStatus, jw: anytype) !void {
                 try jw.beginObject();
                 if (self.Err) |err| {
                     try jw.objectField("Err");
@@ -849,7 +849,7 @@ pub const GetBlock = struct {
             programId: ?Pubkey = null,
             uiTokenAmount: UiTokenAmount,
 
-            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            pub fn jsonStringify(self: UiTransactionTokenBalance, jw: anytype) !void {
                 try jw.beginObject();
                 try jw.objectField("accountIndex");
                 try jw.write(self.accountIndex);
@@ -875,7 +875,7 @@ pub const GetBlock = struct {
             uiAmount: ?f64 = null,
             uiAmountString: []const u8,
 
-            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            pub fn jsonStringify(self: UiTokenAmount, jw: anytype) !void {
                 try jw.beginObject();
                 try jw.objectField("amount");
                 try jw.write(self.amount);
@@ -912,7 +912,7 @@ pub const GetBlock = struct {
             programId: Pubkey,
             data: struct { []const u8, enum { base64 } },
 
-            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            pub fn jsonStringify(self: UiTransactionReturnData, jw: anytype) !void {
                 try jw.beginObject();
                 try jw.objectField("programId");
                 try jw.write(self.programId);
@@ -948,7 +948,7 @@ pub const GetBlock = struct {
                 }
             };
 
-            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            pub fn jsonStringify(self: UiReward, jw: anytype) !void {
                 try jw.beginObject();
                 try jw.objectField("pubkey");
                 try jw.write(self.pubkey);
@@ -1577,7 +1577,7 @@ pub const StaticHookContext = struct {
     genesis_hash: sig.core.Hash,
 
     pub fn getGenesisHash(
-        self: *const @This(),
+        self: *const StaticHookContext,
         _: std.mem.Allocator,
         _: GetGenesisHash,
     ) !GetGenesisHash.Response {
@@ -1595,7 +1595,7 @@ pub const BlockHookContext = struct {
     const ReservedAccountKeys = parse_instruction.ReservedAccountKeys;
 
     pub fn getBlock(
-        self: @This(),
+        self: BlockHookContext,
         allocator: std.mem.Allocator,
         params: GetBlock,
     ) !GetBlock.Response {
@@ -2557,7 +2557,7 @@ fn JsonSkippable(comptime T: type) type {
         none,
         skip,
 
-        pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        pub fn jsonStringify(self: JsonSkippable(T), jw: anytype) !void {
             switch (self) {
                 .value => |v| try jw.write(v),
                 .none => try jw.write(null),

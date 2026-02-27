@@ -115,7 +115,7 @@ pub const UiInnerInstructions = struct {
     index: u8,
     instructions: []const UiInstruction,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+    pub fn jsonStringify(self: UiInnerInstructions, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("index");
         try jw.write(self.index);
@@ -133,7 +133,7 @@ pub const UiInstruction = union(enum) {
     compiled: UiCompiledInstruction,
     parsed: *const UiParsedInstruction,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+    pub fn jsonStringify(self: UiInstruction, jw: anytype) !void {
         switch (self) {
             .compiled => |c| try c.jsonStringify(jw),
             .parsed => |p| try p.jsonStringify(jw),
@@ -145,7 +145,7 @@ pub const UiParsedInstruction = union(enum) {
     parsed: ParsedInstruction,
     partially_decoded: UiPartiallyDecodedInstruction,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+    pub fn jsonStringify(self: UiParsedInstruction, jw: anytype) !void {
         switch (self) {
             .parsed => |p| try p.jsonStringify(jw),
             .partially_decoded => |pd| try pd.jsonStringify(jw),
@@ -159,7 +159,7 @@ pub const UiCompiledInstruction = struct {
     data: []const u8,
     stackHeight: ?u32 = null,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+    pub fn jsonStringify(self: UiCompiledInstruction, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("accounts");
         try writeByteArrayAsJsonArray(jw, self.accounts);
@@ -189,7 +189,7 @@ pub const UiPartiallyDecodedInstruction = struct {
     data: []const u8,
     stackHeight: ?u32 = null,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+    pub fn jsonStringify(self: UiPartiallyDecodedInstruction, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("accounts");
         try jw.write(self.accounts);
@@ -220,7 +220,7 @@ pub const ParsedInstruction = struct {
     /// Stack height
     stack_height: ?u32 = null,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+    pub fn jsonStringify(self: ParsedInstruction, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("parsed");
         // // Write pre-serialized JSON raw
