@@ -807,7 +807,7 @@ pub const RpcHookContext = struct {
 
             // Convert epoch credits to [3]u64 format
             // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1174
-            const all_credits = vote_state.epochCreditsList().items;
+            const all_credits = vote_state.epochCreditsList();
             const num_credits_to_return = @min(
                 all_credits.len,
                 MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY,

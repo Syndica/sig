@@ -1058,14 +1058,23 @@ fn setVoteState(
             return account.serializeIntoAccountData(VoteStateVersions{ .v4 = v4_state });
         },
         .v3 => |v3_state| {
-            if (account.constAccountData().len < VoteStateV3.MAX_VOTE_STATE_SIZE and
-                (!rent.isExempt(account.account.lamports, VoteStateV3.MAX_VOTE_STATE_SIZE) or
-                    std.meta.isError(account.setDataLength(
-                        allocator,
-                        resize_delta,
-                        VoteStateV3.MAX_VOTE_STATE_SIZE,
-                    ))))
-            {
+            const resize_needed = account.constAccountData().len < VoteStateV3.MAX_VOTE_STATE_SIZE;
+            const resize_failed = resize_needed and blk: {
+                if (!rent.isExempt(account.account.lamports, VoteStateV3.MAX_VOTE_STATE_SIZE)) {
+                    break :blk true;
+                }
+                account.setDataLength(
+                    allocator,
+                    resize_delta,
+                    VoteStateV3.MAX_VOTE_STATE_SIZE,
+                ) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => break :blk true, // InstructionError
+                };
+                break :blk false;
+            };
+
+            if (resize_failed) {
                 const landed_votes = v3_state.votes.items;
                 const votes = try allocator.alloc(Lockout, landed_votes.len);
                 defer allocator.free(votes);
