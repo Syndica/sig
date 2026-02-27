@@ -201,6 +201,17 @@ pub const GetAccountInfo = struct {
             space: u64,
 
             pub const Data = account_codec.AccountData;
+
+            pub fn from(account: sig.core.Account, data: Data) Value {
+                return .{
+                    .data = data,
+                    .executable = account.executable,
+                    .lamports = account.lamports,
+                    .owner = account.owner,
+                    .rentEpoch = account.rent_epoch,
+                    .space = account.data.len(),
+                };
+            }
         };
     };
 };
@@ -219,8 +230,22 @@ pub const GetProgramAccounts = struct {
         sortResults: ?bool = null,
     };
 
-    // TODO: Response type defined in Step 3 (depends on OptionalContext + RpcKeyedAccount).
-    pub const Response = noreturn;
+    pub const Value = struct { pubkey: Pubkey, account: GetAccountInfo.Response.Value };
+
+    pub const Response = union(enum) {
+        list: []const Value,
+        context: struct {
+            context: common.Context,
+            value: []const Value,
+        },
+
+        pub fn jsonStringify(self: Response, jw: anytype) @TypeOf(jw.*).Error!void {
+            switch (self) {
+                .list => |list| try jw.write(list),
+                .context => |ctx| try jw.write(ctx),
+            }
+        }
+    };
 };
 
 pub const GetBalance = struct {
@@ -884,33 +909,118 @@ pub const AccountHookContext = struct {
         };
         defer account.deinit(allocator);
 
-        const data: GetAccountInfo.Response.Value.Data = if (encoding == .jsonParsed)
-            try account_codec.encodeJsonParsed(
-                allocator,
-                params.pubkey,
-                account,
-                slot_reader,
-                config.dataSlice,
-            )
-        else
-            // TODO: [agave conformance] When base58 encoding is requested and account data exceeds
-            // 128 bytes, Agave returns JSON-RPC error code -32600 (InvalidRequest) with the message:
-            // "Encoded binary (base 58) data should be less than 128 bytes, please use Base64 encoding."
-            // Currently, `error.Base58DataTooLarge` propagates to hooks.zig's generic error mapper,
-            // which produces a non-deterministic positive error code via `@intFromError` and the raw
-            // error name as the message.
-            try account_codec.encodeStandard(allocator, account, encoding, config.dataSlice);
+        // TODO: [agave conformance] When base58 encoding is requested and account data exceeds
+        // 128 bytes, Agave returns JSON-RPC error code -32600 (InvalidRequest) with the message:
+        // "Encoded binary (base 58) data should be less than 128 bytes, please use Base64 encoding."
+        // Currently, `error.Base58DataTooLarge` propagates to hooks.zig's generic error mapper,
+        // which produces a non-deterministic positive error code via `@intFromError` and the raw
+        // error name as the message.
+        const data = try account_codec.encodeAccount(
+            allocator,
+            params.pubkey,
+            account,
+            encoding,
+            slot_reader,
+            config.dataSlice,
+        );
 
         return .{
             .context = .{ .slot = slot },
-            .value = .{
-                .data = data,
-                .executable = account.executable,
-                .lamports = account.lamports,
-                .owner = account.owner,
-                .rentEpoch = account.rent_epoch,
-                .space = account.data.len(),
-            },
+            .value = .from(account, data),
         };
+    }
+
+    pub fn getProgramAccounts(
+        self: AccountHookContext,
+        allocator: std.mem.Allocator,
+        params: GetProgramAccounts,
+    ) !GetProgramAccounts.Response {
+        const config = params.config orelse GetProgramAccounts.Config{};
+        const commitment = config.commitment orelse .finalized;
+        const encoding = config.encoding orelse .base64;
+        const f = config.filters orelse &.{};
+        try filters.verifyFilters(f);
+
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+        }
+
+        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        const ancestors = &ref.constants.ancestors;
+        const db = switch (self.account_reader) {
+            .accounts_db_two => |db| db,
+            else => return error.MethodNotImplemented,
+        };
+
+        var query = try db.ownerQuery(params.program_id, ancestors);
+        defer query.deinit(db.allocator);
+        const slot_reader = self.account_reader.forSlot(ancestors);
+        var results = std.ArrayListUnmanaged(GetProgramAccounts.Value){};
+        defer results.deinit(allocator);
+
+        // Ierate rooted entries, checking for unrooted overrides.
+        while (query.rooted_iter.next()) |entry| {
+            const account = if (query.unrooted_map.fetchSwapRemove(entry.pubkey)) |kv|
+                kv.value.account
+            else
+                sig.core.Account{
+                    .lamports = entry.lamports,
+                    .data = .{ .unowned_allocation = entry.data },
+                    .owner = entry.owner,
+                    .executable = entry.executable,
+                    .rent_epoch = entry.rent_epoch,
+                };
+            if (account.lamports == 0) continue;
+            if (!filters.filtersAllow(f, account.data.unowned_allocation)) continue;
+
+            const data = try account_codec.encodeAccount(
+                allocator,
+                entry.pubkey,
+                account,
+                encoding,
+                slot_reader,
+                config.dataSlice,
+            );
+            try results.append(allocator, .{
+                .pubkey = entry.pubkey,
+                .account = .from(account, data),
+            });
+        }
+
+        // Remaining unrooted-only entries (not found in rooted).
+        for (query.unrooted_map.keys(), query.unrooted_map.values()) |pubkey, aws| {
+            const account = aws.account;
+            if (account.lamports == 0) continue;
+            if (!filters.filtersAllow(f, account.data.unowned_allocation)) continue;
+
+            const data = try account_codec.encodeAccount(
+                allocator,
+                pubkey,
+                account,
+                encoding,
+                slot_reader,
+                config.dataSlice,
+            );
+            try results.append(
+                allocator,
+                .{
+                    .pubkey = pubkey,
+                    .account = .from(account, data),
+                },
+            );
+        }
+        if (config.sortResults orelse false) {
+            std.mem.sortUnstable(GetProgramAccounts.Value, results.items, {}, struct {
+                fn lessThan(_: void, a: GetProgramAccounts.Value, b: GetProgramAccounts.Value) bool {
+                    return std.mem.order(u8, &a.pubkey.data, &b.pubkey.data) == .lt;
+                }
+            }.lessThan);
+        }
+        const values = try results.toOwnedSlice(allocator);
+        if (config.withContext orelse false) {
+            return .{ .context = .{ .context = .{ .slot = slot }, .value = values } };
+        }
+        return .{ .list = values };
     }
 };

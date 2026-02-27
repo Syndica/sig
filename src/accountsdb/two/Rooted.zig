@@ -208,13 +208,11 @@ pub fn getByOwner(self: *Rooted, owner: Pubkey) OwnerIterator {
     var stmt: ?*sql.sqlite3_stmt = null;
     self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &stmt, null));
     self.err(sql.sqlite3_bind_blob(stmt.?, 1, &owner.data, Pubkey.SIZE, sql.SQLITE_STATIC));
-    return .{ .stmt = stmt.?, .handle = self.handle };
+    return .{ .stmt = stmt.?, .rooted = self };
 }
 
 pub const OwnerIterator = struct {
     rooted: *Rooted,
-    owner: Pubkey,
-    cursor: usize,
     stmt: *sql.sqlite3_stmt,
 
     pub const Entry = struct {
