@@ -2,4 +2,5 @@
 .{
     "net",
     "shred_receiver",
+    "observability",
 }
