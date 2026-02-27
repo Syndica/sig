@@ -16,6 +16,7 @@ const Slot = sig.core.Slot;
 const Ancestors = sig.core.Ancestors;
 const Account = sig.core.Account;
 const AccountSharedData = sig.runtime.AccountSharedData;
+const PubkeyMap = sig.utils.collections.PubkeyMap;
 
 pub const MAX_SLOTS = 4096;
 
@@ -29,7 +30,7 @@ pub const SlotIndex = struct {
     lock: sig.sync.RwLock,
     slot: Slot,
     is_empty: Atomic(bool),
-    entries: sig.utils.collections.PubkeyMap(AccountSharedData),
+    entries: PubkeyMap(AccountSharedData),
 
     const empty: SlotIndex = .{
         .lock = .{},
@@ -123,6 +124,46 @@ pub fn get(
     }
 
     return result;
+}
+
+pub const AccountWithSlot = struct {
+    account: Account,
+    slot: Slot,
+};
+
+pub fn getByOwner(
+    self: *Unrooted,
+    allocator: std.mem.Allocator,
+    owner: Pubkey,
+    ancestors: *const Ancestors,
+) !PubkeyMap(AccountWithSlot) {
+    var map = PubkeyMap(AccountWithSlot){};
+    errdefer map.deinit(allocator);
+
+    for (self.slots) |*index| {
+        if (index.is_empty.load(.acquire)) continue;
+
+        index.lock.lockShared();
+        defer index.lock.unlockShared();
+
+        if (!ancestors.containsSlot(index.slot)) continue;
+
+        const accounts = index.entries.values();
+        const pubkeys = index.entries.keys();
+        for (accounts, pubkeys) |*acc, pk| {
+            if (!acc.owner.equals(&owner)) continue;
+
+            const gop = try map.getOrPut(allocator, pk);
+            if (gop.found_existing or index.slot > gop.value_ptr.slot) {
+                gop.value_ptr.* = .{
+                    .account = acc.asAccount(),
+                    .slot = index.slot,
+                };
+            }
+        }
+    }
+
+    return map;
 }
 
 test "sanity check" {

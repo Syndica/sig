@@ -1,4 +1,5 @@
 pub const client = @import("client.zig");
+pub const filters = @import("filters.zig");
 pub const http = @import("http.zig");
 pub const methods = @import("methods.zig");
 pub const account_codec = @import("account_codec/lib.zig");
