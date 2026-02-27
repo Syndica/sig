@@ -154,7 +154,9 @@ pub const Memcmp = struct {
 
 /// Validates filters according to Agave's rules. Call after parsing, before scanning.
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2413-L2423
-pub fn verifyFilters(filters_slice: []const RpcFilterType) error{ TooManyFilters, MemcmpBytesTooLarge }!void {
+pub fn verifyFilters(
+    filters_slice: []const RpcFilterType,
+) error{ TooManyFilters, MemcmpBytesTooLarge }!void {
     if (filters_slice.len > MAX_FILTERS) return error.TooManyFilters;
     for (filters_slice) |f| {
         switch (f) {
@@ -215,7 +217,12 @@ test "rpc.filters" {
     // allows: memcmp saturating offset overflow
     {
         // offset near maxInt(usize) should not wrap, just fail to match.
-        const filter = RpcFilterType{ .memcmp = .{ .offset = std.math.maxInt(usize), .bytes = &.{1} } };
+        const filter = RpcFilterType{
+            .memcmp = .{
+                .offset = std.math.maxInt(usize),
+                .bytes = &.{1},
+            },
+        };
         try testing.expect(!filter.allows(&.{1}));
     }
 
