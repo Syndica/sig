@@ -85,10 +85,22 @@ pub fn init(file_path: [:0]const u8) !Rooted {
     }
 
     if (rpc_enable_owner_index) {
-        if (sql.sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS rpc_owner_idx ON entries(owner)", null, null, null) != OK)
+        if (sql.sqlite3_exec(
+            db,
+            "CREATE INDEX IF NOT EXISTS rpc_owner_idx ON entries(owner)",
+            null,
+            null,
+            null,
+        ) != OK)
             return error.FailedToCreateIndex;
     } else {
-        if (sql.sqlite3_exec(db, "DROP INDEX IF EXISTS rpc_owner_idx", null, null, null) != OK)
+        if (sql.sqlite3_exec(
+            db,
+            "DROP INDEX IF EXISTS rpc_owner_idx",
+            null,
+            null,
+            null,
+        ) != OK)
             return error.FailedToDropIndex;
     }
 
@@ -214,7 +226,43 @@ pub const OwnerIterator = struct {
         rent_epoch: u64,
     };
 
-    pub fn next(self: *OwnerIterator) ?Entry {}
+    pub fn next(self: *OwnerIterator) ?Entry {
+        const rc = sql.sqlite3_step(self.stmt);
+        switch (rc) {
+            ROW => {},
+            DONE => return null,
+            else => self.rooted.err(rc),
+        }
+
+        const pubkey: Pubkey = .{
+            .data = @as([*]const u8, @ptrCast(sql.sqlite3_column_blob(self.stmt, 0)))[0..32].*,
+        };
+        const lamports: u64 = @bitCast(sql.sqlite3_column_int64(self.stmt, 1));
+        const data = blk: {
+            const len: usize = @intCast(sql.sqlite3_column_bytes(self.stmt, 2));
+            if (len == 0) break :blk &.{};
+            const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(self.stmt, 2));
+            break :blk ptr[0..len];
+        };
+        const owner: Pubkey = .{
+            .data = @as([*]const u8, @ptrCast(sql.sqlite3_column_blob(self.stmt, 3)))[0..32].*,
+        };
+        const executable: bool = sql.sqlite3_column_int(self.stmt, 4) != 0;
+        const rent_epoch: u64 = @bitCast(sql.sqlite3_column_int64(self.stmt, 5));
+
+        return .{
+            .pubkey = pubkey,
+            .lamports = lamports,
+            .data = data,
+            .owner = owner,
+            .executable = executable,
+            .rent_epoch = rent_epoch,
+        };
+    }
+
+    pub fn deinit(self: *OwnerIterator) void {
+        _ = sql.sqlite3_finalize(self.stmt);
+    }
 };
 
 pub fn computeLtHash(
