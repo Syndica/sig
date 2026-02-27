@@ -16,6 +16,10 @@ const OK = sql.SQLITE_OK;
 const DONE = sql.SQLITE_DONE;
 const ROW = sql.SQLITE_ROW;
 
+/// Whether an index on the `owner` column of Rooted is created at startup.
+/// When disabled, the index is actively dropped (if it exists).
+const rpc_enable_owner_index = sig.build_options.rpc_enable_owner_index;
+
 /// Handle to the underlying sqlite database.
 handle: *sql.sqlite3,
 /// Tracks the largest rooted slot.
@@ -78,6 +82,14 @@ pub fn init(file_path: [:0]const u8) !Rooted {
             std.debug.print("err  {s}\n", .{sql.sqlite3_errmsg(db)});
             return error.FailedToCreateTables;
         }
+    }
+
+    if (rpc_enable_owner_index) {
+        if (sql.sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS rpc_owner_idx ON entries(owner)", null, null, null) != OK)
+            return error.FailedToCreateIndex;
+    } else {
+        if (sql.sqlite3_exec(db, "DROP INDEX IF EXISTS rpc_owner_idx", null, null, null) != OK)
+            return error.FailedToDropIndex;
     }
 
     return self;
@@ -175,6 +187,35 @@ pub fn get(
         .rent_epoch = @bitCast(sql.sqlite3_column_int64(stmt, 4)),
     };
 }
+
+pub fn getByOwner(self: *Rooted, owner: Pubkey) OwnerIterator {
+    const query =
+        \\ SELECT address, lamports, data, owner, executable, rent_epoch
+        \\ FROM entries WHERE owner = ?;
+    ;
+    var stmt: ?*sql.sqlite3_stmt = null;
+    self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &stmt, null));
+    self.err(sql.sqlite3_bind_blob(stmt.?, 1, &owner.data, Pubkey.SIZE, sql.SQLITE_STATIC));
+    return .{ .stmt = stmt.?, .handle = self.handle };
+}
+
+pub const OwnerIterator = struct {
+    rooted: *Rooted,
+    owner: Pubkey,
+    cursor: usize,
+    stmt: *sql.sqlite3_stmt,
+
+    pub const Entry = struct {
+        pubkey: Pubkey,
+        data: []const u8,
+        lamports: u64,
+        owner: Pubkey,
+        executable: bool,
+        rent_epoch: u64,
+    };
+
+    pub fn next(self: *OwnerIterator) ?Entry {}
+};
 
 pub fn computeLtHash(
     self: *const Rooted,
