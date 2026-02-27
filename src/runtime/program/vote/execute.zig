@@ -716,7 +716,7 @@ fn widthraw(
             return InstructionError.Custom;
         } else {
             // [SIMD-0185] Withdraw: completely zero vote account data for fully withdrawn v4 accounts.
-            if (vote_state.isV4()) {
+            if (vote_state == .v4) {
                 var zeros: [VoteStateV4.MAX_VOTE_STATE_SIZE]u8 = undefined;
                 @memset(&zeros, 0);
                 try vote_account.setDataFromSlice(
@@ -1044,13 +1044,11 @@ fn setVoteState(
         .v4 => |v4_state| {
             // [SIMD-0185] v4: resize to 3762 if smaller, then check rent exempt, then serialize v4.
             if (account.constAccountData().len < VoteStateV4.MAX_VOTE_STATE_SIZE) {
-                if (std.meta.isError(account.setDataLength(
+                try account.setDataLength(
                     allocator,
                     resize_delta,
                     VoteStateV4.MAX_VOTE_STATE_SIZE,
-                ))) {
-                    return InstructionError.AccountNotRentExempt;
-                }
+                );
                 if (!rent.isExempt(account.account.lamports, VoteStateV4.MAX_VOTE_STATE_SIZE)) {
                     return InstructionError.AccountNotRentExempt;
                 }

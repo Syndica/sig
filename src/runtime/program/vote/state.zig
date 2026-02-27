@@ -929,7 +929,7 @@ pub const VoteState = union(enum(u32)) {
 
     pub fn deinit(self: *const VoteState, allocator: Allocator) void {
         switch (self.*) {
-            inline else => |*s| s.deinit(allocator),
+            inline .v3, .v4 => |s| s.deinit(allocator),
         }
     }
 
@@ -1002,29 +1002,25 @@ pub const VoteState = union(enum(u32)) {
 
     pub fn votes(self: *const VoteState) *const std.ArrayListUnmanaged(LandedVote) {
         return switch (self.*) {
-            .v3 => |*s| &s.votes,
-            .v4 => |*s| &s.votes,
+            inline .v3, .v4 => |s| &s.votes,
         };
     }
 
     pub fn votesMut(self: *VoteState) *std.ArrayListUnmanaged(LandedVote) {
         return switch (self.*) {
-            .v3 => |*s| &s.votes,
-            .v4 => |*s| &s.votes,
+            inline .v3, .v4 => |*s| &s.votes,
         };
     }
 
     pub fn rootSlot(self: *const VoteState) ?Slot {
         return switch (self.*) {
-            .v3 => |s| s.root_slot,
-            .v4 => |s| s.root_slot,
+            inline .v3, .v4 => |s| s.root_slot,
         };
     }
 
     pub fn rootSlotMut(self: *VoteState) *?Slot {
         return switch (self.*) {
-            .v3 => |*s| &s.root_slot,
-            .v4 => |*s| &s.root_slot,
+            inline .v3, .v4 => |*s| &s.root_slot,
         };
     }
 
@@ -1044,22 +1040,19 @@ pub const VoteState = union(enum(u32)) {
 
     pub fn epochCreditsList(self: *const VoteState) *const std.ArrayListUnmanaged(EpochCredit) {
         return switch (self.*) {
-            .v3 => |*s| &s.epoch_credits,
-            .v4 => |*s| &s.epoch_credits,
+            inline .v3, .v4 => |s| &s.epoch_credits,
         };
     }
 
     pub fn epochCreditsListMut(self: *VoteState) *std.ArrayListUnmanaged(EpochCredit) {
         return switch (self.*) {
-            .v3 => |*s| &s.epoch_credits,
-            .v4 => |*s| &s.epoch_credits,
+            inline .v3, .v4 => |*s| &s.epoch_credits,
         };
     }
 
     pub fn lastTimestamp(self: *const VoteState) BlockTimestamp {
         return switch (self.*) {
-            .v3 => |s| s.last_timestamp,
-            .v4 => |s| s.last_timestamp,
+            inline .v3, .v4 => |s| s.last_timestamp,
         };
     }
 
@@ -1111,31 +1104,31 @@ pub const VoteState = union(enum(u32)) {
 
     pub fn epochCredits(self: *const VoteState) u64 {
         return switch (self.*) {
-            inline else => |*s| s.epochCredits(),
+            inline .v3, .v4 => |s| s.epochCredits(),
         };
     }
 
     pub fn lastLockout(self: *const VoteState) ?Lockout {
         return switch (self.*) {
-            inline else => |*s| s.lastLockout(),
+            inline .v3, .v4 => |s| s.lastLockout(),
         };
     }
 
     pub fn lastVotedSlot(self: *const VoteState) ?Slot {
         return switch (self.*) {
-            inline else => |*s| s.lastVotedSlot(),
+            inline .v3, .v4 => |s| s.lastVotedSlot(),
         };
     }
 
     pub fn creditsForVoteAtIndex(self: *const VoteState, index: usize) u64 {
         return switch (self.*) {
-            inline else => |*s| s.creditsForVoteAtIndex(index),
+            inline .v3, .v4 => |s| s.creditsForVoteAtIndex(index),
         };
     }
 
     pub fn getCredits(self: *const VoteState) u64 {
         return switch (self.*) {
-            inline else => |*s| s.getCredits(),
+            inline .v3, .v4 => |s| s.getCredits(),
         };
     }
 
@@ -1146,31 +1139,31 @@ pub const VoteState = union(enum(u32)) {
         credits: u64,
     ) error{OutOfMemory}!void {
         switch (self.*) {
-            inline else => |*s| try s.incrementCredits(allocator, epoch, credits),
+            inline .v3, .v4 => |*s| try s.incrementCredits(allocator, epoch, credits),
         }
     }
 
     pub fn containsSlot(self: *const VoteState, candidate_slot: Slot) bool {
         return switch (self.*) {
-            inline else => |*s| s.containsSlot(candidate_slot),
+            inline .v3, .v4 => |s| s.containsSlot(candidate_slot),
         };
     }
 
     pub fn processTimestamp(self: *VoteState, slot: Slot, timestamp: i64) ?VoteError {
         return switch (self.*) {
-            inline else => |*s| s.processTimestamp(slot, timestamp),
+            inline .v3, .v4 => |*s| s.processTimestamp(slot, timestamp),
         };
     }
 
     pub fn popExpiredVotes(self: *VoteState, next_vote_slot: Slot) void {
         switch (self.*) {
-            inline else => |*s| s.popExpiredVotes(next_vote_slot),
+            inline .v3, .v4 => |s| s.popExpiredVotes(next_vote_slot),
         }
     }
 
     pub fn doubleLockouts(self: *VoteState) !void {
         switch (self.*) {
-            inline else => |*s| try s.doubleLockouts(),
+            inline .v3, .v4 => |s| try s.doubleLockouts(),
         }
     }
 
@@ -1182,7 +1175,7 @@ pub const VoteState = union(enum(u32)) {
         current_slot: Slot,
     ) !void {
         switch (self.*) {
-            inline else => |*s| try s.processNextVoteSlot(
+            inline .v3, .v4 => |s| try s.processNextVoteSlot(
                 allocator,
                 next_vote_slot,
                 epoch,
@@ -1198,7 +1191,7 @@ pub const VoteState = union(enum(u32)) {
         target_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline else => |*s| try s.setNewAuthorizedVoter(
+            inline .v3, .v4 => |*s| try s.setNewAuthorizedVoter(
                 allocator,
                 new_authorized_voter,
                 target_epoch,
@@ -1225,7 +1218,7 @@ pub const VoteState = union(enum(u32)) {
         slot_hashes: *const SlotHashes,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline else => |*s| try s.checkSlotsAreValid(vote, recent_vote_slots, slot_hashes),
+            inline .v3, .v4 => |s| try s.checkSlotsAreValid(vote, recent_vote_slots, slot_hashes),
         };
     }
 
@@ -1238,7 +1231,13 @@ pub const VoteState = union(enum(u32)) {
         current_slot: Slot,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline else => |*s| try s.processVote(allocator, vote, slot_hashes, epoch, current_slot),
+            inline .v3, .v4 => |*s| try s.processVote(
+                allocator,
+                vote,
+                slot_hashes,
+                epoch,
+                current_slot,
+            ),
         };
     }
 
@@ -1252,7 +1251,7 @@ pub const VoteState = union(enum(u32)) {
         current_slot: Slot,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline else => |*s| try s.processVoteUnfiltered(
+            inline .v3, .v4 => |s| try s.processVoteUnfiltered(
                 allocator,
                 recent_vote_slots,
                 vote,
@@ -1272,7 +1271,7 @@ pub const VoteState = union(enum(u32)) {
         vote_state_update: *VoteStateUpdate,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline else => |*s| try s.processVoteStateUpdate(
+            inline .v3, .v4 => |*s| try s.processVoteStateUpdate(
                 allocator,
                 slot_hashes,
                 epoch,
@@ -1291,7 +1290,7 @@ pub const VoteState = union(enum(u32)) {
         tower_sync: *TowerSync,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline else => |*s| try s.processTowerSync(
+            inline .v3, .v4 => |*s| try s.processTowerSync(
                 allocator,
                 slot_hashes,
                 epoch,
@@ -1309,7 +1308,7 @@ pub const VoteState = union(enum(u32)) {
         slot_hashes: *const SlotHashes,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline else => |*s| try s.checkAndFilterProposedVoteState(
+            inline .v3, .v4 => |s| try s.checkAndFilterProposedVoteState(
                 proposed_lockouts,
                 proposed_root,
                 proposed_hash,
@@ -1328,7 +1327,7 @@ pub const VoteState = union(enum(u32)) {
         current_slot: Slot,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline else => |*s| try s.processNewVoteState(
+            inline .v3, .v4 => |s| try s.processNewVoteState(
                 allocator,
                 new_state,
                 new_root,
@@ -1341,46 +1340,6 @@ pub const VoteState = union(enum(u32)) {
 
     pub fn computeVoteLatency(voted_for_slot: Slot, current_slot: Slot) u8 {
         return VoteStateV3.computeVoteLatency(voted_for_slot, current_slot);
-    }
-
-    // ── Version queries ──────────────────────────────────────────────
-
-    pub fn isV4(self: VoteState) bool {
-        return self == .v4;
-    }
-
-    pub fn isV3(self: VoteState) bool {
-        return self == .v3;
-    }
-
-    /// Access the underlying VoteStateV3, if this is a V3 state.
-    pub fn asV3(self: *VoteState) ?*VoteStateV3 {
-        return switch (self.*) {
-            .v3 => |*s| s,
-            .v4 => null,
-        };
-    }
-
-    /// Access the underlying VoteStateV4, if this is a V4 state.
-    pub fn asV4(self: *VoteState) ?*VoteStateV4 {
-        return switch (self.*) {
-            .v3 => null,
-            .v4 => |*s| s,
-        };
-    }
-
-    pub fn asV3Const(self: *const VoteState) ?*const VoteStateV3 {
-        return switch (self.*) {
-            .v3 => |*s| s,
-            .v4 => null,
-        };
-    }
-
-    pub fn asV4Const(self: *const VoteState) ?*const VoteStateV4 {
-        return switch (self.*) {
-            .v3 => null,
-            .v4 => |*s| s,
-        };
     }
 };
 
@@ -6078,8 +6037,8 @@ test "state.VoteState.initV3 and field accessors" {
     defer vs.deinit(allocator);
 
     // Version queries
-    try std.testing.expect(vs.isV3());
-    try std.testing.expect(!vs.isV4());
+    try std.testing.expect(vs == .v3);
+    try std.testing.expect(vs != .v4);
 
     // Field accessors
     try std.testing.expect(vs.nodePubkey().equals(&node_pk));
@@ -6124,11 +6083,7 @@ test "state.VoteState.initV3 and field accessors" {
     vs.setCommission(75);
     try std.testing.expectEqual(75, vs.commission());
 
-    // asV3 / asV4
-    try std.testing.expect(vs.asV3() != null);
-    try std.testing.expectEqual(null, vs.asV4());
-    try std.testing.expect(vs.asV3Const() != null);
-    try std.testing.expectEqual(null, vs.asV4Const());
+    // Version-specific behavior: v3 should never expose v4-only accessors.
 }
 
 test "state.VoteState.initV4 and field accessors" {
@@ -6155,8 +6110,8 @@ test "state.VoteState.initV4 and field accessors" {
     defer vs.deinit(allocator);
 
     // Version queries
-    try std.testing.expect(vs.isV4());
-    try std.testing.expect(!vs.isV3());
+    try std.testing.expect(vs == .v4);
+    try std.testing.expect(vs != .v3);
 
     // Field accessors
     try std.testing.expect(vs.nodePubkey().equals(&node_pk));
@@ -6209,12 +6164,6 @@ test "state.VoteState.initV4 and field accessors" {
     // blockRevenueCollectorMut
     vs.blockRevenueCollectorMut().?.* = Pubkey.ZEROES;
     try std.testing.expect(vs.blockRevenueCollector().?.equals(&Pubkey.ZEROES));
-
-    // asV3 / asV4
-    try std.testing.expectEqual(null, vs.asV3());
-    try std.testing.expect(vs.asV4() != null);
-    try std.testing.expectEqual(null, vs.asV3Const());
-    try std.testing.expect(vs.asV4Const() != null);
 }
 
 test "state.VoteState.clone and equals" {
@@ -6432,8 +6381,8 @@ test "state.VoteStateVersions.convertToVoteState: v0_23_5 to v3" {
     const vs = try versions.convertToVoteState(allocator, null, false);
     defer vs.deinit(allocator);
 
-    try std.testing.expect(vs.isV3());
-    try std.testing.expect(!vs.isV4());
+    try std.testing.expect(vs == .v3);
+    try std.testing.expect(vs != .v4);
     try std.testing.expect(vs.nodePubkey().equals(&node_pk));
     try std.testing.expect(vs.withdrawerKey().equals(&withdrawer_pk));
     try std.testing.expectEqual(10, vs.commission());
@@ -6461,8 +6410,8 @@ test "state.VoteStateVersions.convertToVoteState: v1_14_11 to v3" {
     const vs = try versions.convertToVoteState(allocator, null, false);
     defer vs.deinit(allocator);
 
-    try std.testing.expect(vs.isV3());
-    try std.testing.expect(!vs.isV4());
+    try std.testing.expect(vs == .v3);
+    try std.testing.expect(vs != .v4);
     try std.testing.expect(vs.nodePubkey().equals(&node_pk));
     try std.testing.expect(vs.withdrawerKey().equals(&withdrawer_pk));
     try std.testing.expectEqual(20, vs.commission());
@@ -6486,7 +6435,7 @@ test "state.VoteStateVersions.convertToVoteState: v3 stays v3" {
     const vs = try versions.convertToVoteState(allocator, null, false);
     defer vs.deinit(allocator);
 
-    try std.testing.expect(vs.isV3());
+    try std.testing.expect(vs == .v3);
     try std.testing.expectEqual(30, vs.commission());
 }
 
@@ -6507,7 +6456,7 @@ test "state.VoteStateVersions.convertToVoteState: v4 stays v4 even with target_v
     defer vs.deinit(allocator);
 
     // v4 input stays v4 regardless of target_v4 flag
-    try std.testing.expect(vs.isV4());
+    try std.testing.expect(vs == .v4);
     try std.testing.expectEqual(40, vs.commission());
 }
 
@@ -6527,6 +6476,6 @@ test "state.VoteStateVersions.convertToVoteState: target_v4=true converts to v4"
     const vs = try versions.convertToVoteState(allocator, vote_pk, true);
     defer vs.deinit(allocator);
 
-    try std.testing.expect(vs.isV4());
+    try std.testing.expect(vs == .v4);
     try std.testing.expectEqual(50, vs.commission());
 }

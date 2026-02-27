@@ -807,7 +807,7 @@ pub const RpcHookContext = struct {
 
             // Convert epoch credits to [3]u64 format
             // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1174
-            const all_credits = vote_state.epoch_credits.items;
+            const all_credits = vote_state.epochCreditsList().items;
             const num_credits_to_return = @min(
                 all_credits.len,
                 MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY,
@@ -821,14 +821,14 @@ pub const RpcHookContext = struct {
 
             const info = GetVoteAccounts.VoteAccount{
                 .votePubkey = vote_pk,
-                .nodePubkey = vote_state.node_pubkey,
+                .nodePubkey = vote_state.nodePubkey().*,
                 .activatedStake = activated_stake,
                 .epochVoteAccount = is_epoch_vote_account,
                 .commission = vote_state.commission(),
                 .lastVote = last_vote_slot,
                 .epochCredits = credits,
                 // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1188
-                .rootSlot = vote_state.root_slot orelse 0,
+                .rootSlot = vote_state.rootSlot() orelse 0,
             };
 
             if (is_current) {

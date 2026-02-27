@@ -678,13 +678,9 @@ fn delegate(
 
         break :blk .{
             vote_account.pubkey,
-            // weirdness: error handling for this is done later
-            vote_account.deserializeFromAccountData(allocator, VoteStateVersions),
+            try vote_account.deserializeFromAccountData(allocator, VoteStateVersions),
         };
     };
-    var vote_state_to_deinit: ?*const anyerror!VoteStateVersions = &vote_state;
-    if (vote_state_to_deinit) |fallible| if (fallible.*) |*vs| vs.deinit(allocator) else |_| {};
-
     var stake_account = try ic.borrowInstructionAccount(stake_account_index);
     defer stake_account.release();
 
@@ -697,9 +693,8 @@ fn delegate(
             const validated = try validateDelegatedAmount(ic, &stake_account, meta, feature_set);
             const stake_amount = validated.stake_amount;
 
-            const payload = try vote_state;
-            vote_state_to_deinit = null;
-            const current_vote_state = try payload.convertToVoteState(allocator, vote_pubkey, false);
+            const current_vote_state =
+                try vote_state.convertToVoteState(allocator, vote_pubkey, false);
             defer current_vote_state.deinit(allocator);
 
             const new_stake = newStake(
@@ -723,9 +718,8 @@ fn delegate(
             );
             const stake_amount = validated.stake_amount;
 
-            const payload = try vote_state;
-            vote_state_to_deinit = null;
-            const current_vote_state = try payload.convertToVoteState(allocator, vote_pubkey, false);
+            const current_vote_state =
+                try vote_state.convertToVoteState(allocator, vote_pubkey, false);
             defer current_vote_state.deinit(allocator);
             if (redelegateStake(
                 ic,
