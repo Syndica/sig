@@ -6316,6 +6316,7 @@ test "state.VoteState.delegating methods" {
             allocator,
             Pubkey.ZEROES,
             Pubkey.ZEROES,
+            Pubkey.ZEROES,
             0,
             0,
         ) };
