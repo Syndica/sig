@@ -3,32 +3,43 @@ sidebar_position: 7
 title: Fuzzing
 ---
 
-fuzzing logic can be found in the `src/fuzz.zig` file.
+Fuzzing logic can be found in the `src/fuzz.zig` file.
 
-we currently support the following filters:
+We currently support the following filters:
 
 ```zig
 pub const FuzzFilter = enum {
     accountsdb,
-    snapshot,
     gossip_service,
     gossip_table,
-    allocators,
     ledger,
+    allocators,
 };
 ```
 
-you can build and run the fuzzers with the following commands:
+You can build and run the fuzzers with the following commands:
 
 ```bash
 zig build fuzz -- gossip_service
 ```
 
-*Note:* the accounts-db fuzzer requires many open file descriptors,
-so you need to build the binary first and then run it (ie,
-`zig build fuzz && ./zig-out/bin/fuzz accountsdb`).
+*Note:* The accounts-db fuzzer requires many open file descriptors,
+so you need to build the binary first and then run it:
 
-*Note:* most commands include specification of a rng seed followed by the
+```bash
+zig build -Dno-run fuzz
+./zig-out/bin/fuzz accountsdb --max-slots 1000
+```
+
+### AccountsDB Fuzzer Options
+
+The accountsdb fuzzer supports the following options:
+- `--max-slots <N>`: Exit after N slots (omit for infinite fuzzing)
+- `--non-sequential-slots`: Enable non-sequential slot ordering
+
+### Other Fuzzers
+
+Most other fuzzers include specification of an RNG seed followed by the
 maximum number of 'actions' to take. For example:
 
 ```bash
@@ -40,12 +51,12 @@ zig build fuzz -- gossip_service 19 10000
 We also support kcov to give coverage information on what was and was not fuzzed:
 - [https://github.com/SimonKagstrom/kcov](https://github.com/SimonKagstrom/kcov)
 
-commands to run:
+Commands to run:
 - `bash scripts/kcov_fuzz_gossip_service.sh`
 - `bash scripts/kcov_fuzz_gossip_table.sh`
 - `bash scripts/kcov_fuzz_accountsdb.sh`
 
-*note:* view the scripts for helpful install instructions of kcov
+*Note:* View the scripts for helpful install instructions of kcov.
 
 ![](/img/2024-07-10-09-39-25.png)
 

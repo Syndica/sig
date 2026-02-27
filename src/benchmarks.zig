@@ -8,8 +8,6 @@ const math = std.math;
 
 const Decl = std.builtin.Type.Declaration;
 const Duration = sig.time.Duration;
-const accounts_db = sig.accounts_db;
-const SNAPSHOT_DIR = @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad.SNAPSHOT_DIR_PATH;
 
 pub const Resolution = enum {
     nanos,
@@ -29,15 +27,12 @@ pub const Resolution = enum {
 
 const Filter = enum {
     accounts_db,
-    accounts_db_readwrite,
-    accounts_db_snapshot, // expensive
     bincode,
     crypto,
     geyser,
     gossip,
     ledger,
     socket_utils,
-    swissmap,
     sync,
     zksdk,
 };
@@ -62,6 +57,10 @@ fn usageText() []const u8 {
 /// is already fixed in 0.16.
 fn getBenchmarks(comptime filter: Filter) []const Benchmark {
     return switch (filter) {
+        .accounts_db => &.{.{
+            .type = @import("accountsdb/two/benchmarks.zig").BenchmarkAccountsDBTwo,
+            .resolution = .millis,
+        }},
         .sync => &.{.{
             .type = @import("sync/channel.zig").BenchmarkChannel,
             .resolution = .nanos,
@@ -100,10 +99,6 @@ fn getBenchmarks(comptime filter: Filter) []const Benchmark {
                 .resolution = .millis,
             },
         },
-        .swissmap => &.{.{
-            .type = @import("accountsdb/swiss_map.zig").BenchmarkSwissMap,
-            .resolution = .nanos,
-        }},
         .bincode => &.{.{
             .type = @import("bincode/benchmarks.zig").BenchmarkEntry,
             .resolution = .nanos,
@@ -112,7 +107,7 @@ fn getBenchmarks(comptime filter: Filter) []const Benchmark {
             .type = @import("zksdk/benchmarks.zig").Benchmark,
             .resolution = .micros,
         }},
-        .geyser, .accounts_db, .accounts_db_snapshot, .accounts_db_readwrite => &.{},
+        .geyser => &.{},
     };
 }
 
@@ -239,106 +234,6 @@ pub fn main() !void {
             // NOTE: we dont support CSV output on this method so all results are printed as debug
             logger.debug().log("Geyser Streaming Benchmark:");
             try @import("geyser/lib.zig").benchmark.runBenchmark(.from(logger));
-        },
-        .accounts_db,
-        .accounts_db_snapshot,
-        .accounts_db_readwrite,
-        => |t| {
-            const run_all_benchmarks: bool = t == .accounts_db;
-            const run_snapshot: bool = t == .accounts_db_snapshot or run_all_benchmarks;
-            const run_readwrite: bool = t == .accounts_db_readwrite or run_all_benchmarks;
-
-            if (run_snapshot and !cmd.run_expensive_benchmarks) {
-                logger.err().log("use '-e' to run accounts_db_snapshot benchmark");
-                return;
-            }
-
-            if (run_snapshot) snapshot_benchmark: {
-                // NOTE: not a very robust check, but we don't need anything crazy here.
-                const snapshot_exists = std.meta.isError(std.fs.cwd().access(SNAPSHOT_DIR, .{}));
-                if (cmd.force_fresh_state or !snapshot_exists) {
-                    // download a new snapshot
-                    if (snapshot_exists) {
-                        // delete existing snapshot dir
-                        logger.info().log("deleting snapshot dir...");
-                        std.fs.cwd().deleteTree(SNAPSHOT_DIR) catch |err| {
-                            logger.err().logf("failed to delete snapshot dir ('{s}'): {}", .{
-                                SNAPSHOT_DIR,
-                                err,
-                            });
-                            return err;
-                        };
-                    }
-
-                    // create fresh snapshot dir
-                    var snapshot_dir = try std.fs.cwd().makeOpenPath(
-                        SNAPSHOT_DIR,
-                        .{ .iterate = true },
-                    );
-                    defer snapshot_dir.close();
-
-                    // start gossip
-                    const gossip_service = try sig.gossip.helpers.initGossipFromCluster(
-                        gpa,
-                        .from(logger),
-                        .testnet, // TODO: support other clusters
-                        8006,
-                    );
-                    defer {
-                        gossip_service.shutdown();
-                        gossip_service.deinit();
-                        gpa.destroy(gossip_service);
-                    }
-                    try gossip_service.start(.{});
-
-                    // download and unpack snapshot
-                    const snapshot_manifests, //
-                    _ //
-                    = sig.accounts_db.snapshot.download.getOrDownloadAndUnpackSnapshot(
-                        gpa,
-                        .from(logger),
-                        SNAPSHOT_DIR,
-                        .{
-                            .gossip_service = gossip_service,
-                            .force_new_snapshot_download = true,
-                            .max_number_of_download_attempts = 50,
-                            .min_snapshot_download_speed_mbs = 10,
-                            .download_timeout = Duration.fromMinutes(5),
-                        },
-                    ) catch |err| {
-                        switch (err) {
-                            error.UnableToDownloadSnapshot => {
-                                logger.err().log(
-                                    "unable to download snapshot, skipping benchmark...",
-                                );
-                                break :snapshot_benchmark;
-                            },
-                            else => return err,
-                        }
-                    };
-                    defer snapshot_manifests.deinit(gpa);
-                }
-
-                try benchmark(
-                    gpa,
-                    logger,
-                    @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad,
-                    max_time_per_bench,
-                    .millis,
-                    &metrics,
-                );
-            }
-
-            if (run_readwrite) {
-                try benchmark(
-                    gpa,
-                    logger,
-                    @import("accountsdb/db.zig").BenchmarkAccountsDB,
-                    max_time_per_bench,
-                    .millis,
-                    &metrics,
-                );
-            }
         },
     }
 

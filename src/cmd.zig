@@ -257,20 +257,24 @@ pub fn main() !void {
             params.gossip_node.apply(&current_config);
             try testTransactionSenderService(gpa, gossip_gpa, current_config);
         },
-        .mock_rpc_server => |params| {
-            params.gossip_base.apply(&current_config);
-            params.gossip_node.apply(&current_config);
-
-            current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
-                gpa,
-                params.snapshot_dir,
-                "accounts_db",
-            );
-            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
-            params.accountsdb_base.apply(&current_config);
-            params.accountsdb_download.apply(&current_config);
-            try mockRpcServer(gpa, current_config);
-        },
+        // NOTE: mock_rpc_server is disabled because AccountsDB v2 does not yet support:
+        // - loadWithDefaults (snapshot loading into AccountsDB)
+        // - registerRPCHooks (RPC hooks for snapshot serving)
+        // TODO: Re-enable when v2 implements snapshot loading and RPC hook registration.
+        // .mock_rpc_server => |params| {
+        //     params.gossip_base.apply(&current_config);
+        //     params.gossip_node.apply(&current_config);
+        //
+        //     current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+        //         gpa,
+        //         params.snapshot_dir,
+        //         "accounts_db",
+        //     );
+        //     current_config.cli_provided_genesis_file_path = params.genesis_file_path;
+        //     params.accountsdb_base.apply(&current_config);
+        //     params.accountsdb_download.apply(&current_config);
+        //     try mockRpcServer(gpa, current_config);
+        // },
         .agave_migration_tool => |params| {
             var app_base = try AppBase.init(gpa, current_config);
             defer {
@@ -323,7 +327,10 @@ const Cmd = struct {
         print_manifest: PrintManifest,
         leader_schedule: LeaderScheduleSubCmd,
         test_transaction_sender: TestTransactionSender,
-        mock_rpc_server: MockRpcServer,
+        // NOTE: mock_rpc_server is disabled because AccountsDB v2 does not yet support
+        // snapshot loading (loadWithDefaults) and RPC hook registration (registerRPCHooks).
+        // TODO: Re-enable when v2 implements these features.
+        // mock_rpc_server: MockRpcServer,
         agave_migration_tool: AgaveMigrationTool,
         ledger: LedgerSubCmd,
     },
@@ -351,7 +358,8 @@ const Cmd = struct {
                 .print_manifest = PrintManifest.cmd_info,
                 .leader_schedule = LeaderScheduleSubCmd.cmd_info,
                 .test_transaction_sender = TestTransactionSender.cmd_info,
-                .mock_rpc_server = MockRpcServer.cmd_info,
+                // NOTE: mock_rpc_server is disabled - see MockRpcServer struct below for details.
+                // .mock_rpc_server = MockRpcServer.cmd_info,
                 .agave_migration_tool = AgaveMigrationTool.cmd_info,
                 .ledger = LedgerSubCmd.cmd_info,
             },
@@ -588,24 +596,13 @@ const Cmd = struct {
     };
 
     const AccountsDbArgumentsBase = struct {
-        use_disk_index: bool,
         n_threads_snapshot_load: u32,
         n_threads_snapshot_unpack: u16,
         force_unpack_snapshot: bool,
-        number_of_index_shards: u64,
-        accounts_per_file_estimate: u64,
         skip_snapshot_validation: bool,
         dbg_db_init: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
-            .use_disk_index = .{
-                .kind = .named,
-                .name_override = null,
-                .alias = .none,
-                .default_value = false,
-                .config = {},
-                .help = "use disk-memory for the account index",
-            },
             .n_threads_snapshot_load = .{
                 .kind = .named,
                 .name_override = null,
@@ -630,25 +627,6 @@ const Cmd = struct {
                 .config = {},
                 .help = "unpacks a snapshot (even if it exists)",
             },
-            .number_of_index_shards = .{
-                .kind = .named,
-                .name_override = null,
-                .alias = .none,
-                .default_value = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS,
-                .config = {},
-                .help = "number of shards for the account index's pubkey_ref_map",
-            },
-            .accounts_per_file_estimate = .{
-                .kind = .named,
-                .name_override = null,
-                .alias = .a,
-                .default_value = sig.accounts_db.db
-                    .getAccountPerFileEstimateFromCluster(.testnet) catch
-                    @compileError("account_per_file_estimate missing for default cluster"),
-                .config = {},
-                .help = "number of accounts to estimate inside of account files" ++
-                    " (used for pre-allocation)",
-            },
             .skip_snapshot_validation = .{
                 .kind = .named,
                 .name_override = null,
@@ -672,12 +650,9 @@ const Cmd = struct {
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
-            cfg.accounts_db.use_disk_index = args.use_disk_index;
             cfg.accounts_db.num_threads_snapshot_load = args.n_threads_snapshot_load;
             cfg.accounts_db.num_threads_snapshot_unpack = args.n_threads_snapshot_unpack;
             cfg.accounts_db.force_unpack_snapshot = args.force_unpack_snapshot;
-            cfg.accounts_db.number_of_index_shards = args.number_of_index_shards;
-            cfg.accounts_db.accounts_per_file_estimate = args.accounts_per_file_estimate;
             cfg.accounts_db.skip_snapshot_validation = args.skip_snapshot_validation;
             cfg.accounts_db.dbg_db_init = args.dbg_db_init;
         }
@@ -1200,31 +1175,35 @@ const Cmd = struct {
         };
     };
 
-    const MockRpcServer = struct {
-        gossip_base: GossipArgumentsCommon,
-        gossip_node: GossipArgumentsNode,
-        snapshot_dir: []const u8,
-        genesis_file_path: ?[]const u8,
-        accountsdb_base: AccountsDbArgumentsBase,
-        accountsdb_download: AccountsDbArgumentsDownload,
-        force_new_snapshot_download: bool,
-
-        const cmd_info: cli.CommandInfo(@This()) = .{
-            .help = .{
-                .short = "Run a mock RPC server.",
-                .long = null,
-            },
-            .sub = .{
-                .gossip_base = GossipArgumentsCommon.cmd_info,
-                .gossip_node = GossipArgumentsNode.cmd_info,
-                .snapshot_dir = snapshot_dir_arg,
-                .genesis_file_path = genesis_file_path_arg,
-                .accountsdb_base = AccountsDbArgumentsBase.cmd_info,
-                .accountsdb_download = AccountsDbArgumentsDownload.cmd_info,
-                .force_new_snapshot_download = force_new_snapshot_download_arg,
-            },
-        };
-    };
+    // NOTE: MockRpcServer is disabled because AccountsDB v2 does not yet support:
+    // - loadWithDefaults (snapshot loading into AccountsDB)
+    // - registerRPCHooks (RPC hooks for snapshot serving)
+    // TODO: Re-enable when v2 implements snapshot loading and RPC hook registration.
+    // const MockRpcServer = struct {
+    //     gossip_base: GossipArgumentsCommon,
+    //     gossip_node: GossipArgumentsNode,
+    //     snapshot_dir: []const u8,
+    //     genesis_file_path: ?[]const u8,
+    //     accountsdb_base: AccountsDbArgumentsBase,
+    //     accountsdb_download: AccountsDbArgumentsDownload,
+    //     force_new_snapshot_download: bool,
+    //
+    //     const cmd_info: cli.CommandInfo(@This()) = .{
+    //         .help = .{
+    //             .short = "Run a mock RPC server.",
+    //             .long = null,
+    //         },
+    //         .sub = .{
+    //             .gossip_base = GossipArgumentsCommon.cmd_info,
+    //             .gossip_node = GossipArgumentsNode.cmd_info,
+    //             .snapshot_dir = snapshot_dir_arg,
+    //             .genesis_file_path = genesis_file_path_arg,
+    //             .accountsdb_base = AccountsDbArgumentsBase.cmd_info,
+    //             .accountsdb_download = AccountsDbArgumentsDownload.cmd_info,
+    //             .force_new_snapshot_download = force_new_snapshot_download_arg,
+    //         },
+    //     };
+    // };
 
     const LedgerSubCmd = struct {
         action: ?union(enum) {
@@ -2356,75 +2335,81 @@ fn testTransactionSenderService(
     transaction_sender_handle.join();
 }
 
-fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
-    const logger: sig.trace.Logger("mock rpc") = .{
-        .impl = .direct_print,
-        .max_level = .trace,
-        .filters = .trace,
-    };
-
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(cfg.accounts_db.snapshot_dir, .{
-        .iterate = true,
-    });
-    defer snapshot_dir.close();
-
-    const snap_files = try sig.accounts_db.db.findAndUnpackSnapshotFilePair(
-        allocator,
-        std.Thread.getCpuCount() catch 1,
-        snapshot_dir,
-        snapshot_dir,
-    );
-
-    var accountsdb = try sig.accounts_db.AccountsDB.init(.{
-        .allocator = allocator,
-        .logger = .noop,
-        .snapshot_dir = snapshot_dir,
-        .geyser_writer = null,
-        .gossip_view = null,
-        .index_allocation = .ram,
-        .number_of_index_shards = 1,
-    });
-    defer accountsdb.deinit();
-
-    {
-        const all_snap_fields = try FullAndIncrementalManifest.fromFiles(
-            allocator,
-            .from(logger),
-            snapshot_dir,
-            snap_files,
-        );
-        defer all_snap_fields.deinit(allocator);
-
-        const manifest =
-            try accountsdb.loadWithDefaults(allocator, all_snap_fields, 1, true, 1500);
-        defer manifest.deinit(allocator);
-    }
-
-    var rpc_hooks = sig.rpc.Hooks{};
-    defer rpc_hooks.deinit(allocator);
-    try accountsdb.registerRPCHooks(&rpc_hooks);
-
-    var server_ctx = try sig.rpc.server.Context.init(.{
-        .allocator = allocator,
-        .logger = .from(logger),
-        .rpc_hooks = &rpc_hooks,
-
-        .read_buffer_size = sig.rpc.server.MIN_READ_BUFFER_SIZE,
-        .socket_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 8899),
-        .reuse_address = true,
-    });
-    defer server_ctx.joinDeinit();
-
-    // var maybe_liou = try sig.rpc.server.LinuxIoUring.init(&server_ctx);
-    // defer if (maybe_liou) |*liou| liou.deinit();
-
-    var exit = std.atomic.Value(bool).init(false);
-    try sig.rpc.server.serve(
-        &exit,
-        &server_ctx,
-        .basic, // if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else .basic,
-    );
-}
+// NOTE: mockRpcServer is disabled because AccountsDB v2 does not yet support:
+// - loadWithDefaults (snapshot loading into AccountsDB)
+// - registerRPCHooks (RPC hooks for snapshot serving)
+// TODO: Re-enable when v2 implements snapshot loading and RPC hook registration.
+//
+// fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
+//     const logger: sig.trace.Logger("mock rpc") = .{
+//         .impl = .direct_print,
+//         .max_level = .trace,
+//         .filters = .trace,
+//     };
+//
+//     var snapshot_dir = try std.fs.cwd().makeOpenPath(cfg.accounts_db.snapshot_dir, .{
+//         .iterate = true,
+//     });
+//     defer snapshot_dir.close();
+//
+//     const snap_files = try sig.accounts_db.snapshot.findAndUnpackSnapshotFilePair(
+//         allocator,
+//         std.Thread.getCpuCount() catch 1,
+//         snapshot_dir,
+//         snapshot_dir,
+//     );
+//
+//     // NOTE: AccountsDB v1 initialization - needs v2 equivalent
+//     // var accountsdb = try sig.accounts_db.AccountsDB.init(.{
+//     //     .allocator = allocator,
+//     //     .logger = .noop,
+//     //     .snapshot_dir = snapshot_dir,
+//     //     .geyser_writer = null,
+//     //     .gossip_view = null,
+//     //     .index_allocation = .ram,
+//     // });
+//     // defer accountsdb.deinit();
+//
+//     // {
+//     //     const all_snap_fields = try FullAndIncrementalManifest.fromFiles(
+//     //         allocator,
+//     //         .from(logger),
+//     //         snapshot_dir,
+//     //         snap_files,
+//     //     );
+//     //     defer all_snap_fields.deinit(allocator);
+//     //
+//     //     const manifest =
+//     //         try accountsdb.loadWithDefaults(allocator, all_snap_fields, 1, true, 1500);
+//     //     defer manifest.deinit(allocator);
+//     // }
+//
+//     var rpc_hooks = sig.rpc.Hooks{};
+//     defer rpc_hooks.deinit(allocator);
+//     // NOTE: v2 needs registerRPCHooks equivalent
+//     // try accountsdb.registerRPCHooks(&rpc_hooks);
+//
+//     var server_ctx = try sig.rpc.server.Context.init(.{
+//         .allocator = allocator,
+//         .logger = .from(logger),
+//         .rpc_hooks = &rpc_hooks,
+//
+//         .read_buffer_size = sig.rpc.server.MIN_READ_BUFFER_SIZE,
+//         .socket_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 8899),
+//         .reuse_address = true,
+//     });
+//     defer server_ctx.joinDeinit();
+//
+//     // var maybe_liou = try sig.rpc.server.LinuxIoUring.init(&server_ctx);
+//     // defer if (maybe_liou) |*liou| liou.deinit();
+//
+//     var exit = std.atomic.Value(bool).init(false);
+//     try sig.rpc.server.serve(
+//         &exit,
+//         &server_ctx,
+//         .basic, // if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else .basic,
+//     );
+// }
 
 /// Entrypoint for ledger utilities
 fn ledgerTool(

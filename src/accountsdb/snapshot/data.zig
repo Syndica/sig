@@ -1325,7 +1325,7 @@ test "checkAllAllocationFailures FullAndIncrementalManifest" {
     defer tmp_dir_root.cleanup();
     const snapdir = tmp_dir_root.dir;
 
-    const snapshot_files = try sig.accounts_db.db.findAndUnpackTestSnapshots(1, snapdir);
+    const snapshot_files = try findAndUnpackTestSnapshots(1, snapdir);
 
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
@@ -1477,6 +1477,77 @@ pub fn parallelUnpackZstdTarBall(
     );
 }
 
+/// Test helper: finds and unpacks test snapshot files from the test data directory.
+/// Should only be used in tests.
+pub fn findAndUnpackTestSnapshots(
+    n_threads: usize,
+    /// The directory into which the snapshots are unpacked.
+    /// Useful in tandem with the returned `SnapshotFiles` for loading
+    /// from a different directory to where the source snapshot archives
+    /// are located.
+    output_dir: std.fs.Dir,
+) !SnapshotFiles {
+    comptime std.debug.assert(@import("builtin").is_test); // should only be used in tests
+    const allocator = std.testing.allocator;
+    var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
+    defer test_data_dir.close();
+    return try findAndUnpackSnapshotFilePair(allocator, n_threads, output_dir, test_data_dir);
+}
+
+/// Finds snapshot files in the source directory and unpacks them to the destination directory.
+pub fn findAndUnpackSnapshotFilePair(
+    allocator: std.mem.Allocator,
+    n_threads: usize,
+    dst_dir: std.fs.Dir,
+    /// Must be iterable.
+    src_dir: std.fs.Dir,
+) !SnapshotFiles {
+    const snapshot_files = try SnapshotFiles.find(allocator, src_dir);
+    try unpackSnapshotFilePair(allocator, n_threads, dst_dir, src_dir, snapshot_files);
+    return snapshot_files;
+}
+
+/// Unpacks the identified snapshot files in `src_dir` into `dst_dir`.
+pub fn unpackSnapshotFilePair(
+    allocator: std.mem.Allocator,
+    n_threads: usize,
+    dst_dir: std.fs.Dir,
+    src_dir: std.fs.Dir,
+    /// `= try SnapshotFiles.find(allocator, src_dir)`
+    snapshot_files: SnapshotFiles,
+) !void {
+    {
+        const full = snapshot_files.full;
+        const full_name_bounded = full.snapshotArchiveName();
+        const full_name = full_name_bounded.constSlice();
+        const full_archive_file = try src_dir.openFile(full_name, .{});
+        defer full_archive_file.close();
+        try parallelUnpackZstdTarBall(
+            allocator,
+            .noop,
+            full_archive_file,
+            dst_dir,
+            n_threads,
+            true,
+        );
+    }
+
+    if (snapshot_files.incremental()) |inc| {
+        const inc_name_bounded = inc.snapshotArchiveName();
+        const inc_name = inc_name_bounded.constSlice();
+        const inc_archive_file = try src_dir.openFile(inc_name, .{});
+        defer inc_archive_file.close();
+        try parallelUnpackZstdTarBall(
+            allocator,
+            .noop,
+            inc_archive_file,
+            dst_dir,
+            n_threads,
+            false,
+        );
+    }
+}
+
 test FullSnapshotFileInfo {
     try testFullSnapshotFileInfo("snapshot-10-11111111111111111111111111111111.tar.zst", .{
         .slot = 10,
@@ -1538,7 +1609,7 @@ test "parse status cache" {
     defer tmp_dir_root.cleanup();
     const snapdir = tmp_dir_root.dir;
 
-    _ = try sig.accounts_db.db.findAndUnpackTestSnapshots(1, snapdir);
+    _ = try findAndUnpackTestSnapshots(1, snapdir);
 
     const status_cache_file = try snapdir.openFile("snapshots/status_cache", .{});
     defer status_cache_file.close();
@@ -1556,7 +1627,7 @@ test "parse snapshot fields" {
     defer tmp_dir_root.cleanup();
     const snapdir = tmp_dir_root.dir;
 
-    const snapshot_files = try sig.accounts_db.db.findAndUnpackTestSnapshots(1, snapdir);
+    const snapshot_files = try findAndUnpackTestSnapshots(1, snapdir);
 
     const full_slot = snapshot_files.full.slot;
     const full_manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{full_slot});

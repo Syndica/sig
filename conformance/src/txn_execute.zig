@@ -1214,7 +1214,6 @@ pub fn getSysvarFromAccounts(
 //         .geyser_writer = null,
 //         .gossip_view = null,
 //         .index_allocation = .ram,
-//         .number_of_index_shards = 1,
 //         .buffer_pool_frames = 1024,
 //     });
 // }

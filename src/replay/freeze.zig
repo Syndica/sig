@@ -28,6 +28,8 @@ const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const UpdateSysvarAccountDeps = replay.update_sysvar.UpdateSysvarAccountDeps;
 const updateSlotHistory = replay.update_sysvar.updateSlotHistory;
+
+const MERKLE_FANOUT: usize = 16;
 const updateRecentBlockhashes = replay.update_sysvar.updateRecentBlockhashes;
 
 pub const FreezeParams = struct {
@@ -371,7 +373,7 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
 
     const hash = try sig.utils.merkle_tree.computeMerkleRoot(
         &.{hashes},
-        sig.accounts_db.db.MERKLE_FANOUT,
+        MERKLE_FANOUT,
     );
 
     return hash;

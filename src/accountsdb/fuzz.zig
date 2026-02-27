@@ -1,3 +1,8 @@
+//! Fuzz test for AccountsDB v2 (Two.zig).
+//!
+//! This fuzzer tests the correctness of account storage and retrieval
+//! by comparing against a simple reference implementation (TrackedAccountsMap).
+
 const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../sig.zig");
@@ -7,9 +12,9 @@ const Account = sig.runtime.AccountSharedData;
 const Pubkey = sig.core.pubkey.Pubkey;
 const Slot = sig.core.time.Slot;
 
-const AccountsDB = sig.accounts_db.AccountsDB;
-const FullSnapshotFileInfo = sig.accounts_db.snapshot.data.FullSnapshotFileInfo;
-const IncrementalSnapshotFileInfo = sig.accounts_db.snapshot.data.IncrementalSnapshotFileInfo;
+const Two = sig.accounts_db.Two;
+const AccountStore = sig.accounts_db.AccountStore;
+const AccountReader = sig.accounts_db.AccountReader;
 
 const N_RANDOM_THREADS = 8;
 
@@ -44,14 +49,10 @@ pub const TrackedAccount = struct {
 pub const RunCmd = struct {
     max_slots: ?Slot,
     non_sequential_slots: bool,
-    index_allocation: ?IndexAllocation,
-    enable_manager: bool,
-
-    pub const IndexAllocation = enum { ram, disk };
 
     pub const cmd_info: cli.CommandInfo(RunCmd) = .{
         .help = .{
-            .short = "Fuzz accountsdb.",
+            .short = "Fuzz accountsdb v2.",
             .long = null,
         },
         .sub = .{
@@ -71,25 +72,6 @@ pub const RunCmd = struct {
                 .config = {},
                 .help = "Enable non-sequential slots.",
             },
-            .index_allocation = .{
-                .kind = .named,
-                .name_override = null,
-                .alias = .none,
-                .default_value = null,
-                .config = {},
-                .help =
-                \\Whether to use ram or disk for index allocation.
-                \\Defaults to a random value based on the seed.
-                ,
-            },
-            .enable_manager = .{
-                .kind = .named,
-                .name_override = null,
-                .alias = .none,
-                .default_value = false,
-                .config = {},
-                .help = "Enable the accountsdb manager during fuzzer.",
-            },
         },
     };
 };
@@ -100,7 +82,7 @@ pub fn run(
     allocator: std.mem.Allocator,
     logger: Logger,
     seed: u64,
-    fuzz_data_dir: std.fs.Dir,
+    _: std.fs.Dir, // fuzz_data_dir - not used for v2
     run_cmd: RunCmd,
 ) !void {
     var prng_state: std.Random.DefaultPrng = .init(seed);
@@ -113,52 +95,14 @@ pub fn run(
 
     const maybe_max_slots = run_cmd.max_slots;
     const non_sequential_slots = run_cmd.non_sequential_slots;
-    const enable_manager = run_cmd.enable_manager;
-    const index_allocation =
-        run_cmd.index_allocation orelse
-        random.enumValue(RunCmd.IndexAllocation);
 
-    const main_dir_name = "main";
-    var main_accountsdb_dir = try fuzz_data_dir.makeOpenPath(main_dir_name, .{});
-    defer main_accountsdb_dir.close();
-
-    const alt_dir_name = "alt";
-    var alt_accountsdb_dir = try fuzz_data_dir.makeOpenPath(alt_dir_name, .{});
-    defer alt_accountsdb_dir.close();
-
-    defer for ([_][]const u8{ main_dir_name, alt_dir_name }) |dir_name| {
-        // NOTE: sometimes this can take a long time so we print when we start and finish
-        logger.info().logf("deleting dir: {s}...", .{dir_name});
-        defer logger.info().logf("deleted dir: {s}", .{dir_name});
-        fuzz_data_dir.deleteTreeMinStackSize(dir_name) catch |err| {
-            logger.err().logf(
-                "failed to delete accountsdb dir ('{s}'): {}",
-                .{ dir_name, err },
-            );
-        };
-    };
-
-    logger.info().logf("enable manager: {}", .{enable_manager});
-    logger.info().logf("index allocation: {s}", .{@tagName(index_allocation)});
     logger.info().logf("non-sequential slots: {}", .{non_sequential_slots});
 
-    var accounts_db: AccountsDB = try .init(.{
-        .allocator = allocator,
-        .logger = .from(logger),
-        .snapshot_dir = main_accountsdb_dir,
-        .geyser_writer = null,
-        .gossip_view = null,
-        .index_allocation = switch (index_allocation) {
-            .ram => .ram,
-            .disk => .disk,
-        },
-        .number_of_index_shards = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS,
-    });
-    defer accounts_db.deinit();
-    const account_store = accounts_db.accountStore();
+    var test_state = try Two.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
 
-    // prealloc some references to use throught the fuzz
-    try accounts_db.account_index.expandRefCapacity(1_000_000);
+    const account_store: AccountStore = .{ .accounts_db_two = db };
 
     var tracked_accounts_rw: sig.sync.RwMux(TrackedAccountsMap) = .init(.empty);
     defer {
@@ -173,7 +117,7 @@ pub fn run(
         try tracked_accounts.ensureTotalCapacity(allocator, 10_000);
     }
 
-    var reader_exit: std.atomic.Value(bool) = .init(true);
+    var reader_exit: std.atomic.Value(bool) = .init(false);
     var threads: std14.BoundedArray(std.Thread, N_RANDOM_THREADS) = .{};
     defer {
         reader_exit.store(true, .seq_cst);
@@ -196,9 +140,6 @@ pub fn run(
         }));
     }
 
-    var last_full_snapshot_validated_slot: Slot = 0;
-    var last_inc_snapshot_validated_slot: Slot = 0;
-    var largest_rooted_slot: Slot = 0;
     var top_slot: Slot = 0;
 
     var ancestors: sig.core.Ancestors = .EMPTY;
@@ -308,174 +249,18 @@ pub fn run(
                     };
                 defer account.deinit(allocator);
 
-                if (!account.data.eqlSlice(&tracked_account.data)) {
+                const account_data = try account.data.readAllAllocate(allocator);
+                defer allocator.free(account_data);
+
+                if (!std.mem.eql(u8, account_data, &tracked_account.data)) {
                     logger.err().logf(
                         "found account {f} with different data: " ++
                             "tracked: {any} vs found: {any}\n",
-                        .{ pubkey, tracked_account.data, account.data },
+                        .{ pubkey, tracked_account.data, account_data },
                     );
                     return error.TrackedAccountMismatch;
                 }
             },
-        }
-
-        const create_new_root =
-            enable_manager and
-            will_inc_slot and
-            random.int(u8) == 0;
-        if (create_new_root) snapshot_validation: {
-            largest_rooted_slot = @min(top_slot, largest_rooted_slot + 2);
-            accounts_db.max_slots.set(.{
-                .rooted = largest_rooted_slot,
-                .flushed = null,
-            });
-            try sig.accounts_db.manager.onSlotRooted(
-                allocator,
-                &accounts_db,
-                largest_rooted_slot,
-                5000,
-            );
-
-            // holding the lock here means that the snapshot archive(s) wont be deleted
-            // since deletion requires a write lock
-            const maybe_latest_snapshot_info, //
-            var snapshot_info_lg //
-            = accounts_db.latest_snapshot_gen_info.readWithLock();
-            defer snapshot_info_lg.unlock();
-
-            const snapshot_info = maybe_latest_snapshot_info.* orelse
-                break :snapshot_validation; // no snapshot yet
-            const full_snapshot_info = snapshot_info.full;
-
-            // copy the archive to the alternative snapshot dir
-            const full_snapshot_file_info: FullSnapshotFileInfo = full: {
-                if (full_snapshot_info.slot <= last_full_snapshot_validated_slot) {
-                    const inc_snapshot_info = snapshot_info.inc orelse break :snapshot_validation;
-                    if (inc_snapshot_info.slot <= last_inc_snapshot_validated_slot) {
-                        break :snapshot_validation;
-                    }
-                } else {
-                    last_full_snapshot_validated_slot = full_snapshot_info.slot;
-                }
-
-                const full_snapshot_file_info: FullSnapshotFileInfo = .{
-                    .slot = full_snapshot_info.slot,
-                    .hash = full_snapshot_info.hash.checksum(),
-                };
-                const full_archive_name_bounded = full_snapshot_file_info.snapshotArchiveName();
-                const full_archive_name = full_archive_name_bounded.constSlice();
-
-                const full_archive_file =
-                    try main_accountsdb_dir.openFile(full_archive_name, .{ .mode = .read_only });
-                defer full_archive_file.close();
-
-                try sig.accounts_db.snapshot.data.parallelUnpackZstdTarBall(
-                    allocator,
-                    .noop,
-                    full_archive_file,
-                    alt_accountsdb_dir,
-                    5,
-                    true,
-                );
-                logger.info().logf(
-                    "fuzz[validate]: unpacked full snapshot '{s}'",
-                    .{full_archive_name},
-                );
-
-                break :full full_snapshot_file_info;
-            };
-
-            // maybe copy the archive to the alternative snapshot dir
-            const maybe_incremental_file_info: ?IncrementalSnapshotFileInfo = inc: {
-                const inc_snapshot_info = snapshot_info.inc orelse break :inc null;
-
-                // already validated
-                if (inc_snapshot_info.slot <= last_inc_snapshot_validated_slot) break :inc null;
-                last_inc_snapshot_validated_slot = inc_snapshot_info.slot;
-
-                const inc_snapshot_file_info: IncrementalSnapshotFileInfo = .{
-                    .base_slot = full_snapshot_info.slot,
-                    .hash = inc_snapshot_info.hash.checksum(),
-                    .slot = inc_snapshot_info.slot,
-                };
-                const inc_archive_name_bounded = inc_snapshot_file_info.snapshotArchiveName();
-                const inc_archive_name = inc_archive_name_bounded.constSlice();
-
-                try main_accountsdb_dir.copyFile(
-                    inc_archive_name,
-                    alt_accountsdb_dir,
-                    inc_archive_name,
-                    .{},
-                );
-
-                const inc_archive_file =
-                    try alt_accountsdb_dir.openFile(inc_archive_name, .{});
-                defer inc_archive_file.close();
-
-                try sig.accounts_db.snapshot.data.parallelUnpackZstdTarBall(
-                    allocator,
-                    .noop,
-                    inc_archive_file,
-                    alt_accountsdb_dir,
-                    5,
-                    true,
-                );
-                logger.info().logf(
-                    "fuzz[validate]: unpacked inc snapshot '{s}'",
-                    .{inc_archive_name},
-                );
-
-                break :inc inc_snapshot_file_info;
-            };
-
-            const snapshot_files = sig.accounts_db.snapshot.SnapshotFiles.fromFileInfos(
-                full_snapshot_file_info,
-                maybe_incremental_file_info,
-            );
-
-            const combined_manifest =
-                try sig.accounts_db.snapshot.FullAndIncrementalManifest.fromFiles(
-                    allocator,
-                    .from(logger),
-                    alt_accountsdb_dir,
-                    snapshot_files,
-                );
-            defer combined_manifest.deinit(allocator);
-
-            const index_type: AccountsDB.InitParams.Index =
-                switch (accounts_db.account_index.reference_allocator) {
-                    .disk => .disk,
-                    .ram => .ram,
-                    .parent => @panic("invalid argument"),
-                };
-
-            var alt_accounts_db = try AccountsDB.init(.{
-                .allocator = allocator,
-                .logger = .noop,
-                .snapshot_dir = alt_accountsdb_dir,
-                .geyser_writer = null,
-                .gossip_view = null,
-                .index_allocation = index_type,
-                .number_of_index_shards = accounts_db.number_of_index_shards,
-            });
-            defer alt_accounts_db.deinit();
-
-            {
-                const loaded = try alt_accounts_db.loadWithDefaults(
-                    allocator,
-                    combined_manifest,
-                    1,
-                    true,
-                    N_ACCOUNTS_PER_SLOT,
-                );
-                defer loaded.deinit(allocator);
-            }
-
-            const maybe_inc_slot = if (snapshot_info.inc) |inc| inc.slot else null;
-            logger.info().logf(
-                "loaded and validated snapshot at slot: {} (and inc snapshot @ slot {any})",
-                .{ full_snapshot_info.slot, maybe_inc_slot },
-            );
         }
     }
 
@@ -485,7 +270,7 @@ pub fn run(
 fn readRandomAccounts(
     allocator: std.mem.Allocator,
     logger: Logger,
-    account_reader: sig.accounts_db.AccountReader,
+    account_reader: AccountReader,
     tracked_accounts_rw: *sig.sync.RwMux(TrackedAccountsMap),
     seed: u64,
     exit: *std.atomic.Value(bool),
@@ -534,9 +319,7 @@ test run {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     try run(std.testing.allocator, .FOR_TESTS, std.testing.random_seed, tmp_dir.dir, .{
-        .enable_manager = false,
         .max_slots = 100,
-        .index_allocation = .ram,
         .non_sequential_slots = true,
     });
 }
