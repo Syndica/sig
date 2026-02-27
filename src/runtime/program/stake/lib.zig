@@ -1434,7 +1434,7 @@ fn deactivateDelinquent(
     defer reference_vote_state.deinit(allocator);
 
     if (!acceptableReferenceEpochCredits(
-        reference_vote_state.epochCreditsList().items,
+        reference_vote_state.epochCreditsList(),
         current_epoch,
     )) {
         ic.tc.custom_error = @intFromEnum(StakeError.insufficient_reference_votes);
@@ -1458,7 +1458,7 @@ fn deactivateDelinquent(
     }
 
     if (!eligibleForAccountDelinquent(
-        delinquent_vote_state.epochCreditsList().items,
+        delinquent_vote_state.epochCreditsList(),
         current_epoch,
     )) {
         ic.tc.custom_error = @intFromEnum(

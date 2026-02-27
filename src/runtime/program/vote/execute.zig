@@ -699,7 +699,9 @@ fn widthraw(
 
     if (remaining_balance == 0) {
         const reject_active_vote_account_close = blk: {
-            if (vote_state.epochCreditsList().getLastOrNull()) |last_epoch_credit| {
+            const epoch_credits = vote_state.epochCreditsList();
+            if (epoch_credits.len > 0) {
+                const last_epoch_credit = epoch_credits[epoch_credits.len - 1];
                 const current_epoch = clock.epoch;
                 const last_epoch_with_credits = last_epoch_credit.epoch;
                 // if current_epoch - last_epoch_with_credits < 2 then the validator has received credits

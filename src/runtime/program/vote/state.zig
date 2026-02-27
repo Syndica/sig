@@ -1000,9 +1000,9 @@ pub const VoteState = union(enum(u32)) {
         }
     }
 
-    pub fn votes(self: *const VoteState) *const std.ArrayListUnmanaged(LandedVote) {
+    pub fn votes(self: *const VoteState) []const LandedVote {
         return switch (self.*) {
-            inline .v3, .v4 => |s| &s.votes,
+            inline .v3, .v4 => |s| s.votes.items,
         };
     }
 
@@ -1038,9 +1038,9 @@ pub const VoteState = union(enum(u32)) {
         };
     }
 
-    pub fn epochCreditsList(self: *const VoteState) *const std.ArrayListUnmanaged(EpochCredit) {
+    pub fn epochCreditsList(self: *const VoteState) []const EpochCredit {
         return switch (self.*) {
-            inline .v3, .v4 => |s| &s.epoch_credits,
+            inline .v3, .v4 => |s| s.epoch_credits.items,
         };
     }
 
@@ -6057,10 +6057,10 @@ test "state.VoteState.initV3 and field accessors" {
     try std.testing.expect(!vs.isUninitialized());
 
     // Votes
-    try std.testing.expectEqual(0, vs.votes().items.len);
+    try std.testing.expectEqual(0, vs.votes().len);
 
     // Epoch credits
-    try std.testing.expectEqual(0, vs.epochCreditsList().items.len);
+    try std.testing.expectEqual(0, vs.epochCreditsList().len);
 
     // V4-specific accessors should return null for v3
     try std.testing.expectEqual(null, vs.inflationRewardsCommissionBps());
@@ -6130,10 +6130,10 @@ test "state.VoteState.initV4 and field accessors" {
     try std.testing.expect(!vs.isUninitialized());
 
     // Votes
-    try std.testing.expectEqual(0, vs.votes().items.len);
+    try std.testing.expectEqual(0, vs.votes().len);
 
     // Epoch credits
-    try std.testing.expectEqual(0, vs.epochCreditsList().items.len);
+    try std.testing.expectEqual(0, vs.epochCreditsList().len);
 
     // V4-specific accessors
     // commission_pct=50 => inflation_rewards_commission_bps=5000
@@ -6261,15 +6261,15 @@ test "state.VoteState.votesMut and epochCreditsListMut" {
             .latency = 0,
             .lockout = .{ .slot = 42, .confirmation_count = 1 },
         });
-        try std.testing.expectEqual(1, vs3.votes().items.len);
-        try std.testing.expectEqual(42, vs3.votes().items[0].lockout.slot);
+        try std.testing.expectEqual(1, vs3.votes().len);
+        try std.testing.expectEqual(42, vs3.votes()[0].lockout.slot);
 
         try vs3.epochCreditsListMut().append(allocator, .{
             .epoch = 1,
             .credits = 100,
             .prev_credits = 0,
         });
-        try std.testing.expectEqual(1, vs3.epochCreditsList().items.len);
+        try std.testing.expectEqual(1, vs3.epochCreditsList().len);
     }
 
     // V4
@@ -6289,15 +6289,15 @@ test "state.VoteState.votesMut and epochCreditsListMut" {
             .latency = 0,
             .lockout = .{ .slot = 99, .confirmation_count = 1 },
         });
-        try std.testing.expectEqual(1, vs4.votes().items.len);
-        try std.testing.expectEqual(99, vs4.votes().items[0].lockout.slot);
+        try std.testing.expectEqual(1, vs4.votes().len);
+        try std.testing.expectEqual(99, vs4.votes()[0].lockout.slot);
 
         try vs4.epochCreditsListMut().append(allocator, .{
             .epoch = 2,
             .credits = 200,
             .prev_credits = 0,
         });
-        try std.testing.expectEqual(1, vs4.epochCreditsList().items.len);
+        try std.testing.expectEqual(1, vs4.epochCreditsList().len);
     }
 }
 
@@ -6387,8 +6387,8 @@ test "state.VoteStateVersions.convertToVoteState: v0_23_5 to v3" {
     try std.testing.expect(vs.withdrawerKey().equals(&withdrawer_pk));
     try std.testing.expectEqual(10, vs.commission());
     try std.testing.expectEqual(null, vs.rootSlot());
-    try std.testing.expectEqual(0, vs.votes().items.len);
-    try std.testing.expectEqual(0, vs.epochCreditsList().items.len);
+    try std.testing.expectEqual(0, vs.votes().len);
+    try std.testing.expectEqual(0, vs.epochCreditsList().len);
     // v0_23_5 with ZEROES voter → authorized_voters count is 0
     try std.testing.expectEqual(0, vs.authorizedVoters().count());
 }
@@ -6416,8 +6416,8 @@ test "state.VoteStateVersions.convertToVoteState: v1_14_11 to v3" {
     try std.testing.expect(vs.withdrawerKey().equals(&withdrawer_pk));
     try std.testing.expectEqual(20, vs.commission());
     try std.testing.expectEqual(null, vs.rootSlot());
-    try std.testing.expectEqual(0, vs.votes().items.len);
-    try std.testing.expectEqual(0, vs.epochCreditsList().items.len);
+    try std.testing.expectEqual(0, vs.votes().len);
+    try std.testing.expectEqual(0, vs.epochCreditsList().len);
     try std.testing.expectEqual(1, vs.authorizedVoters().count());
 }
 

@@ -178,7 +178,7 @@ pub fn calculateStakePointsAndCredits(
     var points: u128 = 0;
     var new_credits_observed: u64 = credits_in_stake;
 
-    for (new_vote_state.epochCreditsList().items) |epoch_credits| {
+    for (new_vote_state.epochCreditsList()) |epoch_credits| {
         const stake_amount: u128 = stake.getDelegation().getEffectiveStake(
             epoch_credits.epoch,
             stake_history,
