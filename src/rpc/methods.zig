@@ -222,8 +222,22 @@ pub const GetProgramAccounts = struct {
         sortResults: ?bool = null,
     };
 
-    // TODO: Response type defined in Step 3 (depends on OptionalContext + RpcKeyedAccount).
-    pub const Response = noreturn;
+    pub const Value = struct { pubkey: Pubkey, account: GetAccountInfo.Response.Value };
+
+    pub const Response = union(enum) {
+        list: []const Value,
+        context: struct {
+            context: common.Context,
+            value: []const Value,
+        },
+
+        pub fn jsonStringify(self: Response, jw: anytype) @TypeOf(jw.*).Error!void {
+            switch (self) {
+                .list => |list| try jw.write(list),
+                .context => |ctx| try jw.write(ctx),
+            }
+        }
+    };
 };
 
 pub const GetBalance = struct {
