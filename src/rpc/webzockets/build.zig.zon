@@ -1,0 +1,25 @@
+.{
+    .name = .webzockets,
+
+    .version = "0.0.0",
+
+    .fingerprint = 0x3c694f7003ef0582, // Changing this has security and trust implications.
+
+    .minimum_zig_version = "0.15.2",
+
+    .dependencies = .{
+        .libxev = .{
+            .url = "git+https://github.com/Syndica/libxev#6d5de49dde845e3045bac30b2018da32a4915c84",
+            .hash = "libxev-0.0.0-86vtczgdEwAKwvPWRNzuZMW7FuhDVdSbwgpJAJ0FmICg",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "examples",
+        "e2e_tests",
+        "autobahn",
+        "README.md",
+    },
+}

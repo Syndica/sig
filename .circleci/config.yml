@@ -244,6 +244,36 @@ jobs:
           name: Run Tests
           command: zig-out/bin/test 2>&1 | cat
 
+  test_webzockets:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted
+      - run:
+          name: Build and Run Webzockets Tests
+          command: |
+            cd src/rpc/webzockets
+            ../../../workspace/zig/zig build test -Dcpu=x86_64_v3 --summary all
+
+  test_webzockets_macos:
+    executor: macos-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
+      - run:
+          name: Build and Run Webzockets Tests
+          command: |
+            ulimit -Hn unlimited
+            ulimit -Sn unlimited
+            cd src/rpc/webzockets
+            ../../../workspace/zig/zig build test -Dcpu=apple_m4 --summary all
+
   test_kcov_linux:
     executor: linux-executor
     steps:
@@ -383,6 +413,9 @@ workflows:
       - test_linux:
           requires:
             - build_linux
+      - test_webzockets:
+          requires:
+            - setup_zig_linux
       - test_kcov_linux:
           requires:
             - setup_zig_linux
@@ -419,3 +452,6 @@ workflows:
       - test_macos_hashmap_ledger:
           requires:
             - build_check_macos
+      - test_webzockets_macos:
+          requires:
+            - setup_zig_macos

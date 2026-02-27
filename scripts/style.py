@@ -31,6 +31,13 @@ def main():
 
 def get_files(args):
     files_to_check = []
+    excluded_dirs = {
+        ".git",
+        ".zig-cache",
+        "zig-cache",
+        "zig-out",
+        "__pycache__",
+    }
     dirs = [*args.dirs]
     while len(dirs) > 0:
         d = dirs.pop()
@@ -40,6 +47,8 @@ def get_files(args):
         for file in files:
             full_path = os.path.join(d, file)
             if os.path.isdir(full_path):
+                if file in excluded_dirs:
+                    continue
                 dirs.append(full_path)
             else:
                 if file.endswith(".zig"):

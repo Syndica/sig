@@ -234,6 +234,7 @@ pub fn build(b: *Build) !void {
     const poseidon_mod = b.dependency("poseidon", dep_opts).module("poseidon");
     const xev_mod = b.dependency("xev", dep_opts).module("xev");
     const pretty_table_mod = b.dependency("prettytable", dep_opts).module("prettytable");
+    const webzockets_mod = b.dependency("webzockets", dep_opts).module("webzockets");
 
     const lsquic_dep = b.dependency("lsquic", .{
         .target = config.target,
@@ -323,6 +324,7 @@ pub fn build(b: *Build) !void {
         .{ .name = "ssl",           .module = ssl_mod },
         .{ .name = "table",         .module = gh_table },
         .{ .name = "tracy",         .module = tracy_mod },
+        .{ .name = "webzockets",    .module = webzockets_mod },
         .{ .name = "xev",           .module = xev_mod },
         .{ .name = "zstd",          .module = zstd_mod },
     };
