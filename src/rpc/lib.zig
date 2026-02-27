@@ -1,5 +1,6 @@
 pub const webzockets = @import("webzockets");
 pub const client = @import("client.zig");
+pub const filters = @import("filters.zig");
 pub const http = @import("http.zig");
 pub const methods = @import("methods.zig");
 pub const parse_instruction = @import("parse_instruction/lib.zig");
