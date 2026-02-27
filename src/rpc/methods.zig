@@ -89,7 +89,7 @@ pub const MethodAndParams = union(enum) {
     getTransactionCount: noreturn,
     getVersion: GetVersion,
     getVoteAccounts: GetVoteAccounts,
-    isBlockhashValid: noreturn,
+    isBlockhashValid: IsBlockhashValid,
     minimumLedgerSlot: noreturn,
     requestAirdrop: RequestAirdrop,
     sendTransaction: SendTransaction,
@@ -631,7 +631,16 @@ pub const GetVoteAccounts = struct {
     };
 };
 
-// TODO: isBlockhashValid
+pub const IsBlockhashValid = struct {
+    blockhash: sig.core.Hash,
+    config: ?common.CommitmentSlotConfig = null,
+
+    pub const Response = struct {
+        context: common.Context,
+        value: bool,
+    };
+};
+
 // TODO: minimumLedgerSlot
 
 pub const RequestAirdrop = struct {
@@ -887,6 +896,45 @@ pub const RpcHookContext = struct {
                 .apiVersion = ClientVersion.API_VERSION,
             },
             .value = lamports,
+        };
+    }
+
+    /// Checks if a blockhash is still valid for processing transactions.
+    /// Analogous to [is_blockhash_valid](https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2367)
+    pub fn isBlockhashValid(
+        self: RpcHookContext,
+        _: std.mem.Allocator,
+        params: IsBlockhashValid,
+    ) !IsBlockhashValid.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+        // [agave] Default commitment is finalized:
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
+        const commitment = config.commitment orelse .finalized;
+
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+        }
+
+        // Get slot reference to access blockhash queue
+        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+
+        // Check if blockhash is valid for processing
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2714
+        const blockhash_queue, var bhq_lg = ref.state.blockhash_queue.readWithLock();
+        defer bhq_lg.unlock();
+
+        const is_valid = blockhash_queue.isHashValidForAge(
+            params.blockhash,
+            sig.core.BlockhashQueue.MAX_PROCESSING_AGE,
+        );
+
+        return .{
+            .context = .{
+                .slot = slot,
+                .apiVersion = ClientVersion.API_VERSION,
+            },
+            .value = is_valid,
         };
     }
 };
