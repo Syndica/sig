@@ -2436,8 +2436,8 @@ fn ledgerTool(
     defer if (maybe_file) |file| file.close();
     defer logger.deinit();
 
-    const stdout_file_writer = std.fs.File.stdout().writer(&.{});
-    var stdout = stdout_file_writer.interface;
+    var stdout_file_writer = std.fs.File.stdout().writer(&.{});
+    const stdout = &stdout_file_writer.interface;
 
     const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
     defer allocator.free(ledger_dir);
