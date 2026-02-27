@@ -1068,7 +1068,7 @@ pub fn randomStakes(
     for (voters) |*voter| voter.* = Pubkey.initRandom(random);
 
     for (0..options.num_voters) |i| {
-        var vote_state = try VoteState.initV3(
+        var vote_state: VoteState = .{ .v3 = try VoteStateV3.init(
             allocator,
             nodes[random.uintLessThan(usize, options.max_nodes)],
             Pubkey.initRandom(random),
@@ -1079,7 +1079,7 @@ pub fn randomStakes(
                 options.commission_max,
             ),
             options.epoch + 1,
-        );
+        ) };
         errdefer vote_state.deinit(allocator);
         var vote_account = VoteAccount.init(allocator, .{
             .lamports = 1_000_000_000,

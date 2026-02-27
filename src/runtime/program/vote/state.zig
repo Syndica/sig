@@ -889,44 +889,6 @@ pub const VoteState = union(enum(u32)) {
 
     // ── Construction / lifecycle ──────────────────────────────────────
 
-    pub fn initV3(
-        allocator: Allocator,
-        node_pubkey: Pubkey,
-        authorized_voter: Pubkey,
-        withdrawer: Pubkey,
-        commission_val: u8,
-        voter_epoch: Epoch,
-    ) Allocator.Error!VoteState {
-        return .{ .v3 = try VoteStateV3.init(
-            allocator,
-            node_pubkey,
-            authorized_voter,
-            withdrawer,
-            commission_val,
-            voter_epoch,
-        ) };
-    }
-
-    pub fn initV4(
-        allocator: Allocator,
-        node_pubkey: Pubkey,
-        authorized_voter: Pubkey,
-        withdrawer: Pubkey,
-        commission_pct: u8,
-        voter_epoch: Epoch,
-        vote_pubkey: Pubkey,
-    ) Allocator.Error!VoteState {
-        return .{ .v4 = try VoteStateV4.init(
-            allocator,
-            node_pubkey,
-            authorized_voter,
-            withdrawer,
-            commission_pct,
-            voter_epoch,
-            vote_pubkey,
-        ) };
-    }
-
     pub fn deinit(self: *const VoteState, allocator: Allocator) void {
         switch (self.*) {
             inline .v3, .v4 => |s| s.deinit(allocator),
@@ -6015,7 +5977,7 @@ fn recentVotes(
 
 // ── VoteState union tests ──────────────────────────────────────────────
 
-test "state.VoteState.initV3 and field accessors" {
+test "state.VoteState v3 field accessors" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -6026,14 +5988,14 @@ test "state.VoteState.initV3 and field accessors" {
     const commission_val: u8 = 50;
     const epoch: Epoch = 7;
 
-    var vs = try VoteState.initV3(
+    var vs: VoteState = .{ .v3 = try VoteStateV3.init(
         allocator,
         node_pk,
         voter_pk,
         withdrawer_pk,
         commission_val,
         epoch,
-    );
+    ) };
     defer vs.deinit(allocator);
 
     // Version queries
@@ -6086,7 +6048,7 @@ test "state.VoteState.initV3 and field accessors" {
     // Version-specific behavior: v3 should never expose v4-only accessors.
 }
 
-test "state.VoteState.initV4 and field accessors" {
+test "state.VoteState v4 field accessors" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -6098,7 +6060,7 @@ test "state.VoteState.initV4 and field accessors" {
     const commission_pct: u8 = 50;
     const epoch: Epoch = 7;
 
-    var vs = try VoteState.initV4(
+    var vs: VoteState = .{ .v4 = try VoteStateV4.init(
         allocator,
         node_pk,
         voter_pk,
@@ -6106,7 +6068,7 @@ test "state.VoteState.initV4 and field accessors" {
         commission_pct,
         epoch,
         vote_pk,
-    );
+    ) };
     defer vs.deinit(allocator);
 
     // Version queries
@@ -6178,7 +6140,7 @@ test "state.VoteState.clone and equals" {
 
     // Test clone and equals for V3
     {
-        var vs3 = try VoteState.initV3(allocator, node_pk, voter_pk, withdrawer_pk, 10, 0);
+        var vs3: VoteState = .{ .v3 = try VoteStateV3.init(allocator, node_pk, voter_pk, withdrawer_pk, 10, 0) };
         defer vs3.deinit(allocator);
 
         var clone3 = try vs3.clone(allocator);
@@ -6190,7 +6152,7 @@ test "state.VoteState.clone and equals" {
 
     // Test clone and equals for V4
     {
-        var vs4 = try VoteState.initV4(allocator, node_pk, voter_pk, withdrawer_pk, 10, 0, vote_pk);
+        var vs4: VoteState = .{ .v4 = try VoteStateV4.init(allocator, node_pk, voter_pk, withdrawer_pk, 10, 0, vote_pk) };
         defer vs4.deinit(allocator);
 
         var clone4 = try vs4.clone(allocator);
@@ -6202,10 +6164,10 @@ test "state.VoteState.clone and equals" {
 
     // Test cross-version equals returns false
     {
-        var vs3 = try VoteState.initV3(allocator, node_pk, voter_pk, withdrawer_pk, 10, 0);
+        var vs3: VoteState = .{ .v3 = try VoteStateV3.init(allocator, node_pk, voter_pk, withdrawer_pk, 10, 0) };
         defer vs3.deinit(allocator);
 
-        var vs4 = try VoteState.initV4(allocator, node_pk, voter_pk, withdrawer_pk, 10, 0, vote_pk);
+        var vs4: VoteState = .{ .v4 = try VoteStateV4.init(allocator, node_pk, voter_pk, withdrawer_pk, 10, 0, vote_pk) };
         defer vs4.deinit(allocator);
 
         try std.testing.expect(!vs3.equals(&vs4));
@@ -6222,7 +6184,7 @@ test "state.VoteState.authorizedVoters v3 vs v4" {
 
     // V3: authorized_voters stored as `voters`
     {
-        var vs3 = try VoteState.initV3(allocator, Pubkey.ZEROES, voter_pk, Pubkey.ZEROES, 0, 5);
+        var vs3: VoteState = .{ .v3 = try VoteStateV3.init(allocator, Pubkey.ZEROES, voter_pk, Pubkey.ZEROES, 0, 5) };
         defer vs3.deinit(allocator);
 
         var av = vs3.authorizedVotersMut();
@@ -6232,7 +6194,7 @@ test "state.VoteState.authorizedVoters v3 vs v4" {
 
     // V4: authorized_voters stored as `authorized_voters`
     {
-        var vs4 = try VoteState.initV4(
+        var vs4: VoteState = .{ .v4 = try VoteStateV4.init(
             allocator,
             Pubkey.ZEROES,
             voter_pk,
@@ -6240,7 +6202,7 @@ test "state.VoteState.authorizedVoters v3 vs v4" {
             0,
             5,
             Pubkey.ZEROES,
-        );
+        ) };
         defer vs4.deinit(allocator);
 
         var av = vs4.authorizedVotersMut();
@@ -6254,7 +6216,7 @@ test "state.VoteState.votesMut and epochCreditsListMut" {
 
     // V3
     {
-        var vs3 = try VoteState.initV3(allocator, Pubkey.ZEROES, Pubkey.ZEROES, Pubkey.ZEROES, 0, 0);
+        var vs3: VoteState = .{ .v3 = try VoteStateV3.init(allocator, Pubkey.ZEROES, Pubkey.ZEROES, Pubkey.ZEROES, 0, 0) };
         defer vs3.deinit(allocator);
 
         try vs3.votesMut().append(allocator, .{
@@ -6274,7 +6236,7 @@ test "state.VoteState.votesMut and epochCreditsListMut" {
 
     // V4
     {
-        var vs4 = try VoteState.initV4(
+        var vs4: VoteState = .{ .v4 = try VoteStateV4.init(
             allocator,
             Pubkey.ZEROES,
             Pubkey.ZEROES,
@@ -6282,7 +6244,7 @@ test "state.VoteState.votesMut and epochCreditsListMut" {
             0,
             0,
             Pubkey.ZEROES,
-        );
+        ) };
         defer vs4.deinit(allocator);
 
         try vs4.votesMut().append(allocator, .{
@@ -6306,7 +6268,7 @@ test "state.VoteState.delegating methods" {
 
     // V3
     {
-        var vs3 = try VoteState.initV3(allocator, Pubkey.ZEROES, Pubkey.ZEROES, Pubkey.ZEROES, 0, 0);
+        var vs3: VoteState = .{ .v3 = try VoteStateV3.init(allocator, Pubkey.ZEROES, Pubkey.ZEROES, Pubkey.ZEROES, 0, 0) };
         defer vs3.deinit(allocator);
 
         // Empty state
@@ -6336,7 +6298,7 @@ test "state.VoteState.delegating methods" {
 
     // V4
     {
-        var vs4 = try VoteState.initV4(
+        var vs4: VoteState = .{ .v4 = try VoteStateV4.init(
             allocator,
             Pubkey.ZEROES,
             Pubkey.ZEROES,
@@ -6344,7 +6306,7 @@ test "state.VoteState.delegating methods" {
             0,
             0,
             Pubkey.ZEROES,
-        );
+        ) };
         defer vs4.deinit(allocator);
 
         try std.testing.expectEqual(null, vs4.lastVotedSlot());

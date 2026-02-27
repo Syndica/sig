@@ -24,6 +24,7 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
 const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
 const VoteStateV3 = sig.runtime.program.vote.state.VoteStateV3;
+const VoteStateV4 = sig.runtime.program.vote.state.VoteStateV4;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 
 const PreviousEpochInflationRewards = sig.replay.rewards.PreviousEpochInflationRewards;
@@ -660,7 +661,7 @@ test calculateRewardsAndDistributeVoteRewards {
             .lamports = 10_000_000_000,
             .owner = sig.runtime.program.vote.ID,
         },
-        try VoteState.initV4(
+        .{ .v4 = try VoteStateV4.init(
             allocator,
             Pubkey.initRandom(random),
             Pubkey.initRandom(random),
@@ -668,7 +669,7 @@ test calculateRewardsAndDistributeVoteRewards {
             10,
             epoch,
             vote_account_0_pubkey,
-        ),
+        ) },
     );
     try vote_account_0.state.epochCreditsListMut().append(allocator, .{
         .credits = 10,
@@ -775,7 +776,7 @@ test calculateRewardsForPartitioning {
             .lamports = 10_000_000_000,
             .owner = sig.runtime.program.vote.ID,
         },
-        try VoteState.initV4(
+        .{ .v4 = try VoteStateV4.init(
             allocator,
             Pubkey.initRandom(random),
             Pubkey.initRandom(random),
@@ -783,7 +784,7 @@ test calculateRewardsForPartitioning {
             10,
             epoch,
             vote_account_0_pubkey,
-        ),
+        ) },
     );
     try vote_account_0.state.epochCreditsListMut().append(allocator, .{
         .credits = 10,
@@ -883,7 +884,7 @@ test calculateValidatorRewards {
             .lamports = 10_000_000_000,
             .owner = sig.runtime.program.vote.ID,
         },
-        try VoteState.initV4(
+        .{ .v4 = try VoteStateV4.init(
             allocator,
             Pubkey.initRandom(random),
             Pubkey.initRandom(random),
@@ -891,7 +892,7 @@ test calculateValidatorRewards {
             10,
             epoch,
             vote_account_0_pubkey,
-        ),
+        ) },
     );
     try vote_account_0.state.epochCreditsListMut().append(allocator, .{
         .credits = 10,
@@ -1026,7 +1027,7 @@ test calculateRewardPointsPartitioned {
             .lamports = 10_000_000_000,
             .owner = sig.runtime.program.vote.ID,
         },
-        .state = try VoteState.initV4(
+        .state = .{ .v4 = try VoteStateV4.init(
             allocator,
             Pubkey.initRandom(random),
             Pubkey.initRandom(random),
@@ -1034,7 +1035,7 @@ test calculateRewardPointsPartitioned {
             10,
             epoch,
             vote_account_0_pubkey,
-        ),
+        ) },
         .rc = rc,
     };
     try vote_account_0.state.epochCreditsListMut().append(allocator, .{
