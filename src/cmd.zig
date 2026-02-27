@@ -1719,10 +1719,15 @@ fn validator(
         .accounts_db_two = &new_db,
     };
 
+    // Health check override for RPC (can be set to true to force healthy status)
+    var override_health_check: std.atomic.Value(bool) = .init(false);
+
     try app_base.rpc_hooks.set(allocator, sig.rpc.methods.RpcHookContext{
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .account_reader = account_store.reader(),
+        .ledger = &ledger,
+        .override_health_check = &override_health_check,
     });
 
     const replay_thread = try replay_service_state.spawnService(
@@ -2672,15 +2677,6 @@ fn startGossip(
 
     try app_base.rpc_hooks.set(allocator, struct {
         info: ContactInfo,
-
-        pub fn getHealth(
-            _: @This(),
-            _: std.mem.Allocator,
-            _: anytype,
-        ) !sig.rpc.methods.GetHealth.Response {
-            // TODO: more intricate
-            return .ok;
-        }
 
         pub fn getIdentity(
             self: @This(),

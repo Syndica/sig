@@ -284,21 +284,21 @@ pub const GetBalance = struct {
 };
 
 pub const GetHealth = struct {
-    pub const Response = union(enum) {
-        ok,
-        err: struct {}, // TODO: Our implementation-specifc error information
+    /// Response carries the health status of the node.
+    ///
+    /// When healthy, the JSON-RPC response is: `{"result": "ok"}`
+    /// When unhealthy, the JSON-RPC response is an error:
+    ///   `{"error": {"code": -32005, "message": "...", "data": {"numSlotsBehind": ...}}}`
+    ///
+    /// The HTTP GET /health endpoint always returns 200 with "ok", "behind", or "unknown".
+    ///
+    /// See agave: https://github.com/anza-xyz/agave/blob/master/rpc/src/rpc.rs#L2806-L2818
+    /// See agave: https://github.com/anza-xyz/agave/blob/master/rpc-client-api/src/custom_error.rs#L49-L50
+    pub const Response = RpcHealthStatus;
 
-        pub fn jsonStringify(
-            self: Response,
-            /// `*std.json.WriteStream(...)`
-            jw: anytype,
-        ) !void {
-            switch (self) {
-                .ok => try jw.write("ok"),
-                .err => |e| try jw.write(e),
-            }
-        }
-    };
+    /// JSON-RPC error code for NodeUnhealthy, matching agave's JSON_RPC_SERVER_ERROR_NODE_UNHEALTHY.
+    /// See: https://github.com/anza-xyz/agave/blob/master/rpc-client-api/src/custom_error.rs#L16
+    pub const node_unhealthy_code: i64 = -32005;
 };
 
 pub const GetBlock = struct {
@@ -720,6 +720,14 @@ pub const RpcHookContext = struct {
     slot_tracker: *const sig.replay.trackers.SlotTracker,
     epoch_tracker: *const sig.core.EpochTracker,
     account_reader: sig.accounts_db.AccountReader,
+    /// Ledger access for reading cluster's optimistic slots from gossip (for health check)
+    ledger: ?*sig.ledger.Ledger = null,
+    /// When true, always report healthy (for testing or maintenance)
+    override_health_check: ?*const std.atomic.Value(bool) = null,
+    /// Maximum allowed slot distance before node is considered unhealthy.
+    /// Default is 128 slots, matching agave's DELINQUENT_VALIDATOR_SLOT_DISTANCE.
+    /// See: https://github.com/anza-xyz/agave/blob/master/rpc-client-types/src/request.rs#L158
+    health_check_slot_distance: u64 = 128,
 
     // Limit the length of the `epoch_credits` array for each validator in a `get_vote_accounts`
     // response.
@@ -889,6 +897,73 @@ pub const RpcHookContext = struct {
             .value = lamports,
         };
     }
+
+    /// Check the health of the node.
+    ///
+    /// A node is considered healthy if:
+    /// - `override_health_check` is set to true, OR
+    /// - The node's latest optimistically confirmed slot is within `health_check_slot_distance`
+    ///   of the cluster's latest optimistically confirmed slot.
+    ///
+    /// Returns `RpcHealthStatus.ok`, `RpcHealthStatus.unknown`, or `RpcHealthStatus.behind`.
+    ///
+    /// Analogous to [RpcHealth::check](https://github.com/anza-xyz/agave/blob/8803776d/rpc/src/rpc_health.rs#L44-L107)
+    fn checkHealth(self: RpcHookContext, allocator: std.mem.Allocator) RpcHealthStatus {
+        // If override is set, always return healthy
+        if (self.override_health_check) |override| {
+            if (override.load(.monotonic)) {
+                return .ok;
+            }
+        }
+
+        // Need ledger to check cluster's optimistic slot
+        const ledger = self.ledger orelse return .unknown;
+
+        // Get the node's latest optimistically confirmed slot from replay
+        // This is the slot the node has replayed and validated
+        const my_latest_optimistically_confirmed_slot =
+            self.slot_tracker.latest_confirmed_slot.get();
+
+        // Get the cluster's latest optimistically confirmed slot from blockstore
+        // This comes from gossip observations
+        var optimistic_slots = ledger.reader().getLatestOptimisticSlots(allocator, 1) catch {
+            return .unknown;
+        };
+        defer optimistic_slots.deinit();
+
+        if (optimistic_slots.items.len == 0) {
+            // No optimistic slots in blockstore yet
+            return .unknown;
+        }
+
+        const cluster_latest_optimistically_confirmed_slot, _, _ = optimistic_slots.items[0];
+
+        // Check if node is within acceptable distance of cluster
+        if (my_latest_optimistically_confirmed_slot >=
+            cluster_latest_optimistically_confirmed_slot -| self.health_check_slot_distance)
+        {
+            return .ok;
+        } else {
+            const num_slots_behind = cluster_latest_optimistically_confirmed_slot -|
+                my_latest_optimistically_confirmed_slot;
+            return .{ .behind = num_slots_behind };
+        }
+    }
+
+    /// Implements the getHealth RPC method.
+    ///
+    /// Returns `RpcHealthStatus` which is then formatted by the server layer:
+    /// - JSON-RPC: "ok" result on success, error with code -32005 on failure
+    /// - HTTP GET /health: always 200 OK with "ok", "behind", or "unknown"
+    ///
+    /// Analogous to [get_health](https://github.com/anza-xyz/agave/blob/master/rpc/src/rpc.rs#L2806-L2818)
+    pub fn getHealth(
+        self: RpcHookContext,
+        allocator: std.mem.Allocator,
+        _: GetHealth,
+    ) !GetHealth.Response {
+        return self.checkHealth(allocator);
+    }
 };
 
 pub const StaticHookContext = struct {
@@ -902,3 +977,194 @@ pub const StaticHookContext = struct {
         return .{ .hash = self.genesis_hash };
     }
 };
+
+/// Health check status for the RPC node.
+/// Analogous to [RpcHealthStatus](https://github.com/anza-xyz/agave/blob/8803776d/rpc/src/rpc_health.rs#L11-L16)
+pub const RpcHealthStatus = union(enum) {
+    /// Node is healthy
+    ok,
+    /// Cannot determine health (unknown state)
+    unknown,
+    /// Node is behind cluster by specified number of slots
+    behind: u64,
+
+    pub fn eql(self: RpcHealthStatus, other: RpcHealthStatus) bool {
+        return switch (self) {
+            .ok => other == .ok,
+            .unknown => other == .unknown,
+            .behind => |n| switch (other) {
+                .behind => |m| n == m,
+                else => false,
+            },
+        };
+    }
+
+    /// Returns the HTTP /health endpoint response string.
+    /// Agave always returns "ok", "behind", or "unknown" with HTTP 200.
+    /// See: https://github.com/anza-xyz/agave/blob/master/rpc/src/rpc_service.rs#L332-L340
+    pub fn httpStatusString(self: RpcHealthStatus) []const u8 {
+        return switch (self) {
+            .ok => "ok",
+            .behind => "behind",
+            .unknown => "unknown",
+        };
+    }
+
+    /// Custom JSON serialization for the JSON-RPC response.
+    ///
+    /// When healthy, serializes as the string "ok" (the JSON-RPC result value).
+    /// When unhealthy, this should NOT be used directly - the server layer must
+    /// intercept and format it as a JSON-RPC error response with code -32005.
+    pub fn jsonStringify(
+        self: RpcHealthStatus,
+        /// `*std.json.WriteStream(...)`
+        jw: anytype,
+    ) !void {
+        switch (self) {
+            .ok => try jw.write("ok"),
+            // These cases shouldn't be serialized via the normal .result path.
+            // They're handled by the server as JSON-RPC errors.
+            // But if they are serialized, output something reasonable.
+            .unknown => try jw.write("unknown"),
+            .behind => |n| {
+                try jw.beginObject();
+                try jw.objectField("status");
+                try jw.write("behind");
+                try jw.objectField("numSlotsBehind");
+                try jw.write(n);
+                try jw.endObject();
+            },
+        }
+    }
+};
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+/// Test helper: Create a RpcHookContext with just health-check fields configured.
+/// Avoids unsafe @ptrCast by using a real SlotTracker.
+fn testHealthContext(
+    slot_tracker: *const sig.replay.trackers.SlotTracker,
+    ledger: ?*sig.ledger.Ledger,
+    override_health_check: ?*const std.atomic.Value(bool),
+    health_check_slot_distance: u64,
+) RpcHookContext {
+    return .{
+        .slot_tracker = slot_tracker,
+        .epoch_tracker = undefined, // not used in health check
+        .ledger = ledger,
+        .override_health_check = override_health_check,
+        .health_check_slot_distance = health_check_slot_distance,
+        .account_reader = .noop, // not used in health check
+    };
+}
+
+test "RpcHealthStatus equality" {
+    const testing = std.testing;
+    const ok: RpcHealthStatus = .ok;
+    const unknown: RpcHealthStatus = .unknown;
+    const behind10: RpcHealthStatus = .{ .behind = 10 };
+    const behind5: RpcHealthStatus = .{ .behind = 5 };
+
+    try testing.expect(ok.eql(.ok));
+    try testing.expect(unknown.eql(.unknown));
+    try testing.expect(behind10.eql(.{ .behind = 10 }));
+
+    try testing.expect(!ok.eql(.unknown));
+    try testing.expect(!ok.eql(.{ .behind = 5 }));
+    try testing.expect(!unknown.eql(.ok));
+    try testing.expect(!behind10.eql(behind5));
+}
+
+test "RpcHealthStatus httpStatusString" {
+    const testing = std.testing;
+    try testing.expectEqualStrings("ok", (RpcHealthStatus{ .ok = {} }).httpStatusString());
+    try testing.expectEqualStrings("behind", (RpcHealthStatus{ .behind = 42 }).httpStatusString());
+    try testing.expectEqualStrings("unknown", (RpcHealthStatus{ .unknown = {} }).httpStatusString());
+}
+
+test "RpcHealthStatus jsonStringify ok" {
+    const testing = std.testing;
+    var w = std.io.Writer.Allocating.init(testing.allocator);
+    defer w.deinit();
+
+    std.json.Stringify.value(RpcHealthStatus{ .ok = {} }, .{}, &w.writer) catch unreachable;
+
+    try testing.expectEqualStrings("\"ok\"", w.written());
+}
+
+test "RpcHealthStatus jsonStringify unknown" {
+    const testing = std.testing;
+    var w = std.io.Writer.Allocating.init(testing.allocator);
+    defer w.deinit();
+
+    std.json.Stringify.value(RpcHealthStatus{ .unknown = {} }, .{}, &w.writer) catch unreachable;
+
+    try testing.expectEqualStrings("\"unknown\"", w.written());
+}
+
+test "RpcHealthStatus jsonStringify behind" {
+    const testing = std.testing;
+    var w = std.io.Writer.Allocating.init(testing.allocator);
+    defer w.deinit();
+
+    std.json.Stringify.value(RpcHealthStatus{ .behind = 42 }, .{}, &w.writer) catch unreachable;
+
+    // Verify the JSON structure for behind status
+    const expected =
+        \\{"status":"behind","numSlotsBehind":42}
+    ;
+    try testing.expectEqualStrings(expected, w.written());
+}
+
+test "checkHealth returns ok when override_health_check is true" {
+    // When override_health_check is set to true, health should always be ok
+    // regardless of slot distance.
+    // Analogous to: https://github.com/anza-xyz/agave/blob/8803776d/rpc/src/rpc_health.rs#L163-L164
+    var override = std.atomic.Value(bool).init(true);
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(std.testing.allocator, 0);
+    defer slot_tracker.deinit(std.testing.allocator);
+
+    const ctx = testHealthContext(&slot_tracker, null, &override, 10);
+    const status = ctx.checkHealth(std.testing.allocator);
+    try std.testing.expect(status.eql(.ok));
+}
+
+test "checkHealth returns unknown when ledger is null" {
+    // Without ledger access, we cannot determine cluster's optimistic slot
+    // so status should be unknown.
+    // Analogous to: https://github.com/anza-xyz/agave/blob/8803776d/rpc/src/rpc_health.rs#L169
+    var override = std.atomic.Value(bool).init(false);
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(std.testing.allocator, 0);
+    defer slot_tracker.deinit(std.testing.allocator);
+
+    const ctx = testHealthContext(&slot_tracker, null, &override, 10);
+    const status = ctx.checkHealth(std.testing.allocator);
+    try std.testing.expect(status.eql(.unknown));
+}
+
+test "getHealth returns ok status when node is healthy" {
+    // Test the public getHealth RPC method returns .ok status
+    var override = std.atomic.Value(bool).init(true);
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(std.testing.allocator, 0);
+    defer slot_tracker.deinit(std.testing.allocator);
+
+    const ctx = testHealthContext(&slot_tracker, null, &override, 10);
+    const response = try ctx.getHealth(std.testing.allocator, .{});
+    try std.testing.expect(response.eql(.ok));
+    try std.testing.expectEqualStrings("ok", response.httpStatusString());
+}
+
+test "getHealth returns unknown status when health cannot be determined" {
+    // When ledger is null and override is false, should return .unknown status
+    // Analogous to Agave returning RpcCustomError::NodeUnhealthy { num_slots_behind: None }
+    var override = std.atomic.Value(bool).init(false);
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(std.testing.allocator, 0);
+    defer slot_tracker.deinit(std.testing.allocator);
+
+    const ctx = testHealthContext(&slot_tracker, null, &override, 10);
+    const response = try ctx.getHealth(std.testing.allocator, .{});
+    try std.testing.expect(response.eql(.unknown));
+    try std.testing.expectEqualStrings("unknown", response.httpStatusString());
+}
