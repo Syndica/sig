@@ -595,6 +595,7 @@ const Cmd = struct {
         number_of_index_shards: u64,
         accounts_per_file_estimate: u64,
         skip_snapshot_validation: bool,
+        dbg_db_init: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .use_disk_index = .{
@@ -656,6 +657,18 @@ const Cmd = struct {
                 .config = {},
                 .help = "skip the validation of the snapshot",
             },
+            .dbg_db_init = .{
+                .kind = .named,
+                .name_override = "dbg-db-init",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help =
+                \\save/restore the initial accounts.db to/from accounts.db.init for fast debug cycles.
+                \\first run: loads snapshot normally, then copies accounts.db -> accounts.db.init.
+                \\subsequent runs: copies accounts.db.init -> accounts.db, skipping db population.
+                ,
+            },
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
@@ -666,6 +679,7 @@ const Cmd = struct {
             cfg.accounts_db.number_of_index_shards = args.number_of_index_shards;
             cfg.accounts_db.accounts_per_file_estimate = args.accounts_per_file_estimate;
             cfg.accounts_db.skip_snapshot_validation = args.skip_snapshot_validation;
+            cfg.accounts_db.dbg_db_init = args.dbg_db_init;
         }
     };
     const AccountsDbArgumentsDownload = struct {
@@ -1293,6 +1307,32 @@ const AllocationMetrics = struct {
     allocated_bytes_sqlite: *Gauge(u64),
 };
 
+/// Checks for an `accounts.db.init` snapshot in `snapshot_dir` to speed up debug cycles.
+///
+/// - If `accounts.db.init` exists: copies it over `accounts.db` and returns `true`.
+///   The caller should then load the snapshot with `.metadata_only` to skip repopulating the DB.
+/// - If `accounts.db.init` does not exist: returns `false`.
+///   The caller should load the snapshot normally, then call `saveDbInit` afterwards.
+fn restoreDbInitIfExists(snapshot_dir: std.fs.Dir, logger: Logger) !bool {
+    if (snapshot_dir.access("accounts.db.init", .{})) {
+        logger.info().log("--dbg-db-init: accounts.db.init found, restoring to accounts.db");
+        try std.fs.Dir.copyFile(snapshot_dir, "accounts.db.init", snapshot_dir, "accounts.db", .{});
+        return true;
+    } else |_| {
+        logger.info().log(
+            "--dbg-db-init: accounts.db.init not found, will save after snapshot load",
+        );
+        return false;
+    }
+}
+
+/// Copies `accounts.db` to `accounts.db.init` after a successful snapshot load.
+/// Called on the first run with `--dbg-db-init` when no `.init` file exists yet.
+fn saveDbInit(snapshot_dir: std.fs.Dir, logger: Logger) !void {
+    logger.info().log("--dbg-db-init: saving accounts.db to accounts.db.init");
+    try std.fs.Dir.copyFile(snapshot_dir, "accounts.db", snapshot_dir, "accounts.db.init", .{});
+}
+
 /// Ensures the validator directory exists. Create it if it does not.
 fn ensureValidatorDir(allocator: std.mem.Allocator, validator_dir: []const u8) ![]const u8 {
     std.fs.cwd().access(validator_dir, .{}) catch |access_err| {
@@ -1533,6 +1573,11 @@ fn validator(
     const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
     defer allocator.free(rooted_file);
 
+    const init_db_exists: bool = if (cfg.accounts_db.dbg_db_init)
+        try restoreDbInitIfExists(snapshot_dir, .from(app_base.logger))
+    else
+        false;
+
     var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
@@ -1545,13 +1590,18 @@ fn validator(
         snapshot_files,
         .{
             .genesis_file_path = genesis_file_path,
-            .extract = if (cfg.accounts_db.skip_snapshot_validation)
+            .extract = if (init_db_exists)
+                .metadata_only
+            else if (cfg.accounts_db.skip_snapshot_validation)
                 .{ .entire_snapshot = &rooted_db }
             else
                 .{ .entire_snapshot_and_validate = &rooted_db },
         },
     );
     defer loaded_snapshot.deinit();
+
+    if (cfg.accounts_db.dbg_db_init and !init_db_exists)
+        try saveDbInit(snapshot_dir, .from(app_base.logger));
 
     const static_rpc_ctx: sig.rpc.methods.StaticHookContext = .{
         .genesis_hash = loaded_snapshot.genesis_config.hash,
@@ -1799,6 +1849,11 @@ fn replayOffline(
     );
     defer allocator.free(rooted_file);
 
+    const init_db_exists: bool = if (cfg.accounts_db.dbg_db_init)
+        try restoreDbInitIfExists(snapshot_dir, .from(app_base.logger))
+    else
+        false;
+
     var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
@@ -1820,13 +1875,18 @@ fn replayOffline(
         snapshot_files,
         .{
             .genesis_file_path = genesis_file_path,
-            .extract = if (cfg.accounts_db.skip_snapshot_validation)
+            .extract = if (init_db_exists)
+                .metadata_only
+            else if (cfg.accounts_db.skip_snapshot_validation)
                 .{ .entire_snapshot = &rooted_db }
             else
                 .{ .entire_snapshot_and_validate = &rooted_db },
         },
     );
     defer loaded_snapshot.deinit();
+
+    if (cfg.accounts_db.dbg_db_init and !init_db_exists)
+        try saveDbInit(snapshot_dir, .from(app_base.logger));
 
     var unrooted_tracy: tracy.TracingAllocator = .{
         .name = "AccountsDB Unrooted",
