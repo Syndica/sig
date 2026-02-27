@@ -13,6 +13,7 @@ const Pubkey = sig.core.Pubkey;
 const MemoryMap = memory.MemoryMap;
 const InstructionError = sig.core.instruction.InstructionError;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
+const SyscallError = sig.vm.SyscallError;
 const TransactionContext = sig.runtime.TransactionContext;
 
 // https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/sysvar.rs#L164
@@ -31,6 +32,18 @@ fn getSyscall(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMa
             try tc.consumeCompute(tc.compute_budget.sysvar_base_cost + @sizeOf(T));
 
             const value_addr = registers.get(.r1);
+
+            // SIMD-0219: The destination address of all sysvar related syscalls
+            // must be on the stack or heap, meaning their virtual address is
+            // inside `0x200000000..0x400000000`.
+            // (bytecode/rodata regions below 0x200000000 are always readonly
+            // so mutable translation to addresses below that will result in an AccessViolation anyways).
+            if (value_addr >= memory.INPUT_START and
+                tc.feature_set.active(.stricter_abi_and_runtime_constraints, tc.slot))
+            {
+                return SyscallError.InvalidPointer;
+            }
+
             const value = try memory_map.translateType(
                 T,
                 .mutable,
@@ -71,6 +84,17 @@ pub fn getSysvar(
     const buf_cost = length / tc.compute_budget.cpi_bytes_per_unit;
     const mem_cost = @max(tc.compute_budget.mem_op_base_cost, buf_cost);
     try tc.consumeCompute(tc.compute_budget.sysvar_base_cost +| id_cost +| mem_cost);
+
+    // SIMD-0219: The destination address of all sysvar related syscalls
+    // must be on the stack or heap, meaning their virtual address is
+    // inside `0x200000000..0x400000000`.
+    // (bytecode/rodata regions below 0x200000000 are always readonly
+    // so mutable translation to addresses below that will result in an AccessViolation anyways).
+    if (value_addr >= memory.INPUT_START and
+        tc.feature_set.active(.stricter_abi_and_runtime_constraints, tc.slot))
+    {
+        return SyscallError.InvalidPointer;
+    }
 
     const check_aligned = tc.getCheckAligned();
     const id = (try memory_map.translateType(Pubkey, .constant, id_addr, check_aligned)).*;
@@ -466,6 +490,55 @@ test getSysvar {
             u8,
             std.mem.asBytes(&src.fill(true, obj_parsed)),
             std.mem.asBytes(&clean_obj),
+        );
+    }
+
+    // SIMD-0219: value_addr >= INPUT_START with stricter_abi_and_runtime_constraints returns InvalidPointer
+    {
+        var cache_strict, var tc_strict = try testing.createTransactionContext(
+            allocator,
+            prng.random(),
+            .{
+                .accounts = &.{},
+                .compute_meter = std.math.maxInt(u64),
+                .feature_set = &.{.{ .feature = .stricter_abi_and_runtime_constraints, .slot = 0 }},
+                .slot = 0,
+                .sysvar_cache = .{
+                    .clock = src.clock,
+                    .epoch_schedule = src.epoch_schedule,
+                    .fees = src.fees,
+                    .rent = src.rent,
+                    .epoch_rewards = src.rewards,
+                    .last_restart_slot = src.restart,
+                },
+            },
+        );
+        defer {
+            testing.deinitTransactionContext(allocator, &tc_strict);
+            cache_strict.deinit(allocator);
+        }
+
+        var dummy: u64 = 0;
+        var memory_map = try MemoryMap.init(
+            allocator,
+            &.{memory.Region.init(.mutable, std.mem.asBytes(&dummy), 0x100000000)},
+            .v2,
+            .{},
+        );
+        defer memory_map.deinit(allocator);
+
+        try std.testing.expectError(
+            SyscallError.InvalidPointer,
+            callSysvarSyscall(&tc_strict, &memory_map, getClock, .{memory.INPUT_START}),
+        );
+        try std.testing.expectError(
+            SyscallError.InvalidPointer,
+            callSysvarSyscall(&tc_strict, &memory_map, getSysvar, .{
+                0x200000000,
+                memory.INPUT_START,
+                0,
+                sysvar.Clock.STORAGE_SIZE,
+            }),
         );
     }
 }
