@@ -65,8 +65,8 @@ pub const SlotTracker = struct {
         allocator: Allocator,
         rc: ReferenceCounter = .init,
 
-        pub fn toRef(self: *Element) ?Reference {
-            if (!self.rc.acquire()) return null;
+        pub fn toRef(self: *Element) Reference {
+            std.debug.assert(self.rc.acquire());
             return .{ .element = self };
         }
 
@@ -204,9 +204,9 @@ pub const SlotTracker = struct {
         defer tracy.plot(u32, "slots tracked", @intCast(slots.count()));
 
         if (slots.get(slot)) |existing| {
-            if (existing.toRef()) |ref| return .{
+            return .{
                 .found_existing = true,
-                .reference = ref,
+                .reference = existing.toRef(),
             };
         }
         try slots.ensureUnusedCapacity(allocator, 1);
@@ -215,7 +215,7 @@ pub const SlotTracker = struct {
         slots.putAssumeCapacityNoClobber(slot, elem);
         return .{
             .found_existing = false,
-            .reference = elem.toRef().?,
+            .reference = elem.toRef(),
         };
     }
 
@@ -262,7 +262,7 @@ pub const SlotTracker = struct {
         for (slots.keys(), slots.values()) |slot, value| {
             if (!value.state.isFrozen()) continue;
 
-            const ref = value.toRef() orelse continue;
+            const ref = value.toRef();
             frozen_slots.putAssumeCapacity(
                 slot,
                 ref,
