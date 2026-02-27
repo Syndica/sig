@@ -24,6 +24,7 @@ const Slot = sig.core.Slot;
 const ClientVersion = sig.version.ClientVersion;
 
 const account_codec = sig.rpc.account_codec;
+const filters = sig.rpc.filters;
 
 pub fn Result(comptime method: MethodAndParams.Tag) type {
     return union(enum) {
@@ -74,9 +75,9 @@ pub const MethodAndParams = union(enum) {
     getMaxShredInsertSlot: noreturn,
     getMinimumBalanceForRentExemption: GetMinimumBalanceForRentExemption,
     getMultipleAccounts: GetMultipleAccounts,
-    getProgramAccounts: noreturn,
     getRecentPerformanceSamples: GetRecentPerformanceSamples,
     getRecentPrioritizationFees: GetRecentPrioritizationFees,
+    getProgramAccounts: GetProgramAccounts,
     getSignaturesForAddress: GetSignaturesForAddress,
     getSignatureStatuses: GetSignatureStatuses,
     getSlot: GetSlot,
@@ -203,6 +204,24 @@ pub const GetAccountInfo = struct {
             space: u64,
         };
     };
+};
+
+pub const GetProgramAccounts = struct {
+    program_id: Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        filters: ?[]const filters.RpcFilterType = null,
+        encoding: ?common.AccountEncoding = null,
+        dataSlice: ?common.DataSlice = null,
+        commitment: ?common.Commitment = null,
+        minContextSlot: ?u64 = null,
+        withContext: ?bool = null,
+        sortResults: ?bool = null,
+    };
+
+    // TODO: Response type defined in Step 3 (depends on OptionalContext + RpcKeyedAccount).
+    pub const Response = noreturn;
 };
 
 pub const GetBalance = struct {
