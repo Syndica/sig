@@ -953,7 +953,7 @@ pub const AccountHookContext = struct {
             else => return error.MethodNotImplemented,
         };
 
-        var query = try db.ownerQuery(params.program_id, ancestors);
+        var query = try db.ownerQuery(&params.program_id, ancestors);
         defer query.deinit(db.allocator);
         const slot_reader = self.account_reader.forSlot(ancestors);
         var results = std.ArrayListUnmanaged(GetProgramAccounts.Value){};

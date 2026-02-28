@@ -183,8 +183,12 @@ pub const OwnerQuery = struct {
     }
 };
 
-pub fn ownerQuery(self: *Db, owner: Pubkey, ancestors: *const Ancestors) !OwnerQuery {
-    var unrooted_map = try self.unrooted.getByOwner(self.allocator, owner, ancestors);
+pub fn ownerQuery(self: *Db, owner: *const Pubkey, ancestors: *const Ancestors) !OwnerQuery {
+    var unrooted_map = try self.unrooted.getByOwner(
+        self.allocator,
+        owner.*,
+        ancestors,
+    );
     errdefer unrooted_map.deinit(self.allocator);
     const rooted_iter = self.rooted.getByOwner(owner);
     return .{
