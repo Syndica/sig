@@ -2625,24 +2625,24 @@ fn startGossip(
             _: @This(),
             _: std.mem.Allocator,
             _: anytype,
-        ) !sig.rpc.methods.GetHealth.Response {
+        ) !sig.rpc.methods.RpcResult(sig.rpc.methods.GetHealth.Response) {
             // TODO: more intricate
-            return .ok;
+            return .{ .ok = .ok };
         }
 
         pub fn getIdentity(
             self: @This(),
             _: std.mem.Allocator,
             _: anytype,
-        ) !sig.rpc.methods.GetIdentity.Response {
-            return .{ .identity = self.info.pubkey };
+        ) !sig.rpc.methods.RpcResult(sig.rpc.methods.GetIdentity.Response) {
+            return .{ .ok = .{ .identity = self.info.pubkey } };
         }
 
         pub fn getVersion(
             self: @This(),
             allocator_: std.mem.Allocator,
             _: anytype,
-        ) !sig.rpc.methods.GetVersion.Response {
+        ) !sig.rpc.methods.RpcResult(sig.rpc.methods.GetVersion.Response) {
             const client_version = self.info.version;
             const solana_version = try std.fmt.allocPrint(allocator_, "{}.{}.{}", .{
                 client_version.major,
@@ -2650,10 +2650,10 @@ fn startGossip(
                 client_version.patch,
             });
 
-            return .{
+            return .{ .ok = .{
                 .solana_core = solana_version,
                 .feature_set = client_version.feature_set,
-            };
+            } };
         }
     }{ .info = contact_info });
 

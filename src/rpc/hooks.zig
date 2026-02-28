@@ -64,8 +64,10 @@ pub const Hooks = struct {
     }
 
     /// Takes in an instance of a struct, where the struct has RPC methods in the form of:
-    /// `fn {methodName}(ContextStruct, Allocator, {MethodInstance}) !{MethodInstance}.Response`
+    /// `fn {methodName}(ContextStruct, Allocator, {MethodInstance}) !RpcResult({MethodInstance}.Response)`
     /// where {methodName} is a field in `Request` and `MethodInstance` is the field's value.
+    /// Handlers return `RpcResult` for typed RPC errors (with data), or propagate unexpected
+    /// errors (OOM, IO) via `!`.
     ///
     /// The struct instance is not allowed to have other methods besides RPC methods, but it is
     /// allowed to have other fields to hold relevant context for them.
@@ -107,16 +109,14 @@ pub const Hooks = struct {
                         args: sig.rpc.methods.Request(method),
                     ) sig.rpc.methods.Result(method) {
                         const _cref: *CRef = @alignCast(@fieldParentPtr("ctx_ref", ctx_ref));
-                        if (@call(.auto, callback, .{ _cref.value, _allocator, args })) |response| {
-                            return .{ .ok = response };
+                        if (@call(.auto, callback, .{ _cref.value, _allocator, args })) |result| {
+                            return switch (result) {
+                                .ok => |response| .{ .ok = response },
+                                .rpc_error => |rpc_err| .{
+                                    .err = rpc_err.toResponseError(_allocator),
+                                },
+                            };
                         } else |err| {
-                            // JSON RPC spec reserves error codes at or below -32_000. So the
-                            // unsigned ones returned by `@intFromError` should be fine to use.
-                            // Solana RPC docs also don't dictate exactly what the error codes
-                            // should be, allowing them to be implementation-defined. This then
-                            // serves as a way to allow the callback to not worry about error codes
-                            // or error messages, while also letting it use `try`, `errdefer`, and
-                            // return the Result directly (instead of wrapping it in a union).
                             return .{ .err = .{
                                 .code = @enumFromInt(@intFromError(err)),
                                 .message = @errorName(err),
