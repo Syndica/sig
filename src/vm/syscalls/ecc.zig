@@ -26,12 +26,12 @@ pub const CurveId = enum(u64) {
     edwards = 0,
     ristretto = 1,
 
-    bls12_381_be = 4,
-    bls12_381_le = 4 | 0x80,
-    bls12_381_g1_be = 5,
-    bls12_381_g1_le = 5 | 0x80,
-    bls12_381_g2_be = 6,
-    bls12_381_g2_le = 6 | 0x80,
+    bls12_381_be = 4 | 0x80,
+    bls12_381_le = 4,
+    bls12_381_g1_be = 5 | 0x80,
+    bls12_381_g1_le = 5,
+    bls12_381_g2_be = 6 | 0x80,
+    bls12_381_g2_le = 6,
 
     fn wrap(id: u64) ?CurveId {
         return std.meta.intToEnum(CurveId, id) catch null;
