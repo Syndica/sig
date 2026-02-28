@@ -200,14 +200,14 @@ pub fn get(
     };
 }
 
-pub fn getByOwner(self: *Rooted, owner: Pubkey) OwnerIterator {
+pub fn getByOwner(self: *Rooted, owner: *const Pubkey) OwnerIterator {
     const query =
         \\ SELECT address, lamports, data, owner, executable, rent_epoch
         \\ FROM entries WHERE owner = ?;
     ;
     var stmt: ?*sql.sqlite3_stmt = null;
     self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &stmt, null));
-    self.err(sql.sqlite3_bind_blob(stmt.?, 1, &owner.data, Pubkey.SIZE, sql.SQLITE_TRANSIENT));
+    self.err(sql.sqlite3_bind_blob(stmt.?, 1, &owner.data, Pubkey.SIZE, sql.SQLITE_STATIC));
     return .{ .stmt = stmt.?, .rooted = self };
 }
 
