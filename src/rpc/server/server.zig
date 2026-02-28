@@ -167,7 +167,7 @@ test "serveSpawn hook alloc" {
             _: anytype,
             gpa: std.mem.Allocator,
             _: anytype,
-        ) !sig.rpc.methods.GetLeaderSchedule.Response {
+        ) !sig.rpc.methods.RpcResult(sig.rpc.methods.GetLeaderSchedule.Response) {
             var resp: sig.rpc.methods.GetLeaderSchedule.Response = .{ .value = .{} };
             errdefer resp.value.deinit(gpa);
 
@@ -176,7 +176,7 @@ test "serveSpawn hook alloc" {
             @memset(buf, 42);
 
             try resp.value.put(gpa, sig.core.Pubkey.ZEROES, buf);
-            return resp;
+            return .{ .ok = resp };
         }
     }{});
 
@@ -348,7 +348,7 @@ test "serveSpawn getSnapshot missing" {
             _: anytype,
             _: std.mem.Allocator,
             params: sig.rpc.methods.GetSnapshot,
-        ) !sig.rpc.methods.GetSnapshot.Response {
+        ) !sig.rpc.methods.RpcResult(sig.rpc.methods.GetSnapshot.Response) {
             std.debug.assert(params.get == .size);
             std.debug.assert(std.mem.eql(u8, params.path, "test-snapshot"));
             return error.Missing;
