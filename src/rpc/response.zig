@@ -93,6 +93,10 @@ pub const ErrorCode = enum(i64) {
     /// Internal JSON-RPC error.
     internal_error = -32603,
 
+    /// Minimum context slot has not been reached.
+    /// Agave: https://github.com/anza-xyz/agave/blob/v2.2.0/rpc-client-api/src/custom_error.rs#L17
+    min_context_slot_not_met = -32016,
+
     _,
 
     pub const server_error_first: ErrorCode = @enumFromInt(-32_000);

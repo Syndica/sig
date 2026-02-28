@@ -30,12 +30,70 @@ pub fn Result(comptime method: MethodAndParams.Tag) type {
     };
 }
 
-/// Returns t
+/// Returns the request/params struct type for the given RPC method tag.
 pub fn Request(comptime method: MethodAndParams.Tag) type {
     const FieldType = @FieldType(MethodAndParams, @tagName(method));
     if (FieldType == noreturn) @compileError("TODO: impl " ++ @tagName(method));
     return FieldType;
 }
+
+/// Wraps a handler's `Response` type with an `RpcError` variant, allowing
+/// handlers to return typed RPC errors (with payload data) as values while
+/// still using `try` for unexpected errors (OOM, IO, etc.).
+///
+/// Handler signature: `fn(Context, Allocator, Params) !RpcResult(Response)`
+pub fn RpcResult(comptime R: type) type {
+    return union(enum) {
+        ok: R,
+        rpc_error: RpcError,
+    };
+}
+
+/// Typed RPC errors with Agave-compatible codes, messages, and optional
+/// structured data. These are returned as values (not Zig errors) so they
+/// can carry payload data like `context_slot`.
+pub const RpcError = union(enum) {
+    min_context_slot_not_met: struct { context_slot: u64 },
+    too_many_filters,
+    memcmp_bytes_too_large,
+    base58_data_too_large,
+    slot_not_available,
+
+    /// Converts this typed RPC error into a JSON-RPC error response with the
+    /// correct Agave-compatible error code, message, and optional data.
+    pub fn toResponseError(self: RpcError, allocator: Allocator) rpc.response.Error {
+        return switch (self) {
+            .min_context_slot_not_met => |payload| .{
+                .code = .min_context_slot_not_met,
+                .message = "Minimum context slot has not been reached",
+                .data = blk: {
+                    var map = std.json.ObjectMap.init(allocator);
+                    map.put("contextSlot", .{
+                        .integer = @intCast(payload.context_slot),
+                    }) catch break :blk null;
+                    break :blk .{ .object = map };
+                },
+            },
+            .too_many_filters => .{
+                .code = .invalid_params,
+                .message = "Too many filters provided; max 4",
+            },
+            .memcmp_bytes_too_large => .{
+                .code = .invalid_params,
+                .message = "Invalid param: DataTooLarge",
+            },
+            .base58_data_too_large => .{
+                .code = .invalid_request,
+                .message = "Encoded binary (base 58) data should be less than 128 bytes" ++
+                    "please use Base64 encoding.",
+            },
+            .slot_not_available => .{
+                .code = .internal_error,
+                .message = "Slot not available",
+            },
+        };
+    }
+};
 
 pub const MethodAndParams = union(enum) {
     getAccountInfo: GetAccountInfo,
@@ -704,26 +762,35 @@ pub const RpcHookContext = struct {
     // See: https://github.com/anza-xyz/agave/blob/cd00ceb1fdf43f694caf7af23cb87987922fce2c/rpc-client-types/src/request.rs#L162
     const DELINQUENT_VALIDATOR_SLOT_DISTANCE: u64 = 128;
 
-    pub fn getSlot(self: RpcHookContext, _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
+    pub fn getSlot(
+        self: RpcHookContext,
+        _: std.mem.Allocator,
+        params: GetSlot,
+    ) !RpcResult(GetSlot.Response) {
         const config = params.config orelse common.CommitmentSlotConfig{};
         const commitment = config.commitment orelse .finalized;
         const slot = self.slot_tracker.getSlotForCommitment(commitment);
-        const min_slot = config.minContextSlot orelse return slot;
-        return if (slot >= min_slot) slot else error.RpcMinContextSlotNotMet;
+        const min_slot = config.minContextSlot orelse return .{ .ok = slot };
+        return if (slot >= min_slot)
+            .{ .ok = slot }
+        else
+            .{ .rpc_error = .{ .min_context_slot_not_met = .{ .context_slot = slot } } };
     }
 
     pub fn getVoteAccounts(
         self: RpcHookContext,
         allocator: std.mem.Allocator,
         params: GetVoteAccounts,
-    ) !GetVoteAccounts.Response {
+    ) !RpcResult(GetVoteAccounts.Response) {
         const config: GetVoteAccounts.Config = params.config orelse .{};
 
         // get slot for requested commitment. Agave uses finalized as default.
         const slot = self.slot_tracker.getSlotForCommitment(config.commitment orelse .finalized);
 
         // Get the state for the requested commitment slot.
-        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        const slot_ref = self.slot_tracker.get(slot) orelse return .{
+            .rpc_error = .slot_not_available,
+        };
 
         // Setup config consts for the request.
         const delinquent_distance = config.delinquentSlotDistance orelse
@@ -822,17 +889,17 @@ pub const RpcHookContext = struct {
             for (dlinqt) |va| allocator.free(va.epochCredits);
             allocator.free(dlinqt);
         }
-        return .{
+        return .{ .ok = .{
             .current = current,
             .delinquent = dlinqt,
-        };
+        } };
     }
 
     pub fn getBalance(
         self: RpcHookContext,
         allocator: std.mem.Allocator,
         params: GetBalance,
-    ) !GetBalance.Response {
+    ) !RpcResult(GetBalance.Response) {
         const config = params.config orelse common.CommitmentSlotConfig{};
         // [agave] Default commitment is finalized:
         // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
@@ -840,11 +907,15 @@ pub const RpcHookContext = struct {
 
         const slot = self.slot_tracker.getSlotForCommitment(commitment);
         if (config.minContextSlot) |min_slot| {
-            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+            if (slot < min_slot) return .{
+                .rpc_error = .{
+                    .min_context_slot_not_met = .{ .context_slot = slot },
+                },
+            };
         }
 
         // Get slot reference to access ancestors
-        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        const ref = self.slot_tracker.get(slot) orelse return .{ .rpc_error = .slot_not_available };
         const slot_reader = self.account_reader.forSlot(&ref.constants.ancestors);
 
         // Look up account
@@ -855,13 +926,13 @@ pub const RpcHookContext = struct {
             break :blk account.lamports;
         } else 0;
 
-        return .{
+        return .{ .ok = .{
             .context = .{
                 .slot = slot,
                 .apiVersion = ClientVersion.API_VERSION,
             },
             .value = lamports,
-        };
+        } };
     }
 };
 
@@ -872,8 +943,8 @@ pub const StaticHookContext = struct {
         self: *const @This(),
         _: std.mem.Allocator,
         _: GetGenesisHash,
-    ) !GetGenesisHash.Response {
-        return .{ .hash = self.genesis_hash };
+    ) !RpcResult(GetGenesisHash.Response) {
+        return .{ .ok = .{ .hash = self.genesis_hash } };
     }
 };
 
@@ -885,7 +956,7 @@ pub const AccountHookContext = struct {
         self: AccountHookContext,
         allocator: std.mem.Allocator,
         params: GetAccountInfo,
-    ) !GetAccountInfo.Response {
+    ) !RpcResult(GetAccountInfo.Response) {
         const config = params.config orelse GetAccountInfo.Config{};
         // [agave] Default commitment is finalized:
         // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
@@ -898,55 +969,62 @@ pub const AccountHookContext = struct {
 
         const slot = self.slot_tracker.getSlotForCommitment(commitment);
         if (config.minContextSlot) |min_slot| {
-            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+            if (slot < min_slot) return .{
+                .rpc_error = .{
+                    .min_context_slot_not_met = .{ .context_slot = slot },
+                },
+            };
         }
 
-        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        const ref = self.slot_tracker.get(slot) orelse return .{ .rpc_error = .slot_not_available };
         const slot_reader = self.account_reader.forSlot(&ref.constants.ancestors);
         const account = try slot_reader.get(allocator, params.pubkey) orelse return .{
-            .context = .{ .slot = slot },
-            .value = null,
+            .ok = .{ .context = .{ .slot = slot }, .value = null },
         };
         defer account.deinit(allocator);
 
-        // TODO: [agave conformance] When base58 encoding is requested and account data exceeds
-        // 128 bytes, Agave returns JSON-RPC error code -32600 (InvalidRequest) with the message:
-        // "Encoded binary (base 58) data should be less than 128 bytes, please use Base64 encoding."
-        // Currently, `error.Base58DataTooLarge` propagates to hooks.zig's generic error mapper,
-        // which produces a non-deterministic positive error code via `@intFromError` and the raw
-        // error name as the message.
-        const data = try account_codec.encodeAccount(
+        const data = account_codec.encodeAccount(
             allocator,
             params.pubkey,
             account,
             encoding,
             slot_reader,
             config.dataSlice,
-        );
+        ) catch |err| switch (err) {
+            error.Base58DataTooLarge => return .{ .rpc_error = .base58_data_too_large },
+            else => return err,
+        };
 
-        return .{
+        return .{ .ok = .{
             .context = .{ .slot = slot },
             .value = .from(account, data),
-        };
+        } };
     }
 
     pub fn getProgramAccounts(
         self: AccountHookContext,
         allocator: std.mem.Allocator,
         params: GetProgramAccounts,
-    ) !GetProgramAccounts.Response {
+    ) !RpcResult(GetProgramAccounts.Response) {
         const config = params.config orelse GetProgramAccounts.Config{};
         const commitment = config.commitment orelse .finalized;
         const encoding = config.encoding orelse .base64;
         const f = config.filters orelse &.{};
-        try filters.verifyFilters(f);
+        filters.verifyFilters(f) catch |err| return .{ .rpc_error = switch (err) {
+            error.TooManyFilters => .too_many_filters,
+            error.MemcmpBytesTooLarge => .memcmp_bytes_too_large,
+        } };
 
         const slot = self.slot_tracker.getSlotForCommitment(commitment);
         if (config.minContextSlot) |min_slot| {
-            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+            if (slot < min_slot) return .{
+                .rpc_error = .{
+                    .min_context_slot_not_met = .{ .context_slot = slot },
+                },
+            };
         }
 
-        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        const ref = self.slot_tracker.get(slot) orelse return .{ .rpc_error = .slot_not_available };
         const ancestors = &ref.constants.ancestors;
         const db = switch (self.account_reader) {
             .accounts_db_two => |db| db,
@@ -959,7 +1037,7 @@ pub const AccountHookContext = struct {
         var results = std.ArrayListUnmanaged(GetProgramAccounts.Value){};
         defer results.deinit(allocator);
 
-        // Ierate rooted entries, checking for unrooted overrides.
+        // Iterate rooted entries, checking for unrooted overrides.
         while (query.rooted_iter.next()) |entry| {
             const account = if (query.unrooted_map.fetchSwapRemove(entry.pubkey)) |kv|
                 kv.value.account
@@ -974,14 +1052,17 @@ pub const AccountHookContext = struct {
             if (account.lamports == 0) continue;
             if (!filters.filtersAllow(f, account.data.unowned_allocation)) continue;
 
-            const data = try account_codec.encodeAccount(
+            const data = account_codec.encodeAccount(
                 allocator,
                 entry.pubkey,
                 account,
                 encoding,
                 slot_reader,
                 config.dataSlice,
-            );
+            ) catch |err| switch (err) {
+                error.Base58DataTooLarge => return .{ .rpc_error = .base58_data_too_large },
+                else => return err,
+            };
             try results.append(allocator, .{
                 .pubkey = entry.pubkey,
                 .account = .from(account, data),
@@ -994,14 +1075,17 @@ pub const AccountHookContext = struct {
             if (account.lamports == 0) continue;
             if (!filters.filtersAllow(f, account.data.unowned_allocation)) continue;
 
-            const data = try account_codec.encodeAccount(
+            const data = account_codec.encodeAccount(
                 allocator,
                 pubkey,
                 account,
                 encoding,
                 slot_reader,
                 config.dataSlice,
-            );
+            ) catch |err| switch (err) {
+                error.Base58DataTooLarge => return .{ .rpc_error = .base58_data_too_large },
+                else => return err,
+            };
             try results.append(
                 allocator,
                 .{
@@ -1019,8 +1103,8 @@ pub const AccountHookContext = struct {
         }
         const values = try results.toOwnedSlice(allocator);
         if (config.withContext orelse false) {
-            return .{ .context = .{ .context = .{ .slot = slot }, .value = values } };
+            return .{ .ok = .{ .context = .{ .context = .{ .slot = slot }, .value = values } } };
         }
-        return .{ .list = values };
+        return .{ .ok = .{ .list = values } };
     }
 };

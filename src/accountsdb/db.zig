@@ -2881,7 +2881,7 @@ pub const AccountsDB = struct {
                 this: @This(),
                 allocator: std.mem.Allocator,
                 params: sig.rpc.methods.GetAccountInfo,
-            ) !sig.rpc.methods.GetAccountInfo.Response {
+            ) !sig.rpc.methods.RpcResult(sig.rpc.methods.GetAccountInfo.Response) {
                 const config: sig.rpc.methods.GetAccountInfo.Config = params.config orelse .{};
                 const encoding = config.encoding orelse .base64;
                 if (config.commitment) |commitment| {
@@ -2956,7 +2956,7 @@ pub const AccountsDB = struct {
                 };
                 errdefer allocator.free(account_data_base64);
 
-                return .{
+                return .{ .ok = .{
                     .context = .{
                         .slot = account_slot,
                         .apiVersion = "2.0.15",
@@ -2972,14 +2972,14 @@ pub const AccountsDB = struct {
                         .rentEpoch = facts.rent_epoch,
                         .space = facts.space,
                     },
-                };
+                } };
             }
 
             pub fn getSnapshot(
                 this: @This(),
                 _: std.mem.Allocator,
                 params: sig.rpc.methods.GetSnapshot,
-            ) !sig.rpc.methods.GetSnapshot.Response {
+            ) !sig.rpc.methods.RpcResult(sig.rpc.methods.GetSnapshot.Response) {
                 const snapshot_target = getSnapshotTarget(
                     this.accountsdb,
                     params.path,
@@ -2996,7 +2996,7 @@ pub const AccountsDB = struct {
                         switch (params.get) {
                             .size => {
                                 const stat = try this.accountsdb.snapshot_dir.statFile(archive_name);
-                                return .{ .size = stat.size };
+                                return .{ .ok = .{ .size = stat.size } };
                             },
                             .file => {
                                 const archive_file = this.accountsdb.snapshot_dir.openFile(
@@ -3018,7 +3018,7 @@ pub const AccountsDB = struct {
                                     return error.SystemIoError;
                                 };
                                 errdefer archive_file.close();
-                                return .{ .file = archive_file };
+                                return .{ .ok = .{ .file = archive_file } };
                             },
                         }
                     },
