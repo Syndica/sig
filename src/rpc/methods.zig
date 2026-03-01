@@ -9,6 +9,7 @@
 //! https://solana.com/de/docs/rpc
 
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 const rpc = @import("lib.zig");
 const base58 = @import("base58");
