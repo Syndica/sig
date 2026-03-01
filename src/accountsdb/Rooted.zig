@@ -207,13 +207,16 @@ pub fn getByOwner(self: *Rooted, owner: *const Pubkey) OwnerIterator {
     ;
     var stmt: ?*sql.sqlite3_stmt = null;
     self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &stmt, null));
-    self.err(sql.sqlite3_bind_blob(stmt.?, 1, &owner.data, Pubkey.SIZE, sql.SQLITE_STATIC));
-    return .{ .stmt = stmt.?, .rooted = self };
+    // Don't bind here — the OwnerIterator will be moved (returned by value),
+    // invalidating any pointer into this stack frame. Bind lazily on first next().
+    return .{ .stmt = stmt.?, .rooted = self, .owner = owner.* };
 }
 
 pub const OwnerIterator = struct {
     rooted: *Rooted,
     stmt: *sql.sqlite3_stmt,
+    owner: Pubkey,
+    bound: bool = false,
 
     pub const Entry = struct {
         pubkey: Pubkey,
@@ -225,6 +228,16 @@ pub const OwnerIterator = struct {
     };
 
     pub fn next(self: *OwnerIterator) ?Entry {
+        if (!self.bound) {
+            self.bound = true;
+            self.rooted.err(sql.sqlite3_bind_blob(
+                self.stmt,
+                1,
+                &self.owner.data,
+                Pubkey.SIZE,
+                sql.SQLITE_STATIC,
+            ));
+        }
         const rc = sql.sqlite3_step(self.stmt);
         switch (rc) {
             ROW => {},
