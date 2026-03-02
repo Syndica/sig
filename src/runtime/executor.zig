@@ -349,9 +349,12 @@ pub fn prepareCpiInstructionInfo(
         break :blk program_account_meta.index_in_transaction;
     };
 
-    // Clone instruction data so the trace preserves each CPI's data independently.
-    // Without this, multiple CPI trace entries can alias the same VM memory region,
-    // causing all entries to reflect the last CPI's data.
+    // Clone instruction data so the trace preserves each CPI's data after
+    // the caller's serialized VM memory is freed.
+    // Without this, trace entries hold dangling pointers into the caller's
+    // serialized input buffer (freed in executeBpfProgram via
+    // `defer serialized.deinit`), resulting in use-after-free when the
+    // trace is later read during transaction status construction.
     // [agave] Uses Cow::Owned(instruction.data) for CPI instructions.
     const owned_data = try tc.allocator.dupe(u8, callee.data);
     errdefer tc.allocator.free(owned_data);

@@ -530,7 +530,7 @@ test "TransactionVersion serialization - number" {
 
 test "EncodedTransaction serialization - binary base64" {
     const tx = GetBlock.Response.EncodedTransaction{
-        .binary = .{ .data = "AQID", .encoding = .base64 },
+        .binary = .{ "AQID", .base64 },
     };
     try expectJsonStringify(
         \\["AQID","base64"]
@@ -539,7 +539,7 @@ test "EncodedTransaction serialization - binary base64" {
 
 test "EncodedTransaction serialization - binary base58" {
     const tx = GetBlock.Response.EncodedTransaction{
-        .binary = .{ .data = "2j", .encoding = .base58 },
+        .binary = .{ "2j", .base58 },
     };
     try expectJsonStringify(
         \\["2j","base58"]
@@ -557,7 +557,7 @@ test "EncodedTransaction serialization - legacy binary" {
 
 test "EncodedTransactionWithStatusMeta serialization - minimal" {
     const tx_with_meta = GetBlock.Response.EncodedTransactionWithStatusMeta{
-        .transaction = .{ .binary = .{ .data = "AQID", .encoding = .base64 } },
+        .transaction = .{ .binary = .{ "AQID", .base64 } },
         .meta = null,
         .version = null,
     };
@@ -568,7 +568,7 @@ test "EncodedTransactionWithStatusMeta serialization - minimal" {
 
 test "EncodedTransactionWithStatusMeta serialization - with version" {
     const tx_with_meta = GetBlock.Response.EncodedTransactionWithStatusMeta{
-        .transaction = .{ .binary = .{ .data = "AQID", .encoding = .base64 } },
+        .transaction = .{ .binary = .{ "AQID", .base64 } },
         .meta = null,
         .version = .legacy,
     };

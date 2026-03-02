@@ -15,7 +15,6 @@ const JsonValue = std.json.Value;
 const ObjectMap = std.json.ObjectMap;
 
 pub const AccountKeys = @import("AccountKeys.zig");
-pub const LoadedMessage = @import("LoadedMessage.zig");
 
 const vote_program = sig.runtime.program.vote;
 const system_program = sig.runtime.program.system;
@@ -438,36 +437,6 @@ pub fn makeUiPartiallyDecodedInstruction(
         },
         .stackHeight = stack_height,
     };
-}
-
-/// Build a partially decoded instruction (fallback for unknown programs or parse failures).
-fn buildPartiallyDecoded(
-    allocator: Allocator,
-    program_id: []const u8,
-    data: []const u8,
-    account_indices: []const u8,
-    all_keys: []const []const u8,
-    stack_height: ?u32,
-) !ParsedInstruction {
-    const resolved_accounts = try allocator.alloc([]const u8, account_indices.len);
-    for (account_indices, 0..) |acct_idx, j| {
-        resolved_accounts[j] = if (acct_idx < all_keys.len)
-            try allocator.dupe(u8[acct_idx])
-        else
-            try allocator.dupe(u8, "unknown");
-    }
-
-    const base58_encoder = base58.Table.BITCOIN;
-    const data_str = base58_encoder.encodeAlloc(allocator, data) catch {
-        return error.EncodingError;
-    };
-
-    return .{ .partially_decoded = .{
-        .programId = try allocator.dupe(u8, program_id),
-        .accounts = resolved_accounts,
-        .data = data_str,
-        .stackHeight = stack_height,
-    } };
 }
 
 // ============================================================================

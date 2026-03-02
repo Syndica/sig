@@ -137,6 +137,8 @@ const FinalizeStateParams = struct {
     account_reader: SlotAccountReader,
     capitalization: *std.atomic.Value(u64),
     blockhash_queue: *sig.sync.RwMux(sig.core.BlockhashQueue),
+    ledger: *sig.ledger.Ledger,
+    reward_status: *const rewards.EpochRewardStatus,
 
     // data params
     rent: Rent,
@@ -146,10 +148,6 @@ const FinalizeStateParams = struct {
     collector_id: Pubkey,
     collected_transaction_fees: u64,
     collected_priority_fees: u64,
-
-    ledger: *sig.ledger.Ledger,
-
-    reward_status: *const rewards.EpochRewardStatus,
     block_height: u64,
 };
 

@@ -489,15 +489,8 @@ pub const GetBlock = struct {
             legacy_binary: []const u8,
             /// Binary encoding: [base64_data, "base64"] or [base58_data, "base58"]
             binary: struct {
-                data: []const u8,
-                encoding: enum { base58, base64 },
-
-                pub fn jsonStringify(self: @This(), jw: anytype) !void {
-                    try jw.beginArray();
-                    try jw.write(self.data);
-                    try jw.write(@tagName(self.encoding));
-                    try jw.endArray();
-                }
+                []const u8,
+                enum { base58, base64 },
             },
             /// JSON encoding: object with signatures and message
             json: struct {
@@ -512,7 +505,7 @@ pub const GetBlock = struct {
             pub fn jsonStringify(self: EncodedTransaction, jw: anytype) !void {
                 switch (self) {
                     .legacy_binary => |b| try jw.write(b),
-                    .binary => |b| try b.jsonStringify(jw),
+                    .binary => |b| try jw.write(b),
                     .json => |j| try jw.write(j),
                     .accounts => |a| try jw.write(a),
                 }
@@ -553,12 +546,14 @@ pub const GetBlock = struct {
             }
         };
 
+        pub const MessageHeader = struct {
+            numRequiredSignatures: u8,
+            numReadonlySignedAccounts: u8,
+            numReadonlyUnsignedAccounts: u8,
+        };
+
         pub const UiRawMessage = struct {
-            header: struct {
-                numRequiredSignatures: u8,
-                numReadonlySignedAccounts: u8,
-                numReadonlyUnsignedAccounts: u8,
-            },
+            header: MessageHeader,
             account_keys: []const Pubkey,
             recent_blockhash: Hash,
             instructions: []const parse_instruction.UiCompiledInstruction,
@@ -606,12 +601,6 @@ pub const GetBlock = struct {
                 }
                 try jw.endObject();
             }
-        };
-
-        pub const MessageHeader = struct {
-            numRequiredSignatures: u8,
-            numReadonlySignedAccounts: u8,
-            numReadonlyUnsignedAccounts: u8,
         };
 
         pub const EncodedInstruction = struct {
@@ -1593,6 +1582,7 @@ pub const BlockHookContext = struct {
 
     const SlotTrackerRef = sig.replay.trackers.SlotTracker.Reference;
     const ReservedAccounts = sig.core.ReservedAccounts;
+    const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
 
     pub fn getBlock(
         self: BlockHookContext,
@@ -1803,10 +1793,7 @@ pub const BlockHookContext = struct {
                     bincode_bytes,
                 );
 
-                return .{ .binary = .{
-                    .data = base58_str[0..encoded_len],
-                    .encoding = .base58,
-                } };
+                return .{ .binary = .{ base58_str[0..encoded_len], .base58 } };
             },
             .base64 => {
                 const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
@@ -1816,10 +1803,7 @@ pub const BlockHookContext = struct {
                 const base64_buf = try allocator.alloc(u8, encoded_len);
                 _ = std.base64.standard.Encoder.encode(base64_buf, bincode_bytes);
 
-                return .{ .binary = .{
-                    .data = base64_buf,
-                    .encoding = .base64,
-                } };
+                return .{ .binary = .{ base64_buf, .base64 } };
             },
             .json, .jsonParsed => |enc| return .{ .json = .{
                 .signatures = try allocator.dupe(Signature, transaction.signatures),
@@ -1900,10 +1884,7 @@ pub const BlockHookContext = struct {
                     bincode_bytes,
                 );
 
-                return .{ .binary = .{
-                    .data = base58_str[0..encoded_len],
-                    .encoding = .base58,
-                } };
+                return .{ .binary = .{ base58_str[0..encoded_len], .base58 } };
             },
             .base64 => {
                 const bincode_bytes = try sig.bincode.writeAlloc(allocator, transaction, .{});
@@ -1913,10 +1894,7 @@ pub const BlockHookContext = struct {
                 const base64_buf = try allocator.alloc(u8, encoded_len);
                 _ = std.base64.standard.Encoder.encode(base64_buf, bincode_bytes);
 
-                return .{ .binary = .{
-                    .data = base64_buf,
-                    .encoding = .base64,
-                } };
+                return .{ .binary = .{ base64_buf, .base64 } };
             },
             .json => return try jsonEncodeVersionedTransaction(
                 allocator,
@@ -2092,15 +2070,8 @@ pub const BlockHookContext = struct {
                 defer reserved_account_keys.deinit(allocator);
                 const account_keys = parse_instruction.AccountKeys.init(
                     message.account_keys,
-                    null,
-                );
-                var loaded_message = try parse_instruction.LoadedMessage.init(
-                    allocator,
-                    message,
                     meta.loaded_addresses,
-                    &reserved_account_keys.map,
                 );
-                defer loaded_message.deinit(allocator);
 
                 var instructions = try allocator.alloc(
                     parse_instruction.UiInstruction,
@@ -2132,7 +2103,12 @@ pub const BlockHookContext = struct {
                 }
 
                 return .{ .parsed = .{
-                    .account_keys = try parseV0MessageAccounts(allocator, loaded_message),
+                    .account_keys = try parseV0MessageAccounts(
+                        allocator,
+                        message,
+                        account_keys,
+                        &reserved_account_keys,
+                    ),
                     .recent_blockhash = message.recent_blockhash,
                     .instructions = instructions,
                     .address_table_lookups = address_table_lookups,
@@ -2159,7 +2135,11 @@ pub const BlockHookContext = struct {
         for (message.account_keys, 0..) |account_key, i| {
             accounts[i] = .{
                 .pubkey = account_key,
-                .writable = message.isMaybeWritable(i, &reserved_account_keys.map),
+                .writable = message.isWritable(
+                    i,
+                    null,
+                    reserved_account_keys,
+                ),
                 .signer = message.isSigner(i),
                 .source = .transaction,
             };
@@ -2171,9 +2151,14 @@ pub const BlockHookContext = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_accounts.rs#L21
     fn parseV0MessageAccounts(
         allocator: Allocator,
-        message: parse_instruction.LoadedMessage,
+        message: sig.core.transaction.Message,
+        account_keys: parse_instruction.AccountKeys,
+        reserved_account_keys: *const ReservedAccounts,
     ) ![]const GetBlock.Response.ParsedAccount {
-        const account_keys = message.accountKeys();
+        const loaded_addresses: LoadedAddresses = account_keys.dynamic_keys orelse .{
+            .writable = &.{},
+            .readonly = &.{},
+        };
         const total_len = account_keys.len();
         var accounts = try allocator.alloc(GetBlock.Response.ParsedAccount, total_len);
 
@@ -2181,9 +2166,12 @@ pub const BlockHookContext = struct {
             const account_key = account_keys.get(i).?;
             accounts[i] = .{
                 .pubkey = account_key,
-                .writable = message.isWritable(i),
+                .writable = message.isWritable(i, .{
+                    .writable = loaded_addresses.writable,
+                    .readonly = loaded_addresses.readonly,
+                }, reserved_account_keys),
                 .signer = message.isSigner(i),
-                .source = if (i < message.message.account_keys.len) .transaction else .lookupTable,
+                .source = if (i < message.account_keys.len) .transaction else .lookupTable,
             };
         }
         return accounts;
@@ -2342,12 +2330,15 @@ pub const BlockHookContext = struct {
                 tx_with_meta.transaction.msg,
                 &reserved_account_keys,
             ),
-            .v0 => try parseV0MessageAccounts(allocator, try parse_instruction.LoadedMessage.init(
+            .v0 => try parseV0MessageAccounts(
                 allocator,
                 tx_with_meta.transaction.msg,
-                tx_with_meta.meta.loaded_addresses,
-                &reserved_account_keys.map,
-            )),
+                parse_instruction.AccountKeys.init(
+                    tx_with_meta.transaction.msg.account_keys,
+                    tx_with_meta.meta.loaded_addresses,
+                ),
+                &reserved_account_keys,
+            ),
         };
 
         return .{
@@ -2485,7 +2476,7 @@ pub const BlockHookContext = struct {
     /// Convert loaded addresses to wire format.
     fn convertLoadedAddresses(
         allocator: std.mem.Allocator,
-        loaded: sig.ledger.transaction_status.LoadedAddresses,
+        loaded: LoadedAddresses,
     ) !GetBlock.Response.UiLoadedAddresses {
         return .{
             .writable = try allocator.dupe(Pubkey, loaded.writable),
@@ -2726,9 +2717,9 @@ test "encodeTransactionWithoutMeta - base64 encoding" {
     const result = try BlockHookContext.encodeTransactionWithoutMeta(allocator, tx, .base64);
     const binary = result.binary;
 
-    try std.testing.expect(binary.encoding == .base64);
+    try std.testing.expect(binary[1] == .base64);
     // base64 encoded data should be non-empty (even empty tx has some bincode overhead)
-    try std.testing.expect(binary.data.len > 0);
+    try std.testing.expect(binary[0].len > 0);
 }
 
 test "encodeTransactionWithoutMeta - json encoding" {
@@ -2757,8 +2748,8 @@ test "encodeTransactionWithoutMeta - base58 encoding" {
     const result = try BlockHookContext.encodeTransactionWithoutMeta(allocator, tx, .base58);
     const binary = result.binary;
 
-    try std.testing.expect(binary.encoding == .base58);
-    try std.testing.expect(binary.data.len > 0);
+    try std.testing.expect(binary[1] == .base58);
+    try std.testing.expect(binary[0].len > 0);
 }
 
 test "encodeTransactionWithoutMeta - legacy binary encoding" {
