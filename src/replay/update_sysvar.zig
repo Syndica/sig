@@ -507,13 +507,13 @@ fn getTimestampEstimate(
 
         for (vote_accounts.keys(), vote_accounts.values()) |pubkey, vote_account| {
             const vote_state = &vote_account.account.state;
-            const slot_delta = std.math.sub(u64, slot, vote_state.last_timestamp.slot) catch
+            const slot_delta = std.math.sub(u64, slot, vote_state.lastTimestamp().slot) catch
                 return null;
             if (slot_delta <= slots_per_epoch) {
                 recent_timestamps.appendAssumeCapacity(.{
                     pubkey,
-                    vote_state.last_timestamp.slot,
-                    vote_state.last_timestamp.timestamp,
+                    vote_state.lastTimestamp().slot,
+                    vote_state.lastTimestamp().timestamp,
                 });
             }
         }
