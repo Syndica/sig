@@ -154,7 +154,7 @@ pub fn getByOwner(
             if (!acc.owner.equals(&owner)) continue;
 
             const gop = try map.getOrPut(allocator, pk);
-            if (gop.found_existing or index.slot > gop.value_ptr.slot) {
+            if (!gop.found_existing or index.slot > gop.value_ptr.slot) {
                 gop.value_ptr.* = .{
                     .account = acc.asAccount(),
                     .slot = index.slot,
