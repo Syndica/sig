@@ -15,6 +15,7 @@ const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
 const GetGenesisHash = methods.GetGenesisHash;
 const GetInflationGovernor = methods.GetInflationGovernor;
+const GetInflationRate = methods.GetInflationRate;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
@@ -201,7 +202,21 @@ test GetInflationGovernor {
     );
 }
 
-// TODO: test getInflationRate()
+test GetInflationRate {
+    // getInflationRate takes no parameters
+    try testRequest(.getInflationRate, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getInflationRate","params":[]}
+    );
+    try testResponse(GetInflationRate, .{ .result = .{
+        .total = 0.08,
+        .validator = 0.076,
+        .foundation = 0.004,
+        .epoch = 728,
+    } },
+        \\{"jsonrpc":"2.0","result":{"epoch":728,"foundation":0.004,"total":0.08,"validator":0.076},"id":1}
+    );
+}
+
 // TODO: test getInflationReward()
 // TODO: test getLargeAccounts()
 

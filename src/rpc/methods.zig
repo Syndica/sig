@@ -61,7 +61,7 @@ pub const MethodAndParams = union(enum) {
     getHighestSnapshotSlot: noreturn,
     getIdentity: GetIdentity,
     getInflationGovernor: GetInflationGovernor,
-    getInflationRate: noreturn,
+    getInflationRate: GetInflationRate,
     getInflationReward: noreturn,
     getLargestAccounts: noreturn,
     getLatestBlockhash: GetLatestBlockhash,
@@ -423,7 +423,17 @@ pub const GetInflationGovernor = struct {
     };
 };
 
-// TODO: getInflationRate
+pub const GetInflationRate = struct {
+    // This RPC method takes no parameters (matches Agave behavior)
+
+    pub const Response = struct {
+        total: f64,
+        validator: f64,
+        foundation: f64,
+        epoch: u64,
+    };
+};
+
 // TODO: getInflationReward
 // TODO: getLargeAccounts
 
@@ -925,6 +935,37 @@ pub const RpcHookContext = struct {
             .taper = inflation.taper,
             .foundation = inflation.foundation,
             .foundationTerm = inflation.foundation_term,
+        };
+    }
+
+    pub fn getInflationRate(
+        self: RpcHookContext,
+        _: std.mem.Allocator,
+        _: GetInflationRate,
+    ) !GetInflationRate.Response {
+        // Agave uses bank(None) which means default commitment (finalized)
+        // See: https://github.com/anza-xyz/agave/blob/v2.1.6/rpc/src/rpc.rs#L897-909
+        const slot = self.slot_tracker.getSlotForCommitment(.finalized);
+        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+
+        const epoch = self.epoch_tracker.epoch_schedule.getEpoch(slot);
+        const slots_per_year = self.epoch_tracker.cluster.slotsPerYear();
+
+        const slot_in_years = sig.replay.rewards.inflation_rewards.getSlotInYearsForInflation(
+            slot,
+            epoch,
+            slots_per_year,
+            &slot_ref.constants.feature_set,
+            &self.epoch_tracker.epoch_schedule,
+        );
+
+        const inflation = &slot_ref.constants.inflation;
+
+        return .{
+            .total = inflation.total(slot_in_years),
+            .validator = inflation.validatorRate(slot_in_years),
+            .foundation = inflation.foundationRate(slot_in_years),
+            .epoch = epoch,
         };
     }
 };
