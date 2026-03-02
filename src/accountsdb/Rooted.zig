@@ -31,6 +31,7 @@ sqlite_mem_used: ?*Gauge = null,
 /// on any threads that use put or get.
 threadlocal var put_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_stmt: ?*sql.sqlite3_stmt = null;
+threadlocal var get_by_owner_stmt: ?*sql.sqlite3_stmt = null;
 
 pub fn init(file_path: [:0]const u8) !Rooted {
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.init" });
@@ -121,6 +122,10 @@ pub fn deinitThreadLocals() void {
         _ = sql.sqlite3_finalize(stmt);
         get_stmt = null;
     }
+    if (get_by_owner_stmt) |stmt| {
+        _ = sql.sqlite3_finalize(stmt);
+        get_by_owner_stmt = null;
+    }
 }
 
 pub fn count(self: *const Rooted) u64 {
@@ -160,7 +165,7 @@ pub fn get(
 
     const stmt: *sql.sqlite3_stmt = if (get_stmt) |stmt| stmt else blk: {
         const query =
-            \\SELECT lamports, data, owner, executable, rent_epoch 
+            \\SELECT lamports, data, owner, executable, rent_epoch
             \\FROM entries WHERE address = ?;
         ;
         self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_stmt, null));
@@ -201,15 +206,17 @@ pub fn get(
 }
 
 pub fn getByOwner(self: *Rooted, owner: *const Pubkey) OwnerIterator {
-    const query =
-        \\ SELECT address, lamports, data, owner, executable, rent_epoch
-        \\ FROM entries WHERE owner = ?;
-    ;
-    var stmt: ?*sql.sqlite3_stmt = null;
-    self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &stmt, null));
+    const stmt: *sql.sqlite3_stmt = if (get_by_owner_stmt) |stmt| stmt else blk: {
+        const query =
+            \\ SELECT address, lamports, data, owner, executable, rent_epoch
+            \\ FROM entries WHERE owner = ?;
+        ;
+        self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_by_owner_stmt, null));
+        break :blk get_by_owner_stmt.?;
+    };
     // Don't bind here — the OwnerIterator will be moved (returned by value),
     // invalidating any pointer into this stack frame. Bind lazily on first next().
-    return .{ .stmt = stmt.?, .rooted = self, .owner = owner.* };
+    return .{ .stmt = stmt, .rooted = self, .owner = owner.* };
 }
 
 pub const OwnerIterator = struct {
@@ -272,7 +279,7 @@ pub const OwnerIterator = struct {
     }
 
     pub fn deinit(self: *OwnerIterator) void {
-        _ = sql.sqlite3_finalize(self.stmt);
+        defer std.debug.assert(sql.sqlite3_reset(self.stmt) == OK);
     }
 };
 
@@ -349,7 +356,7 @@ fn computeLtHashForAccountRange(
     defer zone.deinit();
 
     const query =
-        \\SELECT 
+        \\SELECT
         \\address, owner, data, lamports, executable, rent_epoch
         \\FROM entries LIMIT ? OFFSET ?;
     ;
@@ -447,7 +454,7 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
         // Insert or update only if last_modified_slot is greater (excluded = VALUES)
         // https://sqlite.org/lang_upsert.html#examples
         const query =
-            \\INSERT INTO entries 
+            \\INSERT INTO entries
             \\(address, lamports, data, owner, executable, rent_epoch, last_modified_slot)
             \\VALUES (?, ?, ?, ?, ?, ?, ?)
             \\ON CONFLICT(address) DO UPDATE SET
