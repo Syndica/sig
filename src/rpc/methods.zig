@@ -68,7 +68,7 @@ pub const MethodAndParams = union(enum) {
     getLeaderSchedule: GetLeaderSchedule,
     getMaxRetransmitSlot: noreturn,
     getMaxShredInsertSlot: noreturn,
-    getMinimumBalanceForRentExemption: noreturn,
+    getMinimumBalanceForRentExemption: GetMinimumBalanceForRentExemption,
     getMultipleAccounts: noreturn,
     getProgramAccounts: noreturn,
     getRecentPerformanceSamples: noreturn,
@@ -484,7 +484,18 @@ pub const GetLeaderSchedule = struct {
 
 // TODO: getMaxRetransmitSlot
 // TODO: getMaxShredInsertSlot
-// TODO: getMinimumBalanceForRentExemption
+
+/// Returns minimum balance required to make account rent exempt.
+/// https://solana.com/docs/rpc/http/getminimumbalanceforrentexemption
+pub const GetMinimumBalanceForRentExemption = struct {
+    /// The Account's data length
+    data_len: usize,
+    config: ?common.CommitmentSlotConfig = null,
+
+    /// Returns minimum lamports required in account to remain rent free.
+    pub const Response = u64;
+};
+
 // TODO: getMultipleAccounts
 // TODO: getProgramAccounts
 // TODO: getRecentPerformanceSamples
@@ -888,6 +899,35 @@ pub const RpcHookContext = struct {
             },
             .value = lamports,
         };
+    }
+
+    /// Returns the minimum balance required to make account with given data length rent exempt.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L590-L597
+    pub fn getMinimumBalanceForRentExemption(
+        self: RpcHookContext,
+        _: std.mem.Allocator,
+        params: GetMinimumBalanceForRentExemption,
+    ) !GetMinimumBalanceForRentExemption.Response {
+        // Validate data_len doesn't exceed maximum allowed account size
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3003-L3004
+        if (params.data_len > sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH) {
+            return error.InvalidRequest;
+        }
+
+        const config = params.config orelse common.CommitmentSlotConfig{};
+        // [agave] Default commitment is finalized:
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
+        const commitment = config.commitment orelse .finalized;
+
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+
+        // Get slot reference to access rent collector
+        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        const rent = ref.constants.rent_collector.rent;
+
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2719-L2720
+        // minimum_balance returns 0 for empty accounts, but agave returns max(1, min_balance)
+        return @max(1, rent.minimumBalance(params.data_len));
     }
 };
 

@@ -225,7 +225,19 @@ test GetLeaderSchedule {
 
 // TODO: test getMaxRetransmitSlot()
 // TODO: test getMaxShredInsertSlot()
-// TODO: test getMinimumBalanceForRentExemption()
+
+test "GetMinimumBalanceForRentExemption" {
+    const GetMinimumBalanceForRentExemption = methods.GetMinimumBalanceForRentExemption;
+
+    try testRequest(.getMinimumBalanceForRentExemption, .{ .data_len = 50 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getMinimumBalanceForRentExemption","params":[50]}
+    );
+    // Response is just a u64 value representing minimum lamports
+    try testResponse(GetMinimumBalanceForRentExemption, .{ .result = 1238880 },
+        \\{"jsonrpc":"2.0","result":1238880,"id":1}
+    );
+}
+
 // TODO: test getMultipleAccounts()
 // TODO: test getProgramAccounts()
 // TODO: test getRecentPerformanceSamples()

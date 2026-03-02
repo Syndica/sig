@@ -146,6 +146,13 @@ pub const Client = struct {
         return self.fetch(.null, .getLeaderSchedule, request);
     }
 
+    pub fn getMinimumBalanceForRentExemption(
+        self: *Client,
+        request: rpc.methods.GetMinimumBalanceForRentExemption,
+    ) Error!Response(rpc.methods.GetMinimumBalanceForRentExemption.Response) {
+        return self.fetch(.null, .getMinimumBalanceForRentExemption, request);
+    }
+
     pub fn getSignatureStatuses(
         self: *Client,
         request: rpc.methods.GetSignatureStatuses,
