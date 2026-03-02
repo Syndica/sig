@@ -1675,7 +1675,7 @@ fn validator(
         .account_reader = account_store.reader(),
     });
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.methods.BlockHookContext{
+    try app_base.rpc_hooks.set(allocator, sig.rpc.methods.LedgerHookContext{
         .ledger = &ledger,
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
     });

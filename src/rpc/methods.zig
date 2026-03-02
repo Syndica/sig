@@ -753,30 +753,30 @@ pub const GetBlock = struct {
 
                 // Convert inner instructions
                 const inner_instructions = if (meta.inner_instructions) |iis|
-                    try BlockHookContext.convertInnerInstructions(allocator, iis)
+                    try LedgerHookContext.convertInnerInstructions(allocator, iis)
                 else
                     &.{};
 
                 // Convert token balances
                 const pre_token_balances = if (meta.pre_token_balances) |balances|
-                    try BlockHookContext.convertTokenBalances(allocator, balances)
+                    try LedgerHookContext.convertTokenBalances(allocator, balances)
                 else
                     &.{};
 
                 const post_token_balances = if (meta.post_token_balances) |balances|
-                    try BlockHookContext.convertTokenBalances(allocator, balances)
+                    try LedgerHookContext.convertTokenBalances(allocator, balances)
                 else
                     &.{};
 
                 // Convert loaded addresses
-                const loaded_addresses = try BlockHookContext.convertLoadedAddresses(
+                const loaded_addresses = try LedgerHookContext.convertLoadedAddresses(
                     allocator,
                     meta.loaded_addresses,
                 );
 
                 // Convert return data
                 const return_data = if (meta.return_data) |rd|
-                    try BlockHookContext.convertReturnData(allocator, rd)
+                    try LedgerHookContext.convertReturnData(allocator, rd)
                 else
                     null;
 
@@ -1576,7 +1576,7 @@ pub const StaticHookContext = struct {
 
 /// RPC hook context for block-related methods.
 /// Requires access to the Ledger and SlotTracker for commitment checks.
-pub const BlockHookContext = struct {
+pub const LedgerHookContext = struct {
     ledger: *sig.ledger.Ledger,
     slot_tracker: *const sig.replay.trackers.SlotTracker,
 
@@ -1585,7 +1585,7 @@ pub const BlockHookContext = struct {
     const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
 
     pub fn getBlock(
-        self: BlockHookContext,
+        self: LedgerHookContext,
         allocator: std.mem.Allocator,
         params: GetBlock,
     ) !GetBlock.Response {
@@ -2374,11 +2374,11 @@ pub const BlockHookContext = struct {
             .innerInstructions = .skip,
             .logMessages = .skip,
             .preTokenBalances = .{ .value = if (meta.pre_token_balances) |balances|
-                try BlockHookContext.convertTokenBalances(allocator, balances)
+                try LedgerHookContext.convertTokenBalances(allocator, balances)
             else
                 &.{} },
             .postTokenBalances = .{ .value = if (meta.post_token_balances) |balances|
-                try BlockHookContext.convertTokenBalances(allocator, balances)
+                try LedgerHookContext.convertTokenBalances(allocator, balances)
             else
                 &.{} },
             .rewards = if (show_rewards) rewards: {
@@ -2559,35 +2559,35 @@ fn JsonSkippable(comptime T: type) type {
 }
 
 // ============================================================================
-// Tests for private BlockHookContext functions
+// Tests for private LedgerHookContext functions
 // ============================================================================
 
 test "validateVersion - legacy with max_supported_version" {
-    const result = try BlockHookContext.validateVersion(.legacy, 0);
+    const result = try LedgerHookContext.validateVersion(.legacy, 0);
     try std.testing.expect(result != null);
     try std.testing.expect(result.? == .legacy);
 }
 
 test "validateVersion - v0 with max_supported_version >= 0" {
-    const result = try BlockHookContext.validateVersion(.v0, 0);
+    const result = try LedgerHookContext.validateVersion(.v0, 0);
     try std.testing.expect(result != null);
     try std.testing.expectEqual(@as(u8, 0), result.?.number);
 }
 
 test "validateVersion - legacy without max_supported_version returns null" {
-    const result = try BlockHookContext.validateVersion(.legacy, null);
+    const result = try LedgerHookContext.validateVersion(.legacy, null);
     try std.testing.expect(result == null);
 }
 
 test "validateVersion - v0 without max_supported_version errors" {
-    const result = BlockHookContext.validateVersion(.v0, null);
+    const result = LedgerHookContext.validateVersion(.v0, null);
     try std.testing.expectError(error.UnsupportedTransactionVersion, result);
 }
 
 test "buildSimpleUiTransactionStatusMeta - basic" {
     const allocator = std.testing.allocator;
     const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
-    const result = try BlockHookContext.buildSimpleUiTransactionStatusMeta(allocator, meta, false);
+    const result = try LedgerHookContext.buildSimpleUiTransactionStatusMeta(allocator, meta, false);
     defer {
         allocator.free(result.preBalances);
         allocator.free(result.postBalances);
@@ -2606,7 +2606,7 @@ test "buildSimpleUiTransactionStatusMeta - basic" {
 test "buildSimpleUiTransactionStatusMeta - show_rewards true with empty rewards" {
     const allocator = std.testing.allocator;
     const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
-    const result = try BlockHookContext.buildSimpleUiTransactionStatusMeta(allocator, meta, true);
+    const result = try LedgerHookContext.buildSimpleUiTransactionStatusMeta(allocator, meta, true);
     defer {
         allocator.free(result.preBalances);
         allocator.free(result.postBalances);
@@ -2629,7 +2629,7 @@ test "encodeLegacyTransactionMessage - json encoding" {
         .address_lookups = &.{},
     };
 
-    const result = try BlockHookContext.encodeLegacyTransactionMessage(allocator, msg, .json);
+    const result = try LedgerHookContext.encodeLegacyTransactionMessage(allocator, msg, .json);
     // Result should be a raw message
     const raw = result.raw;
 
@@ -2661,7 +2661,7 @@ test "jsonEncodeV0TransactionMessage - with address lookups" {
         }},
     };
 
-    const result = try BlockHookContext.jsonEncodeV0TransactionMessage(allocator, msg);
+    const result = try LedgerHookContext.jsonEncodeV0TransactionMessage(allocator, msg);
     const raw = result.raw;
 
     try std.testing.expectEqual(@as(usize, 1), raw.account_keys.len);
@@ -2698,7 +2698,7 @@ test "encodeLegacyTransactionMessage - base64 encoding" {
     };
 
     // Non-json encodings fall through to the else branch producing raw messages
-    const result = try BlockHookContext.encodeLegacyTransactionMessage(allocator, msg, .base64);
+    const result = try LedgerHookContext.encodeLegacyTransactionMessage(allocator, msg, .base64);
     const raw = result.raw;
 
     try std.testing.expectEqual(@as(u8, 1), raw.header.numRequiredSignatures);
@@ -2714,7 +2714,7 @@ test "encodeTransactionWithoutMeta - base64 encoding" {
     const allocator = arena.allocator();
     const tx = sig.core.Transaction.EMPTY;
 
-    const result = try BlockHookContext.encodeTransactionWithoutMeta(allocator, tx, .base64);
+    const result = try LedgerHookContext.encodeTransactionWithoutMeta(allocator, tx, .base64);
     const binary = result.binary;
 
     try std.testing.expect(binary[1] == .base64);
@@ -2728,7 +2728,7 @@ test "encodeTransactionWithoutMeta - json encoding" {
     const allocator = arena.allocator();
     const tx = sig.core.Transaction.EMPTY;
 
-    const result = try BlockHookContext.encodeTransactionWithoutMeta(allocator, tx, .json);
+    const result = try LedgerHookContext.encodeTransactionWithoutMeta(allocator, tx, .json);
     const json = result.json;
 
     // Should produce a json result with signatures and message
@@ -2745,7 +2745,7 @@ test "encodeTransactionWithoutMeta - base58 encoding" {
     const allocator = arena.allocator();
     const tx = sig.core.Transaction.EMPTY;
 
-    const result = try BlockHookContext.encodeTransactionWithoutMeta(allocator, tx, .base58);
+    const result = try LedgerHookContext.encodeTransactionWithoutMeta(allocator, tx, .base58);
     const binary = result.binary;
 
     try std.testing.expect(binary[1] == .base58);
@@ -2758,7 +2758,7 @@ test "encodeTransactionWithoutMeta - legacy binary encoding" {
     const allocator = arena.allocator();
     const tx = sig.core.Transaction.EMPTY;
 
-    const result = try BlockHookContext.encodeTransactionWithoutMeta(allocator, tx, .binary);
+    const result = try LedgerHookContext.encodeTransactionWithoutMeta(allocator, tx, .binary);
     const legacy_binary = result.legacy_binary;
 
     try std.testing.expect(legacy_binary.len > 0);
