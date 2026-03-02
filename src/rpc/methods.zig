@@ -78,7 +78,7 @@ pub const MethodAndParams = union(enum) {
     getSlot: GetSlot,
     getSlotLeader: noreturn,
     getSlotLeaders: noreturn,
-    getStakeMinimumDelegation: noreturn,
+    getStakeMinimumDelegation: GetStakeMinimumDelegation,
     getSupply: noreturn,
     getTokenAccountBalance: noreturn,
     getTokenAccountsByDelegate: noreturn,
@@ -534,7 +534,16 @@ pub const GetSlot = struct {
 // TODO: getSlotLeader
 // TODO: getSlotLeaders
 // TODO: getStakeActivation
-// TODO: getStakeMinimumDelegation
+
+pub const GetStakeMinimumDelegation = struct {
+    config: ?common.CommitmentSlotConfig = null,
+
+    pub const Response = struct {
+        context: common.Context,
+        value: u64,
+    };
+};
+
 // TODO: getSupply
 // TODO: getTokenAccountBalance
 // TODO: getTokenAccountsByDelegate
@@ -928,6 +937,39 @@ pub const RpcHookContext = struct {
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2719-L2720
         // minimum_balance returns 0 for empty accounts, but agave returns max(1, min_balance)
         return @max(1, rent.minimumBalance(params.data_len));
+    }
+
+    /// Returns the stake minimum delegation, in lamports.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2377-L2384
+    pub fn getStakeMinimumDelegation(
+        self: RpcHookContext,
+        _: std.mem.Allocator,
+        params: GetStakeMinimumDelegation,
+    ) !GetStakeMinimumDelegation.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+        // [agave] Default commitment is finalized:
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
+        const commitment = config.commitment orelse .finalized;
+
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+
+        // Get slot reference to access feature_set
+        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        const feature_set = &ref.constants.feature_set;
+
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2379-L2382
+        const stake_minimum_delegation = sig.runtime.program.stake.getMinimumDelegation(
+            slot,
+            feature_set,
+        );
+
+        return .{
+            .context = .{
+                .slot = slot,
+                .apiVersion = ClientVersion.API_VERSION,
+            },
+            .value = stake_minimum_delegation,
+        };
     }
 };
 

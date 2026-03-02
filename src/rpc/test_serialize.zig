@@ -18,6 +18,7 @@ const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSlot = methods.GetSlot;
+const GetStakeMinimumDelegation = methods.GetStakeMinimumDelegation;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
 
@@ -277,7 +278,19 @@ test GetSlot {
 // TODO: test getSlotLeader()
 // TODO: test getSlotLeaders()
 // TODO: test getStakeActivation()
-// TODO: test getStakeMinimumDelegation()
+
+test GetStakeMinimumDelegation {
+    try testRequest(.getStakeMinimumDelegation, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getStakeMinimumDelegation","params":[]}
+    );
+    try testResponse(GetStakeMinimumDelegation, .{ .result = .{
+        .context = .{ .slot = 501, .apiVersion = "2.0.15" },
+        .value = 1000000000,
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.0.15","slot":501},"value":1000000000},"id":1}
+    );
+}
+
 // TODO: test getSupply()
 // TODO: test getTokenAccountBalance()
 // TODO: test getTokenAccountsByDelegate()

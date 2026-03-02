@@ -167,6 +167,13 @@ pub const Client = struct {
         return self.fetch(.null, .getSlot, request);
     }
 
+    pub fn getStakeMinimumDelegation(
+        self: *Client,
+        request: rpc.methods.GetStakeMinimumDelegation,
+    ) Error!Response(rpc.methods.GetStakeMinimumDelegation.Response) {
+        return self.fetch(.null, .getStakeMinimumDelegation, request);
+    }
+
     pub fn getTransaction(
         self: *Client,
         request: rpc.methods.GetTransaction,
