@@ -312,7 +312,7 @@ test GetTransaction {
     , @as(GetTransaction.Response, .{ .value = .{
         .slot = 430,
         .transaction = .{
-            .transaction = .{ .binary = .{ .data = "AQID", .encoding = .base64 } },
+            .transaction = .{ .binary = .{ "AQID", .base64 } },
         },
         .block_time = null,
     } }));
@@ -325,7 +325,7 @@ test GetTransaction {
     , @as(GetTransaction.Response, .{ .value = .{
         .slot = 430,
         .transaction = .{
-            .transaction = .{ .binary = .{ .data = "AQID", .encoding = .base64 } },
+            .transaction = .{ .binary = .{ "AQID", .base64 } },
             .meta = .{
                 .err = null,
                 .status = .{ .Ok = .{}, .Err = null },
