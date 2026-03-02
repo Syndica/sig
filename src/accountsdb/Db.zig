@@ -312,3 +312,105 @@ test "rooting must handle wraparound and non-consecutive roots" {
         }
     }
 }
+
+test "accounts_db: owner query" {
+    const allocator = std.testing.allocator;
+    var test_state = try Db.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+    const owner_x: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    const owner_y: Pubkey = .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk");
+    const addr_a: Pubkey = .parse("7EqfdGiB5UZgLWc1U9xYbKdy9Ky9NoYcMbEwUq9aAWR6");
+    const addr_b: Pubkey = .parse("9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP");
+    const addr_c: Pubkey = .parse("HN7cABqLq46Es1jh92dQQisAq662SmxELLLsHHe4YWrH");
+    var ancestors: Ancestors = .EMPTY;
+    defer ancestors.deinit(allocator);
+
+    // Slot 1, addr_a with owner_x (unrooted)
+    try ancestors.addSlot(allocator, 1);
+    ancestors.cleanup();
+    try db.put(1, addr_a, .{
+        .lamports = 100,
+        .data = &.{},
+        .owner = owner_x,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    // Slot 2, addr_b with owner_x and addr_c with owner_y (both get rooted)
+    try ancestors.addSlot(allocator, 2);
+    ancestors.cleanup();
+    try db.put(2, addr_b, .{
+        .lamports = 200,
+        .data = &.{},
+        .owner = owner_x,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+    try db.put(2, addr_c, .{
+        .lamports = 300,
+        .data = &.{},
+        .owner = owner_y,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    // Root slots 1 and 2
+    db.onSlotRooted(2, &ancestors);
+
+    // Slot 3, addr_a updated, still owned by owner_x (stays unrooted)
+    try ancestors.addSlot(allocator, 3);
+    ancestors.cleanup();
+    try db.put(3, addr_a, .{
+        .lamports = 150,
+        .data = &.{},
+        .owner = owner_x,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    // Query for owner_x
+    {
+        var query = try db.ownerQuery(&owner_x, &ancestors);
+        defer query.deinit(allocator);
+        // Unrooted should have addr_a at slot 3 (the newer version)
+        try std.testing.expectEqual(1, query.unrooted_map.count());
+        const unrooted_entry = query.unrooted_map.get(addr_a).?;
+        try std.testing.expectEqual(150, unrooted_entry.account.lamports);
+        try std.testing.expectEqual(3, unrooted_entry.slot);
+        // Rooted iterator should yield addr_a(100) and addr_b(200)
+        // (rooted still has the old addr_a from slot 1; the caller
+        //  is responsible for deduplicating against unrooted)
+        var rooted_count: usize = 0;
+        var found_a = false;
+        var found_b = false;
+        while (query.rooted_iter.next()) |entry| {
+            rooted_count += 1;
+            if (entry.pubkey.equals(&addr_a)) {
+                try std.testing.expectEqual(100, entry.lamports);
+                found_a = true;
+            } else if (entry.pubkey.equals(&addr_b)) {
+                try std.testing.expectEqual(200, entry.lamports);
+                found_b = true;
+            } else {
+                return error.UnexpectedAccount;
+            }
+        }
+        try std.testing.expectEqual(2, rooted_count);
+        try std.testing.expect(found_a);
+        try std.testing.expect(found_b);
+    }
+
+    // Query for owner_y
+    {
+        var query = try db.ownerQuery(&owner_y, &ancestors);
+        defer query.deinit(allocator);
+        // No unrooted accounts for owner_y (addr_c was in slot 2 which got rooted)
+        try std.testing.expectEqual(0, query.unrooted_map.count());
+        // Rooted should yield just addr_c
+        const entry = query.rooted_iter.next().?;
+        try std.testing.expectEqual(300, entry.lamports);
+        try std.testing.expect(entry.pubkey.equals(&addr_c));
+        try std.testing.expectEqual(query.rooted_iter.next(), null);
+    }
+}

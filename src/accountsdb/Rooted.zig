@@ -214,7 +214,7 @@ pub fn getByOwner(self: *Rooted, owner: *const Pubkey) OwnerIterator {
         self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_by_owner_stmt, null));
         break :blk get_by_owner_stmt.?;
     };
-    // Don't bind here — the OwnerIterator will be moved (returned by value),
+    // Don't bind here. OwnerIterator will be moved (returned by value),
     // invalidating any pointer into this stack frame. Bind lazily on first next().
     return .{ .stmt = stmt, .rooted = self, .owner = owner.* };
 }
