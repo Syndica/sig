@@ -3086,82 +3086,152 @@ fn parseTokenInstruction(
         },
         .transferFeeExtension => {
             const ext_data = instruction.data[1..];
-            const sub_result = try parseTransferFeeExtension(arena, ext_data, instruction.accounts, account_keys);
+            const sub_result = try parseTransferFeeExtension(
+                arena,
+                ext_data,
+                instruction.accounts,
+                account_keys,
+            );
             return sub_result;
         },
         .confidentialTransferExtension => {
             if (instruction.data.len < 2) return error.DeserializationFailed;
             const ext_data = instruction.data[1..];
-            const sub_result = try parseConfidentialTransferExtension(arena, ext_data, instruction.accounts, account_keys);
+            const sub_result = try parseConfidentialTransferExtension(
+                arena,
+                ext_data,
+                instruction.accounts,
+                account_keys,
+            );
             return sub_result;
         },
         .defaultAccountStateExtension => {
             if (instruction.data.len <= 2) return error.DeserializationFailed;
             const ext_data = instruction.data[1..];
-            const sub_result = try parseDefaultAccountStateExtension(arena, ext_data, instruction.accounts, account_keys);
+            const sub_result = try parseDefaultAccountStateExtension(
+                arena,
+                ext_data,
+                instruction.accounts,
+                account_keys,
+            );
             return sub_result;
         },
         .memoTransferExtension => {
             if (instruction.data.len < 2) return error.DeserializationFailed;
             const ext_data = instruction.data[1..];
-            const sub_result = try parseMemoTransferExtension(arena, ext_data, instruction.accounts, account_keys);
+            const sub_result = try parseMemoTransferExtension(
+                arena,
+                ext_data,
+                instruction.accounts,
+                account_keys,
+            );
             return sub_result;
         },
         .interestBearingMintExtension => {
             if (instruction.data.len < 2) return error.DeserializationFailed;
             const ext_data = instruction.data[1..];
-            const sub_result = try parseInterestBearingMintExtension(arena, ext_data, instruction.accounts, account_keys);
+            const sub_result = try parseInterestBearingMintExtension(
+                arena,
+                ext_data,
+                instruction.accounts,
+                account_keys,
+            );
             return sub_result;
         },
         .cpiGuardExtension => {
             if (instruction.data.len < 2) return error.DeserializationFailed;
             const ext_data = instruction.data[1..];
-            const sub_result = try parseCpiGuardExtension(arena, ext_data, instruction.accounts, account_keys);
+            const sub_result = try parseCpiGuardExtension(
+                arena,
+                ext_data,
+                instruction.accounts,
+                account_keys,
+            );
             return sub_result;
         },
         .transferHookExtension => {
             if (instruction.data.len < 2) return error.DeserializationFailed;
             const ext_data = instruction.data[1..];
-            const sub_result = try parseTransferHookExtension(arena, ext_data, instruction.accounts, account_keys);
+            const sub_result = try parseTransferHookExtension(
+                arena,
+                ext_data,
+                instruction.accounts,
+                account_keys,
+            );
             return sub_result;
         },
         .confidentialTransferFeeExtension => {
             if (instruction.data.len < 2) return error.DeserializationFailed;
             const ext_data = instruction.data[1..];
-            const sub_result = try parseConfidentialTransferFeeExtension(arena, ext_data, instruction.accounts, account_keys);
+            const sub_result = try parseConfidentialTransferFeeExtension(
+                arena,
+                ext_data,
+                instruction.accounts,
+                account_keys,
+            );
             return sub_result;
         },
         .metadataPointerExtension => {
             if (instruction.data.len < 2) return error.DeserializationFailed;
             const ext_data = instruction.data[1..];
-            const sub_result = try parseMetadataPointerExtension(arena, ext_data, instruction.accounts, account_keys);
+            const sub_result = try parseMetadataPointerExtension(
+                arena,
+                ext_data,
+                instruction.accounts,
+                account_keys,
+            );
             return sub_result;
         },
         .groupPointerExtension => {
             if (instruction.data.len < 2) return error.DeserializationFailed;
             const ext_data = instruction.data[1..];
-            const sub_result = try parseGroupPointerExtension(arena, ext_data, instruction.accounts, account_keys);
+            const sub_result = try parseGroupPointerExtension(
+                arena,
+                ext_data,
+                instruction.accounts,
+                account_keys,
+            );
             return sub_result;
         },
         .groupMemberPointerExtension => {
             if (instruction.data.len < 2) return error.DeserializationFailed;
             const ext_data = instruction.data[1..];
-            const sub_result = try parseGroupMemberPointerExtension(arena, ext_data, instruction.accounts, account_keys);
+            const sub_result = try parseGroupMemberPointerExtension(
+                arena,
+                ext_data,
+                instruction.accounts,
+                account_keys,
+            );
             return sub_result;
         },
         .confidentialMintBurnExtension => {
             const ext_data = instruction.data[1..];
-            const sub_result = try parseConfidentialMintBurnExtension(arena, ext_data, instruction.accounts, account_keys);
+            const sub_result = try parseConfidentialMintBurnExtension(
+                arena,
+                ext_data,
+                instruction.accounts,
+                account_keys,
+            );
             return sub_result;
         },
         .scaledUiAmountExtension => {
             const ext_data = instruction.data[1..];
-            const sub_result = try parseScaledUiAmountExtension(arena, ext_data, instruction.accounts, account_keys);
+            const sub_result = try parseScaledUiAmountExtension(
+                arena,
+                ext_data,
+                instruction.accounts,
+                account_keys,
+            );
             return sub_result;
         },
         .pausableExtension => {
             const ext_data = instruction.data[1..];
-            const sub_result = try parsePausableExtension(arena, ext_data, instruction.accounts, account_keys);
+            const sub_result = try parsePausableExtension(
+                arena,
+                ext_data,
+                instruction.accounts,
+                account_keys,
+            );
             return sub_result;
         },
     }
@@ -3229,7 +3299,10 @@ fn parseTransferFeeExtension(
             if (data.len < fee_offset + 10) return error.DeserializationFailed;
             const basis_points = std.mem.readInt(u16, data[fee_offset..][0..2], .little);
             const maximum_fee = std.mem.readInt(u64, data[fee_offset + 2 ..][0..8], .little);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
             try info.put("transferFeeBasisPoints", .{ .integer = @intCast(basis_points) });
             try info.put("maximumFee", .{ .integer = @intCast(maximum_fee) });
             try result.put("info", .{ .object = info });
@@ -3243,12 +3316,29 @@ fn parseTransferFeeExtension(
             const decimals = data[8];
             const fee = std.mem.readInt(u64, data[9..17], .little);
             var info = ObjectMap.init(arena);
-            try info.put("source", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
-            try info.put("destination", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+            try info.put(
+                "source",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
+            );
+            try info.put(
+                "destination",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?),
+            );
             try info.put("tokenAmount", try tokenAmountToUiAmount(arena, amount, decimals));
             try info.put("feeAmount", try tokenAmountToUiAmount(arena, fee, decimals));
-            try parseSigners(arena, &info, 3, account_keys, accounts, "authority", "multisigAuthority");
+            try parseSigners(
+                arena,
+                &info,
+                3,
+                account_keys,
+                accounts,
+                "authority",
+                "multisigAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "transferCheckedWithFee" });
         },
@@ -3256,9 +3346,23 @@ fn parseTransferFeeExtension(
         2 => {
             try checkNumTokenAccounts(accounts, 3);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try info.put("feeRecipient", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
-            try parseSigners(arena, &info, 2, account_keys, accounts, "withdrawWithheldAuthority", "multisigWithdrawWithheldAuthority");
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
+            try info.put(
+                "feeRecipient",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
+            );
+            try parseSigners(
+                arena,
+                &info,
+                2,
+                account_keys,
+                accounts,
+                "withdrawWithheldAuthority",
+                "multisigWithdrawWithheldAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "withdrawWithheldTokensFromMint" });
         },
@@ -3268,16 +3372,36 @@ fn parseTransferFeeExtension(
             const num_token_accounts = data[0];
             try checkNumTokenAccounts(accounts, 3 + @as(usize, num_token_accounts));
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try info.put("feeRecipient", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
+            try info.put(
+                "feeRecipient",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
+            );
             // Source accounts are the last num_token_accounts
             const first_source = accounts.len - @as(usize, num_token_accounts);
-            var source_accounts = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(arena, num_token_accounts);
+            var source_accounts = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(
+                arena,
+                num_token_accounts,
+            );
             for (accounts[first_source..]) |acc_idx| {
-                try source_accounts.append(try pubkeyToValue(arena, account_keys.get(@intCast(acc_idx)).?));
+                try source_accounts.append(try pubkeyToValue(
+                    arena,
+                    account_keys.get(@intCast(acc_idx)).?,
+                ));
             }
             try info.put("sourceAccounts", .{ .array = source_accounts });
-            try parseSigners(arena, &info, 2, account_keys, accounts[0..first_source], "withdrawWithheldAuthority", "multisigWithdrawWithheldAuthority");
+            try parseSigners(
+                arena,
+                &info,
+                2,
+                account_keys,
+                accounts[0..first_source],
+                "withdrawWithheldAuthority",
+                "multisigWithdrawWithheldAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "withdrawWithheldTokensFromAccounts" });
         },
@@ -3285,10 +3409,19 @@ fn parseTransferFeeExtension(
         4 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            var source_accounts = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(arena, if (accounts.len > 1) accounts.len - 1 else 0);
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
+            var source_accounts = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(
+                arena,
+                if (accounts.len > 1) accounts.len - 1 else 0,
+            );
             for (accounts[1..]) |acc_idx| {
-                try source_accounts.append(try pubkeyToValue(arena, account_keys.get(@intCast(acc_idx)).?));
+                try source_accounts.append(try pubkeyToValue(
+                    arena,
+                    account_keys.get(@intCast(acc_idx)).?,
+                ));
             }
             try info.put("sourceAccounts", .{ .array = source_accounts });
             try result.put("info", .{ .object = info });
@@ -3301,10 +3434,21 @@ fn parseTransferFeeExtension(
             const basis_points = std.mem.readInt(u16, data[0..2], .little);
             const maximum_fee = std.mem.readInt(u64, data[2..10], .little);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             try info.put("transferFeeBasisPoints", .{ .integer = @intCast(basis_points) });
             try info.put("maximumFee", .{ .integer = @intCast(maximum_fee) });
-            try parseSigners(arena, &info, 1, account_keys, accounts, "transferFeeConfigAuthority", "multisigtransferFeeConfigAuthority");
+            try parseSigners(
+                arena,
+                &info,
+                1,
+                account_keys,
+                accounts,
+                "transferFeeConfigAuthority",
+                "multisigtransferFeeConfigAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "setTransferFee" });
         },
@@ -3332,7 +3476,10 @@ fn parseConfidentialTransferExtension(
         0 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             // Authority is an OptionalNonZeroPubkey (32 bytes)
             if (ext_data.len >= 33) {
                 if (readOptionalNonZeroPubkey(ext_data, 1)) |pk| {
@@ -3347,8 +3494,14 @@ fn parseConfidentialTransferExtension(
         1 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try info.put("confidentialTransferMintAuthority", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
+            try info.put(
+                "confidentialTransferMintAuthority",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updateConfidentialTransferMint" });
         },
@@ -3356,8 +3509,14 @@ fn parseConfidentialTransferExtension(
         2 => {
             try checkNumTokenAccounts(accounts, 3);
             var info = ObjectMap.init(arena);
-            try info.put("account", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
+            try info.put(
+                "account",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "configureConfidentialTransferAccount" });
         },
@@ -3365,9 +3524,18 @@ fn parseConfidentialTransferExtension(
         3 => {
             try checkNumTokenAccounts(accounts, 3);
             var info = ObjectMap.init(arena);
-            try info.put("account", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
-            try info.put("confidentialTransferAuditorAuthority", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+            try info.put(
+                "account",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
+            );
+            try info.put(
+                "confidentialTransferAuditorAuthority",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?),
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "approveConfidentialTransferAccount" });
         },
@@ -3375,7 +3543,10 @@ fn parseConfidentialTransferExtension(
         4 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("account", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put(
+                "account",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "emptyConfidentialTransferAccount" });
         },
@@ -3383,9 +3554,18 @@ fn parseConfidentialTransferExtension(
         5 => {
             try checkNumTokenAccounts(accounts, 3);
             var info = ObjectMap.init(arena);
-            try info.put("source", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try info.put("destination", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+            try info.put(
+                "source",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
+            try info.put(
+                "destination",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
+            );
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?),
+            );
             // Parse amount and decimals from data if available
             if (ext_data.len >= 10) {
                 const amount = std.mem.readInt(u64, ext_data[1..9], .little);
@@ -3401,9 +3581,18 @@ fn parseConfidentialTransferExtension(
         6 => {
             try checkNumTokenAccounts(accounts, 4);
             var info = ObjectMap.init(arena);
-            try info.put("source", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try info.put("destination", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+            try info.put(
+                "source",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
+            try info.put(
+                "destination",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
+            );
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?),
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "withdrawConfidentialTransfer" });
         },
@@ -3411,9 +3600,18 @@ fn parseConfidentialTransferExtension(
         7 => {
             try checkNumTokenAccounts(accounts, 3);
             var info = ObjectMap.init(arena);
-            try info.put("source", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
-            try info.put("destination", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+            try info.put(
+                "source",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
+            );
+            try info.put(
+                "destination",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?),
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "confidentialTransfer" });
         },
@@ -3421,7 +3619,10 @@ fn parseConfidentialTransferExtension(
         8 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("account", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put(
+                "account",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
             try parseSigners(arena, &info, 0, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "applyPendingConfidentialTransferBalance" });
@@ -3430,7 +3631,10 @@ fn parseConfidentialTransferExtension(
         9 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("account", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put(
+                "account",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
             try parseSigners(arena, &info, 0, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "enableConfidentialTransferConfidentialCredits" });
@@ -3439,7 +3643,10 @@ fn parseConfidentialTransferExtension(
         10 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("account", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put(
+                "account",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
             try parseSigners(arena, &info, 0, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "disableConfidentialTransferConfidentialCredits" });
@@ -3448,27 +3655,48 @@ fn parseConfidentialTransferExtension(
         11 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("account", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put(
+                "account",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
             try parseSigners(arena, &info, 0, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
-            try result.put("type", .{ .string = "enableConfidentialTransferNonConfidentialCredits" });
+            try result.put(
+                "type",
+                .{ .string = "enableConfidentialTransferNonConfidentialCredits" },
+            );
         },
         // DisableNonConfidentialCredits
         12 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("account", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put(
+                "account",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
             try parseSigners(arena, &info, 0, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
-            try result.put("type", .{ .string = "disableConfidentialTransferNonConfidentialCredits" });
+            try result.put(
+                "type",
+                .{ .string = "disableConfidentialTransferNonConfidentialCredits" },
+            );
         },
         // TransferWithFee
         13 => {
             try checkNumTokenAccounts(accounts, 3);
             var info = ObjectMap.init(arena);
-            try info.put("source", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
-            try info.put("destination", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+            try info.put(
+                "source",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
+            );
+            try info.put(
+                "destination",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?),
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "confidentialTransferWithFee" });
         },
@@ -3476,9 +3704,18 @@ fn parseConfidentialTransferExtension(
         14 => {
             try checkNumTokenAccounts(accounts, 3);
             var info = ObjectMap.init(arena);
-            try info.put("account", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
-            try info.put("registry", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+            try info.put(
+                "account",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
+            );
+            try info.put(
+                "registry",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?),
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "configureConfidentialAccountWithRegistry" });
         },
@@ -3514,7 +3751,10 @@ fn parseDefaultAccountStateExtension(
         0 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
             try info.put("accountState", .{ .string = account_state });
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeDefaultAccountState" });
@@ -3523,9 +3763,20 @@ fn parseDefaultAccountStateExtension(
         1 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
             try info.put("accountState", .{ .string = account_state });
-            try parseSigners(arena, &info, 1, account_keys, accounts, "freezeAuthority", "multisigFreezeAuthority");
+            try parseSigners(
+                arena,
+                &info,
+                1,
+                account_keys,
+                accounts,
+                "freezeAuthority",
+                "multisigFreezeAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updateDefaultAccountState" });
         },
@@ -3553,7 +3804,10 @@ fn parseMemoTransferExtension(
         0 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("account", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put(
+                "account",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
             try parseSigners(arena, &info, 1, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "enableRequiredMemoTransfers" });
@@ -3562,7 +3816,10 @@ fn parseMemoTransferExtension(
         1 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("account", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put(
+                "account",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
             try parseSigners(arena, &info, 1, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "disableRequiredMemoTransfers" });
@@ -3591,7 +3848,10 @@ fn parseInterestBearingMintExtension(
         0 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
             // COption<Pubkey> rate_authority followed by i16 rate
             if (ext_data.len >= 1 + 4) {
                 const auth = try readCOptionPubkey(ext_data, 1);
@@ -3613,12 +3873,23 @@ fn parseInterestBearingMintExtension(
         1 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
             if (ext_data.len >= 3) {
                 const rate = std.mem.readInt(i16, ext_data[1..3], .little);
                 try info.put("newRate", .{ .integer = @intCast(rate) });
             }
-            try parseSigners(arena, &info, 1, account_keys, accounts, "rateAuthority", "multisigRateAuthority");
+            try parseSigners(
+                arena,
+                &info,
+                1,
+                account_keys,
+                accounts,
+                "rateAuthority",
+                "multisigRateAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updateInterestBearingConfigRate" });
         },
@@ -3646,7 +3917,10 @@ fn parseCpiGuardExtension(
         0 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("account", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("account", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             try parseSigners(arena, &info, 1, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "enableCpiGuard" });
@@ -3655,7 +3929,10 @@ fn parseCpiGuardExtension(
         1 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("account", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("account", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             try parseSigners(arena, &info, 1, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "disableCpiGuard" });
@@ -3684,7 +3961,10 @@ fn parseTransferHookExtension(
         0 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             if (ext_data.len >= 33) {
                 if (readOptionalNonZeroPubkey(ext_data, 1)) |pk| {
                     try info.put("authority", try pubkeyToValue(arena, pk));
@@ -3702,13 +3982,24 @@ fn parseTransferHookExtension(
         1 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             if (ext_data.len >= 33) {
                 if (readOptionalNonZeroPubkey(ext_data, 1)) |pk| {
                     try info.put("programId", try pubkeyToValue(arena, pk));
                 }
             }
-            try parseSigners(arena, &info, 1, account_keys, accounts, "authority", "multisigAuthority");
+            try parseSigners(
+                arena,
+                &info,
+                1,
+                account_keys,
+                accounts,
+                "authority",
+                "multisigAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updateTransferHook" });
         },
@@ -3736,7 +4027,10 @@ fn parseConfidentialTransferFeeExtension(
         0 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             // OptionalNonZeroPubkey authority (32 bytes) + PodElGamalPubkey (32 bytes)
             if (ext_data.len >= 33) {
                 if (readOptionalNonZeroPubkey(ext_data, 1)) |pk| {
@@ -3750,28 +4044,55 @@ fn parseConfidentialTransferFeeExtension(
         1 => {
             try checkNumTokenAccounts(accounts, 3);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try info.put("feeRecipient", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
+            try info.put("feeRecipient", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[1])).?,
+            ));
             try result.put("info", .{ .object = info });
-            try result.put("type", .{ .string = "withdrawWithheldConfidentialTransferTokensFromMint" });
+            try result.put(
+                "type",
+                .{ .string = "withdrawWithheldConfidentialTransferTokensFromMint" },
+            );
         },
         // WithdrawWithheldTokensFromAccounts
         2 => {
             try checkNumTokenAccounts(accounts, 3);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try info.put("feeRecipient", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
+            try info.put("feeRecipient", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[1])).?,
+            ));
             try result.put("info", .{ .object = info });
-            try result.put("type", .{ .string = "withdrawWithheldConfidentialTransferTokensFromAccounts" });
+            try result.put(
+                "type",
+                .{ .string = "withdrawWithheldConfidentialTransferTokensFromAccounts" },
+            );
         },
         // HarvestWithheldTokensToMint
         3 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            var source_accounts = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(arena, if (accounts.len > 1) accounts.len - 1 else 0);
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
+            var source_accounts = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(
+                arena,
+                if (accounts.len > 1) accounts.len - 1 else 0,
+            );
             for (accounts[1..]) |acc_idx| {
-                try source_accounts.append(try pubkeyToValue(arena, account_keys.get(@intCast(acc_idx)).?));
+                try source_accounts.append(try pubkeyToValue(
+                    arena,
+                    account_keys.get(@intCast(acc_idx)).?,
+                ));
             }
             try info.put("sourceAccounts", .{ .array = source_accounts });
             try result.put("info", .{ .object = info });
@@ -3781,7 +4102,10 @@ fn parseConfidentialTransferFeeExtension(
         4 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("account", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("account", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             try parseSigners(arena, &info, 1, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "enableConfidentialTransferFeeHarvestToMint" });
@@ -3790,7 +4114,10 @@ fn parseConfidentialTransferFeeExtension(
         5 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("account", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("account", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             try parseSigners(arena, &info, 1, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "disableConfidentialTransferFeeHarvestToMint" });
@@ -3819,7 +4146,10 @@ fn parseMetadataPointerExtension(
         0 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             if (ext_data.len >= 33) {
                 if (readOptionalNonZeroPubkey(ext_data, 1)) |pk| {
                     try info.put("authority", try pubkeyToValue(arena, pk));
@@ -3837,13 +4167,24 @@ fn parseMetadataPointerExtension(
         1 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             if (ext_data.len >= 33) {
                 if (readOptionalNonZeroPubkey(ext_data, 1)) |pk| {
                     try info.put("metadataAddress", try pubkeyToValue(arena, pk));
                 }
             }
-            try parseSigners(arena, &info, 1, account_keys, accounts, "authority", "multisigAuthority");
+            try parseSigners(
+                arena,
+                &info,
+                1,
+                account_keys,
+                accounts,
+                "authority",
+                "multisigAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updateMetadataPointer" });
         },
@@ -3871,7 +4212,10 @@ fn parseGroupPointerExtension(
         0 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             if (ext_data.len >= 33) {
                 if (readOptionalNonZeroPubkey(ext_data, 1)) |pk| {
                     try info.put("authority", try pubkeyToValue(arena, pk));
@@ -3889,13 +4233,24 @@ fn parseGroupPointerExtension(
         1 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             if (ext_data.len >= 33) {
                 if (readOptionalNonZeroPubkey(ext_data, 1)) |pk| {
                     try info.put("groupAddress", try pubkeyToValue(arena, pk));
                 }
             }
-            try parseSigners(arena, &info, 1, account_keys, accounts, "authority", "multisigAuthority");
+            try parseSigners(
+                arena,
+                &info,
+                1,
+                account_keys,
+                accounts,
+                "authority",
+                "multisigAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updateGroupPointer" });
         },
@@ -3923,7 +4278,10 @@ fn parseGroupMemberPointerExtension(
         0 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             if (ext_data.len >= 33) {
                 if (readOptionalNonZeroPubkey(ext_data, 1)) |pk| {
                     try info.put("authority", try pubkeyToValue(arena, pk));
@@ -3941,13 +4299,24 @@ fn parseGroupMemberPointerExtension(
         1 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             if (ext_data.len >= 33) {
                 if (readOptionalNonZeroPubkey(ext_data, 1)) |pk| {
                     try info.put("memberAddress", try pubkeyToValue(arena, pk));
                 }
             }
-            try parseSigners(arena, &info, 1, account_keys, accounts, "authority", "multisigAuthority");
+            try parseSigners(
+                arena,
+                &info,
+                1,
+                account_keys,
+                accounts,
+                "authority",
+                "multisigAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updateGroupMemberPointer" });
         },
@@ -3975,7 +4344,10 @@ fn parseConfidentialMintBurnExtension(
         0 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeConfidentialMintBurnMint" });
         },
@@ -3983,7 +4355,10 @@ fn parseConfidentialMintBurnExtension(
         1 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "rotateConfidentialMintBurnSupplyElGamalPubkey" });
         },
@@ -3991,7 +4366,10 @@ fn parseConfidentialMintBurnExtension(
         2 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             try parseSigners(arena, &info, 0, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updateConfidentialMintBurnDecryptableSupply" });
@@ -4000,8 +4378,14 @@ fn parseConfidentialMintBurnExtension(
         3 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("destination", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
+            try info.put("destination", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[1])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "confidentialMint" });
         },
@@ -4009,8 +4393,14 @@ fn parseConfidentialMintBurnExtension(
         4 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("destination", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
+            try info.put("destination", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[1])).?,
+            ));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "confidentialBurn" });
         },
@@ -4018,7 +4408,10 @@ fn parseConfidentialMintBurnExtension(
         5 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             try parseSigners(arena, &info, 0, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "applyPendingBurn" });
@@ -4047,7 +4440,10 @@ fn parseScaledUiAmountExtension(
         0 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             if (ext_data.len >= 33) {
                 if (readOptionalNonZeroPubkey(ext_data, 1)) |pk| {
                     try info.put("authority", try pubkeyToValue(arena, pk));
@@ -4057,8 +4453,16 @@ fn parseScaledUiAmountExtension(
             }
             if (ext_data.len >= 41) {
                 const multiplier_bytes = ext_data[33..41];
-                const multiplier: f64 = @bitCast(std.mem.readInt(u64, multiplier_bytes[0..8], .little));
-                try info.put("multiplier", .{ .string = try std.fmt.allocPrint(arena, "{d}", .{multiplier}) });
+                const multiplier: f64 = @bitCast(std.mem.readInt(
+                    u64,
+                    multiplier_bytes[0..8],
+                    .little,
+                ));
+                try info.put("multiplier", .{ .string = try std.fmt.allocPrint(
+                    arena,
+                    "{d}",
+                    .{multiplier},
+                ) });
             }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeScaledUiAmountConfig" });
@@ -4067,16 +4471,31 @@ fn parseScaledUiAmountExtension(
         1 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             if (ext_data.len >= 9) {
                 const multiplier: f64 = @bitCast(std.mem.readInt(u64, ext_data[1..9], .little));
-                try info.put("newMultiplier", .{ .string = try std.fmt.allocPrint(arena, "{d}", .{multiplier}) });
+                try info.put("newMultiplier", .{ .string = try std.fmt.allocPrint(
+                    arena,
+                    "{d}",
+                    .{multiplier},
+                ) });
             }
             if (ext_data.len >= 17) {
                 const timestamp = std.mem.readInt(i64, ext_data[9..17], .little);
                 try info.put("newMultiplierTimestamp", .{ .integer = timestamp });
             }
-            try parseSigners(arena, &info, 1, account_keys, accounts, "authority", "multisigAuthority");
+            try parseSigners(
+                arena,
+                &info,
+                1,
+                account_keys,
+                accounts,
+                "authority",
+                "multisigAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updateMultiplier" });
         },
@@ -4104,7 +4523,10 @@ fn parsePausableExtension(
         0 => {
             try checkNumTokenAccounts(accounts, 1);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
             if (ext_data.len >= 33) {
                 if (readOptionalNonZeroPubkey(ext_data, 1)) |pk| {
                     try info.put("authority", try pubkeyToValue(arena, pk));
@@ -4119,8 +4541,19 @@ fn parsePausableExtension(
         1 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try parseSigners(arena, &info, 1, account_keys, accounts, "authority", "multisigAuthority");
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
+            try parseSigners(
+                arena,
+                &info,
+                1,
+                account_keys,
+                accounts,
+                "authority",
+                "multisigAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "pause" });
         },
@@ -4128,8 +4561,19 @@ fn parsePausableExtension(
         2 => {
             try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
-            try info.put("mint", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?));
-            try parseSigners(arena, &info, 1, account_keys, accounts, "authority", "multisigAuthority");
+            try info.put("mint", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(accounts[0])).?,
+            ));
+            try parseSigners(
+                arena,
+                &info,
+                1,
+                account_keys,
+                accounts,
+                "authority",
+                "multisigAuthority",
+            );
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "resume" });
         },
@@ -4566,9 +5010,17 @@ test "parseTransferFeeExtension: initializeTransferFeeConfig" {
     // maximum_fee=1000000
     std.mem.writeInt(u64, payload[74..82], 1000000, .little);
 
-    const result = try parseTransferFeeExtension(allocator, &([_]u8{0} ++ payload), &.{0}, &account_keys);
+    const result = try parseTransferFeeExtension(
+        allocator,
+        &([_]u8{0} ++ payload),
+        &.{0},
+        &account_keys,
+    );
     const info = result.object.get("info").?.object;
-    try std.testing.expectEqualStrings("initializeTransferFeeConfig", result.object.get("type").?.string);
+    try std.testing.expectEqualStrings(
+        "initializeTransferFeeConfig",
+        result.object.get("type").?.string,
+    );
     try std.testing.expectEqual(@as(i64, 100), info.get("transferFeeBasisPoints").?.integer);
     try std.testing.expectEqual(@as(i64, 1000000), info.get("maximumFee").?.integer);
     try std.testing.expect(info.get("transferFeeConfigAuthority") != null);
@@ -4617,8 +5069,16 @@ test "parseTransferFeeExtension: transferCheckedWithFee" {
     std.mem.writeInt(u64, payload[9..17], 10, .little);
 
     const ext_data = [_]u8{1} ++ payload;
-    const result = try parseTransferFeeExtension(allocator, &ext_data, &.{ 0, 1, 2, 3 }, &account_keys);
-    try std.testing.expectEqualStrings("transferCheckedWithFee", result.object.get("type").?.string);
+    const result = try parseTransferFeeExtension(
+        allocator,
+        &ext_data,
+        &.{ 0, 1, 2, 3 },
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "transferCheckedWithFee",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expect(info.get("source") != null);
     try std.testing.expect(info.get("mint") != null);
@@ -4639,8 +5099,16 @@ test "parseTransferFeeExtension: withdrawWithheldTokensFromMint" {
     const account_keys = AccountKeys.init(&static_keys, null);
 
     const ext_data = [_]u8{2}; // sub_tag=2, no data
-    const result = try parseTransferFeeExtension(allocator, &ext_data, &.{ 0, 1, 2 }, &account_keys);
-    try std.testing.expectEqualStrings("withdrawWithheldTokensFromMint", result.object.get("type").?.string);
+    const result = try parseTransferFeeExtension(
+        allocator,
+        &ext_data,
+        &.{ 0, 1, 2 },
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "withdrawWithheldTokensFromMint",
+        result.object.get("type").?.string,
+    );
 }
 
 test "parseTransferFeeExtension: harvestWithheldTokensToMint" {
@@ -4655,7 +5123,10 @@ test "parseTransferFeeExtension: harvestWithheldTokensToMint" {
 
     const ext_data = [_]u8{4}; // sub_tag=4
     const result = try parseTransferFeeExtension(allocator, &ext_data, &.{ 0, 1 }, &account_keys);
-    try std.testing.expectEqualStrings("harvestWithheldTokensToMint", result.object.get("type").?.string);
+    try std.testing.expectEqualStrings(
+        "harvestWithheldTokensToMint",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expectEqual(@as(usize, 1), info.get("sourceAccounts").?.array.items.len);
 }
@@ -4670,7 +5141,12 @@ test "parseTransferFeeExtension: invalid sub-tag returns error" {
     const account_keys = AccountKeys.init(&static_keys, null);
 
     const ext_data = [_]u8{99}; // invalid sub_tag
-    try std.testing.expectError(error.DeserializationFailed, parseTransferFeeExtension(allocator, &ext_data, &.{0}, &account_keys));
+    try std.testing.expectError(error.DeserializationFailed, parseTransferFeeExtension(
+        allocator,
+        &ext_data,
+        &.{0},
+        &account_keys,
+    ));
 }
 
 test "parseTransferFeeExtension: empty data returns error" {
@@ -4682,7 +5158,12 @@ test "parseTransferFeeExtension: empty data returns error" {
     const static_keys = [_]Pubkey{mint};
     const account_keys = AccountKeys.init(&static_keys, null);
 
-    try std.testing.expectError(error.DeserializationFailed, parseTransferFeeExtension(allocator, &.{}, &.{0}, &account_keys));
+    try std.testing.expectError(error.DeserializationFailed, parseTransferFeeExtension(
+        allocator,
+        &.{},
+        &.{0},
+        &account_keys,
+    ));
 }
 
 test "parseDefaultAccountStateExtension: initialize" {
@@ -4696,8 +5177,16 @@ test "parseDefaultAccountStateExtension: initialize" {
 
     // sub_tag=0 (Initialize), account_state=2 (Frozen)
     const ext_data = [_]u8{ 0, 2 };
-    const result = try parseDefaultAccountStateExtension(allocator, &ext_data, &.{0}, &account_keys);
-    try std.testing.expectEqualStrings("initializeDefaultAccountState", result.object.get("type").?.string);
+    const result = try parseDefaultAccountStateExtension(
+        allocator,
+        &ext_data,
+        &.{0},
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "initializeDefaultAccountState",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expectEqualStrings("frozen", info.get("accountState").?.string);
 }
@@ -4714,8 +5203,16 @@ test "parseDefaultAccountStateExtension: update" {
 
     // sub_tag=1 (Update), account_state=1 (Initialized)
     const ext_data = [_]u8{ 1, 1 };
-    const result = try parseDefaultAccountStateExtension(allocator, &ext_data, &.{ 0, 1 }, &account_keys);
-    try std.testing.expectEqualStrings("updateDefaultAccountState", result.object.get("type").?.string);
+    const result = try parseDefaultAccountStateExtension(
+        allocator,
+        &ext_data,
+        &.{ 0, 1 },
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "updateDefaultAccountState",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expectEqualStrings("initialized", info.get("accountState").?.string);
     // Should have freezeAuthority (single signer)
@@ -4733,7 +5230,12 @@ test "parseDefaultAccountStateExtension: invalid account state" {
 
     // sub_tag=0, invalid account_state=5
     const ext_data = [_]u8{ 0, 5 };
-    try std.testing.expectError(error.DeserializationFailed, parseDefaultAccountStateExtension(allocator, &ext_data, &.{0}, &account_keys));
+    try std.testing.expectError(error.DeserializationFailed, parseDefaultAccountStateExtension(
+        allocator,
+        &ext_data,
+        &.{0},
+        &account_keys,
+    ));
 }
 
 test "parseDefaultAccountStateExtension: too few accounts" {
@@ -4747,7 +5249,12 @@ test "parseDefaultAccountStateExtension: too few accounts" {
 
     // update needs 2 accounts
     const ext_data = [_]u8{ 1, 1 };
-    try std.testing.expectError(error.NotEnoughSplTokenAccounts, parseDefaultAccountStateExtension(allocator, &ext_data, &.{0}, &account_keys));
+    try std.testing.expectError(error.NotEnoughSplTokenAccounts, parseDefaultAccountStateExtension(
+        allocator,
+        &ext_data,
+        &.{0},
+        &account_keys,
+    ));
 }
 
 test "parseMemoTransferExtension: enable" {
@@ -4762,7 +5269,10 @@ test "parseMemoTransferExtension: enable" {
 
     const ext_data = [_]u8{0}; // Enable
     const result = try parseMemoTransferExtension(allocator, &ext_data, &.{ 0, 1 }, &account_keys);
-    try std.testing.expectEqualStrings("enableRequiredMemoTransfers", result.object.get("type").?.string);
+    try std.testing.expectEqualStrings(
+        "enableRequiredMemoTransfers",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expect(info.get("account") != null);
     try std.testing.expect(info.get("owner") != null);
@@ -4780,7 +5290,10 @@ test "parseMemoTransferExtension: disable" {
 
     const ext_data = [_]u8{1}; // Disable
     const result = try parseMemoTransferExtension(allocator, &ext_data, &.{ 0, 1 }, &account_keys);
-    try std.testing.expectEqualStrings("disableRequiredMemoTransfers", result.object.get("type").?.string);
+    try std.testing.expectEqualStrings(
+        "disableRequiredMemoTransfers",
+        result.object.get("type").?.string,
+    );
 }
 
 test "parseMemoTransferExtension: multisig signers" {
@@ -4796,7 +5309,12 @@ test "parseMemoTransferExtension: multisig signers" {
     const account_keys = AccountKeys.init(&static_keys, null);
 
     const ext_data = [_]u8{0}; // Enable
-    const result = try parseMemoTransferExtension(allocator, &ext_data, &.{ 0, 1, 2, 3 }, &account_keys);
+    const result = try parseMemoTransferExtension(
+        allocator,
+        &ext_data,
+        &.{ 0, 1, 2, 3 },
+        &account_keys,
+    );
     const info = result.object.get("info").?.object;
     // Multisig case: should have multisigOwner and signers
     try std.testing.expect(info.get("multisigOwner") != null);
@@ -4821,8 +5339,16 @@ test "parseInterestBearingMintExtension: initialize" {
     std.mem.writeInt(i16, payload[36..38], 500, .little);
     const ext_data = [_]u8{0} ++ payload;
 
-    const result = try parseInterestBearingMintExtension(allocator, &ext_data, &.{0}, &account_keys);
-    try std.testing.expectEqualStrings("initializeInterestBearingConfig", result.object.get("type").?.string);
+    const result = try parseInterestBearingMintExtension(
+        allocator,
+        &ext_data,
+        &.{0},
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "initializeInterestBearingConfig",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expect(info.get("rateAuthority") != null);
     try std.testing.expectEqual(@as(i64, 500), info.get("rate").?.integer);
@@ -4843,8 +5369,16 @@ test "parseInterestBearingMintExtension: updateRate" {
     std.mem.writeInt(i16, payload[0..2], 750, .little);
     const ext_data = [_]u8{1} ++ payload;
 
-    const result = try parseInterestBearingMintExtension(allocator, &ext_data, &.{ 0, 1 }, &account_keys);
-    try std.testing.expectEqualStrings("updateInterestBearingConfigRate", result.object.get("type").?.string);
+    const result = try parseInterestBearingMintExtension(
+        allocator,
+        &ext_data,
+        &.{ 0, 1 },
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "updateInterestBearingConfigRate",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expectEqual(@as(i64, 750), info.get("newRate").?.integer);
 }
@@ -4893,7 +5427,12 @@ test "parseCpiGuardExtension: invalid sub-tag" {
     const account_keys = AccountKeys.init(&static_keys, null);
 
     const ext_data = [_]u8{42}; // Invalid
-    try std.testing.expectError(error.DeserializationFailed, parseCpiGuardExtension(allocator, &ext_data, &.{ 0, 1 }, &account_keys));
+    try std.testing.expectError(error.DeserializationFailed, parseCpiGuardExtension(
+        allocator,
+        &ext_data,
+        &.{ 0, 1 },
+        &account_keys,
+    ));
 }
 
 test "parseTransferHookExtension: initialize" {
@@ -4914,7 +5453,10 @@ test "parseTransferHookExtension: initialize" {
     const ext_data = [_]u8{0} ++ payload;
 
     const result = try parseTransferHookExtension(allocator, &ext_data, &.{0}, &account_keys);
-    try std.testing.expectEqualStrings("initializeTransferHook", result.object.get("type").?.string);
+    try std.testing.expectEqualStrings(
+        "initializeTransferHook",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expect(info.get("authority") != null);
     try std.testing.expect(info.get("programId") != null);
@@ -4934,7 +5476,10 @@ test "parseTransferHookExtension: initialize with no authority (zeros)" {
     const ext_data = [_]u8{0} ++ payload;
 
     const result = try parseTransferHookExtension(allocator, &ext_data, &.{0}, &account_keys);
-    try std.testing.expectEqualStrings("initializeTransferHook", result.object.get("type").?.string);
+    try std.testing.expectEqualStrings(
+        "initializeTransferHook",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     // Zero pubkeys should not appear
     try std.testing.expect(info.get("authority") == null);
@@ -4978,7 +5523,10 @@ test "parseMetadataPointerExtension: initialize" {
     const ext_data = [_]u8{0} ++ payload;
 
     const result = try parseMetadataPointerExtension(allocator, &ext_data, &.{0}, &account_keys);
-    try std.testing.expectEqualStrings("initializeMetadataPointer", result.object.get("type").?.string);
+    try std.testing.expectEqualStrings(
+        "initializeMetadataPointer",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expect(info.get("authority") != null);
     try std.testing.expect(info.get("metadataAddress") != null);
@@ -4999,8 +5547,16 @@ test "parseMetadataPointerExtension: update" {
     @memcpy(payload[0..32], &new_metadata.data);
     const ext_data = [_]u8{1} ++ payload;
 
-    const result = try parseMetadataPointerExtension(allocator, &ext_data, &.{ 0, 1 }, &account_keys);
-    try std.testing.expectEqualStrings("updateMetadataPointer", result.object.get("type").?.string);
+    const result = try parseMetadataPointerExtension(
+        allocator,
+        &ext_data,
+        &.{ 0, 1 },
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "updateMetadataPointer",
+        result.object.get("type").?.string,
+    );
 }
 
 test "parseGroupPointerExtension: initialize" {
@@ -5020,7 +5576,10 @@ test "parseGroupPointerExtension: initialize" {
     const ext_data = [_]u8{0} ++ payload;
 
     const result = try parseGroupPointerExtension(allocator, &ext_data, &.{0}, &account_keys);
-    try std.testing.expectEqualStrings("initializeGroupPointer", result.object.get("type").?.string);
+    try std.testing.expectEqualStrings(
+        "initializeGroupPointer",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expect(info.get("authority") != null);
     try std.testing.expect(info.get("groupAddress") != null);
@@ -5062,8 +5621,16 @@ test "parseGroupMemberPointerExtension: initialize and update" {
     @memcpy(payload_init[0..32], &auth.data);
     @memcpy(payload_init[32..64], &member.data);
     const ext_data_init = [_]u8{0} ++ payload_init;
-    const result_init = try parseGroupMemberPointerExtension(allocator, &ext_data_init, &.{0}, &account_keys);
-    try std.testing.expectEqualStrings("initializeGroupMemberPointer", result_init.object.get("type").?.string);
+    const result_init = try parseGroupMemberPointerExtension(
+        allocator,
+        &ext_data_init,
+        &.{0},
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "initializeGroupMemberPointer",
+        result_init.object.get("type").?.string,
+    );
     const info_init = result_init.object.get("info").?.object;
     try std.testing.expect(info_init.get("memberAddress") != null);
 
@@ -5071,8 +5638,16 @@ test "parseGroupMemberPointerExtension: initialize and update" {
     var payload_update: [32]u8 = undefined;
     @memcpy(payload_update[0..32], &member.data);
     const ext_data_update = [_]u8{1} ++ payload_update;
-    const result_update = try parseGroupMemberPointerExtension(allocator, &ext_data_update, &.{ 0, 1 }, &account_keys);
-    try std.testing.expectEqualStrings("updateGroupMemberPointer", result_update.object.get("type").?.string);
+    const result_update = try parseGroupMemberPointerExtension(
+        allocator,
+        &ext_data_update,
+        &.{ 0, 1 },
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "updateGroupMemberPointer",
+        result_update.object.get("type").?.string,
+    );
 }
 
 test "parsePausableExtension: initialize" {
@@ -5091,7 +5666,10 @@ test "parsePausableExtension: initialize" {
     const ext_data = [_]u8{0} ++ payload;
 
     const result = try parsePausableExtension(allocator, &ext_data, &.{0}, &account_keys);
-    try std.testing.expectEqualStrings("initializePausableConfig", result.object.get("type").?.string);
+    try std.testing.expectEqualStrings(
+        "initializePausableConfig",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expect(info.get("authority") != null);
 }
@@ -5109,8 +5687,16 @@ test "parsePausableExtension: initialize with no authority" {
     const payload = [_]u8{0} ** 32;
     const ext_data = [_]u8{0} ++ payload;
 
-    const result = try parsePausableExtension(allocator, &ext_data, &.{0}, &account_keys);
-    try std.testing.expectEqualStrings("initializePausableConfig", result.object.get("type").?.string);
+    const result = try parsePausableExtension(
+        allocator,
+        &ext_data,
+        &.{0},
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "initializePausableConfig",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     // Null authority
     try std.testing.expect(info.get("authority").?.null == {});
@@ -5156,7 +5742,12 @@ test "parsePausableExtension: invalid sub-tag" {
     const account_keys = AccountKeys.init(&static_keys, null);
 
     const ext_data = [_]u8{3}; // Invalid
-    try std.testing.expectError(error.DeserializationFailed, parsePausableExtension(allocator, &ext_data, &.{0}, &account_keys));
+    try std.testing.expectError(error.DeserializationFailed, parsePausableExtension(
+        allocator,
+        &ext_data,
+        &.{0},
+        &account_keys,
+    ));
 }
 
 test "parseScaledUiAmountExtension: initialize" {
@@ -5176,8 +5767,16 @@ test "parseScaledUiAmountExtension: initialize" {
     std.mem.writeInt(u64, payload[32..40], @bitCast(multiplier), .little);
     const ext_data = [_]u8{0} ++ payload;
 
-    const result = try parseScaledUiAmountExtension(allocator, &ext_data, &.{0}, &account_keys);
-    try std.testing.expectEqualStrings("initializeScaledUiAmountConfig", result.object.get("type").?.string);
+    const result = try parseScaledUiAmountExtension(
+        allocator,
+        &ext_data,
+        &.{0},
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "initializeScaledUiAmountConfig",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expect(info.get("authority") != null);
     try std.testing.expect(info.get("multiplier") != null);
@@ -5200,11 +5799,22 @@ test "parseScaledUiAmountExtension: updateMultiplier" {
     std.mem.writeInt(i64, payload[8..16], 1700000000, .little);
     const ext_data = [_]u8{1} ++ payload;
 
-    const result = try parseScaledUiAmountExtension(allocator, &ext_data, &.{ 0, 1 }, &account_keys);
-    try std.testing.expectEqualStrings("updateMultiplier", result.object.get("type").?.string);
+    const result = try parseScaledUiAmountExtension(
+        allocator,
+        &ext_data,
+        &.{ 0, 1 },
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "updateMultiplier",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expect(info.get("newMultiplier") != null);
-    try std.testing.expectEqual(@as(i64, 1700000000), info.get("newMultiplierTimestamp").?.integer);
+    try std.testing.expectEqual(
+        @as(i64, 1700000000),
+        info.get("newMultiplierTimestamp").?.integer,
+    );
 }
 
 test "parseConfidentialTransferExtension: approveAccount" {
@@ -5219,8 +5829,16 @@ test "parseConfidentialTransferExtension: approveAccount" {
     const account_keys = AccountKeys.init(&static_keys, null);
 
     const ext_data = [_]u8{3}; // ApproveAccount
-    const result = try parseConfidentialTransferExtension(allocator, &ext_data, &.{ 0, 1, 2 }, &account_keys);
-    try std.testing.expectEqualStrings("approveConfidentialTransferAccount", result.object.get("type").?.string);
+    const result = try parseConfidentialTransferExtension(
+        allocator,
+        &ext_data,
+        &.{ 0, 1, 2 },
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "approveConfidentialTransferAccount",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expect(info.get("account") != null);
     try std.testing.expect(info.get("mint") != null);
@@ -5239,8 +5857,16 @@ test "parseConfidentialTransferExtension: configureAccountWithRegistry" {
     const account_keys = AccountKeys.init(&static_keys, null);
 
     const ext_data = [_]u8{14}; // ConfigureAccountWithRegistry
-    const result = try parseConfidentialTransferExtension(allocator, &ext_data, &.{ 0, 1, 2 }, &account_keys);
-    try std.testing.expectEqualStrings("configureConfidentialAccountWithRegistry", result.object.get("type").?.string);
+    const result = try parseConfidentialTransferExtension(
+        allocator,
+        &ext_data,
+        &.{ 0, 1, 2 },
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "configureConfidentialAccountWithRegistry",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expect(info.get("registry") != null);
 }
@@ -5257,23 +5883,55 @@ test "parseConfidentialTransferExtension: enableDisableCredits" {
 
     // Enable confidential credits (tag=9)
     const ext_data_enable = [_]u8{9};
-    const result_enable = try parseConfidentialTransferExtension(allocator, &ext_data_enable, &.{ 0, 1 }, &account_keys);
-    try std.testing.expectEqualStrings("enableConfidentialTransferConfidentialCredits", result_enable.object.get("type").?.string);
+    const result_enable = try parseConfidentialTransferExtension(
+        allocator,
+        &ext_data_enable,
+        &.{ 0, 1 },
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "enableConfidentialTransferConfidentialCredits",
+        result_enable.object.get("type").?.string,
+    );
 
     // Disable confidential credits (tag=10)
     const ext_data_disable = [_]u8{10};
-    const result_disable = try parseConfidentialTransferExtension(allocator, &ext_data_disable, &.{ 0, 1 }, &account_keys);
-    try std.testing.expectEqualStrings("disableConfidentialTransferConfidentialCredits", result_disable.object.get("type").?.string);
+    const result_disable = try parseConfidentialTransferExtension(
+        allocator,
+        &ext_data_disable,
+        &.{ 0, 1 },
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "disableConfidentialTransferConfidentialCredits",
+        result_disable.object.get("type").?.string,
+    );
 
     // Enable non-confidential credits (tag=11)
     const ext_data_enable_nc = [_]u8{11};
-    const result_enable_nc = try parseConfidentialTransferExtension(allocator, &ext_data_enable_nc, &.{ 0, 1 }, &account_keys);
-    try std.testing.expectEqualStrings("enableConfidentialTransferNonConfidentialCredits", result_enable_nc.object.get("type").?.string);
+    const result_enable_nc = try parseConfidentialTransferExtension(
+        allocator,
+        &ext_data_enable_nc,
+        &.{ 0, 1 },
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "enableConfidentialTransferNonConfidentialCredits",
+        result_enable_nc.object.get("type").?.string,
+    );
 
     // Disable non-confidential credits (tag=12)
     const ext_data_disable_nc = [_]u8{12};
-    const result_disable_nc = try parseConfidentialTransferExtension(allocator, &ext_data_disable_nc, &.{ 0, 1 }, &account_keys);
-    try std.testing.expectEqualStrings("disableConfidentialTransferNonConfidentialCredits", result_disable_nc.object.get("type").?.string);
+    const result_disable_nc = try parseConfidentialTransferExtension(
+        allocator,
+        &ext_data_disable_nc,
+        &.{ 0, 1 },
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "disableConfidentialTransferNonConfidentialCredits",
+        result_disable_nc.object.get("type").?.string,
+    );
 }
 
 test "parseConfidentialTransferExtension: invalid sub-tag" {
@@ -5286,7 +5944,12 @@ test "parseConfidentialTransferExtension: invalid sub-tag" {
     const account_keys = AccountKeys.init(&static_keys, null);
 
     const ext_data = [_]u8{99};
-    try std.testing.expectError(error.DeserializationFailed, parseConfidentialTransferExtension(allocator, &ext_data, &.{0}, &account_keys));
+    try std.testing.expectError(error.DeserializationFailed, parseConfidentialTransferExtension(
+        allocator,
+        &ext_data,
+        &.{0},
+        &account_keys,
+    ));
 }
 
 test "parseConfidentialTransferFeeExtension: initializeConfig" {
@@ -5304,8 +5967,16 @@ test "parseConfidentialTransferFeeExtension: initializeConfig" {
     @memcpy(payload[0..32], &auth.data);
     const ext_data = [_]u8{0} ++ payload;
 
-    const result = try parseConfidentialTransferFeeExtension(allocator, &ext_data, &.{0}, &account_keys);
-    try std.testing.expectEqualStrings("initializeConfidentialTransferFeeConfig", result.object.get("type").?.string);
+    const result = try parseConfidentialTransferFeeExtension(
+        allocator,
+        &ext_data,
+        &.{0},
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "initializeConfidentialTransferFeeConfig",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expect(info.get("authority") != null);
 }
@@ -5321,8 +5992,16 @@ test "parseConfidentialTransferFeeExtension: harvestWithheldTokensToMint" {
     const account_keys = AccountKeys.init(&static_keys, null);
 
     const ext_data = [_]u8{3}; // HarvestWithheldTokensToMint
-    const result = try parseConfidentialTransferFeeExtension(allocator, &ext_data, &.{ 0, 1 }, &account_keys);
-    try std.testing.expectEqualStrings("harvestWithheldConfidentialTransferTokensToMint", result.object.get("type").?.string);
+    const result = try parseConfidentialTransferFeeExtension(
+        allocator,
+        &ext_data,
+        &.{ 0, 1 },
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "harvestWithheldConfidentialTransferTokensToMint",
+        result.object.get("type").?.string,
+    );
     const info = result.object.get("info").?.object;
     try std.testing.expectEqual(@as(usize, 1), info.get("sourceAccounts").?.array.items.len);
 }
@@ -5339,13 +6018,29 @@ test "parseConfidentialTransferFeeExtension: enableDisableHarvestToMint" {
 
     // Enable (tag=4)
     const ext_enable = [_]u8{4};
-    const result_enable = try parseConfidentialTransferFeeExtension(allocator, &ext_enable, &.{ 0, 1 }, &account_keys);
-    try std.testing.expectEqualStrings("enableConfidentialTransferFeeHarvestToMint", result_enable.object.get("type").?.string);
+    const result_enable = try parseConfidentialTransferFeeExtension(
+        allocator,
+        &ext_enable,
+        &.{ 0, 1 },
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "enableConfidentialTransferFeeHarvestToMint",
+        result_enable.object.get("type").?.string,
+    );
 
     // Disable (tag=5)
     const ext_disable = [_]u8{5};
-    const result_disable = try parseConfidentialTransferFeeExtension(allocator, &ext_disable, &.{ 0, 1 }, &account_keys);
-    try std.testing.expectEqualStrings("disableConfidentialTransferFeeHarvestToMint", result_disable.object.get("type").?.string);
+    const result_disable = try parseConfidentialTransferFeeExtension(
+        allocator,
+        &ext_disable,
+        &.{ 0, 1 },
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "disableConfidentialTransferFeeHarvestToMint",
+        result_disable.object.get("type").?.string,
+    );
 }
 
 test "parseConfidentialMintBurnExtension: initializeMint" {
@@ -5358,8 +6053,16 @@ test "parseConfidentialMintBurnExtension: initializeMint" {
     const account_keys = AccountKeys.init(&static_keys, null);
 
     const ext_data = [_]u8{0};
-    const result = try parseConfidentialMintBurnExtension(allocator, &ext_data, &.{0}, &account_keys);
-    try std.testing.expectEqualStrings("initializeConfidentialMintBurnMint", result.object.get("type").?.string);
+    const result = try parseConfidentialMintBurnExtension(
+        allocator,
+        &ext_data,
+        &.{0},
+        &account_keys,
+    );
+    try std.testing.expectEqualStrings(
+        "initializeConfidentialMintBurnMint",
+        result.object.get("type").?.string,
+    );
 }
 
 test "parseConfidentialMintBurnExtension: applyPendingBurn" {
@@ -5373,7 +6076,12 @@ test "parseConfidentialMintBurnExtension: applyPendingBurn" {
     const account_keys = AccountKeys.init(&static_keys, null);
 
     const ext_data = [_]u8{5}; // ApplyPendingBurn
-    const result = try parseConfidentialMintBurnExtension(allocator, &ext_data, &.{ 0, 1 }, &account_keys);
+    const result = try parseConfidentialMintBurnExtension(
+        allocator,
+        &ext_data,
+        &.{ 0, 1 },
+        &account_keys,
+    );
     try std.testing.expectEqualStrings("applyPendingBurn", result.object.get("type").?.string);
 }
 
@@ -5395,7 +6103,10 @@ test "parseTokenInstruction: defaultAccountState extension via outer dispatch" {
     };
 
     const result = try parseTokenInstruction(allocator, instruction, &account_keys);
-    try std.testing.expectEqualStrings("initializeDefaultAccountState", result.object.get("type").?.string);
+    try std.testing.expectEqualStrings(
+        "initializeDefaultAccountState",
+        result.object.get("type").?.string,
+    );
 }
 
 test "parseTokenInstruction: memoTransfer extension via outer dispatch" {
@@ -5417,7 +6128,10 @@ test "parseTokenInstruction: memoTransfer extension via outer dispatch" {
     };
 
     const result = try parseTokenInstruction(allocator, instruction, &account_keys);
-    try std.testing.expectEqualStrings("enableRequiredMemoTransfers", result.object.get("type").?.string);
+    try std.testing.expectEqualStrings(
+        "enableRequiredMemoTransfers",
+        result.object.get("type").?.string,
+    );
 }
 
 test "parseTokenInstruction: cpiGuard extension via outer dispatch" {
@@ -5481,7 +6195,11 @@ test "parseTokenInstruction: extension with insufficient data returns error" {
         .data = &data,
     };
 
-    try std.testing.expectError(error.DeserializationFailed, parseTokenInstruction(allocator, instruction, &account_keys));
+    try std.testing.expectError(error.DeserializationFailed, parseTokenInstruction(
+        allocator,
+        instruction,
+        &account_keys,
+    ));
 }
 
 test "readOptionalNonZeroPubkey: non-zero returns pubkey" {
