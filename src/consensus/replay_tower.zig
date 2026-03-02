@@ -5870,7 +5870,7 @@ fn genStakes(
                 .stake = lamports,
                 .account = .{
                     .account = .{ .lamports = lamports, .owner = Pubkey.initRandom(random) },
-                    .state = vote_state,
+                    .state = .{ .v4 = vote_state },
                     .rc = rc,
                 },
             },
