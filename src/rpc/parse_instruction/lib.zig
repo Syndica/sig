@@ -4,6 +4,8 @@
 //! into structured JSON representations matching Agave's output format.
 //! Unknown programs fall back to partially decoded representation.
 
+// TODO(refactor): refactor this file into different files, one for each instruction type
+
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const base58 = @import("base58");
