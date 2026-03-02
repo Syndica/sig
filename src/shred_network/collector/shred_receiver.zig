@@ -312,7 +312,7 @@ test "handleBatch/handlePacket" {
         root_slot,
         .INIT,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
     defer ledger.deinit();

@@ -1660,7 +1660,7 @@ fn validator(
         collapsed_manifest,
         &feature_set,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     const rpc_cluster_type = loaded_snapshot.genesis_config.cluster_type;
     const rpc_url = rpc_cluster_type.getRpcUrl() orelse @panic("No RPC Url for cluster type!");
@@ -1932,7 +1932,7 @@ fn replayOffline(
         collapsed_manifest,
         &feature_set,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
@@ -2011,7 +2011,7 @@ fn shredNetwork(
         shred_network_conf.root_slot,
         genesis_config.epoch_schedule,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     var rpc_epoch_ctx_service = RpcLeaderScheduleService
         .init(allocator, .from(app_base.logger), &epoch_tracker, rpc_client);

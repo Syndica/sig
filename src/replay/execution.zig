@@ -913,7 +913,7 @@ test "prepareSlot: empty and dead slots are handled correctly" {
     var state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
     defer {
         state.deinit();
-        state.epoch_tracker.deinit(allocator);
+        state.epoch_tracker.deinit();
         allocator.destroy(state.epoch_tracker);
     }
 

@@ -143,7 +143,7 @@ pub const EpochTracker = struct {
             slot,
             epoch_schedule,
         );
-        errdefer epoch_tracker.deinit(allocator);
+        errdefer epoch_tracker.deinit();
 
         const epoch_stakes_map = manifest.bank_extra.versioned_epoch_stakes;
         const min_epoch = std.mem.min(Epoch, manifest.bank_extra.versioned_epoch_stakes.keys());
@@ -163,11 +163,11 @@ pub const EpochTracker = struct {
         return epoch_tracker;
     }
 
-    pub fn deinit(self: *EpochTracker, allocator: Allocator) void {
+    pub fn deinit(self: *EpochTracker) void {
         var lock = self.rooted_epochs.write();
-        lock.mut().deinit(allocator);
+        lock.mut().deinit();
         lock.unlock();
-        self.unrooted_epochs.deinit(allocator);
+        self.unrooted_epochs.deinit();
     }
 
     /// Get the EpochInfo which is 'active' for the current slot. This means the EpochInfo which
@@ -348,7 +348,7 @@ pub const EpochTracker = struct {
     ) !EpochTracker {
         if (!builtin.is_test) @compileError("only for tests");
         var self = EpochTracker.init(.default, root_slot, epoch_schedule);
-        errdefer self.deinit(allocator);
+        errdefer self.deinit();
 
         const epoch = epoch_schedule.getEpoch(root_slot);
         for (epoch -| 3..epoch + 1) |epoch_i| {
@@ -384,7 +384,7 @@ pub const EpochTracker = struct {
         errdefer for (epoch_stakes) |epoch_stake| epoch_stake.deinit(allocator);
 
         var self: EpochTracker = .init(.default, 0, .INIT);
-        errdefer self.deinit(allocator);
+        errdefer self.deinit();
 
         for (epoch_stakes) |stakes| {
             const epoch_info_ptr = try allocator.create(EpochInfo);
@@ -505,7 +505,7 @@ const RootedEpochBuffer = struct {
     buf: [4]?*const EpochInfo = @splat(null),
     root: Atomic(Epoch) = .init(0),
 
-    fn deinit(self: *const RootedEpochBuffer, _: Allocator) void {
+    fn deinit(self: *const RootedEpochBuffer) void {
         var buf = self.buf;
         for (&buf) |*maybe_entry| {
             if (maybe_entry.*) |entry| {
@@ -574,7 +574,7 @@ const UnrootedEpochBuffer = struct {
 
     pub const MAX_FORKS = 4;
 
-    fn deinit(self: *const UnrootedEpochBuffer, _: Allocator) void {
+    fn deinit(self: *const UnrootedEpochBuffer) void {
         var buf = self.buf;
         for (&buf) |*maybe_entry| {
             if (maybe_entry.*) |entry| {
@@ -655,7 +655,7 @@ test RootedEpochBuffer {
     });
 
     var buffer = RootedEpochBuffer{};
-    defer buffer.deinit(allocator);
+    defer buffer.deinit();
 
     // Assert all gets fail initially
     for (0..buffer.buf.len * 2) |epoch| {
@@ -811,7 +811,7 @@ test UnrootedEpochBuffer {
     });
 
     var buffer = UnrootedEpochBuffer{};
-    defer buffer.deinit(allocator);
+    defer buffer.deinit();
 
     var branch = try Ancestors.initWithSlots(allocator, &.{ 10, 11, 12 });
     defer branch.deinit(allocator);
@@ -881,7 +881,7 @@ test EpochTracker {
 
     // Begin test at last slot in epoch 0
     var epoch_tracker = EpochTracker.init(.default, 31, epoch_schedule);
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     // Only the root slot is set
     try std.testing.expectEqual(31, epoch_tracker.root_slot.load(.monotonic));

@@ -981,7 +981,7 @@ test "trackNewVotesAndNotifyConfirmations filter" {
         0,
         .INIT,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     const slot_data_provider: SlotDataProvider = .{
         .slot_tracker = &slot_tracker,
@@ -1727,7 +1727,7 @@ test parseAndVerifyVoteTransaction {
         0,
         .INIT,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     try std.testing.expectError(
         error.Unverified,
@@ -1771,7 +1771,7 @@ test "simple usage" {
         0,
         .INIT,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     const slot_data_provider: SlotDataProvider = .{
         .slot_tracker = &slot_tracker,
@@ -1861,7 +1861,7 @@ test "check trackers" {
         0,
         .INIT,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     {
         var stakes = try sig.core.EpochStakes.initRandom(

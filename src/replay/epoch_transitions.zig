@@ -759,7 +759,7 @@ test updateEpochStakes {
     const random = prng.random();
 
     var epoch_tracker = sig.core.EpochTracker.init(.default, 0, .INIT);
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     var stakes_cache = StakesCache.EMPTY;
     defer stakes_cache.deinit(allocator);

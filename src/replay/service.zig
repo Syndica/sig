@@ -735,7 +735,7 @@ test trackNewSlots {
         0,
         .INIT,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     const slot_leaders = SlotLeaders.init(
         &leader_schedule,
@@ -883,7 +883,7 @@ test "Service clean init and deinit" {
             var service = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
             defer {
                 service.deinit();
-                service.epoch_tracker.deinit(allocator);
+                service.epoch_tracker.deinit();
                 allocator.destroy(service.epoch_tracker);
             }
         }
@@ -904,7 +904,7 @@ test "process runs without error with no replay results" {
     var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
     defer {
         replay_state.deinit();
-        replay_state.epoch_tracker.deinit(allocator);
+        replay_state.epoch_tracker.deinit();
         allocator.destroy(replay_state.epoch_tracker);
     }
 
@@ -969,7 +969,7 @@ test "advance calls consensus.process with empty replay results" {
     var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
     defer {
         replay_state.deinit();
-        replay_state.epoch_tracker.deinit(allocator);
+        replay_state.epoch_tracker.deinit();
         allocator.destroy(replay_state.epoch_tracker);
     }
 
@@ -1013,7 +1013,7 @@ test "freezeCompletedSlots handles errors correctly" {
     var replay_state = try dep_stubs.stubbedState(allocator, .from(logger.logger("", .warn)));
     defer {
         replay_state.deinit();
-        replay_state.epoch_tracker.deinit(allocator);
+        replay_state.epoch_tracker.deinit();
         allocator.destroy(replay_state.epoch_tracker);
     }
 
@@ -1129,7 +1129,7 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     );
     defer {
         replay_state.deinit();
-        replay_state.epoch_tracker.deinit(allocator);
+        replay_state.epoch_tracker.deinit();
         allocator.destroy(replay_state.epoch_tracker);
     }
 
@@ -1286,7 +1286,7 @@ pub const DependencyStubs = struct {
             0,
             .INIT,
         );
-        errdefer epoch_tracker.deinit(allocator);
+        errdefer epoch_tracker.deinit();
 
         return try .init(.{
             .allocator = allocator,
@@ -1338,7 +1338,7 @@ pub const DependencyStubs = struct {
             collapsed_manifest,
             &feature_set,
         );
-        errdefer epoch_tracker.deinit(allocator);
+        errdefer epoch_tracker.deinit();
 
         const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
             allocator,

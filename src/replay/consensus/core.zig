@@ -1878,7 +1878,7 @@ test "processResult and handleDuplicateConfirmedFork" {
     var replay_state = try stubs.stubbedState(allocator, .FOR_TESTS);
     defer {
         replay_state.deinit();
-        replay_state.epoch_tracker.deinit(allocator);
+        replay_state.epoch_tracker.deinit();
         allocator.destroy(replay_state.epoch_tracker);
     }
     {
@@ -2595,7 +2595,7 @@ test "checkAndHandleNewRoot - missing slot" {
         0,
         .INIT,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     // Try to check a slot that doesn't exist in the tracker
     const result = checkAndHandleNewRoot(
@@ -2660,7 +2660,7 @@ test "checkAndHandleNewRoot - missing hash" {
         0,
         .INIT,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     // Try to check a slot that doesn't exist in the tracker
     const result = checkAndHandleNewRoot(
@@ -2712,7 +2712,7 @@ test "checkAndHandleNewRoot - empty slot tracker" {
         0,
         .INIT,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     // Try to check a slot that doesn't exist in the tracker
     const result = checkAndHandleNewRoot(
@@ -2825,7 +2825,7 @@ test "checkAndHandleNewRoot - success" {
         0,
         .INIT,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     try testing.expectEqual(4, fixture.progress.map.count());
     try testing.expect(fixture.progress.map.contains(hash1.slot));
@@ -2921,7 +2921,7 @@ test "computeBankStats - child bank heavier" {
         }
         break :blk try .initWithEpochStakesOnlyForTest(gpa, &.{versioned_stakes});
     };
-    defer epoch_tracker.deinit(gpa);
+    defer epoch_tracker.deinit();
 
     var replay_tower = try createTestReplayTower(
         1,
@@ -3018,7 +3018,7 @@ test "computeBankStats - same weight selects lower slot" {
         testing.allocator,
         &.{ versioned_stakes_0, versioned_stakes_1 },
     );
-    defer epoch_tracker.deinit(testing.allocator);
+    defer epoch_tracker.deinit();
 
     var replay_tower = try createTestReplayTower(
         1,
@@ -4919,7 +4919,7 @@ test "edge cases - duplicate slot" {
     var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
     defer {
         replay_state.deinit();
-        replay_state.epoch_tracker.deinit(gpa);
+        replay_state.epoch_tracker.deinit();
         gpa.destroy(replay_state.epoch_tracker);
     }
 
@@ -5049,7 +5049,7 @@ test "edge cases - duplicate slot" {
         0,
         .INIT,
     );
-    defer epoch_tracker.deinit(std.testing.allocator);
+    defer epoch_tracker.deinit();
 
     try tower_consensus.process(gpa, .{
         .account_store = replay_state.account_store,
@@ -5099,7 +5099,7 @@ test "edge cases - duplicate confirmed slot" {
     var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
     defer {
         replay_state.deinit();
-        replay_state.epoch_tracker.deinit(gpa);
+        replay_state.epoch_tracker.deinit();
         gpa.destroy(replay_state.epoch_tracker);
     }
 
@@ -5230,7 +5230,7 @@ test "edge cases - duplicate confirmed slot" {
         0,
         .INIT,
     );
-    defer epoch_tracker.deinit(std.testing.allocator);
+    defer epoch_tracker.deinit();
 
     try tower_consensus.process(gpa, .{
         .account_store = replay_state.account_store,
@@ -5280,7 +5280,7 @@ test "edge cases - gossip verified vote hashes" {
     var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
     defer {
         replay_state.deinit();
-        replay_state.epoch_tracker.deinit(gpa);
+        replay_state.epoch_tracker.deinit();
         gpa.destroy(replay_state.epoch_tracker);
     }
 
@@ -5423,7 +5423,7 @@ test "edge cases - gossip verified vote hashes" {
         0,
         .INIT,
     );
-    defer epoch_tracker.deinit(std.testing.allocator);
+    defer epoch_tracker.deinit();
 
     try tower_consensus.process(gpa, .{
         .account_store = replay_state.account_store,
@@ -5558,7 +5558,7 @@ test "vote on heaviest frozen descendant with no switch" {
         gpa,
         &.{.EMPTY_WITH_GENESIS},
     );
-    defer epoch_tracker.deinit(gpa);
+    defer epoch_tracker.deinit();
 
     // Add root and slot 1 entries into progress map.
     var progress = sig.consensus.ProgressMap.INIT;
@@ -5781,7 +5781,7 @@ test "vote accounts with landed votes populate bank stats" {
         gpa,
         &.{epoch_stakes},
     );
-    defer epoch_tracker.deinit(gpa);
+    defer epoch_tracker.deinit();
 
     {
         const epoch_info = try epoch_tracker.getEpochInfo(0);
@@ -6049,7 +6049,7 @@ test "root advances after vote satisfies lockouts" {
         gpa,
         &.{ epoch_stakes_0, epoch_stakes_1 },
     );
-    defer epoch_tracker.deinit(gpa);
+    defer epoch_tracker.deinit();
 
     var progress = sig.consensus.ProgressMap.INIT;
     defer progress.deinit(gpa);
@@ -6471,7 +6471,7 @@ test "vote refresh when no new vote available" {
         gpa,
         &.{.EMPTY_WITH_GENESIS},
     );
-    defer epoch_tracker.deinit(gpa);
+    defer epoch_tracker.deinit();
 
     var progress = sig.consensus.ProgressMap.INIT;
     defer progress.deinit(gpa);
@@ -6758,7 +6758,7 @@ test "detect and mark duplicate confirmed fork" {
         gpa,
         &.{epoch_stakes},
     );
-    defer epoch_tracker.deinit(gpa);
+    defer epoch_tracker.deinit();
 
     {
         {
@@ -6976,7 +6976,7 @@ test "detect and mark duplicate slot" {
         gpa,
         &.{.EMPTY_WITH_GENESIS},
     );
-    defer epoch_tracker.deinit(gpa);
+    defer epoch_tracker.deinit();
 
     var progress = sig.consensus.ProgressMap.INIT;
     defer progress.deinit(gpa);
@@ -7273,7 +7273,7 @@ test "successful fork switch (switch_proof)" {
         gpa,
         &.{epoch_stakes},
     );
-    defer epoch_tracker.deinit(gpa);
+    defer epoch_tracker.deinit();
 
     {
         {

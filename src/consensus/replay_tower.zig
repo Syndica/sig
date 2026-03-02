@@ -4936,7 +4936,7 @@ test "selectVoteAndResetForks stake not found" {
         allocator,
         &.{.EMPTY_WITH_GENESIS},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     try std.testing.expectError(
         error.ForkStatsNotFound,
@@ -5459,7 +5459,7 @@ pub const TestFixture = struct {
         errdefer slot_tracker.deinit(allocator);
 
         var epoch_tracker = sig.core.EpochTracker.init(.default, 0, .INIT);
-        defer epoch_tracker.deinit(allocator);
+        defer epoch_tracker.deinit();
 
         return .{
             .slot_tracker = slot_tracker,
@@ -5483,7 +5483,7 @@ pub const TestFixture = struct {
         self.node_pubkeys.deinit(allocator);
         self.vote_pubkeys.deinit(allocator);
         self.latest_validator_votes_for_frozen_banks.deinit(allocator);
-        self.epoch_tracker.deinit(allocator);
+        self.epoch_tracker.deinit();
 
         for (self.descendants.values()) |set| set.deinit(allocator);
         self.descendants.deinit(allocator);
@@ -5634,7 +5634,7 @@ pub const TestFixture = struct {
         );
         epoch_stakes.stakes.epoch = 0;
 
-        self.epoch_tracker.deinit(allocator);
+        self.epoch_tracker.deinit();
         self.epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
             allocator,
             &.{epoch_stakes},
