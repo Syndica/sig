@@ -60,7 +60,7 @@ pub const MethodAndParams = union(enum) {
 
     getHighestSnapshotSlot: noreturn,
     getIdentity: GetIdentity,
-    getInflationGovernor: noreturn,
+    getInflationGovernor: GetInflationGovernor,
     getInflationRate: noreturn,
     getInflationReward: noreturn,
     getLargestAccounts: noreturn,
@@ -406,7 +406,23 @@ pub const GetGenesisHash = struct {
 // TODO: getHealth
 // TODO: getHighestSnapshotSlot
 // TODO: getIdentity
-// TODO: getInflationGovernor
+
+pub const GetInflationGovernor = struct {
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+    };
+
+    pub const Response = struct {
+        initial: f64,
+        terminal: f64,
+        taper: f64,
+        foundation: f64,
+        foundationTerm: f64,
+    };
+};
+
 // TODO: getInflationRate
 // TODO: getInflationReward
 // TODO: getLargeAccounts
@@ -887,6 +903,28 @@ pub const RpcHookContext = struct {
                 .apiVersion = ClientVersion.API_VERSION,
             },
             .value = lamports,
+        };
+    }
+
+    pub fn getInflationGovernor(
+        self: RpcHookContext,
+        _: std.mem.Allocator,
+        params: GetInflationGovernor,
+    ) !GetInflationGovernor.Response {
+        const config = params.config orelse GetInflationGovernor.Config{};
+        const commitment = config.commitment orelse .finalized;
+
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+
+        const inflation = &slot_ref.constants.inflation;
+
+        return .{
+            .initial = inflation.initial,
+            .terminal = inflation.terminal,
+            .taper = inflation.taper,
+            .foundation = inflation.foundation,
+            .foundationTerm = inflation.foundation_term,
         };
     }
 };

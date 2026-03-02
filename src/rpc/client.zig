@@ -132,6 +132,13 @@ pub const Client = struct {
         return self.fetch(.null, .getGenesisHash, request);
     }
 
+    pub fn getInflationGovernor(
+        self: *Client,
+        request: rpc.methods.GetInflationGovernor,
+    ) Error!Response(rpc.methods.GetInflationGovernor.Response) {
+        return self.fetch(.null, .getInflationGovernor, request);
+    }
+
     pub fn getLatestBlockhash(
         self: *Client,
         request: rpc.methods.GetLatestBlockhash,

@@ -14,6 +14,7 @@ const GetBlockHeight = methods.GetBlockHeight;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
 const GetGenesisHash = methods.GetGenesisHash;
+const GetInflationGovernor = methods.GetInflationGovernor;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
@@ -181,7 +182,25 @@ test GetGenesisHash {
 // TODO: test getHealth()
 // TODO: test getHighestSnapshotSlot()
 // TODO: test getIdentity()
-// TODO: test getInflationGovernor()
+
+test GetInflationGovernor {
+    try testRequest(.getInflationGovernor, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getInflationGovernor","params":[]}
+    );
+    try testRequest(.getInflationGovernor, .{ .config = .{ .commitment = .confirmed } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getInflationGovernor","params":[{"commitment":"confirmed"}]}
+    );
+    try testResponse(GetInflationGovernor, .{ .result = .{
+        .initial = 0.08,
+        .terminal = 0.015,
+        .taper = 0.15,
+        .foundation = 0.05,
+        .foundationTerm = 7.0,
+    } },
+        \\{"jsonrpc":"2.0","result":{"foundation":0.05,"foundationTerm":7.0,"initial":0.08,"taper":0.15,"terminal":0.015},"id":1}
+    );
+}
+
 // TODO: test getInflationRate()
 // TODO: test getInflationReward()
 // TODO: test getLargeAccounts()
