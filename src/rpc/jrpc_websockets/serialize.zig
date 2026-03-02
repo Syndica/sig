@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("sig");
+const sig = @import("../../sig.zig");
 const xev = @import("xev");
 const types = @import("types.zig");
 const protocol = @import("protocol.zig");

@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("sig");
+const sig = @import("../../sig.zig");
 const types = @import("types.zig");
 const metrics_mod = @import("metrics.zig");
 const NotifQueue = @import("NotifQueue.zig");

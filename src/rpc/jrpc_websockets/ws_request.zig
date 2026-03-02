@@ -4,7 +4,7 @@
 // (HTTP vs WS are different server paths).
 
 const std = @import("std");
-const sig = @import("sig");
+const sig = @import("../../sig.zig");
 
 const methods = @import("methods.zig");
 

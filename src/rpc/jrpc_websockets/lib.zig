@@ -20,4 +20,5 @@ test {
     _ = metrics;
     _ = methods;
     _ = ws_request;
+    _ = @import("integration_tests.zig");
 }

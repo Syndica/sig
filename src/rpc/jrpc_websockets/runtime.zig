@@ -1,6 +1,6 @@
 const std = @import("std");
 const xev = @import("xev");
-const sig = @import("sig");
+const sig = @import("../../sig.zig");
 
 const log = std.log.scoped(.jrpc_ws_runtime);
 

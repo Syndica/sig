@@ -1,6 +1,6 @@
 const std = @import("std");
 const ws = @import("webzockets");
-const sig = @import("sig");
+const sig = @import("../../sig.zig");
 
 const types = @import("types.zig");
 const protocol = @import("protocol.zig");

@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("sig");
+const sig = @import("../../sig.zig");
 const xev = @import("xev");
 const ws = @import("webzockets");
 
@@ -20,11 +20,6 @@ const ThreadPool = sig.sync.ThreadPool;
 const JRPCHandler = handler_mod.JRPCHandler;
 const WebSocketServer = JRPCHandler.WebSocketServer;
 const RuntimeContext = runtime_mod.RuntimeContext;
-
-// Re-export all module tests.
-test {
-    _ = lib;
-}
 
 /// Bundles all server-side state needed for an in-process test server.
 const TestServer = struct {

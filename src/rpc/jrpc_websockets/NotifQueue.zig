@@ -22,7 +22,7 @@
 //! All operations are single-threaded (IO loop thread only).
 const builtin = @import("builtin");
 const std = @import("std");
-const sig = @import("sig");
+const sig = @import("../../sig.zig");
 
 const JRPCHandler = @import("handler.zig").JRPCHandler;
 

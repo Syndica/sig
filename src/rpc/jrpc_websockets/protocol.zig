@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("sig");
+const sig = @import("../../sig.zig");
 const ws = @import("webzockets");
 const base58 = @import("base58");
 const zstd = @import("zstd");

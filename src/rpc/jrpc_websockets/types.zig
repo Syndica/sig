@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("sig");
+const sig = @import("../../sig.zig");
 const NotifPayload = sig.sync.RcSlice(u8);
 const methods = @import("methods.zig");
 const ws_request = @import("ws_request.zig");
