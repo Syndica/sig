@@ -7,26 +7,20 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const base58 = @import("base58");
+pub const AccountKeys = @import("AccountKeys.zig");
 
 const Allocator = std.mem.Allocator;
-const Pubkey = sig.core.Pubkey;
-const Hash = sig.core.Hash;
 const JsonValue = std.json.Value;
 const ObjectMap = std.json.ObjectMap;
 
-pub const AccountKeys = @import("AccountKeys.zig");
-
-const vote_program = sig.runtime.program.vote;
-const system_program = sig.runtime.program.system;
-const address_lookup_table_program = sig.runtime.program.address_lookup_table;
-const stake_program = sig.runtime.program.stake;
-const bpf_loader = sig.runtime.program.bpf_loader;
-const VoteInstruction = vote_program.Instruction;
-const SystemInstruction = system_program.Instruction;
-const AddressLookupTableInstruction = address_lookup_table_program.Instruction;
-const StakeInstruction = stake_program.Instruction;
-const StakeLockupArgs = stake_program.LockupArgs;
-const BpfUpgradeableLoaderInstruction = bpf_loader.v3.Instruction;
+const AddressLookupTableInstruction = sig.runtime.program.address_lookup_table.Instruction;
+const BpfUpgradeableLoaderInstruction = sig.runtime.program.bpf_loader.v3.Instruction;
+const Hash = sig.core.Hash;
+const Pubkey = sig.core.Pubkey;
+const StakeAuthorize = sig.runtime.program.stake.state.StakeStateV2.StakeAuthorize;
+const StakeInstruction = sig.runtime.program.stake.Instruction;
+const StakeLockupArgs = sig.runtime.program.stake.LockupArgs;
+const SystemInstruction = sig.runtime.program.system.Instruction;
 
 /// SPL Associated Token Account program ID
 const SPL_ASSOCIATED_TOKEN_ACC_ID: Pubkey = .parse("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
@@ -289,6 +283,7 @@ pub fn parseUiInnerInstructions(
 
 /// Try to parse a compiled instruction into a structured parsed instruction.
 /// Falls back to partially decoded representation on failure.
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_instruction.rs#L95
 pub fn parseInstruction(
     allocator: Allocator,
     program_id: Pubkey,
@@ -406,6 +401,8 @@ pub fn parseInstruction(
     }
 }
 
+/// Fallback decoded representation of a compiled instruction
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L96
 pub fn makeUiPartiallyDecodedInstruction(
     allocator: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -439,12 +436,8 @@ pub fn makeUiPartiallyDecodedInstruction(
     };
 }
 
-// ============================================================================
-// SPL Memo Parser
-// ============================================================================
-
 /// Parse an SPL Memo instruction. The data is simply UTF-8 text.
-/// Returns a JSON string value.
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_instruction.rs#L131
 fn parseMemoInstruction(allocator: Allocator, data: []const u8) !JsonValue {
     // Validate UTF-8
     if (!std.unicode.utf8ValidateSlice(data)) return error.InvalidUtf8;
@@ -453,17 +446,19 @@ fn parseMemoInstruction(allocator: Allocator, data: []const u8) !JsonValue {
     return .{ .string = try allocator.dupe(u8, data) };
 }
 
-// ============================================================================
-// Vote Instruction Parser
-// ============================================================================
-
 /// Parse a vote instruction into a JSON Value.
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_vote.rs#L11
 fn parseVoteInstruction(
     allocator: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
     account_keys: *const AccountKeys,
 ) !JsonValue {
-    const ix = sig.bincode.readFromSlice(allocator, VoteInstruction, instruction.data, .{}) catch {
+    const ix = sig.bincode.readFromSlice(
+        allocator,
+        sig.runtime.program.vote.Instruction,
+        instruction.data,
+        .{},
+    ) catch {
         return error.DeserializationFailed;
     };
     defer ix.deinit(allocator);
@@ -830,7 +825,7 @@ fn hashToValue(allocator: std.mem.Allocator, hash: Hash) !JsonValue {
 }
 
 /// Convert VoteAuthorize to a JSON string value
-fn voteAuthorizeToValue(auth: vote_program.vote_instruction.VoteAuthorize) JsonValue {
+fn voteAuthorizeToValue(auth: sig.runtime.program.vote.vote_instruction.VoteAuthorize) JsonValue {
     return .{ .string = switch (auth) {
         .voter => "Voter",
         .withdrawer => "Withdrawer",
@@ -838,7 +833,7 @@ fn voteAuthorizeToValue(auth: vote_program.vote_instruction.VoteAuthorize) JsonV
 }
 
 /// Convert a Vote to a JSON Value object
-fn voteToValue(allocator: Allocator, vote: vote_program.state.Vote) !JsonValue {
+fn voteToValue(allocator: Allocator, vote: sig.runtime.program.vote.state.Vote) !JsonValue {
     var obj = ObjectMap.init(allocator);
     errdefer obj.deinit();
 
@@ -859,7 +854,10 @@ fn voteToValue(allocator: Allocator, vote: vote_program.state.Vote) !JsonValue {
 }
 
 /// Convert a VoteStateUpdate to a JSON Value object
-fn voteStateUpdateToValue(allocator: Allocator, vsu: vote_program.state.VoteStateUpdate) !JsonValue {
+fn voteStateUpdateToValue(
+    allocator: Allocator,
+    vsu: sig.runtime.program.vote.state.VoteStateUpdate,
+) !JsonValue {
     var obj = ObjectMap.init(allocator);
     errdefer obj.deinit();
 
@@ -872,7 +870,10 @@ fn voteStateUpdateToValue(allocator: Allocator, vsu: vote_program.state.VoteStat
 }
 
 /// Convert a TowerSync to a JSON Value object
-fn towerSyncToValue(allocator: Allocator, ts: vote_program.state.TowerSync) !JsonValue {
+fn towerSyncToValue(
+    allocator: Allocator,
+    ts: sig.runtime.program.vote.state.TowerSync,
+) !JsonValue {
     var obj = ObjectMap.init(allocator);
     errdefer obj.deinit();
 
@@ -886,7 +887,10 @@ fn towerSyncToValue(allocator: Allocator, ts: vote_program.state.TowerSync) !Jso
 }
 
 /// Convert an array of Lockouts to a JSON array value
-fn lockoutsToValue(allocator: Allocator, lockouts: []const vote_program.state.Lockout) !JsonValue {
+fn lockoutsToValue(
+    allocator: Allocator,
+    lockouts: []const sig.runtime.program.vote.state.Lockout,
+) !JsonValue {
     var arr = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(
         allocator,
         lockouts.len,
@@ -906,11 +910,8 @@ fn lockoutsToValue(allocator: Allocator, lockouts: []const vote_program.state.Lo
     return .{ .array = arr };
 }
 
-// ============================================================================
-// System Instruction Parser
-// ============================================================================
-
 /// Parse a system instruction into a JSON Value.
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_system.rs#L11
 fn parseSystemInstruction(
     allocator: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -1153,11 +1154,8 @@ fn checkNumSystemAccounts(accounts: []const u8, num: usize) !void {
     return checkNumAccounts(accounts, num, ParsableProgram.system);
 }
 
-// ============================================================================
-// Address Lookup Table Instruction Parser
-// ============================================================================
-
 /// Parse an address lookup table instruction into a JSON Value.
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_address_lookup_table.rs#L11
 fn parseAddressLookupTableInstruction(
     allocator: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -1299,11 +1297,8 @@ fn parseAddressLookupTableInstruction(
     return .{ .object = result };
 }
 
-// ============================================================================
-// Stake Instruction Parser
-// ============================================================================
-
 /// Parse a stake instruction into a JSON Value.
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_stake.rs#L11
 fn parseStakeInstruction(
     allocator: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -1765,7 +1760,7 @@ fn checkNumStakeAccounts(accounts: []const u8, num: usize) !void {
 }
 
 /// Convert StakeAuthorize to a JSON string value
-fn stakeAuthorizeToValue(auth: stake_program.state.StakeStateV2.StakeAuthorize) JsonValue {
+fn stakeAuthorizeToValue(auth: StakeAuthorize) JsonValue {
     return .{ .string = switch (auth) {
         .staker => "Staker",
         .withdrawer => "Withdrawer",
@@ -1790,11 +1785,8 @@ fn lockupArgsToValue(allocator: Allocator, lockup_args: StakeLockupArgs) !JsonVa
     return .{ .object = obj };
 }
 
-// ============================================================================
-// BPF Upgradeable Loader Instruction Parser
-// ============================================================================
-
 /// Parse a BPF upgradeable loader instruction into a JSON Value.
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_bpf_loader.rs#L48
 fn parseBpfUpgradeableLoaderInstruction(
     allocator: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -2111,10 +2103,6 @@ fn checkNumBpfUpgradeableLoaderAccounts(
     return checkNumAccounts(accounts, num, ParsableProgram.bpfUpgradeableLoader);
 }
 
-// ============================================================================
-// Shared Helpers
-// ============================================================================
-
 fn checkNumAddressLookupTableAccounts(
     accounts: []const u8,
     num: usize,
@@ -2142,11 +2130,8 @@ fn checkNumAccounts(
     }
 }
 
-// ============================================================================
-// BPF Loader v2 Instruction Parser
-// ============================================================================
-
 /// Parse a BPF Loader v2 instruction into a JSON Value.
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_bpf_loader.rs#L13
 fn parseBpfLoaderInstruction(
     allocator: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -2208,11 +2193,8 @@ fn parseBpfLoaderInstruction(
     return .{ .object = result };
 }
 
-// ============================================================================
-// Associated Token Account Instruction Parser
-// ============================================================================
-
 /// Parse an Associated Token Account instruction into a JSON Value.
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_associated_token.rs#L11
 fn parseAssociatedTokenInstruction(
     allocator: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -2342,130 +2324,81 @@ fn checkNumAssociatedTokenAccounts(accounts: []const u8, num: usize) !void {
     return checkNumAccounts(accounts, num, .splAssociatedTokenAccount);
 }
 
-// ============================================================================
-// SPL Token Instruction Parser
-// ============================================================================
-
 /// SPL Token instruction tag (first byte)
+/// [agave] https://github.com/solana-program/token/blob/f403c97ed4522469c2e320b8b4a2941f24c40a5e/interface/src/instruction.rs#L478
 const TokenInstructionTag = enum(u8) {
-    InitializeMint = 0,
-    InitializeAccount = 1,
-    InitializeMultisig = 2,
-    Transfer = 3,
-    Approve = 4,
-    Revoke = 5,
-    SetAuthority = 6,
-    MintTo = 7,
-    Burn = 8,
-    CloseAccount = 9,
-    FreezeAccount = 10,
-    ThawAccount = 11,
-    TransferChecked = 12,
-    ApproveChecked = 13,
-    MintToChecked = 14,
-    BurnChecked = 15,
-    InitializeAccount2 = 16,
-    SyncNative = 17,
-    InitializeAccount3 = 18,
-    InitializeMultisig2 = 19,
-    InitializeMint2 = 20,
-    GetAccountDataSize = 21,
-    InitializeImmutableOwner = 22,
-    AmountToUiAmount = 23,
-    UiAmountToAmount = 24,
-    InitializeMintCloseAuthority = 25,
+    initializeMint = 0,
+    initializeAccount = 1,
+    initializeMultisig = 2,
+    transfer = 3,
+    approve = 4,
+    revoke = 5,
+    setAuthority = 6,
+    mintTo = 7,
+    burn = 8,
+    closeAccount = 9,
+    freezeAccount = 10,
+    thawAccount = 11,
+    transferChecked = 12,
+    approveChecked = 13,
+    mintToChecked = 14,
+    burnChecked = 15,
+    initializeAccount2 = 16,
+    syncNative = 17,
+    initializeAccount3 = 18,
+    initializeMultisig2 = 19,
+    initializeMint2 = 20,
+    getAccountDataSize = 21,
+    initializeImmutableOwner = 22,
+    amountToUiAmount = 23,
+    uiAmountToAmount = 24,
+    initializeMintCloseAuthority = 25,
     // Extensions start at higher values
-    TransferFeeExtension = 26,
-    ConfidentialTransferExtension = 27,
-    DefaultAccountStateExtension = 28,
-    Reallocate = 29,
-    MemoTransferExtension = 30,
-    CreateNativeMint = 31,
-    InitializeNonTransferableMint = 32,
-    InterestBearingMintExtension = 33,
-    CpiGuardExtension = 34,
-    InitializePermanentDelegate = 35,
-    TransferHookExtension = 36,
-    ConfidentialTransferFeeExtension = 37,
-    WithdrawExcessLamports = 38,
-    MetadataPointerExtension = 39,
-    GroupPointerExtension = 40,
-    GroupMemberPointerExtension = 41,
-    ConfidentialMintBurnExtension = 42,
-    ScaledUiAmountExtension = 43,
-    PausableExtension = 44,
-    _,
+    transferFeeExtension = 26,
+    confidentialTransferExtension = 27,
+    defaultAccountStateExtension = 28,
+    reallocate = 29,
+    memoTransferExtension = 30,
+    createNativeMint = 31,
+    initializeNonTransferableMint = 32,
+    interestBearingMintExtension = 33,
+    cpiGuardExtension = 34,
+    initializePermanentDelegate = 35,
+    transferHookExtension = 36,
+    confidentialTransferFeeExtension = 37,
+    withdrawExcessLamports = 38,
+    metadataPointerExtension = 39,
+    groupPointerExtension = 40,
+    groupMemberPointerExtension = 41,
+    confidentialMintBurnExtension = 42,
+    scaledUiAmountExtension = 43,
+    pausableExtension = 44,
 };
 
 /// Authority type for SetAuthority instruction
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token.rs#L730
 const TokenAuthorityType = enum(u8) {
-    MintTokens = 0,
-    FreezeAccount = 1,
-    AccountOwner = 2,
-    CloseAccount = 3,
-    TransferFeeConfig = 4,
-    WithheldWithdraw = 5,
-    CloseMint = 6,
-    InterestRate = 7,
-    PermanentDelegate = 8,
-    ConfidentialTransferMint = 9,
-    TransferHookProgramId = 10,
-    ConfidentialTransferFeeConfig = 11,
-    MetadataPointer = 12,
-    GroupPointer = 13,
-    GroupMemberPointer = 14,
-    ScaledUiAmount = 15,
-    Pause = 16,
-    _,
-
-    pub fn toString(self: TokenAuthorityType) []const u8 {
-        return switch (self) {
-            .MintTokens => "mintTokens",
-            .FreezeAccount => "freezeAccount",
-            .AccountOwner => "accountOwner",
-            .CloseAccount => "closeAccount",
-            .TransferFeeConfig => "transferFeeConfig",
-            .WithheldWithdraw => "withheldWithdraw",
-            .CloseMint => "closeMint",
-            .InterestRate => "interestRate",
-            .PermanentDelegate => "permanentDelegate",
-            .ConfidentialTransferMint => "confidentialTransferMint",
-            .TransferHookProgramId => "transferHookProgramId",
-            .ConfidentialTransferFeeConfig => "confidentialTransferFeeConfig",
-            .MetadataPointer => "metadataPointer",
-            .GroupPointer => "groupPointer",
-            .GroupMemberPointer => "groupMemberPointer",
-            .ScaledUiAmount => "scaledUiAmount",
-            .Pause => "pause",
-            else => "unknown",
-        };
-    }
-
-    pub fn getOwnedField(self: TokenAuthorityType) []const u8 {
-        return switch (self) {
-            .MintTokens,
-            .FreezeAccount,
-            .TransferFeeConfig,
-            .WithheldWithdraw,
-            .CloseMint,
-            .InterestRate,
-            .PermanentDelegate,
-            .ConfidentialTransferMint,
-            .TransferHookProgramId,
-            .ConfidentialTransferFeeConfig,
-            .MetadataPointer,
-            .GroupPointer,
-            .GroupMemberPointer,
-            .ScaledUiAmount,
-            .Pause,
-            => "mint",
-            .AccountOwner, .CloseAccount => "account",
-            else => "account",
-        };
-    }
+    mintTokens = 0,
+    freezeAccount = 1,
+    accountOwner = 2,
+    closeAccount = 3,
+    transferFeeConfig = 4,
+    withheldWithdraw = 5,
+    closeMint = 6,
+    interestRate = 7,
+    permanentDelegate = 8,
+    confidentialTransferMint = 9,
+    transferHookProgramId = 10,
+    confidentialTransferFeeConfig = 11,
+    metadataPointer = 12,
+    groupPointer = 13,
+    groupMemberPointer = 14,
+    scaledUiAmount = 15,
+    pause = 16,
 };
 
 /// Parse an SPL Token instruction into a JSON Value.
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token.rs#L30
 fn parseTokenInstruction(
     allocator: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -2490,7 +2423,7 @@ fn parseTokenInstruction(
     errdefer result.deinit();
 
     switch (tag) {
-        .InitializeMint => {
+        .initializeMint => {
             try checkNumTokenAccounts(instruction.accounts, 2);
             if (instruction.data.len < 35) return error.DeserializationFailed;
             const decimals = instruction.data[1];
@@ -2514,7 +2447,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeMint" });
         },
-        .InitializeMint2 => {
+        .initializeMint2 => {
             try checkNumTokenAccounts(instruction.accounts, 1);
             if (instruction.data.len < 35) return error.DeserializationFailed;
             const decimals = instruction.data[1];
@@ -2533,7 +2466,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeMint2" });
         },
-        .InitializeAccount => {
+        .initializeAccount => {
             try checkNumTokenAccounts(instruction.accounts, 4);
             var info = ObjectMap.init(allocator);
             try info.put("account", try pubkeyToValue(
@@ -2555,7 +2488,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeAccount" });
         },
-        .InitializeAccount2 => {
+        .initializeAccount2 => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             if (instruction.data.len < 33) return error.DeserializationFailed;
             const owner = Pubkey{ .data = instruction.data[1..33].* };
@@ -2576,7 +2509,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeAccount2" });
         },
-        .InitializeAccount3 => {
+        .initializeAccount3 => {
             try checkNumTokenAccounts(instruction.accounts, 2);
             if (instruction.data.len < 33) return error.DeserializationFailed;
             const owner = Pubkey{ .data = instruction.data[1..33].* };
@@ -2593,7 +2526,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeAccount3" });
         },
-        .InitializeMultisig => {
+        .initializeMultisig => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             if (instruction.data.len < 2) return error.DeserializationFailed;
             const m = instruction.data[1];
@@ -2621,7 +2554,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeMultisig" });
         },
-        .InitializeMultisig2 => {
+        .initializeMultisig2 => {
             try checkNumTokenAccounts(instruction.accounts, 2);
             if (instruction.data.len < 2) return error.DeserializationFailed;
             const m = instruction.data[1];
@@ -2645,7 +2578,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeMultisig2" });
         },
-        .Transfer => {
+        .transfer => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             if (instruction.data.len < 9) return error.DeserializationFailed;
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
@@ -2675,7 +2608,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "transfer" });
         },
-        .Approve => {
+        .approve => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             if (instruction.data.len < 9) return error.DeserializationFailed;
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
@@ -2705,7 +2638,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "approve" });
         },
-        .Revoke => {
+        .revoke => {
             try checkNumTokenAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(allocator);
             try info.put("source", try pubkeyToValue(
@@ -2724,20 +2657,38 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "revoke" });
         },
-        .SetAuthority => {
+        .setAuthority => {
             try checkNumTokenAccounts(instruction.accounts, 2);
             if (instruction.data.len < 3) return error.DeserializationFailed;
             const authority_type = std.meta.intToEnum(
                 TokenAuthorityType,
                 instruction.data[1],
-            ) catch TokenAuthorityType.MintTokens;
-            const owned_field = authority_type.getOwnedField();
+            ) catch TokenAuthorityType.mintTokens;
+            const owned_field = switch (authority_type) {
+                .mintTokens,
+                .freezeAccount,
+                .transferFeeConfig,
+                .withheldWithdraw,
+                .closeMint,
+                .interestRate,
+                .permanentDelegate,
+                .confidentialTransferMint,
+                .transferHookProgramId,
+                .confidentialTransferFeeConfig,
+                .metadataPointer,
+                .groupPointer,
+                .groupMemberPointer,
+                .scaledUiAmount,
+                .pause,
+                => "mint",
+                .accountOwner, .closeAccount => "account",
+            };
             var info = ObjectMap.init(allocator);
             try info.put(owned_field, try pubkeyToValue(
                 allocator,
                 account_keys.get(@intCast(instruction.accounts[0])).?,
             ));
-            try info.put("authorityType", .{ .string = authority_type.toString() });
+            try info.put("authorityType", .{ .string = @tagName(authority_type) });
             // new_authority: COption<Pubkey> - 1 byte tag + 32 bytes pubkey
             if (instruction.data.len >= 35 and instruction.data[2] == 1) {
                 const new_authority = Pubkey{ .data = instruction.data[3..35].* };
@@ -2757,7 +2708,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "setAuthority" });
         },
-        .MintTo => {
+        .mintTo => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             if (instruction.data.len < 9) return error.DeserializationFailed;
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
@@ -2787,7 +2738,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "mintTo" });
         },
-        .Burn => {
+        .burn => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             if (instruction.data.len < 9) return error.DeserializationFailed;
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
@@ -2817,7 +2768,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "burn" });
         },
-        .CloseAccount => {
+        .closeAccount => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
             try info.put("account", try pubkeyToValue(
@@ -2840,7 +2791,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "closeAccount" });
         },
-        .FreezeAccount => {
+        .freezeAccount => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
             try info.put("account", try pubkeyToValue(
@@ -2863,7 +2814,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "freezeAccount" });
         },
-        .ThawAccount => {
+        .thawAccount => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
             try info.put("account", try pubkeyToValue(
@@ -2886,7 +2837,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "thawAccount" });
         },
-        .TransferChecked => {
+        .transferChecked => {
             try checkNumTokenAccounts(instruction.accounts, 4);
             if (instruction.data.len < 10) return error.DeserializationFailed;
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
@@ -2917,7 +2868,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "transferChecked" });
         },
-        .ApproveChecked => {
+        .approveChecked => {
             try checkNumTokenAccounts(instruction.accounts, 4);
             if (instruction.data.len < 10) return error.DeserializationFailed;
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
@@ -2948,7 +2899,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "approveChecked" });
         },
-        .MintToChecked => {
+        .mintToChecked => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             if (instruction.data.len < 10) return error.DeserializationFailed;
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
@@ -2975,7 +2926,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "mintToChecked" });
         },
-        .BurnChecked => {
+        .burnChecked => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             if (instruction.data.len < 10) return error.DeserializationFailed;
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
@@ -3002,7 +2953,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "burnChecked" });
         },
-        .SyncNative => {
+        .syncNative => {
             try checkNumTokenAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
             try info.put("account", try pubkeyToValue(
@@ -3012,7 +2963,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "syncNative" });
         },
-        .GetAccountDataSize => {
+        .getAccountDataSize => {
             try checkNumTokenAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
             try info.put("mint", try pubkeyToValue(
@@ -3023,7 +2974,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "getAccountDataSize" });
         },
-        .InitializeImmutableOwner => {
+        .initializeImmutableOwner => {
             try checkNumTokenAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
             try info.put("account", try pubkeyToValue(
@@ -3033,7 +2984,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeImmutableOwner" });
         },
-        .AmountToUiAmount => {
+        .amountToUiAmount => {
             try checkNumTokenAccounts(instruction.accounts, 1);
             if (instruction.data.len < 9) return error.DeserializationFailed;
             const amount = std.mem.readInt(u64, instruction.data[1..9], .little);
@@ -3050,7 +3001,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "amountToUiAmount" });
         },
-        .UiAmountToAmount => {
+        .uiAmountToAmount => {
             try checkNumTokenAccounts(instruction.accounts, 1);
             // ui_amount is a string in remaining bytes
             var info = ObjectMap.init(allocator);
@@ -3064,7 +3015,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "uiAmountToAmount" });
         },
-        .InitializeMintCloseAuthority => {
+        .initializeMintCloseAuthority => {
             try checkNumTokenAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
             try info.put("mint", try pubkeyToValue(
@@ -3081,7 +3032,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeMintCloseAuthority" });
         },
-        .CreateNativeMint => {
+        .createNativeMint => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
             try info.put("payer", try pubkeyToValue(
@@ -3099,7 +3050,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "createNativeMint" });
         },
-        .InitializeNonTransferableMint => {
+        .initializeNonTransferableMint => {
             try checkNumTokenAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
             try info.put("mint", try pubkeyToValue(
@@ -3109,7 +3060,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeNonTransferableMint" });
         },
-        .InitializePermanentDelegate => {
+        .initializePermanentDelegate => {
             try checkNumTokenAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(allocator);
             try info.put("mint", try pubkeyToValue(
@@ -3123,7 +3074,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializePermanentDelegate" });
         },
-        .WithdrawExcessLamports => {
+        .withdrawExcessLamports => {
             try checkNumTokenAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(allocator);
             try info.put("source", try pubkeyToValue(
@@ -3146,7 +3097,7 @@ fn parseTokenInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "withdrawExcessLamports" });
         },
-        .Reallocate => {
+        .reallocate => {
             try checkNumTokenAccounts(instruction.accounts, 4);
             var info = ObjectMap.init(allocator);
             try info.put("account", try pubkeyToValue(
@@ -3175,24 +3126,21 @@ fn parseTokenInstruction(
             try result.put("type", .{ .string = "reallocate" });
         },
         // Extensions that need sub-instruction parsing - return not parsable for now
-        .TransferFeeExtension,
-        .ConfidentialTransferExtension,
-        .DefaultAccountStateExtension,
-        .MemoTransferExtension,
-        .InterestBearingMintExtension,
-        .CpiGuardExtension,
-        .TransferHookExtension,
-        .ConfidentialTransferFeeExtension,
-        .MetadataPointerExtension,
-        .GroupPointerExtension,
-        .GroupMemberPointerExtension,
-        .ConfidentialMintBurnExtension,
-        .ScaledUiAmountExtension,
-        .PausableExtension,
+        .transferFeeExtension,
+        .confidentialTransferExtension,
+        .defaultAccountStateExtension,
+        .memoTransferExtension,
+        .interestBearingMintExtension,
+        .cpiGuardExtension,
+        .transferHookExtension,
+        .confidentialTransferFeeExtension,
+        .metadataPointerExtension,
+        .groupPointerExtension,
+        .groupMemberPointerExtension,
+        .confidentialMintBurnExtension,
+        .scaledUiAmountExtension,
+        .pausableExtension,
         => {
-            return error.DeserializationFailed;
-        },
-        _ => {
             return error.DeserializationFailed;
         },
     }
@@ -3205,7 +3153,7 @@ fn checkNumTokenAccounts(accounts: []const u8, num: usize) !void {
 }
 
 /// Parse signers for SPL Token instructions.
-/// Similar to the Agave implementation's parse_signers function.
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token.rs#L850
 fn parseSigners(
     allocator: Allocator,
     info: *ObjectMap,
@@ -3332,7 +3280,7 @@ fn formatUiAmount(allocator: Allocator, value: f64, decimals: u8) ![]const u8 {
     }
 }
 
-test "ParsableProgram.fromID - known programs" {
+test "parse_instruction.ParsableProgram.fromID: known programs" {
     try std.testing.expectEqual(
         ParsableProgram.system,
         ParsableProgram.fromID(sig.runtime.program.system.ID).?,
@@ -3367,7 +3315,7 @@ test "ParsableProgram.fromID - known programs" {
     );
 }
 
-test "ParsableProgram.fromID - unknown program returns null" {
+test "parse_instruction.ParsableProgram.fromID: unknown program returns null" {
     // Note: Pubkey.ZEROES matches the system program, so use different values
     try std.testing.expectEqual(
         @as(?ParsableProgram, null),
@@ -3379,7 +3327,7 @@ test "ParsableProgram.fromID - unknown program returns null" {
     );
 }
 
-test "ParsableProgram.fromID - spl-memo programs" {
+test "parse_instruction.ParsableProgram.fromID: spl-memo programs" {
     try std.testing.expectEqual(
         ParsableProgram.splMemo,
         ParsableProgram.fromID(SPL_MEMO_V1_ID).?,
@@ -3390,14 +3338,14 @@ test "ParsableProgram.fromID - spl-memo programs" {
     );
 }
 
-test "ParsableProgram.fromID - spl-associated-token-account" {
+test "parse_instruction.ParsableProgram.fromID: spl-associated-token-account" {
     try std.testing.expectEqual(
         ParsableProgram.splAssociatedTokenAccount,
         ParsableProgram.fromID(SPL_ASSOCIATED_TOKEN_ACC_ID).?,
     );
 }
 
-test "parseMemoInstruction - valid UTF-8" {
+test "parse_instruction.parseMemoInstruction: valid UTF-8" {
     const allocator = std.testing.allocator;
     const result = try parseMemoInstruction(allocator, "hello world");
     defer switch (result) {
@@ -3407,7 +3355,7 @@ test "parseMemoInstruction - valid UTF-8" {
     try std.testing.expectEqualStrings("hello world", result.string);
 }
 
-test "parseMemoInstruction - empty data" {
+test "parse_instruction.parseMemoInstruction: empty data" {
     const allocator = std.testing.allocator;
     const result = try parseMemoInstruction(allocator, "");
     defer switch (result) {
@@ -3417,7 +3365,7 @@ test "parseMemoInstruction - empty data" {
     try std.testing.expectEqualStrings("", result.string);
 }
 
-test "makeUiPartiallyDecodedInstruction" {
+test makeUiPartiallyDecodedInstruction {
     const allocator = std.testing.allocator;
     const key0 = Pubkey{ .data = [_]u8{1} ** 32 };
     const key1 = Pubkey{ .data = [_]u8{2} ** 32 };
@@ -3463,7 +3411,7 @@ test "makeUiPartiallyDecodedInstruction" {
     try std.testing.expectEqual(@as(?u32, 3), result.stackHeight);
 }
 
-test "parseUiInstruction - unknown program falls back to partially decoded" {
+test "parse_instruction.parseUiInstruction: unknown program falls back to partially decoded" {
     // Use arena allocator since parse functions allocate many small objects
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -3506,7 +3454,7 @@ test "parseUiInstruction - unknown program falls back to partially decoded" {
     }
 }
 
-test "parseInstruction - system transfer" {
+test "parse_instruction.parseInstruction: system transfer" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -3558,7 +3506,7 @@ test "parseInstruction - system transfer" {
     }
 }
 
-test "parseInstruction - spl-memo" {
+test "parse_instruction.parseInstruction: spl-memo" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();

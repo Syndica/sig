@@ -431,7 +431,7 @@ fn getMintDecimals(
 }
 
 // Tests
-test "ParsedTokenAccount.parse" {
+test "runtime.spl_token.ParsedTokenAccount.parse" {
     const testing = std.testing;
 
     // Create a valid token account data blob
@@ -460,7 +460,7 @@ test "ParsedTokenAccount.parse" {
     try testing.expectEqual(TokenAccountState.initialized, parsed.?.state);
 }
 
-test "ParsedTokenAccount.parse rejects uninitialized" {
+test "runtime.spl_token.ParsedTokenAccount.parse rejects uninitialized" {
     const testing = std.testing;
 
     var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
@@ -472,7 +472,7 @@ test "ParsedTokenAccount.parse rejects uninitialized" {
     try testing.expect(parsed == null);
 }
 
-test "ParsedTokenAccount.parse rejects short data" {
+test "runtime.spl_token.ParsedTokenAccount.parse rejects short data" {
     const testing = std.testing;
 
     // Test with data that's too short - parse should return null
@@ -483,7 +483,7 @@ test "ParsedTokenAccount.parse rejects short data" {
     try testing.expect(parsed == null);
 }
 
-test "ParsedMint.parse" {
+test "runtime.spl_token.ParsedMint.parse" {
     const testing = std.testing;
 
     var data: [MINT_ACCOUNT_SIZE]u8 = undefined;
@@ -500,7 +500,7 @@ test "ParsedMint.parse" {
     try testing.expectEqual(true, parsed.?.is_initialized);
 }
 
-test "formatTokenAmount" {
+test "runtime.spl_token.formatTokenAmount" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -535,7 +535,7 @@ test "formatTokenAmount" {
     }
 }
 
-test "isTokenProgram" {
+test "runtime.spl_token.isTokenProgram" {
     const testing = std.testing;
 
     try testing.expect(isTokenProgram(ids.TOKEN_PROGRAM_ID));
@@ -544,28 +544,28 @@ test "isTokenProgram" {
     try testing.expect(!isTokenProgram(sig.runtime.program.system.ID));
 }
 
-test "realNumberString - zero decimals" {
+test "runtime.spl_token.realNumberString: zero decimals" {
     const allocator = std.testing.allocator;
     const result = try realNumberString(allocator, 42, 0);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("42", result);
 }
 
-test "realNumberString - 9 decimals with exact SOL" {
+test "runtime.spl_token.realNumberString: 9 decimals with exact SOL" {
     const allocator = std.testing.allocator;
     const result = try realNumberString(allocator, 1_000_000_000, 9);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("1.000000000", result);
 }
 
-test "realNumberString - 3 decimals" {
+test "runtime.spl_token.realNumberString: 3 decimals" {
     const allocator = std.testing.allocator;
     const result = try realNumberString(allocator, 1_234_567_890, 3);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("1234567.890", result);
 }
 
-test "realNumberString - amount smaller than decimals requires padding" {
+test "runtime.spl_token.realNumberString: amount smaller than decimals requires padding" {
     const allocator = std.testing.allocator;
     // amount=42, decimals=6 -> "0.000042"
     const result = try realNumberString(allocator, 42, 6);
@@ -573,14 +573,14 @@ test "realNumberString - amount smaller than decimals requires padding" {
     try std.testing.expectEqualStrings("0.000042", result);
 }
 
-test "realNumberString - zero amount with decimals" {
+test "runtime.spl_token.realNumberString: zero amount with decimals" {
     const allocator = std.testing.allocator;
     const result = try realNumberString(allocator, 0, 9);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("0.000000000", result);
 }
 
-test "realNumberStringTrimmed - trims trailing zeros" {
+test "runtime.spl_token.realNumberStringTrimmed: trims trailing zeros" {
     const allocator = std.testing.allocator;
     // 1 SOL = 1_000_000_000 with 9 decimals -> "1" (all trailing zeros trimmed including dot)
     const result = try realNumberStringTrimmed(allocator, 1_000_000_000, 9);
@@ -588,7 +588,7 @@ test "realNumberStringTrimmed - trims trailing zeros" {
     try std.testing.expectEqualStrings("1", result);
 }
 
-test "realNumberStringTrimmed - partial trailing zeros" {
+test "runtime.spl_token.realNumberStringTrimmed: partial trailing zeros" {
     const allocator = std.testing.allocator;
     // 1_234_567_890 with 3 decimals -> "1234567.89" (one trailing zero trimmed)
     const result = try realNumberStringTrimmed(allocator, 1_234_567_890, 3);
@@ -596,7 +596,7 @@ test "realNumberStringTrimmed - partial trailing zeros" {
     try std.testing.expectEqualStrings("1234567.89", result);
 }
 
-test "realNumberStringTrimmed - no trailing zeros" {
+test "runtime.spl_token.realNumberStringTrimmed: no trailing zeros" {
     const allocator = std.testing.allocator;
     // Agave example: 600010892365405206, 9 -> "600010892.365405206"
     const result = try realNumberStringTrimmed(allocator, 600010892365405206, 9);
@@ -604,21 +604,21 @@ test "realNumberStringTrimmed - no trailing zeros" {
     try std.testing.expectEqualStrings("600010892.365405206", result);
 }
 
-test "realNumberStringTrimmed - zero decimals" {
+test "runtime.spl_token.realNumberStringTrimmed: zero decimals" {
     const allocator = std.testing.allocator;
     const result = try realNumberStringTrimmed(allocator, 42, 0);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("42", result);
 }
 
-test "realNumberStringTrimmed - zero amount" {
+test "runtime.spl_token.realNumberStringTrimmed: zero amount" {
     const allocator = std.testing.allocator;
     const result = try realNumberStringTrimmed(allocator, 0, 6);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("0", result);
 }
 
-test "formatTokenAmount - ui_amount_string uses trimmed format" {
+test "runtime.spl_token.formatTokenAmount: ui_amount_string uses trimmed format" {
     const allocator = std.testing.allocator;
     // 1.5 SOL -> ui_amount_string should be "1.5", not "1.500000000"
     const result = try formatTokenAmount(allocator, 1_500_000_000, 9);
@@ -629,7 +629,7 @@ test "formatTokenAmount - ui_amount_string uses trimmed format" {
     try std.testing.expectEqual(@as(u8, 9), result.decimals);
 }
 
-test "formatTokenAmount - small fractional amount" {
+test "runtime.spl_token.formatTokenAmount: small fractional amount" {
     const allocator = std.testing.allocator;
     // 1 lamport = 0.000000001 SOL -> trimmed to "0.000000001"
     const result = try formatTokenAmount(allocator, 1, 9);
@@ -639,7 +639,7 @@ test "formatTokenAmount - small fractional amount" {
     try std.testing.expectEqualStrings("0.000000001", result.ui_amount_string);
 }
 
-test "ParsedMint.parse - uninitialized returns null" {
+test "runtime.spl_token.ParsedMint.parse: uninitialized returns null" {
     var data: [MINT_ACCOUNT_SIZE]u8 = undefined;
     @memset(&data, 0);
     data[MINT_DECIMALS_OFFSET] = 6;
@@ -648,13 +648,13 @@ test "ParsedMint.parse - uninitialized returns null" {
     try std.testing.expect(ParsedMint.parse(&data) == null);
 }
 
-test "ParsedMint.parse - short data returns null" {
+test "runtime.spl_token.ParsedMint.parse: short data returns null" {
     var data: [50]u8 = undefined;
     @memset(&data, 0);
     try std.testing.expect(ParsedMint.parse(&data) == null);
 }
 
-test "ParsedTokenAccount.parse - frozen state" {
+test "runtime.spl_token.ParsedTokenAccount.parse: frozen state" {
     var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
     @memset(&data, 0);
 
@@ -671,7 +671,7 @@ test "ParsedTokenAccount.parse - frozen state" {
     try std.testing.expectEqual(@as(u64, 500), parsed.?.amount);
 }
 
-test "MintDecimalsCache - basic usage" {
+test "runtime.spl_token.MintDecimalsCache: basic usage" {
     const allocator = std.testing.allocator;
     var cache = MintDecimalsCache.init(allocator);
     defer cache.deinit();
@@ -683,7 +683,7 @@ test "MintDecimalsCache - basic usage" {
     try std.testing.expectEqual(@as(?u8, 6), cache.get(mint));
 }
 
-test "ParsedTokenAccount.parse - invalid state byte rejects" {
+test "runtime.spl_token.ParsedTokenAccount.parse: invalid state byte rejects" {
     // State byte = 3 is not a valid TokenAccountState variant
     var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
     @memset(&data, 0);
@@ -695,7 +695,7 @@ test "ParsedTokenAccount.parse - invalid state byte rejects" {
     try std.testing.expect(ParsedTokenAccount.parse(&data) == null);
 }
 
-test "ParsedTokenAccount.parse - max amount (u64 max)" {
+test "runtime.spl_token.ParsedTokenAccount.parse: max amount (u64 max)" {
     var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
     @memset(&data, 0);
 
@@ -712,14 +712,14 @@ test "ParsedTokenAccount.parse - max amount (u64 max)" {
     try std.testing.expectEqual(owner, parsed.owner);
 }
 
-test "ParsedTokenAccount.parse - data exactly TOKEN_ACCOUNT_SIZE" {
+test "runtime.spl_token.ParsedTokenAccount.parse: data exactly TOKEN_ACCOUNT_SIZE" {
     var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
     @memset(&data, 0);
     data[STATE_OFFSET] = 1;
     try std.testing.expect(ParsedTokenAccount.parse(&data) != null);
 }
 
-test "ParsedTokenAccount.parse - data larger than TOKEN_ACCOUNT_SIZE (Token-2022 with extensions)" {
+test "runtime.spl_token.ParsedTokenAccount.parse: data larger than Token-2022 with extensions" {
     // Token-2022 accounts can be larger than 165 bytes with extensions
     var data: [TOKEN_ACCOUNT_SIZE + 100]u8 = undefined;
     @memset(&data, 0);
@@ -736,14 +736,14 @@ test "ParsedTokenAccount.parse - data larger than TOKEN_ACCOUNT_SIZE (Token-2022
     try std.testing.expectEqual(mint, parsed.mint);
 }
 
-test "ParsedTokenAccount.parse - data one byte too short" {
+test "runtime.spl_token.ParsedTokenAccount.parse: data one byte too short" {
     var data: [TOKEN_ACCOUNT_SIZE - 1]u8 = undefined;
     @memset(&data, 0);
     data[STATE_OFFSET] = 1;
     try std.testing.expect(ParsedTokenAccount.parse(&data) == null);
 }
 
-test "ParsedTokenAccount.parse - zero amount initialized" {
+test "runtime.spl_token.ParsedTokenAccount.parse: zero amount initialized" {
     var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
     @memset(&data, 0);
     data[STATE_OFFSET] = 1;
@@ -754,7 +754,7 @@ test "ParsedTokenAccount.parse - zero amount initialized" {
     try std.testing.expectEqual(TokenAccountState.initialized, parsed.state);
 }
 
-test "ParsedMint.parse - various decimal values" {
+test "runtime.spl_token.ParsedMint.parse: various decimal values" {
     const test_decimals = [_]u8{ 0, 1, 6, 9, 18, 255 };
     for (test_decimals) |dec| {
         var data: [MINT_ACCOUNT_SIZE]u8 = undefined;
@@ -767,7 +767,7 @@ test "ParsedMint.parse - various decimal values" {
     }
 }
 
-test "ParsedMint.parse - data exactly MINT_ACCOUNT_SIZE" {
+test "runtime.spl_token.ParsedMint.parse: data exactly MINT_ACCOUNT_SIZE" {
     var data: [MINT_ACCOUNT_SIZE]u8 = undefined;
     @memset(&data, 0);
     data[MINT_DECIMALS_OFFSET] = 9;
@@ -775,7 +775,7 @@ test "ParsedMint.parse - data exactly MINT_ACCOUNT_SIZE" {
     try std.testing.expect(ParsedMint.parse(&data) != null);
 }
 
-test "ParsedMint.parse - data larger than MINT_ACCOUNT_SIZE (Token-2022 mint with extensions)" {
+test "runtime.spl_token.ParsedMint.parse: data larger than Token-2022 mint with extensions" {
     var data: [MINT_ACCOUNT_SIZE + 200]u8 = undefined;
     @memset(&data, 0);
     data[MINT_DECIMALS_OFFSET] = 18;
@@ -785,7 +785,7 @@ test "ParsedMint.parse - data larger than MINT_ACCOUNT_SIZE (Token-2022 mint wit
     try std.testing.expectEqual(@as(u8, 18), parsed.decimals);
 }
 
-test "ParsedMint.parse - data one byte too short" {
+test "runtime.spl_token.ParsedMint.parse: data one byte too short" {
     var data: [MINT_ACCOUNT_SIZE - 1]u8 = undefined;
     @memset(&data, 0);
     data[MINT_DECIMALS_OFFSET] = 6;
@@ -793,7 +793,7 @@ test "ParsedMint.parse - data one byte too short" {
     try std.testing.expect(ParsedMint.parse(&data) == null);
 }
 
-test "ParsedMint.parse - non-zero is_initialized byte" {
+test "runtime.spl_token.ParsedMint.parse: non-zero is_initialized byte" {
     // Any non-zero value should count as initialized (Agave uses bool)
     var data: [MINT_ACCOUNT_SIZE]u8 = undefined;
     @memset(&data, 0);
@@ -804,7 +804,7 @@ test "ParsedMint.parse - non-zero is_initialized byte" {
     try std.testing.expect(parsed != null);
 }
 
-test "realNumberString - single digit amount with many decimals" {
+test "runtime.spl_token.realNumberString: single digit amount with many decimals" {
     const allocator = std.testing.allocator;
     // Agave test case: amount=1, decimals=9 -> "0.000000001"
     const result = try realNumberString(allocator, 1, 9);
@@ -812,28 +812,28 @@ test "realNumberString - single digit amount with many decimals" {
     try std.testing.expectEqualStrings("0.000000001", result);
 }
 
-test "realNumberString - large amount (u64 max)" {
+test "runtime.spl_token.realNumberString: large amount (u64 max)" {
     const allocator = std.testing.allocator;
     const result = try realNumberString(allocator, std.math.maxInt(u64), 0);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("18446744073709551615", result);
 }
 
-test "realNumberString - large amount with decimals" {
+test "runtime.spl_token.realNumberString: large amount with decimals" {
     const allocator = std.testing.allocator;
     const result = try realNumberString(allocator, std.math.maxInt(u64), 9);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("18446744073.709551615", result);
 }
 
-test "realNumberString - 1 decimal" {
+test "runtime.spl_token.realNumberString: 1 decimal" {
     const allocator = std.testing.allocator;
     const result = try realNumberString(allocator, 15, 1);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("1.5", result);
 }
 
-test "realNumberString - amount exactly equals decimals digits" {
+test "runtime.spl_token.realNumberString: amount exactly equals decimals digits" {
     const allocator = std.testing.allocator;
     // amount=123, decimals=3 -> "0.123"
     const result = try realNumberString(allocator, 123, 3);
@@ -841,7 +841,7 @@ test "realNumberString - amount exactly equals decimals digits" {
     try std.testing.expectEqualStrings("0.123", result);
 }
 
-test "realNumberStringTrimmed - single lamport (Agave test)" {
+test "runtime.spl_token.realNumberStringTrimmed: single lamport (Agave test)" {
     const allocator = std.testing.allocator;
     // Agave test: amount=1, decimals=9 -> "0.000000001"
     const result = try realNumberStringTrimmed(allocator, 1, 9);
@@ -849,7 +849,7 @@ test "realNumberStringTrimmed - single lamport (Agave test)" {
     try std.testing.expectEqualStrings("0.000000001", result);
 }
 
-test "realNumberStringTrimmed - exact round number (Agave test)" {
+test "runtime.spl_token.realNumberStringTrimmed: exact round number (Agave test)" {
     const allocator = std.testing.allocator;
     // Agave test: amount=1_000_000_000, decimals=9 -> "1"
     const result = try realNumberStringTrimmed(allocator, 1_000_000_000, 9);
@@ -857,7 +857,7 @@ test "realNumberStringTrimmed - exact round number (Agave test)" {
     try std.testing.expectEqualStrings("1", result);
 }
 
-test "realNumberStringTrimmed - large amount with high precision (Agave test)" {
+test "runtime.spl_token.realNumberStringTrimmed: large amount with high precision (Agave test)" {
     const allocator = std.testing.allocator;
     // Agave test: 1_234_567_890 with 3 decimals -> "1234567.89"
     const result = try realNumberStringTrimmed(allocator, 1_234_567_890, 3);
@@ -865,14 +865,14 @@ test "realNumberStringTrimmed - large amount with high precision (Agave test)" {
     try std.testing.expectEqualStrings("1234567.89", result);
 }
 
-test "realNumberStringTrimmed - u64 max with 9 decimals" {
+test "runtime.spl_token.realNumberStringTrimmed: u64 max with 9 decimals" {
     const allocator = std.testing.allocator;
     const result = try realNumberStringTrimmed(allocator, std.math.maxInt(u64), 9);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("18446744073.709551615", result);
 }
 
-test "formatTokenAmount - zero amount zero decimals" {
+test "runtime.spl_token.formatTokenAmount: zero amount zero decimals" {
     const allocator = std.testing.allocator;
     const result = try formatTokenAmount(allocator, 0, 0);
     defer result.deinit(allocator);
@@ -883,7 +883,7 @@ test "formatTokenAmount - zero amount zero decimals" {
     try std.testing.expectApproxEqRel(@as(f64, 0.0), result.ui_amount.?, 0.0001);
 }
 
-test "formatTokenAmount - zero amount 9 decimals" {
+test "runtime.spl_token.formatTokenAmount: zero amount 9 decimals" {
     const allocator = std.testing.allocator;
     const result = try formatTokenAmount(allocator, 0, 9);
     defer result.deinit(allocator);
@@ -893,7 +893,7 @@ test "formatTokenAmount - zero amount 9 decimals" {
     try std.testing.expectEqual(@as(u8, 9), result.decimals);
 }
 
-test "formatTokenAmount - USDC style (6 decimals, 1 million)" {
+test "runtime.spl_token.formatTokenAmount: USDC style (6 decimals, 1 million)" {
     const allocator = std.testing.allocator;
     // 1 USDC = 1_000_000 with 6 decimals
     const result = try formatTokenAmount(allocator, 1_000_000, 6);
@@ -904,7 +904,7 @@ test "formatTokenAmount - USDC style (6 decimals, 1 million)" {
     try std.testing.expectApproxEqRel(@as(f64, 1.0), result.ui_amount.?, 0.0001);
 }
 
-test "formatTokenAmount - max u64 amount" {
+test "runtime.spl_token.formatTokenAmount: max u64 amount" {
     const allocator = std.testing.allocator;
     const result = try formatTokenAmount(allocator, std.math.maxInt(u64), 0);
     defer result.deinit(allocator);
@@ -913,7 +913,7 @@ test "formatTokenAmount - max u64 amount" {
     try std.testing.expectEqualStrings("18446744073709551615", result.ui_amount_string);
 }
 
-test "formatTokenAmount - ui_amount precision (Agave pattern)" {
+test "runtime.spl_token.formatTokenAmount: ui_amount precision (Agave pattern)" {
     const allocator = std.testing.allocator;
     // 1.234567890 SOL
     const result = try formatTokenAmount(allocator, 1_234_567_890, 9);
@@ -925,7 +925,7 @@ test "formatTokenAmount - ui_amount precision (Agave pattern)" {
     try std.testing.expectEqualStrings("1.23456789", result.ui_amount_string);
 }
 
-test "MintDecimalsCache - multiple mints" {
+test "runtime.spl_token.MintDecimalsCache: multiple mints" {
     const allocator = std.testing.allocator;
     var cache = MintDecimalsCache.init(allocator);
     defer cache.deinit();
@@ -943,7 +943,7 @@ test "MintDecimalsCache - multiple mints" {
     try std.testing.expectEqual(@as(?u8, 0), cache.get(mint3));
 }
 
-test "MintDecimalsCache - overwrite existing entry" {
+test "runtime.spl_token.MintDecimalsCache: overwrite existing entry" {
     const allocator = std.testing.allocator;
     var cache = MintDecimalsCache.init(allocator);
     defer cache.deinit();
@@ -957,7 +957,7 @@ test "MintDecimalsCache - overwrite existing entry" {
     try std.testing.expectEqual(@as(?u8, 9), cache.get(mint));
 }
 
-test "MintDecimalsCache - unknown mint returns null" {
+test "runtime.spl_token.MintDecimalsCache: unknown mint returns null" {
     const allocator = std.testing.allocator;
     var cache = MintDecimalsCache.init(allocator);
     defer cache.deinit();
@@ -966,19 +966,19 @@ test "MintDecimalsCache - unknown mint returns null" {
     try std.testing.expectEqual(@as(?u8, null), cache.get(unknown));
 }
 
-test "TokenAccountState - all enum values" {
+test "runtime.spl_token.TokenAccountState: all enum values" {
     try std.testing.expectEqual(@as(u8, 0), @intFromEnum(TokenAccountState.uninitialized));
     try std.testing.expectEqual(@as(u8, 1), @intFromEnum(TokenAccountState.initialized));
     try std.testing.expectEqual(@as(u8, 2), @intFromEnum(TokenAccountState.frozen));
 }
 
-test "collectRawTokenBalances - empty accounts" {
+test "runtime.spl_token.collectRawTokenBalances: empty accounts" {
     const accounts: []const account_loader.LoadedAccount = &.{};
     const result = collectRawTokenBalances(accounts);
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
 
-test "collectRawTokenBalances - non-token accounts skipped" {
+test "runtime.spl_token.collectRawTokenBalances: non-token accounts skipped" {
     // Create accounts owned by the system program (not a token program)
     var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
     @memset(&data, 0);
@@ -998,7 +998,7 @@ test "collectRawTokenBalances - non-token accounts skipped" {
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
 
-test "collectRawTokenBalances - token account collected" {
+test "runtime.spl_token.collectRawTokenBalances: token account collected" {
     var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
     @memset(&data, 0);
 
@@ -1028,7 +1028,7 @@ test "collectRawTokenBalances - token account collected" {
     try std.testing.expectEqual(ids.TOKEN_PROGRAM_ID, result.constSlice()[0].program_id);
 }
 
-test "collectRawTokenBalances - Token-2022 account collected" {
+test "runtime.spl_token.collectRawTokenBalances: Token-2022 account collected" {
     var data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
     @memset(&data, 0);
 
@@ -1054,13 +1054,13 @@ test "collectRawTokenBalances - Token-2022 account collected" {
     try std.testing.expectEqual(ids.TOKEN_2022_PROGRAM_ID, result.constSlice()[0].program_id);
 }
 
-test "collectRawTokenBalances - mixed token and non-token accounts" {
-    // Account 0: system program (not token) - should be skipped
+test "runtime.spl_token.collectRawTokenBalances: mixed token and non-token accounts" {
+    // Account 0: system program (not token): should be skipped
     var system_data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
     @memset(&system_data, 0);
     system_data[STATE_OFFSET] = 1;
 
-    // Account 1: SPL Token account - should be collected
+    // Account 1: SPL Token account: should be collected
     var token_data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
     @memset(&token_data, 0);
     const mint1 = Pubkey{ .data = [_]u8{0xAA} ** 32 };
@@ -1070,7 +1070,7 @@ test "collectRawTokenBalances - mixed token and non-token accounts" {
     std.mem.writeInt(u64, token_data[AMOUNT_OFFSET..][0..8], 1000, .little);
     token_data[STATE_OFFSET] = 1;
 
-    // Account 2: Token-2022 account - should be collected
+    // Account 2: Token-2022 account: should be collected
     var token2022_data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
     @memset(&token2022_data, 0);
     const mint2 = Pubkey{ .data = [_]u8{0xCC} ** 32 };
@@ -1080,7 +1080,7 @@ test "collectRawTokenBalances - mixed token and non-token accounts" {
     std.mem.writeInt(u64, token2022_data[AMOUNT_OFFSET..][0..8], 2000, .little);
     token2022_data[STATE_OFFSET] = 2; // frozen
 
-    // Account 3: uninitialized token account - should be skipped
+    // Account 3: uninitialized token account: should be skipped
     var uninit_data: [TOKEN_ACCOUNT_SIZE]u8 = undefined;
     @memset(&uninit_data, 0);
     uninit_data[STATE_OFFSET] = 0; // uninitialized
@@ -1139,7 +1139,7 @@ test "collectRawTokenBalances - mixed token and non-token accounts" {
     try std.testing.expectEqual(ids.TOKEN_2022_PROGRAM_ID, result.constSlice()[1].program_id);
 }
 
-test "collectRawTokenBalances - short data account skipped" {
+test "runtime.spl_token.collectRawTokenBalances: short data account skipped" {
     // Token program owner but data too short
     var short_data: [100]u8 = undefined;
     @memset(&short_data, 0);
@@ -1158,7 +1158,7 @@ test "collectRawTokenBalances - short data account skipped" {
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
 
-test "isTokenProgram - distinct pubkeys" {
+test "runtime.spl_token.isTokenProgram: distinct pubkeys" {
     // Verify TOKEN_PROGRAM_ID and TOKEN_2022_PROGRAM_ID are different
     try std.testing.expect(!ids.TOKEN_PROGRAM_ID.equals(&ids.TOKEN_2022_PROGRAM_ID));
 
@@ -1167,7 +1167,7 @@ test "isTokenProgram - distinct pubkeys" {
     try std.testing.expect(!isTokenProgram(random_key));
 }
 
-test "RawTokenBalance struct layout" {
+test "runtime.spl_token.RawTokenBalance struct layout" {
     // Verify RawTokenBalance fields are properly accessible
     const balance = RawTokenBalance{
         .account_index = 5,
@@ -1180,7 +1180,7 @@ test "RawTokenBalance struct layout" {
     try std.testing.expectEqual(@as(u64, 999_999), balance.amount);
 }
 
-test "realNumberString - 2 decimals (Agave USDC-like)" {
+test "runtime.spl_token.realNumberString: 2 decimals (Agave USDC-like)" {
     const allocator = std.testing.allocator;
     // Agave tests token amounts with 2 decimals
     const result = try realNumberString(allocator, 4200, 2);
@@ -1188,7 +1188,7 @@ test "realNumberString - 2 decimals (Agave USDC-like)" {
     try std.testing.expectEqualStrings("42.00", result);
 }
 
-test "realNumberString - 18 decimals (high precision token)" {
+test "runtime.spl_token.realNumberString: 18 decimals (high precision token)" {
     const allocator = std.testing.allocator;
     // Some tokens use 18 decimals (like ETH-bridged tokens)
     const result = try realNumberString(allocator, 1_000_000_000_000_000_000, 18);
@@ -1196,21 +1196,21 @@ test "realNumberString - 18 decimals (high precision token)" {
     try std.testing.expectEqualStrings("1.000000000000000000", result);
 }
 
-test "realNumberStringTrimmed - 2 decimals trims" {
+test "runtime.spl_token.realNumberStringTrimmed: 2 decimals trims" {
     const allocator = std.testing.allocator;
     const result = try realNumberStringTrimmed(allocator, 4200, 2);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("42", result);
 }
 
-test "realNumberStringTrimmed - 18 decimals large amount" {
+test "runtime.spl_token.realNumberStringTrimmed: 18 decimals large amount" {
     const allocator = std.testing.allocator;
     const result = try realNumberStringTrimmed(allocator, 1_000_000_000_000_000_000, 18);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("1", result);
 }
 
-test "realNumberStringTrimmed - 18 decimals with fractional" {
+test "runtime.spl_token.realNumberStringTrimmed: 18 decimals with fractional" {
     const allocator = std.testing.allocator;
     // 1.5 in 18 decimals
     const result = try realNumberStringTrimmed(allocator, 1_500_000_000_000_000_000, 18);
@@ -1218,7 +1218,7 @@ test "realNumberStringTrimmed - 18 decimals with fractional" {
     try std.testing.expectEqualStrings("1.5", result);
 }
 
-test "formatTokenAmount - all fields consistent" {
+test "runtime.spl_token.formatTokenAmount: all fields consistent" {
     const allocator = std.testing.allocator;
     // 42.5 USDC (6 decimals)
     const result = try formatTokenAmount(allocator, 42_500_000, 6);
@@ -1275,7 +1275,7 @@ const MockAccountReader = struct {
     }
 };
 
-test "getMintDecimals - cache hit" {
+test "runtime.spl_token.getMintDecimals: cache hit" {
     const allocator = std.testing.allocator;
     var cache = MintDecimalsCache.init(allocator);
     defer cache.deinit();
@@ -1290,7 +1290,7 @@ test "getMintDecimals - cache hit" {
     try std.testing.expectEqual(@as(u8, 9), decimals);
 }
 
-test "getMintDecimals - cache miss fetches from reader" {
+test "runtime.spl_token.getMintDecimals: cache miss fetches from reader" {
     const allocator = std.testing.allocator;
     var cache = MintDecimalsCache.init(allocator);
     defer cache.deinit();
@@ -1307,7 +1307,7 @@ test "getMintDecimals - cache miss fetches from reader" {
     try std.testing.expectEqual(@as(?u8, 6), cache.get(mint));
 }
 
-test "getMintDecimals - unknown mint returns MintNotFound" {
+test "runtime.spl_token.getMintDecimals: unknown mint returns MintNotFound" {
     const allocator = std.testing.allocator;
     var cache = MintDecimalsCache.init(allocator);
     defer cache.deinit();
@@ -1319,7 +1319,7 @@ test "getMintDecimals - unknown mint returns MintNotFound" {
     try std.testing.expectError(error.MintNotFound, result);
 }
 
-test "resolveTokenBalances - empty raw balances returns null" {
+test "runtime.spl_token.resolveTokenBalances: empty raw balances returns null" {
     const allocator = std.testing.allocator;
     var cache = MintDecimalsCache.init(allocator);
     defer cache.deinit();
@@ -1331,7 +1331,7 @@ test "resolveTokenBalances - empty raw balances returns null" {
     try std.testing.expectEqual(@as(?[]TransactionTokenBalance, null), result);
 }
 
-test "resolveTokenBalances - resolves token balances with mint lookup" {
+test "runtime.spl_token.resolveTokenBalances: resolves token balances with mint lookup" {
     const allocator = std.testing.allocator;
     var cache = MintDecimalsCache.init(allocator);
     defer cache.deinit();
@@ -1382,7 +1382,7 @@ test "resolveTokenBalances - resolves token balances with mint lookup" {
     try std.testing.expectEqualStrings("1.5", result[1].ui_token_amount.ui_amount_string);
 }
 
-test "resolveTokenBalances - skips tokens with missing mints" {
+test "runtime.spl_token.resolveTokenBalances: skips tokens with missing mints" {
     const allocator = std.testing.allocator;
     var cache = MintDecimalsCache.init(allocator);
     defer cache.deinit();

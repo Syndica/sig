@@ -1,7 +1,6 @@
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
-const InstructionAccount = sig.core.instruction.InstructionAccount;
 const Pubkey = sig.core.Pubkey;
 
 /// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/instruction.rs#L64
@@ -30,7 +29,7 @@ pub fn transfer(
     to: Pubkey,
     lamports: u64,
 ) error{OutOfMemory}!sig.core.Instruction {
-    const accounts = try allocator.dupe(InstructionAccount, &.{
+    const accounts = try allocator.dupe(sig.core.instruction.InstructionAccount, &.{
         .{ .pubkey = from, .is_signer = true, .is_writable = true },
         .{ .pubkey = to, .is_signer = false, .is_writable = true },
     });
@@ -51,7 +50,7 @@ pub fn allocate(
     pubkey: Pubkey,
     space: u64,
 ) error{OutOfMemory}!sig.core.Instruction {
-    const accounts = try allocator.dupe(InstructionAccount, &.{.{
+    const accounts = try allocator.dupe(sig.core.instruction.InstructionAccount, &.{.{
         .pubkey = pubkey,
         .is_signer = true,
         .is_writable = true,
@@ -73,7 +72,7 @@ pub fn assign(
     pubkey: Pubkey,
     owner: Pubkey,
 ) error{OutOfMemory}!sig.core.Instruction {
-    const accounts = try allocator.dupe(InstructionAccount, &.{.{
+    const accounts = try allocator.dupe(sig.core.instruction.InstructionAccount, &.{.{
         .pubkey = pubkey,
         .is_signer = true,
         .is_writable = true,

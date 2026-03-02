@@ -54,7 +54,7 @@ pub fn isEmpty(self: *const AccountKeys) bool {
 
 const testing = @import("std").testing;
 
-test "AccountKeys - static keys only" {
+test "static keys only" {
     const key0 = Pubkey{ .data = [_]u8{1} ** 32 };
     const key1 = Pubkey{ .data = [_]u8{2} ** 32 };
     const static_keys = [_]Pubkey{ key0, key1 };
@@ -67,7 +67,7 @@ test "AccountKeys - static keys only" {
     try testing.expectEqual(@as(?Pubkey, null), ak.get(2));
 }
 
-test "AccountKeys - with dynamic keys" {
+test "with dynamic keys" {
     const key0 = Pubkey{ .data = [_]u8{1} ** 32 };
     const writable_key = Pubkey{ .data = [_]u8{3} ** 32 };
     const readonly_key = Pubkey{ .data = [_]u8{4} ** 32 };
@@ -86,14 +86,14 @@ test "AccountKeys - with dynamic keys" {
     try testing.expectEqual(@as(?Pubkey, null), ak.get(3)); // out of bounds
 }
 
-test "AccountKeys - empty" {
+test "empty" {
     const ak = AccountKeys.init(&.{}, null);
     try testing.expectEqual(@as(usize, 0), ak.len());
     try testing.expect(ak.isEmpty());
     try testing.expectEqual(@as(?Pubkey, null), ak.get(0));
 }
 
-test "AccountKeys - keySegmentIter without dynamic" {
+test "keySegmentIter without dynamic" {
     const key0 = Pubkey{ .data = [_]u8{1} ** 32 };
     const static_keys = [_]Pubkey{key0};
     const ak = AccountKeys.init(&static_keys, null);
@@ -104,7 +104,7 @@ test "AccountKeys - keySegmentIter without dynamic" {
     try testing.expectEqual(@as(usize, 0), segments[2].len);
 }
 
-test "AccountKeys - keySegmentIter with dynamic" {
+test "keySegmentIter with dynamic" {
     const static_keys = [_]Pubkey{Pubkey.ZEROES};
     const writable = [_]Pubkey{ Pubkey{ .data = [_]u8{1} ** 32 }, Pubkey{ .data = [_]u8{2} ** 32 } };
     const readonly = [_]Pubkey{Pubkey{ .data = [_]u8{3} ** 32 }};

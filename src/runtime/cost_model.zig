@@ -261,7 +261,7 @@ fn calculateLoadedAccountsDataSizeCost(loaded_accounts_data_size: u32) u64 {
     return pages * LOADED_ACCOUNTS_DATA_SIZE_COST_PER_32K;
 }
 
-test "calculateLoadedAccountsDataSizeCost" {
+test "runtime.cost_model.calculateLoadedAccountsDataSizeCost" {
     // 0 bytes = 0 cost
     try std.testing.expectEqual(@as(u64, 0), calculateLoadedAccountsDataSizeCost(0));
 
@@ -278,7 +278,7 @@ test "calculateLoadedAccountsDataSizeCost" {
     try std.testing.expectEqual(@as(u64, 16), calculateLoadedAccountsDataSizeCost(64 * 1024));
 }
 
-test "UsageCostDetails.total" {
+test "runtime.cost_model.UsageCostDetails.total" {
     const cost = UsageCostDetails{
         .signature_cost = SIGNATURE_COST,
         .write_lock_cost = 2 * WRITE_LOCK_UNITS,
@@ -289,12 +289,12 @@ test "UsageCostDetails.total" {
     try std.testing.expectEqual(@as(u64, 201_338), cost.total());
 }
 
-test "TransactionCost.total for simple_vote" {
+test "runtime.cost_model.TransactionCost.total for simple_vote" {
     const cost = TransactionCost{ .simple_vote = {} };
     try std.testing.expectEqual(@as(u64, SIMPLE_VOTE_USAGE_COST), cost.total());
 }
 
-test "TransactionCost.total for transaction" {
+test "runtime.cost_model.TransactionCost.total for transaction" {
     const cost = TransactionCost{
         .transaction = .{
             .signature_cost = SIGNATURE_COST,
@@ -307,7 +307,7 @@ test "TransactionCost.total for transaction" {
     try std.testing.expectEqual(@as(u64, 201_338), cost.total());
 }
 
-test "TransactionCost.programsExecutionCost for simple_vote" {
+test "runtime.cost_model.TransactionCost.programsExecutionCost for simple_vote" {
     const cost = TransactionCost{ .simple_vote = {} };
     // Simple vote transactions use a static execution cost of 2100 CU (vote program default)
     try std.testing.expectEqual(
@@ -316,7 +316,7 @@ test "TransactionCost.programsExecutionCost for simple_vote" {
     );
 }
 
-test "TransactionCost.programsExecutionCost for transaction" {
+test "runtime.cost_model.TransactionCost.programsExecutionCost for transaction" {
     const cost = TransactionCost{
         .transaction = .{
             .signature_cost = SIGNATURE_COST,

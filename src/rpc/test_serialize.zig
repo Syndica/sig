@@ -338,10 +338,6 @@ test GetVoteAccounts {
     );
 }
 
-// ============================================================================
-// GetBlock serialization tests
-// ============================================================================
-
 /// Helper to stringify a value and compare against expected JSON.
 fn expectJsonStringify(expected: []const u8, value: anytype) !void {
     const actual = try std.json.Stringify.valueAlloc(std.testing.allocator, value, .{});
@@ -727,10 +723,6 @@ test "EncodedMessage serialization - with addressTableLookups" {
     , msg);
 }
 
-// ============================================================================
-// parse_instruction serialization tests
-// ============================================================================
-
 test "UiCompiledInstruction serialization" {
     const ix = parse_instruction.UiCompiledInstruction{
         .programIdIndex = 3,
@@ -823,10 +815,6 @@ test "UiInstruction serialization - compiled variant" {
     , ix);
 }
 
-// ============================================================================
-// GetBlock request serialization test
-// ============================================================================
-
 test "GetBlock request serialization" {
     try testRequest(.getBlock, .{ .slot = 430 },
         \\{"jsonrpc":"2.0","id":1,"method":"getBlock","params":[430]}
@@ -854,10 +842,6 @@ test "GetBlock request serialization - with config" {
         \\{"jsonrpc":"2.0","id":1,"method":"getBlock","params":[430,{"commitment":null,"encoding":"json","transactionDetails":"full","maxSupportedTransactionVersion":null,"rewards":false}]}
     );
 }
-
-// ============================================================================
-// JsonSkippable serialization tests
-// ============================================================================
 
 test "JsonSkippable - value state serializes the inner value" {
     const meta = GetBlock.Response.UiTransactionStatusMeta{
@@ -908,10 +892,6 @@ test "JsonSkippable - none state serializes as null" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"rewards\":null") != null);
 }
 
-// ============================================================================
-// ParsedAccount serialization tests
-// ============================================================================
-
 test "ParsedAccount serialization - transaction source" {
     const account = GetBlock.Response.ParsedAccount{
         .pubkey = Pubkey.ZEROES,
@@ -936,10 +916,6 @@ test "ParsedAccount serialization - lookupTable source" {
     , account);
 }
 
-// ============================================================================
-// AddressTableLookup serialization tests (uses writeU8SliceAsIntArray)
-// ============================================================================
-
 test "AddressTableLookup serialization - indexes as integer arrays" {
     const atl = GetBlock.Response.AddressTableLookup{
         .accountKey = Pubkey.ZEROES,
@@ -962,10 +938,6 @@ test "AddressTableLookup serialization - empty indexes" {
     , atl);
 }
 
-// ============================================================================
-// EncodedInstruction serialization (accounts as integer array)
-// ============================================================================
-
 test "EncodedInstruction serialization - accounts as integer array" {
     // Verifies that accounts field is serialized as [0,1,2] not as a string
     const ix = GetBlock.Response.EncodedInstruction{
@@ -977,10 +949,6 @@ test "EncodedInstruction serialization - accounts as integer array" {
         \\{"programIdIndex":3,"accounts":[0,1,2],"data":"base58data"}
     , ix);
 }
-
-// ============================================================================
-// UiRawMessage serialization tests
-// ============================================================================
 
 test "UiRawMessage serialization - without address table lookups" {
     const msg = GetBlock.Response.UiRawMessage{
@@ -1024,10 +992,6 @@ test "UiRawMessage serialization - with address table lookups" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"addressTableLookups\"") != null);
 }
 
-// ============================================================================
-// UiParsedMessage serialization tests
-// ============================================================================
-
 test "UiParsedMessage serialization - without address table lookups" {
     const msg = GetBlock.Response.UiParsedMessage{
         .account_keys = &.{},
@@ -1040,10 +1004,6 @@ test "UiParsedMessage serialization - without address table lookups" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"recentBlockhash\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "addressTableLookups") == null);
 }
-
-// ============================================================================
-// UiMessage serialization tests
-// ============================================================================
 
 test "UiMessage serialization - raw variant" {
     const msg = GetBlock.Response.UiMessage{ .raw = .{
@@ -1061,10 +1021,6 @@ test "UiMessage serialization - raw variant" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"numRequiredSignatures\":2") != null);
 }
 
-// ============================================================================
-// EncodedTransaction.accounts serialization test
-// ============================================================================
-
 test "EncodedTransaction serialization - accounts variant" {
     const account = GetBlock.Response.ParsedAccount{
         .pubkey = Pubkey.ZEROES,
@@ -1081,10 +1037,6 @@ test "EncodedTransaction serialization - accounts variant" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"accountKeys\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"source\":\"transaction\"") != null);
 }
-
-// ============================================================================
-// UiTransactionStatusMeta serialization - skipped fields
-// ============================================================================
 
 test "UiTransactionStatusMeta serialization - innerInstructions and logMessages skipped" {
     const meta = GetBlock.Response.UiTransactionStatusMeta{
