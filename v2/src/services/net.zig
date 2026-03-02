@@ -15,11 +15,12 @@ pub const panic = start.panic;
 pub const std_options = start.options;
 
 pub const ReadWrite = struct {
-    pair: *Pair,
+    shred_pair: *Pair,
+    gossip_pair: *Pair,
 };
 
 pub fn serviceMain(rw: ReadWrite) !noreturn {
-    try mainInner(&.{rw.pair});
+    try mainInner(&.{ rw.shred_pair, rw.gossip_pair });
 }
 
 const MAX_SOCKETS = 10;
@@ -57,13 +58,16 @@ fn mainInner(pairs: []const *Pair) !noreturn {
             var counter: u32 = 0;
             inline for (.{ slice.first(), slice.second() }) |packets| {
                 for (packets) |p| {
-                    const bytes = try std.posix.sendto(
+                    const bytes = std.posix.sendto(
                         sock,
                         p.data[0..p.size],
                         flags,
                         &p.addr.any,
                         p.addr.getOsSockLen(),
-                    );
+                    ) catch |e| switch (e) {
+                        error.WouldBlock => break,
+                        else => |err| return err,
+                    };
                     std.debug.assert(bytes == p.size);
                     counter += 1;
                 }

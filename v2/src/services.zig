@@ -26,6 +26,8 @@ const e = E.init;
 
 pub const Service = enum {
     net,
+    gossip,
+    snapshot,
     shred_receiver,
 
     pub fn entrypoint(self: Service) ServiceEntrypoint {
@@ -50,6 +52,15 @@ pub const Service = enum {
         return switch (self) {
             .net => &.{
                 .{ .region = .net_pair, .rw = true },
+                .{ .region = .net_pair, .rw = true },
+            },
+            .gossip => &.{
+                .{ .region = .net_pair, .rw = true },
+                .{ .region = .snapshot_queue, .rw = true },
+                .{ .region = .gossip_config },
+            },
+            .snapshot => &.{
+                .{ .region = .snapshot_queue, .rw = true },
             },
             .shred_receiver => &.{
                 .{ .region = .net_pair, .rw = true },
@@ -82,6 +93,9 @@ pub const SharedRegion = struct {
 pub const RegionType = enum {
     net_pair,
     leader_schedule,
+    snapshot_queue,
+    gossip_config,
+    gossip_signer,
 };
 
 pub const Region = union(RegionType) {
@@ -90,11 +104,21 @@ pub const Region = union(RegionType) {
         // TODO: this should not exist - remove once we can open snapshots again
         schedule_string: *std.Io.Reader,
     },
+    snapshot_queue: struct {},
+    gossip_config: struct {
+        cluster: common.solana.Cluster,
+        turbine_recv_port: u16,
+        turbine_repair_port: u16,
+    },
+    gossip_signer: struct{},
 
     pub fn size(self: Region) usize {
         return switch (self) {
             .net_pair => @sizeOf(common.net.Pair),
             .leader_schedule => @sizeOf(common.solana.LeaderSchedule),
+            .snapshot_queue => @sizeOf(common.gossip.SnapshotContactQueue),
+            .gossip_config => @sizeOf(common.gossip.GossipConfig),
+            .gossip_signer => @sizeOf(common.gossip.GossipSigner),
         };
     }
 
@@ -106,15 +130,33 @@ pub const Region = union(RegionType) {
                 std.debug.assert(buf.len == @sizeOf(common.net.Pair));
                 const data: *common.net.Pair = @ptrCast(buf);
 
-                data.recv.init();
-                data.send.init();
-                data.port = cfg.port;
+                data.init(cfg.port);
             },
             .leader_schedule => |cfg| {
                 std.debug.assert(buf.len == @sizeOf(common.solana.LeaderSchedule));
                 const data: *common.solana.LeaderSchedule = @ptrCast(buf);
 
                 try common.solana.LeaderSchedule.fromCommand(data, cfg.schedule_string);
+            },
+            .snapshot_queue => {
+                std.debug.assert(buf.len == @sizeOf(common.gossip.SnapshotContactQueue));
+                const queue: *common.gossip.SnapshotContactQueue = @ptrCast(buf);
+
+                queue.incoming.init();
+            },
+            .gossip_config => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(common.gossip.GossipConfig));
+                const config: *common.gossip.GossipConfig = @ptrCast(buf);
+
+                config.cluster = cfg.cluster;
+                config.turbine_recv_port = cfg.turbine_recv_port;
+                config.turbine_repair_port = cfg.turbine_repair_port;
+            },
+            .gossip_signer => {
+                std.debug.assert(buf.len == @sizeOf(common.gossip.GossipSigner));
+                const signer: *common.gossip.GossipSigner = @ptrCast(buf);
+
+                signer.init();
             },
         };
     }
@@ -140,6 +182,7 @@ const Map = std.AutoArrayHashMapUnmanaged(ServiceInstance, MapEntry);
 const MapEntry = std.ArrayListUnmanaged(LookupResult);
 
 const LookupResult = struct {
+    index: usize,
     shared: SharedRegion,
     rw: bool,
     memfd: memfd.RW,
@@ -177,19 +220,31 @@ fn serviceMap(
             const found_region: LookupResult = blk: for (
                 regions,
                 region_memfds,
-            ) |shared_region, region_memfd| {
+                0..,
+            ) |shared_region, region_memfd, i| {
                 if (shared_region.region != required_region.region) continue;
 
                 for (shared_region.shares) |share| {
                     if (instance.service == share.instance.service and
                         instance.n == share.instance.n)
                     {
-                        std.debug.assert(region_memfd.size == shared_region.region.size());
-                        break :blk .{
+                        const result: LookupResult = .{
+                            .index = i,
                             .shared = shared_region,
                             .rw = required_region.rw,
                             .memfd = region_memfd,
                         };
+
+                        // Avoid returning duplicate entries in case they share the same resource.
+                        var exists = false;
+                        if (map.getPtr(instance)) |entry| {
+                            exists = for (entry.items) |existing| {
+                                if (std.meta.eql(existing, result)) break true;
+                            } else false;
+                        }
+
+                        std.debug.assert(region_memfd.size == shared_region.region.size());
+                        if (!exists) break :blk result;
                     }
                 }
             } else std.debug.panic(

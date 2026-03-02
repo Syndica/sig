@@ -1150,7 +1150,7 @@ pub const layout = struct {
     }
 
     pub fn getShred(packet: *const Packet, is_repair: bool) ?[]const u8 {
-        if (getShredSize(packet, is_repair) > Packet.len) return null;
+        if (getShredSize(packet, is_repair) > Packet.MTU) return null;
         return packet.data[0..getShredSize(packet, is_repair)];
     }
 

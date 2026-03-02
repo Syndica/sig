@@ -10,11 +10,11 @@ const MAX_PACKETS = 1 << 14;
 
 /// The maximum packet size.
 pub const Packet = extern struct {
-    data: [len]u8,
+    data: [MTU]u8,
     size: u16,
     addr: std.net.Address,
 
-    pub const len = 1232;
+    pub const MTU = 1232;
 };
 
 pub const Pair = extern struct {

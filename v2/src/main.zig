@@ -4,12 +4,13 @@ test {
     _ = std.testing.refAllDecls(@This());
 }
 
+const common = @import("common");
 const services = @import("services.zig");
 
 const Config = struct {
     sandboxing_mode: SandboxingMode,
 
-    cluster: Cluster,
+    cluster: common.solana.Cluster,
 
     /// path to a file containing the output of `solana leader-schedule`
     leader_schedule_file: []const u8,
@@ -18,8 +19,6 @@ const Config = struct {
     shred_network: ShredNetwork,
 
     const SandboxingMode = enum { sandboxed, threaded };
-
-    const Cluster = enum { testnet, devnet, mainnet };
 
     const Gossip = struct {
         port: u16,
@@ -66,9 +65,13 @@ pub fn main() !void {
     const service_instances: []const services.ServiceInstance = &.{
         .{ .service = .shred_receiver },
         .{ .service = .net },
+        .{ .service = .signer },
+        .{ .service = .gossip },
+        .{ .service = .snapshot },
     };
 
     const shared_regions: []const services.SharedRegion = &.{
+        // shred networking
         .{
             .region = .{ .net_pair = .{ .port = config.shred_network.recv_port } },
             .shares = &.{
@@ -76,10 +79,48 @@ pub fn main() !void {
                 .{ .instance = .{ .service = .net }, .rw = true },
             },
         },
+        // shred constants
         .{
             .region = .{ .leader_schedule = .{ .schedule_string = &reader.interface } },
             .shares = &.{
                 .{ .instance = .{ .service = .shred_receiver } },
+            },
+        },
+        // gossip networking
+        .{
+            .region = .{ .net_pair = .{ .port = config.gossip.port } },
+            .shares = &.{
+                .{ .instance = .{ .service = .gossip }, .rw = true },
+                .{ .instance = .{ .service = .net }, .rw = true },
+            },
+        },
+        // gossip constants
+        .{
+            .region = .{
+                .gossip_config = .{
+                    .cluster = config.cluster,
+                    .turbine_recv_port = config.shred_network.recv_port,
+                    .turbine_repair_port = 0, // TODO
+                },
+            },
+            .shares = &.{
+                .{ .instance = .{ .service = .gossip } },
+            },
+        },
+        // gossip signing
+        .{
+            .region = .{ .gossip_signer = .{} },
+            .shares = &.{
+                .{ .instance = .{ .service = .gossip }, .rw = true },
+                .{ .instance = .{ .service = .signer }, .rw = true },
+            },
+        },
+        // gossip snapshot queue
+        .{
+            .region = .{ .snapshot_queue = .{} },
+            .shares = &.{
+                .{ .instance = .{ .service = .gossip }, .rw = true },
+                .{ .instance = .{ .service = .snapshot }, .rw = true },
             },
         },
     };
