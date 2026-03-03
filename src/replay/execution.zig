@@ -919,7 +919,7 @@ test "prepareSlot: empty and dead slots are handled correctly" {
 
     const constants, const slot_state = try sig.replay.service.newSlotFromParent(
         allocator,
-        .{ .accounts_db_two = &dep_stubs.accounts_db_state.db },
+        .{ .accounts_db = &dep_stubs.accounts_db_state.db },
         state.epoch_tracker.cluster.ticks_per_slot,
         0,
         root.?.constants,
@@ -1005,7 +1005,7 @@ fn testReplaySlot(
 
 pub const TestState = struct {
     // shared for multiple things
-    accounts_db: sig.accounts_db.Two.TestContext,
+    accounts_db: sig.accounts_db.Db.TestContext,
     status_cache: sig.core.StatusCache,
     ancestors: Ancestors,
 
@@ -1049,7 +1049,7 @@ pub const TestState = struct {
 
         const replay_votes_channel: *sig.sync.Channel(ParsedVote) = try .create(allocator);
 
-        var test_context = try sig.accounts_db.Two.initTest(allocator);
+        var test_context = try sig.accounts_db.Db.initTest(allocator);
         errdefer test_context.deinit();
 
         return .{
@@ -1086,7 +1086,7 @@ pub const TestState = struct {
     }
 
     pub fn accountStore(self: *TestState) AccountStore {
-        return .{ .accounts_db_two = &self.accounts_db.db };
+        return .{ .accounts_db = &self.accounts_db.db };
     }
 
     pub fn svmParams(self: *TestState) SvmGateway.Params {
@@ -1118,7 +1118,7 @@ pub const TestState = struct {
     pub fn resolver(self: *TestState) SlotResolver {
         return .{
             .slot = self.slot,
-            .account_reader = .{ .accounts_db_two = .{ &self.accounts_db.db, &self.ancestors } },
+            .account_reader = .{ .accounts_db = .{ &self.accounts_db.db, &self.ancestors } },
             .reserved_accounts = &.empty,
             .slot_hashes = .INIT,
         };

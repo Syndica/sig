@@ -667,7 +667,7 @@ fn inheritLamportsAndRentEpoch(
 
 const TestEnvironment = struct {
     genesis_config: sig.core.GenesisConfig,
-    db_context: sig.accounts_db.Two.TestContext,
+    db_context: sig.accounts_db.Db.TestContext,
     ancestors: Ancestors,
     slot_constants: SlotConstants,
     slot_state: SlotState,
@@ -676,7 +676,7 @@ const TestEnvironment = struct {
         var genesis_config = sig.core.GenesisConfig.default(allocator);
         errdefer genesis_config.deinit(allocator);
 
-        var db_context = try sig.accounts_db.Two.initTest(allocator);
+        var db_context = try sig.accounts_db.Db.initTest(allocator);
         errdefer db_context.deinit();
 
         var ancestors = Ancestors.EMPTY;
@@ -736,7 +736,7 @@ const TestEnvironment = struct {
         self: *TestEnvironment,
         slot: Slot,
     ) SlotAccountStore {
-        return .{ .accounts_db_two = .{
+        return .{ .accounts_db = .{
             &self.db_context.db,
             slot,
             &self.ancestors,
@@ -746,7 +746,7 @@ const TestEnvironment = struct {
     pub fn accountStore(
         self: *TestEnvironment,
     ) AccountStore {
-        return .{ .accounts_db_two = &self.db_context.db };
+        return .{ .accounts_db = &self.db_context.db };
     }
 };
 

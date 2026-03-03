@@ -97,7 +97,7 @@ pub const Ancestors = struct {
     // when we iterate over the ancestors for performing unrooted get()s, we will wrap
     // around and start getting funky behaviour.
     pub fn cleanup(self: *Ancestors) void {
-        if (self.ancestors.count() >= sig.accounts_db.Two.Unrooted.MAX_SLOTS) {
+        if (self.ancestors.count() >= sig.accounts_db.Db.Unrooted.MAX_SLOTS) {
             self.ancestors.orderedRemoveAt(0);
         }
     }

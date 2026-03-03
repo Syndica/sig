@@ -609,7 +609,7 @@ fn testCreateSysvarAccount(
 
 test fillMissingSysvarCacheEntries {
     const allocator = std.testing.allocator;
-    const AccountsDB = sig.accounts_db.Two;
+    const AccountsDB = sig.accounts_db.Db;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -644,7 +644,7 @@ test fillMissingSysvarCacheEntries {
     // Fill missing entries in the sysvar cache from accounts db.
     try fillMissingSysvarCacheEntries(
         allocator,
-        .{ .accounts_db_two = .{ db, &ancestors } },
+        .{ .accounts_db = .{ db, &ancestors } },
         &actual,
     );
 
@@ -724,7 +724,7 @@ fn initSysvarCacheWithDefaultValues(allocator: Allocator) !SysvarCache {
 
 fn insertSysvarCacheAccounts(
     allocator: Allocator,
-    db: *sig.accounts_db.Two,
+    db: *sig.accounts_db.Db,
     sysvar_cache: *const SysvarCache,
     slot: Slot,
     inherit_from_old_account: bool,
@@ -742,7 +742,7 @@ fn insertSysvarCacheAccounts(
         Fees,
         RecentBlockhashes,
     }) |Sysvar| {
-        const reader: sig.accounts_db.AccountReader = .{ .accounts_db_two = db };
+        const reader: sig.accounts_db.AccountReader = .{ .accounts_db = db };
         const old_account = if (inherit_from_old_account)
             reader.getLatest(allocator, Sysvar.ID) catch null
         else
@@ -810,7 +810,7 @@ fn getSysvarAndAccount(
 
 test "update all sysvars" {
     const allocator = std.testing.allocator;
-    const AccountsDB = sig.accounts_db.Two;
+    const AccountsDB = sig.accounts_db.Db;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -854,7 +854,7 @@ test "update all sysvars" {
     // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
     slot = slot + 1;
     const update_sysvar_deps: UpdateSysvarAccountDeps = .{
-        .slot_store = .{ .accounts_db_two = .{ db, slot, &ancestors } },
+        .slot_store = .{ .accounts_db = .{ db, slot, &ancestors } },
         .capitalization = &capitalization,
         .rent = &rent,
         .slot = slot,

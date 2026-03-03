@@ -320,7 +320,7 @@ fn resolveLookupTableAccounts(
 test resolveLookupTableAccounts {
     const allocator = std.testing.allocator;
 
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Db.initTest(allocator);
     defer test_state.deinit();
 
     const slot = 1;
@@ -329,7 +329,7 @@ test resolveLookupTableAccounts {
     defer ancestors.deinit(allocator);
 
     const account_reader: sig.accounts_db.SlotAccountReader = .{
-        .accounts_db_two = .{ &test_state.db, &ancestors },
+        .accounts_db = .{ &test_state.db, &ancestors },
     };
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -498,7 +498,7 @@ test resolveBatch {
         },
     };
 
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Db.initTest(allocator);
     defer test_state.deinit();
     const db = &test_state.db;
 
@@ -602,7 +602,7 @@ test resolveBatch {
             .slot = 1, // Greater than lookup tables' last_extended_slot
             .slot_hashes = slot_hashes,
             .reserved_accounts = &.empty,
-            .account_reader = .{ .accounts_db_two = .{ db, &ancestors } },
+            .account_reader = .{ .accounts_db = .{ db, &ancestors } },
         },
     );
     defer resolved.deinit(allocator);
@@ -664,14 +664,14 @@ test getLookupTable {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Db.initTest(allocator);
     defer test_state.deinit();
     const db = &test_state.db;
 
     var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
     defer ancestors.deinit(allocator);
 
-    const account_reader: sig.accounts_db.SlotAccountReader = .{ .accounts_db_two = .{
+    const account_reader: sig.accounts_db.SlotAccountReader = .{ .accounts_db = .{
         db,
         &ancestors,
     } };

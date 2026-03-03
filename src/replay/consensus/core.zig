@@ -3345,7 +3345,7 @@ test "generateVoteTx - success with tower_sync vote" {
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(prng);
 
-    var test_state = try sig.accounts_db.Two.initTest(gpa);
+    var test_state = try sig.accounts_db.Db.initTest(gpa);
     defer test_state.deinit();
     const db = &test_state.db;
 
@@ -3389,7 +3389,7 @@ test "generateVoteTx - success with tower_sync vote" {
         node_kp,
         .same_fork,
         &replay_tower,
-        .{ .accounts_db_two = db },
+        .{ .accounts_db = db },
         &slot_tracker,
         &.INIT,
     );
@@ -3457,7 +3457,7 @@ test "generateVoteTx - success with vote_state_update compacted" {
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(prng);
 
-    var test_state = try sig.accounts_db.Two.initTest(gpa);
+    var test_state = try sig.accounts_db.Db.initTest(gpa);
     defer test_state.deinit();
     const db = &test_state.db;
 
@@ -3502,7 +3502,7 @@ test "generateVoteTx - success with vote_state_update compacted" {
         node_kp,
         .same_fork,
         &replay_tower,
-        .{ .accounts_db_two = db },
+        .{ .accounts_db = db },
         &slot_tracker,
         &.INIT,
     );
@@ -3569,7 +3569,7 @@ test "generateVoteTx - success with switch proof" {
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(prng);
 
-    var test_state = try sig.accounts_db.Two.initTest(gpa);
+    var test_state = try sig.accounts_db.Db.initTest(gpa);
     defer test_state.deinit();
     const db = &test_state.db;
 
@@ -3615,7 +3615,7 @@ test "generateVoteTx - success with switch proof" {
         node_kp,
         .{ .switch_proof = switch_proof_hash },
         &replay_tower,
-        .{ .accounts_db_two = db },
+        .{ .accounts_db = db },
         &slot_tracker,
         &.INIT,
     );
@@ -3661,7 +3661,7 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
     const auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(prng);
 
-    var test_state = try sig.accounts_db.Two.initTest(gpa);
+    var test_state = try sig.accounts_db.Db.initTest(gpa);
     defer test_state.deinit();
     const db = &test_state.db;
 
@@ -3706,7 +3706,7 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
         node_kp,
         .same_fork,
         &replay_tower,
-        .{ .accounts_db_two = db },
+        .{ .accounts_db = db },
         &fixture.slot_tracker,
         &.INIT,
     );
@@ -3749,7 +3749,7 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
     const actual_auth_voter_kp = sig.identity.KeyPair.generate();
     const vote_account_pubkey = Pubkey.initRandom(random);
 
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Db.initTest(allocator);
     defer test_state.deinit();
     const db = &test_state.db;
 
@@ -3794,7 +3794,7 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
         node_kp,
         .same_fork,
         &replay_tower,
-        .{ .accounts_db_two = db },
+        .{ .accounts_db = db },
         &fixture.slot_tracker,
         &.INIT,
     );

@@ -799,14 +799,14 @@ test parseStakes {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    var test_context = try sig.accounts_db.Two.initTest(allocator);
+    var test_context = try sig.accounts_db.Db.initTest(allocator);
     defer test_context.deinit();
 
     var ancestors = Ancestors.EMPTY;
     defer ancestors.deinit(allocator);
     try ancestors.addSlot(allocator, 0);
 
-    const account_store = sig.accounts_db.AccountStore{ .accounts_db_two = &test_context.db };
+    const account_store = sig.accounts_db.AccountStore{ .accounts_db = &test_context.db };
     const slot_account_store = account_store.forSlot(0, &ancestors);
 
     var stakes = Stakes(.delegation).EMPTY;
