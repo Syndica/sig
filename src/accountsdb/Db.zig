@@ -176,10 +176,11 @@ pub fn slotModifiedIterator(self: *Db, slot: Slot) ?SlotModifiedIterator {
 pub const OwnerQuery = struct {
     rooted_iter: Rooted.OwnerIterator,
     unrooted_map: PubkeyMap(Unrooted.AccountWithSlot),
+    allocator: std.mem.Allocator,
 
-    pub fn deinit(self: *OwnerQuery, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *OwnerQuery) void {
         self.rooted_iter.deinit();
-        self.unrooted_map.deinit(allocator);
+        self.unrooted_map.deinit(self.allocator);
     }
 };
 
@@ -194,6 +195,7 @@ pub fn ownerQuery(self: *Db, owner: *const Pubkey, ancestors: *const Ancestors) 
     return .{
         .rooted_iter = rooted_iter,
         .unrooted_map = unrooted_map,
+        .allocator = self.allocator,
     };
 }
 
@@ -372,7 +374,7 @@ test "accounts_db: owner query" {
     // Query for owner_x
     {
         var query = try db.ownerQuery(&owner_x, &ancestors);
-        defer query.deinit(allocator);
+        defer query.deinit();
         // Unrooted should have addr_a at slot 3 (the newer version)
         try std.testing.expectEqual(1, query.unrooted_map.count());
         const unrooted_entry = query.unrooted_map.get(addr_a).?;
@@ -404,7 +406,7 @@ test "accounts_db: owner query" {
     // Query for owner_y
     {
         var query = try db.ownerQuery(&owner_y, &ancestors);
-        defer query.deinit(allocator);
+        defer query.deinit();
         // No unrooted accounts for owner_y (addr_c was in slot 2 which got rooted)
         try std.testing.expectEqual(0, query.unrooted_map.count());
         // Rooted should yield just addr_c
