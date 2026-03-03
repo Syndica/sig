@@ -1501,10 +1501,17 @@ pub const RpcHookContext = struct {
     /// - The node's latest optimistically confirmed slot is within `health_check_slot_distance`
     ///   of the cluster's latest optimistically confirmed slot.
     ///
-    /// Returns `RpcHealthStatus.ok`, `RpcHealthStatus.unknown`, or `RpcHealthStatus.behind`.
+    /// Returns `RpcHealthStatus` which is then formatted by the server layer:
+    /// - JSON-RPC: "ok" result on success, error with code -32005 on failure
+    /// - HTTP GET /health: always 200 OK with "ok", "behind", or "unknown"
     ///
     /// Analogous to [RpcHealth::check](https://github.com/anza-xyz/agave/blob/8803776d/rpc/src/rpc_health.rs#L44-L107)
-    fn checkHealth(self: RpcHookContext, allocator: std.mem.Allocator) RpcHealthStatus {
+    /// and [get_health](https://github.com/anza-xyz/agave/blob/master/rpc/src/rpc.rs#L2806-L2818)
+    pub fn getHealth(
+        self: RpcHookContext,
+        allocator: std.mem.Allocator,
+        _: GetHealth,
+    ) !GetHealth.Response {
         // If override is set, always return healthy
         if (self.override_health_check) |override| {
             if (override.load(.monotonic)) {
@@ -1544,21 +1551,6 @@ pub const RpcHookContext = struct {
                 my_latest_optimistically_confirmed_slot;
             return .{ .behind = num_slots_behind };
         }
-    }
-
-    /// Implements the getHealth RPC method.
-    ///
-    /// Returns `RpcHealthStatus` which is then formatted by the server layer:
-    /// - JSON-RPC: "ok" result on success, error with code -32005 on failure
-    /// - HTTP GET /health: always 200 OK with "ok", "behind", or "unknown"
-    ///
-    /// Analogous to [get_health](https://github.com/anza-xyz/agave/blob/master/rpc/src/rpc.rs#L2806-L2818)
-    pub fn getHealth(
-        self: RpcHookContext,
-        allocator: std.mem.Allocator,
-        _: GetHealth,
-    ) !GetHealth.Response {
-        return self.checkHealth(allocator);
     }
 };
 
@@ -1730,7 +1722,7 @@ test "RpcHealthStatus jsonStringify behind" {
     try testing.expectEqualStrings(expected, w.written());
 }
 
-test "checkHealth returns ok when override_health_check is true" {
+test "getHealth returns ok when override_health_check is true" {
     // When override_health_check is set to true, health should always be ok
     // regardless of slot distance.
     // Analogous to: https://github.com/anza-xyz/agave/blob/8803776d/rpc/src/rpc_health.rs#L163-L164
@@ -1739,11 +1731,11 @@ test "checkHealth returns ok when override_health_check is true" {
     defer slot_tracker.deinit(std.testing.allocator);
 
     const ctx = testHealthContext(&slot_tracker, null, &override, 10);
-    const status = ctx.checkHealth(std.testing.allocator);
+    const status = try ctx.getHealth(std.testing.allocator, .{});
     try std.testing.expect(status.eql(.ok));
 }
 
-test "checkHealth returns unknown when ledger is null" {
+test "getHealth returns unknown when ledger is null" {
     // Without ledger access, we cannot determine cluster's optimistic slot
     // so status should be unknown.
     // Analogous to: https://github.com/anza-xyz/agave/blob/8803776d/rpc/src/rpc_health.rs#L169
@@ -1752,7 +1744,7 @@ test "checkHealth returns unknown when ledger is null" {
     defer slot_tracker.deinit(std.testing.allocator);
 
     const ctx = testHealthContext(&slot_tracker, null, &override, 10);
-    const status = ctx.checkHealth(std.testing.allocator);
+    const status = try ctx.getHealth(std.testing.allocator, .{});
     try std.testing.expect(status.eql(.unknown));
 }
 
