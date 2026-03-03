@@ -746,6 +746,8 @@ pub const RpcHookContext = struct {
     slot_tracker: *const sig.replay.trackers.SlotTracker,
     epoch_tracker: *const sig.core.EpochTracker,
     account_reader: sig.accounts_db.AccountReader,
+    gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable) = null,
+    my_shred_version: ?*const std.atomic.Value(u16) = null,
 
     // Limit the length of the `epoch_credits` array for each validator in a `get_vote_accounts`
     // response.
@@ -967,6 +969,125 @@ pub const RpcHookContext = struct {
             .foundation = inflation.foundationRate(slot_in_years),
             .epoch = epoch,
         };
+    }
+
+    pub fn getClusterNodes(
+        self: RpcHookContext,
+        allocator: std.mem.Allocator,
+        _: GetClusterNodes,
+    ) !GetClusterNodes.Response {
+        // getClusterNodes takes no parameters
+        // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3634-3695
+
+        const gossip_table_rw = self.gossip_table_rw orelse
+            return error.GossipTableNotAvailable;
+        const my_shred_version_atomic = self.my_shred_version orelse
+            return error.ShredVersionNotAvailable;
+
+        const my_shred_version = my_shred_version_atomic.load(.monotonic);
+
+        // Lock the gossip table for reading
+        const gossip_table, var gossip_lock = gossip_table_rw.readWithLock();
+        defer gossip_lock.unlock();
+
+        // Get all contact infos matching our shred version
+        // We iterate through the gossip table contact infos directly to get full ContactInfo
+        var contact_info_iter = gossip_table.contactInfoIterator(0);
+        var result_list: std.ArrayListUnmanaged(common.RpcContactInfo) = .empty;
+        errdefer {
+            for (result_list.items) |item| {
+                freeRpcContactInfo(allocator, item);
+            }
+            result_list.deinit(allocator);
+        }
+
+        while (contact_info_iter.next()) |contact_info| {
+            // Filter by matching shred version (exclude spy nodes with shred_version 0)
+            // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3643
+            if (contact_info.shred_version != my_shred_version) continue;
+
+            // Check that gossip address is valid (not unspecified)
+            // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3644-3647
+            const gossip_addr = contact_info.getSocket(.gossip);
+            if (gossip_addr == null or gossip_addr.?.isUnspecified()) continue;
+
+            // Get version info for this node from the gossip table
+            // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3649-3655
+            var version_str: ?[]const u8 = null;
+            var feature_set: ?u32 = null;
+
+            if (gossip_table.get(.{ .Version = contact_info.pubkey })) |version_data| {
+                const v = version_data.data.Version.version;
+                // Format version as "major.minor.patch" string
+                version_str = try std.fmt.allocPrint(
+                    allocator,
+                    "{d}.{d}.{d}",
+                    .{ v.major, v.minor, v.patch },
+                );
+                feature_set = v.feature_set;
+            }
+            errdefer if (version_str) |vs| allocator.free(vs);
+
+            // Build the RpcContactInfo response
+            const rpc_contact_info = common.RpcContactInfo{
+                .pubkey = try std.fmt.allocPrint(
+                    allocator,
+                    "{s}",
+                    .{contact_info.pubkey.base58String().slice()},
+                ),
+                .gossip = try formatSocketAddr(allocator, gossip_addr),
+                .tvu = try formatSocketAddr(allocator, contact_info.getSocket(.turbine_recv)),
+                .tpu = try formatSocketAddr(allocator, contact_info.getSocket(.tpu)),
+                .tpuQuic = try formatSocketAddr(
+                    allocator,
+                    contact_info.getSocket(.tpu_quic),
+                ),
+                .tpuForwards = try formatSocketAddr(
+                    allocator,
+                    contact_info.getSocket(.tpu_forwards),
+                ),
+                .tpuForwardsQuic = try formatSocketAddr(
+                    allocator,
+                    contact_info.getSocket(.tpu_forwards_quic),
+                ),
+                .tpuVote = try formatSocketAddr(allocator, contact_info.getSocket(.tpu_vote)),
+                .serveRepair = try formatSocketAddr(
+                    allocator,
+                    contact_info.getSocket(.serve_repair),
+                ),
+                .rpc = try formatSocketAddr(allocator, contact_info.getSocket(.rpc)),
+                .pubsub = try formatSocketAddr(allocator, contact_info.getSocket(.rpc_pubsub)),
+                .version = version_str,
+                .featureSet = feature_set,
+                .shredVersion = my_shred_version,
+            };
+            errdefer freeRpcContactInfo(allocator, rpc_contact_info);
+
+            try result_list.append(allocator, rpc_contact_info);
+        }
+
+        return try result_list.toOwnedSlice(allocator);
+    }
+
+    fn formatSocketAddr(allocator: std.mem.Allocator, addr: ?sig.net.SocketAddr) !?[]const u8 {
+        const socket_addr = addr orelse return null;
+        if (socket_addr.isUnspecified()) return null;
+        return try std.fmt.allocPrint(allocator, "{f}", .{socket_addr.toAddress()});
+    }
+
+    fn freeRpcContactInfo(allocator: std.mem.Allocator, info: common.RpcContactInfo) void {
+        allocator.free(info.pubkey);
+        if (info.gossip) |g| allocator.free(g);
+        if (info.tvu) |t| allocator.free(t);
+        if (info.tpu) |t| allocator.free(t);
+        if (info.tpuQuic) |t| allocator.free(t);
+        if (info.tpuForwards) |t| allocator.free(t);
+        if (info.tpuForwardsQuic) |t| allocator.free(t);
+        if (info.tpuVote) |t| allocator.free(t);
+        if (info.serveRepair) |t| allocator.free(t);
+        if (info.rpc) |r| allocator.free(r);
+        if (info.pubsub) |p| allocator.free(p);
+        if (info.version) |v| allocator.free(v);
     }
 };
 

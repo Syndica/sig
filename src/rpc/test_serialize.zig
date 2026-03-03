@@ -11,6 +11,7 @@ const GetAccountInfo = methods.GetAccountInfo;
 const GetBalance = methods.GetBalance;
 const GetBlockCommitment = methods.GetBlockCommitment;
 const GetBlockHeight = methods.GetBlockHeight;
+const GetClusterNodes = methods.GetClusterNodes;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
 const GetGenesisHash = methods.GetGenesisHash;
@@ -134,6 +135,51 @@ test GetBlockCommitment {
         },
         \\{"jsonrpc":"2.0","result":{"commitment":[56410821025255,33711292695244,27701727782831,55401460131423,72618639807497,0,27796008663080,0,28095671118333,0,0,55401620019031,0,0,27705104515750,55503391231079,55401283113964,38837474545660,38948031805667,59470578427800,0,0,11133899193586,0,11133899193587,27704990400041,66439189441453,0,2085408698601000,2095104661986814,4274561647461058,282363342888089693],"totalStake":302884919142324276},"id":1}
         ,
+    );
+}
+
+test GetClusterNodes {
+    // getClusterNodes takes no parameters
+    try testRequest(.getClusterNodes, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getClusterNodes","params":[]}
+    );
+    // Test response with full node info
+    try testResponse(GetClusterNodes, .{ .result = &.{.{
+        .pubkey = "9QzsJf7LPLj8GkXbYT3LFDKqsj2hHG7TA3xinJHu8epQ",
+        .gossip = "10.239.6.48:8001",
+        .tvu = "10.239.6.48:8000",
+        .tpu = "10.239.6.48:8003",
+        .tpuQuic = "10.239.6.48:8009",
+        .tpuForwards = "10.239.6.48:8004",
+        .tpuForwardsQuic = "10.239.6.48:8010",
+        .tpuVote = "10.239.6.48:8005",
+        .serveRepair = "10.239.6.48:8008",
+        .rpc = "10.239.6.48:8899",
+        .pubsub = "10.239.6.48:8900",
+        .version = "1.18.15",
+        .featureSet = 3241752014,
+        .shredVersion = 50093,
+    }} },
+        \\{"jsonrpc":"2.0","result":[{"featureSet":3241752014,"gossip":"10.239.6.48:8001","pubkey":"9QzsJf7LPLj8GkXbYT3LFDKqsj2hHG7TA3xinJHu8epQ","pubsub":"10.239.6.48:8900","rpc":"10.239.6.48:8899","serveRepair":"10.239.6.48:8008","shredVersion":50093,"tpu":"10.239.6.48:8003","tpuForwards":"10.239.6.48:8004","tpuForwardsQuic":"10.239.6.48:8010","tpuQuic":"10.239.6.48:8009","tpuVote":"10.239.6.48:8005","tvu":"10.239.6.48:8000","version":"1.18.15"}],"id":1}
+    );
+    // Test response with minimal node info (some fields null)
+    try testResponse(GetClusterNodes, .{ .result = &.{.{
+        .pubkey = "9QzsJf7LPLj8GkXbYT3LFDKqsj2hHG7TA3xinJHu8epQ",
+        .gossip = "10.239.6.48:8001",
+        .tvu = null,
+        .tpu = null,
+        .tpuQuic = null,
+        .tpuForwards = null,
+        .tpuForwardsQuic = null,
+        .tpuVote = null,
+        .serveRepair = null,
+        .rpc = null,
+        .pubsub = null,
+        .version = null,
+        .featureSet = null,
+        .shredVersion = 50093,
+    }} },
+        \\{"jsonrpc":"2.0","result":[{"featureSet":null,"gossip":"10.239.6.48:8001","pubkey":"9QzsJf7LPLj8GkXbYT3LFDKqsj2hHG7TA3xinJHu8epQ","pubsub":null,"rpc":null,"serveRepair":null,"shredVersion":50093,"tpu":null,"tpuForwards":null,"tpuForwardsQuic":null,"tpuQuic":null,"tpuVote":null,"tvu":null,"version":null}],"id":1}
     );
 }
 

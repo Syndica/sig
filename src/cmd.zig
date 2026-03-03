@@ -1723,6 +1723,8 @@ fn validator(
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .account_reader = account_store.reader(),
+        .gossip_table_rw = &gossip_service.gossip_table_rw,
+        .my_shred_version = &gossip_service.my_shred_version,
     });
 
     const replay_thread = try replay_service_state.spawnService(
