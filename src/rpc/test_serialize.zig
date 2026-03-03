@@ -14,6 +14,8 @@ const GetBalance = methods.GetBalance;
 const GetBlock = methods.GetBlock;
 const GetBlockCommitment = methods.GetBlockCommitment;
 const GetBlockHeight = methods.GetBlockHeight;
+const GetBlocks = methods.GetBlocks;
+const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
 const GetGenesisHash = methods.GetGenesisHash;
@@ -135,6 +137,49 @@ test GetBlockCommitment {
         },
         \\{"jsonrpc":"2.0","result":{"commitment":[56410821025255,33711292695244,27701727782831,55401460131423,72618639807497,0,27796008663080,0,28095671118333,0,0,55401620019031,0,0,27705104515750,55503391231079,55401283113964,38837474545660,38948031805667,59470578427800,0,0,11133899193586,0,11133899193587,27704990400041,66439189441453,0,2085408698601000,2095104661986814,4274561647461058,282363342888089693],"totalStake":302884919142324276},"id":1}
         ,
+    );
+}
+
+test GetBlocks {
+    try testRequest(.getBlocks, .{ .start_slot = 5 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlocks","params":[5]}
+    );
+    try testRequest(.getBlocks, .{
+        .start_slot = 5,
+        .end_slot_or_config = .{ .end_slot = 10 },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlocks","params":[5,{"end_slot":10}]}
+    );
+    try testRequest(.getBlocks, .{
+        .start_slot = 5,
+        .end_slot_or_config = .{ .config = .{ .commitment = .finalized } },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlocks","params":[5,{"config":{"commitment":"finalized"}}]}
+    );
+    try testResponse(GetBlocks, .{ .result = &.{ 5, 6, 7, 8, 9, 10 } },
+        \\{"jsonrpc":"2.0","result":[5,6,7,8,9,10],"id":1}
+    );
+    try testResponse(GetBlocks, .{ .result = &.{} },
+        \\{"jsonrpc":"2.0","result":[],"id":1}
+    );
+}
+
+test GetBlocksWithLimit {
+    try testRequest(.getBlocksWithLimit, .{ .start_slot = 5, .limit = 3 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlocksWithLimit","params":[5,3]}
+    );
+    try testRequest(.getBlocksWithLimit, .{
+        .start_slot = 5,
+        .limit = 3,
+        .config = .{ .commitment = .confirmed },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlocksWithLimit","params":[5,3,{"commitment":"confirmed"}]}
+    );
+    try testResponse(GetBlocksWithLimit, .{ .result = &.{ 5, 6, 7 } },
+        \\{"jsonrpc":"2.0","result":[5,6,7],"id":1}
+    );
+    try testResponse(GetBlocksWithLimit, .{ .result = &.{} },
+        \\{"jsonrpc":"2.0","result":[],"id":1}
     );
 }
 
