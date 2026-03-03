@@ -157,11 +157,13 @@ fn validateVersion(
 ) !?GetBlock.Response.EncodedTransactionWithStatusMeta.TransactionVersion {
     if (max_supported_version) |max_version| switch (version) {
         .legacy => return .legacy,
-        // TODO: update this to use the version number
-        // that would be stored inside the version enum
-        .v0 => if (max_version >= 0) {
-            return .{ .number = 0 };
-        } else return error.UnsupportedTransactionVersion,
+        else => |tag| {
+            const version_num = @intFromEnum(tag);
+            if (version_num <= max_version)
+                return .{ .number = version_num }
+            else
+                return error.UnsupportedTransactionVersion;
+        },
     } else switch (version) {
         .legacy => return null,
         .v0 => return error.UnsupportedTransactionVersion,
