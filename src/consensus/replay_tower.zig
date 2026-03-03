@@ -5011,7 +5011,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     try fixture.fillFork(allocator, .{ .root = root, .data = trees1 }, .active);
     try fixture.fill_epoch_stake_random(allocator, random);
 
-    var test_ctx = try sig.accounts_db.Two.initTest(allocator);
+    var test_ctx = try sig.accounts_db.Db.initTest(allocator);
     defer test_ctx.deinit();
     var accountsdb = &test_ctx.db;
 
@@ -5055,7 +5055,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         try accountsdb.put(slot_to_write, SlotHistory.ID, sh_account);
     }
 
-    const account_reader: sig.accounts_db.AccountReader = .{ .accounts_db_two = accountsdb };
+    const account_reader: sig.accounts_db.AccountReader = .{ .accounts_db = accountsdb };
 
     const forks1 = try fixture.select_fork_slots(&replay_tower);
     const result = try replay_tower.selectVoteAndResetForks(

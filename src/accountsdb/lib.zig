@@ -9,4 +9,4 @@ pub const AccountReader = account_store.AccountReader;
 pub const SlotAccountStore = account_store.SlotAccountStore;
 pub const SlotAccountReader = account_store.SlotAccountReader;
 
-pub const Two = @import("two/Two.zig");
+pub const Db = @import("Db.zig");

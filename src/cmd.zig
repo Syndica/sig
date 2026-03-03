@@ -1557,7 +1557,7 @@ fn validator(
     else
         false;
 
-    var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
+    var rooted_db: sig.accounts_db.Db.Rooted = try .init(rooted_file);
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
 
@@ -1597,7 +1597,7 @@ fn validator(
         .parent = unrooted_tracy.allocator(),
     };
 
-    var new_db: sig.accounts_db.Two = try .init(unrooted_tracy_metrics.allocator(), rooted_db);
+    var new_db: sig.accounts_db.Db = try .init(unrooted_tracy_metrics.allocator(), rooted_db);
     defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
@@ -1682,7 +1682,7 @@ fn validator(
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
-        .account_store = .{ .accounts_db_two = &new_db },
+        .account_store = .{ .accounts_db = &new_db },
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
         .epoch_tracker = &epoch_tracker,
@@ -1695,7 +1695,7 @@ fn validator(
     defer replay_service_state.deinit(allocator);
 
     const account_store = sig.accounts_db.AccountStore{
-        .accounts_db_two = &new_db,
+        .accounts_db = &new_db,
     };
 
     try app_base.rpc_hooks.set(allocator, sig.rpc.methods.RpcHookContext{
@@ -1833,7 +1833,7 @@ fn replayOffline(
     else
         false;
 
-    var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
+    var rooted_db: sig.accounts_db.Db.Rooted = try .init(rooted_file);
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
 
@@ -1876,7 +1876,7 @@ fn replayOffline(
         .parent = unrooted_tracy.allocator(),
     };
 
-    var new_db: sig.accounts_db.Two = try .init(unrooted_tracy_metrics.allocator(), rooted_db);
+    var new_db: sig.accounts_db.Db = try .init(unrooted_tracy_metrics.allocator(), rooted_db);
     defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
@@ -1915,7 +1915,7 @@ fn replayOffline(
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
-        .account_store = .{ .accounts_db_two = &new_db },
+        .account_store = .{ .accounts_db = &new_db },
         .loaded_snapshot = &loaded_snapshot,
         .ledger = &ledger,
         .epoch_tracker = &epoch_tracker,
@@ -2173,7 +2173,7 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
     defer allocator.free(rooted_file);
 
-    var rooted_db: sig.accounts_db.Two.Rooted = try .init(rooted_file);
+    var rooted_db: sig.accounts_db.Db.Rooted = try .init(rooted_file);
     defer rooted_db.deinit();
 
     var loaded_snapshot = try loadSnapshot(

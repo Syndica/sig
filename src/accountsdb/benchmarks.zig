@@ -5,15 +5,15 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const sig = @import("../../sig.zig");
+const sig = @import("../sig.zig");
 
-const Two = @import("Two.zig");
+const Db = @import("Db.zig");
 const Rooted = @import("Rooted.zig");
 const Unrooted = @import("Unrooted.zig");
 const Pubkey = sig.core.Pubkey;
 const Ancestors = sig.core.Ancestors;
 const AccountSharedData = sig.runtime.AccountSharedData;
-const Resolution = @import("../../benchmarks.zig").Resolution;
+const Resolution = @import("../benchmarks.zig").Resolution;
 
 pub const BenchmarkAccountsDBTwo = struct {
     pub const min_iterations = 3;
@@ -80,7 +80,7 @@ pub const BenchmarkAccountsDBTwo = struct {
         const allocator = if (builtin.is_test) std.testing.allocator else std.heap.c_allocator;
 
         // Initialize the v2 database
-        var test_state = try Two.initTest(allocator);
+        var test_state = try Db.initTest(allocator);
         defer test_state.deinit();
         const db = &test_state.db;
 

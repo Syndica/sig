@@ -289,7 +289,7 @@ test "serveSpawn getAccountInfo" {
     const logger = logger_unscoped.withScope(@src().fn_name);
 
     // Initialize v2 AccountsDB
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Db.initTest(allocator);
     defer test_state.deinit();
     const db = &test_state.db;
 
@@ -324,7 +324,7 @@ test "serveSpawn getAccountInfo" {
 
     // Create RPC hook context for getAccountInfo using v2
     const AccountInfoHookContext = struct {
-        db: *sig.accounts_db.Two,
+        db: *sig.accounts_db.Db,
         ancestors: *const sig.core.Ancestors,
         slot: sig.core.Slot,
 

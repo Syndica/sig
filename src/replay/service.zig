@@ -1160,7 +1160,7 @@ fn parseBincodeFromGzipFile(
 /// outlive replay, and is used by replay.
 pub const DependencyStubs = struct {
     allocator: Allocator,
-    accounts_db_state: sig.accounts_db.Two.TestContext,
+    accounts_db_state: sig.accounts_db.Db.TestContext,
     ledger: Ledger,
     senders: TowerConsensus.Senders,
     receivers: TowerConsensus.Receivers,
@@ -1176,7 +1176,7 @@ pub const DependencyStubs = struct {
     }
 
     pub fn init(allocator: Allocator, logger: Logger) !DependencyStubs {
-        var test_state = try sig.accounts_db.Two.initTest(allocator);
+        var test_state = try sig.accounts_db.Db.initTest(allocator);
         errdefer test_state.deinit();
 
         try test_state.tmp.dir.makeDir("ledger");
@@ -1206,11 +1206,11 @@ pub const DependencyStubs = struct {
     }
 
     pub fn accountStore(self: *DependencyStubs) AccountStore {
-        return .{ .accounts_db_two = &self.accounts_db_state.db };
+        return .{ .accounts_db = &self.accounts_db_state.db };
     }
 
     pub fn accountReader(self: *DependencyStubs) AccountReader {
-        return .{ .accounts_db_two = &self.accounts_db_state.db };
+        return .{ .accounts_db = &self.accounts_db_state.db };
     }
 
     /// Initialize replay service with stubbed inputs.
@@ -1288,7 +1288,7 @@ pub const DependencyStubs = struct {
 
         const feature_set = try sig.replay.service.getActiveFeatures(
             allocator,
-            .{ .accounts_db_two = .{ &self.accounts_db_state.db, &bank_fields.ancestors } },
+            .{ .accounts_db = .{ &self.accounts_db_state.db, &bank_fields.ancestors } },
             bank_fields.slot,
         );
 
@@ -1312,7 +1312,7 @@ pub const DependencyStubs = struct {
         const lt_hash = collapsed_manifest.bank_extra.accounts_lt_hash;
 
         const account_store = sig.accounts_db.AccountStore{
-            .accounts_db_two = &self.accounts_db_state.db,
+            .accounts_db = &self.accounts_db_state.db,
         };
         const account_reader = account_store.reader().forSlot(&bank_fields.ancestors);
         var root_slot_state =

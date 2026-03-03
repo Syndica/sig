@@ -58,7 +58,7 @@ fn usageText() []const u8 {
 fn getBenchmarks(comptime filter: Filter) []const Benchmark {
     return switch (filter) {
         .accounts_db => &.{.{
-            .type = @import("accountsdb/two/benchmarks.zig").BenchmarkAccountsDBTwo,
+            .type = @import("accountsdb/benchmarks.zig").BenchmarkAccountsDBTwo,
             .resolution = .millis,
         }},
         .sync => &.{.{

@@ -1,4 +1,4 @@
-//! Fuzz test for AccountsDB v2 (Two.zig).
+//! Fuzz test for AccountsDB v2 (Db.zig).
 //!
 //! This fuzzer tests the correctness of account storage and retrieval
 //! by comparing against a simple reference implementation (TrackedAccountsMap).
@@ -12,7 +12,7 @@ const Account = sig.runtime.AccountSharedData;
 const Pubkey = sig.core.pubkey.Pubkey;
 const Slot = sig.core.time.Slot;
 
-const Two = sig.accounts_db.Two;
+const Db = sig.accounts_db.Db;
 const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
 
@@ -98,11 +98,11 @@ pub fn run(
 
     logger.info().logf("non-sequential slots: {}", .{non_sequential_slots});
 
-    var test_state = try Two.initTest(allocator);
+    var test_state = try Db.initTest(allocator);
     defer test_state.deinit();
     const db = &test_state.db;
 
-    const account_store: AccountStore = .{ .accounts_db_two = db };
+    const account_store: AccountStore = .{ .accounts_db = db };
 
     var tracked_accounts_rw: sig.sync.RwMux(TrackedAccountsMap) = .init(.empty);
     defer {

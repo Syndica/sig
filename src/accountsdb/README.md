@@ -10,11 +10,11 @@ Checkout the blog post here: [Sig Engineering - Part 3 - Solana's AccountsDB](ht
 
 The AccountsDB v2 implementation uses a two-tier storage system:
 
-- **Unrooted Storage** (`two/Unrooted.zig`): Stores recent, unrooted account modifications in memory. Supports fork-aware queries using ancestors.
-- **Rooted Storage** (`two/Rooted.zig`): Persists finalized (rooted) accounts to disk using SQLite.
+- **Unrooted Storage** (`Unrooted.zig`): Stores recent, unrooted account modifications in memory. Supports fork-aware queries using ancestors.
+- **Rooted Storage** (`Rooted.zig`): Persists finalized (rooted) accounts to disk using SQLite.
 
 The main struct files include:
-- `two/Two.zig`: The main database struct that combines rooted and unrooted storage
+- `Db.zig`: The main database struct that combines rooted and unrooted storage
 - `account_store.zig`: Unified interface for reading and writing accounts
 - `accounts_file.zig`: Reading + validating account files (which store the on-chain accounts)
 - `snapshot/`: Snapshot loading and management
@@ -33,12 +33,12 @@ The main interface is through `AccountStore` and `AccountReader`:
 const sig = @import("sig");
 
 // Initialize v2 database for testing
-var test_state = try sig.accounts_db.Two.initTest(allocator);
+var test_state = try sig.accounts_db.Db.initTest(allocator);
 defer test_state.deinit();
 const db = &test_state.db;
 
 // Create an account store wrapper
-const account_store: sig.accounts_db.AccountStore = .{ .accounts_db_two = db };
+const account_store: sig.accounts_db.AccountStore = .{ .accounts_db = db };
 
 // Put an account
 try account_store.put(slot, pubkey, account_shared_data);
