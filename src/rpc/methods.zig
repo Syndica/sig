@@ -929,6 +929,9 @@ pub const RpcHookContext = struct {
         const commitment = config.commitment orelse .finalized;
 
         const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+        }
 
         // Get slot reference to access rent collector
         const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
@@ -952,6 +955,9 @@ pub const RpcHookContext = struct {
         const commitment = config.commitment orelse .finalized;
 
         const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+        }
 
         // Get slot reference to access feature_set
         const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;

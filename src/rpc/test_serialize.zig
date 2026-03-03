@@ -21,6 +21,7 @@ const GetSlot = methods.GetSlot;
 const GetStakeMinimumDelegation = methods.GetStakeMinimumDelegation;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
+const GetMinimumBalanceForRentExemption = methods.GetMinimumBalanceForRentExemption;
 
 const Response = rpc.response.Response;
 
@@ -227,9 +228,7 @@ test GetLeaderSchedule {
 // TODO: test getMaxRetransmitSlot()
 // TODO: test getMaxShredInsertSlot()
 
-test "GetMinimumBalanceForRentExemption" {
-    const GetMinimumBalanceForRentExemption = methods.GetMinimumBalanceForRentExemption;
-
+test GetMinimumBalanceForRentExemption {
     try testRequest(.getMinimumBalanceForRentExemption, .{ .data_len = 50 },
         \\{"jsonrpc":"2.0","id":1,"method":"getMinimumBalanceForRentExemption","params":[50]}
     );
