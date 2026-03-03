@@ -801,9 +801,8 @@ fn parseVoteInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "authorizeChecked" });
         },
-        // TODO: .initializeAccount2
-        // TODO: .updateCommissionCollector
-        // TODO: .updateComissionBps
+        // TODO: .updateCommissionCollector for SIMD-0232
+        // TODO: .updateComissionBps for SIMD-0291
     }
 
     return .{ .object = result };
