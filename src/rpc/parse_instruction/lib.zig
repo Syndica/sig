@@ -3518,7 +3518,10 @@ fn parseConfidentialTransferExtension(
             }
             // auditorElGamalPubkey: OptionalNonZero ElGamal pubkey (32 bytes) at offset 34
             if (ext_data.len >= 66) {
-                try info.put("auditorElGamalPubkey", try elGamalPubkeyToValue(arena, ext_data[34..66]));
+                try info.put("auditorElGamalPubkey", try elGamalPubkeyToValue(
+                    arena,
+                    ext_data[34..66],
+                ));
             }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeConfidentialTransferMint" });
@@ -3541,7 +3544,10 @@ fn parseConfidentialTransferExtension(
             }
             // auditorElGamalPubkey: OptionalNonZero ElGamal pubkey (32 bytes) at offset 2
             if (ext_data.len >= 34) {
-                try info.put("auditorElGamalPubkey", try elGamalPubkeyToValue(arena, ext_data[2..34]));
+                try info.put(
+                    "auditorElGamalPubkey",
+                    try elGamalPubkeyToValue(arena, ext_data[2..34]),
+                );
             }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updateConfidentialTransferMint" });
@@ -3562,19 +3568,55 @@ fn parseConfidentialTransferExtension(
             if (ext_data.len >= 46) {
                 try info.put("decryptableZeroBalance", try base64ToValue(arena, ext_data[1..37]));
                 const max_pending = std.mem.readInt(u64, ext_data[37..45], .little);
-                try info.put("maximumPendingBalanceCreditCounter", .{ .integer = @intCast(max_pending) });
+                try info.put(
+                    "maximumPendingBalanceCreditCounter",
+                    .{ .integer = @intCast(max_pending) },
+                );
                 const proof_offset: i8 = @bitCast(ext_data[45]);
                 try info.put("proofInstructionOffset", .{ .integer = @intCast(proof_offset) });
                 if (proof_offset == 0) {
-                    try info.put("proofContextStateAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
-                    try parseSigners(arena, &info, 3, account_keys, accounts, "owner", "multisigOwner");
+                    try info.put("proofContextStateAccount", try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[2])).?,
+                    ));
+                    try parseSigners(
+                        arena,
+                        &info,
+                        3,
+                        account_keys,
+                        accounts,
+                        "owner",
+                        "multisigOwner",
+                    );
                 } else {
-                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+                    try info.put("instructionsSysvar", try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[2])).?,
+                    ));
                     if (accounts.len > 4) {
-                        try info.put("recordAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[3])).?));
-                        try parseSigners(arena, &info, 4, account_keys, accounts, "owner", "multisigOwner");
+                        try info.put("recordAccount", try pubkeyToValue(
+                            arena,
+                            account_keys.get(@intCast(accounts[3])).?,
+                        ));
+                        try parseSigners(
+                            arena,
+                            &info,
+                            4,
+                            account_keys,
+                            accounts,
+                            "owner",
+                            "multisigOwner",
+                        );
                     } else {
-                        try parseSigners(arena, &info, 3, account_keys, accounts, "owner", "multisigOwner");
+                        try parseSigners(
+                            arena,
+                            &info,
+                            3,
+                            account_keys,
+                            accounts,
+                            "owner",
+                            "multisigOwner",
+                        );
                     }
                 }
             }
@@ -3613,15 +3655,48 @@ fn parseConfidentialTransferExtension(
                 const proof_offset: i8 = @bitCast(ext_data[1]);
                 try info.put("proofInstructionOffset", .{ .integer = @intCast(proof_offset) });
                 if (proof_offset == 0) {
-                    try info.put("proofContextStateAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
-                    try parseSigners(arena, &info, 2, account_keys, accounts, "owner", "multisigOwner");
+                    try info.put("proofContextStateAccount", try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[1])).?,
+                    ));
+                    try parseSigners(
+                        arena,
+                        &info,
+                        2,
+                        account_keys,
+                        accounts,
+                        "owner",
+                        "multisigOwner",
+                    );
                 } else {
-                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
+                    try info.put("instructionsSysvar", try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[1])).?,
+                    ));
                     if (accounts.len > 3) {
-                        try info.put("recordAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
-                        try parseSigners(arena, &info, 3, account_keys, accounts, "owner", "multisigOwner");
+                        try info.put("recordAccount", try pubkeyToValue(
+                            arena,
+                            account_keys.get(@intCast(accounts[2])).?,
+                        ));
+                        try parseSigners(
+                            arena,
+                            &info,
+                            3,
+                            account_keys,
+                            accounts,
+                            "owner",
+                            "multisigOwner",
+                        );
                     } else {
-                        try parseSigners(arena, &info, 2, account_keys, accounts, "owner", "multisigOwner");
+                        try parseSigners(
+                            arena,
+                            &info,
+                            2,
+                            account_keys,
+                            accounts,
+                            "owner",
+                            "multisigOwner",
+                        );
                     }
                 }
             }
@@ -3676,27 +3751,53 @@ fn parseConfidentialTransferExtension(
                 const amount = std.mem.readInt(u64, ext_data[1..9], .little);
                 try info.put("amount", .{ .integer = @intCast(amount) });
                 try info.put("decimals", .{ .integer = @intCast(ext_data[9]) });
-                try info.put("newDecryptableAvailableBalance", try base64ToValue(arena, ext_data[10..46]));
+                try info.put(
+                    "newDecryptableAvailableBalance",
+                    try base64ToValue(arena, ext_data[10..46]),
+                );
                 const eq_offset: i8 = @bitCast(ext_data[46]);
                 const range_offset: i8 = @bitCast(ext_data[47]);
                 try info.put("equalityProofInstructionOffset", .{ .integer = @intCast(eq_offset) });
                 try info.put("rangeProofInstructionOffset", .{ .integer = @intCast(range_offset) });
                 var signer_start: usize = 3;
                 if (signer_start < accounts.len -| 1 and (eq_offset != 0 or range_offset != 0)) {
-                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    try info.put("instructionsSysvar", try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
                 if (signer_start < accounts.len -| 1) {
-                    const label = if (eq_offset == 0) "equalityProofContextStateAccount" else "equalityProofRecordAccount";
-                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    const label = if (eq_offset == 0)
+                        "equalityProofContextStateAccount"
+                    else
+                        "equalityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
                 if (signer_start < accounts.len -| 1) {
-                    const label = if (range_offset == 0) "rangeProofContextStateAccount" else "rangeProofRecordAccount";
-                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    const label = if (range_offset == 0)
+                        "rangeProofContextStateAccount"
+                    else
+                        "rangeProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
-                try parseSigners(arena, &info, signer_start, account_keys, accounts, "owner", "multisigOwner");
+                try parseSigners(
+                    arena,
+                    &info,
+                    signer_start,
+                    account_keys,
+                    accounts,
+                    "owner",
+                    "multisigOwner",
+                );
             }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "withdrawConfidentialTransfer" });
@@ -3719,34 +3820,77 @@ fn parseConfidentialTransferExtension(
             );
             // TransferInstructionData: new_source_decryptable(36) + eq_proof_offset(1) + ct_validity_offset(1) + range_offset(1)
             if (ext_data.len >= 40) {
-                try info.put("newSourceDecryptableAvailableBalance", try base64ToValue(arena, ext_data[1..37]));
+                try info.put(
+                    "newSourceDecryptableAvailableBalance",
+                    try base64ToValue(arena, ext_data[1..37]),
+                );
                 const eq_offset: i8 = @bitCast(ext_data[37]);
                 const ct_offset: i8 = @bitCast(ext_data[38]);
                 const range_offset: i8 = @bitCast(ext_data[39]);
-                try info.put("equalityProofInstructionOffset", .{ .integer = @intCast(eq_offset) });
-                try info.put("ciphertextValidityProofInstructionOffset", .{ .integer = @intCast(ct_offset) });
-                try info.put("rangeProofInstructionOffset", .{ .integer = @intCast(range_offset) });
+                try info.put(
+                    "equalityProofInstructionOffset",
+                    .{ .integer = @intCast(eq_offset) },
+                );
+                try info.put(
+                    "ciphertextValidityProofInstructionOffset",
+                    .{ .integer = @intCast(ct_offset) },
+                );
+                try info.put(
+                    "rangeProofInstructionOffset",
+                    .{ .integer = @intCast(range_offset) },
+                );
                 var signer_start: usize = 3;
-                if (signer_start < accounts.len -| 1 and (eq_offset != 0 or ct_offset != 0 or range_offset != 0)) {
-                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                if (signer_start < accounts.len -| 1 and
+                    (eq_offset != 0 or ct_offset != 0 or range_offset != 0))
+                {
+                    try info.put("instructionsSysvar", try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
                 if (signer_start < accounts.len -| 1) {
-                    const label = if (eq_offset == 0) "equalityProofContextStateAccount" else "equalityProofRecordAccount";
-                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    const label = if (eq_offset == 0)
+                        "equalityProofContextStateAccount"
+                    else
+                        "equalityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
                 if (signer_start < accounts.len -| 1) {
-                    const label = if (ct_offset == 0) "ciphertextValidityProofContextStateAccount" else "ciphertextValidityProofRecordAccount";
-                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    const label = if (ct_offset == 0)
+                        "ciphertextValidityProofContextStateAccount"
+                    else
+                        "ciphertextValidityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
                 if (signer_start < accounts.len -| 1) {
-                    const label = if (range_offset == 0) "rangeProofContextStateAccount" else "rangeProofRecordAccount";
-                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    const label = if (range_offset == 0)
+                        "rangeProofContextStateAccount"
+                    else
+                        "rangeProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
-                try parseSigners(arena, &info, signer_start, account_keys, accounts, "owner", "multisigOwner");
+                try parseSigners(
+                    arena,
+                    &info,
+                    signer_start,
+                    account_keys,
+                    accounts,
+                    "owner",
+                    "multisigOwner",
+                );
             }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "confidentialTransfer" });
@@ -3761,9 +3905,15 @@ fn parseConfidentialTransferExtension(
             );
             // ApplyPendingBalanceData: new_decryptable_available_balance(36) + expected_pending_balance_credit_counter(8)
             if (ext_data.len >= 45) {
-                try info.put("newDecryptableAvailableBalance", try base64ToValue(arena, ext_data[1..37]));
+                try info.put(
+                    "newDecryptableAvailableBalance",
+                    try base64ToValue(arena, ext_data[1..37]),
+                );
                 const counter = std.mem.readInt(u64, ext_data[37..45], .little);
-                try info.put("expectedPendingBalanceCreditCounter", .{ .integer = @intCast(counter) });
+                try info.put(
+                    "expectedPendingBalanceCreditCounter",
+                    .{ .integer = @intCast(counter) },
+                );
             }
             try parseSigners(arena, &info, 1, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
@@ -3841,50 +3991,110 @@ fn parseConfidentialTransferExtension(
             );
             // TransferWithFeeInstructionData: new_source_decryptable(36) + eq_proof(1) + transfer_ct_validity(1) + fee_ct_validity(1) + fee_sigma(1) + range(1)
             if (ext_data.len >= 42) {
-                try info.put("newSourceDecryptableAvailableBalance", try base64ToValue(arena, ext_data[1..37]));
+                try info.put(
+                    "newSourceDecryptableAvailableBalance",
+                    try base64ToValue(arena, ext_data[1..37]),
+                );
                 const eq_offset: i8 = @bitCast(ext_data[37]);
                 const transfer_ct_offset: i8 = @bitCast(ext_data[38]);
                 const fee_ct_offset: i8 = @bitCast(ext_data[39]);
                 const fee_sigma_offset: i8 = @bitCast(ext_data[40]);
                 const range_offset: i8 = @bitCast(ext_data[41]);
-                try info.put("equalityProofInstructionOffset", .{ .integer = @intCast(eq_offset) });
-                try info.put("transferAmountCiphertextValidityProofInstructionOffset", .{ .integer = @intCast(transfer_ct_offset) });
-                try info.put("feeCiphertextValidityProofInstructionOffset", .{ .integer = @intCast(fee_ct_offset) });
-                try info.put("feeSigmaProofInstructionOffset", .{ .integer = @intCast(fee_sigma_offset) });
-                try info.put("rangeProofInstructionOffset", .{ .integer = @intCast(range_offset) });
+                try info.put(
+                    "equalityProofInstructionOffset",
+                    .{ .integer = @intCast(eq_offset) },
+                );
+                try info.put(
+                    "transferAmountCiphertextValidityProofInstructionOffset",
+                    .{ .integer = @intCast(transfer_ct_offset) },
+                );
+                try info.put(
+                    "feeCiphertextValidityProofInstructionOffset",
+                    .{ .integer = @intCast(fee_ct_offset) },
+                );
+                try info.put(
+                    "feeSigmaProofInstructionOffset",
+                    .{ .integer = @intCast(fee_sigma_offset) },
+                );
+                try info.put(
+                    "rangeProofInstructionOffset",
+                    .{ .integer = @intCast(range_offset) },
+                );
                 var signer_start: usize = 3;
                 if (signer_start < accounts.len -| 1 and
-                    (eq_offset != 0 or transfer_ct_offset != 0 or fee_ct_offset != 0 or fee_sigma_offset != 0 or range_offset != 0))
+                    (eq_offset != 0 or transfer_ct_offset != 0 or
+                        fee_ct_offset != 0 or fee_sigma_offset != 0 or range_offset != 0))
                 {
-                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    try info.put("instructionsSysvar", try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
                 if (signer_start < accounts.len -| 1) {
-                    const label = if (eq_offset == 0) "equalityProofContextStateAccount" else "equalityProofRecordAccount";
-                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    const label = if (eq_offset == 0)
+                        "equalityProofContextStateAccount"
+                    else
+                        "equalityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
                 if (signer_start < accounts.len -| 1) {
-                    const label = if (transfer_ct_offset == 0) "transferAmountCiphertextValidityProofContextStateAccount" else "transferAmountCiphertextValidityProofRecordAccount";
-                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    const label = if (transfer_ct_offset == 0)
+                        "transferAmountCiphertextValidityProofContextStateAccount"
+                    else
+                        "transferAmountCiphertextValidityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
                 if (signer_start < accounts.len -| 1) {
-                    const label = if (fee_ct_offset == 0) "feeCiphertextValidityProofContextStateAccount" else "feeCiphertextValidityProofRecordAccount";
-                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    const label = if (fee_ct_offset == 0)
+                        "feeCiphertextValidityProofContextStateAccount"
+                    else
+                        "feeCiphertextValidityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
                 if (signer_start < accounts.len -| 1) {
-                    const label = if (fee_sigma_offset == 0) "feeSigmaProofContextStateAccount" else "feeSigmaProofRecordAccount";
-                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    const label = if (fee_sigma_offset == 0)
+                        "feeSigmaProofContextStateAccount"
+                    else
+                        "feeSigmaProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
                 if (signer_start < accounts.len -| 1) {
-                    const label = if (range_offset == 0) "rangeProofContextStateAccount" else "rangeProofRecordAccount";
-                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    const label = if (range_offset == 0)
+                        "rangeProofContextStateAccount"
+                    else
+                        "rangeProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
-                try parseSigners(arena, &info, signer_start, account_keys, accounts, "owner", "multisigOwner");
+                try parseSigners(
+                    arena,
+                    &info,
+                    signer_start,
+                    account_keys,
+                    accounts,
+                    "owner",
+                    "multisigOwner",
+                );
             }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "confidentialTransferWithFee" });
@@ -4227,7 +4437,10 @@ fn parseConfidentialTransferFeeExtension(
                 }
             }
             if (ext_data.len >= 65) {
-                try info.put("withdrawWithheldAuthorityElGamalPubkey", try elGamalPubkeyToValue(arena, ext_data[33..65]));
+                try info.put(
+                    "withdrawWithheldAuthorityElGamalPubkey",
+                    try elGamalPubkeyToValue(arena, ext_data[33..65]),
+                );
             }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeConfidentialTransferFeeConfig" });
@@ -4248,20 +4461,40 @@ fn parseConfidentialTransferFeeExtension(
             if (ext_data.len >= 38) {
                 const proof_offset: i8 = @bitCast(ext_data[1]);
                 try info.put("proofInstructionOffset", .{ .integer = @intCast(proof_offset) });
-                try info.put("newDecryptableAvailableBalance", try base64ToValue(arena, ext_data[2..38]));
+                try info.put(
+                    "newDecryptableAvailableBalance",
+                    try base64ToValue(arena, ext_data[2..38]),
+                );
                 const signer_start: usize = if (proof_offset == 0) blk: {
-                    try info.put("proofContextStateAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+                    try info.put("proofContextStateAccount", try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[2])).?,
+                    ));
                     break :blk @as(usize, 3);
                 } else blk: {
-                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+                    try info.put("instructionsSysvar", try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[2])).?,
+                    ));
                     if (accounts.len > 4) {
-                        try info.put("recordAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[3])).?));
+                        try info.put("recordAccount", try pubkeyToValue(
+                            arena,
+                            account_keys.get(@intCast(accounts[3])).?,
+                        ));
                         break :blk @as(usize, 4);
                     } else {
                         break :blk @as(usize, 3);
                     }
                 };
-                try parseSigners(arena, &info, signer_start, account_keys, accounts, "withdrawWithheldAuthority", "multisigWithdrawWithheldAuthority");
+                try parseSigners(
+                    arena,
+                    &info,
+                    signer_start,
+                    account_keys,
+                    accounts,
+                    "withdrawWithheldAuthority",
+                    "multisigWithdrawWithheldAuthority",
+                );
             }
             try result.put("info", .{ .object = info });
             try result.put(
@@ -4285,31 +4518,57 @@ fn parseConfidentialTransferFeeExtension(
                 const proof_offset: i8 = @bitCast(ext_data[1]);
                 const num_token_accounts: u8 = ext_data[2];
                 try info.put("proofInstructionOffset", .{ .integer = @intCast(proof_offset) });
-                try info.put("newDecryptableAvailableBalance", try base64ToValue(arena, ext_data[3..39]));
+                try info.put(
+                    "newDecryptableAvailableBalance",
+                    try base64ToValue(arena, ext_data[3..39]),
+                );
                 try checkNumTokenAccounts(accounts, 4 + @as(usize, num_token_accounts));
                 const first_source_index = accounts.len -| @as(usize, num_token_accounts);
                 const signer_start: usize = if (proof_offset == 0) blk: {
-                    try info.put("proofContextStateAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+                    try info.put("proofContextStateAccount", try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[2])).?,
+                    ));
                     break :blk @as(usize, 3);
                 } else blk: {
-                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+                    try info.put("instructionsSysvar", try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[2])).?,
+                    ));
                     if (first_source_index > 4) {
-                        try info.put("proofAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[3])).?));
+                        try info.put("proofAccount", try pubkeyToValue(
+                            arena,
+                            account_keys.get(@intCast(accounts[3])).?,
+                        ));
                         break :blk @as(usize, 4);
                     } else {
                         break :blk @as(usize, 3);
                     }
                 };
                 // Source accounts at the end
-                var source_accounts = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(
+                var source_accounts = try std.array_list.AlignedManaged(
+                    JsonValue,
+                    null,
+                ).initCapacity(
                     arena,
                     num_token_accounts,
                 );
                 for (accounts[first_source_index..]) |acc_idx| {
-                    try source_accounts.append(try pubkeyToValue(arena, account_keys.get(@intCast(acc_idx)).?));
+                    try source_accounts.append(try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(acc_idx)).?,
+                    ));
                 }
                 try info.put("sourceAccounts", .{ .array = source_accounts });
-                try parseSigners(arena, &info, signer_start, account_keys, accounts[0..first_source_index], "withdrawWithheldAuthority", "multisigWithdrawWithheldAuthority");
+                try parseSigners(
+                    arena,
+                    &info,
+                    signer_start,
+                    account_keys,
+                    accounts[0..first_source_index],
+                    "withdrawWithheldAuthority",
+                    "multisigWithdrawWithheldAuthority",
+                );
             }
             try result.put("info", .{ .object = info });
             try result.put(
@@ -4611,9 +4870,15 @@ fn parseConfidentialMintBurnExtension(
                 const proof_offset: i8 = @bitCast(ext_data[33]);
                 try info.put("proofInstructionOffset", .{ .integer = @intCast(proof_offset) });
                 if (proof_offset == 0) {
-                    try info.put("proofAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
+                    try info.put("proofAccount", try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[1])).?,
+                    ));
                 } else {
-                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
+                    try info.put("instructionsSysvar", try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[1])).?,
+                    ));
                 }
                 try parseSigners(arena, &info, 2, account_keys, accounts, "owner", "multisigOwner");
             }
@@ -4654,30 +4919,67 @@ fn parseConfidentialMintBurnExtension(
                 const eq_offset: i8 = @bitCast(ext_data[37]);
                 const ct_offset: i8 = @bitCast(ext_data[38]);
                 const range_offset: i8 = @bitCast(ext_data[39]);
-                try info.put("equalityProofInstructionOffset", .{ .integer = @intCast(eq_offset) });
-                try info.put("ciphertextValidityProofInstructionOffset", .{ .integer = @intCast(ct_offset) });
+                try info.put(
+                    "equalityProofInstructionOffset",
+                    .{ .integer = @intCast(eq_offset) },
+                );
+                try info.put(
+                    "ciphertextValidityProofInstructionOffset",
+                    .{ .integer = @intCast(ct_offset) },
+                );
                 try info.put("rangeProofInstructionOffset", .{ .integer = @intCast(range_offset) });
                 var signer_start: usize = 2;
-                if (signer_start < accounts.len -| 1 and (eq_offset != 0 or ct_offset != 0 or range_offset != 0)) {
-                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                if (signer_start < accounts.len -| 1 and
+                    (eq_offset != 0 or ct_offset != 0 or range_offset != 0))
+                {
+                    try info.put("instructionsSysvar", try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
                 if (signer_start < accounts.len -| 1) {
-                    const label = if (eq_offset == 0) "equalityProofContextStateAccount" else "equalityProofRecordAccount";
-                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    const label = if (eq_offset == 0)
+                        "equalityProofContextStateAccount"
+                    else
+                        "equalityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
                 if (signer_start < accounts.len -| 1) {
-                    const label = if (ct_offset == 0) "ciphertextValidityProofContextStateAccount" else "ciphertextValidityProofRecordAccount";
-                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    const label = if (ct_offset == 0)
+                        "ciphertextValidityProofContextStateAccount"
+                    else
+                        "ciphertextValidityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
                 if (signer_start < accounts.len -| 1) {
-                    const label = if (range_offset == 0) "rangeProofContextStateAccount" else "rangeProofRecordAccount";
-                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    const label = if (range_offset == 0)
+                        "rangeProofContextStateAccount"
+                    else
+                        "rangeProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
-                try parseSigners(arena, &info, signer_start, account_keys, accounts, "owner", "multisigOwner");
+                try parseSigners(
+                    arena,
+                    &info,
+                    signer_start,
+                    account_keys,
+                    accounts,
+                    "owner",
+                    "multisigOwner",
+                );
             }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "confidentialMint" });
@@ -4696,34 +4998,71 @@ fn parseConfidentialMintBurnExtension(
             ));
             // BurnInstructionData: new_decryptable_available_balance(36) + eq_proof_offset(1) + ct_validity_offset(1) + range_offset(1)
             if (ext_data.len >= 40) {
-                try info.put("newDecryptableAvailableBalance", try base64ToValue(arena, ext_data[1..37]));
+                try info.put("newDecryptableAvailableBalance", try base64ToValue(
+                    arena,
+                    ext_data[1..37],
+                ));
                 const eq_offset: i8 = @bitCast(ext_data[37]);
                 const ct_offset: i8 = @bitCast(ext_data[38]);
                 const range_offset: i8 = @bitCast(ext_data[39]);
                 try info.put("equalityProofInstructionOffset", .{ .integer = @intCast(eq_offset) });
-                try info.put("ciphertextValidityProofInstructionOffset", .{ .integer = @intCast(ct_offset) });
+                try info.put(
+                    "ciphertextValidityProofInstructionOffset",
+                    .{ .integer = @intCast(ct_offset) },
+                );
                 try info.put("rangeProofInstructionOffset", .{ .integer = @intCast(range_offset) });
                 var signer_start: usize = 2;
-                if (signer_start < accounts.len -| 1 and (eq_offset != 0 or ct_offset != 0 or range_offset != 0)) {
-                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                if (signer_start < accounts.len -| 1 and
+                    (eq_offset != 0 or ct_offset != 0 or range_offset != 0))
+                {
+                    try info.put("instructionsSysvar", try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
                 if (signer_start < accounts.len -| 1) {
-                    const label = if (eq_offset == 0) "equalityProofContextStateAccount" else "equalityProofRecordAccount";
-                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    const label = if (eq_offset == 0)
+                        "equalityProofContextStateAccount"
+                    else
+                        "equalityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
                 if (signer_start < accounts.len -| 1) {
-                    const label = if (ct_offset == 0) "ciphertextValidityProofContextStateAccount" else "ciphertextValidityProofRecordAccount";
-                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    const label = if (ct_offset == 0)
+                        "ciphertextValidityProofContextStateAccount"
+                    else
+                        "ciphertextValidityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
                 if (signer_start < accounts.len -| 1) {
-                    const label = if (range_offset == 0) "rangeProofContextStateAccount" else "rangeProofRecordAccount";
-                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    const label = if (range_offset == 0)
+                        "rangeProofContextStateAccount"
+                    else
+                        "rangeProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(
+                        arena,
+                        account_keys.get(@intCast(accounts[signer_start])).?,
+                    ));
                     signer_start += 1;
                 }
-                try parseSigners(arena, &info, signer_start, account_keys, accounts, "owner", "multisigOwner");
+                try parseSigners(
+                    arena,
+                    &info,
+                    signer_start,
+                    account_keys,
+                    accounts,
+                    "owner",
+                    "multisigOwner",
+                );
             }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "confidentialBurn" });
