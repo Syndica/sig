@@ -8,11 +8,15 @@ const parse_instruction = @import("../parse_instruction/lib.zig");
 
 const AccountKeys = parse_instruction.AccountKeys;
 const Allocator = std.mem.Allocator;
+const AncestorIterator = sig.ledger.Reader.AncestorIterator;
 const GetBlock = methods.GetBlock;
+const GetBlocks = methods.GetBlocks;
+const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
 const Pubkey = sig.core.Pubkey;
 const ReservedAccounts = sig.core.ReservedAccounts;
 const Signature = sig.core.Signature;
+const Slot = sig.core.Slot;
 const TransactionDetails = methods.common.TransactionDetails;
 const TransactionEncoding = methods.common.TransactionEncoding;
 
@@ -68,6 +72,149 @@ pub fn getBlock(
         .show_rewards = show_rewards,
         .max_supported_version = max_supported_version,
     });
+}
+
+pub fn getBlocks(
+    self: LedgerHookContext,
+    allocator: std.mem.Allocator,
+    params: GetBlocks,
+) !GetBlocks.Response {
+    const commitment = params.commitment();
+    if (commitment == .processed) return error.ProcessedNotSupported;
+
+    const highest_root = self.slot_tracker.getSlotForCommitment(.finalized);
+    const upper_bound = if (commitment == .finalized)
+        highest_root
+    else
+        self.slot_tracker.getSlotForCommitment(.confirmed);
+
+    const end_slot = @min(
+        params.endSlot() orelse params.start_slot +| GetBlocks.MAX_GET_CONFIRMED_BLOCKS_RANGE,
+        upper_bound,
+    );
+
+    if (end_slot < params.start_slot) return &.{};
+    if (end_slot - params.start_slot > GetBlocks.MAX_GET_CONFIRMED_BLOCKS_RANGE) {
+        return error.SlotRangeTooLarge;
+    }
+
+    // Collect rooted (finalized) slots in range.
+    var blocks = try std.ArrayList(Slot).initCapacity(
+        allocator,
+        end_slot - params.start_slot +| 1,
+    );
+
+    var rooted_iter = try self.ledger.db.iterator(
+        sig.ledger.schema.schema.rooted_slots,
+        .forward,
+        params.start_slot,
+    );
+
+    while (try rooted_iter.nextKey()) |slot| {
+        if (slot > end_slot or slot > highest_root) break;
+        try blocks.append(allocator, slot);
+    }
+
+    // For confirmed commitment, also include confirmed-but-unrooted slots.
+    if (commitment == .confirmed) {
+        const last_rooted = if (blocks.items.len > 0)
+            blocks.items[blocks.items.len - 1]
+        else
+            params.start_slot -| 1;
+
+        if (last_rooted < end_slot) {
+            const latest_confirmed = self.slot_tracker.getSlotForCommitment(.confirmed);
+            const confirmed = try self.getConfirmedUnrootedSlots(
+                allocator,
+                latest_confirmed,
+                highest_root,
+            );
+            defer allocator.free(confirmed);
+
+            for (confirmed) |slot| {
+                if (slot > end_slot) continue;
+                if (slot <= last_rooted) continue;
+                try blocks.append(allocator, slot);
+            }
+        }
+    }
+
+    return try blocks.toOwnedSlice(allocator);
+}
+
+pub fn getBlocksWithLimit(
+    self: LedgerHookContext,
+    allocator: std.mem.Allocator,
+    params: GetBlocksWithLimit,
+) !GetBlocksWithLimit.Response {
+    const commitment = params.commitment();
+    if (commitment == .processed) return error.ProcessedNotSupported;
+
+    if (params.limit > GetBlocks.MAX_GET_CONFIRMED_BLOCKS_RANGE) {
+        return error.SlotRangeTooLarge;
+    }
+
+    const highest_root = self.slot_tracker.getSlotForCommitment(.finalized);
+
+    // Collect rooted (finalized) slots starting from start_slot, up to limit.
+    var blocks = try std.ArrayList(Slot).initCapacity(allocator, params.limit);
+
+    var rooted_iter = try self.ledger.db.iterator(
+        sig.ledger.schema.schema.rooted_slots,
+        .forward,
+        params.start_slot,
+    );
+    defer rooted_iter.deinit();
+
+    while (blocks.items.len < params.limit) {
+        const slot = try rooted_iter.nextKey() orelse break;
+        if (slot > highest_root) break;
+        try blocks.append(allocator, slot);
+    }
+
+    // For confirmed commitment, add confirmed-but-unrooted slots up to limit.
+    if (commitment == .confirmed and blocks.items.len < params.limit) {
+        const last_rooted = if (blocks.items.len > 0)
+            blocks.items[blocks.items.len - 1]
+        else
+            params.start_slot -| 1;
+
+        const latest_confirmed = self.slot_tracker.getSlotForCommitment(.confirmed);
+        const confirmed = try self.getConfirmedUnrootedSlots(
+            allocator,
+            latest_confirmed,
+            highest_root,
+        );
+
+        for (confirmed) |slot| {
+            if (blocks.items.len >= params.limit) break;
+            if (slot <= last_rooted) continue;
+            try blocks.append(allocator, slot);
+        }
+    }
+
+    return try blocks.toOwnedSlice(allocator);
+}
+
+/// Walk from latest_confirmed back to the root, collecting confirmed-but-unrooted slots.
+/// Returns slots sorted ascending.
+fn getConfirmedUnrootedSlots(
+    self: @This(),
+    allocator: std.mem.Allocator,
+    latest_confirmed: Slot,
+    highest_root: Slot,
+) ![]Slot {
+    var slots = try std.ArrayList(Slot).initCapacity(allocator, latest_confirmed - highest_root);
+
+    var iterator = AncestorIterator.initInclusive(allocator, &self.ledger.db, latest_confirmed);
+    while (try iterator.next()) |slot| {
+        if (slot <= highest_root) break;
+        try slots.append(allocator, slot);
+    }
+
+    // AncestorIterator walks backwards (high to low), so reverse to get ascending order.
+    std.mem.reverse(Slot, slots.items);
+    return try slots.toOwnedSlice(allocator);
 }
 
 /// Encode transactions and/or signatures based on the requested options.

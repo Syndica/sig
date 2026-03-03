@@ -45,8 +45,8 @@ pub const MethodAndParams = union(enum) {
     getBlockCommitment: GetBlockCommitment,
     getBlockHeight: GetBlockHeight,
     getBlockProduction: noreturn,
-    getBlocks: noreturn,
-    getBlocksWithLimit: noreturn,
+    getBlocks: GetBlocks,
+    getBlocksWithLimit: GetBlocksWithLimit,
     getBlockTime: noreturn,
     getClusterNodes: GetClusterNodes,
     getEpochInfo: GetEpochInfo,
@@ -919,8 +919,78 @@ pub const GetBlockHeight = struct {
 
 // TODO: getBlockProduction
 // TODO: getBlockTime
-// TODO: getBlocks
-// TODO: getBlocksWithLimit
+
+pub const GetBlocks = struct {
+    start_slot: Slot,
+    end_slot_or_config: ?EndSlotOrConfig = null,
+
+    pub const MAX_GET_CONFIRMED_BLOCKS_RANGE: u64 = 500_000;
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+    };
+
+    /// The second positional param can be either an end_slot (integer) or a
+    /// commitment config (object), matching Agave's RpcBlocksConfigWrapper.
+    pub const EndSlotOrConfig = union(enum) {
+        end_slot: Slot,
+        config: Config,
+
+        pub fn jsonParseFromValue(
+            allocator: std.mem.Allocator,
+            source: std.json.Value,
+            options: std.json.ParseOptions,
+        ) std.json.ParseFromValueError!EndSlotOrConfig {
+            return switch (source) {
+                .integer => |i| .{ .end_slot = @intCast(i) },
+                .object => .{ .config = try std.json.innerParseFromValue(
+                    Config,
+                    allocator,
+                    source,
+                    options,
+                ) },
+                else => error.UnexpectedToken,
+            };
+        }
+    };
+
+    pub fn endSlot(self: GetBlocks) ?Slot {
+        const eoc = self.end_slot_or_config orelse return null;
+        return switch (eoc) {
+            .end_slot => |s| s,
+            .config => null,
+        };
+    }
+
+    pub fn commitment(self: GetBlocks) common.Commitment {
+        if (self.config) |c| if (c.commitment) |cm| return cm;
+        if (self.end_slot_or_config) |eoc| switch (eoc) {
+            .end_slot => {},
+            .config => |c| if (c.commitment) |cm| return cm,
+        };
+        return .finalized;
+    }
+
+    pub const Response = []const Slot;
+};
+
+/// https://solana.com/docs/rpc/http/getblockswithlimit
+pub const GetBlocksWithLimit = struct {
+    start_slot: Slot,
+    limit: u64,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+    };
+
+    pub fn commitment(self: GetBlocksWithLimit) common.Commitment {
+        if (self.config) |c| if (c.commitment) |cm| return cm;
+        return .finalized;
+    }
+
+    pub const Response = []const Slot;
+};
 
 pub const GetClusterNodes = struct {
     pub const Response = []const common.RpcContactInfo;
