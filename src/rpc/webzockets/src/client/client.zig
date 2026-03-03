@@ -141,8 +141,11 @@ pub fn Client(comptime Handler: type, comptime read_buf_size: usize) type {
         ) ClientSelf {
             // The kqueue and epoll backends require a thread pool to be set on
             // the loop, otherwise they cannot perform socket close operations.
-            if (comptime @hasField(xev.Loop, "thread_pool")) {
-                std.debug.assert(loop.thread_pool != null);
+            switch (xev.backend) {
+                .io_uring, .wasi_poll, .iocp => {
+                    comptime std.debug.assert(!@hasDecl(xev.Loop, "thread_pool"));
+                },
+                .epoll, .kqueue => std.debug.assert(loop.thread_pool != null),
             }
 
             return ClientSelf{
