@@ -175,10 +175,10 @@ fn executeTxnContext(
     );
 
     // Bank::new_with_paths(...)
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Db.initTest(allocator);
     defer test_state.deinit();
     const db = &test_state.db;
-    const account_store: AccountStore = .{ .accounts_db_two = db };
+    const account_store: AccountStore = .{ .accounts_db = db };
 
     var slot: Slot = 0;
     var epoch: Epoch = 0;
@@ -777,7 +777,7 @@ fn executeTxnContext(
     // Resolve transaction
     const resolved_transaction = resolveTransaction(allocator, transaction, .{
         .slot = slot,
-        .account_reader = .{ .accounts_db_two = .{ db, &ancestors } },
+        .account_reader = .{ .accounts_db = .{ db, &ancestors } },
         .reserved_accounts = &reserved_accounts,
         .slot_hashes = try sysvar_cache.get(sig.runtime.sysvar.SlotHashes),
     }) catch |err| return serializeSanitizationError(switch (err) {
