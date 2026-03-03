@@ -41,7 +41,7 @@ pub const RuntimeContext = struct {
     loop: *xev.Loop,
     /// True when an async wake has been requested but not yet observed by the loop thread.
     /// Used to coalesce multiple wake requests into a single wakeup event on the loop.
-    notify_pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    notify_pending: *std.atomic.Value(bool),
     /// Set to false to stop async wakeups, which in turn stops draining queues.
     running: bool = true,
     /// Queues that have newly committed notifications this drain cycle.
@@ -53,6 +53,18 @@ pub const RuntimeContext = struct {
     inflight_jobs: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// Optional queue for off-loop payload allocator free work.
     payload_free_queue: ?*Channel(ReleasedPayloadBytes) = null,
+    /// Optional callback run on the loop thread whenever the async wake fires.
+    /// Used by integrations to drain additional loop-thread-only queues.
+    wakeup_hook: ?WakeupHook = null,
+
+    pub const WakeupHook = struct {
+        ptr: *anyopaque,
+        onWake: *const fn (*anyopaque) void,
+
+        fn call(self: WakeupHook) void {
+            self.onWake(self.ptr);
+        }
+    };
 
     const SerializeTask = struct {
         runtime: *RuntimeContext,
@@ -106,6 +118,9 @@ pub const RuntimeContext = struct {
 
         const self = self_opt orelse return .disarm;
         _ = self.notify_pending.swap(false, .acquire);
+        if (self.wakeup_hook) |wakeup_hook| {
+            wakeup_hook.call();
+        }
         self.drainInboundEvents();
         self.drainCommitQueue();
 

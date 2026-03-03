@@ -1,5 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
+const xev = @import("xev");
 const ws = @import("webzockets_lib");
 
 const servers = @import("../support/test_servers.zig");
@@ -337,6 +338,199 @@ test "headers exceeding read buffer size" {
     try stream.writeAll(big_buf[0..fbs.pos]);
 
     try expectClosed(stream);
+}
+
+test "feedConnection handles complete pre-read upgrade request" {
+    try runFeedConnectionCase(.complete);
+}
+
+test "feedConnection handles partial pre-read upgrade request" {
+    try runFeedConnectionCase(.partial);
+}
+
+const FeedReadMode = enum {
+    complete,
+    partial,
+};
+
+const FeedClientContext = struct {
+    port: u16,
+    request: []const u8,
+    split_at: ?usize,
+    done: std.Thread.ResetEvent = .{},
+    err: ?anyerror = null,
+};
+
+fn runFeedConnectionCase(comptime mode: FeedReadMode) !void {
+    const FeedServer = ws.Server(servers.EchoHandler, servers.default_read_buf_size);
+
+    var thread_pool = xev.ThreadPool.init(.{});
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
+
+    var loop = try xev.Loop.init(.{ .thread_pool = &thread_pool });
+    defer loop.deinit();
+
+    var server = try FeedServer.initNoListen(testing.allocator, &loop, .{
+        .address = servers.localhost,
+        .handler_context = {},
+    });
+    defer server.deinit();
+
+    var listener = try servers.localhost.listen(.{ .reuse_address = true });
+    defer listener.deinit();
+
+    var request_buf: [512]u8 = undefined;
+    const request = buildRequest(&request_buf, .{});
+    const split_at = request.len / 2;
+
+    var client_ctx = FeedClientContext{
+        .port = getAssignedPort(listener.stream.handle),
+        .request = request,
+        .split_at = if (mode == .partial) split_at else null,
+    };
+    const client_thread = try std.Thread.spawn(.{}, runFeedClientThread, .{&client_ctx});
+    defer client_thread.join();
+
+    var conn = try listener.accept();
+    var close_conn = true;
+    defer {
+        if (close_conn) {
+            conn.stream.close();
+        }
+    }
+
+    var initial_data_buf: [512]u8 = undefined;
+    const initial_data_len = switch (mode) {
+        .complete => try readUntilHeadersComplete(conn.stream, &initial_data_buf),
+        .partial => blk: {
+            const n = try conn.stream.read(initial_data_buf[0..split_at]);
+            if (n == 0) {
+                return error.ConnectionClosed;
+            }
+            break :blk n;
+        },
+    };
+
+    if (mode == .partial) {
+        try testing.expect(initial_data_len < request.len);
+    }
+
+    try setSocketNonBlocking(conn.stream.handle);
+
+    try server.feedConnection(conn.stream.handle, initial_data_buf[0..initial_data_len]);
+    close_conn = false;
+
+    const deadline = @as(u64, @intCast(std.time.milliTimestamp())) + 2000;
+    while (!client_ctx.done.isSet() and @as(u64, @intCast(std.time.milliTimestamp())) < deadline) {
+        loop.run(.no_wait) catch break;
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
+
+    if (!client_ctx.done.isSet()) {
+        return error.ClientTimeout;
+    }
+
+    if (client_ctx.err) |err| {
+        return err;
+    }
+
+    var shutdown_done = false;
+    server.shutdown(1000, bool, &shutdown_done, struct {
+        fn onShutdown(done_opt: ?*bool, _: FeedServer.ShutdownResult) void {
+            if (done_opt) |done| {
+                done.* = true;
+            }
+        }
+    }.onShutdown);
+
+    const shutdown_deadline = @as(u64, @intCast(std.time.milliTimestamp())) + 2000;
+    while (!shutdown_done and @as(u64, @intCast(std.time.milliTimestamp())) < shutdown_deadline) {
+        loop.run(.no_wait) catch break;
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
+
+    try testing.expect(shutdown_done);
+}
+
+fn runFeedClientThread(ctx: *FeedClientContext) void {
+    defer ctx.done.set();
+
+    runFeedClientThreadInner(ctx) catch |err| {
+        ctx.err = err;
+    };
+}
+
+fn runFeedClientThreadInner(ctx: *FeedClientContext) !void {
+    const stream = try rawConnect(ctx.port);
+    defer stream.close();
+
+    if (ctx.split_at) |split_at| {
+        try stream.writeAll(ctx.request[0..split_at]);
+        std.Thread.sleep(30 * std.time.ns_per_ms);
+        try stream.writeAll(ctx.request[split_at..]);
+    } else {
+        try stream.writeAll(ctx.request);
+    }
+
+    var response_buf: [512]u8 = undefined;
+    var total_read: usize = 0;
+    while (total_read < response_buf.len) {
+        const n = stream.read(response_buf[total_read..]) catch |err| switch (err) {
+            error.WouldBlock => return error.ResponseTimeout,
+            else => return err,
+        };
+        if (n == 0) {
+            return error.ConnectionClosed;
+        }
+
+        total_read += n;
+        if (std.mem.indexOf(u8, response_buf[0..total_read], "\r\n\r\n") != null) {
+            break;
+        }
+    }
+
+    const response = response_buf[0..total_read];
+    if (!std.mem.startsWith(u8, response, "HTTP/1.1 101 Switching Protocols\r\n")) {
+        return error.BadHandshakeResponse;
+    }
+}
+
+fn readUntilHeadersComplete(stream: std.net.Stream, buf: []u8) !usize {
+    var total_read: usize = 0;
+    while (total_read < buf.len) {
+        const n = try stream.read(buf[total_read..]);
+        if (n == 0) {
+            return error.ConnectionClosed;
+        }
+
+        total_read += n;
+        if (std.mem.indexOf(u8, buf[0..total_read], "\r\n\r\n") != null) {
+            return total_read;
+        }
+    }
+
+    return error.HeaderTooLarge;
+}
+
+fn setSocketNonBlocking(fd: std.posix.fd_t) !void {
+    const FlagsInt = @typeInfo(std.posix.O).@"struct".backing_integer.?;
+    var flags_int: FlagsInt = @intCast(try std.posix.fcntl(fd, std.posix.F.GETFL, 0));
+    const flags = std.mem.bytesAsValue(std.posix.O, std.mem.asBytes(&flags_int));
+    if (!flags.NONBLOCK) {
+        flags.NONBLOCK = true;
+        _ = try std.posix.fcntl(fd, std.posix.F.SETFL, flags_int);
+    }
+}
+
+fn getAssignedPort(fd: std.posix.fd_t) u16 {
+    var addr: std.posix.sockaddr.storage = undefined;
+    var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.storage);
+    std.posix.getsockname(fd, @ptrCast(&addr), &addr_len) catch return 0;
+    const sa_in: *const std.posix.sockaddr.in = @ptrCast(@alignCast(&addr));
+    return std.mem.bigToNative(u16, sa_in.port);
 }
 
 /// Connect raw TCP to the test server with a 2s read timeout.

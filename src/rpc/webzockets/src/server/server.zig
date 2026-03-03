@@ -195,10 +195,48 @@ pub fn Server(
             };
         }
 
+        /// Create a server without creating or binding a listen socket.
+        /// Connections can still be introduced with `feedConnection`.
+        pub fn initNoListen(
+            allocator: std.mem.Allocator,
+            loop: *xev.Loop,
+            config: Config,
+        ) !ServerSelf {
+            if (comptime @hasField(xev.Loop, "thread_pool")) {
+                std.debug.assert(loop.thread_pool != null);
+            }
+
+            var hs_pool = HandshakePool.init(allocator, config.max_handshakes);
+            errdefer hs_pool.deinit();
+            try hs_pool.preheat(config.initial_handshake_pool_size);
+
+            var conn_pool = ConnectionPool.init(allocator, config.max_connections);
+            errdefer conn_pool.deinit();
+            try conn_pool.preheat(config.initial_connection_pool_size);
+
+            return .{
+                .allocator = allocator,
+                .loop = loop,
+                .config = config,
+                .listen_socket = .{ .fd = -1 },
+                .accept_completion = .{},
+                .handshake_pool = hs_pool,
+                .connection_pool = conn_pool,
+                .shutting_down = false,
+                .listen_socket_closed = true,
+                .active_connections = .{},
+                .shutdown_timer = undefined,
+                .shutdown_timer_completion = .{},
+                .listen_close_completion = .{},
+                .shutdown_deadline = 0,
+                .shutdown_userdata = null,
+            };
+        }
+
         /// Close the listen socket and clean up memory pools.
         /// Does not affect active connections (they continue until closed).
         pub fn deinit(self: *ServerSelf) void {
-            if (!self.listen_socket_closed) {
+            if (!self.listen_socket_closed and self.listen_socket.fd >= 0) {
                 std.posix.close(self.listen_socket.fd);
             }
             self.handshake_pool.deinit();
@@ -272,6 +310,19 @@ pub fn Server(
             return true;
         }
 
+        /// Feed an already accepted TCP connection into the handshake pipeline.
+        /// Must be called on the loop thread.
+        pub fn feedConnection(
+            self: *ServerSelf,
+            client_fd: std.posix.fd_t,
+            initial_data: []const u8,
+        ) error{ ShuttingDown, PoolExhausted }!void {
+            if (self.shutting_down) return error.ShuttingDown;
+            const hs = self.handshake_pool.create() catch return error.PoolExhausted;
+            hs.init(.{ .fd = client_fd }, self);
+            hs.startWithInitialData(initial_data);
+        }
+
         fn onRejectCloseComplete(
             self_opt: ?*ServerSelf,
             _: *xev.Loop,
@@ -328,13 +379,15 @@ pub fn Server(
                 @as(i128, max_wait_ms) * std.time.ns_per_ms;
 
             // Close the listen socket to stop accepting new connections
-            self.listen_socket.close(
-                self.loop,
-                &self.listen_close_completion,
-                ServerSelf,
-                self,
-                onListenSocketCloseComplete,
-            );
+            if (!self.listen_socket_closed and self.listen_socket.fd >= 0) {
+                self.listen_socket.close(
+                    self.loop,
+                    &self.listen_close_completion,
+                    ServerSelf,
+                    self,
+                    onListenSocketCloseComplete,
+                );
+            }
 
             // Close all active WebSocket connections
             var it = self.active_connections.first;
