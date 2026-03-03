@@ -1,6 +1,6 @@
 # Webzockets
 
-A WebSocket (RFC 6455) library for Zig 0.14.1, built on `libxev`. Server and client. No hidden allocators — all memory is allocated through caller-provided allocators with caller-configured pool sizes and limits. Sends are zero-copy. Server connections are memory-pooled; client connections are caller-owned.
+A WebSocket (RFC 6455) library for Zig 0.15.2, built on `libxev`. Server and client. No hidden allocators — all memory is allocated through caller-provided allocators with caller-configured pool sizes and limits. Sends are zero-copy. Server connections are memory-pooled; client connections are caller-owned.
 
 ## Quick Start
 
