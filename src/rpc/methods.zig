@@ -936,6 +936,13 @@ pub const GetBlocks = struct {
         end_slot: Slot,
         config: Config,
 
+        pub fn jsonStringify(self: EndSlotOrConfig, jw: anytype) !void {
+            switch (self) {
+                .end_slot => |s| try jw.write(s),
+                .config => |c| try jw.write(c),
+            }
+        }
+
         pub fn jsonParseFromValue(
             allocator: std.mem.Allocator,
             source: std.json.Value,

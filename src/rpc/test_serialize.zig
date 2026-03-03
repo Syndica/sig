@@ -148,13 +148,13 @@ test GetBlocks {
         .start_slot = 5,
         .end_slot_or_config = .{ .end_slot = 10 },
     },
-        \\{"jsonrpc":"2.0","id":1,"method":"getBlocks","params":[5,{"end_slot":10}]}
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlocks","params":[5,10]}
     );
     try testRequest(.getBlocks, .{
         .start_slot = 5,
         .end_slot_or_config = .{ .config = .{ .commitment = .finalized } },
     },
-        \\{"jsonrpc":"2.0","id":1,"method":"getBlocks","params":[5,{"config":{"commitment":"finalized"}}]}
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlocks","params":[5,{"commitment":"finalized"}]}
     );
     try testResponse(GetBlocks, .{ .result = &.{ 5, 6, 7, 8, 9, 10 } },
         \\{"jsonrpc":"2.0","result":[5,6,7,8,9,10],"id":1}
