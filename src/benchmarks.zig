@@ -26,7 +26,6 @@ pub const Resolution = enum {
 };
 
 const Filter = enum {
-    accounts_db,
     bincode,
     crypto,
     geyser,
@@ -57,10 +56,6 @@ fn usageText() []const u8 {
 /// is already fixed in 0.16.
 fn getBenchmarks(comptime filter: Filter) []const Benchmark {
     return switch (filter) {
-        .accounts_db => &.{.{
-            .type = @import("accountsdb/benchmarks.zig").BenchmarkAccountsDBTwo,
-            .resolution = .millis,
-        }},
         .sync => &.{.{
             .type = @import("sync/channel.zig").BenchmarkChannel,
             .resolution = .nanos,
