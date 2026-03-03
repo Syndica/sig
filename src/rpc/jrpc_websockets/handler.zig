@@ -294,7 +294,6 @@ pub const JRPCHandler = struct {
             },
             error.MissingJsonRpcVersion,
             error.MissingMethod,
-            error.MissingParams,
             error.InvalidJsonRpcVersion,
             => {
                 log.debug("request parse failed: invalid request", .{});

@@ -75,7 +75,6 @@ pub const WsRequest = struct {
             // JSON-RPC envelope errors
             error.MissingJsonRpcVersion,
             error.MissingMethod,
-            error.MissingParams,
             error.InvalidJsonRpcVersion,
             => return error.MissingField,
 
@@ -130,7 +129,6 @@ pub const WsRequest = struct {
         pub const ParseError = error{
             MissingJsonRpcVersion,
             MissingMethod,
-            MissingParams,
 
             InvalidJsonRpcVersion,
             InvalidMethod,
@@ -153,8 +151,7 @@ pub const WsRequest = struct {
                 return diag.initErr(error.MissingJsonRpcVersion, .{ .id = id });
             const method_str = self.method orelse
                 return diag.initErr(error.MissingMethod, .{ .id = id });
-            const params_values = self.params orelse
-                return diag.initErr(error.MissingParams, .{ .id = id });
+            const params_values = self.params orelse &.{};
 
             if (!std.mem.eql(u8, jsonrpc, "2.0")) {
                 return diag.initErr(error.InvalidJsonRpcVersion, .{ .id = id });
@@ -468,6 +465,54 @@ test "WsRequest parse voteSubscribe (no params)" {
     );
 }
 
+test "WsRequest parse rootSubscribe (omitted params)" {
+    try testParseRequest(
+        .{},
+        \\{"jsonrpc":"2.0","id":9,"method":"rootSubscribe"}
+    ,
+        .{
+            .id = .{ .int = 9 },
+            .method = .{ .rootSubscribe = .{} },
+        },
+    );
+}
+
+test "WsRequest parse slotSubscribe (omitted params)" {
+    try testParseRequest(
+        .{},
+        \\{"jsonrpc":"2.0","id":3,"method":"slotSubscribe"}
+    ,
+        .{
+            .id = .{ .int = 3 },
+            .method = .{ .slotSubscribe = .{} },
+        },
+    );
+}
+
+test "WsRequest parse slotsUpdatesSubscribe (omitted params)" {
+    try testParseRequest(
+        .{},
+        \\{"jsonrpc":"2.0","id":10,"method":"slotsUpdatesSubscribe"}
+    ,
+        .{
+            .id = .{ .int = 10 },
+            .method = .{ .slotsUpdatesSubscribe = .{} },
+        },
+    );
+}
+
+test "WsRequest parse voteSubscribe (omitted params)" {
+    try testParseRequest(
+        .{},
+        \\{"jsonrpc":"2.0","id":11,"method":"voteSubscribe"}
+    ,
+        .{
+            .id = .{ .int = 11 },
+            .method = .{ .voteSubscribe = .{} },
+        },
+    );
+}
+
 test "WsRequest parse slotUnsubscribe" {
     try testParseRequest(
         .{},
@@ -513,11 +558,22 @@ test "WsRequest parse errors" {
         , .{}),
     );
 
-    // Missing params
+    // Missing params for parameterless method succeeds
+    try testParseRequest(
+        .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"slotSubscribe"}
+    ,
+        .{
+            .id = .{ .int = 1 },
+            .method = .{ .slotSubscribe = .{} },
+        },
+    );
+
+    // Missing params for method with required params
     try std.testing.expectError(
-        error.MissingField,
+        error.LengthMismatch,
         std.json.parseFromSliceLeaky(WsRequest, std.testing.allocator,
-            \\{"jsonrpc":"2.0","id":1,"method":"slotSubscribe"}
+            \\{"jsonrpc":"2.0","id":1,"method":"accountSubscribe"}
         , .{}),
     );
 

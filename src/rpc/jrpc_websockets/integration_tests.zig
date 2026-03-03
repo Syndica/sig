@@ -594,9 +594,9 @@ test "e2e: json-rpc request error codes follow spec" {
     handler.queueSend(
         \\{"jsonrpc":"2.0","id":1,"method":"nonexistentMethod","params":[]}
     );
-    // -32600 invalid request (missing params)
+    // -32600 invalid request (missing jsonrpc version)
     handler.queueSend(
-        \\{"jsonrpc":"2.0","id":2,"method":"slotSubscribe"}
+        \\{"id":2,"method":"slotSubscribe","params":[]}
     );
     // -32602 invalid params (wrong param count)
     handler.queueSend(
