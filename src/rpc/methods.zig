@@ -955,15 +955,14 @@ pub const GetBlocks = struct {
     };
 
     pub fn endSlot(self: GetBlocks) ?Slot {
-        const eoc = self.end_slot_or_config orelse return null;
-        return switch (eoc) {
-            .end_slot => |s| s,
-            .config => null,
+        if (self.end_slot_or_config) |eoc| switch (eoc) {
+            .end_slot => |s| return s,
+            .config => {},
         };
+        return null;
     }
 
     pub fn commitment(self: GetBlocks) common.Commitment {
-        if (self.config) |c| if (c.commitment) |cm| return cm;
         if (self.end_slot_or_config) |eoc| switch (eoc) {
             .end_slot => {},
             .config => |c| if (c.commitment) |cm| return cm,
