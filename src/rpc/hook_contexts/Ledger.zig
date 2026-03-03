@@ -1,5 +1,5 @@
-///! RPC hook context for block-related methods.
-///! Requires access to the Ledger and SlotTracker for commitment checks.
+//! RPC hook context for block-related methods.
+//! Requires access to the Ledger and SlotTracker for commitment checks.
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const base58 = @import("base58");
@@ -332,7 +332,7 @@ fn parseUiTransactionStatusMetaFromLedger(
         if (meta.rewards) |rewards| {
             const converted = try arena.alloc(GetBlock.Response.UiReward, rewards.len);
             for (rewards, 0..) |reward, i| {
-                converted[i] = try GetBlock.Response.UiReward.fromLedgerReward(reward);
+                converted[i] = GetBlock.Response.UiReward.fromLedgerReward(reward);
             }
             break :rewards converted;
         } else break :rewards &.{};
@@ -885,7 +885,7 @@ fn buildSimpleUiTransactionStatusMeta(
             if (meta.rewards) |rewards| {
                 const converted = try arena.alloc(GetBlock.Response.UiReward, rewards.len);
                 for (rewards, 0..) |reward, i| {
-                    converted[i] = try GetBlock.Response.UiReward.fromLedgerReward(reward);
+                    converted[i] = GetBlock.Response.UiReward.fromLedgerReward(reward);
                 }
                 break :rewards .{ .value = converted };
             } else break :rewards .{ .value = &.{} };
@@ -1007,7 +1007,7 @@ fn convertRewards(
     const rewards = try arena.alloc(GetBlock.Response.UiReward, rewards_value.len);
 
     for (rewards_value, 0..) |r, i| {
-        rewards[i] = try GetBlock.Response.UiReward.fromLedgerReward(r);
+        rewards[i] = GetBlock.Response.UiReward.fromLedgerReward(r);
     }
     return rewards;
 }

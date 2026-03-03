@@ -452,7 +452,7 @@ test "UiReward.fromLedgerReward" {
         .reward_type = .fee,
         .commission = null,
     };
-    const ui_reward = try GetBlock.Response.UiReward.fromLedgerReward(ledger_reward);
+    const ui_reward = GetBlock.Response.UiReward.fromLedgerReward(ledger_reward);
     try std.testing.expectEqual(Pubkey.ZEROES, ui_reward.pubkey);
     try std.testing.expectEqual(@as(i64, 5000), ui_reward.lamports);
     try std.testing.expectEqual(@as(u64, 1_000_000_000), ui_reward.postBalance);
@@ -475,7 +475,7 @@ test "UiReward.fromLedgerReward - all reward type mappings" {
             .reward_type = pair[0],
             .commission = null,
         };
-        const ui_reward = try GetBlock.Response.UiReward.fromLedgerReward(ledger_reward);
+        const ui_reward = GetBlock.Response.UiReward.fromLedgerReward(ledger_reward);
         try std.testing.expectEqual(pair[1], ui_reward.rewardType.?);
     }
 }
@@ -488,7 +488,7 @@ test "UiReward.fromLedgerReward - null reward type" {
         .reward_type = null,
         .commission = null,
     };
-    const ui_reward = try GetBlock.Response.UiReward.fromLedgerReward(ledger_reward);
+    const ui_reward = GetBlock.Response.UiReward.fromLedgerReward(ledger_reward);
     try std.testing.expectEqual(@as(?GetBlock.Response.UiReward.RewardType, null), ui_reward.rewardType);
 }
 

@@ -882,9 +882,7 @@ pub const GetBlock = struct {
                 try jw.endObject();
             }
 
-            pub fn fromLedgerReward(
-                reward: sig.ledger.meta.Reward,
-            ) !UiReward {
+            pub fn fromLedgerReward(reward: sig.ledger.meta.Reward) UiReward {
                 return .{
                     .pubkey = reward.pubkey,
                     .lamports = reward.lamports,

@@ -2623,7 +2623,7 @@ fn parseTokenInstruction(
             const authority_type = std.meta.intToEnum(
                 TokenAuthorityType,
                 instruction.data[1],
-            ) catch TokenAuthorityType.mintTokens;
+            ) catch return error.DeserializationFailed;
             const owned_field = switch (authority_type) {
                 .mintTokens,
                 .freezeAccount,
@@ -3095,7 +3095,6 @@ fn parseTokenInstruction(
             return sub_result;
         },
         .confidentialTransferExtension => {
-            if (instruction.data.len < 2) return error.DeserializationFailed;
             const ext_data = instruction.data[1..];
             const sub_result = try parseConfidentialTransferExtension(
                 arena,
@@ -5325,49 +5324,6 @@ fn exactFloat(arena: Allocator, value: f64) ![]const u8 {
         return std.fmt.allocPrint(arena, "{s}.0", .{result});
     }
     return arena.dupe(u8, result);
-}
-
-/// Format a UI amount with the specified number of decimal places.
-fn formatUiAmount(arena: Allocator, value: f64, decimals: u8) ![]const u8 {
-    // Format the float value manually with the right precision
-    var buf: [64]u8 = undefined;
-    const result = std.fmt.bufPrint(&buf, "{d}", .{value}) catch return error.FormatError;
-
-    // Find decimal point
-    const dot_idx = std.mem.indexOf(u8, result, ".") orelse {
-        // No decimal point, add trailing zeros
-        var output = try std.ArrayList(u8).initCapacity(arena, result.len + 1 + decimals);
-        try output.appendSlice(arena, result);
-        try output.append(arena, '.');
-        for (0..decimals) |_| {
-            try output.append(arena, '0');
-        }
-        return try output.toOwnedSlice(arena);
-    };
-
-    // Has decimal point - pad or truncate to desired precision
-    const after_dot = result.len - dot_idx - 1;
-    if (after_dot >= decimals) {
-        const slice = result[0 .. dot_idx + 1 + decimals];
-        var output = try std.ArrayList(u8).initCapacity(
-            arena,
-            slice.len,
-        );
-        // Truncate
-        try output.appendSlice(arena, slice);
-        return try output.toOwnedSlice(arena);
-    } else {
-        var output = try std.ArrayList(u8).initCapacity(
-            arena,
-            result.len + (decimals - after_dot),
-        );
-        // Pad with zeros
-        try output.appendSlice(arena, result);
-        for (0..(decimals - after_dot)) |_| {
-            try output.append(arena, '0');
-        }
-        return try output.toOwnedSlice(arena);
-    }
 }
 
 test "parse_instruction.ParsableProgram.fromID: known programs" {
