@@ -505,9 +505,8 @@ const RootedEpochBuffer = struct {
     buf: [4]?*const EpochInfo = @splat(null),
     root: Atomic(Epoch) = .init(0),
 
-    fn deinit(self: *const RootedEpochBuffer) void {
-        var buf = self.buf;
-        for (&buf) |*maybe_entry| {
+    fn deinit(self: *RootedEpochBuffer) void {
+        for (&self.buf) |*maybe_entry| {
             if (maybe_entry.*) |entry| {
                 entry.release();
             }
@@ -574,9 +573,8 @@ const UnrootedEpochBuffer = struct {
 
     pub const MAX_FORKS = 4;
 
-    fn deinit(self: *const UnrootedEpochBuffer) void {
-        var buf = self.buf;
-        for (&buf) |*maybe_entry| {
+    fn deinit(self: *UnrootedEpochBuffer) void {
+        for (&self.buf) |*maybe_entry| {
             if (maybe_entry.*) |entry| {
                 entry.info.release();
             }
