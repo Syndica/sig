@@ -140,6 +140,13 @@ pub const ExecutedTransaction = struct {
 
     pub fn deinit(self: *ExecutedTransaction, allocator: std.mem.Allocator) void {
         if (self.log_collector) |*lc| lc.deinit(allocator);
+        // Top-level instructions (depth == 1) are owned by the RuntimeTransaction.
+        // Only CPI instructions (depth > 1) are owned by this trace.
+        if (self.instruction_trace) |trace| for (trace.slice()) |entry| {
+            if (entry.depth > 1) {
+                entry.ixn_info.deinit(allocator);
+            }
+        };
     }
 
     pub fn total_cost(self: *const ExecutedTransaction) u64 {
@@ -172,9 +179,9 @@ pub const ProcessedTransaction = struct {
     pub const PreBalances = std14.BoundedArray(u64, account_loader.MAX_TX_ACCOUNT_LOCKS);
     pub const PreTokenBalances = sig.runtime.spl_token.RawTokenBalances;
 
-    pub fn deinit(self: ProcessedTransaction, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *ProcessedTransaction, allocator: std.mem.Allocator) void {
         for (self.writes.slice()) |account| account.deinit(allocator);
-        if (self.outputs) |out| if (out.log_collector) |log| log.deinit(allocator);
+        if (self.outputs) |*out| out.deinit(allocator);
     }
 };
 
