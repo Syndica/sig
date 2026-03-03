@@ -3,6 +3,7 @@ const std14 = @import("std14");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 const tracy = @import("tracy");
+const jrpc_types = sig.rpc.jrpc_websockets.types;
 
 const Allocator = std.mem.Allocator;
 
@@ -99,6 +100,8 @@ pub fn advanceReplay(
     // freeze slots
     const processed_a_slot: bool = try freezeCompletedSlots(replay_state, slot_results);
 
+    const root_before = replay_state.slot_tracker.root.load(.monotonic);
+
     // run consensus
     if (consensus_params) |consensus| {
         var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
@@ -125,7 +128,25 @@ pub fn advanceReplay(
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
             .results = slot_results,
         });
-    } else try bypassConsensus(replay_state);
+    } else {
+        try bypassConsensus(replay_state);
+    }
+
+    const root_after = replay_state.slot_tracker.root.load(.monotonic);
+    if (root_after != root_before) {
+        if (replay_state.event_sink) |sink| {
+            sink.send(.{
+                .method = .root,
+                .event_data = .{ .root = .{ .root = root_after } },
+            }) catch |err| {
+                // just catch and log error to avoid exiting replay
+                replay_state.logger.err().logf(
+                    "failed to send root event, slot: {}, err: {}",
+                    .{ root_after, err },
+                );
+            };
+        }
+    }
 
     if (slot_results.len != 0) {
         const elapsed = start_time.read().asNanos();
@@ -166,6 +187,7 @@ pub const Dependencies = struct {
     hard_forks: sig.core.HardForks,
     replay_threads: u32,
     stop_at_slot: ?Slot,
+    event_sink: ?*jrpc_types.EventSink = null,
 };
 
 pub const ConsensusStatus = enum {
@@ -189,6 +211,7 @@ pub const ReplayState = struct {
     status_cache: sig.core.StatusCache,
     execution_log_helper: replay.execution.LogHelper,
     replay_votes_channel: ?*Channel(ParsedVote),
+    event_sink: ?*jrpc_types.EventSink,
     stop_at_slot: ?sig.core.Slot,
 
     pub fn deinit(self: *ReplayState) void {
@@ -257,6 +280,7 @@ pub const ReplayState = struct {
             .status_cache = .DEFAULT,
             .execution_log_helper = .init(.from(deps.logger)),
             .replay_votes_channel = replay_votes_channel,
+            .event_sink = deps.event_sink,
             .stop_at_slot = deps.stop_at_slot,
         };
     }
