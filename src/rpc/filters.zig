@@ -1,7 +1,8 @@
-/// Filter types for scanning RPC methods (`getProgramAccounts`, `getTokenAccountsByOwner`, etc.).
-///
-/// Handles JSON wire format parsing, validation, and runtime matching against account data.
-/// Shared across all 6 scanning methods.
+//! Filter types for scanning RPC methods (`getProgramAccounts`, `getTokenAccountsByOwner`, etc.).
+//!
+//! Handles JSON wire format parsing, validation, and runtime matching against account data.
+//! Shared across all 6 scanning methods.
+//! TODO: Move all this into methods.zig and move the unit tests into test_serialize.zig.
 const std = @import("std");
 const base58 = @import("base58");
 
