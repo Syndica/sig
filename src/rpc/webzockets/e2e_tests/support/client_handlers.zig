@@ -207,22 +207,16 @@ pub const SendOnceHandler = struct {
             .ping => {
                 // sendPing copies the payload into an internal queue (no onWriteComplete),
                 // so no allocation or lifetime management is needed.
-                conn.sendPing(data) catch return;
+                conn.sendPing(data) catch unreachable;
             },
             .text => {
-                const copy = self.allocator.dupe(u8, data) catch return;
-                conn.sendText(copy) catch {
-                    self.allocator.free(copy);
-                    return;
-                };
+                const copy = self.allocator.dupe(u8, data) catch unreachable;
+                conn.sendText(copy) catch unreachable;
                 self.sent_data = copy;
             },
             .binary => {
-                const copy = self.allocator.dupe(u8, data) catch return;
-                conn.sendBinary(copy) catch {
-                    self.allocator.free(copy);
-                    return;
-                };
+                const copy = self.allocator.dupe(u8, data) catch unreachable;
+                conn.sendBinary(copy) catch unreachable;
                 self.sent_data = copy;
             },
             .none => {},
@@ -230,13 +224,13 @@ pub const SendOnceHandler = struct {
     }
 
     pub fn onMessage(self: *SendOnceHandler, conn: anytype, message: ws.Message) void {
-        self.received_data = self.allocator.dupe(u8, message.data) catch null;
+        self.received_data = self.allocator.dupe(u8, message.data) catch unreachable;
         self.received_type = message.type;
         conn.close(.normal, "");
     }
 
     pub fn onPong(self: *SendOnceHandler, conn: anytype, data: []const u8) void {
-        self.received_data = self.allocator.dupe(u8, data) catch null;
+        self.received_data = self.allocator.dupe(u8, data) catch unreachable;
         self.received_type = .pong;
         conn.close(.normal, "");
     }
