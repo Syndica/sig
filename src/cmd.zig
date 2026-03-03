@@ -1639,7 +1639,7 @@ fn validator(
         collapsed_manifest,
         &feature_set,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     const rpc_cluster_type = loaded_snapshot.genesis_config.cluster_type;
     const rpc_url = rpc_cluster_type.getRpcUrl() orelse @panic("No RPC Url for cluster type!");
@@ -1911,7 +1911,7 @@ fn replayOffline(
         collapsed_manifest,
         &feature_set,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
@@ -1990,7 +1990,7 @@ fn shredNetwork(
         shred_network_conf.root_slot,
         genesis_config.epoch_schedule,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     var rpc_epoch_ctx_service = RpcLeaderScheduleService
         .init(allocator, .from(app_base.logger), &epoch_tracker, rpc_client);
@@ -2002,11 +2002,12 @@ fn shredNetwork(
 
     var start = sig.time.Timer.start();
     while (start.read().asSecs() < 30) {
-        const leader_schedules = epoch_tracker.getLeaderSchedules() catch {
+        const leader_schedules_with_infos = epoch_tracker.getLeaderSchedules() catch {
             std.Thread.sleep(1_000_000_000);
             continue;
         };
-        if (leader_schedules.next != null) break;
+        defer leader_schedules_with_infos.release();
+        if (leader_schedules_with_infos.leader_schedules.next != null) break;
     }
 
     var ledger = try Ledger.init(
@@ -3019,13 +3020,15 @@ const RpcLeaderScheduleService = struct {
 
         // Iterate from the leader schedule epoch to the current epoch, and populate any missing epochs in the epoch tracker.
         for (leader_schedule_epoch..epoch + 1) |e| {
-            if (self.epoch_tracker.rooted_epochs.isNext(e)) {
+            // TODO: make this a little helper
+            const is_next = blk: {
+                var lock = self.epoch_tracker.rooted_epochs.read();
+                defer lock.unlock();
+                break :blk lock.get().isNext(e);
+            };
+            if (is_next) {
                 const first_slot_in_epoch = self.epoch_tracker.epoch_schedule.getFirstSlotInEpoch(e);
 
-                // The leaders saved in epoch E, are the leaders which will be active in epoch E + 1.
-                // Therefore, we need to fetch the leader schedule for epoch E + 1.
-                // We store the leaders for epoch E + 1 in the epoch info for epoch E since they are
-                // computed using the stakes from epoch E.
                 const leaders = try self.getLeaderSchedule(
                     first_slot_in_epoch +|
                         self.epoch_tracker.epoch_schedule.leader_schedule_slot_offset,
@@ -3034,19 +3037,17 @@ const RpcLeaderScheduleService = struct {
 
                 const entry = try self.allocator.create(sig.core.EpochInfo);
                 entry.* = .{
+                    .allocator = self.allocator,
                     .leaders = leaders,
                     .stakes = .EMPTY,
-                    // TODO: if you need features here for whatever reason, you'll have to implement
-                    // some way to forward them from replay, or source them by some other means.
                     .feature_set = .ALL_DISABLED,
                 };
                 entry.stakes.stakes.epoch = e;
-                errdefer {
-                    entry.deinit(self.allocator);
-                    self.allocator.destroy(entry);
-                }
+                errdefer entry.release();
 
-                try self.epoch_tracker.rooted_epochs.insert(self.allocator, e, entry);
+                var lock = self.epoch_tracker.rooted_epochs.write();
+                defer lock.unlock();
+                try lock.mut().insert(e, entry);
             }
         }
     }

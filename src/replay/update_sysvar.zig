@@ -55,7 +55,7 @@ const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 pub fn updateSysvarsForNewSlot(
     allocator: Allocator,
     account_store: AccountStore,
-    epoch_tracker: *const sig.core.EpochTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     constants: *const sig.core.SlotConstants,
     state: *sig.core.SlotState,
     slot: Slot,
@@ -64,6 +64,7 @@ pub fn updateSysvarsForNewSlot(
     const epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
     const parent_slots_epoch = epoch_tracker.epoch_schedule.getEpoch(constants.parent_slot);
     const epoch_info = try epoch_tracker.getEpochInfo(slot);
+    defer epoch_info.release();
 
     const sysvar_deps = UpdateSysvarAccountDeps{
         .slot = slot,
