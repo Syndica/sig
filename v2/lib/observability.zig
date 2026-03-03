@@ -566,3 +566,131 @@ pub const Histogram = struct {
         try std.testing.expectEqual(expected_count, snap.count);
     }
 };
+
+fn initBuckets(
+    comptime len: usize,
+    upper_bounds: *const [len]f64,
+    cumulative_counts: *const [len]u64,
+) [len]Histogram.SnapshotReader.Bucket {
+    var buckets: [len]Histogram.SnapshotReader.Bucket = undefined;
+    for (
+        &buckets,
+        upper_bounds,
+        cumulative_counts,
+    ) |*bucket, upper_bound, cumulative_count| {
+        bucket.* = .{
+            .upper_bound = upper_bound,
+            .cumulative_count = cumulative_count,
+        };
+    }
+    return buckets;
+}
+
+const various_observation_results: [11]u64 = .{ 1, 1, 1, 1, 4, 4, 4, 5, 6, 6, 6 };
+fn observeVarious(hist: Histogram) void {
+    hist.observe(1.0);
+    hist.observe(0.1);
+    hist.observe(2.0);
+    hist.observe(0.1);
+    hist.observe(0.0000000001);
+    hist.observe(0.1);
+    hist.observe(100.0);
+}
+
+test "histogram: empty" {
+    const gpa = std.testing.allocator;
+
+    const histogram: Histogram = try .initForTest(gpa, &Histogram.DEFAULT_UPPER_BOUNDS);
+    defer histogram.deinitForTest(gpa);
+
+    try histogram.testExpectBuckets(0, &initBuckets(
+        Histogram.DEFAULT_UPPER_BOUNDS.len,
+        &Histogram.DEFAULT_UPPER_BOUNDS,
+        &@splat(0),
+    ));
+}
+
+test "histogram: data goes in correct buckets" {
+    const gpa = std.testing.allocator;
+
+    const histogram: Histogram = try .initForTest(gpa, &Histogram.DEFAULT_UPPER_BOUNDS);
+    defer histogram.deinitForTest(gpa);
+
+    observeVarious(histogram);
+
+    try histogram.testExpectBuckets(7, &initBuckets(
+        Histogram.DEFAULT_UPPER_BOUNDS.len,
+        &Histogram.DEFAULT_UPPER_BOUNDS,
+        &various_observation_results,
+    ));
+}
+
+test "histogram: repeated snapshots measure the same thing" {
+    const gpa = std.testing.allocator;
+
+    const histogram: Histogram = try .initForTest(gpa, &Histogram.DEFAULT_UPPER_BOUNDS);
+    defer histogram.deinitForTest(gpa);
+
+    observeVarious(histogram);
+
+    for (0..2) |_| try histogram.testExpectBuckets(7, &initBuckets(
+        Histogram.DEFAULT_UPPER_BOUNDS.len,
+        &Histogram.DEFAULT_UPPER_BOUNDS,
+        &various_observation_results,
+    ));
+}
+
+test "histogram: values accumulate across snapshots" {
+    const gpa = std.testing.allocator;
+
+    const histogram: Histogram = try .initForTest(gpa, &Histogram.DEFAULT_UPPER_BOUNDS);
+    defer histogram.deinitForTest(gpa);
+
+    observeVarious(histogram);
+    try histogram.testExpectBuckets(7, &initBuckets(
+        Histogram.DEFAULT_UPPER_BOUNDS.len,
+        &Histogram.DEFAULT_UPPER_BOUNDS,
+        &various_observation_results,
+    ));
+
+    histogram.observe(1.0);
+
+    try histogram.testExpectBuckets(8, &initBuckets(
+        Histogram.DEFAULT_UPPER_BOUNDS.len,
+        &Histogram.DEFAULT_UPPER_BOUNDS,
+        &.{ 1, 1, 1, 1, 4, 4, 4, 6, 7, 7, 7 },
+    ));
+}
+
+test "histogram: totals add up after concurrent reads and writes" {
+    const gpa = std.testing.allocator;
+
+    const histogram: Histogram = try .initForTest(gpa, &Histogram.DEFAULT_UPPER_BOUNDS);
+    defer histogram.deinitForTest(gpa);
+
+    var threads: [4]std.Thread = undefined;
+    for (&threads, 0..) |*thread, thread_i| {
+        const local = struct {
+            fn run(h: Histogram, snapshotter: bool) void {
+                for (0..1000) |i| {
+                    observeVarious(h);
+                    if (snapshotter and i % 10 == 0) {
+                        var snap = h.swapOutSnapshot();
+                        defer snap.release();
+                    }
+                }
+            }
+        };
+        thread.* = try .spawn(.{}, local.run, .{ histogram, thread_i == 0 });
+    }
+    for (&threads) |*thread| thread.join();
+
+    var expected = various_observation_results;
+    for (&expected) |*r| r.* *= 4000;
+
+    try histogram.testExpectBuckets(28000, &initBuckets(
+        Histogram.DEFAULT_UPPER_BOUNDS.len,
+        &Histogram.DEFAULT_UPPER_BOUNDS,
+        &expected,
+    ));
+}
