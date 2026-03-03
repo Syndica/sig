@@ -67,6 +67,16 @@ pub const AccountData = union(enum) {
     /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/lib.rs#L39
     legacy_binary: []const u8,
 
+    pub fn deinit(self: AccountData, allocator: std.mem.Allocator) void {
+        const slice = switch (self) {
+            .encoded => |pair| pair[0],
+            .jsonParsed => |s| s,
+            .json_parsed_base64_fallback => |s| s,
+            .legacy_binary => |s| s,
+        };
+        allocator.free(slice);
+    }
+
     pub fn jsonStringify(
         self: AccountData,
         /// `*std.json.WriteStream(...)`

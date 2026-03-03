@@ -9,7 +9,6 @@
 //! https://solana.com/de/docs/rpc
 
 const std = @import("std");
-const tracy = @import("tracy");
 const sig = @import("../sig.zig");
 const rpc = @import("lib.zig");
 const base58 = @import("base58");
@@ -203,6 +202,20 @@ pub const GetAccountInfo = struct {
             owner: Pubkey,
             rentEpoch: u64,
             space: u64,
+
+            pub fn from(
+                account: sig.core.Account,
+                data: account_codec.AccountData,
+            ) Value {
+                return .{
+                    .data = data,
+                    .executable = account.executable,
+                    .lamports = account.lamports,
+                    .owner = account.owner,
+                    .rentEpoch = account.rent_epoch,
+                    .space = account.data.len(),
+                };
+            }
         };
     };
 };
