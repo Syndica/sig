@@ -243,6 +243,7 @@ pub fn getMultipleAccounts(
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
+
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
