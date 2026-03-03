@@ -1400,7 +1400,7 @@ pub const ReplayTower = struct {
         progress: *const ProgressMap,
         latest_validator_votes: *const LatestValidatorVotes,
         fork_choice: *const HeaviestSubtreeForkChoice,
-        epoch_tracker: *const sig.core.EpochTracker,
+        epoch_tracker: *sig.core.EpochTracker,
         /// For reading the slot history account
         account_reader: sig.accounts_db.AccountReader,
     ) !SelectVoteAndResetForkResult {
@@ -1410,6 +1410,7 @@ pub const ReplayTower = struct {
 
         const epoch_info = epoch_tracker.getEpochInfo(heaviest_slot) catch
             return error.ForkStatsNotFound;
+        defer epoch_info.release();
         // Check switch threshold conditions
         const initial_decision = try self.checkSwitchThreshold(
             allocator,
@@ -4935,7 +4936,7 @@ test "selectVoteAndResetForks stake not found" {
         allocator,
         &.{.EMPTY_WITH_GENESIS},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     try std.testing.expectError(
         error.ForkStatsNotFound,
@@ -5011,24 +5012,9 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     try fixture.fillFork(allocator, .{ .root = root, .data = trees1 }, .active);
     try fixture.fill_epoch_stake_random(allocator, random);
 
-    var tmp_dir_root = std.testing.tmpDir(.{});
-    defer tmp_dir_root.cleanup();
-    const tmp_dir = tmp_dir_root.dir;
-
-    // the directory into which the snapshots will be unpacked and copied to.
-    var unpacked_snap_dir = try tmp_dir.makeOpenPath("snapshot", .{});
-    defer unpacked_snap_dir.close();
-
-    var accountsdb = try sig.accounts_db.AccountsDB.init(.{
-        .allocator = allocator,
-        .logger = .noop,
-        .snapshot_dir = unpacked_snap_dir,
-        .geyser_writer = null,
-        .gossip_view = null,
-        .index_allocation = .ram,
-        .number_of_index_shards = 1,
-    });
-    defer accountsdb.deinit();
+    var test_ctx = try sig.accounts_db.Db.initTest(allocator);
+    defer test_ctx.deinit();
+    var accountsdb = &test_ctx.db;
 
     var replay_tower = try ReplayTower.init(
         .noop,
@@ -5067,8 +5053,10 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
             .executable = false,
             .rent_epoch = 0,
         };
-        try accountsdb.putAccount(slot_to_write, SlotHistory.ID, sh_account);
+        try accountsdb.put(slot_to_write, SlotHistory.ID, sh_account);
     }
+
+    const account_reader: sig.accounts_db.AccountReader = .{ .accounts_db = accountsdb };
 
     const forks1 = try fixture.select_fork_slots(&replay_tower);
     const result = try replay_tower.selectVoteAndResetForks(
@@ -5081,7 +5069,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &LatestValidatorVotes.empty,
         &fixture.fork_choice,
         &fixture.epoch_tracker,
-        accountsdb.accountReader(),
+        account_reader,
     );
     try std.testing.expectEqual(4, result.reset_slot.?);
     try std.testing.expectEqual(4, result.vote_slot.?.slot);
@@ -5101,7 +5089,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &LatestValidatorVotes.empty,
         &fixture.fork_choice,
         &fixture.epoch_tracker,
-        accountsdb.accountReader(),
+        account_reader,
     );
 
     defer {
@@ -5125,7 +5113,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &LatestValidatorVotes.empty,
         &fixture.fork_choice,
         &fixture.epoch_tracker,
-        accountsdb.accountReader(),
+        account_reader,
     );
 
     defer {
@@ -5189,7 +5177,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &LatestValidatorVotes.empty,
         &fixture.fork_choice,
         &fixture.epoch_tracker,
-        accountsdb.accountReader(),
+        account_reader,
     );
 
     defer {
@@ -5231,7 +5219,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &LatestValidatorVotes.empty,
         &fixture.fork_choice,
         &fixture.epoch_tracker,
-        accountsdb.accountReader(),
+        account_reader,
     );
 
     defer {
@@ -5440,7 +5428,7 @@ pub const TestFixture = struct {
         allocator: std.mem.Allocator,
         root: SlotAndHash,
     ) !TestFixture {
-        const slot_tracker: SlotTracker = blk: {
+        var slot_tracker: SlotTracker = blk: {
             var constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
             errdefer constants.deinit(allocator);
             constants.parent_slot = root.slot -| 1;
@@ -5452,13 +5440,13 @@ pub const TestFixture = struct {
             break :blk try .init(
                 allocator,
                 root.slot,
-                .{ .constants = constants, .state = state },
+                .{ .constants = constants, .state = state, .allocator = allocator },
             );
         };
         errdefer slot_tracker.deinit(allocator);
 
         var epoch_tracker = sig.core.EpochTracker.init(.default, 0, .INIT);
-        defer epoch_tracker.deinit(allocator);
+        defer epoch_tracker.deinit();
 
         return .{
             .slot_tracker = slot_tracker,
@@ -5482,7 +5470,7 @@ pub const TestFixture = struct {
         self.node_pubkeys.deinit(allocator);
         self.vote_pubkeys.deinit(allocator);
         self.latest_validator_votes_for_frozen_banks.deinit(allocator);
-        self.epoch_tracker.deinit(allocator);
+        self.epoch_tracker.deinit();
 
         for (self.descendants.values()) |set| set.deinit(allocator);
         self.descendants.deinit(allocator);
@@ -5572,7 +5560,7 @@ pub const TestFixture = struct {
                 try self.slot_tracker.put(
                     allocator,
                     tree[0].slot,
-                    .{ .constants = constants, .state = state },
+                    .{ .constants = constants, .state = state, .allocator = allocator },
                 );
             }
 
@@ -5592,7 +5580,8 @@ pub const TestFixture = struct {
             if (frozen_state == .frozen) {
                 // new_bank.freeze();
                 const new_slot = self.slot_tracker.get(parent_slot) orelse continue;
-                new_slot.state.hash = .init(parent_hash);
+                defer new_slot.release();
+                new_slot.state().hash = .init(parent_hash);
                 const fork_state = self.progress.getForkStats(parent_slot) orelse continue;
                 fork_state.slot_hash = parent_hash;
             }
@@ -5632,7 +5621,7 @@ pub const TestFixture = struct {
         );
         epoch_stakes.stakes.epoch = 0;
 
-        self.epoch_tracker.deinit(allocator);
+        self.epoch_tracker.deinit();
         self.epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
             allocator,
             &.{epoch_stakes},
@@ -5870,7 +5859,7 @@ fn genStakes(
                 .stake = lamports,
                 .account = .{
                     .account = .{ .lamports = lamports, .owner = Pubkey.initRandom(random) },
-                    .state = vote_state,
+                    .state = .{ .v4 = vote_state },
                     .rc = rc,
                 },
             },

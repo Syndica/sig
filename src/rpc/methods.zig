@@ -1316,9 +1316,9 @@ pub const common = struct {
 };
 
 pub const RpcHookContext = struct {
-    slot_tracker: *const sig.replay.trackers.SlotTracker,
-    epoch_tracker: *const sig.core.EpochTracker,
+    slot_tracker: *sig.replay.trackers.SlotTracker,
     account_reader: sig.accounts_db.AccountReader,
+    epoch_tracker: *sig.core.EpochTracker,
 
     // Limit the length of the `epoch_credits` array for each validator in a `get_vote_accounts`
     // response.
@@ -1349,6 +1349,7 @@ pub const RpcHookContext = struct {
 
         // Get the state for the requested commitment slot.
         const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        defer slot_ref.release();
 
         // Setup config consts for the request.
         const delinquent_distance = config.delinquentSlotDistance orelse
@@ -1358,6 +1359,7 @@ pub const RpcHookContext = struct {
 
         // Get epoch info for epochVoteAccounts check
         const epoch_constants = try self.epoch_tracker.getEpochInfo(slot);
+        defer epoch_constants.release();
         const epoch_stakes = epoch_constants.stakes.stakes;
         const epoch_vote_accounts = &epoch_stakes.vote_accounts.vote_accounts;
 
@@ -1373,7 +1375,7 @@ pub const RpcHookContext = struct {
         }
 
         // Access stakes cache (takes read lock).
-        const stakes, var stakes_guard = slot_ref.state.stakes_cache.stakes.readWithLock();
+        const stakes, var stakes_guard = slot_ref.state().stakes_cache.stakes.readWithLock();
         defer stakes_guard.unlock();
         const vote_accounts_map = &stakes.vote_accounts.vote_accounts;
         for (vote_accounts_map.keys(), vote_accounts_map.values()) |vote_pk, stake_and_vote| {
@@ -1406,7 +1408,7 @@ pub const RpcHookContext = struct {
 
             // Convert epoch credits to [3]u64 format
             // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1174
-            const all_credits = vote_state.epoch_credits.items;
+            const all_credits = vote_state.epochCreditsList();
             const num_credits_to_return = @min(
                 all_credits.len,
                 MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY,
@@ -1420,14 +1422,14 @@ pub const RpcHookContext = struct {
 
             const info = GetVoteAccounts.VoteAccount{
                 .votePubkey = vote_pk,
-                .nodePubkey = vote_state.node_pubkey,
+                .nodePubkey = vote_state.nodePubkey().*,
                 .activatedStake = activated_stake,
                 .epochVoteAccount = is_epoch_vote_account,
                 .commission = vote_state.commission(),
                 .lastVote = last_vote_slot,
                 .epochCredits = credits,
                 // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1188
-                .rootSlot = vote_state.root_slot orelse 0,
+                .rootSlot = vote_state.rootSlot() orelse 0,
             };
 
             if (is_current) {
@@ -1469,8 +1471,9 @@ pub const RpcHookContext = struct {
         }
 
         // Get slot reference to access ancestors
-        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-        const slot_reader = self.account_reader.forSlot(&ref.constants.ancestors);
+        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        defer slot_ref.release();
+        const slot_reader = self.account_reader.forSlot(&slot_ref.constants().ancestors);
 
         // Look up account
         const maybe_account = try slot_reader.get(allocator, params.pubkey);

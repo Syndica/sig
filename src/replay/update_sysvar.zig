@@ -55,7 +55,7 @@ const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 pub fn updateSysvarsForNewSlot(
     allocator: Allocator,
     account_store: AccountStore,
-    epoch_tracker: *const sig.core.EpochTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     constants: *const sig.core.SlotConstants,
     state: *sig.core.SlotState,
     slot: Slot,
@@ -64,6 +64,7 @@ pub fn updateSysvarsForNewSlot(
     const epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
     const parent_slots_epoch = epoch_tracker.epoch_schedule.getEpoch(constants.parent_slot);
     const epoch_info = try epoch_tracker.getEpochInfo(slot);
+    defer epoch_info.release();
 
     const sysvar_deps = UpdateSysvarAccountDeps{
         .slot = slot,
@@ -509,13 +510,13 @@ fn getTimestampEstimate(
 
         for (vote_accounts.keys(), vote_accounts.values()) |pubkey, vote_account| {
             const vote_state = &vote_account.account.state;
-            const slot_delta = std.math.sub(u64, slot, vote_state.last_timestamp.slot) catch
+            const slot_delta = std.math.sub(u64, slot, vote_state.lastTimestamp().slot) catch
                 return null;
             if (slot_delta <= slots_per_epoch) {
                 recent_timestamps.appendAssumeCapacity(.{
                     pubkey,
-                    vote_state.last_timestamp.slot,
-                    vote_state.last_timestamp.timestamp,
+                    vote_state.lastTimestamp().slot,
+                    vote_state.lastTimestamp().timestamp,
                 });
             }
         }
@@ -611,7 +612,7 @@ fn testCreateSysvarAccount(
 
 test fillMissingSysvarCacheEntries {
     const allocator = std.testing.allocator;
-    const AccountsDB = sig.accounts_db.Two;
+    const AccountsDB = sig.accounts_db.Db;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -646,7 +647,7 @@ test fillMissingSysvarCacheEntries {
     // Fill missing entries in the sysvar cache from accounts db.
     try fillMissingSysvarCacheEntries(
         allocator,
-        .{ .accounts_db_two = .{ db, &ancestors } },
+        .{ .accounts_db = .{ db, &ancestors } },
         &actual,
     );
 
@@ -726,7 +727,7 @@ fn initSysvarCacheWithDefaultValues(allocator: Allocator) !SysvarCache {
 
 fn insertSysvarCacheAccounts(
     allocator: Allocator,
-    db: *sig.accounts_db.Two,
+    db: *sig.accounts_db.Db,
     sysvar_cache: *const SysvarCache,
     slot: Slot,
     inherit_from_old_account: bool,
@@ -744,7 +745,7 @@ fn insertSysvarCacheAccounts(
         Fees,
         RecentBlockhashes,
     }) |Sysvar| {
-        const reader: sig.accounts_db.AccountReader = .{ .accounts_db_two = db };
+        const reader: sig.accounts_db.AccountReader = .{ .accounts_db = db };
         const old_account = if (inherit_from_old_account)
             reader.getLatest(allocator, Sysvar.ID) catch null
         else
@@ -812,7 +813,7 @@ fn getSysvarAndAccount(
 
 test "update all sysvars" {
     const allocator = std.testing.allocator;
-    const AccountsDB = sig.accounts_db.Two;
+    const AccountsDB = sig.accounts_db.Db;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -856,7 +857,7 @@ test "update all sysvars" {
     // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
     slot = slot + 1;
     const update_sysvar_deps: UpdateSysvarAccountDeps = .{
-        .slot_store = .{ .accounts_db_two = .{ db, slot, &ancestors } },
+        .slot_store = .{ .accounts_db = .{ db, slot, &ancestors } },
         .capitalization = &capitalization,
         .rent = &rent,
         .slot = slot,

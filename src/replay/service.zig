@@ -74,7 +74,9 @@ pub fn advanceReplay(
     var start_time = sig.time.Timer.start();
     replay_state.logger.debug().log("advancing replay");
 
-    var leader_schedules = try replay_state.epoch_tracker.getLeaderSchedules();
+    var leader_schedules_with_epoch_infos = try replay_state.epoch_tracker.getLeaderSchedules();
+    defer leader_schedules_with_epoch_infos.release();
+    var leader_schedules = leader_schedules_with_epoch_infos.leader_schedules;
     const slot_leaders = SlotLeaders.init(
         &leader_schedules,
         sig.core.leader_schedule.LeaderSchedules.getLeaderOrNull,
@@ -217,12 +219,18 @@ pub const ReplayState = struct {
         var slot_tracker: SlotTracker = try .init(
             deps.allocator,
             deps.root.slot,
-            .{ .constants = deps.root.constants, .state = deps.root.state },
+            .{
+                .constants = deps.root.constants,
+                .state = deps.root.state,
+                .allocator = deps.allocator,
+            },
         );
         errdefer slot_tracker.deinit(deps.allocator);
         errdefer {
             // do not free the root slot data parameter, we don't own it unless the function returns successfully
-            deps.allocator.destroy(slot_tracker.slots.fetchSwapRemove(deps.root.slot).?.value);
+            var slots_lg = slot_tracker.slots.write();
+            defer slots_lg.unlock();
+            deps.allocator.destroy(slots_lg.mut().fetchSwapRemove(deps.root.slot).?.value);
         }
 
         const replay_votes_channel: ?*Channel(ParsedVote) = if (consensus_status == .enabled)
@@ -267,13 +275,14 @@ pub const ReplayState = struct {
 /// Analogous to [`initialize_progress_and_fork_choice_with_locked_bank_forks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L637)
 pub fn initProgressMap(
     allocator: std.mem.Allocator,
-    slot_tracker: *const SlotTracker,
-    epoch_tracker: *const sig.core.EpochTracker,
+    slot_tracker: *SlotTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     my_pubkey: Pubkey,
     vote_account: ?Pubkey,
 ) !ProgressMap {
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
+    defer for (frozen_slots.values()) |ref| ref.release();
 
     frozen_slots.sort(FrozenSlotsSortCtx{ .slots = frozen_slots.keys() });
 
@@ -283,7 +292,8 @@ pub fn initProgressMap(
     // Initialize progress map with any root slots
     for (frozen_slots.keys(), frozen_slots.values()) |slot, ref| {
         const epoch_info = try epoch_tracker.getEpochInfo(slot);
-        const prev_leader_slot = progress.getSlotPrevLeaderSlot(ref.constants.parent_slot);
+        defer epoch_info.release();
+        const prev_leader_slot = progress.getSlotPrevLeaderSlot(ref.constants().parent_slot);
         try progress.map.ensureUnusedCapacity(allocator, 1);
         progress.map.putAssumeCapacity(slot, try .initFromInfo(allocator, .{
             .slot_info = ref,
@@ -334,6 +344,7 @@ pub fn trackNewSlots(
     const root = slot_tracker.root.load(.monotonic);
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
+    defer for (frozen_slots.values()) |ref| ref.release();
 
     var frozen_slots_since_root = try std.ArrayListUnmanaged(sig.core.Slot)
         .initCapacity(allocator, frozen_slots.count());
@@ -362,8 +373,8 @@ pub fn trackNewSlots(
                 account_store.reader(),
                 epoch_tracker.cluster.ticks_per_slot,
                 parent_slot,
-                parent_info.constants,
-                parent_info.state,
+                parent_info.constants(),
+                parent_info.state(),
                 slot_leaders.get(slot) orelse return error.UnknownLeader,
                 slot,
             );
@@ -422,7 +433,11 @@ pub fn trackNewSlots(
             try ledger.db.put(schema.blocktime, slot, clock.unix_timestamp);
             try ledger.db.put(schema.block_height, slot, constants.block_height);
 
-            try slot_tracker.put(allocator, slot, .{ .constants = constants, .state = state });
+            try slot_tracker.put(allocator, slot, .{
+                .constants = constants,
+                .state = state,
+                .allocator = allocator,
+            });
             try slot_tree.record(allocator, slot, constants.parent_slot);
 
             // TODO: update_fork_propagated_threshold_from_votes
@@ -567,14 +582,15 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
         .last_entry_hash => |last_entry_hash| {
             const slot = result.slot;
             const slot_info = slot_tracker.get(slot) orelse return error.MissingSlotInTracker;
-            if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+            defer slot_info.release();
+            if (slot_info.state().tickHeight() == slot_info.constants().max_tick_height) {
                 state.logger.info().logf("finished replaying slot: {}", .{slot});
                 try replay.freeze.freezeSlot(state.allocator, .init(
                     .from(state.logger),
                     state.account_store,
                     &state.thread_pool,
-                    slot_info.state,
-                    slot_info.constants,
+                    slot_info.state(),
+                    slot_info.constants(),
                     slot,
                     last_entry_hash,
                     state.ledger,
@@ -610,14 +626,15 @@ fn bypassConsensus(state: *ReplayState) !void {
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root.store(new_root, .monotonic);
-        slot_tracker.pruneNonRooted(state.allocator, &state.thread_pool);
+        slot_tracker.pruneNonRooted(&state.thread_pool);
 
         try state.status_cache.addRoot(state.allocator, new_root);
 
         const slot_constants = slot_tracker.get(new_root).?;
+        defer slot_constants.release();
         try state.account_store.onSlotRooted(
             new_root,
-            &slot_constants.constants.ancestors,
+            &slot_constants.constants().ancestors,
         );
     }
 }
@@ -691,9 +708,14 @@ test trackNewSlots {
     var slot_tracker: SlotTracker = try .init(allocator, 0, .{
         .state = state,
         .constants = try .genesis(allocator, .DEFAULT),
+        .allocator = allocator,
     });
     defer slot_tracker.deinit(allocator);
-    slot_tracker.get(0).?.state.hash.set(.ZEROES);
+    {
+        const ref = slot_tracker.get(0).?;
+        defer ref.release();
+        ref.state().hash.set(.ZEROES);
+    }
 
     var leader_schedule = sig.core.leader_schedule.LeaderSchedule{
         .start = 0,
@@ -715,7 +737,7 @@ test trackNewSlots {
         0,
         .INIT,
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     const slot_leaders = SlotLeaders.init(
         &leader_schedule,
@@ -771,7 +793,11 @@ test trackNewSlots {
     );
 
     // freezing 1 should result in 2 and 4 being added
-    slot_tracker.get(1).?.state.hash.set(.ZEROES);
+    {
+        const ref = slot_tracker.get(1).?;
+        defer ref.release();
+        ref.state().hash.set(.ZEROES);
+    }
 
     try trackNewSlots(
         allocator,
@@ -793,8 +819,16 @@ test trackNewSlots {
     );
 
     // freezing 2 and 4 should only result in 6 being added since 3's parent is unknown
-    slot_tracker.get(2).?.state.hash.set(.ZEROES);
-    slot_tracker.get(4).?.state.hash.set(.ZEROES);
+    {
+        const ref2 = slot_tracker.get(2).?;
+        defer ref2.release();
+        ref2.state().hash.set(.ZEROES);
+    }
+    {
+        const ref4 = slot_tracker.get(4).?;
+        defer ref4.release();
+        ref4.state().hash.set(.ZEROES);
+    }
 
     try trackNewSlots(
         allocator,
@@ -820,7 +854,7 @@ test trackNewSlots {
 }
 
 fn expectSlotTracker(
-    slot_tracker: *const SlotTracker,
+    slot_tracker: *SlotTracker,
     leader_schedule: sig.core.leader_schedule.LeaderSchedule,
     included_slots: []const [2]Slot,
     excluded_slots: []const Slot,
@@ -828,14 +862,17 @@ fn expectSlotTracker(
     for (included_slots) |item| {
         const slot, const parent = item;
         const slot_info = slot_tracker.get(slot) orelse return error.Fail;
-        try std.testing.expectEqual(parent, slot_info.constants.parent_slot);
+        defer slot_info.release();
+        try std.testing.expectEqual(parent, slot_info.constants().parent_slot);
         if (slot != 0) try std.testing.expectEqual(
             leader_schedule.leaders[slot],
-            slot_info.constants.collector_id,
+            slot_info.constants().collector_id,
         );
     }
     for (excluded_slots) |slot| {
-        try std.testing.expectEqual(null, slot_tracker.get(slot));
+        const maybe_ref = slot_tracker.get(slot);
+        if (maybe_ref) |ref| ref.release();
+        try std.testing.expectEqual(null, maybe_ref);
     }
 }
 
@@ -848,7 +885,7 @@ test "Service clean init and deinit" {
             var service = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
             defer {
                 service.deinit();
-                service.epoch_tracker.deinit(allocator);
+                service.epoch_tracker.deinit();
                 allocator.destroy(service.epoch_tracker);
             }
         }
@@ -869,7 +906,7 @@ test "process runs without error with no replay results" {
     var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
     defer {
         replay_state.deinit();
-        replay_state.epoch_tracker.deinit(allocator);
+        replay_state.epoch_tracker.deinit();
         allocator.destroy(replay_state.epoch_tracker);
     }
 
@@ -934,7 +971,7 @@ test "advance calls consensus.process with empty replay results" {
     var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
     defer {
         replay_state.deinit();
-        replay_state.epoch_tracker.deinit(allocator);
+        replay_state.epoch_tracker.deinit();
         allocator.destroy(replay_state.epoch_tracker);
     }
 
@@ -978,7 +1015,7 @@ test "freezeCompletedSlots handles errors correctly" {
     var replay_state = try dep_stubs.stubbedState(allocator, .from(logger.logger("", .warn)));
     defer {
         replay_state.deinit();
-        replay_state.epoch_tracker.deinit(allocator);
+        replay_state.epoch_tracker.deinit();
         allocator.destroy(replay_state.epoch_tracker);
     }
 
@@ -1094,7 +1131,7 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     );
     defer {
         replay_state.deinit();
-        replay_state.epoch_tracker.deinit(allocator);
+        replay_state.epoch_tracker.deinit();
         allocator.destroy(replay_state.epoch_tracker);
     }
 
@@ -1108,7 +1145,8 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
     // get slot hash
     const actual_slot_hash = tracker_lock: {
         const ref = replay_state.slot_tracker.get(execution_slot).?;
-        break :tracker_lock ref.state.hash.readCopy().?;
+        defer ref.release();
+        break :tracker_lock ref.state().hash.readCopy().?;
     };
 
     const expected_slot_hash = sig.core.Hash.parse("4UeCbit4YGY42p9KrDzoD1LL21Vn3htb5N5G9w6L1kUE");
@@ -1162,7 +1200,7 @@ fn parseBincodeFromGzipFile(
 /// outlive replay, and is used by replay.
 pub const DependencyStubs = struct {
     allocator: Allocator,
-    accounts_db_state: sig.accounts_db.Two.TestContext,
+    accounts_db_state: sig.accounts_db.Db.TestContext,
     ledger: Ledger,
     senders: TowerConsensus.Senders,
     receivers: TowerConsensus.Receivers,
@@ -1178,7 +1216,7 @@ pub const DependencyStubs = struct {
     }
 
     pub fn init(allocator: Allocator, logger: Logger) !DependencyStubs {
-        var test_state = try sig.accounts_db.Two.initTest(allocator);
+        var test_state = try sig.accounts_db.Db.initTest(allocator);
         errdefer test_state.deinit();
 
         try test_state.tmp.dir.makeDir("ledger");
@@ -1208,11 +1246,11 @@ pub const DependencyStubs = struct {
     }
 
     pub fn accountStore(self: *DependencyStubs) AccountStore {
-        return .{ .accounts_db_two = &self.accounts_db_state.db };
+        return .{ .accounts_db = &self.accounts_db_state.db };
     }
 
     pub fn accountReader(self: *DependencyStubs) AccountReader {
-        return .{ .accounts_db_two = &self.accounts_db_state.db };
+        return .{ .accounts_db = &self.accounts_db_state.db };
     }
 
     /// Initialize replay service with stubbed inputs.
@@ -1250,7 +1288,7 @@ pub const DependencyStubs = struct {
             0,
             .INIT,
         );
-        errdefer epoch_tracker.deinit(allocator);
+        errdefer epoch_tracker.deinit();
 
         return try .init(.{
             .allocator = allocator,
@@ -1290,7 +1328,7 @@ pub const DependencyStubs = struct {
 
         const feature_set = try sig.replay.service.getActiveFeatures(
             allocator,
-            .{ .accounts_db_two = .{ &self.accounts_db_state.db, &bank_fields.ancestors } },
+            .{ .accounts_db = .{ &self.accounts_db_state.db, &bank_fields.ancestors } },
             bank_fields.slot,
         );
 
@@ -1302,7 +1340,7 @@ pub const DependencyStubs = struct {
             collapsed_manifest,
             &feature_set,
         );
-        errdefer epoch_tracker.deinit(allocator);
+        errdefer epoch_tracker.deinit();
 
         const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
             allocator,
@@ -1314,7 +1352,7 @@ pub const DependencyStubs = struct {
         const lt_hash = collapsed_manifest.bank_extra.accounts_lt_hash;
 
         const account_store = sig.accounts_db.AccountStore{
-            .accounts_db_two = &self.accounts_db_state.db,
+            .accounts_db = &self.accounts_db_state.db,
         };
         const account_reader = account_store.reader().forSlot(&bank_fields.ancestors);
         var root_slot_state =
