@@ -503,7 +503,7 @@ pub const EpochInfo = struct {
 /// deinitialize the corresponding data when overwriting entries with new epoch data.
 const RootedEpochBuffer = struct {
     buf: [4]?*const EpochInfo = @splat(null),
-    root: Atomic(Epoch) = .init(0),
+    root: Epoch = 0,
 
     fn deinit(self: *RootedEpochBuffer) void {
         for (&self.buf) |*maybe_entry| {
@@ -527,7 +527,7 @@ const RootedEpochBuffer = struct {
         }
 
         self.buf[index] = value;
-        self.root.store(epoch, .monotonic);
+        self.root = epoch;
     }
 
     /// Returns a ref-counted reference to the EpochInfo for the given epoch.
@@ -536,7 +536,7 @@ const RootedEpochBuffer = struct {
         self: *const RootedEpochBuffer,
         epoch: Epoch,
     ) !*const EpochInfo {
-        const root_epoch = self.root.load(.monotonic);
+        const root_epoch = self.root;
 
         if (root_epoch == 0 and std.mem.allEqual(
             ?*const EpochInfo,
@@ -558,13 +558,12 @@ const RootedEpochBuffer = struct {
     }
 
     pub fn isNext(self: *const RootedEpochBuffer, epoch: Epoch) bool {
-        const root = self.root.load(.monotonic);
-        if (root == 0 and (epoch == 1 or std.mem.allEqual(
+        if (self.root == 0 and (epoch == 1 or std.mem.allEqual(
             ?*const EpochInfo,
             &self.buf,
             null,
         ))) return true;
-        return epoch == root + 1;
+        return epoch == self.root + 1;
     }
 };
 

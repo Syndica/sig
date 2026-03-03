@@ -1007,7 +1007,7 @@ test "GossipDuplicateShredHandler: reconstructShredsFromData returns shreds on v
     {
         var lock = epoch_tracker.rooted_epochs.write();
         defer lock.unlock();
-        lock.mut().root.store(base_epoch, .monotonic);
+        lock.mut().root = base_epoch;
     }
 
     var ledger = try sig.ledger.tests.initTestLedger(gpa, @src(), .FOR_TESTS);
