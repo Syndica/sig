@@ -1081,7 +1081,7 @@ fn parseSystemInstruction(
             try result.put("type", .{ .string = "allocate" });
         },
         .allocate_with_seed => |aws| {
-            try checkNumSystemAccounts(instruction.accounts, 1);
+            try checkNumSystemAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(arena);
             try info.put("account", try pubkeyToValue(
                 arena,
@@ -1095,7 +1095,7 @@ fn parseSystemInstruction(
             try result.put("type", .{ .string = "allocateWithSeed" });
         },
         .assign_with_seed => |aws| {
-            try checkNumSystemAccounts(instruction.accounts, 1);
+            try checkNumSystemAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(arena);
             try info.put("account", try pubkeyToValue(
                 arena,
@@ -1782,7 +1782,7 @@ fn parseBpfUpgradeableLoaderInstruction(
 
     switch (ix) {
         .initialize_buffer => {
-            try checkNumBpfLoaderAccounts(instruction.accounts, 1);
+            try checkNumBpfUpgradeableLoaderAccounts(instruction.accounts, 1);
             var info = ObjectMap.init(arena);
             try info.put("account", try pubkeyToValue(
                 arena,
@@ -1799,7 +1799,7 @@ fn parseBpfUpgradeableLoaderInstruction(
             try result.put("type", .{ .string = "initializeBuffer" });
         },
         .write => |w| {
-            try checkNumBpfLoaderAccounts(instruction.accounts, 2);
+            try checkNumBpfUpgradeableLoaderAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(arena);
             try info.put("account", try pubkeyToValue(
                 arena,
@@ -1820,7 +1820,7 @@ fn parseBpfUpgradeableLoaderInstruction(
             try result.put("type", .{ .string = "write" });
         },
         .deploy_with_max_data_len => |deploy| {
-            try checkNumBpfLoaderAccounts(instruction.accounts, 8);
+            try checkNumBpfUpgradeableLoaderAccounts(instruction.accounts, 8);
             var info = ObjectMap.init(arena);
             try info.put("maxDataLen", .{ .integer = @intCast(deploy.max_data_len) });
             try info.put("payerAccount", try pubkeyToValue(
@@ -1859,7 +1859,7 @@ fn parseBpfUpgradeableLoaderInstruction(
             try result.put("type", .{ .string = "deployWithMaxDataLen" });
         },
         .upgrade => {
-            try checkNumBpfLoaderAccounts(instruction.accounts, 7);
+            try checkNumBpfUpgradeableLoaderAccounts(instruction.accounts, 7);
             var info = ObjectMap.init(arena);
             try info.put("programDataAccount", try pubkeyToValue(
                 arena,
@@ -1893,7 +1893,7 @@ fn parseBpfUpgradeableLoaderInstruction(
             try result.put("type", .{ .string = "upgrade" });
         },
         .set_authority => {
-            try checkNumBpfLoaderAccounts(instruction.accounts, 2);
+            try checkNumBpfUpgradeableLoaderAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(arena);
             try info.put("account", try pubkeyToValue(
                 arena,
@@ -1917,7 +1917,7 @@ fn parseBpfUpgradeableLoaderInstruction(
             try result.put("type", .{ .string = "setAuthority" });
         },
         .set_authority_checked => {
-            try checkNumBpfLoaderAccounts(instruction.accounts, 3);
+            try checkNumBpfUpgradeableLoaderAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(arena);
             try info.put("account", try pubkeyToValue(
                 arena,
@@ -1935,7 +1935,7 @@ fn parseBpfUpgradeableLoaderInstruction(
             try result.put("type", .{ .string = "setAuthorityChecked" });
         },
         .close => {
-            try checkNumBpfLoaderAccounts(instruction.accounts, 3);
+            try checkNumBpfUpgradeableLoaderAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(arena);
             try info.put("account", try pubkeyToValue(
                 arena,
@@ -1963,7 +1963,7 @@ fn parseBpfUpgradeableLoaderInstruction(
             try result.put("type", .{ .string = "close" });
         },
         .extend_program => |ext| {
-            try checkNumBpfLoaderAccounts(instruction.accounts, 2);
+            try checkNumBpfUpgradeableLoaderAccounts(instruction.accounts, 2);
             var info = ObjectMap.init(arena);
             try info.put("additionalBytes", .{ .integer = @intCast(ext.additional_bytes) });
             try info.put("programDataAccount", try pubkeyToValue(
@@ -1998,7 +1998,7 @@ fn parseBpfUpgradeableLoaderInstruction(
             try result.put("type", .{ .string = "extendProgram" });
         },
         .migrate => {
-            try checkNumBpfLoaderAccounts(instruction.accounts, 3);
+            try checkNumBpfUpgradeableLoaderAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(arena);
             try info.put("programDataAccount", try pubkeyToValue(
                 arena,
@@ -2016,7 +2016,7 @@ fn parseBpfUpgradeableLoaderInstruction(
             try result.put("type", .{ .string = "migrate" });
         },
         .extend_program_checked => |ext| {
-            try checkNumBpfLoaderAccounts(instruction.accounts, 3);
+            try checkNumBpfUpgradeableLoaderAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(arena);
             try info.put("additionalBytes", .{ .integer = @intCast(ext.additional_bytes) });
             try info.put("programDataAccount", try pubkeyToValue(
@@ -2986,9 +2986,9 @@ fn parseTokenInstruction(
             // close_authority: COption<Pubkey>
             if (instruction.data.len >= 34 and instruction.data[1] == 1) {
                 const close_authority = Pubkey{ .data = instruction.data[2..34].* };
-                try info.put("closeAuthority", try pubkeyToValue(arena, close_authority));
+                try info.put("newAuthority", try pubkeyToValue(arena, close_authority));
             } else {
-                try info.put("closeAuthority", .null);
+                try info.put("newAuthority", .null);
             }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeMintCloseAuthority" });
@@ -3023,15 +3023,14 @@ fn parseTokenInstruction(
         },
         .initializePermanentDelegate => {
             try checkNumTokenAccounts(instruction.accounts, 1);
+            if (instruction.data.len < 33) return error.DeserializationFailed;
             var info = ObjectMap.init(arena);
             try info.put("mint", try pubkeyToValue(
                 arena,
                 account_keys.get(@intCast(instruction.accounts[0])).?,
             ));
-            if (instruction.data.len >= 33) {
-                const delegate = Pubkey{ .data = instruction.data[1..33].* };
-                try info.put("delegate", try pubkeyToValue(arena, delegate));
-            }
+            const delegate = Pubkey{ .data = instruction.data[1..33].* };
+            try info.put("delegate", try pubkeyToValue(arena, delegate));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializePermanentDelegate" });
         },
@@ -3246,6 +3245,32 @@ fn checkNumTokenAccounts(accounts: []const u8, num: usize) !void {
 }
 
 /// Helper to read an OptionalNonZeroPubkey (32 bytes, all zeros = None)
+/// Convert an OptionalNonZero ElGamal pubkey (32 bytes) to a JSON value.
+/// All zeros → null, otherwise base64-encoded string.
+fn elGamalPubkeyToValue(arena: Allocator, bytes: *const [32]u8) !JsonValue {
+    if (std.mem.eql(u8, bytes, &([_]u8{0} ** 32))) return .null;
+    const base64_encoder = std.base64.standard;
+    const encoded_len = base64_encoder.Encoder.calcSize(32);
+    const encoded = try arena.alloc(u8, encoded_len);
+    _ = base64_encoder.Encoder.encode(encoded, bytes);
+    return .{ .string = encoded };
+}
+
+/// Base64-encode a byte slice and return it as a JSON string value.
+fn base64ToValue(arena: Allocator, bytes: []const u8) !JsonValue {
+    const base64_encoder = std.base64.standard;
+    const encoded_len = base64_encoder.Encoder.calcSize(bytes.len);
+    const encoded = try arena.alloc(u8, encoded_len);
+    _ = base64_encoder.Encoder.encode(encoded, bytes);
+    return .{ .string = encoded };
+}
+
+/// Read an i8 from data at the given offset. Returns null if out of bounds.
+fn readI8(data: []const u8, offset: usize) ?i8 {
+    if (data.len <= offset) return null;
+    return @bitCast(data[offset]);
+}
+
 fn readOptionalNonZeroPubkey(data: []const u8, offset: usize) ?Pubkey {
     if (data.len < offset + 32) return null;
     const bytes = data[offset..][0..32];
@@ -3488,7 +3513,14 @@ fn parseConfidentialTransferExtension(
                     try info.put("authority", try pubkeyToValue(arena, pk));
                 }
             }
-            // TODO: parse autoApproveNewAccounts and auditorElGamalPubkey from data
+            // autoApproveNewAccounts: PodBool (1 byte) at offset 33
+            if (ext_data.len >= 34) {
+                try info.put("autoApproveNewAccounts", .{ .bool = ext_data[33] != 0 });
+            }
+            // auditorElGamalPubkey: OptionalNonZero ElGamal pubkey (32 bytes) at offset 34
+            if (ext_data.len >= 66) {
+                try info.put("auditorElGamalPubkey", try elGamalPubkeyToValue(arena, ext_data[34..66]));
+            }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeConfidentialTransferMint" });
         },
@@ -3504,12 +3536,20 @@ fn parseConfidentialTransferExtension(
                 "confidentialTransferMintAuthority",
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
             );
+            // autoApproveNewAccounts: PodBool (1 byte) at offset 1
+            if (ext_data.len >= 2) {
+                try info.put("autoApproveNewAccounts", .{ .bool = ext_data[1] != 0 });
+            }
+            // auditorElGamalPubkey: OptionalNonZero ElGamal pubkey (32 bytes) at offset 2
+            if (ext_data.len >= 34) {
+                try info.put("auditorElGamalPubkey", try elGamalPubkeyToValue(arena, ext_data[2..34]));
+            }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updateConfidentialTransferMint" });
         },
         // ConfigureAccount
         2 => {
-            try checkNumTokenAccounts(accounts, 3);
+            try checkNumTokenAccounts(accounts, 4);
             var info = ObjectMap.init(arena);
             try info.put(
                 "account",
@@ -3519,6 +3559,26 @@ fn parseConfidentialTransferExtension(
                 "mint",
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
             );
+            // ConfigureAccountInstructionData: decryptable_zero_balance(36) + max_pending(8) + proof_offset(1)
+            if (ext_data.len >= 46) {
+                try info.put("decryptableZeroBalance", try base64ToValue(arena, ext_data[1..37]));
+                const max_pending = std.mem.readInt(u64, ext_data[37..45], .little);
+                try info.put("maximumPendingBalanceCreditCounter", .{ .integer = @intCast(max_pending) });
+                const proof_offset: i8 = @bitCast(ext_data[45]);
+                try info.put("proofInstructionOffset", .{ .integer = @intCast(proof_offset) });
+                if (proof_offset == 0) {
+                    try info.put("proofContextStateAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+                    try parseSigners(arena, &info, 3, account_keys, accounts, "owner", "multisigOwner");
+                } else {
+                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+                    if (accounts.len > 4) {
+                        try info.put("recordAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[3])).?));
+                        try parseSigners(arena, &info, 4, account_keys, accounts, "owner", "multisigOwner");
+                    } else {
+                        try parseSigners(arena, &info, 3, account_keys, accounts, "owner", "multisigOwner");
+                    }
+                }
+            }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "configureConfidentialTransferAccount" });
         },
@@ -3543,18 +3603,35 @@ fn parseConfidentialTransferExtension(
         },
         // EmptyAccount
         4 => {
-            try checkNumTokenAccounts(accounts, 2);
+            try checkNumTokenAccounts(accounts, 3);
             var info = ObjectMap.init(arena);
             try info.put(
                 "account",
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
             );
+            // EmptyAccountInstructionData: proof_instruction_offset(1)
+            if (ext_data.len >= 2) {
+                const proof_offset: i8 = @bitCast(ext_data[1]);
+                try info.put("proofInstructionOffset", .{ .integer = @intCast(proof_offset) });
+                if (proof_offset == 0) {
+                    try info.put("proofContextStateAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
+                    try parseSigners(arena, &info, 2, account_keys, accounts, "owner", "multisigOwner");
+                } else {
+                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
+                    if (accounts.len > 3) {
+                        try info.put("recordAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+                        try parseSigners(arena, &info, 3, account_keys, accounts, "owner", "multisigOwner");
+                    } else {
+                        try parseSigners(arena, &info, 2, account_keys, accounts, "owner", "multisigOwner");
+                    }
+                }
+            }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "emptyConfidentialTransferAccount" });
         },
         // Deposit
         5 => {
-            try checkNumTokenAccounts(accounts, 3);
+            try checkNumTokenAccounts(accounts, 4);
             var info = ObjectMap.init(arena);
             try info.put(
                 "source",
@@ -3581,6 +3658,52 @@ fn parseConfidentialTransferExtension(
         },
         // Withdraw
         6 => {
+            try checkNumTokenAccounts(accounts, 5);
+            var info = ObjectMap.init(arena);
+            try info.put(
+                "source",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
+            );
+            try info.put(
+                "destination",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
+            );
+            try info.put(
+                "mint",
+                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?),
+            );
+            // WithdrawInstructionData: amount(8) + decimals(1) + new_decryptable(36) + eq_proof_offset(1) + range_proof_offset(1)
+            if (ext_data.len >= 48) {
+                const amount = std.mem.readInt(u64, ext_data[1..9], .little);
+                try info.put("amount", .{ .integer = @intCast(amount) });
+                try info.put("decimals", .{ .integer = @intCast(ext_data[9]) });
+                try info.put("newDecryptableAvailableBalance", try base64ToValue(arena, ext_data[10..46]));
+                const eq_offset: i8 = @bitCast(ext_data[46]);
+                const range_offset: i8 = @bitCast(ext_data[47]);
+                try info.put("equalityProofInstructionOffset", .{ .integer = @intCast(eq_offset) });
+                try info.put("rangeProofInstructionOffset", .{ .integer = @intCast(range_offset) });
+                var signer_start: usize = 3;
+                if (signer_start < accounts.len -| 1 and (eq_offset != 0 or range_offset != 0)) {
+                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                if (signer_start < accounts.len -| 1) {
+                    const label = if (eq_offset == 0) "equalityProofContextStateAccount" else "equalityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                if (signer_start < accounts.len -| 1) {
+                    const label = if (range_offset == 0) "rangeProofContextStateAccount" else "rangeProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                try parseSigners(arena, &info, signer_start, account_keys, accounts, "owner", "multisigOwner");
+            }
+            try result.put("info", .{ .object = info });
+            try result.put("type", .{ .string = "withdrawConfidentialTransfer" });
+        },
+        // Transfer
+        7 => {
             try checkNumTokenAccounts(accounts, 4);
             var info = ObjectMap.init(arena);
             try info.put(
@@ -3588,25 +3711,6 @@ fn parseConfidentialTransferExtension(
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
             );
             try info.put(
-                "destination",
-                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
-            );
-            try info.put(
-                "mint",
-                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?),
-            );
-            try result.put("info", .{ .object = info });
-            try result.put("type", .{ .string = "withdrawConfidentialTransfer" });
-        },
-        // Transfer
-        7 => {
-            try checkNumTokenAccounts(accounts, 3);
-            var info = ObjectMap.init(arena);
-            try info.put(
-                "source",
-                try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
-            );
-            try info.put(
                 "mint",
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
             );
@@ -3614,54 +3718,91 @@ fn parseConfidentialTransferExtension(
                 "destination",
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?),
             );
+            // TransferInstructionData: new_source_decryptable(36) + eq_proof_offset(1) + ct_validity_offset(1) + range_offset(1)
+            if (ext_data.len >= 40) {
+                try info.put("newSourceDecryptableAvailableBalance", try base64ToValue(arena, ext_data[1..37]));
+                const eq_offset: i8 = @bitCast(ext_data[37]);
+                const ct_offset: i8 = @bitCast(ext_data[38]);
+                const range_offset: i8 = @bitCast(ext_data[39]);
+                try info.put("equalityProofInstructionOffset", .{ .integer = @intCast(eq_offset) });
+                try info.put("ciphertextValidityProofInstructionOffset", .{ .integer = @intCast(ct_offset) });
+                try info.put("rangeProofInstructionOffset", .{ .integer = @intCast(range_offset) });
+                var signer_start: usize = 3;
+                if (signer_start < accounts.len -| 1 and (eq_offset != 0 or ct_offset != 0 or range_offset != 0)) {
+                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                if (signer_start < accounts.len -| 1) {
+                    const label = if (eq_offset == 0) "equalityProofContextStateAccount" else "equalityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                if (signer_start < accounts.len -| 1) {
+                    const label = if (ct_offset == 0) "ciphertextValidityProofContextStateAccount" else "ciphertextValidityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                if (signer_start < accounts.len -| 1) {
+                    const label = if (range_offset == 0) "rangeProofContextStateAccount" else "rangeProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                try parseSigners(arena, &info, signer_start, account_keys, accounts, "owner", "multisigOwner");
+            }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "confidentialTransfer" });
         },
         // ApplyPendingBalance
         8 => {
-            try checkNumTokenAccounts(accounts, 1);
+            try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
             try info.put(
                 "account",
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
             );
-            try parseSigners(arena, &info, 0, account_keys, accounts, "owner", "multisigOwner");
+            // ApplyPendingBalanceData: new_decryptable_available_balance(36) + expected_pending_balance_credit_counter(8)
+            if (ext_data.len >= 45) {
+                try info.put("newDecryptableAvailableBalance", try base64ToValue(arena, ext_data[1..37]));
+                const counter = std.mem.readInt(u64, ext_data[37..45], .little);
+                try info.put("expectedPendingBalanceCreditCounter", .{ .integer = @intCast(counter) });
+            }
+            try parseSigners(arena, &info, 1, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "applyPendingConfidentialTransferBalance" });
         },
         // EnableConfidentialCredits
         9 => {
-            try checkNumTokenAccounts(accounts, 1);
+            try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
             try info.put(
                 "account",
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
             );
-            try parseSigners(arena, &info, 0, account_keys, accounts, "owner", "multisigOwner");
+            try parseSigners(arena, &info, 1, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "enableConfidentialTransferConfidentialCredits" });
         },
         // DisableConfidentialCredits
         10 => {
-            try checkNumTokenAccounts(accounts, 1);
+            try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
             try info.put(
                 "account",
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
             );
-            try parseSigners(arena, &info, 0, account_keys, accounts, "owner", "multisigOwner");
+            try parseSigners(arena, &info, 1, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "disableConfidentialTransferConfidentialCredits" });
         },
         // EnableNonConfidentialCredits
         11 => {
-            try checkNumTokenAccounts(accounts, 1);
+            try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
             try info.put(
                 "account",
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
             );
-            try parseSigners(arena, &info, 0, account_keys, accounts, "owner", "multisigOwner");
+            try parseSigners(arena, &info, 1, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put(
                 "type",
@@ -3670,13 +3811,13 @@ fn parseConfidentialTransferExtension(
         },
         // DisableNonConfidentialCredits
         12 => {
-            try checkNumTokenAccounts(accounts, 1);
+            try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
             try info.put(
                 "account",
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
             );
-            try parseSigners(arena, &info, 0, account_keys, accounts, "owner", "multisigOwner");
+            try parseSigners(arena, &info, 1, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put(
                 "type",
@@ -3685,7 +3826,7 @@ fn parseConfidentialTransferExtension(
         },
         // TransferWithFee
         13 => {
-            try checkNumTokenAccounts(accounts, 3);
+            try checkNumTokenAccounts(accounts, 4);
             var info = ObjectMap.init(arena);
             try info.put(
                 "source",
@@ -3699,6 +3840,53 @@ fn parseConfidentialTransferExtension(
                 "destination",
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?),
             );
+            // TransferWithFeeInstructionData: new_source_decryptable(36) + eq_proof(1) + transfer_ct_validity(1) + fee_ct_validity(1) + fee_sigma(1) + range(1)
+            if (ext_data.len >= 42) {
+                try info.put("newSourceDecryptableAvailableBalance", try base64ToValue(arena, ext_data[1..37]));
+                const eq_offset: i8 = @bitCast(ext_data[37]);
+                const transfer_ct_offset: i8 = @bitCast(ext_data[38]);
+                const fee_ct_offset: i8 = @bitCast(ext_data[39]);
+                const fee_sigma_offset: i8 = @bitCast(ext_data[40]);
+                const range_offset: i8 = @bitCast(ext_data[41]);
+                try info.put("equalityProofInstructionOffset", .{ .integer = @intCast(eq_offset) });
+                try info.put("transferAmountCiphertextValidityProofInstructionOffset", .{ .integer = @intCast(transfer_ct_offset) });
+                try info.put("feeCiphertextValidityProofInstructionOffset", .{ .integer = @intCast(fee_ct_offset) });
+                try info.put("feeSigmaProofInstructionOffset", .{ .integer = @intCast(fee_sigma_offset) });
+                try info.put("rangeProofInstructionOffset", .{ .integer = @intCast(range_offset) });
+                var signer_start: usize = 3;
+                if (signer_start < accounts.len -| 1 and
+                    (eq_offset != 0 or transfer_ct_offset != 0 or fee_ct_offset != 0 or fee_sigma_offset != 0 or range_offset != 0))
+                {
+                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                if (signer_start < accounts.len -| 1) {
+                    const label = if (eq_offset == 0) "equalityProofContextStateAccount" else "equalityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                if (signer_start < accounts.len -| 1) {
+                    const label = if (transfer_ct_offset == 0) "transferAmountCiphertextValidityProofContextStateAccount" else "transferAmountCiphertextValidityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                if (signer_start < accounts.len -| 1) {
+                    const label = if (fee_ct_offset == 0) "feeCiphertextValidityProofContextStateAccount" else "feeCiphertextValidityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                if (signer_start < accounts.len -| 1) {
+                    const label = if (fee_sigma_offset == 0) "feeSigmaProofContextStateAccount" else "feeSigmaProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                if (signer_start < accounts.len -| 1) {
+                    const label = if (range_offset == 0) "rangeProofContextStateAccount" else "rangeProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                try parseSigners(arena, &info, signer_start, account_keys, accounts, "owner", "multisigOwner");
+            }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "confidentialTransferWithFee" });
         },
@@ -4033,18 +4221,21 @@ fn parseConfidentialTransferFeeExtension(
                 arena,
                 account_keys.get(@intCast(accounts[0])).?,
             ));
-            // OptionalNonZeroPubkey authority (32 bytes) + PodElGamalPubkey (32 bytes)
+            // InitializeConfidentialTransferFeeConfigData: authority(32) + withdraw_withheld_authority_elgamal_pubkey(32)
             if (ext_data.len >= 33) {
                 if (readOptionalNonZeroPubkey(ext_data, 1)) |pk| {
                     try info.put("authority", try pubkeyToValue(arena, pk));
                 }
+            }
+            if (ext_data.len >= 65) {
+                try info.put("withdrawWithheldAuthorityElGamalPubkey", try elGamalPubkeyToValue(arena, ext_data[33..65]));
             }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeConfidentialTransferFeeConfig" });
         },
         // WithdrawWithheldTokensFromMint
         1 => {
-            try checkNumTokenAccounts(accounts, 3);
+            try checkNumTokenAccounts(accounts, 4);
             var info = ObjectMap.init(arena);
             try info.put("mint", try pubkeyToValue(
                 arena,
@@ -4054,6 +4245,25 @@ fn parseConfidentialTransferFeeExtension(
                 arena,
                 account_keys.get(@intCast(accounts[1])).?,
             ));
+            // WithdrawWithheldTokensFromMintData: proof_instruction_offset(1) + new_decryptable_available_balance(36)
+            if (ext_data.len >= 38) {
+                const proof_offset: i8 = @bitCast(ext_data[1]);
+                try info.put("proofInstructionOffset", .{ .integer = @intCast(proof_offset) });
+                try info.put("newDecryptableAvailableBalance", try base64ToValue(arena, ext_data[2..38]));
+                const signer_start: usize = if (proof_offset == 0) blk: {
+                    try info.put("proofContextStateAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+                    break :blk @as(usize, 3);
+                } else blk: {
+                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+                    if (accounts.len > 4) {
+                        try info.put("recordAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[3])).?));
+                        break :blk @as(usize, 4);
+                    } else {
+                        break :blk @as(usize, 3);
+                    }
+                };
+                try parseSigners(arena, &info, signer_start, account_keys, accounts, "withdrawWithheldAuthority", "multisigWithdrawWithheldAuthority");
+            }
             try result.put("info", .{ .object = info });
             try result.put(
                 "type",
@@ -4062,7 +4272,6 @@ fn parseConfidentialTransferFeeExtension(
         },
         // WithdrawWithheldTokensFromAccounts
         2 => {
-            try checkNumTokenAccounts(accounts, 3);
             var info = ObjectMap.init(arena);
             try info.put("mint", try pubkeyToValue(
                 arena,
@@ -4072,6 +4281,37 @@ fn parseConfidentialTransferFeeExtension(
                 arena,
                 account_keys.get(@intCast(accounts[1])).?,
             ));
+            // WithdrawWithheldTokensFromAccountsData: proof_instruction_offset(1) + num_token_accounts(1) + new_decryptable_available_balance(36)
+            if (ext_data.len >= 39) {
+                const proof_offset: i8 = @bitCast(ext_data[1]);
+                const num_token_accounts: u8 = ext_data[2];
+                try info.put("proofInstructionOffset", .{ .integer = @intCast(proof_offset) });
+                try info.put("newDecryptableAvailableBalance", try base64ToValue(arena, ext_data[3..39]));
+                try checkNumTokenAccounts(accounts, 4 + @as(usize, num_token_accounts));
+                const first_source_index = accounts.len -| @as(usize, num_token_accounts);
+                const signer_start: usize = if (proof_offset == 0) blk: {
+                    try info.put("proofContextStateAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+                    break :blk @as(usize, 3);
+                } else blk: {
+                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?));
+                    if (first_source_index > 4) {
+                        try info.put("proofAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[3])).?));
+                        break :blk @as(usize, 4);
+                    } else {
+                        break :blk @as(usize, 3);
+                    }
+                };
+                // Source accounts at the end
+                var source_accounts = try std.array_list.AlignedManaged(JsonValue, null).initCapacity(
+                    arena,
+                    num_token_accounts,
+                );
+                for (accounts[first_source_index..]) |acc_idx| {
+                    try source_accounts.append(try pubkeyToValue(arena, account_keys.get(@intCast(acc_idx)).?));
+                }
+                try info.put("sourceAccounts", .{ .array = source_accounts });
+                try parseSigners(arena, &info, signer_start, account_keys, accounts[0..first_source_index], "withdrawWithheldAuthority", "multisigWithdrawWithheldAuthority");
+            }
             try result.put("info", .{ .object = info });
             try result.put(
                 "type",
@@ -4350,35 +4590,56 @@ fn parseConfidentialMintBurnExtension(
                 arena,
                 account_keys.get(@intCast(accounts[0])).?,
             ));
+            // InitializeMintData: supply_elgamal_pubkey(32) + decryptable_supply(36)
+            if (ext_data.len >= 69) {
+                try info.put("supplyElGamalPubkey", try base64ToValue(arena, ext_data[1..33]));
+                try info.put("decryptableSupply", try base64ToValue(arena, ext_data[33..69]));
+            }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "initializeConfidentialMintBurnMint" });
         },
         // RotateSupplyElGamalPubkey
         1 => {
-            try checkNumTokenAccounts(accounts, 2);
+            try checkNumTokenAccounts(accounts, 3);
             var info = ObjectMap.init(arena);
             try info.put("mint", try pubkeyToValue(
                 arena,
                 account_keys.get(@intCast(accounts[0])).?,
             ));
+            // RotateSupplyElGamalPubkeyData: new_supply_elgamal_pubkey(32) + proof_instruction_offset(1)
+            if (ext_data.len >= 34) {
+                try info.put("newSupplyElGamalPubkey", try base64ToValue(arena, ext_data[1..33]));
+                const proof_offset: i8 = @bitCast(ext_data[33]);
+                try info.put("proofInstructionOffset", .{ .integer = @intCast(proof_offset) });
+                if (proof_offset == 0) {
+                    try info.put("proofAccount", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
+                } else {
+                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?));
+                }
+                try parseSigners(arena, &info, 2, account_keys, accounts, "owner", "multisigOwner");
+            }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "rotateConfidentialMintBurnSupplyElGamalPubkey" });
         },
         // UpdateDecryptableSupply
         2 => {
-            try checkNumTokenAccounts(accounts, 1);
+            try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
             try info.put("mint", try pubkeyToValue(
                 arena,
                 account_keys.get(@intCast(accounts[0])).?,
             ));
-            try parseSigners(arena, &info, 0, account_keys, accounts, "owner", "multisigOwner");
+            // UpdateDecryptableSupplyData: new_decryptable_supply(36)
+            if (ext_data.len >= 37) {
+                try info.put("newDecryptableSupply", try base64ToValue(arena, ext_data[1..37]));
+            }
+            try parseSigners(arena, &info, 1, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updateConfidentialMintBurnDecryptableSupply" });
         },
         // Mint
         3 => {
-            try checkNumTokenAccounts(accounts, 2);
+            try checkNumTokenAccounts(accounts, 3);
             var info = ObjectMap.init(arena);
             try info.put("destination", try pubkeyToValue(
                 arena,
@@ -4388,12 +4649,43 @@ fn parseConfidentialMintBurnExtension(
                 arena,
                 account_keys.get(@intCast(accounts[1])).?,
             ));
+            // MintInstructionData: new_decryptable_supply(36) + eq_proof_offset(1) + ct_validity_offset(1) + range_offset(1)
+            if (ext_data.len >= 40) {
+                try info.put("newDecryptableSupply", try base64ToValue(arena, ext_data[1..37]));
+                const eq_offset: i8 = @bitCast(ext_data[37]);
+                const ct_offset: i8 = @bitCast(ext_data[38]);
+                const range_offset: i8 = @bitCast(ext_data[39]);
+                try info.put("equalityProofInstructionOffset", .{ .integer = @intCast(eq_offset) });
+                try info.put("ciphertextValidityProofInstructionOffset", .{ .integer = @intCast(ct_offset) });
+                try info.put("rangeProofInstructionOffset", .{ .integer = @intCast(range_offset) });
+                var signer_start: usize = 2;
+                if (signer_start < accounts.len -| 1 and (eq_offset != 0 or ct_offset != 0 or range_offset != 0)) {
+                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                if (signer_start < accounts.len -| 1) {
+                    const label = if (eq_offset == 0) "equalityProofContextStateAccount" else "equalityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                if (signer_start < accounts.len -| 1) {
+                    const label = if (ct_offset == 0) "ciphertextValidityProofContextStateAccount" else "ciphertextValidityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                if (signer_start < accounts.len -| 1) {
+                    const label = if (range_offset == 0) "rangeProofContextStateAccount" else "rangeProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                try parseSigners(arena, &info, signer_start, account_keys, accounts, "owner", "multisigOwner");
+            }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "confidentialMint" });
         },
         // Burn
         4 => {
-            try checkNumTokenAccounts(accounts, 2);
+            try checkNumTokenAccounts(accounts, 3);
             var info = ObjectMap.init(arena);
             try info.put("destination", try pubkeyToValue(
                 arena,
@@ -4403,18 +4695,49 @@ fn parseConfidentialMintBurnExtension(
                 arena,
                 account_keys.get(@intCast(accounts[1])).?,
             ));
+            // BurnInstructionData: new_decryptable_available_balance(36) + eq_proof_offset(1) + ct_validity_offset(1) + range_offset(1)
+            if (ext_data.len >= 40) {
+                try info.put("newDecryptableAvailableBalance", try base64ToValue(arena, ext_data[1..37]));
+                const eq_offset: i8 = @bitCast(ext_data[37]);
+                const ct_offset: i8 = @bitCast(ext_data[38]);
+                const range_offset: i8 = @bitCast(ext_data[39]);
+                try info.put("equalityProofInstructionOffset", .{ .integer = @intCast(eq_offset) });
+                try info.put("ciphertextValidityProofInstructionOffset", .{ .integer = @intCast(ct_offset) });
+                try info.put("rangeProofInstructionOffset", .{ .integer = @intCast(range_offset) });
+                var signer_start: usize = 2;
+                if (signer_start < accounts.len -| 1 and (eq_offset != 0 or ct_offset != 0 or range_offset != 0)) {
+                    try info.put("instructionsSysvar", try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                if (signer_start < accounts.len -| 1) {
+                    const label = if (eq_offset == 0) "equalityProofContextStateAccount" else "equalityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                if (signer_start < accounts.len -| 1) {
+                    const label = if (ct_offset == 0) "ciphertextValidityProofContextStateAccount" else "ciphertextValidityProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                if (signer_start < accounts.len -| 1) {
+                    const label = if (range_offset == 0) "rangeProofContextStateAccount" else "rangeProofRecordAccount";
+                    try info.put(label, try pubkeyToValue(arena, account_keys.get(@intCast(accounts[signer_start])).?));
+                    signer_start += 1;
+                }
+                try parseSigners(arena, &info, signer_start, account_keys, accounts, "owner", "multisigOwner");
+            }
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "confidentialBurn" });
         },
         // ApplyPendingBurn
         5 => {
-            try checkNumTokenAccounts(accounts, 1);
+            try checkNumTokenAccounts(accounts, 2);
             var info = ObjectMap.init(arena);
             try info.put("mint", try pubkeyToValue(
                 arena,
                 account_keys.get(@intCast(accounts[0])).?,
             ));
-            try parseSigners(arena, &info, 0, account_keys, accounts, "owner", "multisigOwner");
+            try parseSigners(arena, &info, 1, account_keys, accounts, "owner", "multisigOwner");
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "applyPendingBurn" });
         },
