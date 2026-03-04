@@ -9,11 +9,13 @@ const parse_instruction = @import("../parse_instruction/lib.zig");
 const AccountKeys = parse_instruction.AccountKeys;
 const Allocator = std.mem.Allocator;
 const GetBlock = methods.GetBlock;
+const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetTransaction = methods.GetTransaction;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
 const Pubkey = sig.core.Pubkey;
 const ReservedAccounts = sig.core.ReservedAccounts;
 const Signature = sig.core.Signature;
+const Slot = sig.core.Slot;
 const TransactionDetails = methods.common.TransactionDetails;
 const TransactionEncoding = methods.common.TransactionEncoding;
 
@@ -69,6 +71,61 @@ pub fn getBlock(
         .show_rewards = show_rewards,
         .max_supported_version = max_supported_version,
     });
+}
+
+pub fn getSignaturesForAddress(
+    self: LedgerHookContext,
+    allocator: std.mem.Allocator,
+    params: GetSignaturesForAddress,
+) !GetSignaturesForAddress.Response {
+    const config: GetSignaturesForAddress.Config = params.config orelse .{};
+    const commitment = config.getCommitment();
+
+    // processed is not supported
+    if (commitment == .processed) return error.ProcessedNotSupported;
+
+    const highest_finalized_slot = self.slot_tracker.getSlotForCommitment(.finalized);
+    const highest_slot: Slot = switch (commitment) {
+        .confirmed => self.slot_tracker.getSlotForCommitment(.confirmed),
+        .finalized => highest_finalized_slot,
+        .processed => unreachable,
+    };
+
+    if (config.minContextSlot) |min_slot| {
+        if (highest_slot < min_slot) return error.RpcMinContextSlotNotMet;
+    }
+
+    const limit = config.getLimit();
+    if (limit == 0 or limit > 1000) return error.InvalidParams;
+
+    const reader = self.ledger.reader();
+    const result = try reader.getConfirmedSignaturesForAddress(
+        allocator,
+        params.address,
+        highest_slot,
+        config.before,
+        config.until,
+        limit,
+    );
+
+    const response = try allocator.alloc(
+        @typeInfo(GetSignaturesForAddress.Response).pointer.child,
+        result.infos.items.len,
+    );
+    for (result.infos.items, 0..) |info, i| {
+        response[i] = .{
+            .signature = info.signature,
+            .slot = info.slot,
+            .err = info.err,
+            .memo = if (info.memo) |m| m.items else null,
+            .blockTime = info.block_time,
+            .confirmationStatus = if (info.slot <= highest_finalized_slot)
+                .finalized
+            else
+                .confirmed,
+        };
+    }
+    return response;
 }
 
 pub fn getTransaction(
