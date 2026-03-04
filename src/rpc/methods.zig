@@ -931,8 +931,9 @@ pub const RpcHookContext = struct {
 
         const slot = self.slot_tracker.getSlotForCommitment(commitment);
         const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        defer slot_ref.release();
 
-        const inflation = &slot_ref.constants.inflation;
+        const inflation = &slot_ref.constants().inflation;
 
         return .{
             .initial = inflation.initial,
@@ -952,6 +953,7 @@ pub const RpcHookContext = struct {
         // See: https://github.com/anza-xyz/agave/blob/v2.1.6/rpc/src/rpc.rs#L897-909
         const slot = self.slot_tracker.getSlotForCommitment(.finalized);
         const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        defer slot_ref.release();
 
         const epoch = self.epoch_tracker.epoch_schedule.getEpoch(slot);
         const slots_per_year = self.epoch_tracker.cluster.slotsPerYear();
@@ -960,11 +962,11 @@ pub const RpcHookContext = struct {
             slot,
             epoch,
             slots_per_year,
-            &slot_ref.constants.feature_set,
+            &slot_ref.constants().feature_set,
             &self.epoch_tracker.epoch_schedule,
         );
 
-        const inflation = &slot_ref.constants.inflation;
+        const inflation = &slot_ref.constants().inflation;
 
         return .{
             .total = inflation.total(slot_in_years),
