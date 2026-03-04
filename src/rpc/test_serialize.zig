@@ -162,6 +162,35 @@ test GetBlocks {
     try testResponse(GetBlocks, .{ .result = &.{} },
         \\{"jsonrpc":"2.0","result":[],"id":1}
     );
+
+    // EndSlotOrConfig
+    {
+        const result = try GetBlocks.EndSlotOrConfig.jsonParseFromValue(
+            std.testing.allocator,
+            .{ .integer = 42 },
+            .{},
+        );
+        try std.testing.expectEqual(GetBlocks.EndSlotOrConfig{ .end_slot = 42 }, result);
+    }
+    {
+        var obj = std.json.ObjectMap.init(std.testing.allocator);
+        defer obj.deinit();
+        try obj.put("commitment", .{ .string = "confirmed" });
+        const result = try GetBlocks.EndSlotOrConfig.jsonParseFromValue(
+            std.testing.allocator,
+            .{ .object = obj },
+            .{},
+        );
+        try std.testing.expectEqual(.confirmed, result.config.commitment.?);
+    }
+    {
+        const result = GetBlocks.EndSlotOrConfig.jsonParseFromValue(
+            std.testing.allocator,
+            .{ .bool = true },
+            .{},
+        );
+        try std.testing.expectError(error.UnexpectedToken, result);
+    }
 }
 
 test GetBlocksWithLimit {
