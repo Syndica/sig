@@ -938,7 +938,8 @@ pub const RpcHookContext = struct {
 
         // Get slot reference to access rent collector
         const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-        const rent = ref.constants.rent_collector.rent;
+        defer ref.release();
+        const rent = ref.constants().rent_collector.rent;
 
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2719-L2720
         // minimum_balance returns 0 for empty accounts, but agave returns max(1, min_balance)
@@ -964,7 +965,8 @@ pub const RpcHookContext = struct {
 
         // Get slot reference to access feature_set
         const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-        const feature_set = &ref.constants.feature_set;
+        defer ref.release();
+        const feature_set = &ref.constants().feature_set;
 
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2379-L2382
         const stake_minimum_delegation = sig.runtime.program.stake.getMinimumDelegation(
