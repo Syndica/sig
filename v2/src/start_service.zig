@@ -14,7 +14,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const common = @import("common");
 
-test {
+comptime {
     _ = std.testing.refAllDecls(@This());
 }
 

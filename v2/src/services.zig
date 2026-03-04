@@ -9,7 +9,7 @@
 const std = @import("std");
 const tracy = @import("tracy");
 
-test {
+comptime {
     _ = std.testing.refAllDecls(@This());
 }
 
@@ -297,7 +297,7 @@ pub fn spawnAndWait(
     var status: u32 = 0;
     const exited_pid: i32 = pid: {
         const ret: usize = linux.waitpid(-1, &status, 0);
-        std.debug.assert(ret != -1);
+        std.debug.assert(e(ret) == .SUCCESS);
         break :pid @intCast(ret);
     };
 
@@ -465,9 +465,9 @@ fn closeAllFdsExceptStderr(maybe_stderr: ?linux.fd_t) void {
 
     if (maybe_stderr) |stderr| {
         // close (0..stderr, stderr+1..=max)
-        if (std.os.linux.syscall3(.close_range, 0, @intCast(stderr - 1), 0) != 0)
+        if (std.os.linux.syscall3(.close_range, 0, @intCast(stderr -| 1), 0) != 0)
             std.debug.panic("close_range failed\n", .{});
-        if (std.os.linux.syscall3(.close_range, @intCast(stderr + 1), max_fd, 0) != 0)
+        if (std.os.linux.syscall3(.close_range, @intCast(stderr +| 1), max_fd, 0) != 0)
             std.debug.panic("close_range failed\n", .{});
     } else {
         // close (0..=max)

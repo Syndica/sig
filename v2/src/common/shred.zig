@@ -1,6 +1,6 @@
 const std = @import("std");
 
-test {
+comptime {
     _ = std.testing.refAllDecls(@This());
 }
 
@@ -805,7 +805,7 @@ pub const MerkleProofEntryList = struct {
     }
 
     pub fn get(self: *const MerkleProofEntryList, index: usize) ?MerkleProofEntry {
-        if (index > self.len) return null;
+        if (index >= self.len) return null;
         const start = index * merkle_proof_entry_size;
         const end = start + merkle_proof_entry_size;
         var entry: MerkleProofEntry = undefined;

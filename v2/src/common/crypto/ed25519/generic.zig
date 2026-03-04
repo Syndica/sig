@@ -5,7 +5,7 @@
 
 const std = @import("std");
 
-test {
+comptime {
     _ = std.testing.refAllDecls(@This());
 }
 

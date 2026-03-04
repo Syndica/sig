@@ -1,11 +1,11 @@
 const std = @import("std");
 
-test {
+comptime {
     _ = std.testing.refAllDecls(@This());
 }
 
 const SECCOMP = std.os.linux.SECCOMP;
-const syscalls = std.os.linux.syscalls.X64;
+const syscalls = std.os.linux.SYS;
 
 pub const sock_filter = extern struct {
     code: u16, // filter code
