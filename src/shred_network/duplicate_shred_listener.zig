@@ -22,7 +22,7 @@ pub const HandlerParams = struct {
     ledger_reader: LedgerReader,
     duplicate_slots_sender: *Channel(Slot),
     shred_version: *const std.atomic.Value(u16),
-    epoch_tracker: *const sig.core.EpochTracker,
+    epoch_tracker: *sig.core.EpochTracker,
 };
 
 pub const RecvLoopParams = struct {
@@ -127,6 +127,7 @@ const GossipDuplicateShredHandler = struct {
 
             // Refresh cached staked nodes from epoch context
             if (self.params.epoch_tracker.getEpochInfo(self.last_root)) |epoch_info| {
+                defer epoch_info.release();
                 // Clear and repopulate cached staked nodes
                 self.cached_staked_nodes.clearRetainingCapacity();
                 for (
@@ -355,6 +356,7 @@ const GossipDuplicateShredHandler = struct {
         const leader = leader: {
             const info =
                 self.params.epoch_tracker.getEpochInfo(key.slot) catch return error.UnknownLeader;
+            defer info.release();
             break :leader info.leaders.getLeaderOrNull(key.slot) orelse return error.UnknownLeader;
         };
         shred1.verify(leader) catch {
@@ -419,7 +421,7 @@ test "GossipDuplicateShredHandler: invalid chunk index rejected" {
 
     var epoch_tracker: sig.core.EpochTracker =
         try .initWithEpochStakesOnlyForTest(gpa, &.{});
-    defer epoch_tracker.deinit(gpa);
+    defer epoch_tracker.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(gpa, @src(), .FOR_TESTS);
     defer ledger.deinit();
@@ -458,7 +460,7 @@ test "GossipDuplicateShredHandler: overwrite existing chunk at same index" {
 
     var epoch_tracker: sig.core.EpochTracker =
         try .initWithEpochStakesOnlyForTest(gpa, &.{});
-    defer epoch_tracker.deinit(gpa);
+    defer epoch_tracker.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(gpa, @src(), .FOR_TESTS);
     defer ledger.deinit();
@@ -510,7 +512,7 @@ test "GossipDuplicateShredHandler: complete invalid proof cleans up entry" {
 
     var epoch_tracker: sig.core.EpochTracker =
         try .initWithEpochStakesOnlyForTest(gpa, &.{});
-    defer epoch_tracker.deinit(gpa);
+    defer epoch_tracker.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(gpa, @src(), .FOR_TESTS);
     defer ledger.deinit();
@@ -556,7 +558,7 @@ test "GossipDuplicateShredHandler: early duplicate slot skips buffering" {
 
     var epoch_tracker: sig.core.EpochTracker =
         try .initWithEpochStakesOnlyForTest(gpa, &.{});
-    defer epoch_tracker.deinit(gpa);
+    defer epoch_tracker.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(gpa, @src(), .FOR_TESTS);
     defer ledger.deinit();
@@ -603,7 +605,7 @@ test "GossipDuplicateShredHandler: cacheRootInfo updates cached slots in epoch" 
 
     var epoch_tracker: sig.core.EpochTracker =
         try .initWithEpochStakesOnlyForTest(gpa, &.{});
-    defer epoch_tracker.deinit(gpa);
+    defer epoch_tracker.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(gpa, @src(), .noop);
     defer ledger.deinit();
@@ -658,7 +660,7 @@ test "GossipDuplicateShredHandler: cacheRootInfo populates and uses cached stake
 
     var epoch_tracker: sig.core.EpochTracker =
         try .initWithEpochStakesOnlyForTest(gpa, &.{});
-    defer epoch_tracker.deinit(gpa);
+    defer epoch_tracker.deinit();
 
     const kp1: sig.identity.KeyPair = try .generateDeterministic(seed: {
         var seed: [sig.identity.KeyPair.seed_length]u8 = @splat(0);
@@ -864,7 +866,7 @@ test "GossipDuplicateShredHandler: maybePruneBuffer prunes when over capacity" {
 
     var epoch_tracker: sig.core.EpochTracker =
         try .initWithEpochStakesOnlyForTest(gpa, &.{});
-    defer epoch_tracker.deinit(gpa);
+    defer epoch_tracker.deinit();
 
     var ledger = try sig.ledger.tests.initTestLedger(gpa, @src(), .noop);
     defer ledger.deinit();
@@ -925,7 +927,7 @@ test "GossipDuplicateShredHandler: reconstructShredsFromData returns shreds on v
     const leader: Pubkey = .fromPublicKey(&keypair.public_key);
 
     var epoch_tracker: sig.core.EpochTracker = try .initWithEpochStakesOnlyForTest(gpa, &.{});
-    defer epoch_tracker.deinit(gpa);
+    defer epoch_tracker.deinit();
 
     const base_epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
 
@@ -1002,7 +1004,11 @@ test "GossipDuplicateShredHandler: reconstructShredsFromData returns shreds on v
     }
 
     epoch_tracker.root_slot.store(slot, .monotonic);
-    epoch_tracker.rooted_epochs.root.store(base_epoch, .monotonic);
+    {
+        var lock = epoch_tracker.rooted_epochs.write();
+        defer lock.unlock();
+        lock.mut().root = base_epoch;
+    }
 
     var ledger = try sig.ledger.tests.initTestLedger(gpa, @src(), .FOR_TESTS);
     defer ledger.deinit();

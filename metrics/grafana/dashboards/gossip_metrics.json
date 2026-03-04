@@ -242,7 +242,7 @@
           "datasource": {},
           "editorMode": "builder",
           "expr": "rate(gossip_packets_received_total[$__rate_interval])",
-          "legendFormat": "gossip_packets_received_total",
+          "legendFormat": "received",
           "range": true,
           "refId": "A"
         },
@@ -251,7 +251,7 @@
           "editorMode": "builder",
           "expr": "rate(gossip_packets_verified_total[$__rate_interval])",
           "hide": false,
-          "legendFormat": "gossip_packets_verified_total",
+          "legendFormat": "verified",
           "range": true,
           "refId": "B"
         },
@@ -260,9 +260,24 @@
           "editorMode": "builder",
           "expr": "rate(gossip_packets_processed_total[$__rate_interval])",
           "hide": false,
-          "legendFormat": "gossip_packets_processed_total",
+          "legendFormat": "processed",
           "range": true,
           "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus"
+          },
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "rate(invalid_packets_count[$__rate_interval])",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "{{variant}}",
+          "range": true,
+          "refId": "packet verification errors",
+          "useBackend": false
         }
       ],
       "title": "Packet Info",
