@@ -1,3 +1,4 @@
+pub const webzockets = @import("webzockets");
 pub const client = @import("client.zig");
 pub const hook_contexts = @import("hook_contexts/lib.zig");
 pub const http = @import("http.zig");

@@ -334,11 +334,11 @@ test distributePartitionedEpochRewards {
     defer ancestors.deinit(allocator);
     try ancestors.addSlot(allocator, 0);
 
-    var db_context = try sig.accounts_db.Two.initTest(allocator);
+    var db_context = try sig.accounts_db.Db.initTest(allocator);
     defer db_context.deinit();
 
     const account_store = sig.accounts_db.AccountStore{
-        .accounts_db_two = &db_context.db,
+        .accounts_db = &db_context.db,
     };
     const slot_store = account_store.forSlot(0, &ancestors);
 
@@ -477,11 +477,11 @@ test distributeEpochRewardsInPartition {
     defer ancestors.deinit(allocator);
     try ancestors.addSlot(allocator, 0);
 
-    var db_context = try sig.accounts_db.Two.initTest(allocator);
+    var db_context = try sig.accounts_db.Db.initTest(allocator);
     defer db_context.deinit();
 
     const account_store = sig.accounts_db.AccountStore{
-        .accounts_db_two = &db_context.db,
+        .accounts_db = &db_context.db,
     };
     const slot_store = account_store.forSlot(0, &ancestors);
 
@@ -649,11 +649,11 @@ test storeStakeAccountsInPartition {
         );
         defer partitioned_rewards.deinit(allocator);
 
-        var db_context = try sig.accounts_db.Two.initTest(allocator);
+        var db_context = try sig.accounts_db.Db.initTest(allocator);
         defer db_context.deinit();
 
         const account_store = sig.accounts_db.AccountStore{
-            .accounts_db_two = &db_context.db,
+            .accounts_db = &db_context.db,
         };
         const slot_store = account_store.forSlot(0, &ancestors);
 
@@ -672,11 +672,11 @@ test storeStakeAccountsInPartition {
     }
 
     {
-        var db_context = try sig.accounts_db.Two.initTest(allocator);
+        var db_context = try sig.accounts_db.Db.initTest(allocator);
         defer db_context.deinit();
 
         const account_store = sig.accounts_db.AccountStore{
-            .accounts_db_two = &db_context.db,
+            .accounts_db = &db_context.db,
         };
         const slot_store = account_store.forSlot(0, &ancestors);
 
@@ -771,11 +771,11 @@ test buildUpdatedStakeReward {
     defer ancestors.deinit(allocator);
     try ancestors.addSlot(allocator, 0);
 
-    var db_context = try sig.accounts_db.Two.initTest(allocator);
+    var db_context = try sig.accounts_db.Db.initTest(allocator);
     defer db_context.deinit();
 
     const account_store = sig.accounts_db.AccountStore{
-        .accounts_db_two = &db_context.db,
+        .accounts_db = &db_context.db,
     };
     const slot_store = account_store.forSlot(0, &ancestors);
 

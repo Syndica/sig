@@ -16,6 +16,7 @@ const Slot = sig.core.Slot;
 const FeatureSet = sig.core.FeatureSet;
 
 const InstructionError = sig.core.instruction.InstructionError;
+const VoteState = runtime.program.vote.state.VoteState;
 const VoteStateVersions = runtime.program.vote.state.VoteStateVersions;
 const VoteStateV3 = runtime.program.vote.state.VoteStateV3;
 const VoteStateV4 = runtime.program.vote.state.VoteStateV4;
@@ -604,7 +605,7 @@ fn validateDelegatedAmount(
 fn newStake(
     stake: u64,
     voter_pubkey: *const Pubkey,
-    vote_state: *const VoteStateV4,
+    vote_state: *const VoteState,
     activation_epoch: Epoch,
 ) StakeStateV2.Stake {
     return .{
@@ -629,7 +630,7 @@ fn redelegateStake(
     stake: *StakeStateV2.Stake,
     stake_lamports: u64,
     voter_pubkey: *const Pubkey,
-    vote_state: *const VoteStateV4,
+    vote_state: *const VoteState,
     clock: *const sysvar.Clock,
     stake_history: *const sysvar.StakeHistory,
 ) ?StakeError {
@@ -678,11 +679,9 @@ fn delegate(
 
         break :blk .{
             vote_account.pubkey,
-            // weirdness: error handling for this is done later
-            vote_account.deserializeFromAccountData(allocator, VoteStateVersions),
+            try vote_account.deserializeFromAccountData(allocator, VoteStateVersions),
         };
     };
-
     var stake_account = try ic.borrowInstructionAccount(stake_account_index);
     defer stake_account.release();
 
@@ -695,8 +694,8 @@ fn delegate(
             const validated = try validateDelegatedAmount(ic, &stake_account, meta, feature_set);
             const stake_amount = validated.stake_amount;
 
-            const payload = try vote_state;
-            var current_vote_state = try payload.convertToV4(allocator, vote_pubkey);
+            const current_vote_state =
+                try vote_state.convertToVoteState(allocator, vote_pubkey, false);
             defer current_vote_state.deinit(allocator);
 
             const new_stake = newStake(
@@ -720,8 +719,8 @@ fn delegate(
             );
             const stake_amount = validated.stake_amount;
 
-            const payload = try vote_state;
-            var current_vote_state = try payload.convertToV4(allocator, vote_pubkey);
+            const current_vote_state =
+                try vote_state.convertToVoteState(allocator, vote_pubkey, false);
             defer current_vote_state.deinit(allocator);
             if (redelegateStake(
                 ic,
@@ -1408,13 +1407,15 @@ fn deactivateDelinquent(
     if (!delinquent_vote_account.account.owner.equals(&runtime.program.vote.ID))
         return error.IncorrectProgramId;
 
-    var delinquent_vote_state_raw = try delinquent_vote_account.deserializeFromAccountData(
+    const delinquent_vote_state_raw = try delinquent_vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
-    defer delinquent_vote_state_raw.deinit(allocator);
-
-    var delinquent_vote_state = try delinquent_vote_state_raw.convertToV4(allocator, null);
+    const delinquent_vote_state = try delinquent_vote_state_raw.convertToVoteState(
+        allocator,
+        null,
+        false,
+    );
     defer delinquent_vote_state.deinit(allocator);
 
     const reference_vote_account = try ic.borrowInstructionAccount(reference_vote_account_index);
@@ -1422,16 +1423,21 @@ fn deactivateDelinquent(
     if (!reference_vote_account.account.owner.equals(&runtime.program.vote.ID))
         return error.IncorrectProgramId;
 
-    var reference_vote_state_raw = try reference_vote_account.deserializeFromAccountData(
+    const reference_vote_state_raw = try reference_vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
-    defer reference_vote_state_raw.deinit(allocator);
-
-    var reference_vote_state = try reference_vote_state_raw.convertToV4(allocator, null);
+    const reference_vote_state = try reference_vote_state_raw.convertToVoteState(
+        allocator,
+        null,
+        false,
+    );
     defer reference_vote_state.deinit(allocator);
 
-    if (!acceptableReferenceEpochCredits(reference_vote_state.epoch_credits.items, current_epoch)) {
+    if (!acceptableReferenceEpochCredits(
+        reference_vote_state.epochCreditsList(),
+        current_epoch,
+    )) {
         ic.tc.custom_error = @intFromEnum(StakeError.insufficient_reference_votes);
         return error.Custom;
     }
@@ -1452,7 +1458,10 @@ fn deactivateDelinquent(
         return error.Custom;
     }
 
-    if (!eligibleForAccountDelinquent(delinquent_vote_state.epoch_credits.items, current_epoch)) {
+    if (!eligibleForAccountDelinquent(
+        delinquent_vote_state.epochCreditsList(),
+        current_epoch,
+    )) {
         ic.tc.custom_error = @intFromEnum(
             StakeError.minimum_delinquent_epochs_for_deactivation_not_met,
         );

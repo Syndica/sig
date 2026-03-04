@@ -402,7 +402,7 @@ pub const ForkChoice = struct {
         self: *ForkChoice,
         allocator: std.mem.Allocator,
         pubkey_votes: []const PubkeyVote,
-        epoch_tracker: *const sig.core.EpochTracker,
+        epoch_tracker: *sig.core.EpochTracker,
     ) (std.mem.Allocator.Error || error{MultipleVotesForPubKey})!SlotAndHash {
         const noop_ctx: struct {
             pub fn addSlotStake(_: @This(), slot_hash_key: SlotAndHash, stake: u64) !void {
@@ -447,7 +447,7 @@ pub const ForkChoice = struct {
         self: *ForkChoice,
         allocator: std.mem.Allocator,
         pubkey_votes: []const PubkeyVote,
-        epoch_tracker: *const sig.core.EpochTracker,
+        epoch_tracker: *sig.core.EpochTracker,
         /// Expects a value with methods:
         /// * `fn subtractSlotStake(ctx, slot_hash_key: SlotAndHash, stake: u64) !void`
         /// * `fn aggregateSlot(ctx, slot_hash_key: SlotAndHash) !void`
@@ -500,6 +500,7 @@ pub const ForkChoice = struct {
                 const stake_update = stake_update: {
                     const epoch_info = epoch_tracker.getEpochInfo(old_latest_vote_slot) catch
                         break :stake_update 0;
+                    defer epoch_info.release();
                     const stake_and_vote_account =
                         epoch_info.stakes.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
                         break :stake_update 0;
@@ -525,6 +526,7 @@ pub const ForkChoice = struct {
             const stake_update: u64 = stake_update: {
                 const epoch_info = epoch_tracker.getEpochInfo(new_vote_slot_hash.slot) catch
                     break :stake_update 0;
+                defer epoch_info.release();
                 const stake_and_vote_account =
                     epoch_info.stakes.stakes.vote_accounts.vote_accounts.get(pubkey) orelse
                     break :stake_update 0;
@@ -1413,7 +1415,7 @@ pub const ForkChoice = struct {
     pub fn processLatestVotes(
         self: *ForkChoice,
         allocator: std.mem.Allocator,
-        epoch_tracker: *const sig.core.EpochTracker,
+        epoch_tracker: *sig.core.EpochTracker,
         latest_validator_votes: *LatestValidatorVotes,
     ) !void {
         const root = self.tree_root.slot;
@@ -1998,7 +2000,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 6, .hash = .ZEROES } },
@@ -2143,7 +2145,7 @@ test "HeaviestSubtreeForkChoice.propagateNewLeaf2" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 4, .hash = .ZEROES } },
@@ -2191,7 +2193,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddOutdatedVotes" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     // Vote for slot 0
     const pubkey_votes1 = [_]PubkeyVote{
@@ -2881,7 +2883,7 @@ const UpdateOperation = union(enum) {
 
 fn expectAddVotesUpdateOps(
     fork_choice: *ForkChoice,
-    epoch_tracker: *const sig.core.EpochTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     pubkey_votes: []const PubkeyVote,
     expected_slots_and_ops: []const struct { Slot, UpdateOperation },
 ) !void {
@@ -2973,7 +2975,7 @@ test "HeaviestSubtreeForkChoice.generateUpdateOperations" {
         allocator,
         &.{ versioned_stakes_0, versioned_stakes_1 },
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     var fork_choice = try forkChoiceForTest(allocator, &fork_tuples);
     defer fork_choice.deinit(allocator);
@@ -3106,7 +3108,7 @@ test "HeaviestSubtreeForkChoice.addRootParent" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = .{
@@ -3188,7 +3190,7 @@ test "HeaviestSubtreeForkChoice.addVotes" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     var fork_choice = try forkChoiceForTest(allocator, fork_tuples[0..]);
     defer fork_choice.deinit(allocator);
@@ -3252,7 +3254,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateGreaterHashIgnored" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
     // one in the event of a tie
@@ -3349,7 +3351,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateSmallerHashPrioritized" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     const expected_best_slot_hash = duplicate_leaves_descended_from_4[1];
     try std.testing.expectEqual(expected_best_slot_hash, try fork_choice.addVotes(
@@ -3464,7 +3466,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateThenOutdated" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
     // one in the event of a tie
@@ -3610,7 +3612,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateTie" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
     // one in the event of a tie
@@ -3707,7 +3709,7 @@ test "HeaviestSubtreeForkChoice.addVotesDuplicateZeroStake" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     // Make new vote with vote_pubkeys[0] for a higher slot
     // Create new child with heaviest duplicate parent
@@ -3845,7 +3847,7 @@ test "HeaviestSubtreeForkChoice.isBestChild" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 9, .hash = .ZEROES } },
@@ -3902,7 +3904,7 @@ test "HeaviestSubtreeForkChoice.markInvalidThenAddNewHeavierDuplicateSlot" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     // If we add a new version of the duplicate slot that is not descended from the invalid
     // candidate and votes for that duplicate slot, the new duplicate slot should be picked
@@ -3963,7 +3965,7 @@ test "HeaviestSubtreeForkChoice.markValidInvalidForks" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     const pubkey_votes = [_]PubkeyVote{
         .{ .pubkey = vote_pubkeys[0], .slot_hash = .{ .slot = 6, .hash = .ZEROES } },
@@ -4104,7 +4106,7 @@ test "HeaviestSubtreeForkChoice.setRootAndAddVotes" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     // Vote for slot 2
     const pubkey_votes1 = [_]PubkeyVote{
@@ -4201,7 +4203,7 @@ test "HeaviestSubtreeForkChoice.splitOffOnBestPath" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     _ = try fork_choice.addVotes(
         allocator,
@@ -4283,7 +4285,7 @@ test "HeaviestSubtreeForkChoice.splitOffSimple" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     _ = try fork_choice.addVotes(
         allocator,
@@ -4376,7 +4378,7 @@ test "HeaviestSubtreeForkChoice.splitOffSubtreeWithDups" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
     // one in the event of a tie
@@ -4466,7 +4468,7 @@ test "HeaviestSubtreeForkChoice.splitOffUnvoted" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     _ = try fork_choice.addVotes(
         allocator,
@@ -4549,7 +4551,7 @@ test "HeaviestSubtreeForkChoice.splitOffWithDups" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     // duplicate_leaves_descended_from_4 are sorted, and fork choice will pick the smaller
     // one in the event of a tie
@@ -4637,7 +4639,7 @@ test "HeaviestSubtreeForkChoice.gossipVoteDoesntAffectForkChoice" {
         allocator,
         &.{versioned_stakes},
     );
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     _ = try fork_choice.addVotes(
         allocator,

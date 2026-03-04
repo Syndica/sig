@@ -5,7 +5,7 @@
     <br/>
 <div align="center">
   <a href="https://github.com/syndica/sig/releases/latest"><img alt="Version" src="https://img.shields.io/github/v/release/syndica/sig?include_prereleases&label=version"></a>
-  <a href="https://ziglang.org/download"><img alt="Zig" src="https://img.shields.io/badge/zig-0.14.1-green.svg"></a>
+  <a href="https://ziglang.org/download"><img alt="Zig" src="https://img.shields.io/badge/zig-0.15.2-green.svg"></a>
   <a href="https://github.com/syndica/sig/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache_2.0-blue.svg"></a>
   <a href="https://dl.circleci.com/status-badge/redirect/gh/Syndica/sig/tree/main"><img alt="Build status" src="https://dl.circleci.com/status-badge/img/gh/Syndica/sig/tree/main.svg?style=svg" /></a>
   <a href="https://codecov.io/gh/Syndica/sig" >

@@ -29,6 +29,8 @@ const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const UpdateSysvarAccountDeps = replay.update_sysvar.UpdateSysvarAccountDeps;
 const updateSlotHistory = replay.update_sysvar.updateSlotHistory;
+
+const MERKLE_FANOUT: usize = 16;
 const updateRecentBlockhashes = replay.update_sysvar.updateRecentBlockhashes;
 
 pub const FreezeParams = struct {
@@ -477,7 +479,7 @@ pub fn deltaMerkleHash(account_reader: AccountReader, allocator: Allocator, slot
 
     const hash = try sig.utils.merkle_tree.computeMerkleRoot(
         &.{hashes},
-        sig.accounts_db.db.MERKLE_FANOUT,
+        MERKLE_FANOUT,
     );
 
     return hash;
@@ -501,8 +503,8 @@ pub fn deltaLtHash(
         range: struct { usize, usize },
         hash: LtHash = .IDENTITY,
         gpa: std.mem.Allocator,
-        slot_index: *sig.accounts_db.Two.Unrooted.SlotIndex,
-        db: *sig.accounts_db.Two,
+        slot_index: *sig.accounts_db.Db.Unrooted.SlotIndex,
+        db: *sig.accounts_db.Db,
         ancestors: *const Ancestors,
 
         fn run(task: *sig.sync.ThreadPool.Task) void {
@@ -573,8 +575,8 @@ pub fn deltaLtHash(
                 .wg = &wg,
                 .range = .{ start_index, end_index },
                 .gpa = allocator,
-                .slot_index = iterator.accounts_db_two.slot,
-                .db = account_reader.accounts_db_two,
+                .slot_index = iterator.accounts_db.slot,
+                .db = account_reader.accounts_db,
                 .ancestors = parent_ancestors,
             };
             batch.push(.from(&worker.task));
@@ -589,7 +591,7 @@ pub fn deltaLtHash(
 test "deltaLtHash is identity for 0 accounts" {
     const allocator = std.testing.allocator;
 
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Db.initTest(allocator);
     defer test_state.deinit();
 
     var tp: sig.sync.ThreadPool = .init(.{});
@@ -601,7 +603,7 @@ test "deltaLtHash is identity for 0 accounts" {
     try std.testing.expectEqual(LtHash.IDENTITY, try deltaLtHash(
         allocator,
         &tp,
-        .{ .accounts_db_two = &test_state.db },
+        .{ .accounts_db = &test_state.db },
         0,
         &Ancestors{},
     ));
@@ -629,9 +631,9 @@ test "deltaMerkleHash for 0 accounts" {
 test "freezeSlot: trivial e2e merkle hash test" {
     const allocator = std.testing.allocator;
 
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Db.initTest(allocator);
     defer test_state.deinit();
-    const account_store: AccountStore = .{ .accounts_db_two = &test_state.db };
+    const account_store: AccountStore = .{ .accounts_db = &test_state.db };
 
     const constants = try SlotConstants.genesis(allocator, .DEFAULT);
     defer constants.deinit(allocator);
@@ -688,7 +690,7 @@ test "freezeSlot: trivial e2e merkle hash test" {
 test "freezeSlot: trivial e2e lattice hash test" {
     const allocator = std.testing.allocator;
 
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Db.initTest(allocator);
     defer test_state.deinit();
     const real_state = &test_state.db;
 
@@ -698,7 +700,7 @@ test "freezeSlot: trivial e2e lattice hash test" {
         tp.deinit();
     }
 
-    const account_store: sig.accounts_db.AccountStore = .{ .accounts_db_two = real_state };
+    const account_store: sig.accounts_db.AccountStore = .{ .accounts_db = real_state };
 
     var constants = try SlotConstants.genesis(allocator, .DEFAULT);
     defer constants.deinit(allocator);
@@ -748,7 +750,7 @@ test "delta hashes with many accounts" {
     const allocator = std.testing.allocator;
     const generate_rust_code = false;
 
-    var test_state = try sig.accounts_db.Two.initTest(allocator);
+    var test_state = try sig.accounts_db.Db.initTest(allocator);
     defer test_state.deinit();
     const db = &test_state.db;
 
@@ -851,12 +853,12 @@ test "delta hashes with many accounts" {
     const actual_lt_hash = try deltaLtHash(
         allocator,
         &tp,
-        .{ .accounts_db_two = db },
+        .{ .accounts_db = db },
         hash_slot,
         &parent_ancestors,
     );
     const actual_merkle_hash = try deltaMerkleHash(
-        .{ .accounts_db_two = db },
+        .{ .accounts_db = db },
         allocator,
         hash_slot,
     );

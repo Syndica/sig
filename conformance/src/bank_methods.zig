@@ -180,10 +180,7 @@ fn applyBuiltinProgramFeatureTransitions(
         const maybe_account = account_store.reader().getLatest(
             allocator,
             precompile.program_id,
-        ) catch |err| switch (err) {
-            error.PubkeyNotInIndex => null,
-            else => return err,
-        };
+        ) catch |err| return err;
         defer if (maybe_account) |account| account.deinit(allocator);
 
         // If account is present and executable, do nothing. Otherwise burn and purge, then create a new account.
@@ -260,10 +257,7 @@ fn tryGetAccount(
     account_reader: AccountReader,
     pubkey: Pubkey,
 ) !?Account {
-    return account_reader.getLatest(allocator, pubkey) catch |err| switch (err) {
-        error.PubkeyNotInIndex => null,
-        else => error.AccountsDbInternal,
-    };
+    return account_reader.getLatest(allocator, pubkey) catch error.AccountsDbInternal;
 }
 
 fn accountSharedDataFromAccount(
