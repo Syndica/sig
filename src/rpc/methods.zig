@@ -195,14 +195,12 @@ pub const GetAccountInfo = struct {
         value: ?Value,
 
         pub const Value = struct {
-            data: Data,
+            data: account_codec.AccountData,
             executable: bool,
             lamports: u64,
             owner: Pubkey,
             rentEpoch: u64,
             space: u64,
-
-            pub const Data = account_codec.AccountData;
         };
     };
 };
