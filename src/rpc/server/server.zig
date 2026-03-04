@@ -128,7 +128,7 @@ test "serveSpawn hook missing" {
     var rpc_hooks = sig.rpc.Hooks{};
     defer rpc_hooks.deinit(allocator);
 
-    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
@@ -182,7 +182,7 @@ test "serveSpawn hook alloc" {
         }
     }{});
 
-    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
@@ -244,7 +244,7 @@ test "serveSpawn getSnapshot missing" {
         }
     }{});
 
-    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
@@ -587,6 +587,8 @@ fn testHttpFetchSelf(
 }
 
 test "HTTP GET /health returns ok when hook returns ok status" {
+    if (sig.build_options.no_network_tests) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
     const logger_unscoped: Logger = .noop;
     const logger = logger_unscoped.withScope(@src().fn_name);
@@ -605,7 +607,7 @@ test "HTTP GET /health returns ok when hook returns ok status" {
         }
     }{});
 
-    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
@@ -634,6 +636,8 @@ test "HTTP GET /health returns ok when hook returns ok status" {
 }
 
 test "HTTP GET /health returns behind when hook returns behind status" {
+    if (sig.build_options.no_network_tests) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
     const logger_unscoped: Logger = .noop;
     const logger = logger_unscoped.withScope(@src().fn_name);
@@ -652,7 +656,7 @@ test "HTTP GET /health returns behind when hook returns behind status" {
         }
     }{});
 
-    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
@@ -681,7 +685,10 @@ test "HTTP GET /health returns behind when hook returns behind status" {
 }
 
 test "HTTP GET /health returns unknown when hook returns unknown status" {
+    if (sig.build_options.no_network_tests) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
+
     const logger_unscoped: Logger = .noop;
     const logger = logger_unscoped.withScope(@src().fn_name);
 
@@ -699,7 +706,7 @@ test "HTTP GET /health returns unknown when hook returns unknown status" {
         }
     }{});
 
-    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
@@ -746,7 +753,7 @@ test "JSON-RPC POST getHealth returns ok result" {
         }
     }{});
 
-    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
@@ -810,7 +817,7 @@ test "JSON-RPC POST getHealth returns error for unknown status" {
         }
     }{});
 
-    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
@@ -884,7 +891,7 @@ test "JSON-RPC POST getHealth returns error for behind status" {
         }
     }{});
 
-    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
