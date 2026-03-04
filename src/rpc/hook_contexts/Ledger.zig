@@ -76,7 +76,7 @@ pub fn getBlock(
 
 pub fn getBlocks(
     self: LedgerHookContext,
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     params: GetBlocks,
 ) !GetBlocks.Response {
     const commitment = params.commitment();
@@ -100,7 +100,7 @@ pub fn getBlocks(
 
     // Collect rooted (finalized) slots in range.
     var blocks = try std.ArrayList(Slot).initCapacity(
-        allocator,
+        arena,
         end_slot - params.start_slot +| 1,
     );
 
@@ -112,7 +112,7 @@ pub fn getBlocks(
 
     while (try rooted_iter.nextKey()) |slot| {
         if (slot > end_slot or slot > highest_root) break;
-        try blocks.append(allocator, slot);
+        try blocks.append(arena, slot);
     }
 
     // For confirmed commitment, also include confirmed-but-unrooted slots.
@@ -125,26 +125,25 @@ pub fn getBlocks(
         if (last_rooted < end_slot) {
             const latest_confirmed = self.slot_tracker.getSlotForCommitment(.confirmed);
             const confirmed = try self.getConfirmedUnrootedSlots(
-                allocator,
+                arena,
                 latest_confirmed,
                 highest_root,
             );
-            defer allocator.free(confirmed);
 
             for (confirmed) |slot| {
                 if (slot > end_slot) continue;
                 if (slot <= last_rooted) continue;
-                try blocks.append(allocator, slot);
+                try blocks.append(arena, slot);
             }
         }
     }
 
-    return try blocks.toOwnedSlice(allocator);
+    return try blocks.toOwnedSlice(arena);
 }
 
 pub fn getBlocksWithLimit(
     self: LedgerHookContext,
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     params: GetBlocksWithLimit,
 ) !GetBlocksWithLimit.Response {
     const commitment = params.commitment();
@@ -157,7 +156,7 @@ pub fn getBlocksWithLimit(
     const highest_root = self.slot_tracker.getSlotForCommitment(.finalized);
 
     // Collect rooted (finalized) slots starting from start_slot, up to limit.
-    var blocks = try std.ArrayList(Slot).initCapacity(allocator, params.limit);
+    var blocks = try std.ArrayList(Slot).initCapacity(arena, params.limit);
 
     var rooted_iter = try self.ledger.db.iterator(
         sig.ledger.schema.schema.rooted_slots,
@@ -169,7 +168,7 @@ pub fn getBlocksWithLimit(
     while (blocks.items.len < params.limit) {
         const slot = try rooted_iter.nextKey() orelse break;
         if (slot > highest_root) break;
-        try blocks.append(allocator, slot);
+        try blocks.append(arena, slot);
     }
 
     // For confirmed commitment, add confirmed-but-unrooted slots up to limit.
@@ -181,7 +180,7 @@ pub fn getBlocksWithLimit(
 
         const latest_confirmed = self.slot_tracker.getSlotForCommitment(.confirmed);
         const confirmed = try self.getConfirmedUnrootedSlots(
-            allocator,
+            arena,
             latest_confirmed,
             highest_root,
         );
@@ -189,32 +188,32 @@ pub fn getBlocksWithLimit(
         for (confirmed) |slot| {
             if (blocks.items.len >= params.limit) break;
             if (slot <= last_rooted) continue;
-            try blocks.append(allocator, slot);
+            try blocks.append(arena, slot);
         }
     }
 
-    return try blocks.toOwnedSlice(allocator);
+    return try blocks.toOwnedSlice(arena);
 }
 
 /// Walk from latest_confirmed back to the root, collecting confirmed-but-unrooted slots.
 /// Returns slots sorted ascending.
 fn getConfirmedUnrootedSlots(
     self: @This(),
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     latest_confirmed: Slot,
     highest_root: Slot,
 ) ![]Slot {
-    var slots = try std.ArrayList(Slot).initCapacity(allocator, latest_confirmed - highest_root);
+    var slots = try std.ArrayList(Slot).initCapacity(arena, latest_confirmed - highest_root);
 
-    var iterator = AncestorIterator.initInclusive(allocator, &self.ledger.db, latest_confirmed);
+    var iterator = AncestorIterator.initInclusive(arena, &self.ledger.db, latest_confirmed);
     while (try iterator.next()) |slot| {
         if (slot <= highest_root) break;
-        try slots.append(allocator, slot);
+        try slots.append(arena, slot);
     }
 
     // AncestorIterator walks backwards (high to low), so reverse to get ascending order.
     std.mem.reverse(Slot, slots.items);
-    return try slots.toOwnedSlice(allocator);
+    return try slots.toOwnedSlice(arena);
 }
 
 /// Encode transactions and/or signatures based on the requested options.
