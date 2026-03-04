@@ -76,7 +76,7 @@ pub fn getTransaction(
     arena: std.mem.Allocator,
     params: GetTransaction,
 ) !GetTransaction.Response {
-    const config = params.config orelse GetTransaction.Config{};
+    const config: GetTransaction.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
     const encoding = config.encoding orelse .json;
     const max_supported_version = config.maxSupportedTransactionVersion;
