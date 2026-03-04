@@ -1453,7 +1453,9 @@ pub const RpcHookContext = struct {
         const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
         defer resolved.ref.release();
 
-        const epoch_and_slot_index = self.epoch_tracker.epoch_schedule.getEpochAndSlotIndex(resolved.slot);
+        const epoch_and_slot_index = self.epoch_tracker.epoch_schedule.getEpochAndSlotIndex(
+            resolved.slot,
+        );
         const epoch = epoch_and_slot_index[0];
         const slot_index = epoch_and_slot_index[1];
         const slots_in_epoch = self.epoch_tracker.epoch_schedule.getSlotsInEpoch(epoch);
@@ -1491,7 +1493,8 @@ pub const RpcHookContext = struct {
         const age = bq.getHashAge(last_hash) orelse return error.SlotNotAvailable;
         const BQ = sig.core.blockhash_queue.BlockhashQueue;
         const max_processing_age: u64 = BQ.MAX_RECENT_BLOCKHASHES / 2;
-        const last_valid_block_height = resolved.ref.constants().block_height + max_processing_age - age;
+        const block_height = resolved.ref.constants().block_height;
+        const last_valid_block_height = block_height + max_processing_age - age;
 
         // Allocate the base58 string so it outlives the function scope.
         // The server uses an arena allocator, so this will be freed with the arena.
