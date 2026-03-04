@@ -924,7 +924,7 @@ pub const RpcHookContext = struct {
 
         // Check if blockhash is valid for processing
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2714
-        const blockhash_queue, var bhq_lg = ref.state.blockhash_queue.readWithLock();
+        const blockhash_queue, var bhq_lg = ref.state().blockhash_queue.readWithLock();
         defer bhq_lg.unlock();
 
         const is_valid = blockhash_queue.isHashValidForAge(
