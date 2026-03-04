@@ -85,7 +85,6 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             \\erasure_set_index: {}
             \\index: {}
             \\shred_type: {}
-            \\
         , .{
             packet_shred.commonHeader().slot,
             packet_shred.commonHeader().erasure_set_index,

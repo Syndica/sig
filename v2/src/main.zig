@@ -50,13 +50,13 @@ pub fn main() !void {
         defer diag.deinit(allocator);
 
         break :cfg std.zon.parse.fromSlice(Config, allocator, cfg_str, &diag, .{}) catch |err| {
-            std.log.err("{f}\n", .{diag});
+            std.log.err("{f}", .{diag});
             return err;
         };
     };
     defer std.zon.parse.free(allocator, config);
 
-    std.log.info("config: {}\n", .{config});
+    std.log.info("config: {}", .{config});
 
     const schedule_file = try std.fs.cwd().openFile(config.leader_schedule_file, .{});
     defer schedule_file.close();
