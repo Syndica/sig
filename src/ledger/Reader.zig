@@ -1517,7 +1517,7 @@ pub const VersionedConfirmedBlock = struct {
     block_time: ?UnixTimestamp,
     block_height: ?u64,
 
-    pub fn deinit(self: @This(), allocator: Allocator) void {
+    pub fn deinit(self: VersionedConfirmedBlock, allocator: Allocator) void {
         for (self.transactions) |it| it.deinit(allocator);
         allocator.free(self.transactions);
         allocator.free(self.rewards);
@@ -1546,7 +1546,7 @@ const ConfirmedTransactionWithStatusMeta = struct {
     tx_with_meta: TransactionWithStatusMeta,
     block_time: ?UnixTimestamp,
 
-    pub fn deinit(self: @This(), allocator: Allocator) void {
+    pub fn deinit(self: ConfirmedTransactionWithStatusMeta, allocator: Allocator) void {
         self.tx_with_meta.deinit(allocator);
     }
 };
@@ -1557,7 +1557,7 @@ pub const TransactionWithStatusMeta = union(enum) {
     // Versioned stored transaction always have metadata
     complete: VersionedTransactionWithStatusMeta,
 
-    pub fn deinit(self: @This(), allocator: Allocator) void {
+    pub fn deinit(self: TransactionWithStatusMeta, allocator: Allocator) void {
         switch (self) {
             .missing_metadata => |tx| tx.deinit(allocator),
             .complete => |versioned| versioned.deinit(allocator),
@@ -1569,7 +1569,7 @@ pub const VersionedTransactionWithStatusMeta = struct {
     transaction: Transaction,
     meta: TransactionStatusMeta,
 
-    pub fn deinit(self: @This(), allocator: Allocator) void {
+    pub fn deinit(self: VersionedTransactionWithStatusMeta, allocator: Allocator) void {
         self.transaction.deinit(allocator);
         self.meta.deinit(allocator);
     }

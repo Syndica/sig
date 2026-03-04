@@ -72,7 +72,7 @@ pub fn getBlock(
 }
 
 pub fn getTransaction(
-    self: @This(),
+    self: LedgerHookContext,
     allocator: std.mem.Allocator,
     params: GetTransaction,
 ) !GetTransaction.Response {
