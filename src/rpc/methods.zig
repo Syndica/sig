@@ -921,6 +921,7 @@ pub const RpcHookContext = struct {
 
         // Get slot reference to access blockhash queue
         const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        defer ref.release();
 
         // Check if blockhash is valid for processing
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2714
