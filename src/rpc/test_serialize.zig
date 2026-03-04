@@ -318,6 +318,9 @@ test GetHighestSnapshotSlot {
     } },
         \\{"jsonrpc":"2.0","result":{"full":100},"id":1}
     );
+    try testResponse(GetHighestSnapshotSlot, .{ .result = null },
+        \\{"jsonrpc":"2.0","result":null,"id":1}
+    );
 }
 // TODO: test getIdentity()
 // TODO: test getInflationGovernor()

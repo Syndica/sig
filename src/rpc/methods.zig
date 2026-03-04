@@ -24,6 +24,7 @@ const Slot = sig.core.Slot;
 const ClientVersion = sig.version.ClientVersion;
 
 const account_codec = sig.rpc.account_codec;
+const SlotRef = sig.replay.trackers.SlotTracker.Reference;
 
 pub fn Result(comptime method: MethodAndParams.Tag) type {
     return union(enum) {
@@ -1373,12 +1374,39 @@ pub const RpcHookContext = struct {
     // See: https://github.com/anza-xyz/agave/blob/cd00ceb1fdf43f694caf7af23cb87987922fce2c/rpc-client-types/src/request.rs#L162
     const DELINQUENT_VALIDATOR_SLOT_DISTANCE: u64 = 128;
 
+    /// Resolves commitment and minContextSlot config to a slot number.
+    /// Defaults to finalized commitment if none is specified.
+    fn resolveCommitmentSlot(
+        self: RpcHookContext,
+        commitment: ?common.Commitment,
+        min_context_slot: ?Slot,
+    ) !Slot {
+        const resolved_commitment = commitment orelse .finalized;
+        const slot = self.slot_tracker.getSlotForCommitment(resolved_commitment);
+
+        if (min_context_slot) |min_slot| {
+            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+        }
+
+        return slot;
+    }
+
+    /// Resolves commitment config to a slot and returns the slot number along
+    /// with a reference to the slot's data. The caller must call `release()`
+    /// on the returned `SlotRef` when done (typically via `defer`).
+    fn resolveSlot(
+        self: RpcHookContext,
+        commitment: ?common.Commitment,
+        min_context_slot: ?Slot,
+    ) !struct { slot: Slot, ref: SlotRef } {
+        const slot = try self.resolveCommitmentSlot(commitment, min_context_slot);
+        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        return .{ .slot = slot, .ref = slot_ref };
+    }
+
     pub fn getSlot(self: RpcHookContext, _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
         const config = params.config orelse common.CommitmentSlotConfig{};
-        const commitment = config.commitment orelse .finalized;
-        const slot = self.slot_tracker.getSlotForCommitment(commitment);
-        const min_slot = config.minContextSlot orelse return slot;
-        return if (slot >= min_slot) slot else error.RpcMinContextSlotNotMet;
+        return self.resolveCommitmentSlot(config.commitment, config.minContextSlot);
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L955-L958
@@ -1388,17 +1416,9 @@ pub const RpcHookContext = struct {
         params: GetBlockHeight,
     ) !GetBlockHeight.Response {
         const config = params.config orelse common.CommitmentSlotConfig{};
-        // [agave] Default commitment is finalized:
-        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L270-L285
-        const commitment = config.commitment orelse .finalized;
-        const slot = self.slot_tracker.getSlotForCommitment(commitment);
-
-        if (config.minContextSlot) |min_slot| {
-            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-        }
-
-        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-        return slot_ref.constants.block_height;
+        const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
+        defer resolved.ref.release();
+        return resolved.ref.constants().block_height;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1022-L1025
@@ -1408,17 +1428,9 @@ pub const RpcHookContext = struct {
         params: GetTransactionCount,
     ) !GetTransactionCount.Response {
         const config = params.config orelse common.CommitmentSlotConfig{};
-        // [agave] Default commitment is finalized:
-        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L270-L285
-        const commitment = config.commitment orelse .finalized;
-        const slot = self.slot_tracker.getSlotForCommitment(commitment);
-
-        if (config.minContextSlot) |min_slot| {
-            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-        }
-
-        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-        return slot_ref.state.transaction_count.load(.monotonic);
+        const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
+        defer resolved.ref.release();
+        return resolved.ref.state().transaction_count.load(.monotonic);
     }
 
     /// for the time being we will return null
@@ -1438,18 +1450,10 @@ pub const RpcHookContext = struct {
         params: GetEpochInfo,
     ) !GetEpochInfo.Response {
         const config = params.config orelse common.CommitmentSlotConfig{};
-        // [agave] Default commitment is finalized:
-        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L270-L285
-        const commitment = config.commitment orelse .finalized;
-        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
+        defer resolved.ref.release();
 
-        if (config.minContextSlot) |min_slot| {
-            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-        }
-
-        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-
-        const epoch_and_slot_index = self.epoch_tracker.epoch_schedule.getEpochAndSlotIndex(slot);
+        const epoch_and_slot_index = self.epoch_tracker.epoch_schedule.getEpochAndSlotIndex(resolved.slot);
         const epoch = epoch_and_slot_index[0];
         const slot_index = epoch_and_slot_index[1];
         const slots_in_epoch = self.epoch_tracker.epoch_schedule.getSlotsInEpoch(epoch);
@@ -1458,9 +1462,9 @@ pub const RpcHookContext = struct {
             .epoch = epoch,
             .slotIndex = slot_index,
             .slotsInEpoch = slots_in_epoch,
-            .absoluteSlot = slot,
-            .blockHeight = slot_ref.constants.block_height,
-            .transactionCount = slot_ref.state.transaction_count.load(.monotonic),
+            .absoluteSlot = resolved.slot,
+            .blockHeight = resolved.ref.constants().block_height,
+            .transactionCount = resolved.ref.state().transaction_count.load(.monotonic),
         };
     }
 
@@ -1471,19 +1475,11 @@ pub const RpcHookContext = struct {
         params: GetLatestBlockhash,
     ) !GetLatestBlockhash.Response {
         const config = params.config orelse common.CommitmentSlotConfig{};
-        // [agave] Default commitment is finalized:
-        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L270-L285
-        const commitment = config.commitment orelse .finalized;
-        const slot = self.slot_tracker.getSlotForCommitment(commitment);
-
-        if (config.minContextSlot) |min_slot| {
-            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-        }
-
-        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
+        defer resolved.ref.release();
 
         // Read blockhash queue under lock
-        const bq, var bq_lock = slot_ref.state.blockhash_queue.readWithLock();
+        const bq, var bq_lock = resolved.ref.state().blockhash_queue.readWithLock();
         defer bq_lock.unlock();
 
         const last_hash = bq.last_hash orelse return error.SlotNotAvailable;
@@ -1495,7 +1491,7 @@ pub const RpcHookContext = struct {
         const age = bq.getHashAge(last_hash) orelse return error.SlotNotAvailable;
         const BQ = sig.core.blockhash_queue.BlockhashQueue;
         const max_processing_age: u64 = BQ.MAX_RECENT_BLOCKHASHES / 2;
-        const last_valid_block_height = slot_ref.constants.block_height + max_processing_age - age;
+        const last_valid_block_height = resolved.ref.constants().block_height + max_processing_age - age;
 
         // Allocate the base58 string so it outlives the function scope.
         // The server uses an arena allocator, so this will be freed with the arena.
@@ -1504,7 +1500,7 @@ pub const RpcHookContext = struct {
 
         return .{
             .context = .{
-                .slot = slot,
+                .slot = resolved.slot,
                 .apiVersion = ClientVersion.API_VERSION,
             },
             .value = .{
@@ -1521,12 +1517,8 @@ pub const RpcHookContext = struct {
     ) !GetVoteAccounts.Response {
         const config: GetVoteAccounts.Config = params.config orelse .{};
 
-        // get slot for requested commitment. Agave uses finalized as default.
-        const slot = self.slot_tracker.getSlotForCommitment(config.commitment orelse .finalized);
-
-        // Get the state for the requested commitment slot.
-        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-        defer slot_ref.release();
+        const resolved = try self.resolveSlot(config.commitment, null);
+        defer resolved.ref.release();
 
         // Setup config consts for the request.
         const delinquent_distance = config.delinquentSlotDistance orelse
@@ -1535,7 +1527,7 @@ pub const RpcHookContext = struct {
         const filter_pk = config.votePubkey;
 
         // Get epoch info for epochVoteAccounts check
-        const epoch_constants = try self.epoch_tracker.getEpochInfo(slot);
+        const epoch_constants = try self.epoch_tracker.getEpochInfo(resolved.slot);
         defer epoch_constants.release();
         const epoch_stakes = epoch_constants.stakes.stakes;
         const epoch_vote_accounts = &epoch_stakes.vote_accounts.vote_accounts;
@@ -1552,7 +1544,7 @@ pub const RpcHookContext = struct {
         }
 
         // Access stakes cache (takes read lock).
-        const stakes, var stakes_guard = slot_ref.state().stakes_cache.stakes.readWithLock();
+        const stakes, var stakes_guard = resolved.ref.state().stakes_cache.stakes.readWithLock();
         defer stakes_guard.unlock();
         const vote_accounts_map = &stakes.vote_accounts.vote_accounts;
         for (vote_accounts_map.keys(), vote_accounts_map.values()) |vote_pk, stake_and_vote| {
@@ -1574,8 +1566,8 @@ pub const RpcHookContext = struct {
 
             // Partition by delinquent status. current is set when last_vote_slot > slot - delinquent_distance.
             // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1194
-            const is_current = if (slot >= delinquent_distance)
-                last_vote_slot > slot - delinquent_distance
+            const is_current = if (resolved.slot >= delinquent_distance)
+                last_vote_slot > resolved.slot - delinquent_distance
             else
                 last_vote_slot > 0;
 
@@ -1629,6 +1621,33 @@ pub const RpcHookContext = struct {
         return .{
             .current = current,
             .delinquent = dlinqt,
+        };
+    }
+
+    pub fn getBalance(
+        self: RpcHookContext,
+        allocator: std.mem.Allocator,
+        params: GetBalance,
+    ) !GetBalance.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+        const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
+        defer resolved.ref.release();
+        const slot_reader = self.account_reader.forSlot(&resolved.ref.constants().ancestors);
+
+        // Look up account
+        const maybe_account = try slot_reader.get(allocator, params.pubkey);
+
+        const lamports: u64 = if (maybe_account) |account| blk: {
+            defer account.deinit(allocator);
+            break :blk account.lamports;
+        } else 0;
+
+        return .{
+            .context = .{
+                .slot = resolved.slot,
+                .apiVersion = ClientVersion.API_VERSION,
+            },
+            .value = lamports,
         };
     }
 };
@@ -1694,10 +1713,11 @@ fn testSetupSlotTracker(
     return .init(testing.allocator, root_slot, .{
         .constants = testDummySlotConstants(root_slot, root_block_height),
         .state = testDummySlotState(root_tx_count),
+        .allocator = testing.allocator,
     });
 }
 
-fn testRpcHookContext(slot_tracker: *const sig.replay.trackers.SlotTracker) RpcHookContext {
+fn testRpcHookContext(slot_tracker: *sig.replay.trackers.SlotTracker) RpcHookContext {
     return .{
         .slot_tracker = slot_tracker,
         .epoch_tracker = undefined, // not used by getBlockHeight/getTransactionCount/getHighestSnapshotSlot
@@ -1706,8 +1726,8 @@ fn testRpcHookContext(slot_tracker: *const sig.replay.trackers.SlotTracker) RpcH
 }
 
 fn testRpcHookContextWithEpochTracker(
-    slot_tracker: *const sig.replay.trackers.SlotTracker,
-    epoch_tracker: *const sig.core.EpochTracker,
+    slot_tracker: *sig.replay.trackers.SlotTracker,
+    epoch_tracker: *sig.core.EpochTracker,
 ) RpcHookContext {
     return .{
         .slot_tracker = slot_tracker,
@@ -1733,6 +1753,7 @@ test "RpcHookContext.getBlockHeight - respects commitment level" {
     try slot_tracker.put(testing.allocator, 15, .{
         .constants = testDummySlotConstants(15, 55),
         .state = testDummySlotState(0),
+        .allocator = testing.allocator,
     });
     slot_tracker.latest_processed_slot.set(15);
 
@@ -1796,6 +1817,7 @@ test "RpcHookContext.getTransactionCount - respects commitment level" {
     try slot_tracker.put(testing.allocator, 15, .{
         .constants = testDummySlotConstants(15, 0),
         .state = testDummySlotState(2000),
+        .allocator = testing.allocator,
     });
     slot_tracker.latest_processed_slot.set(15);
 
@@ -1856,7 +1878,7 @@ test "RpcHookContext.getEpochInfo - returns epoch info for finalized slot" {
         .leader_schedule_slot_offset = 32,
         .warmup = false,
     });
-    const epoch_tracker = sig.core.EpochTracker.init(.default, 0, epoch_schedule);
+    var epoch_tracker = sig.core.EpochTracker.init(.default, 0, epoch_schedule);
 
     // Slot 42 with 32 slots/epoch (no warmup, first_normal_slot=0):
     //   epoch = 42 / 32 = 1, slot_index = 42 % 32 = 10, slots_in_epoch = 32
@@ -1880,7 +1902,7 @@ test "RpcHookContext.getEpochInfo - respects commitment level" {
         .leader_schedule_slot_offset = 32,
         .warmup = false,
     });
-    const epoch_tracker = sig.core.EpochTracker.init(.default, 0, epoch_schedule);
+    var epoch_tracker = sig.core.EpochTracker.init(.default, 0, epoch_schedule);
 
     var slot_tracker = try testSetupSlotTracker(10, 50, 1000);
     defer slot_tracker.deinit(testing.allocator);
@@ -1889,6 +1911,7 @@ test "RpcHookContext.getEpochInfo - respects commitment level" {
     try slot_tracker.put(testing.allocator, 35, .{
         .constants = testDummySlotConstants(35, 80),
         .state = testDummySlotState(2000),
+        .allocator = testing.allocator,
     });
     slot_tracker.latest_processed_slot.set(35);
 
@@ -1917,7 +1940,7 @@ test "RpcHookContext.getEpochInfo - minContextSlot enforcement" {
         .leader_schedule_slot_offset = 32,
         .warmup = false,
     });
-    const epoch_tracker = sig.core.EpochTracker.init(.default, 0, epoch_schedule);
+    var epoch_tracker = sig.core.EpochTracker.init(.default, 0, epoch_schedule);
 
     var slot_tracker = try testSetupSlotTracker(10, 50, 1000);
     defer slot_tracker.deinit(testing.allocator);
@@ -1943,7 +1966,7 @@ test "RpcHookContext.getEpochInfo - slot not available" {
         .leader_schedule_slot_offset = 32,
         .warmup = false,
     });
-    const epoch_tracker = sig.core.EpochTracker.init(.default, 0, epoch_schedule);
+    var epoch_tracker = sig.core.EpochTracker.init(.default, 0, epoch_schedule);
 
     var slot_tracker: sig.replay.trackers.SlotTracker = try .initEmpty(testing.allocator, 10);
     defer slot_tracker.deinit(testing.allocator);
@@ -1968,6 +1991,7 @@ test "RpcHookContext.getLatestBlockhash - returns blockhash and last valid block
     var slot_tracker: sig.replay.trackers.SlotTracker = try .init(testing.allocator, 42, .{
         .constants = testDummySlotConstants(42, 100),
         .state = state,
+        .allocator = testing.allocator,
     });
     defer slot_tracker.deinit(testing.allocator);
 
