@@ -163,7 +163,6 @@ pub fn getBlocksWithLimit(
         .forward,
         params.start_slot,
     );
-    defer rooted_iter.deinit();
 
     while (blocks.items.len < params.limit) {
         const slot = try rooted_iter.nextKey() orelse break;
