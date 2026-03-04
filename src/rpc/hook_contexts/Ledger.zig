@@ -93,7 +93,7 @@ pub fn getBlocks(
         upper_bound,
     );
 
-    if (end_slot < params.start_slot) return &.{};
+    if (end_slot <= params.start_slot) return &.{};
     if (end_slot - params.start_slot > GetBlocks.MAX_GET_CONFIRMED_BLOCKS_RANGE) {
         return error.SlotRangeTooLarge;
     }
@@ -198,7 +198,7 @@ pub fn getBlocksWithLimit(
 /// Walk from latest_confirmed back to the root, collecting confirmed-but-unrooted slots.
 /// Returns slots sorted ascending.
 fn getConfirmedUnrootedSlots(
-    self: @This(),
+    self: LedgerHookContext,
     arena: std.mem.Allocator,
     latest_confirmed: Slot,
     highest_root: Slot,
