@@ -582,7 +582,7 @@ pub fn spawnAndWaitNoSandbox(
     }
 
     var reset_event: std.Thread.ResetEvent = .{};
-    var finished_service_idx: ?u16 = null;
+    var finished_service_idx: std.atomic.Value(u16) = .init(std.math.maxInt(u16));
 
     // Start up all services, storing their pids
     inline for (services, exit_memfds, 0..) |service_instance, exit, i| {
@@ -600,7 +600,8 @@ pub fn spawnAndWaitNoSandbox(
     // Wait for first service to exit
     reset_event.wait();
 
-    const exited_idx = finished_service_idx.?;
+    const exited_idx = finished_service_idx.load(.seq_cst);
+    std.debug.assert(exited_idx != std.math.maxInt(u16));
 
     dumpOnExit(@ptrCast(try exit_memfds[exited_idx].mmap(null)), services[exited_idx], 0, 0);
 }
@@ -610,7 +611,7 @@ fn threadEntry(
     service: Service,
     args: common.ResolvedArgs,
     service_idx: u16,
-    finished_idx: *?u16,
+    finished_idx: *std.atomic.Value(u16),
     reset_event: *std.Thread.ResetEvent,
 ) void {
     switch (service) {
@@ -618,8 +619,8 @@ fn threadEntry(
     }
 
     entry_point(args);
-    finished_idx.* = service_idx;
     reset_event.set();
+    finished_idx.store(service_idx, .seq_cst);
 }
 
 fn spawnServiceNoSandbox(
@@ -628,7 +629,7 @@ fn spawnServiceNoSandbox(
     stderr: std.fs.File,
     regions: []const LookupResult,
     service_idx: u16,
-    finished_idx: *?u16,
+    finished_idx: *std.atomic.Value(u16),
     reset_event: *std.Thread.ResetEvent,
 ) !std.Thread {
     const resolved_args = try resolveArgs(exit, stderr, regions);
