@@ -22,6 +22,10 @@ const SlotHashes = sig.runtime.sysvar.SlotHashes;
 pub const VoteStateV4 = state_v4.VoteStateV4;
 pub const createTestVoteStateV4 = state_v4.createTestVoteStateV4;
 
+/// Size of a BLS public key in a compressed point representation
+/// https://github.com/anza-xyz/solana-sdk/blob/00d056c4ce9def466ad5475533588713feebcb2c/vote-interface/src/state/mod.rs#L33
+pub const BLS_PUBLIC_KEY_COMPRESSED_SIZE: usize = 48;
+
 pub const MAX_PRIOR_VOTERS: usize = 32;
 pub const MAX_LOCKOUT_HISTORY: usize = 31;
 pub const INITIAL_LOCKOUT: usize = 2;
@@ -679,7 +683,7 @@ pub const VoteStateVersions = union(enum(u32)) {
     /// vote_pubkey: when provided, used as inflation_rewards_collector default for old versions.
     ///
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
-    fn convertToV4(
+    pub fn convertToV4(
         self: VoteStateVersions,
         /// must be the allocator used to allocate self
         allocator: Allocator,

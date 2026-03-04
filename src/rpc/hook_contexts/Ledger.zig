@@ -12,6 +12,7 @@ const AncestorIterator = sig.ledger.Reader.AncestorIterator;
 const GetBlock = methods.GetBlock;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
+const GetTransaction = methods.GetTransaction;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
 const Pubkey = sig.core.Pubkey;
 const ReservedAccounts = sig.core.ReservedAccounts;
@@ -192,6 +193,43 @@ pub fn getBlocksWithLimit(
     }
 
     return try blocks.toOwnedSlice(arena);
+}
+
+pub fn getTransaction(
+    self: LedgerHookContext,
+    arena: std.mem.Allocator,
+    params: GetTransaction,
+) !GetTransaction.Response {
+    const config: GetTransaction.Config = params.config orelse .{};
+    const commitment = config.commitment orelse .finalized;
+    const encoding = config.encoding orelse .json;
+    const max_supported_version = config.maxSupportedTransactionVersion;
+
+    const reader = self.ledger.reader();
+    const highest_confirmed_slot = self.slot_tracker.getSlotForCommitment(.confirmed);
+
+    // Get transaction from ledger.
+    const confirmed_tx_with_meta = switch (commitment) {
+        .processed => return error.ProcessedNotSupported,
+        .confirmed => try reader.getCompleteTransaction(
+            arena,
+            params.signature,
+            highest_confirmed_slot,
+        ),
+        .finalized => try reader.getRootedTransaction(arena, params.signature),
+    } orelse return .none;
+
+    return .{ .value = .{
+        .slot = confirmed_tx_with_meta.slot,
+        .transaction = try encodeTransactionWithStatusMeta(
+            arena,
+            confirmed_tx_with_meta.tx_with_meta,
+            encoding,
+            max_supported_version,
+            true,
+        ),
+        .block_time = confirmed_tx_with_meta.block_time,
+    } };
 }
 
 /// Walk from latest_confirmed back to the root, collecting confirmed-but-unrooted slots.

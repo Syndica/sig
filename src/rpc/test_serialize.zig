@@ -23,6 +23,7 @@ const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSlot = methods.GetSlot;
+const GetTransaction = methods.GetTransaction;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
 
@@ -72,6 +73,7 @@ test GetAccountInfo {
         \\{"jsonrpc":"2.0","id":1,"method":"getAccountInfo","params":["Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm"]}
         ,
     );
+
     try testResponse(
         GetAccountInfo,
         .{ .result = .{
@@ -97,6 +99,48 @@ test GetAccountInfo {
         \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275280},"value":null},"id":1}
         ,
     );
+
+    // Test jsonParsed response deserialization (object_begin branch).
+    // Uses std.json.Value as generic representation on the client side.
+    {
+        const response_json =
+            \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275280},"value":{"data":{"program":"nonce","parsed":{"type":"initialized","info":{"authority":"5CZKcm98vSbMwBPRBMF6VkaFtyZfCsjLBbGygQiGGqmJ","blockhash":"4N7Mz3MHMTFgrF2FawpFE42PerjEfyPnsmPSWRxoCon3","feeCalculator":{"lamportsPerSignature":"5000"}}},"space":80},"executable":false,"lamports":1169280,"owner":"11111111111111111111111111111111","rentEpoch":18446744073709551615,"space":80}},"id":1}
+        ;
+        const response = try Response(GetAccountInfo.Response).fromJson(std.testing.allocator, response_json);
+        defer response.deinit();
+        const res: GetAccountInfo.Response = try response.result();
+        try std.testing.expectEqual(@as(u64, 309275280), res.context.slot);
+        try std.testing.expectEqualStrings("2.1.6", res.context.apiVersion);
+
+        const value = res.value.?;
+        try std.testing.expectEqual(false, value.executable);
+        try std.testing.expectEqual(@as(u64, 1169280), value.lamports);
+        try std.testing.expectEqual(@as(u64, 80), value.space);
+
+        // Verify the data is a jsonParsed pre-serialized JSON string
+        const json_str = value.data.jsonParsed;
+        const parsed_json = try std.json.parseFromSlice(
+            std.json.Value,
+            std.testing.allocator,
+            json_str,
+            .{},
+        );
+        defer parsed_json.deinit();
+        const json_val = parsed_json.value;
+        try std.testing.expect(json_val == .object);
+        const obj = json_val.object;
+        try std.testing.expectEqualStrings("nonce", obj.get("program").?.string);
+        try std.testing.expectEqual(@as(i64, 80), obj.get("space").?.integer);
+
+        // Verify nested parsed content
+        const parsed = obj.get("parsed").?.object;
+        try std.testing.expectEqualStrings("initialized", parsed.get("type").?.string);
+        const info = parsed.get("info").?.object;
+        try std.testing.expectEqualStrings(
+            "5CZKcm98vSbMwBPRBMF6VkaFtyZfCsjLBbGygQiGGqmJ",
+            info.get("authority").?.string,
+        );
+    }
 }
 
 test GetBalance {
@@ -349,7 +393,69 @@ test GetSlot {
 // TODO: test getTockenAccountsByOwner()
 // TODO: test getTokenLargestAccounts()
 // TODO: test getTokenSupply()
-// TODO: test getTransaction()
+test GetTransaction {
+    const tx_sig: Signature = .parse(
+        "56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp",
+    );
+
+    // Request serialization - signature only
+    try testRequest(
+        .getTransaction,
+        .{ .signature = tx_sig },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTransaction","params":["56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp"]}
+        ,
+    );
+
+    // Request serialization - with config
+    try testRequest(
+        .getTransaction,
+        .{
+            .signature = tx_sig,
+            .config = .{
+                .maxSupportedTransactionVersion = 0,
+                .encoding = .base64,
+            },
+        },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTransaction","params":["56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp",{"commitment":null,"maxSupportedTransactionVersion":0,"encoding":"base64"}]}
+        ,
+    );
+
+    // Response serialization - transaction not found (none)
+    try expectJsonStringify("null", @as(GetTransaction.Response, .none));
+
+    // Response serialization - minimal (no meta, no version, no blockTime)
+    try expectJsonStringify(
+        \\{"slot":430,"transaction":["AQID","base64"]}
+    , @as(GetTransaction.Response, .{ .value = .{
+        .slot = 430,
+        .transaction = .{
+            .transaction = .{ .binary = .{ "AQID", .base64 } },
+        },
+        .block_time = null,
+    } }));
+
+    // Response serialization - full (with meta, version, and blockTime)
+    const pre_balances = [_]u64{ 1_000_000_000, 500_000_000 };
+    const post_balances = [_]u64{ 999_995_000, 500_005_000 };
+    try expectJsonStringify(
+        \\{"slot":430,"meta":{"err":null,"fee":5000,"innerInstructions":[],"logMessages":[],"postBalances":[999995000,500005000],"postTokenBalances":[],"preBalances":[1000000000,500000000],"preTokenBalances":[],"rewards":[],"status":{"Ok":null}},"transaction":["AQID","base64"],"version":0,"blockTime":1700000000}
+    , @as(GetTransaction.Response, .{ .value = .{
+        .slot = 430,
+        .transaction = .{
+            .transaction = .{ .binary = .{ "AQID", .base64 } },
+            .meta = .{
+                .err = null,
+                .status = .{ .Ok = .{}, .Err = null },
+                .fee = 5000,
+                .preBalances = &pre_balances,
+                .postBalances = &post_balances,
+            },
+            .version = .{ .number = 0 },
+        },
+        .block_time = 1_700_000_000,
+    } }));
+}
+
 // TODO: test getTransactionCount()
 // TODO: test getVoteAccounts()
 // TODO: test isBlockhashValid()
