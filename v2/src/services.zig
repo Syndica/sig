@@ -99,7 +99,7 @@ pub const Region = union(RegionType) {
     }
 
     pub fn init(self: Region, buf: []align(page_size_min) u8) !void {
-        std.debug.print("Initialising: {}\n", .{@as(RegionType, self)});
+        std.log.info("Initialising: {}\n", .{@as(RegionType, self)});
 
         return switch (self) {
             .net_pair => |cfg| {
@@ -257,7 +257,7 @@ pub fn spawnAndWait(
         defer std.posix.munmap(buf);
         try shared_region.region.init(buf);
 
-        std.debug.print("Initialised: {f}\n", .{shared_region});
+        std.log.info("Initialised: {f}\n", .{shared_region});
     }
 
     var map = try serviceMap(allocator, services, regions, region_memfds);
@@ -335,7 +335,7 @@ fn spawnService(
 
     if (maybe_child_pid) |child_pid| {
         // parent code
-        std.debug.print("Starting Service `{f}`, pid: {}\n", .{ service_instance, child_pid });
+        std.log.info("Starting Service `{f}`, pid: {}\n", .{ service_instance, child_pid });
         return child_pid;
     }
 
@@ -483,43 +483,43 @@ fn dumpOnExit(
     status: u32,
 ) void {
     if (meta.panicMsg()) |panic_msg| {
-        std.debug.print(
+        std.log.err(
             "Service `{f}` (pid: {}) panicked with message: {s}\n",
             .{ service_instance, pid, panic_msg },
         );
     }
     if (meta.errorName()) |error_string| {
-        std.debug.print(
+        std.log.err(
             "Service `{f}` (pid: {}) exited with error: {s}\n",
             .{ service_instance, pid, error_string },
         );
     }
     if (meta.faultMsg()) |fault_msg| {
-        std.debug.print(
+        std.log.err(
             "Service `{f}` (pid: {}) faulted with message: {s}\n",
             .{ service_instance, pid, fault_msg },
         );
     }
 
     if (linux.W.TERMSIG(status) != 0) {
-        std.debug.print(
+        std.log.err(
             "Service `{f}` (pid: {}) exited from signal {}\n",
             .{ service_instance, pid, linux.W.TERMSIG(status) },
         );
     }
 
     if (meta.errorReturnStackTrace()) |trace| {
-        std.debug.print("Error trace:\n", .{});
+        std.log.err("Error trace:\n", .{});
         std.debug.dumpStackTrace(trace);
     }
 
     if (meta.stackTrace()) |trace| {
-        std.debug.print("Stack trace:\n", .{});
+        std.log.err("Stack trace:\n", .{});
         std.debug.dumpStackTrace(trace);
     }
 
     if (meta.faultStackTrace()) |trace| {
-        std.debug.print("Fault trace:\n", .{});
+        std.log.err("Fault trace:\n", .{});
         std.debug.dumpStackTrace(trace);
     }
 }
@@ -572,7 +572,7 @@ pub fn spawnAndWaitNoSandbox(
         defer std.posix.munmap(buf);
         try shared_region.region.init(buf);
 
-        std.debug.print("Initialised: {f}\n", .{shared_region});
+        std.log.info("Initialised: {f}\n", .{shared_region});
     }
 
     var map = try serviceMap(allocator, services, regions, region_memfds);
