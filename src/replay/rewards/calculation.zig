@@ -24,6 +24,7 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
 const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
 const VoteStateV3 = sig.runtime.program.vote.state.VoteStateV3;
+const VoteStateV4 = sig.runtime.program.vote.state.VoteStateV4;
 
 const PreviousEpochInflationRewards = sig.replay.rewards.PreviousEpochInflationRewards;
 const VoteRewards = sig.replay.rewards.VoteRewards;
@@ -58,6 +59,7 @@ pub fn beginPartitionedRewards(
         slot,
         &slot_constants.ancestors,
     );
+    defer current_epoch_info.release();
     const epoch_vote_accounts = current_epoch_info.stakes.stakes.vote_accounts;
 
     const slots_per_year = epoch_tracker.cluster.slotsPerYear();
@@ -633,7 +635,7 @@ fn newVoteAccountForTest(
             .lamports = 1234,
             .owner = sig.runtime.program.vote.ID,
         },
-        vote_state_v4,
+        .{ .v4 = vote_state_v4 },
     );
 }
 
@@ -659,7 +661,7 @@ test calculateRewardsAndDistributeVoteRewards {
             .lamports = 10_000_000_000,
             .owner = sig.runtime.program.vote.ID,
         },
-        try .init(
+        .{ .v4 = try VoteStateV4.init(
             allocator,
             Pubkey.initRandom(random),
             Pubkey.initRandom(random),
@@ -667,9 +669,9 @@ test calculateRewardsAndDistributeVoteRewards {
             10,
             epoch,
             vote_account_0_pubkey,
-        ),
+        ) },
     );
-    try vote_account_0.state.epoch_credits.append(allocator, .{
+    try vote_account_0.state.epochCreditsListMut().append(allocator, .{
         .credits = 10,
         .epoch = 1,
         .prev_credits = 5,
@@ -709,7 +711,7 @@ test calculateRewardsAndDistributeVoteRewards {
         } });
     }
 
-    var test_context = try sig.accounts_db.Two.initTest(allocator);
+    var test_context = try sig.accounts_db.Db.initTest(allocator);
     defer test_context.deinit();
 
     var ancestors = sig.core.Ancestors.EMPTY;
@@ -717,7 +719,7 @@ test calculateRewardsAndDistributeVoteRewards {
     try ancestors.addSlot(allocator, 0);
 
     const account_store = sig.accounts_db.AccountStore{
-        .accounts_db_two = &test_context.db,
+        .accounts_db = &test_context.db,
     };
     const vote_account_shared_data = try vote_account_0.toAccountSharedData(allocator);
     defer vote_account_shared_data.deinit(allocator);
@@ -774,7 +776,7 @@ test calculateRewardsForPartitioning {
             .lamports = 10_000_000_000,
             .owner = sig.runtime.program.vote.ID,
         },
-        try .init(
+        .{ .v4 = try VoteStateV4.init(
             allocator,
             Pubkey.initRandom(random),
             Pubkey.initRandom(random),
@@ -782,9 +784,9 @@ test calculateRewardsForPartitioning {
             10,
             epoch,
             vote_account_0_pubkey,
-        ),
+        ) },
     );
-    try vote_account_0.state.epoch_credits.append(allocator, .{
+    try vote_account_0.state.epochCreditsListMut().append(allocator, .{
         .credits = 10,
         .epoch = 1,
         .prev_credits = 5,
@@ -882,7 +884,7 @@ test calculateValidatorRewards {
             .lamports = 10_000_000_000,
             .owner = sig.runtime.program.vote.ID,
         },
-        try .init(
+        .{ .v4 = try VoteStateV4.init(
             allocator,
             Pubkey.initRandom(random),
             Pubkey.initRandom(random),
@@ -890,9 +892,9 @@ test calculateValidatorRewards {
             10,
             epoch,
             vote_account_0_pubkey,
-        ),
+        ) },
     );
-    try vote_account_0.state.epoch_credits.append(allocator, .{
+    try vote_account_0.state.epochCreditsListMut().append(allocator, .{
         .credits = 10,
         .epoch = 1,
         .prev_credits = 5,
@@ -1025,7 +1027,7 @@ test calculateRewardPointsPartitioned {
             .lamports = 10_000_000_000,
             .owner = sig.runtime.program.vote.ID,
         },
-        .state = try .init(
+        .state = .{ .v4 = try VoteStateV4.init(
             allocator,
             Pubkey.initRandom(random),
             Pubkey.initRandom(random),
@@ -1033,10 +1035,10 @@ test calculateRewardPointsPartitioned {
             10,
             epoch,
             vote_account_0_pubkey,
-        ),
+        ) },
         .rc = rc,
     };
-    try vote_account_0.state.epoch_credits.append(allocator, .{
+    try vote_account_0.state.epochCreditsListMut().append(allocator, .{
         .credits = 10,
         .epoch = 1,
         .prev_credits = 5,

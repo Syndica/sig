@@ -240,7 +240,7 @@ pub fn computeFromVoteAccounts(
 
     for (vote_keyed) |*pubkey| {
         const vote_account = vote_accounts.get(pubkey.*) orelse unreachable;
-        pubkey.* = vote_account.account.state.node_pubkey;
+        pubkey.* = vote_account.account.state.nodePubkey().*;
     }
 
     return vote_keyed;

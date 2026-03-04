@@ -7,7 +7,7 @@
 
 const std = @import("std");
 const tracy = @import("tracy");
-const sig = @import("../../sig.zig");
+const sig = @import("../sig.zig");
 
 const Atomic = std.atomic.Value;
 
