@@ -73,7 +73,7 @@ pub fn getBlock(
 
 pub fn getTransaction(
     self: LedgerHookContext,
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     params: GetTransaction,
 ) !GetTransaction.Response {
     const config = params.config orelse GetTransaction.Config{};
@@ -88,18 +88,17 @@ pub fn getTransaction(
     const confirmed_tx_with_meta = switch (commitment) {
         .processed => return error.ProcessedNotSupported,
         .confirmed => try reader.getCompleteTransaction(
-            allocator,
+            arena,
             params.signature,
             highest_confirmed_slot,
         ),
-        .finalized => try reader.getRootedTransaction(allocator, params.signature),
+        .finalized => try reader.getRootedTransaction(arena, params.signature),
     } orelse return .none;
-    defer confirmed_tx_with_meta.deinit(allocator);
 
     return .{ .value = .{
         .slot = confirmed_tx_with_meta.slot,
         .transaction = try encodeTransactionWithStatusMeta(
-            allocator,
+            arena,
             confirmed_tx_with_meta.tx_with_meta,
             encoding,
             max_supported_version,
