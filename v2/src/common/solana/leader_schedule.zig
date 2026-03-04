@@ -1,11 +1,11 @@
 //! Must be replaced - cannot handle epoch transitions at all
 
-const common = @import("../../common.zig");
+const solana = @import("../solana.zig");
 
 const std = @import("std");
 
-const Slot = common.solana.Slot;
-const Pubkey = common.solana.Pubkey;
+const Slot = solana.Slot;
+const Pubkey = solana.Pubkey;
 
 const slots_per_epoch = 432000;
 
