@@ -13,6 +13,8 @@ pub const requests = @import("requests.zig");
 pub const basic = @import("basic.zig");
 // pub const LinuxIoUring = @import("linux_io_uring.zig").LinuxIoUring;
 
+const account_codec = sig.rpc.account_codec;
+
 const Logger = sig.trace.Logger("rpc.server");
 
 test {
@@ -342,9 +344,8 @@ test "serveSpawn getAccountInfo" {
             const raw_data = try account.data.readAllAllocate(alloc);
             defer alloc.free(raw_data);
 
-            const GetAccountInfoResp = sig.rpc.methods.GetAccountInfo.Response;
             const base64_encoder = std.base64.standard.Encoder;
-            const encoded_data: GetAccountInfoResp.Value.Data = switch (encoding) {
+            const encoded_data: account_codec.AccountData = switch (encoding) {
                 .base64 => blk: {
                     const encoded_len = base64_encoder.calcSize(raw_data.len);
                     const encoded_buf = try alloc.alloc(u8, encoded_len);
@@ -354,6 +355,7 @@ test "serveSpawn getAccountInfo" {
                 .base58 => return error.UnsupportedEncoding,
                 .@"base64+zstd" => return error.UnsupportedEncoding,
                 .jsonParsed => return error.UnsupportedEncoding,
+                .binary => return error.UnsupportedEncoding,
             };
 
             return .{
