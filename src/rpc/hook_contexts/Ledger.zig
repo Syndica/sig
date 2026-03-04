@@ -1,5 +1,5 @@
-///! RPC hook context for block-related methods.
-///! Requires access to the Ledger and SlotTracker for commitment checks.
+//! RPC hook context for block-related methods.
+//! Requires access to the Ledger and SlotTracker for commitment checks.
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const base58 = @import("base58");
@@ -195,11 +195,13 @@ fn validateVersion(
 ) !?GetBlock.Response.EncodedTransactionWithStatusMeta.TransactionVersion {
     if (max_supported_version) |max_version| switch (version) {
         .legacy => return .legacy,
-        // TODO: update this to use the version number
-        // that would be stored inside the version enum
-        .v0 => if (max_version >= 0) {
-            return .{ .number = 0 };
-        } else return error.UnsupportedTransactionVersion,
+        else => |tag| {
+            const version_num = @intFromEnum(tag);
+            if (version_num <= max_version)
+                return .{ .number = version_num }
+            else
+                return error.UnsupportedTransactionVersion;
+        },
     } else switch (version) {
         .legacy => return null,
         .v0 => return error.UnsupportedTransactionVersion,
@@ -368,7 +370,7 @@ fn parseUiTransactionStatusMetaFromLedger(
         if (meta.rewards) |rewards| {
             const converted = try arena.alloc(GetBlock.Response.UiReward, rewards.len);
             for (rewards, 0..) |reward, i| {
-                converted[i] = try GetBlock.Response.UiReward.fromLedgerReward(reward);
+                converted[i] = GetBlock.Response.UiReward.fromLedgerReward(reward);
             }
             break :rewards converted;
         } else break :rewards &.{};
@@ -921,7 +923,7 @@ fn buildSimpleUiTransactionStatusMeta(
             if (meta.rewards) |rewards| {
                 const converted = try arena.alloc(GetBlock.Response.UiReward, rewards.len);
                 for (rewards, 0..) |reward, i| {
-                    converted[i] = try GetBlock.Response.UiReward.fromLedgerReward(reward);
+                    converted[i] = GetBlock.Response.UiReward.fromLedgerReward(reward);
                 }
                 break :rewards .{ .value = converted };
             } else break :rewards .{ .value = &.{} };
@@ -1043,7 +1045,7 @@ fn convertRewards(
     const rewards = try arena.alloc(GetBlock.Response.UiReward, rewards_value.len);
 
     for (rewards_value, 0..) |r, i| {
-        rewards[i] = try GetBlock.Response.UiReward.fromLedgerReward(r);
+        rewards[i] = GetBlock.Response.UiReward.fromLedgerReward(r);
     }
     return rewards;
 }
