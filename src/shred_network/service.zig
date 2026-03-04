@@ -274,7 +274,7 @@ test "start and stop gracefully" {
     defer state.deinit();
 
     var epoch_tracker: sig.core.EpochTracker = .init(.default, 0, .INIT);
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     const config: ShredNetworkConfig = .{
         .root_slot = 0,
