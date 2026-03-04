@@ -75,13 +75,12 @@ fn mainInner(pairs: []const *Pair) !noreturn {
         for (pairs, sockets[0..sockets_len]) |pair, sock| {
             var slice = pair.recv.getWritable() catch continue;
             const ptr = slice.one();
-            var dummy: u32 = 0;
             ptr.size = @intCast(std.posix.recvfrom(
                 sock,
                 &ptr.data,
                 0,
-                &ptr.addr.any,
-                &dummy,
+                null,
+                null,
             ) catch |err| switch (err) {
                 error.WouldBlock => continue,
                 else => |e| return e,
