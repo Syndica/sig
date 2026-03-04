@@ -357,6 +357,7 @@ const FeedClientContext = struct {
     port: u16,
     request: []const u8,
     split_at: ?usize,
+    handshake_done: std.Thread.ResetEvent = .{},
     done: std.Thread.ResetEvent = .{},
     err: ?anyerror = null,
 };
@@ -382,6 +383,7 @@ fn runFeedConnectionCase(comptime mode: FeedReadMode) !void {
     var listener = try servers.localhost.listen(.{ .reuse_address = true });
     defer listener.deinit();
 
+    // Build one valid upgrade request and choose a split point for partial mode.
     var request_buf: [512]u8 = undefined;
     const request = buildRequest(&request_buf, .{});
     const split_at = request.len / 2;
@@ -402,6 +404,7 @@ fn runFeedConnectionCase(comptime mode: FeedReadMode) !void {
         }
     }
 
+    // Simulate an upstream pre-read: either full headers or only the first half.
     var initial_data_buf: [512]u8 = undefined;
     const initial_data_len = switch (mode) {
         .complete => try readUntilHeadersComplete(conn.stream, &initial_data_buf),
@@ -418,25 +421,32 @@ fn runFeedConnectionCase(comptime mode: FeedReadMode) !void {
         try testing.expect(initial_data_len < request.len);
     }
 
+    // feedConnection expects a non-blocking fd owned by the server loop.
     try setSocketNonBlocking(conn.stream.handle);
 
+    // Hand off the accepted socket plus pre-read bytes to the server handshake path.
     try server.feedConnection(conn.stream.handle, initial_data_buf[0..initial_data_len]);
     close_conn = false;
 
-    const deadline = @as(u64, @intCast(std.time.milliTimestamp())) + 2000;
-    while (!client_ctx.done.isSet() and @as(u64, @intCast(std.time.milliTimestamp())) < deadline) {
-        loop.run(.no_wait) catch break;
+    // Drive the loop until the client confirms it received the 101 response.
+    const handshake_deadline = std.time.milliTimestamp() + 2000;
+    while (!client_ctx.handshake_done.isSet() and
+        client_ctx.err == null and
+        std.time.milliTimestamp() < handshake_deadline)
+    {
+        try loop.run(.no_wait);
         std.Thread.sleep(1 * std.time.ns_per_ms);
-    }
-
-    if (!client_ctx.done.isSet()) {
-        return error.ClientTimeout;
     }
 
     if (client_ctx.err) |err| {
         return err;
     }
 
+    if (!client_ctx.handshake_done.isSet()) {
+        return error.ClientTimeout;
+    }
+
+    // Trigger shutdown and wait for the shutdown callback to fire.
     var shutdown_done = false;
     server.shutdown(1000, bool, &shutdown_done, struct {
         fn onShutdown(done_opt: ?*bool, _: FeedServer.ShutdownResult) void {
@@ -446,13 +456,19 @@ fn runFeedConnectionCase(comptime mode: FeedReadMode) !void {
         }
     }.onShutdown);
 
-    const shutdown_deadline = @as(u64, @intCast(std.time.milliTimestamp())) + 2000;
-    while (!shutdown_done and @as(u64, @intCast(std.time.milliTimestamp())) < shutdown_deadline) {
-        loop.run(.no_wait) catch break;
+    const shutdown_deadline = std.time.milliTimestamp() + 2000;
+    while (!shutdown_done and std.time.milliTimestamp() < shutdown_deadline) {
+        try loop.run(.no_wait);
         std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 
     try testing.expect(shutdown_done);
+
+    // Client thread should observe server close and then exit.
+    try client_ctx.done.timedWait(2 * std.time.ns_per_s);
+    if (client_ctx.err) |err| {
+        return err;
+    }
 }
 
 fn runFeedClientThread(ctx: *FeedClientContext) void {
@@ -467,6 +483,7 @@ fn runFeedClientThreadInner(ctx: *FeedClientContext) !void {
     const stream = try rawConnect(ctx.port);
     defer stream.close();
 
+    // Send either the full request or two chunks to exercise partial pre-read mode.
     if (ctx.split_at) |split_at| {
         try stream.writeAll(ctx.request[0..split_at]);
         std.Thread.sleep(30 * std.time.ns_per_ms);
@@ -475,6 +492,7 @@ fn runFeedClientThreadInner(ctx: *FeedClientContext) !void {
         try stream.writeAll(ctx.request);
     }
 
+    // Read until the HTTP response header terminator.
     var response_buf: [512]u8 = undefined;
     var total_read: usize = 0;
     while (total_read < response_buf.len) {
@@ -495,6 +513,21 @@ fn runFeedClientThreadInner(ctx: *FeedClientContext) !void {
     const response = response_buf[0..total_read];
     if (!std.mem.startsWith(u8, response, "HTTP/1.1 101 Switching Protocols\r\n")) {
         return error.BadHandshakeResponse;
+    }
+
+    // Signal main test thread that handshake completed successfully.
+    ctx.handshake_done.set();
+
+    // Keep reading until server shutdown closes the socket.
+    var close_buf: [256]u8 = undefined;
+    while (true) {
+        const n = stream.read(&close_buf) catch |err| switch (err) {
+            error.WouldBlock => return error.ConnectionNotClosed,
+            else => return err,
+        };
+        if (n == 0) {
+            return;
+        }
     }
 }
 
