@@ -86,35 +86,6 @@ pub const Pubkey = extern struct {
         return writer.writeAll(str);
     }
 
-    pub fn jsonStringify(self: Pubkey, write_stream: anytype) !void {
-        try write_stream.write(self.base58String().slice());
-    }
-
-    pub fn jsonParse(
-        _: std.mem.Allocator,
-        source: anytype,
-        _: std.json.ParseOptions,
-    ) std.json.ParseError(@TypeOf(source.*))!Pubkey {
-        return switch (try source.next()) {
-            .string => |str| parseRuntime(str) catch error.UnexpectedToken,
-            else => error.UnexpectedToken,
-        };
-    }
-
-    pub fn jsonParseFromValue(
-        _: std.mem.Allocator,
-        source: std.json.Value,
-        _: std.json.ParseOptions,
-    ) std.json.ParseFromValueError!Pubkey {
-        return switch (source) {
-            .string => |str| parseRuntime(str) catch |err| switch (err) {
-                error.InvalidPubkey => error.InvalidCharacter,
-                error.InvalidLength => error.LengthMismatch,
-            },
-            else => error.UnexpectedToken,
-        };
-    }
-
     pub fn indexIn(self: Pubkey, pubkeys: []const Pubkey) ?usize {
         return for (pubkeys, 0..) |candidate, index| {
             if (self.equals(&candidate)) break index;
