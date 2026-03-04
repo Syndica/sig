@@ -22,7 +22,8 @@ const VoteStateV3 = runtime.program.vote.state.VoteStateV3;
 const VoteStateV4 = runtime.program.vote.state.VoteStateV4;
 const ExecuteContextsParams = runtime.testing.ExecuteContextsParams;
 
-const Instruction = instruction.Instruction;
+pub const Instruction = instruction.Instruction;
+pub const LockupArgs = instruction.LockupArgs;
 
 const InstructionContext = runtime.InstructionContext;
 const BorrowedAccount = runtime.BorrowedAccount;

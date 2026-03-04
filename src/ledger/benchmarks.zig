@@ -19,7 +19,7 @@ fn createRewards(allocator: std.mem.Allocator, count: usize) !Rewards {
     var rewards: Rewards = Rewards.init(allocator);
     for (0..count) |i| {
         try rewards.append(Reward{
-            .pubkey = &Pubkey.initRandom(rand).data,
+            .pubkey = Pubkey.initRandom(rand),
             .lamports = @intCast(42 + i),
             .post_balance = std.math.maxInt(u64),
             .reward_type = RewardType.fee,
@@ -160,7 +160,7 @@ pub const BenchmarkLedger = struct {
         var indices = try std.array_list.Managed(u32).initCapacity(allocator, num_reads);
         defer indices.deinit();
         for (0..num_reads) |_| {
-            indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds)));
+            indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds - 1)));
         }
 
         const reader = state.reader();
@@ -247,7 +247,7 @@ pub const BenchmarkLedger = struct {
         var indices = try std.array_list.Managed(u32).initCapacity(allocator, total_shreds);
         defer indices.deinit();
         for (0..total_shreds) |_| {
-            indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds)));
+            indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds - 1)));
         }
 
         const reader = state.reader();
@@ -347,8 +347,8 @@ pub const BenchmarkLedger = struct {
             _ = try result_writer.writeTransactionStatus(
                 slot,
                 signature,
-                w_keys,
-                r_keys,
+                w_keys.items,
+                r_keys.items,
                 status,
                 tx_idx,
             );

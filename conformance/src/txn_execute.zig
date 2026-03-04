@@ -387,7 +387,7 @@ fn executeTxnContext(
                 .update_sysvar_deps = update_sysvar_deps,
             },
         );
-        try update_sysvar.updateClock(allocator, .{
+        _ = try update_sysvar.updateClock(allocator, .{
             .feature_set = &feature_set,
             .epoch_schedule = &epoch_schedule,
             .epoch_stakes = epoch_stakes_map.getPtr(epoch),
@@ -611,7 +611,7 @@ fn executeTxnContext(
                         .update_sysvar_deps = update_sysvar_deps,
                     },
                 );
-                try update_sysvar.updateClock(allocator, .{
+                _ = try update_sysvar.updateClock(allocator, .{
                     .feature_set = &feature_set,
                     .epoch_schedule = &epoch_schedule,
                     .epoch_stakes = epoch_stakes_map.getPtr(epoch),
