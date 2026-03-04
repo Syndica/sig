@@ -1,5 +1,5 @@
-/// This module provides encoding and decoding of Solana accounts for RPC responses.
-/// Supports `jsonParsed`, `base58`, `base64`, and `base64+zstd` encodings.
+//! This module provides encoding and decoding of Solana accounts for RPC responses.
+//! Supports `jsonParsed`, `base58`, `base64`, and `base64+zstd` encodings.
 const std = @import("std");
 const base58 = @import("base58");
 const zstd = @import("zstd");
@@ -168,8 +168,8 @@ pub fn encodeJsonParsed(
     // [agave] https://github.com/anza-xyz/agave/blob/8803776abe/rpc/src/rpc.rs#L2504-L2509
     // SPL token accounts ignore data_slice in the fallback path because
     // get_parsed_token_account hardcodes it to None.
-    const is_spl_token = sig.runtime.ids.SPL_TOKEN_PROGRAM_ID.equals(&account.owner) or
-        sig.runtime.ids.SPL_TOKEN_2022_PROGRAM_ID.equals(&account.owner);
+    const is_spl_token = sig.runtime.ids.TOKEN_PROGRAM_ID.equals(&account.owner) or
+        sig.runtime.ids.TOKEN_2022_PROGRAM_ID.equals(&account.owner);
     const fallback_slice = if (is_spl_token) null else data_slice;
     var encoded = try std.ArrayListUnmanaged(u8).initCapacity(
         allocator,
@@ -515,8 +515,8 @@ const ParsableAccount = enum {
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L48
         if (program_id.equals(&sig.runtime.sysvar.OWNER_ID)) return .sysvar;
         if (program_id.equals(&sig.runtime.program.config.ID)) return .config;
-        if (program_id.equals(&sig.runtime.ids.SPL_TOKEN_PROGRAM_ID)) return .token;
-        if (program_id.equals(&sig.runtime.ids.SPL_TOKEN_2022_PROGRAM_ID)) return .token_2022;
+        if (program_id.equals(&sig.runtime.ids.TOKEN_PROGRAM_ID)) return .token;
+        if (program_id.equals(&sig.runtime.ids.TOKEN_2022_PROGRAM_ID)) return .token_2022;
         return null;
     }
 
@@ -655,8 +655,8 @@ pub fn buildTokenAdditionalData(
     slot_reader: sig.accounts_db.SlotAccountReader,
 ) AdditionalAccountData {
     // Check if this is a token account
-    const is_token_program = account.owner.equals(&sig.runtime.ids.SPL_TOKEN_PROGRAM_ID) or
-        account.owner.equals(&sig.runtime.ids.SPL_TOKEN_2022_PROGRAM_ID);
+    const is_token_program = account.owner.equals(&sig.runtime.ids.TOKEN_PROGRAM_ID) or
+        account.owner.equals(&sig.runtime.ids.TOKEN_2022_PROGRAM_ID);
     if (!is_token_program) return .{};
 
     // Read account data to extract mint pubkey
@@ -799,14 +799,14 @@ test "rpc.account_codec.lib: parse account" {
         // SPL Token
         try std.testing.expectEqual(
             ParsableAccount.token,
-            ParsableAccount.fromProgramId(ids.SPL_TOKEN_PROGRAM_ID).?,
+            ParsableAccount.fromProgramId(ids.TOKEN_PROGRAM_ID).?,
         );
         try std.testing.expectEqualStrings("spl-token", ParsableAccount.token.programName());
 
         // SPL Token 2022
         try std.testing.expectEqual(
             ParsableAccount.token_2022,
-            ParsableAccount.fromProgramId(ids.SPL_TOKEN_2022_PROGRAM_ID).?,
+            ParsableAccount.fromProgramId(ids.TOKEN_2022_PROGRAM_ID).?,
         );
         try std.testing.expectEqualStrings(
             "spl-token-2022",

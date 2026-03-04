@@ -1,5 +1,5 @@
-/// Types for parsing SPL Token accounts for RPC responses using the `jsonParsed` encoding.
-/// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token.rs
+//! Types for parsing SPL Token accounts for RPC responses using the `jsonParsed` encoding.
+//! [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token.rs
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const parse_token_extension = @import("parse_token_extension.zig");

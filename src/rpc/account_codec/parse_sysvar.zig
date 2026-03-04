@@ -1,5 +1,5 @@
-/// Types for parsing sysvar accounts for RPC responses using the `jsonParsed` encoding.
-/// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs
+//! Types for parsing sysvar accounts for RPC responses using the `jsonParsed` encoding.
+//! [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const parse_nonce = @import("parse_nonce.zig");

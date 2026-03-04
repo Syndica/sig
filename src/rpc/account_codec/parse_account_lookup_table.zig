@@ -1,5 +1,5 @@
-/// Types for parsing a address lookup table accounts for RPC responses using the `jsonParsed` encoding.
-/// [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs
+//! Types for parsing a address lookup table accounts for RPC responses using the `jsonParsed` encoding.
+//! [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs
 const std = @import("std");
 const sig = @import("../../sig.zig");
 

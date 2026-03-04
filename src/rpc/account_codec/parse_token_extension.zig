@@ -1,5 +1,5 @@
-/// Token-2022 extension parsing and UI representation for account decoder.
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token_extension.rs#L22
+//! Token-2022 extension parsing and UI representation for account decoder.
+//! [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token_extension.rs#L22
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
