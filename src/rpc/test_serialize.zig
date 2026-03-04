@@ -1,14 +1,17 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const rpc = @import("lib.zig");
+const parse_instruction = @import("parse_instruction/lib.zig");
 
 const methods = rpc.methods;
 
+const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 
 const GetAccountInfo = methods.GetAccountInfo;
 const GetBalance = methods.GetBalance;
+const GetBlock = methods.GetBlock;
 const GetBlockCommitment = methods.GetBlockCommitment;
 const GetBlockHeight = methods.GetBlockHeight;
 const GetEpochInfo = methods.GetEpochInfo;
@@ -333,4 +336,652 @@ test GetVoteAccounts {
         \\}
         ,
     );
+}
+
+/// Helper to stringify a value and compare against expected JSON.
+fn expectJsonStringify(expected: []const u8, value: anytype) !void {
+    const actual = try std.json.Stringify.valueAlloc(std.testing.allocator, value, .{});
+    defer std.testing.allocator.free(actual);
+    try std.testing.expectEqualStrings(expected, actual);
+}
+
+test "GetBlock" {
+    // Request serialization
+    try testRequest(.getBlock, .{ .slot = 430 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlock","params":[430]}
+    );
+    try testRequest(.getBlock, .{
+        .slot = 430,
+        .encoding_or_config = .{ .encoding = .base64 },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlock","params":[430,"base64"]}
+    );
+    try testRequest(.getBlock, .{
+        .slot = 430,
+        .encoding_or_config = .{ .config = .{
+            .encoding = .json,
+            .transactionDetails = .full,
+            .rewards = false,
+        } },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlock","params":[430,{"commitment":null,"encoding":"json","transactionDetails":"full","maxSupportedTransactionVersion":null,"rewards":false}]}
+    );
+
+    // Response serialization - minimal block
+    {
+        const response = GetBlock.Response{
+            .previousBlockhash = Hash.ZEROES,
+            .blockhash = Hash.ZEROES,
+            .parentSlot = 99,
+        };
+        try expectJsonStringify(
+            \\{"blockhash":"11111111111111111111111111111111","parentSlot":99,"previousBlockhash":"11111111111111111111111111111111"}
+        , response);
+    }
+
+    // Response serialization - with blockTime and blockHeight
+    {
+        const response = GetBlock.Response{
+            .previousBlockhash = Hash.ZEROES,
+            .blockhash = Hash.ZEROES,
+            .parentSlot = 99,
+            .blockTime = 1_700_000_000,
+            .blockHeight = 42,
+        };
+        try expectJsonStringify(
+            \\{"blockHeight":42,"blockTime":1700000000,"blockhash":"11111111111111111111111111111111","parentSlot":99,"previousBlockhash":"11111111111111111111111111111111"}
+        , response);
+    }
+
+    // Response serialization - with rewards
+    {
+        const rewards = [_]GetBlock.Response.UiReward{.{
+            .pubkey = Pubkey.ZEROES,
+            .lamports = 5000,
+            .postBalance = 1_000_000_000,
+            .rewardType = .Fee,
+            .commission = null,
+        }};
+        const response = GetBlock.Response{
+            .previousBlockhash = Hash.ZEROES,
+            .blockhash = Hash.ZEROES,
+            .parentSlot = 99,
+            .rewards = &rewards,
+        };
+        try expectJsonStringify(
+            \\{"blockhash":"11111111111111111111111111111111","parentSlot":99,"previousBlockhash":"11111111111111111111111111111111","rewards":[{"pubkey":"11111111111111111111111111111111","lamports":5000,"postBalance":1000000000,"rewardType":"Fee","commission":null}]}
+        , response);
+    }
+
+    // Response serialization - with signatures
+    {
+        const sigs = [_]Signature{Signature.ZEROES};
+        const response = GetBlock.Response{
+            .previousBlockhash = Hash.ZEROES,
+            .blockhash = Hash.ZEROES,
+            .parentSlot = 99,
+            .signatures = &sigs,
+        };
+        try expectJsonStringify(
+            \\{"blockhash":"11111111111111111111111111111111","parentSlot":99,"previousBlockhash":"11111111111111111111111111111111","signatures":["1111111111111111111111111111111111111111111111111111111111111111"]}
+        , response);
+    }
+
+    // UiReward serialization - Fee
+    try expectJsonStringify(
+        \\{"pubkey":"11111111111111111111111111111111","lamports":5000,"postBalance":1000000000,"rewardType":"Fee","commission":null}
+    , GetBlock.Response.UiReward{
+        .pubkey = Pubkey.ZEROES,
+        .lamports = 5000,
+        .postBalance = 1_000_000_000,
+        .rewardType = .Fee,
+        .commission = null,
+    });
+
+    // UiReward serialization - Staking with commission
+    try expectJsonStringify(
+        \\{"pubkey":"11111111111111111111111111111111","lamports":100000,"postBalance":5000000000,"rewardType":"Staking","commission":10}
+    , GetBlock.Response.UiReward{
+        .pubkey = Pubkey.ZEROES,
+        .lamports = 100_000,
+        .postBalance = 5_000_000_000,
+        .rewardType = .Staking,
+        .commission = 10,
+    });
+
+    // UiReward serialization - all reward types
+    inline for (.{
+        .{ GetBlock.Response.UiReward.RewardType.Fee, "Fee" },
+        .{ GetBlock.Response.UiReward.RewardType.Rent, "Rent" },
+        .{ GetBlock.Response.UiReward.RewardType.Staking, "Staking" },
+        .{ GetBlock.Response.UiReward.RewardType.Voting, "Voting" },
+    }) |pair| {
+        const actual = try std.json.Stringify.valueAlloc(std.testing.allocator, pair[0], .{});
+        defer std.testing.allocator.free(actual);
+        const expected = "\"" ++ pair[1] ++ "\"";
+        try std.testing.expectEqualStrings(expected, actual);
+    }
+
+    // UiReward.fromLedgerReward
+    {
+        const ledger_reward = sig.ledger.transaction_status.Reward{
+            .pubkey = Pubkey.ZEROES,
+            .lamports = 5000,
+            .post_balance = 1_000_000_000,
+            .reward_type = .fee,
+            .commission = null,
+        };
+        const ui_reward = GetBlock.Response.UiReward.fromLedgerReward(ledger_reward);
+        try std.testing.expectEqual(Pubkey.ZEROES, ui_reward.pubkey);
+        try std.testing.expectEqual(@as(i64, 5000), ui_reward.lamports);
+        try std.testing.expectEqual(@as(u64, 1_000_000_000), ui_reward.postBalance);
+        try std.testing.expectEqual(GetBlock.Response.UiReward.RewardType.Fee, ui_reward.rewardType.?);
+        try std.testing.expectEqual(@as(?u8, null), ui_reward.commission);
+    }
+
+    // UiReward.fromLedgerReward - all reward type mappings
+    {
+        const mappings = .{
+            .{ @as(?sig.replay.rewards.RewardType, .fee), GetBlock.Response.UiReward.RewardType.Fee },
+            .{ @as(?sig.replay.rewards.RewardType, .rent), GetBlock.Response.UiReward.RewardType.Rent },
+            .{ @as(?sig.replay.rewards.RewardType, .staking), GetBlock.Response.UiReward.RewardType.Staking },
+            .{ @as(?sig.replay.rewards.RewardType, .voting), GetBlock.Response.UiReward.RewardType.Voting },
+        };
+        inline for (mappings) |pair| {
+            const ledger_reward = sig.ledger.transaction_status.Reward{
+                .pubkey = Pubkey.ZEROES,
+                .lamports = 0,
+                .post_balance = 0,
+                .reward_type = pair[0],
+                .commission = null,
+            };
+            const ui_reward = GetBlock.Response.UiReward.fromLedgerReward(ledger_reward);
+            try std.testing.expectEqual(pair[1], ui_reward.rewardType.?);
+        }
+    }
+
+    // UiReward.fromLedgerReward - null reward type
+    {
+        const ledger_reward = sig.ledger.transaction_status.Reward{
+            .pubkey = Pubkey.ZEROES,
+            .lamports = 0,
+            .post_balance = 0,
+            .reward_type = null,
+            .commission = null,
+        };
+        const ui_reward = GetBlock.Response.UiReward.fromLedgerReward(ledger_reward);
+        try std.testing.expectEqual(@as(?GetBlock.Response.UiReward.RewardType, null), ui_reward.rewardType);
+    }
+
+    // UiTransactionResultStatus serialization
+    try expectJsonStringify(
+        \\{"Ok":null}
+    , GetBlock.Response.UiTransactionResultStatus{ .Ok = .{}, .Err = null });
+    try expectJsonStringify(
+        \\{"Err":"InsufficientFundsForFee"}
+    , GetBlock.Response.UiTransactionResultStatus{ .Ok = null, .Err = .InsufficientFundsForFee });
+
+    // TransactionVersion serialization
+    try expectJsonStringify(
+        \\"legacy"
+    , GetBlock.Response.EncodedTransactionWithStatusMeta.TransactionVersion{ .legacy = {} });
+    try expectJsonStringify("0", GetBlock.Response.EncodedTransactionWithStatusMeta.TransactionVersion{ .number = 0 });
+
+    // EncodedTransaction serialization
+    try expectJsonStringify(
+        \\["AQID","base64"]
+    , GetBlock.Response.EncodedTransaction{ .binary = .{ "AQID", .base64 } });
+    try expectJsonStringify(
+        \\["2j","base58"]
+    , GetBlock.Response.EncodedTransaction{ .binary = .{ "2j", .base58 } });
+    try expectJsonStringify(
+        \\"some_base58_data"
+    , GetBlock.Response.EncodedTransaction{ .legacy_binary = "some_base58_data" });
+
+    // EncodedTransactionWithStatusMeta serialization
+    try expectJsonStringify(
+        \\{"transaction":["AQID","base64"]}
+    , GetBlock.Response.EncodedTransactionWithStatusMeta{
+        .transaction = .{ .binary = .{ "AQID", .base64 } },
+        .meta = null,
+        .version = null,
+    });
+    try expectJsonStringify(
+        \\{"transaction":["AQID","base64"],"version":"legacy"}
+    , GetBlock.Response.EncodedTransactionWithStatusMeta{
+        .transaction = .{ .binary = .{ "AQID", .base64 } },
+        .meta = null,
+        .version = .legacy,
+    });
+
+    // UiTransactionStatusMeta serialization - success with balances
+    {
+        const pre_balances = [_]u64{ 1_000_000_000, 500_000_000 };
+        const post_balances = [_]u64{ 999_995_000, 500_005_000 };
+        try expectJsonStringify(
+            \\{"err":null,"fee":5000,"innerInstructions":[],"logMessages":[],"postBalances":[999995000,500005000],"postTokenBalances":[],"preBalances":[1000000000,500000000],"preTokenBalances":[],"rewards":[],"status":{"Ok":null}}
+        , GetBlock.Response.UiTransactionStatusMeta{
+            .err = null,
+            .status = .{ .Ok = .{}, .Err = null },
+            .fee = 5000,
+            .preBalances = &pre_balances,
+            .postBalances = &post_balances,
+        });
+    }
+
+    // UiTransactionStatusMeta serialization - with computeUnitsConsumed
+    try expectJsonStringify(
+        \\{"computeUnitsConsumed":150000,"err":null,"fee":5000,"innerInstructions":[],"logMessages":[],"postBalances":[],"postTokenBalances":[],"preBalances":[],"preTokenBalances":[],"rewards":[],"status":{"Ok":null}}
+    , GetBlock.Response.UiTransactionStatusMeta{
+        .err = null,
+        .status = .{ .Ok = .{}, .Err = null },
+        .fee = 5000,
+        .preBalances = &.{},
+        .postBalances = &.{},
+        .computeUnitsConsumed = .{ .value = 150_000 },
+    });
+
+    // UiTransactionStatusMeta serialization - with loadedAddresses
+    try expectJsonStringify(
+        \\{"err":null,"fee":5000,"innerInstructions":[],"loadedAddresses":{"readonly":["11111111111111111111111111111111"],"writable":[]},"logMessages":[],"postBalances":[],"postTokenBalances":[],"preBalances":[],"preTokenBalances":[],"rewards":[],"status":{"Ok":null}}
+    , GetBlock.Response.UiTransactionStatusMeta{
+        .err = null,
+        .status = .{ .Ok = .{}, .Err = null },
+        .fee = 5000,
+        .preBalances = &.{},
+        .postBalances = &.{},
+        .loadedAddresses = .{ .value = .{
+            .readonly = &.{Pubkey.ZEROES},
+            .writable = &.{},
+        } },
+    });
+
+    // UiTransactionStatusMeta serialization - innerInstructions and logMessages skipped
+    {
+        const meta = GetBlock.Response.UiTransactionStatusMeta{
+            .err = null,
+            .status = .{ .Ok = .{}, .Err = null },
+            .fee = 0,
+            .preBalances = &.{},
+            .postBalances = &.{},
+            .innerInstructions = .skip,
+            .logMessages = .skip,
+            .rewards = .skip,
+        };
+        const json = try std.json.Stringify.valueAlloc(std.testing.allocator, meta, .{});
+        defer std.testing.allocator.free(json);
+        try std.testing.expect(std.mem.indexOf(u8, json, "innerInstructions") == null);
+        try std.testing.expect(std.mem.indexOf(u8, json, "logMessages") == null);
+        try std.testing.expect(std.mem.indexOf(u8, json, "rewards") == null);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"err\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"fee\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"status\"") != null);
+    }
+
+    // UiTransactionStatusMeta serialization - costUnits present
+    {
+        const json = try std.json.Stringify.valueAlloc(std.testing.allocator, GetBlock.Response.UiTransactionStatusMeta{
+            .err = null,
+            .status = .{ .Ok = .{}, .Err = null },
+            .fee = 0,
+            .preBalances = &.{},
+            .postBalances = &.{},
+            .costUnits = .{ .value = 3428 },
+        }, .{});
+        defer std.testing.allocator.free(json);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"costUnits\":3428") != null);
+    }
+
+    // UiTransactionStatusMeta serialization - returnData present
+    {
+        const json = try std.json.Stringify.valueAlloc(std.testing.allocator, GetBlock.Response.UiTransactionStatusMeta{
+            .err = null,
+            .status = .{ .Ok = .{}, .Err = null },
+            .fee = 0,
+            .preBalances = &.{},
+            .postBalances = &.{},
+            .returnData = .{ .value = .{
+                .programId = Pubkey.ZEROES,
+                .data = .{ "AQID", .base64 },
+            } },
+        }, .{});
+        defer std.testing.allocator.free(json);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"returnData\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"programId\"") != null);
+    }
+
+    // JsonSkippable - value state
+    {
+        const json = try std.json.Stringify.valueAlloc(std.testing.allocator, GetBlock.Response.UiTransactionStatusMeta{
+            .err = null,
+            .status = .{ .Ok = .{}, .Err = null },
+            .fee = 0,
+            .preBalances = &.{},
+            .postBalances = &.{},
+            .computeUnitsConsumed = .{ .value = 42 },
+        }, .{});
+        defer std.testing.allocator.free(json);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"computeUnitsConsumed\":42") != null);
+    }
+
+    // JsonSkippable - skip state
+    {
+        const json = try std.json.Stringify.valueAlloc(std.testing.allocator, GetBlock.Response.UiTransactionStatusMeta{
+            .err = null,
+            .status = .{ .Ok = .{}, .Err = null },
+            .fee = 0,
+            .preBalances = &.{},
+            .postBalances = &.{},
+            .computeUnitsConsumed = .skip,
+            .loadedAddresses = .skip,
+            .returnData = .skip,
+        }, .{});
+        defer std.testing.allocator.free(json);
+        try std.testing.expect(std.mem.indexOf(u8, json, "computeUnitsConsumed") == null);
+        try std.testing.expect(std.mem.indexOf(u8, json, "loadedAddresses") == null);
+        try std.testing.expect(std.mem.indexOf(u8, json, "returnData") == null);
+    }
+
+    // JsonSkippable - none state serializes as null
+    {
+        const json = try std.json.Stringify.valueAlloc(std.testing.allocator, GetBlock.Response.UiTransactionStatusMeta{
+            .err = null,
+            .status = .{ .Ok = .{}, .Err = null },
+            .fee = 0,
+            .preBalances = &.{},
+            .postBalances = &.{},
+            .rewards = .none,
+        }, .{});
+        defer std.testing.allocator.free(json);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"rewards\":null") != null);
+    }
+
+    // UiTransactionReturnData serialization
+    try expectJsonStringify(
+        \\{"programId":"11111111111111111111111111111111","data":["AQID","base64"]}
+    , GetBlock.Response.UiTransactionReturnData{
+        .programId = Pubkey.ZEROES,
+        .data = .{ "AQID", .base64 },
+    });
+
+    // UiTransactionTokenBalance serialization
+    try expectJsonStringify(
+        \\{"accountIndex":2,"mint":"11111111111111111111111111111111","owner":"11111111111111111111111111111111","programId":"11111111111111111111111111111111","uiTokenAmount":{"amount":"1000000","decimals":6,"uiAmount":1.0,"uiAmountString":"1"}}
+    , GetBlock.Response.UiTransactionTokenBalance{
+        .accountIndex = 2,
+        .mint = Pubkey.ZEROES,
+        .owner = Pubkey.ZEROES,
+        .programId = Pubkey.ZEROES,
+        .uiTokenAmount = .{
+            .amount = "1000000",
+            .decimals = 6,
+            .uiAmount = 1.0,
+            .uiAmountString = "1",
+        },
+    });
+
+    // UiTokenAmount serialization - without uiAmount
+    try expectJsonStringify(
+        \\{"amount":"42","decimals":0,"uiAmountString":"42"}
+    , GetBlock.Response.UiTokenAmount{
+        .amount = "42",
+        .decimals = 0,
+        .uiAmount = null,
+        .uiAmountString = "42",
+    });
+
+    // EncodedInstruction serialization
+    {
+        const accounts = [_]u8{ 0, 1 };
+        try expectJsonStringify(
+            \\{"programIdIndex":2,"accounts":[0,1],"data":"3Bxs3zzLZLuLQEYX"}
+        , GetBlock.Response.EncodedInstruction{
+            .programIdIndex = 2,
+            .accounts = &accounts,
+            .data = "3Bxs3zzLZLuLQEYX",
+        });
+    }
+    try expectJsonStringify(
+        \\{"programIdIndex":2,"accounts":[],"data":"3Bxs3zzLZLuLQEYX","stackHeight":1}
+    , GetBlock.Response.EncodedInstruction{
+        .programIdIndex = 2,
+        .accounts = &.{},
+        .data = "3Bxs3zzLZLuLQEYX",
+        .stackHeight = 1,
+    });
+    try expectJsonStringify(
+        \\{"programIdIndex":3,"accounts":[0,1,2],"data":"base58data"}
+    , GetBlock.Response.EncodedInstruction{
+        .programIdIndex = 3,
+        .accounts = &[_]u8{ 0, 1, 2 },
+        .data = "base58data",
+    });
+
+    // EncodedMessage serialization
+    try expectJsonStringify(
+        \\{"accountKeys":["11111111111111111111111111111111"],"header":{"numRequiredSignatures":1,"numReadonlySignedAccounts":0,"numReadonlyUnsignedAccounts":1},"recentBlockhash":"11111111111111111111111111111111","instructions":[]}
+    , GetBlock.Response.EncodedMessage{
+        .accountKeys = &.{Pubkey.ZEROES},
+        .header = .{
+            .numRequiredSignatures = 1,
+            .numReadonlySignedAccounts = 0,
+            .numReadonlyUnsignedAccounts = 1,
+        },
+        .recentBlockhash = Hash.ZEROES,
+        .instructions = &.{},
+    });
+    try expectJsonStringify(
+        \\{"accountKeys":[],"header":{"numRequiredSignatures":1,"numReadonlySignedAccounts":0,"numReadonlyUnsignedAccounts":0},"recentBlockhash":"11111111111111111111111111111111","instructions":[],"addressTableLookups":[{"accountKey":"11111111111111111111111111111111","readonlyIndexes":[1],"writableIndexes":[0]}]}
+    , GetBlock.Response.EncodedMessage{
+        .accountKeys = &.{},
+        .header = .{
+            .numRequiredSignatures = 1,
+            .numReadonlySignedAccounts = 0,
+            .numReadonlyUnsignedAccounts = 0,
+        },
+        .recentBlockhash = Hash.ZEROES,
+        .instructions = &.{},
+        .addressTableLookups = &.{.{
+            .accountKey = Pubkey.ZEROES,
+            .writableIndexes = &.{0},
+            .readonlyIndexes = &.{1},
+        }},
+    });
+
+    // ParsedAccount serialization
+    try expectJsonStringify(
+        \\{"pubkey":"11111111111111111111111111111111","signer":true,"source":"transaction","writable":true}
+    , GetBlock.Response.ParsedAccount{
+        .pubkey = Pubkey.ZEROES,
+        .writable = true,
+        .signer = true,
+        .source = .transaction,
+    });
+    try expectJsonStringify(
+        \\{"pubkey":"11111111111111111111111111111111","signer":false,"source":"lookupTable","writable":false}
+    , GetBlock.Response.ParsedAccount{
+        .pubkey = Pubkey.ZEROES,
+        .writable = false,
+        .signer = false,
+        .source = .lookupTable,
+    });
+
+    // AddressTableLookup serialization
+    try expectJsonStringify(
+        \\{"accountKey":"11111111111111111111111111111111","readonlyIndexes":[2,3],"writableIndexes":[0,1,4]}
+    , GetBlock.Response.AddressTableLookup{
+        .accountKey = Pubkey.ZEROES,
+        .writableIndexes = &[_]u8{ 0, 1, 4 },
+        .readonlyIndexes = &[_]u8{ 2, 3 },
+    });
+    try expectJsonStringify(
+        \\{"accountKey":"11111111111111111111111111111111","readonlyIndexes":[],"writableIndexes":[]}
+    , GetBlock.Response.AddressTableLookup{
+        .accountKey = Pubkey.ZEROES,
+        .writableIndexes = &.{},
+        .readonlyIndexes = &.{},
+    });
+
+    // UiRawMessage serialization - without address table lookups
+    {
+        const json = try std.json.Stringify.valueAlloc(std.testing.allocator, GetBlock.Response.UiRawMessage{
+            .header = .{
+                .numRequiredSignatures = 1,
+                .numReadonlySignedAccounts = 0,
+                .numReadonlyUnsignedAccounts = 1,
+            },
+            .account_keys = &.{Pubkey.ZEROES},
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{},
+        }, .{});
+        defer std.testing.allocator.free(json);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"accountKeys\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"header\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"numRequiredSignatures\":1") != null);
+        try std.testing.expect(std.mem.indexOf(u8, json, "addressTableLookups") == null);
+    }
+
+    // UiRawMessage serialization - with address table lookups
+    {
+        const atl = GetBlock.Response.AddressTableLookup{
+            .accountKey = Pubkey.ZEROES,
+            .writableIndexes = &[_]u8{0},
+            .readonlyIndexes = &.{},
+        };
+        const json = try std.json.Stringify.valueAlloc(std.testing.allocator, GetBlock.Response.UiRawMessage{
+            .header = .{
+                .numRequiredSignatures = 1,
+                .numReadonlySignedAccounts = 0,
+                .numReadonlyUnsignedAccounts = 0,
+            },
+            .account_keys = &.{},
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{},
+            .address_table_lookups = &.{atl},
+        }, .{});
+        defer std.testing.allocator.free(json);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"addressTableLookups\"") != null);
+    }
+
+    // UiParsedMessage serialization - without address table lookups
+    {
+        const json = try std.json.Stringify.valueAlloc(std.testing.allocator, GetBlock.Response.UiParsedMessage{
+            .account_keys = &.{},
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{},
+        }, .{});
+        defer std.testing.allocator.free(json);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"accountKeys\":[]") != null);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"recentBlockhash\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, json, "addressTableLookups") == null);
+    }
+
+    // UiMessage serialization - raw variant
+    {
+        const json = try std.json.Stringify.valueAlloc(std.testing.allocator, GetBlock.Response.UiMessage{ .raw = .{
+            .header = .{
+                .numRequiredSignatures = 2,
+                .numReadonlySignedAccounts = 0,
+                .numReadonlyUnsignedAccounts = 1,
+            },
+            .account_keys = &.{},
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = &.{},
+        } }, .{});
+        defer std.testing.allocator.free(json);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"numRequiredSignatures\":2") != null);
+    }
+
+    // EncodedTransaction serialization - accounts variant
+    {
+        const account = GetBlock.Response.ParsedAccount{
+            .pubkey = Pubkey.ZEROES,
+            .writable = true,
+            .signer = true,
+            .source = .transaction,
+        };
+        const json = try std.json.Stringify.valueAlloc(std.testing.allocator, GetBlock.Response.EncodedTransaction{ .accounts = .{
+            .signatures = &.{},
+            .accountKeys = &.{account},
+        } }, .{});
+        defer std.testing.allocator.free(json);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"accountKeys\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"source\":\"transaction\"") != null);
+    }
+
+    // UiCompiledInstruction serialization
+    try expectJsonStringify(
+        \\{"accounts":[0,1,2],"data":"3Bxs3zzLZLuLQEYX","programIdIndex":3,"stackHeight":2}
+    , parse_instruction.UiCompiledInstruction{
+        .programIdIndex = 3,
+        .accounts = &.{ 0, 1, 2 },
+        .data = "3Bxs3zzLZLuLQEYX",
+        .stackHeight = 2,
+    });
+    try expectJsonStringify(
+        \\{"accounts":[],"data":"3Bxs3zzLZLuLQEYX","programIdIndex":3}
+    , parse_instruction.UiCompiledInstruction{
+        .programIdIndex = 3,
+        .accounts = &.{},
+        .data = "3Bxs3zzLZLuLQEYX",
+    });
+
+    // UiPartiallyDecodedInstruction serialization
+    try expectJsonStringify(
+        \\{"accounts":["Vote111111111111111111111111111111111111111"],"data":"3Bxs3zzLZLuLQEYX","programId":"11111111111111111111111111111111"}
+    , parse_instruction.UiPartiallyDecodedInstruction{
+        .programId = "11111111111111111111111111111111",
+        .accounts = &.{"Vote111111111111111111111111111111111111111"},
+        .data = "3Bxs3zzLZLuLQEYX",
+    });
+
+    // ParsedInstruction serialization
+    {
+        var info = std.json.ObjectMap.init(std.testing.allocator);
+        defer info.deinit();
+        try info.put("lamports", .{ .integer = 5000 });
+        try info.put("source", .{ .string = "11111111111111111111111111111111" });
+
+        var parsed = std.json.ObjectMap.init(std.testing.allocator);
+        defer parsed.deinit();
+        try parsed.put("type", .{ .string = "transfer" });
+        try parsed.put("info", .{ .object = info });
+
+        const pi = parse_instruction.ParsedInstruction{
+            .program = "system",
+            .program_id = "11111111111111111111111111111111",
+            .parsed = .{ .object = parsed },
+            .stack_height = null,
+        };
+
+        const output = try std.json.Stringify.valueAlloc(std.testing.allocator, pi, .{});
+        defer std.testing.allocator.free(output);
+        try std.testing.expect(std.mem.indexOf(u8, output, "\"parsed\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output, "\"program\":\"system\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output, "\"programId\":\"11111111111111111111111111111111\"") != null);
+    }
+
+    // UiInnerInstructions serialization
+    try expectJsonStringify(
+        \\{"index":0,"instructions":[{"accounts":[0],"data":"3Bxs3zzLZLuLQEYX","programIdIndex":2,"stackHeight":2}]}
+    , parse_instruction.UiInnerInstructions{
+        .index = 0,
+        .instructions = &.{.{ .compiled = .{
+            .programIdIndex = 2,
+            .accounts = &.{0},
+            .data = "3Bxs3zzLZLuLQEYX",
+            .stackHeight = 2,
+        } }},
+    });
+
+    // UiInstruction serialization - compiled variant
+    try expectJsonStringify(
+        \\{"accounts":[0,2],"data":"abcd","programIdIndex":1}
+    , parse_instruction.UiInstruction{
+        .compiled = .{
+            .programIdIndex = 1,
+            .accounts = &.{ 0, 2 },
+            .data = "abcd",
+        },
+    });
 }

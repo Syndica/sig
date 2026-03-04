@@ -273,7 +273,7 @@ pub const FeeDetails = struct {
         return sig_count *| lamports_per_signature;
     }
 
-    fn total(self: FeeDetails) u64 {
+    pub fn total(self: FeeDetails) u64 {
         return self.prioritization_fee +| self.transaction_fee;
     }
 };
