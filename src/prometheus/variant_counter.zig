@@ -36,6 +36,10 @@ pub fn VariantCounter(comptime T: type) type {
             _ = self.counts[indexer.index(value)].fetchAdd(1, .monotonic);
         }
 
+        pub fn reset(self: *Self) void {
+            for (&self.counts) |*count| _ = count.store(0, .monotonic);
+        }
+
         pub fn getResult(metric: *Metric, _: std.mem.Allocator) Metric.Error!Metric.Result {
             const self: *Self = @fieldParentPtr("metric", metric);
             return .{ .variant_counter = .{

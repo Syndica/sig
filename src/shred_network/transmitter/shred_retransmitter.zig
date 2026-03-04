@@ -38,7 +38,7 @@ const DEDUPER_NUM_BITS: u64 = 637_534_199;
 pub const ShredRetransmitterParams = struct {
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
-    epoch_tracker: *const sig.core.EpochTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
     receiver: *Channel(Packet),
     maybe_num_retransmit_threads: ?usize,
@@ -131,7 +131,7 @@ pub fn runShredRetransmitter(params: ShredRetransmitterParams) !void {
 fn receiveShreds(
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
-    epoch_tracker: *const sig.core.EpochTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     receiver: *Channel(Packet),
     sender: *Channel(RetransmitShredInfo),
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
@@ -252,7 +252,7 @@ fn createAndSendRetransmitInfo(
     allocator: std.mem.Allocator,
     shreds: std.AutoArrayHashMap(Slot, std.array_list.Managed(ShredIdAndPacket)),
     my_contact_info: ThreadSafeContactInfo,
-    epoch_tracker: *const sig.core.EpochTracker,
+    epoch_tracker: *sig.core.EpochTracker,
     gossip_table_rw: *RwMux(sig.gossip.GossipTable),
     turbine_tree_cache: *TurbineTreeCache,
     retransmit_shred_sender: *Channel(RetransmitShredInfo),
@@ -260,12 +260,15 @@ fn createAndSendRetransmitInfo(
     overwrite_stake_for_testing: bool,
 ) !void {
     var create_and_send_retransmit_info_timer = sig.time.Timer.start();
-    const leader_schedule = epoch_tracker.getLeaderSchedules() catch return;
+    const leader_schedules_with_infos = epoch_tracker.getLeaderSchedules() catch return;
+    defer leader_schedules_with_infos.release();
+    const leader_schedule = leader_schedules_with_infos.leader_schedules;
     for (shreds.keys(), shreds.values()) |slot, slot_shreds| {
         // NOTE: On transition boundaries we might want ancestors here so that we can get stakes
         // for the new epoch which will be unrooted for a period of time.
         const epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
         const epoch_info = epoch_tracker.getEpochInfo(slot) catch continue;
+        defer epoch_info.release();
         const epoch_staked_nodes = &epoch_info.stakes.stakes.vote_accounts.staked_nodes;
 
         var get_slot_leader_timer = sig.time.Timer.start();

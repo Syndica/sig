@@ -11,7 +11,7 @@ const Allocator = std.mem.Allocator;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const ThreadPool = sig.sync.ThreadPool;
-const Rooted = sig.accounts_db.Two.Rooted;
+const Rooted = sig.accounts_db.Db.Rooted;
 const features = sig.core.features;
 const GenesisConfig = sig.core.GenesisConfig;
 const FeatureSet = sig.core.features.Set;
@@ -37,7 +37,7 @@ pub const LoadedSnapshot = struct {
     pub fn featureSet(
         self: *LoadedSnapshot,
         allocator: Allocator,
-        accounts_db: *sig.accounts_db.Two,
+        accounts_db: *sig.accounts_db.Db,
     ) !FeatureSet {
         const ancestors = self.collapsed_manifest.bank_fields.ancestors;
 

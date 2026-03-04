@@ -59,6 +59,7 @@ pub fn beginPartitionedRewards(
         slot,
         &slot_constants.ancestors,
     );
+    defer current_epoch_info.release();
     const epoch_vote_accounts = current_epoch_info.stakes.stakes.vote_accounts;
 
     const slots_per_year = epoch_tracker.cluster.slotsPerYear();
@@ -710,7 +711,7 @@ test calculateRewardsAndDistributeVoteRewards {
         } });
     }
 
-    var test_context = try sig.accounts_db.Two.initTest(allocator);
+    var test_context = try sig.accounts_db.Db.initTest(allocator);
     defer test_context.deinit();
 
     var ancestors = sig.core.Ancestors.EMPTY;
@@ -718,7 +719,7 @@ test calculateRewardsAndDistributeVoteRewards {
     try ancestors.addSlot(allocator, 0);
 
     const account_store = sig.accounts_db.AccountStore{
-        .accounts_db_two = &test_context.db,
+        .accounts_db = &test_context.db,
     };
     const vote_account_shared_data = try vote_account_0.toAccountSharedData(allocator);
     defer vote_account_shared_data.deinit(allocator);

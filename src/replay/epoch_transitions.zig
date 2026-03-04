@@ -84,7 +84,9 @@ pub fn updateEpochStakes(
     epoch_tracker: *sig.core.EpochTracker,
 ) !void {
     const epoch_info = epoch_tracker.getEpochInfoNoOffset(slot, ancestors) catch null;
-    if (epoch_info == null) {
+    if (epoch_info) |info| {
+        info.release();
+    } else {
         const epoch_stakes = try getEpochStakes(
             allocator,
             epoch_tracker.epoch_schedule.getLeaderScheduleEpoch(slot),
@@ -667,7 +669,7 @@ fn inheritLamportsAndRentEpoch(
 
 const TestEnvironment = struct {
     genesis_config: sig.core.GenesisConfig,
-    db_context: sig.accounts_db.Two.TestContext,
+    db_context: sig.accounts_db.Db.TestContext,
     ancestors: Ancestors,
     slot_constants: SlotConstants,
     slot_state: SlotState,
@@ -676,7 +678,7 @@ const TestEnvironment = struct {
         var genesis_config = sig.core.GenesisConfig.default(allocator);
         errdefer genesis_config.deinit(allocator);
 
-        var db_context = try sig.accounts_db.Two.initTest(allocator);
+        var db_context = try sig.accounts_db.Db.initTest(allocator);
         errdefer db_context.deinit();
 
         var ancestors = Ancestors.EMPTY;
@@ -736,7 +738,7 @@ const TestEnvironment = struct {
         self: *TestEnvironment,
         slot: Slot,
     ) SlotAccountStore {
-        return .{ .accounts_db_two = .{
+        return .{ .accounts_db = .{
             &self.db_context.db,
             slot,
             &self.ancestors,
@@ -746,7 +748,7 @@ const TestEnvironment = struct {
     pub fn accountStore(
         self: *TestEnvironment,
     ) AccountStore {
-        return .{ .accounts_db_two = &self.db_context.db };
+        return .{ .accounts_db = &self.db_context.db };
     }
 };
 
@@ -757,7 +759,7 @@ test updateEpochStakes {
     const random = prng.random();
 
     var epoch_tracker = sig.core.EpochTracker.init(.default, 0, .INIT);
-    defer epoch_tracker.deinit(allocator);
+    defer epoch_tracker.deinit();
 
     var stakes_cache = StakesCache.EMPTY;
     defer stakes_cache.deinit(allocator);
@@ -775,7 +777,8 @@ test updateEpochStakes {
             &stakes_cache,
             &epoch_tracker,
         );
-        const epoch_info = try epoch_tracker.unrooted_epochs.get(&ancestors);
+        const epoch_info = try epoch_tracker.unrooted_epochs.getEpochInfoRef(&ancestors);
+        defer epoch_info.release();
         try std.testing.expectEqual(
             stakes_cache.stakes.private.v.epoch,
             epoch_info.stakes.stakes.epoch,
