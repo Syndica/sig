@@ -419,9 +419,13 @@ pub const Message = struct {
     pub fn isWritable(
         self: Message,
         index: usize,
-        lookups: LookupTableAccounts,
+        maybe_lookups: ?LookupTableAccounts,
         reserved_accounts: *const ReservedAccounts,
     ) bool {
+        const lookups = maybe_lookups orelse LookupTableAccounts{
+            .writable = &.{},
+            .readonly = &.{},
+        };
         const pubkey = blk: {
             if (index < self.account_keys.len) {
                 if (index >= self.signature_count) {

@@ -173,7 +173,7 @@ fn createLookupTable(
             table_key,
             required_lamports,
         );
-        defer allocator.free(transfer_instruction.data);
+        defer transfer_instruction.deinit(allocator);
         try runtime.executor.executeNativeCpiInstruction(
             allocator,
             ic.tc,
@@ -189,7 +189,7 @@ fn createLookupTable(
             table_key,
             LOOKUP_TABLE_META_SIZE,
         );
-        defer allocator.free(allocate_instruction.data);
+        defer allocate_instruction.deinit(allocator);
         try runtime.executor.executeNativeCpiInstruction(
             allocator,
             ic.tc,
@@ -201,7 +201,7 @@ fn createLookupTable(
     // [agave] https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L157
     {
         const assign_instruction = try system_program.assign(allocator, table_key, program.ID);
-        defer allocator.free(assign_instruction.data);
+        defer assign_instruction.deinit(allocator);
         try runtime.executor.executeNativeCpiInstruction(
             allocator,
             ic.tc,
@@ -436,7 +436,7 @@ fn extendLookupTable(
             table_key,
             required_lamports,
         );
-        defer allocator.free(transfer_instruction.data);
+        defer transfer_instruction.deinit(allocator);
         try runtime.executor.executeNativeCpiInstruction(
             allocator,
             ic.tc,

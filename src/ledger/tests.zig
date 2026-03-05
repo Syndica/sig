@@ -416,6 +416,7 @@ pub fn insertDataForBlockTest(
                 .loaded_addresses = .{},
                 .return_data = .{},
                 .compute_units_consumed = compute_units_consumed,
+                .cost_units = null,
             };
             try db.put(schema.transaction_status, .{ signature, slot }, status);
             try db.put(schema.transaction_status, .{ signature, slot + 1 }, status);
@@ -435,6 +436,7 @@ pub fn insertDataForBlockTest(
                     .loaded_addresses = .{},
                     .return_data = .{},
                     .compute_units_consumed = compute_units_consumed,
+                    .cost_units = null,
                 },
             });
         }

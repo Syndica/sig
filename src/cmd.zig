@@ -1694,15 +1694,18 @@ fn validator(
     });
     defer replay_service_state.deinit(allocator);
 
-    const account_store = sig.accounts_db.AccountStore{
-        .accounts_db = &new_db,
-    };
-
     try app_base.rpc_hooks.set(allocator, sig.rpc.methods.RpcHookContext{
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
         .epoch_tracker = &epoch_tracker,
-        .account_reader = account_store.reader(),
     });
+
+    try app_base.rpc_hooks.set(
+        allocator,
+        sig.rpc.hook_contexts.AccountHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .account_reader = replay_service_state.replay_state.account_store.reader(),
+        },
+    );
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
