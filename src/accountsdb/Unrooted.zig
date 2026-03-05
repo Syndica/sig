@@ -137,16 +137,17 @@ pub fn getByOwner(
     owner: Pubkey,
     ancestors: *const Ancestors,
 ) !PubkeyMap(AccountWithSlot) {
+    // struct hold SlotIndex and slot.
     var map = PubkeyMap(AccountWithSlot){};
     errdefer map.deinit(allocator);
 
     for (self.slots) |*index| {
         if (index.is_empty.load(.acquire)) continue;
 
+        if (!ancestors.containsSlot(index.slot)) continue;
+
         index.lock.lockShared();
         defer index.lock.unlockShared();
-
-        if (!ancestors.containsSlot(index.slot)) continue;
 
         const accounts = index.entries.values();
         const pubkeys = index.entries.keys();
@@ -156,6 +157,8 @@ pub fn getByOwner(
             const gop = try map.getOrPut(allocator, pk);
             if (!gop.found_existing or index.slot > gop.value_ptr.slot) {
                 gop.value_ptr.* = .{
+                    // Potential race here. Accumulate SlotIndex's we want to pull out later.
+                    // Then iterate over those and copy those out FROM the RPC side, calling Unrooted.get() for each.
                     .account = acc.asAccount(),
                     .slot = index.slot,
                 };
