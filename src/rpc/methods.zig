@@ -21,8 +21,9 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
-const Commitment = common.Commitment;
 const ClientVersion = sig.version.ClientVersion;
+
+const account_codec = sig.rpc.account_codec;
 
 pub fn Result(comptime method: MethodAndParams.Tag) type {
     return union(enum) {
@@ -45,8 +46,8 @@ pub const MethodAndParams = union(enum) {
     getBlockCommitment: GetBlockCommitment,
     getBlockHeight: GetBlockHeight,
     getBlockProduction: noreturn,
-    getBlocks: noreturn,
-    getBlocksWithLimit: noreturn,
+    getBlocks: GetBlocks,
+    getBlocksWithLimit: GetBlocksWithLimit,
     getBlockTime: noreturn,
     getClusterNodes: GetClusterNodes,
     getEpochInfo: GetEpochInfo,
@@ -182,17 +183,10 @@ pub const GetAccountInfo = struct {
     pubkey: Pubkey,
     config: ?Config = null,
 
-    pub const Encoding = enum {
-        base58,
-        base64,
-        @"base64+zstd",
-        jsonParsed,
-    };
-
     pub const Config = struct {
         commitment: ?common.Commitment = null,
         minContextSlot: ?u64 = null,
-        encoding: ?Encoding = null,
+        encoding: ?account_codec.AccountEncoding = null,
         dataSlice: ?common.DataSlice = null,
     };
 
@@ -201,77 +195,12 @@ pub const GetAccountInfo = struct {
         value: ?Value,
 
         pub const Value = struct {
-            data: Data,
+            data: account_codec.AccountData,
             executable: bool,
             lamports: u64,
             owner: Pubkey,
             rentEpoch: u64,
             space: u64,
-
-            pub const Data = union(enum) {
-                encoded: struct { []const u8, Encoding },
-                // TODO: this should be a json value/map, test cases can't compare that though
-                jsonParsed: noreturn,
-
-                /// This field is only set when the request object asked for `jsonParsed` encoding,
-                /// and the server couldn't find a parser, therefore falling back to simply returning
-                /// the account data in base64 encoding directly as a string.
-                ///
-                /// [Solana documentation REF](https://solana.com/docs/rpc/http/getaccountinfo):
-                /// In the drop-down documentation for the encoding field:
-                /// > * `jsonParsed` encoding attempts to use program-specific state parsers to
-                /// return more human-readable and explicit account state data.
-                /// > * If `jsonParsed` is requested but a parser cannot be found, the field falls
-                /// back to base64 encoding, detectable when the data field is type string.
-                json_parsed_base64_fallback: []const u8,
-
-                pub fn jsonStringify(
-                    self: Data,
-                    /// `*std.json.WriteStream(...)`
-                    jw: anytype,
-                ) @TypeOf(jw.*).Error!void {
-                    switch (self) {
-                        .encoded => |pair| try jw.write(pair),
-                        .jsonParsed => |map| try jw.write(map),
-                        .json_parsed_base64_fallback => |str| try jw.write(str),
-                    }
-                }
-
-                pub fn jsonParse(
-                    allocator: std.mem.Allocator,
-                    source: anytype,
-                    options: std.json.ParseOptions,
-                ) std.json.ParseError(@TypeOf(source.*))!Data {
-                    return switch (try source.peekNextTokenType()) {
-                        .array_begin => .{ .encoded = try std.json.innerParse(
-                            struct { []const u8, Encoding },
-                            allocator,
-                            source,
-                            options,
-                        ) },
-                        .object_begin => if (true)
-                            std.debug.panic("TODO: implement jsonParsed for GetAccountInfo", .{})
-                        else
-                            .{ .jsonParsed = try std.json.innerParse(
-                                std.json.ArrayHashMap(std.json.Value),
-                                allocator,
-                                source,
-                                options,
-                            ) },
-                        .string => .{ .json_parsed_base64_fallback = try std.json.innerParse(
-                            []const u8,
-                            allocator,
-                            source,
-                            options,
-                        ) },
-                        .array_end, .object_end => error.UnexpectedToken,
-                        else => {
-                            try source.skipValue();
-                            return error.UnexpectedToken;
-                        },
-                    };
-                }
-            };
         };
     };
 };
@@ -318,7 +247,7 @@ pub const GetBlock = struct {
         rewards: ?bool = null,
 
         pub fn getCommitment(self: Config) common.Commitment {
-            return self.commitment orelse Commitment.finalized;
+            return self.commitment orelse common.Commitment.finalized;
         }
 
         pub fn getEncoding(self: Config) common.TransactionEncoding {
@@ -917,8 +846,84 @@ pub const GetBlockHeight = struct {
 
 // TODO: getBlockProduction
 // TODO: getBlockTime
-// TODO: getBlocks
-// TODO: getBlocksWithLimit
+
+pub const GetBlocks = struct {
+    start_slot: Slot,
+    end_slot_or_config: ?EndSlotOrConfig = null,
+
+    pub const MAX_GET_CONFIRMED_BLOCKS_RANGE: u64 = 500_000;
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+    };
+
+    /// The second positional param can be either an end_slot (integer) or a
+    /// commitment config (object), matching Agave's RpcBlocksConfigWrapper.
+    pub const EndSlotOrConfig = union(enum) {
+        end_slot: Slot,
+        config: Config,
+
+        pub fn jsonStringify(self: EndSlotOrConfig, jw: anytype) !void {
+            switch (self) {
+                .end_slot => |s| try jw.write(s),
+                .config => |c| try jw.write(c),
+            }
+        }
+
+        pub fn jsonParseFromValue(
+            allocator: std.mem.Allocator,
+            source: std.json.Value,
+            options: std.json.ParseOptions,
+        ) std.json.ParseFromValueError!EndSlotOrConfig {
+            return switch (source) {
+                .integer => |i| .{ .end_slot = @intCast(i) },
+                .object => .{ .config = try std.json.innerParseFromValue(
+                    Config,
+                    allocator,
+                    source,
+                    options,
+                ) },
+                else => error.UnexpectedToken,
+            };
+        }
+    };
+
+    pub fn endSlot(self: GetBlocks) ?Slot {
+        if (self.end_slot_or_config) |eoc| switch (eoc) {
+            .end_slot => |s| return s,
+            .config => {},
+        };
+        return null;
+    }
+
+    pub fn commitment(self: GetBlocks) common.Commitment {
+        if (self.end_slot_or_config) |eoc| switch (eoc) {
+            .end_slot => {},
+            .config => |c| if (c.commitment) |cm| return cm,
+        };
+        return .finalized;
+    }
+
+    pub const Response = []const Slot;
+};
+
+/// https://solana.com/docs/rpc/http/getblockswithlimit
+pub const GetBlocksWithLimit = struct {
+    start_slot: Slot,
+    limit: u64,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+    };
+
+    pub fn commitment(self: GetBlocksWithLimit) common.Commitment {
+        if (self.config) |c| if (c.commitment) |cm| return cm;
+        return .finalized;
+    }
+
+    pub const Response = []const Slot;
+};
 
 pub const GetClusterNodes = struct {
     pub const Response = []const common.RpcContactInfo;
@@ -1122,31 +1127,61 @@ pub const GetTransaction = struct {
 
     pub const Config = struct {
         /// processed is not supported.
-        commitment: ?enum { confirmed, finalized },
+        commitment: ?common.Commitment = null,
         /// Set the max transaction version to return in responses.
         /// If the requested transaction is a higher version, an error will be returned.
         /// If this parameter is omitted, only legacy transactions will be returned,
         /// and any versioned transaction will prompt the error.
-        max_supported_transaction_version: ?u8,
+        maxSupportedTransactionVersion: ?u8 = null,
         /// Encoding for the returned Transaction
         /// jsonParsed encoding attempts to use program-specific state parsers to return
         /// more human-readable and explicit data in the transaction.message.instructions
         /// list. If jsonParsed is requested but a parser cannot be found, the instruction
         /// falls back to regular JSON encoding (accounts, data, and programIdIndex fields).
-        encoding: ?enum { json, jsonParsed, base64, base58 },
+        encoding: ?common.TransactionEncoding = null,
     };
 
-    pub const Response = struct {
-        /// the slot this transaction was processed in
-        slot: Slot,
-        /// Transaction object, either in JSON format or encoded binary data, depending on encoding parameter
-        transaction: void,
-        /// estimated production time, as Unix timestamp (seconds since the Unix epoch) of when the transaction was processed. null if not available
-        blocktime: ?i64,
-        /// transaction status metadata object:
-        meta: void,
-        /// Transaction version. Undefined if maxSupportedTransactionVersion is not set in request params.
-        version: union(enum) { legacy, version: u8, not_defined },
+    pub const Response = union(enum) {
+        none,
+        value: struct {
+            /// the slot this transaction was processed in
+            slot: Slot,
+            /// Transaction object
+            transaction: GetBlock.Response.EncodedTransactionWithStatusMeta,
+            /// estimated production time, as Unix timestamp (seconds since the Unix epoch) of when the transaction was processed. null if not available
+            block_time: ?i64,
+
+            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("slot");
+                try jw.write(self.slot);
+
+                // Flatten EncodedTransactionWithStatusMeta fields to top level
+                if (self.transaction.meta) |m| {
+                    try jw.objectField("meta");
+                    try jw.write(m);
+                }
+                try jw.objectField("transaction");
+                try jw.write(self.transaction.transaction);
+                if (self.transaction.version) |v| {
+                    try jw.objectField("version");
+                    try v.jsonStringify(jw);
+                }
+
+                if (self.block_time) |bt| {
+                    try jw.objectField("blockTime");
+                    try jw.write(bt);
+                }
+                try jw.endObject();
+            }
+        },
+
+        pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            switch (self) {
+                .none => try jw.write(null),
+                .value => |v| try v.jsonStringify(jw),
+            }
+        }
     };
 };
 
@@ -1245,10 +1280,7 @@ pub const SendTransaction = struct {
 
 /// Types that are used in multiple RPC methods.
 pub const common = struct {
-    pub const DataSlice = struct {
-        offset: usize,
-        length: usize,
-    };
+    pub const DataSlice = account_codec.DataSlice;
 
     pub const Commitment = enum {
         finalized,
@@ -1264,7 +1296,7 @@ pub const common = struct {
 
     pub const Context = struct {
         slot: u64,
-        apiVersion: []const u8,
+        apiVersion: []const u8 = ClientVersion.API_VERSION,
     };
 
     // TODO field types
@@ -1317,7 +1349,6 @@ pub const common = struct {
 
 pub const RpcHookContext = struct {
     slot_tracker: *sig.replay.trackers.SlotTracker,
-    account_reader: sig.accounts_db.AccountReader,
     epoch_tracker: *sig.core.EpochTracker,
 
     // Limit the length of the `epoch_credits` array for each validator in a `get_vote_accounts`
@@ -1452,43 +1483,6 @@ pub const RpcHookContext = struct {
         return .{
             .current = current,
             .delinquent = dlinqt,
-        };
-    }
-
-    pub fn getBalance(
-        self: RpcHookContext,
-        allocator: std.mem.Allocator,
-        params: GetBalance,
-    ) !GetBalance.Response {
-        const config = params.config orelse common.CommitmentSlotConfig{};
-        // [agave] Default commitment is finalized:
-        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
-        const commitment = config.commitment orelse .finalized;
-
-        const slot = self.slot_tracker.getSlotForCommitment(commitment);
-        if (config.minContextSlot) |min_slot| {
-            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-        }
-
-        // Get slot reference to access ancestors
-        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-        defer slot_ref.release();
-        const slot_reader = self.account_reader.forSlot(&slot_ref.constants().ancestors);
-
-        // Look up account
-        const maybe_account = try slot_reader.get(allocator, params.pubkey);
-
-        const lamports: u64 = if (maybe_account) |account| blk: {
-            defer account.deinit(allocator);
-            break :blk account.lamports;
-        } else 0;
-
-        return .{
-            .context = .{
-                .slot = slot,
-                .apiVersion = ClientVersion.API_VERSION,
-            },
-            .value = lamports,
         };
     }
 };
