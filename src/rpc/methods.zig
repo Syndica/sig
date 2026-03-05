@@ -1613,7 +1613,12 @@ pub const RpcHookContext = struct {
         }
 
         while (contact_info_iter.next()) |contact_info| {
-            if (try contactInfoToRpc(allocator, contact_info, gossip_table, my_shred_version)) |rpc_contact_info| {
+            if (try contactInfoToRpc(
+                allocator,
+                contact_info,
+                gossip_table,
+                my_shred_version,
+            )) |rpc_contact_info| {
                 errdefer rpc_contact_info.deinit(allocator);
                 try result_list.append(allocator, rpc_contact_info);
             }
@@ -1666,7 +1671,10 @@ pub const RpcHookContext = struct {
 
         rpc_contact_info.shredVersion = my_shred_version;
         rpc_contact_info.gossip = try formatSocketAddr(allocator, gossip_addr);
-        rpc_contact_info.tvu = try formatSocketAddr(allocator, contact_info.getSocket(.turbine_recv));
+        rpc_contact_info.tvu = try formatSocketAddr(
+            allocator,
+            contact_info.getSocket(.turbine_recv),
+        );
         rpc_contact_info.tpu = try formatSocketAddr(allocator, contact_info.getSocket(.tpu));
         rpc_contact_info.tpuQuic = try formatSocketAddr(
             allocator,
@@ -1680,13 +1688,22 @@ pub const RpcHookContext = struct {
             allocator,
             contact_info.getSocket(.tpu_forwards_quic),
         );
-        rpc_contact_info.tpuVote = try formatSocketAddr(allocator, contact_info.getSocket(.tpu_vote));
+        rpc_contact_info.tpuVote = try formatSocketAddr(
+            allocator,
+            contact_info.getSocket(.tpu_vote),
+        );
         rpc_contact_info.serveRepair = try formatSocketAddr(
             allocator,
             contact_info.getSocket(.serve_repair),
         );
-        rpc_contact_info.rpc = try formatSocketAddr(allocator, contact_info.getSocket(.rpc));
-        rpc_contact_info.pubsub = try formatSocketAddr(allocator, contact_info.getSocket(.rpc_pubsub));
+        rpc_contact_info.rpc = try formatSocketAddr(
+            allocator,
+            contact_info.getSocket(.rpc),
+        );
+        rpc_contact_info.pubsub = try formatSocketAddr(
+            allocator,
+            contact_info.getSocket(.rpc_pubsub),
+        );
 
         return rpc_contact_info;
     }
