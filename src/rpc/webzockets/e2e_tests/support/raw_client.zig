@@ -6,6 +6,7 @@ const mask_mod = ws.mask;
 const http = ws.http;
 const Opcode = ws.Opcode;
 const Message = ws.Message;
+const socket_opts = ws.socket_opts;
 
 /// Blocking, frame-level WebSocket client for testing close handshake behavior
 /// against the webzockets server. Connects via TCP, performs HTTP upgrade, then
@@ -39,6 +40,7 @@ pub const RawClient = struct {
         const address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, port);
         const stream = try std.net.tcpConnectToAddress(address);
         errdefer stream.close();
+        try socket_opts.setTcpNoDelay(stream.handle);
 
         // Set SO_RCVTIMEO for blocking reads (defaults to 2s) to reduce scheduler-jitter flakes.
         const timeout = std.posix.timeval{

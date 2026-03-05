@@ -5,6 +5,7 @@ const ws = @import("webzockets_lib");
 
 const servers = @import("../support/test_servers.zig");
 const RawClient = @import("../support/raw_client.zig").RawClient;
+const socket_opts = ws.socket_opts;
 const FdLeakDetector = @import("../support/FdLeakDetector.zig");
 const verifyServerFunctional = @import("../support/test_helpers.zig").verifyServerFunctional;
 
@@ -377,6 +378,7 @@ fn runFeedConnectionCase(comptime mode: FeedReadMode) !void {
     var server = try FeedServer.initNoListen(testing.allocator, &loop, .{
         .address = servers.localhost,
         .handler_context = {},
+        .tcp_nodelay = true,
     });
     defer server.deinit();
 
@@ -397,6 +399,7 @@ fn runFeedConnectionCase(comptime mode: FeedReadMode) !void {
     defer client_thread.join();
 
     var conn = try listener.accept();
+    try socket_opts.setTcpNoDelay(conn.stream.handle);
     var close_conn = true;
     defer {
         if (close_conn) {
@@ -571,6 +574,7 @@ fn rawConnect(port: u16) !std.net.Stream {
     const address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, port);
     const stream = try std.net.tcpConnectToAddress(address);
     errdefer stream.close();
+    try socket_opts.setTcpNoDelay(stream.handle);
     const timeout = std.posix.timeval{ .sec = 2, .usec = 0 };
     try std.posix.setsockopt(
         stream.handle,

@@ -1819,6 +1819,7 @@ fn runRPCServer(
     var ws_server = try WSRPCServer.initNoListen(allocator, &loop, .{
         .address = server_addr,
         .handler_context = &ws_runtime_ctx,
+        .tcp_nodelay = true,
     });
     defer ws_server.deinit();
 
