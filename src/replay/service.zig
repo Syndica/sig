@@ -795,6 +795,9 @@ test trackNewSlots {
     var slot_tree = try SlotTree.init(allocator, 0);
     defer slot_tree.deinit(allocator);
 
+    var event_sink = try jrpc_types.EventSink.create(allocator);
+    defer event_sink.destroy(allocator);
+
     // only the root (0) is considered frozen, so only 0 and 1 should be added at first.
     try trackNewSlots(
         allocator,
@@ -806,7 +809,7 @@ test trackNewSlots {
         &slot_tree,
         slot_leaders,
         &hard_forks,
-        null,
+        event_sink,
         undefined,
     );
     try expectSlotTracker(
@@ -815,6 +818,7 @@ test trackNewSlots {
         &.{ .{ 0, 0 }, .{ 1, 0 } },
         &.{ 2, 3, 4, 5, 6 },
     );
+    try expectSlotEvents(allocator, event_sink, &.{.{ 1, 0, 0 }});
 
     // doing nothing should result in the same tracker state
     try trackNewSlots(
@@ -827,7 +831,7 @@ test trackNewSlots {
         &slot_tree,
         slot_leaders,
         &hard_forks,
-        null,
+        event_sink,
         undefined,
     );
     try expectSlotTracker(
@@ -836,6 +840,7 @@ test trackNewSlots {
         &.{ .{ 0, 0 }, .{ 1, 0 } },
         &.{ 2, 3, 4, 5, 6 },
     );
+    try expectSlotEvents(allocator, event_sink, &.{});
 
     // freezing 1 should result in 2 and 4 being added
     {
@@ -854,7 +859,7 @@ test trackNewSlots {
         &slot_tree,
         slot_leaders,
         &hard_forks,
-        null,
+        event_sink,
         undefined,
     );
     try expectSlotTracker(
@@ -863,6 +868,7 @@ test trackNewSlots {
         &.{ .{ 0, 0 }, .{ 1, 0 }, .{ 2, 1 }, .{ 4, 1 } },
         &.{ 3, 5, 6 },
     );
+    try expectSlotEvents(allocator, event_sink, &.{ .{ 2, 1, 0 }, .{ 4, 1, 0 } });
 
     // freezing 2 and 4 should only result in 6 being added since 3's parent is unknown
     {
@@ -886,7 +892,7 @@ test trackNewSlots {
         &slot_tree,
         slot_leaders,
         &hard_forks,
-        null,
+        event_sink,
         undefined,
     );
     try expectSlotTracker(
@@ -895,6 +901,7 @@ test trackNewSlots {
         &.{ .{ 0, 0 }, .{ 1, 0 }, .{ 2, 1 }, .{ 4, 1 }, .{ 6, 4 } },
         &.{ 3, 5 },
     );
+    try expectSlotEvents(allocator, event_sink, &.{.{ 6, 4, 0 }});
 
     try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.processed));
     try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
@@ -920,6 +927,35 @@ fn expectSlotTracker(
         const maybe_ref = slot_tracker.get(slot);
         if (maybe_ref) |ref| ref.release();
         try std.testing.expectEqual(null, maybe_ref);
+    }
+}
+
+fn expectSlotEvents(
+    allocator: Allocator,
+    event_sink: *jrpc_types.EventSink,
+    expected_events: []const [3]Slot,
+) !void {
+    for (expected_events) |event| {
+        const slot, const parent, const root = event;
+        const msg = event_sink.channel.tryReceive() orelse return error.MissingEvent;
+        defer msg.event_data.deinit(allocator);
+
+        try std.testing.expectEqual(.slot, msg.method);
+        switch (msg.event_data) {
+            .slot => |slot_event| {
+                try std.testing.expectEqual(slot, slot_event.slot);
+                try std.testing.expectEqual(parent, slot_event.parent);
+                try std.testing.expectEqual(root, slot_event.root);
+            },
+            else => {
+                return error.UnexpectedEventType;
+            },
+        }
+    }
+
+    if (event_sink.channel.tryReceive()) |msg| {
+        msg.event_data.deinit(allocator);
+        return error.UnexpectedEvent;
     }
 }
 
