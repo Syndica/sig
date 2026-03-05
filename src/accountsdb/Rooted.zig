@@ -224,15 +224,12 @@ pub fn getByOwner(self: *Rooted, owner: *const Pubkey) OwnerIterator {
         Pubkey.SIZE,
         sql.SQLITE_STATIC,
     ));
-    // Don't bind here. OwnerIterator will be moved (returned by value),
-    // invalidating any pointer into this stack frame. Bind lazily on first next().
-    return .{ .stmt = stmt, .rooted = self, .owner = owner.* };
+    return .{ .stmt = stmt, .rooted = self };
 }
 
 pub const OwnerIterator = struct {
     rooted: *Rooted,
     stmt: *sql.sqlite3_stmt,
-    owner: Pubkey,
 
     // Return sig.core.Account here instead, or AccountSharedData.
     pub const Entry = struct {
