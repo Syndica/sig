@@ -205,6 +205,7 @@ pub fn get(
     };
 }
 
+threadlocal var owner_pk: Pubkey = undefined;
 pub fn getByOwner(self: *Rooted, owner: *const Pubkey) OwnerIterator {
     const stmt: *sql.sqlite3_stmt = if (get_by_owner_stmt) |stmt| stmt else blk: {
         const query =
@@ -214,12 +215,14 @@ pub fn getByOwner(self: *Rooted, owner: *const Pubkey) OwnerIterator {
         self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_by_owner_stmt, null));
         break :blk get_by_owner_stmt.?;
     };
+
+    owner_pk = owner.*;
     self.err(sql.sqlite3_bind_blob(
         stmt,
         1,
-        &owner.data,
+        &owner_pk,
         Pubkey.SIZE,
-        sql.SQLITE_TRANSIENT,
+        sql.SQLITE_STATIC,
     ));
     // Don't bind here. OwnerIterator will be moved (returned by value),
     // invalidating any pointer into this stack frame. Bind lazily on first next().
