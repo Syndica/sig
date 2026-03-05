@@ -574,6 +574,7 @@ fn generateFeatureSetId(b: *Build) Build.LazyPath {
     // import a library in the future.
     const gen = b.addExecutable(.{
         .name = "gen_feature_set_id",
+        .use_llvm = true,
         .root_module = b.createModule(.{
             .target = b.graph.host,
             .optimize = .Debug,
