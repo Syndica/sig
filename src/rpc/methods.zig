@@ -1629,33 +1629,6 @@ pub const RpcHookContext = struct {
             .delinquent = dlinqt,
         };
     }
-
-    pub fn getBalance(
-        self: RpcHookContext,
-        allocator: std.mem.Allocator,
-        params: GetBalance,
-    ) !GetBalance.Response {
-        const config: common.CommitmentSlotConfig = params.config orelse .{};
-        const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
-        defer resolved.ref.release();
-        const slot_reader = self.account_reader.forSlot(&resolved.ref.constants().ancestors);
-
-        // Look up account
-        const maybe_account = try slot_reader.get(allocator, params.pubkey);
-
-        const lamports: u64 = if (maybe_account) |account| blk: {
-            defer account.deinit(allocator);
-            break :blk account.lamports;
-        } else 0;
-
-        return .{
-            .context = .{
-                .slot = resolved.slot,
-                .apiVersion = ClientVersion.API_VERSION,
-            },
-            .value = lamports,
-        };
-    }
 };
 
 pub const StaticHookContext = struct {
@@ -1727,7 +1700,6 @@ fn testRpcHookContext(slot_tracker: *sig.replay.trackers.SlotTracker) RpcHookCon
     return .{
         .slot_tracker = slot_tracker,
         .epoch_tracker = undefined, // not used by getBlockHeight/getTransactionCount/getHighestSnapshotSlot
-        .account_reader = .noop,
     };
 }
 
@@ -1738,7 +1710,6 @@ fn testRpcHookContextWithEpochTracker(
     return .{
         .slot_tracker = slot_tracker,
         .epoch_tracker = epoch_tracker,
-        .account_reader = .noop,
     };
 }
 
