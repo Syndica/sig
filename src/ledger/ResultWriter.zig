@@ -37,15 +37,18 @@ pub fn writeTransactionStatus(
     self: *const ResultWriter,
     slot: Slot,
     signature: Signature,
-    writeable_keys: ArrayList(Pubkey),
-    readonly_keys: ArrayList(Pubkey),
+    writeable_keys: []const Pubkey,
+    readonly_keys: []const Pubkey,
     status: TransactionStatusMeta,
     transaction_index: usize,
 ) !void {
-    try self.ledger.db.put(schema.transaction_status, .{ signature, slot }, status);
+    var write_batch = try self.ledger.db.initWriteBatch();
+    defer write_batch.deinit();
+
+    try write_batch.put(schema.transaction_status, .{ signature, slot }, status);
     inline for (.{ writeable_keys, readonly_keys }, .{ true, false }) |keys, writeable| {
-        for (keys.items) |address| {
-            try self.ledger.db.put(
+        for (keys) |address| {
+            try write_batch.put(
                 schema.address_signatures,
                 .{
                     .address = address,
@@ -57,6 +60,8 @@ pub fn writeTransactionStatus(
             );
         }
     }
+
+    try self.ledger.db.commit(&write_batch);
 }
 
 /// agave: insert_bank_hash

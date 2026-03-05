@@ -1180,11 +1180,10 @@ test getProcessedSiblingInstruction {
         cache.deinit(allocator);
     }
 
-    var allocated_account_metas: std.ArrayListUnmanaged(InstructionInfo.AccountMetas) = .empty;
-    defer {
-        for (allocated_account_metas.items) |*account_metas| account_metas.deinit(allocator);
-        allocated_account_metas.deinit(allocator);
-    }
+    // Track the first (depth==1) instruction's account_metas for manual cleanup.
+    // tc.deinit() handles depth > 1 entries automatically.
+    var first_account_metas: ?InstructionInfo.AccountMetas = null;
+    defer if (first_account_metas) |*am| am.deinit(allocator);
 
     const trace_indexes: [8]u8 = std.simd.iota(u8, 8);
     for ([_]u8{ 1, 2, 3, 2, 2, 3, 4, 3 }, 0..) |stack_height, index_in_trace| {
@@ -1212,17 +1211,23 @@ test getProcessedSiblingInstruction {
                 .is_writable = false,
             });
 
-            try allocated_account_metas.append(allocator, info.account_metas);
-
             tc.instruction_stack.appendAssumeCapacity(.{
                 .tc = &tc,
                 .ixn_info = info,
                 .depth = @intCast(tc.instruction_stack.len),
             });
+
+            const depth: u8 = @intCast(tc.instruction_stack.len);
             tc.instruction_trace.appendAssumeCapacity(.{
                 .ixn_info = info,
-                .depth = @intCast(tc.instruction_stack.len),
+                .depth = depth,
             });
+
+            // Track the first (depth==1) instruction's account_metas for manual cleanup.
+            // tc.deinit() handles depth > 1 entries automatically.
+            if (depth == 1) {
+                first_account_metas = info.account_metas;
+            }
         }
     }
 
