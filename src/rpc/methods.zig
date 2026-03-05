@@ -22,6 +22,7 @@ const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 const ClientVersion = sig.version.ClientVersion;
+const BlockhashQueue = sig.core.blockhash_queue.BlockhashQueue;
 
 const account_codec = sig.rpc.account_codec;
 const SlotRef = sig.replay.trackers.SlotTracker.Reference;
@@ -1405,7 +1406,7 @@ pub const RpcHookContext = struct {
     }
 
     pub fn getSlot(self: RpcHookContext, _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
-        const config = params.config orelse common.CommitmentSlotConfig{};
+        const config: common.CommitmentSlotConfig = params.config orelse .{};
         return self.resolveCommitmentSlot(config.commitment, config.minContextSlot);
     }
 
@@ -1415,7 +1416,7 @@ pub const RpcHookContext = struct {
         _: std.mem.Allocator,
         params: GetBlockHeight,
     ) !GetBlockHeight.Response {
-        const config = params.config orelse common.CommitmentSlotConfig{};
+        const config: common.CommitmentSlotConfig = params.config orelse .{};
         const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
         defer resolved.ref.release();
         return resolved.ref.constants().block_height;
@@ -1427,7 +1428,7 @@ pub const RpcHookContext = struct {
         _: std.mem.Allocator,
         params: GetTransactionCount,
     ) !GetTransactionCount.Response {
-        const config = params.config orelse common.CommitmentSlotConfig{};
+        const config: common.CommitmentSlotConfig = params.config orelse .{};
         const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
         defer resolved.ref.release();
         return resolved.ref.state().transaction_count.load(.monotonic);
@@ -1449,7 +1450,7 @@ pub const RpcHookContext = struct {
         _: std.mem.Allocator,
         params: GetEpochInfo,
     ) !GetEpochInfo.Response {
-        const config = params.config orelse common.CommitmentSlotConfig{};
+        const config: common.CommitmentSlotConfig = params.config orelse .{};
         const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
         defer resolved.ref.release();
 
@@ -1473,33 +1474,35 @@ pub const RpcHookContext = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2352-L2365
     pub fn getLatestBlockhash(
         self: RpcHookContext,
-        allocator: std.mem.Allocator,
+        arena: std.mem.Allocator,
         params: GetLatestBlockhash,
     ) !GetLatestBlockhash.Response {
-        const config = params.config orelse common.CommitmentSlotConfig{};
+        const config: common.CommitmentSlotConfig = params.config orelse .{};
         const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
         defer resolved.ref.release();
 
-        // Read blockhash queue under lock
-        const bq, var bq_lock = resolved.ref.state().blockhash_queue.readWithLock();
-        defer bq_lock.unlock();
+        const hash_data: struct { last_hash: sig.core.Hash, hash_age: u64 } = result: {
+            const bq, var bq_lock = resolved.ref.state().blockhash_queue.readWithLock();
+            defer bq_lock.unlock();
 
-        const last_hash = bq.last_hash orelse return error.SlotNotAvailable;
+            const last_hash = bq.last_hash orelse return error.SlotNotAvailable;
+            const hash_age = bq.getHashAge(last_hash) orelse return error.SlotNotAvailable;
+
+            break :result .{ .last_hash = last_hash, .hash_age = hash_age };
+        };
 
         // [agave] get_blockhash_last_valid_block_height:
         // https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2765
         // last_valid_block_height = block_height + MAX_PROCESSING_AGE - age
         // where MAX_PROCESSING_AGE = MAX_RECENT_BLOCKHASHES / 2 = 150
-        const age = bq.getHashAge(last_hash) orelse return error.SlotNotAvailable;
-        const BQ = sig.core.blockhash_queue.BlockhashQueue;
-        const max_processing_age: u64 = BQ.MAX_RECENT_BLOCKHASHES / 2;
+        const max_processing_age: u64 = BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2;
         const block_height = resolved.ref.constants().block_height;
-        const last_valid_block_height = block_height + max_processing_age - age;
+        const last_valid_block_height = block_height + max_processing_age - hash_data.hash_age;
 
         // Allocate the base58 string so it outlives the function scope.
         // The server uses an arena allocator, so this will be freed with the arena.
-        const blockhash_str = last_hash.base58String();
-        const blockhash = try allocator.dupe(u8, blockhash_str.constSlice());
+        const blockhash_str = hash_data.last_hash.base58String();
+        const blockhash = try arena.dupe(u8, blockhash_str.constSlice());
 
         return .{
             .context = .{
@@ -1632,7 +1635,7 @@ pub const RpcHookContext = struct {
         allocator: std.mem.Allocator,
         params: GetBalance,
     ) !GetBalance.Response {
-        const config = params.config orelse common.CommitmentSlotConfig{};
+        const config: common.CommitmentSlotConfig = params.config orelse .{};
         const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
         defer resolved.ref.release();
         const slot_reader = self.account_reader.forSlot(&resolved.ref.constants().ancestors);
