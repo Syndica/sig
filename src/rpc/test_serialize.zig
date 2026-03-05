@@ -304,7 +304,7 @@ test "getFeeForMessage" {
             .commitment = .confirmed,
         },
     },
-        \\{"jsonrpc":"2.0","id":1,"method":"getFeeForMessage","params":["AQABAgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAQA=",{"commitment":"confirmed"}]}
+        \\{"jsonrpc":"2.0","id":1,"method":"getFeeForMessage","params":["AQABAgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAQA=",{"commitment":"confirmed","minContextSlot":null}]}
     );
 
     // Response with fee value

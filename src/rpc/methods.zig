@@ -27,7 +27,6 @@ const ClientVersion = sig.version.ClientVersion;
 const Base64Decoder = std.base64.standard.Decoder;
 const FeeBudgetLimits = sig.runtime.check_transactions.FeeBudgetLimits;
 const ComputeBudgetLimits = compute_budget.ComputeBudgetLimits;
-const ComputeBudgetInstructionDetails = compute_budget.ComputeBudgetInstructionDetails;
 const FeeDetails = sig.runtime.check_transactions.FeeDetails;
 const SignatureCounts = sig.runtime.check_transactions.SignatureCounts;
 
@@ -1555,12 +1554,14 @@ pub const RpcHookContext = struct {
         defer message.deinit(allocator);
 
         // Look up lamports_per_signature from the blockhash queue.
-        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2733-L2736
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2732-L2741
         const lamports_per_signature: u64 = lps: {
             const bq, var bq_guard = slot_ref.state().blockhash_queue.readWithLock();
             defer bq_guard.unlock();
             break :lps bq.getLamportsPerSignature(message.recent_blockhash);
         } orelse {
+            // TODO: nonce
+            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2737-L2740
             return .{
                 .context = .{ .slot = slot },
                 .value = null,
@@ -1574,24 +1575,24 @@ pub const RpcHookContext = struct {
                 const feature_set = &slot_ref.constants().feature_set;
                 const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
 
-                const budget_limit_details = switch (compute_budget.execute(&message)) {
-                    .ok => |limits| limits,
-                    .err => ComputeBudgetInstructionDetails{},
-                };
-                const budget_limits = switch (compute_budget.sanitize(
-                    budget_limit_details,
-                    feature_set,
-                    slot,
-                )) {
-                    .ok => |limits| limits,
-                    .err => ComputeBudgetLimits.DEFAULT,
+                // [agave] process_compute_budget_instructions(message.program_instructions_iter(), &self.feature_set)
+                //         .unwrap_or_default()
+                // In Agave, execute+sanitize is a single call; on ANY error, ComputeBudgetLimits::default() is used.
+                const budget_limits = blk: {
+                    const details = switch (compute_budget.execute(&message)) {
+                        .ok => |d| d,
+                        .err => break :blk ComputeBudgetLimits.DEFAULT,
+                    };
+                    break :blk switch (compute_budget.sanitize(details, feature_set, slot)) {
+                        .ok => |limits| limits,
+                        .err => ComputeBudgetLimits.DEFAULT,
+                    };
                 };
                 const fee_budget_limits = FeeBudgetLimits.fromComputeBudgetLimits(budget_limits);
 
                 break :result FeeDetails.init(
                     SignatureCounts.fromMessage(&message),
-                    // [agave] fee_structure().lamports_per_signature — use slot's fee rate for the calculation, not blockhash queue's.
-                    slot_ref.constants().fee_rate_governor.lamports_per_signature,
+                    5_000,
                     enable_secp256r1,
                     fee_budget_limits.prioritization_fee,
                 );
