@@ -1706,6 +1706,14 @@ fn validator(
         .my_shred_version = &gossip_service.my_shred_version,
     });
 
+    try app_base.rpc_hooks.set(
+        allocator,
+        sig.rpc.hook_contexts.AccountHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .account_reader = replay_service_state.replay_state.account_store.reader(),
+        },
+    );
+
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
         if (maybe_vote_sockets) |*vs| vs else null,

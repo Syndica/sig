@@ -44,6 +44,21 @@ pub const EpochSchedule = extern struct {
         .warmup = true,
     });
 
+    pub fn jsonStringify(self: EpochSchedule, jw: anytype) @TypeOf(jw.*).Error!void {
+        try jw.beginObject();
+        try jw.objectField("slotsPerEpoch");
+        try jw.write(self.slots_per_epoch);
+        try jw.objectField("leaderScheduleSlotOffset");
+        try jw.write(self.leader_schedule_slot_offset);
+        try jw.objectField("warmup");
+        try jw.write(self.warmup);
+        try jw.objectField("firstNormalEpoch");
+        try jw.write(self.first_normal_epoch);
+        try jw.objectField("firstNormalSlot");
+        try jw.write(self.first_normal_slot);
+        try jw.endObject();
+    }
+
     pub fn getEpoch(self: *const EpochSchedule, slot: Slot) Epoch {
         return self.getEpochAndSlotIndex(slot)[0];
     }
