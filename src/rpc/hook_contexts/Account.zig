@@ -40,7 +40,6 @@ pub fn getAccountInfo(
         .context = .{ .slot = slot },
         .value = null,
     };
-    defer account.deinit(arena);
 
     const data: account_codec.AccountData = if (encoding == .jsonParsed)
         try account_codec.encodeJsonParsed(
@@ -95,7 +94,6 @@ pub fn getBalance(
     const maybe_account = try slot_reader.get(arena, params.pubkey);
 
     const lamports: u64 = if (maybe_account) |account| blk: {
-        defer account.deinit(arena);
         break :blk account.lamports;
     } else 0;
 
@@ -122,7 +120,6 @@ pub fn getTokenAccountBalance(
     const maybe_account = try slot_reader.get(arena, params.pubkey);
 
     const account = maybe_account orelse return error.RpcAccountNotFound;
-    defer account.deinit(arena);
 
     // Validate that this is a token account (owned by SPL Token or Token-2022)
     const is_token_program = account.owner.equals(&sig.runtime.ids.TOKEN_PROGRAM_ID) or
