@@ -185,13 +185,19 @@ pub fn computeFeatureSet(
     feature_set: *FeatureSet,
     logger: Logger,
 ) !if (allow_new_activations) FeatureSet else void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
     var new_activations = FeatureSet.ALL_DISABLED;
     var inactive_iterator = feature_set.iterator(slot, .inactive);
     while (inactive_iterator.next()) |feature| {
-        const feature_id = features.map.get(feature).key;
+        defer _ = arena.reset(.retain_capacity);
 
-        const feature_account = try slot_store.reader().get(allocator, feature_id) orelse continue;
-        defer feature_account.deinit(allocator);
+        const feature_id = features.map.get(feature).key;
+        const feature_account = try slot_store.reader().get(
+            arena.allocator(),
+            feature_id,
+        ) orelse continue;
 
         switch (try features.activationStateFromAccount(feature_account)) {
             .activated => |activation_slot| if (slot >= activation_slot) feature_set.setSlot(

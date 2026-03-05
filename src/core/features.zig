@@ -200,7 +200,12 @@ pub fn activationStateFromAccount(account: sig.core.Account) !FeatureActivationS
 
     var feature_bytes = [_]u8{0} ** 9;
     account.data.readAll(&feature_bytes);
-    const maybe_slot = try sig.bincode.readFromSlice(failing_allocator, ?u64, &feature_bytes, .{});
+    const maybe_slot = sig.bincode.readFromSlice(
+        failing_allocator,
+        ?u64,
+        &feature_bytes,
+        .{},
+    ) catch @panic("failed to deserialize feature account data");
 
     return if (maybe_slot) |slot| .{ .activated = slot } else .pending;
 }
