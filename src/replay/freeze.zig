@@ -295,17 +295,13 @@ fn getRewardsAndNumPartitions(
             if (is_epoch_boundary) {
                 // Epoch boundary: record vote rewards + fee reward + num_partitions.
                 const vote_entries = active.all_vote_rewards.entries;
-                const num_partitions: u64 = if (active.partitioned_indices) |pi|
-                    pi.entries.len
-                else
-                    0;
+                const num_partitions: u64 = active.num_partitions;
 
                 const all_rewards = try allocator.alloc(
                     sig.ledger.meta.Reward,
                     1 + vote_entries.len,
                 );
-                all_rewards[0] = fee_reward;
-                for (vote_entries, 1..) |vr, i| {
+                for (vote_entries, 0..) |vr, i| {
                     all_rewards[i] = .{
                         .pubkey = vr.vote_pubkey,
                         .lamports = @intCast(vr.rewards.lamports),
@@ -314,6 +310,7 @@ fn getRewardsAndNumPartitions(
                         .commission = vr.rewards.commission,
                     };
                 }
+                all_rewards[all_rewards.len - 1] = fee_reward;
                 return .{ all_rewards, num_partitions };
             } else {
                 // Distribution block: record distributed stake rewards + fee reward.
@@ -321,8 +318,8 @@ fn getRewardsAndNumPartitions(
                     sig.ledger.meta.Reward,
                     1 + active.distributed_rewards.items.len,
                 );
-                all_rewards[0] = fee_reward;
-                @memcpy(all_rewards[1..], active.distributed_rewards.items);
+                @memcpy(all_rewards[0..active.distributed_rewards.items.len], active.distributed_rewards.items);
+                all_rewards[all_rewards.len - 1] = fee_reward;
                 return .{ all_rewards, null };
             }
         },

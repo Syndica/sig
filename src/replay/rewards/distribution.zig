@@ -424,6 +424,7 @@ test distributePartitionedEpochRewards {
     var epoch_reward_status = EpochRewardStatus{
         .active = .{
             .distribution_start_block_height = 0,
+            .num_partitions = 1,
             .partitioned_indices = try sig.replay.rewards.PartitionedIndices.init(
                 allocator,
                 try allocator.dupe(

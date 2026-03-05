@@ -189,6 +189,7 @@ pub const PreviousEpochInflationRewards = struct {
 pub const EpochRewardStatus = union(enum) {
     active: struct {
         distribution_start_block_height: u64,
+        num_partitions: u64,
         all_stake_rewards: PartitionedStakeRewards,
         all_vote_rewards: PartitionedVoteRewards,
         partitioned_indices: ?PartitionedIndices,
@@ -218,6 +219,7 @@ pub const EpochRewardStatus = union(enum) {
         return .{
             .active = .{
                 .distribution_start_block_height = active.distribution_start_block_height,
+                .num_partitions = active.num_partitions,
                 .all_stake_rewards = active.all_stake_rewards.getAcquire(),
                 .all_vote_rewards = active.all_vote_rewards.getAcquire(),
                 .partitioned_indices = if (active.partitioned_indices) |pi|
