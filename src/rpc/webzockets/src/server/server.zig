@@ -2,6 +2,7 @@ const std = @import("std");
 const xev = @import("xev");
 
 const slot_pool = @import("slot_pool.zig");
+const socket_opts = @import("../socket_opts.zig");
 const server_hs = @import("handshake.zig");
 const server_conn = @import("connection.zig");
 
@@ -146,6 +147,8 @@ pub fn Server(
             /// Maximum time in ms a connection may remain in `.closing`
             /// before force-disconnecting. Default: 5000.
             close_timeout_ms: u32 = 5_000,
+            /// Enable TCP_NODELAY on accepted client sockets.
+            tcp_nodelay: bool = false,
         };
 
         /// Create a server: opens, binds, and listens on the configured address.
@@ -280,8 +283,9 @@ pub fn Server(
                 return .disarm;
             };
 
-            if (!self.setupConnection(client_socket)) {
-                // Pool exhausted, close socket asynchronously, then resume accepting
+            self.setupConnection(client_socket) catch |err| {
+                log.debug("setupConnection failed: {}", .{err});
+                // Setup failed, close socket asynchronously, then resume accepting
                 client_socket.close(
                     self.loop,
                     completion,
@@ -290,24 +294,27 @@ pub fn Server(
                     onRejectCloseComplete,
                 );
                 return .disarm;
-            }
+            };
 
             // Re-register to accept the next connection.
             self.accept();
             return .disarm;
         }
 
-        fn setupConnection(self: *ServerSelf, client_socket: xev.TCP) bool {
+        fn setupConnection(
+            self: *ServerSelf,
+            client_socket: xev.TCP,
+        ) !void {
+            if (self.config.tcp_nodelay) {
+                try socket_opts.setTcpNoDelay(client_socket.fd);
+            }
+
             // Acquire handshake slot from pool
-            const hs = self.handshake_pool.create() catch {
-                log.debug("setupConnection: handshake pool exhausted", .{});
-                return false;
-            };
+            const hs = try self.handshake_pool.create();
 
             // Initialize and start the handshake
             hs.init(client_socket, self);
             hs.start();
-            return true;
         }
 
         /// Feed an already accepted TCP connection into the handshake pipeline.
@@ -316,9 +323,14 @@ pub fn Server(
             self: *ServerSelf,
             client_fd: std.posix.fd_t,
             initial_data: []const u8,
-        ) error{ ShuttingDown, PoolExhausted }!void {
+        ) !void {
             if (self.shutting_down) return error.ShuttingDown;
-            const hs = self.handshake_pool.create() catch return error.PoolExhausted;
+
+            if (self.config.tcp_nodelay) {
+                try socket_opts.setTcpNoDelay(client_fd);
+            }
+
+            const hs = try self.handshake_pool.create();
             hs.init(.{ .fd = client_fd }, self);
             hs.startWithInitialData(initial_data);
         }
