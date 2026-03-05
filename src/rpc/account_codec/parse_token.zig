@@ -469,17 +469,22 @@ pub const UiTokenAmount = struct {
 
     // Note: only used for unit tests.
     pub fn jsonParse(
-        allocator: std.mem.Allocator,
+        arena: std.mem.Allocator,
         source: anytype,
         options: std.json.ParseOptions,
     ) std.json.ParseError(@TypeOf(source.*))!UiTokenAmount {
-        const value = try std.json.Value.jsonParse(allocator, source, options);
-        const intermediate = try std.json.parseFromValue(struct {
-            uiAmount: ?f64 = null,
-            decimals: u8,
-            amount: []const u8,
-            uiAmountString: []const u8,
-        }, allocator, value, options);
+        const value = try std.json.Value.jsonParse(arena, source, options);
+        const intermediate = try std.json.parseFromValue(
+            struct {
+                uiAmount: ?f64 = null,
+                decimals: u8,
+                amount: []const u8,
+                uiAmountString: []const u8,
+            },
+            arena,
+            value,
+            options,
+        );
         return .{
             .ui_amount = intermediate.value.uiAmount,
             .decimals = intermediate.value.decimals,

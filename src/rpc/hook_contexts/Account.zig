@@ -117,7 +117,7 @@ pub fn getTokenAccountBalance(
 
     const slot = self.slot_tracker.getSlotForCommitment(commitment);
 
-    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotFound;
+    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
     const maybe_account = try slot_reader.get(arena, params.pubkey);
 
