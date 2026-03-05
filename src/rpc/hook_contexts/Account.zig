@@ -112,7 +112,7 @@ pub fn getTokenAccountBalance(
     arena: std.mem.Allocator,
     params: GetTokenAccountBalance,
 ) !GetTokenAccountBalance.Response {
-    const config = params.config orelse GetTokenAccountBalance.Config{};
+    const config: GetTokenAccountBalance.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
     const slot = self.slot_tracker.getSlotForCommitment(commitment);
