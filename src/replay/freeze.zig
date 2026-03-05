@@ -318,7 +318,10 @@ fn getRewardsAndNumPartitions(
                     sig.ledger.meta.Reward,
                     1 + active.distributed_rewards.items.len,
                 );
-                @memcpy(all_rewards[0..active.distributed_rewards.items.len], active.distributed_rewards.items);
+                @memcpy(
+                    all_rewards[0..active.distributed_rewards.items.len],
+                    active.distributed_rewards.items,
+                );
                 all_rewards[all_rewards.len - 1] = fee_reward;
                 return .{ all_rewards, null };
             }
