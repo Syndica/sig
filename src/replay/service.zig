@@ -90,6 +90,7 @@ pub fn advanceReplay(
         &replay_state.slot_tree,
         slot_leaders,
         &replay_state.hard_forks,
+        replay_state.event_sink,
         &replay_state.progress_map,
     );
 
@@ -347,6 +348,7 @@ pub fn trackNewSlots(
     slot_tree: *SlotTree,
     slot_leaders: SlotLeaders,
     hard_forks: *const sig.core.HardForks,
+    event_sink: ?*jrpc_types.EventSink,
     /// needed for update_fork_propagated_threshold_from_votes
     _: *ProgressMap,
 ) !void {
@@ -443,7 +445,23 @@ pub fn trackNewSlots(
             );
 
             try slot_tracker.put(allocator, slot, .{ .constants = constants, .state = state });
-            try slot_tree.record(allocator, slot, constants.parent_slot);
+            try slot_tree.record(allocator, slot, parent_slot);
+
+            if (event_sink) |sink| {
+                sink.send(.{
+                    .method = .slot,
+                    .event_data = .{ .slot = .{
+                        .slot = slot,
+                        .parent = parent_slot,
+                        .root = root,
+                    } },
+                }) catch |err| {
+                    logger.err().logf(
+                        "failed to send slot event, slot: {}, err: {}",
+                        .{ slot, err },
+                    );
+                };
+            }
 
             // TODO: update_fork_propagated_threshold_from_votes
         }
@@ -763,6 +781,7 @@ test trackNewSlots {
         &slot_tree,
         slot_leaders,
         &hard_forks,
+        null,
         undefined,
     );
     try expectSlotTracker(
@@ -783,6 +802,7 @@ test trackNewSlots {
         &slot_tree,
         slot_leaders,
         &hard_forks,
+        null,
         undefined,
     );
     try expectSlotTracker(
@@ -805,6 +825,7 @@ test trackNewSlots {
         &slot_tree,
         slot_leaders,
         &hard_forks,
+        null,
         undefined,
     );
     try expectSlotTracker(
@@ -828,6 +849,7 @@ test trackNewSlots {
         &slot_tree,
         slot_leaders,
         &hard_forks,
+        null,
         undefined,
     );
     try expectSlotTracker(
