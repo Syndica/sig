@@ -34,6 +34,7 @@ const deinitAccountMap = sig.runtime.testing.deinitAccountMap;
 const AccountLoadError = sig.runtime.account_loader.AccountLoadError;
 const wrapDB = sig.runtime.account_loader.wrapDB;
 
+const Message = sig.core.transaction.Message;
 const NONCED_TX_MARKER_IX_INDEX = 0;
 
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L186
@@ -204,7 +205,7 @@ pub fn checkFeePayer(
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/dad81b9b2ecf81ceb518dd9f7cc91e83ba33bda8/fee/src/lib.rs#L85
-const SignatureCounts = struct {
+pub const SignatureCounts = struct {
     num_transaction_signatures: u64,
     num_ed25519_signatures: u64,
     num_secp256k1_signatures: u64,
@@ -235,15 +236,50 @@ const SignatureCounts = struct {
             .num_transaction_signatures = transaction.signature_count,
         };
     }
+
+    /// [agave] default_precompile_signature_count in svm-transaction/src/svm_message.rs#L148-L156
+    /// Same as fromTransaction but for a deserialized Message (e.g. from getFeeForMessage RPC).
+    /// Program IDs are resolved via message.account_keys[inst.program_index]; precompile count is inst.data[0] (or 0 if empty).
+    fn sumPrecompileSigsFromMessage(message: *const Message, precompile: *const Pubkey) u64 {
+        var n_signatures: u64 = 0;
+        for (message.instructions) |inst| {
+            if (inst.program_index >= message.account_keys.len) continue;
+            const program_pubkey = message.account_keys[inst.program_index];
+            if (!program_pubkey.equals(precompile)) continue;
+            n_signatures += if (inst.data.len > 0) inst.data[0] else 0;
+        }
+        return n_signatures;
+    }
+
+    /// [agave] SignatureCounts::from(message) in fee/src/lib.rs#L101-L109; message implements SVMMessage (sanitized_message.rs: num_transaction_signatures = header.num_required_signatures, num_*_signatures via default_precompile_signature_count).
+    pub fn fromMessage(message: *const Message) SignatureCounts {
+        const precompiles = sig.runtime.program.precompiles;
+
+        return .{
+            .num_transaction_signatures = message.signature_count,
+            .num_ed25519_signatures = sumPrecompileSigsFromMessage(
+                message,
+                &precompiles.ed25519.ID,
+            ),
+            .num_secp256k1_signatures = sumPrecompileSigsFromMessage(
+                message,
+                &precompiles.secp256k1.ID,
+            ),
+            .num_secp256r1_signatures = sumPrecompileSigsFromMessage(
+                message,
+                &precompiles.secp256r1.ID,
+            ),
+        };
+    }
 };
 
 pub const FeeDetails = struct {
     transaction_fee: u64,
     prioritization_fee: u64,
 
-    const DEFAULT: FeeDetails = .{ .transaction_fee = 0, .prioritization_fee = 0 };
+    pub const DEFAULT: FeeDetails = .{ .transaction_fee = 0, .prioritization_fee = 0 };
 
-    fn init(
+    pub fn init(
         sig_counts: SignatureCounts,
         lamports_per_signature: u64,
         enable_secp256r1: bool,
@@ -278,7 +314,7 @@ pub const FeeDetails = struct {
     }
 };
 
-const FeeBudgetLimits = struct {
+pub const FeeBudgetLimits = struct {
     /// non-zero
     loaded_accounts_data_size_limit: u32,
     heap_cost: u64,
@@ -298,7 +334,7 @@ const FeeBudgetLimits = struct {
         ) orelse std.math.maxInt(u64);
     }
 
-    fn fromComputeBudgetLimits(val: ComputeBudgetLimits) FeeBudgetLimits {
+    pub fn fromComputeBudgetLimits(val: ComputeBudgetLimits) FeeBudgetLimits {
         const prioritization_fee = getPrioritizationFee(
             val.compute_unit_price,
             val.compute_unit_limit,

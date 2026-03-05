@@ -14,6 +14,8 @@ const rpc = @import("lib.zig");
 const base58 = @import("base58");
 const parse_instruction = @import("parse_instruction/lib.zig");
 
+const compute_budget = sig.runtime.program.compute_budget;
+
 const Allocator = std.mem.Allocator;
 const ParseOptions = std.json.ParseOptions;
 
@@ -22,6 +24,12 @@ const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 const ClientVersion = sig.version.ClientVersion;
+const Base64Decoder = std.base64.standard.Decoder;
+const FeeBudgetLimits = sig.runtime.check_transactions.FeeBudgetLimits;
+const ComputeBudgetLimits = compute_budget.ComputeBudgetLimits;
+const ComputeBudgetInstructionDetails = compute_budget.ComputeBudgetInstructionDetails;
+const FeeDetails = sig.runtime.check_transactions.FeeDetails;
+const SignatureCounts = sig.runtime.check_transactions.SignatureCounts;
 
 const account_codec = sig.rpc.account_codec;
 
@@ -52,7 +60,7 @@ pub const MethodAndParams = union(enum) {
     getClusterNodes: GetClusterNodes,
     getEpochInfo: GetEpochInfo,
     getEpochSchedule: GetEpochSchedule,
-    getFeeForMessage: noreturn,
+    getFeeForMessage: GetFeeForMessage,
     getFirstAvailableBlock: noreturn,
 
     /// https://github.com/Syndica/sig/issues/557
@@ -962,7 +970,25 @@ pub const GetEpochSchedule = struct {
     };
 };
 
-// TODO: getFeeForMessage
+/// Get the fee the network will charge for a particular Message.
+/// [agave] https://github.com/anza-xyz/agave/blob/d70b1714b1153674c16e2b15b68790d274dfe953/rpc/src/rpc.rs#L3580-L3586
+pub const GetFeeForMessage = struct {
+    /// Base64-encoded serialized VersionedMessage
+    message: []const u8,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        minContextSlot: ?Slot = null,
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        /// Fee in lamports, or null if the blockhash has expired.
+        value: ?u64,
+    };
+};
+
 // TODO: getFirstAvailableBlock
 
 pub const GetGenesisHash = struct {
@@ -1483,6 +1509,98 @@ pub const RpcHookContext = struct {
         return .{
             .current = current,
             .delinquent = dlinqt,
+        };
+    }
+
+    /// Get the fee the network will charge for a particular Message.
+    /// [agave] https://github.com/anza-xyz/agave/blob/d70b1714b1153674c16e2b15b68790d274dfe953/rpc/src/rpc.rs#L4260-L4278
+    pub fn getFeeForMessage(
+        self: RpcHookContext,
+        allocator: std.mem.Allocator,
+        params: GetFeeForMessage,
+    ) !GetFeeForMessage.Response {
+        const Version = sig.core.transaction.Version;
+        const Message = sig.core.transaction.Message;
+
+        const config = params.config orelse GetFeeForMessage.Config{};
+        const commitment = config.commitment orelse .finalized;
+
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+        }
+
+        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        defer slot_ref.release();
+
+        // Decode base64-encoded message.
+        // [agave] https://github.com/anza-xyz/agave/blob/d70b1714b1153674c16e2b15b68790d274dfe953/rpc/src/rpc.rs#L4261-L4264
+        const decoded_len = Base64Decoder.calcSizeForSlice(params.message) catch
+            return error.InvalidBase64Encoding;
+        const decoded_bytes = try allocator.alloc(u8, decoded_len);
+        defer allocator.free(decoded_bytes);
+        Base64Decoder.decode(decoded_bytes, params.message) catch return error.InvalidBase64Encoding;
+
+        // Deserialize into a VersionedMessage.
+        // [agave] SanitizedVersionedMessage::try_from(message)
+        var fbs = std.io.fixedBufferStream(decoded_bytes);
+        var peekable = sig.utils.io.peekableReader(fbs.reader());
+        const version = Version.deserialize(&peekable) catch return error.InvalidMessageFormat;
+        var limit_allocator = sig.bincode.LimitAllocator.init(
+            allocator,
+            sig.core.Transaction.MAX_BYTES,
+        );
+        const message = Message.deserialize(&limit_allocator, peekable.reader(), version) catch
+            return error.InvalidMessageFormat;
+        defer message.deinit(allocator);
+
+        // Look up lamports_per_signature from the blockhash queue.
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2733-L2736
+        const lamports_per_signature: u64 = lps: {
+            const bq, var bq_guard = slot_ref.state().blockhash_queue.readWithLock();
+            defer bq_guard.unlock();
+            break :lps bq.getLamportsPerSignature(message.recent_blockhash);
+        } orelse {
+            return .{
+                .context = .{ .slot = slot },
+                .value = null,
+            };
+        };
+
+        const fee_details = result: {
+            if (lamports_per_signature == 0) {
+                break :result FeeDetails.DEFAULT;
+            } else {
+                const feature_set = &slot_ref.constants().feature_set;
+                const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
+
+                const budget_limit_details = switch (compute_budget.execute(&message)) {
+                    .ok => |limits| limits,
+                    .err => ComputeBudgetInstructionDetails{},
+                };
+                const budget_limits = switch (compute_budget.sanitize(
+                    budget_limit_details,
+                    feature_set,
+                    slot,
+                )) {
+                    .ok => |limits| limits,
+                    .err => ComputeBudgetLimits.DEFAULT,
+                };
+                const fee_budget_limits = FeeBudgetLimits.fromComputeBudgetLimits(budget_limits);
+
+                break :result FeeDetails.init(
+                    SignatureCounts.fromMessage(&message),
+                    // [agave] fee_structure().lamports_per_signature — use slot's fee rate for the calculation, not blockhash queue's.
+                    slot_ref.constants().fee_rate_governor.lamports_per_signature,
+                    enable_secp256r1,
+                    fee_budget_limits.prioritization_fee,
+                );
+            }
+        };
+
+        return .{
+            .context = .{ .slot = slot },
+            .value = fee_details.total(),
         };
     }
 };
