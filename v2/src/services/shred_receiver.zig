@@ -52,7 +52,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         const zone = tracy.Zone.init(@src(), .{ .name = "shred recv" });
         defer zone.deinit();
 
-        const packet = slice.one();
+        const packet = slice.get(0);
         defer slice.markUsed(1);
 
         validateShred(packet, stub_root_slot, &stub_shred_version, stub_max_slot) catch |err| {
