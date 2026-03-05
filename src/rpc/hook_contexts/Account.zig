@@ -17,7 +17,7 @@ account_reader: sig.accounts_db.AccountReader,
 
 pub fn getAccountInfo(
     self: @This(),
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     params: GetAccountInfo,
 ) !GetAccountInfo.Response {
     const config = params.config orelse GetAccountInfo.Config{};
@@ -36,15 +36,15 @@ pub fn getAccountInfo(
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
-    const account = try slot_reader.get(allocator, params.pubkey) orelse return .{
+    const account = try slot_reader.get(arena, params.pubkey) orelse return .{
         .context = .{ .slot = slot },
         .value = null,
     };
-    defer account.deinit(allocator);
+    defer account.deinit(arena);
 
     const data: account_codec.AccountData = if (encoding == .jsonParsed)
         try account_codec.encodeJsonParsed(
-            allocator,
+            arena,
             params.pubkey,
             account,
             slot_reader,
@@ -57,7 +57,7 @@ pub fn getAccountInfo(
         // Currently, `error.Base58DataTooLarge` propagates to hooks.zig's generic error mapper,
         // which produces a non-deterministic positive error code via `@intFromError` and the raw
         // error name as the message.
-        try account_codec.encodeStandard(allocator, account, encoding, config.dataSlice);
+        try account_codec.encodeStandard(arena, account, encoding, config.dataSlice);
 
     return .{
         .context = .{ .slot = slot },
@@ -74,7 +74,7 @@ pub fn getAccountInfo(
 
 pub fn getBalance(
     self: @This(),
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     params: GetBalance,
 ) !GetBalance.Response {
     const config = params.config orelse CommitmentSlotConfig{};
@@ -92,10 +92,10 @@ pub fn getBalance(
     const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
 
     // Look up account
-    const maybe_account = try slot_reader.get(allocator, params.pubkey);
+    const maybe_account = try slot_reader.get(arena, params.pubkey);
 
     const lamports: u64 = if (maybe_account) |account| blk: {
-        defer account.deinit(allocator);
+        defer account.deinit(arena);
         break :blk account.lamports;
     } else 0;
 
@@ -109,7 +109,7 @@ pub fn getBalance(
 
 pub fn getTokenAccountBalance(
     self: @This(),
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     params: GetTokenAccountBalance,
 ) !GetTokenAccountBalance.Response {
     const config = params.config orelse GetTokenAccountBalance.Config{};
@@ -119,10 +119,10 @@ pub fn getTokenAccountBalance(
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotFound;
     const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
-    const maybe_account = try slot_reader.get(allocator, params.pubkey);
+    const maybe_account = try slot_reader.get(arena, params.pubkey);
 
     const account = maybe_account orelse return error.RpcAccountNotFound;
-    defer account.deinit(allocator);
+    defer account.deinit(arena);
 
     // Validate that this is a token account (owned by SPL Token or Token-2022)
     const is_token_program = account.owner.equals(&sig.runtime.ids.TOKEN_PROGRAM_ID) or
@@ -149,7 +149,7 @@ pub fn getTokenAccountBalance(
     else
         // Look up the mint account for decimals and extension configs
         account_codec.getMintAdditionalData(
-            allocator,
+            arena,
             token_account.mint,
             slot_reader,
         ) orelse return error.RpcMintNotFound;
