@@ -1368,8 +1368,6 @@ pub const RpcHookContext = struct {
     epoch_tracker: *sig.core.EpochTracker,
     /// Ledger access for reading cluster's optimistic slots from gossip (for health check)
     ledger: ?*sig.ledger.Ledger = null,
-    /// When true, always report healthy (for testing or maintenance)
-    override_health_check: ?*const std.atomic.Value(bool) = null,
     /// Maximum allowed slot distance before node is considered unhealthy.
     /// Default is 128 slots, matching agave's DELINQUENT_VALIDATOR_SLOT_DISTANCE.
     /// See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L158
@@ -1527,7 +1525,7 @@ pub const RpcHookContext = struct {
 
     pub fn getVoteAccounts(
         self: RpcHookContext,
-        allocator: std.mem.Allocator,
+        arena: std.mem.Allocator,
         params: GetVoteAccounts,
     ) !GetVoteAccounts.Response {
         const config: GetVoteAccounts.Config = params.config orelse .{};
@@ -1549,13 +1547,13 @@ pub const RpcHookContext = struct {
 
         var current_list: std.ArrayListUnmanaged(GetVoteAccounts.VoteAccount) = .empty;
         errdefer {
-            for (current_list.items) |va| allocator.free(va.epochCredits);
-            current_list.deinit(allocator);
+            for (current_list.items) |va| arena.free(va.epochCredits);
+            current_list.deinit(arena);
         }
         var delinqt_list: std.ArrayListUnmanaged(GetVoteAccounts.VoteAccount) = .empty;
         errdefer {
-            for (delinqt_list.items) |va| allocator.free(va.epochCredits);
-            delinqt_list.deinit(allocator);
+            for (delinqt_list.items) |va| arena.free(va.epochCredits);
+            delinqt_list.deinit(arena);
         }
 
         // Access stakes cache (takes read lock).
@@ -1598,8 +1596,8 @@ pub const RpcHookContext = struct {
                 MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY,
             );
             const epoch_credits = all_credits[all_credits.len - num_credits_to_return ..];
-            const credits = try allocator.alloc([3]u64, num_credits_to_return);
-            errdefer allocator.free(credits);
+            const credits = try arena.alloc([3]u64, num_credits_to_return);
+            errdefer arena.free(credits);
             for (epoch_credits, 0..) |ec, i| {
                 credits[i] = .{ ec.epoch, ec.credits, ec.prev_credits };
             }
@@ -1617,21 +1615,21 @@ pub const RpcHookContext = struct {
             };
 
             if (is_current) {
-                try current_list.append(allocator, info);
+                try current_list.append(arena, info);
             } else {
-                try delinqt_list.append(allocator, info);
+                try delinqt_list.append(arena, info);
             }
         }
 
-        const current = try current_list.toOwnedSlice(allocator);
+        const current = try current_list.toOwnedSlice(arena);
         errdefer {
-            for (current) |va| allocator.free(va.epochCredits);
-            allocator.free(current);
+            for (current) |va| arena.free(va.epochCredits);
+            arena.free(current);
         }
-        const dlinqt = try delinqt_list.toOwnedSlice(allocator);
+        const dlinqt = try delinqt_list.toOwnedSlice(arena);
         errdefer {
-            for (dlinqt) |va| allocator.free(va.epochCredits);
-            allocator.free(dlinqt);
+            for (dlinqt) |va| arena.free(va.epochCredits);
+            arena.free(dlinqt);
         }
         return .{
             .current = current,
@@ -1641,29 +1639,18 @@ pub const RpcHookContext = struct {
 
     /// Check the health of the node.
     ///
-    /// A node is considered healthy if:
-    /// - `override_health_check` is set to true, OR
-    /// - The node's latest optimistically confirmed slot is within `health_check_slot_distance`
-    ///   of the cluster's latest optimistically confirmed slot.
+    /// A node is considered healthy if the node's latest optimistically confirmed
+    /// slot is within `health_check_slot_distance` of the cluster's latest
+    /// optimistically confirmed slot.
     ///
     /// Returns `RpcHealthStatus` which is then formatted by the server layer:
     /// - JSON-RPC: "ok" result on success, error with code -32005 on failure
     /// - HTTP GET /health: always 200 OK with "ok", "behind", or "unknown"
-    ///
-    /// Analogous to [RpcHealth::check](https://github.com/anza-xyz/agave/blob/8803776d/rpc/src/rpc_health.rs#L44-L107)
-    /// and [get_health](https://github.com/anza-xyz/agave/blob/master/rpc/src/rpc.rs#L2806-L2818)
     pub fn getHealth(
         self: RpcHookContext,
-        allocator: std.mem.Allocator,
+        arena: std.mem.Allocator,
         _: GetHealth,
     ) !GetHealth.Response {
-        // If override is set, always return healthy
-        if (self.override_health_check) |override| {
-            if (override.load(.monotonic)) {
-                return .ok;
-            }
-        }
-
         // Need ledger to check cluster's optimistic slot
         const ledger = self.ledger orelse return .unknown;
 
@@ -1672,15 +1659,15 @@ pub const RpcHookContext = struct {
         const my_latest_optimistically_confirmed_slot =
             self.slot_tracker.latest_confirmed_slot.get();
 
-        // Get the cluster's latest optimistically confirmed slot from blockstore
+        // Get the cluster's latest optimistically confirmed slot from ledger
         // This comes from gossip observations
-        var optimistic_slots = ledger.reader().getLatestOptimisticSlots(allocator, 1) catch {
+        var optimistic_slots = ledger.reader().getLatestOptimisticSlots(arena, 1) catch {
             return .unknown;
         };
         defer optimistic_slots.deinit();
 
         if (optimistic_slots.items.len == 0) {
-            // No optimistic slots in blockstore yet
+            // No optimistic slots in ledger yet
             return .unknown;
         }
 
@@ -1796,14 +1783,12 @@ pub const RpcHealthStatus = union(enum) {
 fn testHealthContext(
     slot_tracker: *sig.replay.trackers.SlotTracker,
     ledger: ?*sig.ledger.Ledger,
-    override_health_check: ?*const std.atomic.Value(bool),
     health_check_slot_distance: u64,
 ) RpcHookContext {
     return .{
         .slot_tracker = slot_tracker,
         .epoch_tracker = undefined, // not used in health check
         .ledger = ledger,
-        .override_health_check = override_health_check,
         .health_check_slot_distance = health_check_slot_distance,
     };
 }
@@ -1861,53 +1846,15 @@ test "RpcHealthStatus jsonStringify behind" {
     try testing.expectEqualStrings(expected, w.written());
 }
 
-test "getHealth returns ok when override_health_check is true" {
-    // When override_health_check is set to true, health should always be ok
-    // regardless of slot distance.
-    var override = std.atomic.Value(bool).init(true);
-    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(std.testing.allocator, 0);
-    defer slot_tracker.deinit(std.testing.allocator);
-
-    const ctx = testHealthContext(&slot_tracker, null, &override, 10);
-    const status = try ctx.getHealth(std.testing.allocator, .{});
-    try std.testing.expect(status.eql(.ok));
-}
-
 test "getHealth returns unknown when ledger is null" {
     // Without ledger access, we cannot determine cluster's optimistic slot
     // so status should be unknown.
-    var override = std.atomic.Value(bool).init(false);
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(std.testing.allocator, 0);
     defer slot_tracker.deinit(std.testing.allocator);
 
-    const ctx = testHealthContext(&slot_tracker, null, &override, 10);
-    const status = try ctx.getHealth(std.testing.allocator, .{});
-    try std.testing.expect(status.eql(.unknown));
-}
-
-test "getHealth returns ok status when node is healthy" {
-    // Test the public getHealth RPC method returns .ok status
-    var override = std.atomic.Value(bool).init(true);
-    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(std.testing.allocator, 0);
-    defer slot_tracker.deinit(std.testing.allocator);
-
-    const ctx = testHealthContext(&slot_tracker, null, &override, 10);
-    const response = try ctx.getHealth(std.testing.allocator, .{});
-    try std.testing.expect(response.eql(.ok));
-    try std.testing.expectEqualStrings("ok", response.httpStatusString());
-}
-
-test "getHealth returns unknown status when health cannot be determined" {
-    // When ledger is null and override is false, should return .unknown status
-    // Analogous to Agave returning RpcCustomError::NodeUnhealthy { num_slots_behind: None }
-    var override = std.atomic.Value(bool).init(false);
-    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(std.testing.allocator, 0);
-    defer slot_tracker.deinit(std.testing.allocator);
-
-    const ctx = testHealthContext(&slot_tracker, null, &override, 10);
+    const ctx = testHealthContext(&slot_tracker, null, 10);
     const response = try ctx.getHealth(std.testing.allocator, .{});
     try std.testing.expect(response.eql(.unknown));
-
     try std.testing.expectEqualStrings("unknown", response.httpStatusString());
 }
 

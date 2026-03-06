@@ -136,7 +136,7 @@ fn handleGetOrHead(
         if (std.mem.eql(u8, path, "health")) {
             // HTTP GET /health always returns 200 OK with a plain-text status string.
             // This matches agave's behavior:
-            // See: https://github.com/anza-xyz/agave/blob/master/rpc/src/rpc_service.rs#L332-L340
+            // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc_service.rs#L332-L340
             const health_result = server_ctx.rpc_hooks.call(
                 server_ctx.allocator,
                 .getHealth,
