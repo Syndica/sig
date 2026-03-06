@@ -883,7 +883,7 @@ const Cmd = struct {
                 \\      --no-snapshots
                 \\      --no-snapshot-fetch
                 \\      --use-snapshot-archives-at-startup always
-                \\      --limit-ledger-size 50000000000000 
+                \\      --limit-ledger-size 50000000000000
                 \\
                 \\   After this has processed the ledger, it will be usable from other agave tools.
                 ,
@@ -1255,7 +1255,7 @@ const Cmd = struct {
                                 .default_value = null,
                                 .config = {},
                                 .help =
-                                \\The first slot to retain (inclusive). 
+                                \\The first slot to retain (inclusive).
                                 \\Defaults to min slot in ledger.
                                 ,
                             },
@@ -1266,7 +1266,7 @@ const Cmd = struct {
                                 .default_value = null,
                                 .config = {},
                                 .help =
-                                \\The last slot to retain (inclusive). 
+                                \\The last slot to retain (inclusive).
                                 \\Defaults to max slot in ledger.
                                 ,
                             },
@@ -1378,7 +1378,7 @@ fn ensureGenesis(
     // Determine cluster for genesis
     const cluster = try cfg.getCluster() orelse {
         logger.err().log(
-            \\No genesis file path provided and no cluster specified. 
+            \\No genesis file path provided and no cluster specified.
             \\Use --genesis-file-path or --cluster"
         );
         return error.GenesisPathNotProvided;
@@ -1582,7 +1582,7 @@ fn validator(
     if (cfg.accounts_db.dbg_db_init and !init_db_exists)
         try saveDbInit(snapshot_dir, .from(app_base.logger));
 
-    const static_rpc_ctx: sig.rpc.methods.StaticHookContext = .{
+    const static_rpc_ctx: sig.rpc.hook_contexts.StaticHookContext = .{
         .genesis_hash = loaded_snapshot.genesis_config.hash,
     };
 
@@ -1694,23 +1694,20 @@ fn validator(
     });
     defer replay_service_state.deinit(allocator);
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.methods.RpcHookContext{
+    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
         .epoch_tracker = &epoch_tracker,
     });
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.Ledger{
+    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
         .ledger = &ledger,
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
     });
 
-    try app_base.rpc_hooks.set(
-        allocator,
-        sig.rpc.hook_contexts.AccountHookContext{
-            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-            .account_reader = replay_service_state.replay_state.account_store.reader(),
-        },
-    );
+    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
+        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+        .account_reader = replay_service_state.replay_state.account_store.reader(),
+    });
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,

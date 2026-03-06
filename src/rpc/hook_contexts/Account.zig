@@ -14,11 +14,13 @@ const GetTokenSupply = sig.rpc.methods.GetTokenSupply;
 const AccountEncoding = account_codec.AccountEncoding;
 const CommitmentSlotConfig = sig.rpc.methods.common.CommitmentSlotConfig;
 
+const AccountHookContext = @This();
+
 slot_tracker: *sig.replay.trackers.SlotTracker,
 account_reader: sig.accounts_db.AccountReader,
 
 pub fn getAccountInfo(
-    self: @This(),
+    self: AccountHookContext,
     arena: std.mem.Allocator,
     params: GetAccountInfo,
 ) !GetAccountInfo.Response {
@@ -74,7 +76,7 @@ pub fn getAccountInfo(
 }
 
 pub fn getBalance(
-    self: @This(),
+    self: AccountHookContext,
     arena: std.mem.Allocator,
     params: GetBalance,
 ) !GetBalance.Response {
@@ -108,7 +110,7 @@ pub fn getBalance(
 }
 
 pub fn getTokenAccountBalance(
-    self: @This(),
+    self: AccountHookContext,
     arena: std.mem.Allocator,
     params: GetTokenAccountBalance,
 ) !GetTokenAccountBalance.Response {
