@@ -29,6 +29,7 @@ const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSlot = methods.GetSlot;
 const GetTransaction = methods.GetTransaction;
 const GetTransactionCount = methods.GetTransactionCount;
+const GetTokenAccountBalance = methods.GetTokenAccountBalance;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
 
@@ -489,7 +490,38 @@ test GetSlot {
 // TODO: test getStakeActivation()
 // TODO: test getStakeMinimumDelegation()
 // TODO: test getSupply()
-// TODO: test getTokenAccountBalance()
+
+test GetTokenAccountBalance {
+    const pubkey: Pubkey = .parse("7fUAJdStEuGbc3sM84cKRL6yYaaSstyLSU4ve5oovLS7");
+
+    // Request without config
+    try testRequest(
+        .getTokenAccountBalance,
+        .{ .pubkey = pubkey },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTokenAccountBalance","params":["7fUAJdStEuGbc3sM84cKRL6yYaaSstyLSU4ve5oovLS7"]}
+        ,
+    );
+
+    // Request with commitment config
+    try testRequest(
+        .getTokenAccountBalance,
+        .{ .pubkey = pubkey, .config = .{ .commitment = .finalized } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTokenAccountBalance","params":["7fUAJdStEuGbc3sM84cKRL6yYaaSstyLSU4ve5oovLS7",{"commitment":"finalized"}]}
+        ,
+    );
+
+    // Response deserialization
+    try testResponse(GetTokenAccountBalance, .{ .result = .{
+        .context = .{ .slot = 1114, .apiVersion = "2.1.6" },
+        .value = .init(
+            9864,
+            .{ .decimals = 2 },
+        ),
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"slot":1114,"apiVersion":"2.1.6"},"value":{"uiAmount":98.64,"decimals":2,"amount":"9864","uiAmountString":"98.64"}},"id":1}
+    );
+}
+
 // TODO: test getTokenAccountsByDelegate()
 // TODO: test getTockenAccountsByOwner()
 // TODO: test getTokenLargestAccounts()
