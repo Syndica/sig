@@ -1554,6 +1554,11 @@ pub const RpcHookContext = struct {
 
         const slot_account_reader = self.account_reader.forSlot(&slot_ref.constants().ancestors);
 
+        const empty_result: GetFeeForMessage.Response = .{
+            .context = .{ .slot = slot },
+            .value = null,
+        };
+
         const runtime_txn = (messageToRuntimeTransaction(
             arena,
             message,
@@ -1561,62 +1566,58 @@ pub const RpcHookContext = struct {
             slot_account_reader,
             &slot_ref.constants().reserved_accounts,
             slot,
-        ) catch return .{ .context = .{ .slot = slot }, .value = null }) orelse return .{
-            .context = .{ .slot = slot },
-            .value = null,
-        };
+        ) catch return empty_result) orelse return empty_result;
 
         // Look up lamports_per_signature from the blockhash queue, or from nonce account if durable nonce.
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2732-L2741
-        const lamports_per_signature: u64 = lps: {
+        const maybe_bq_lps: ?u64 = blk: {
             const bq, var bq_guard = slot_ref.state().blockhash_queue.readWithLock();
             defer bq_guard.unlock();
-            break :lps bq.getLamportsPerSignature(message.recent_blockhash);
-        } orelse {
+            break :blk bq.getLamportsPerSignature(message.recent_blockhash);
+        };
+
+        if (maybe_bq_lps == null) {
             const nonce_result = check_transactions.loadMessageNonceAccount(
                 arena,
                 &runtime_txn,
                 slot_account_reader,
-            ) catch return .{ .context = .{ .slot = slot }, .value = null };
+            ) catch return empty_result;
 
             if (nonce_result) |r| {
                 const nonce_address, const nonce_account, const nonce_data = r;
                 _ = nonce_address;
                 _ = nonce_account;
-                return .{ .context = .{ .slot = slot }, .value = nonce_data.lamports_per_signature };
-            } else return .{ .context = .{ .slot = slot }, .value = null };
-        };
-
-        const fee_details = result: {
-            if (lamports_per_signature == 0) {
-                break :result FeeDetails.DEFAULT;
-            } else {
-                const feature_set = &slot_ref.constants().feature_set;
-                const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
-
-                // [agave] process_compute_budget_instructions(message.program_instructions_iter(), &self.feature_set)
-                //         .unwrap_or_default()
-                // In Agave, execute+sanitize is a single call; on ANY error, ComputeBudgetLimits::default() is used.
-                const budget_limits = blk: {
-                    const details = switch (compute_budget.execute(&message)) {
-                        .ok => |d| d,
-                        .err => break :blk ComputeBudgetLimits.DEFAULT,
-                    };
-                    break :blk switch (compute_budget.sanitize(details, feature_set, slot)) {
-                        .ok => |limits| limits,
-                        .err => ComputeBudgetLimits.DEFAULT,
-                    };
+                return .{
+                    .context = .{ .slot = slot },
+                    .value = nonce_data.lamports_per_signature,
                 };
-                const fee_budget_limits = FeeBudgetLimits.fromComputeBudgetLimits(budget_limits);
-
-                break :result FeeDetails.init(
-                    SignatureCounts.fromTransaction(&runtime_txn),
-                    5_000,
-                    enable_secp256r1,
-                    fee_budget_limits.prioritization_fee,
-                );
             }
-        };
+            return empty_result;
+        }
+
+        const bq_lps = maybe_bq_lps.?;
+
+        var fee_details: FeeDetails = FeeDetails.DEFAULT;
+        if (bq_lps != 0) {
+            const feature_set = &slot_ref.constants().feature_set;
+            const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
+
+            // [agave] process_compute_budget_instructions(message.program_instructions_iter(), &self.feature_set).unwrap_or_default()
+            // In Agave, execute+sanitize is a single call; on ANY error, ComputeBudgetLimits::default() is used.
+            var budget_limits = ComputeBudgetLimits.DEFAULT;
+            const details = compute_budget.execute(&message);
+            if (details == .ok) {
+                const sanitized = compute_budget.sanitize(details.ok, feature_set, slot);
+                if (sanitized == .ok) budget_limits = sanitized.ok;
+            }
+            const fee_budget_limits = FeeBudgetLimits.fromComputeBudgetLimits(budget_limits);
+            fee_details = FeeDetails.init(
+                SignatureCounts.fromTransaction(&runtime_txn),
+                5_000,
+                enable_secp256r1,
+                fee_budget_limits.prioritization_fee,
+            );
+        }
 
         return .{
             .context = .{ .slot = slot },
