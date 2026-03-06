@@ -66,8 +66,8 @@ pub const MethodAndParams = union(enum) {
 
     getHighestSnapshotSlot: GetHighestSnapshotSlot,
     getIdentity: GetIdentity,
-    getInflationGovernor: noreturn,
-    getInflationRate: noreturn,
+    getInflationGovernor: GetInflationGovernor,
+    getInflationRate: GetInflationRate,
     getInflationReward: noreturn,
     getLargestAccounts: noreturn,
     getLatestBlockhash: GetLatestBlockhash,
@@ -1006,8 +1006,34 @@ pub const GetHighestSnapshotSlot = struct {
 };
 
 // TODO: getIdentity
-// TODO: getInflationGovernor
-// TODO: getInflationRate
+
+pub const GetInflationGovernor = struct {
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+    };
+
+    pub const Response = struct {
+        initial: f64,
+        terminal: f64,
+        taper: f64,
+        foundation: f64,
+        foundationTerm: f64,
+    };
+};
+
+pub const GetInflationRate = struct {
+    // This RPC method takes no parameters (matches Agave behavior)
+
+    pub const Response = struct {
+        total: f64,
+        validator: f64,
+        foundation: f64,
+        epoch: u64,
+    };
+};
+
 // TODO: getInflationReward
 // TODO: getLargeAccounts
 
@@ -1386,6 +1412,8 @@ pub const common = struct {
 
 pub const RpcHookContext = struct {
     slot_tracker: *sig.replay.trackers.SlotTracker,
+    gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable) = null,
+    my_shred_version: ?*const std.atomic.Value(u16) = null,
     epoch_tracker: *sig.core.EpochTracker,
 
     // Limit the length of the `epoch_credits` array for each validator in a `get_vote_accounts`
@@ -1690,6 +1718,178 @@ pub const RpcHookContext = struct {
             },
             .value = is_valid,
         };
+    }
+
+    pub fn getInflationGovernor(
+        self: RpcHookContext,
+        _: std.mem.Allocator,
+        params: GetInflationGovernor,
+    ) !GetInflationGovernor.Response {
+        const config: GetInflationGovernor.Config = params.config orelse .{};
+        const commitment = config.commitment orelse .finalized;
+
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        defer slot_ref.release();
+
+        const inflation = &slot_ref.constants().inflation;
+
+        return .{
+            .initial = inflation.initial,
+            .terminal = inflation.terminal,
+            .taper = inflation.taper,
+            .foundation = inflation.foundation,
+            .foundationTerm = inflation.foundation_term,
+        };
+    }
+
+    pub fn getInflationRate(
+        self: RpcHookContext,
+        _: std.mem.Allocator,
+        _: GetInflationRate,
+    ) !GetInflationRate.Response {
+        // Agave uses bank(None) which means default commitment (finalized)
+        // See: https://github.com/anza-xyz/agave/blob/v2.1.6/rpc/src/rpc.rs#L897-909
+        const slot = self.slot_tracker.getSlotForCommitment(.finalized);
+        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        defer slot_ref.release();
+
+        const epoch = self.epoch_tracker.epoch_schedule.getEpoch(slot);
+        const slots_per_year = self.epoch_tracker.cluster.slotsPerYear();
+
+        const slot_in_years = sig.replay.rewards.inflation_rewards.getSlotInYearsForInflation(
+            slot,
+            epoch,
+            slots_per_year,
+            &slot_ref.constants().feature_set,
+            &self.epoch_tracker.epoch_schedule,
+        );
+
+        const inflation = &slot_ref.constants().inflation;
+
+        return .{
+            .total = inflation.total(slot_in_years),
+            .validator = inflation.validatorRate(slot_in_years),
+            .foundation = inflation.foundationRate(slot_in_years),
+            .epoch = epoch,
+        };
+    }
+
+    pub fn getClusterNodes(
+        self: RpcHookContext,
+        arena: std.mem.Allocator,
+        _: GetClusterNodes,
+    ) !GetClusterNodes.Response {
+        // getClusterNodes takes no parameters
+        // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3634-3695
+
+        const gossip_table_rw = self.gossip_table_rw orelse
+            return error.GossipTableNotAvailable;
+        const my_shred_version_atomic = self.my_shred_version orelse
+            return error.ShredVersionNotAvailable;
+
+        const my_shred_version = my_shred_version_atomic.load(.monotonic);
+
+        const gossip_table, var gossip_lock = gossip_table_rw.readWithLock();
+        defer gossip_lock.unlock();
+
+        var contact_info_iter = gossip_table.contactInfoIterator(0);
+        var result_list: std.ArrayList(common.RpcContactInfo) = .empty;
+
+        while (contact_info_iter.next()) |contact_info| {
+            if (try contactInfoToRpc(
+                arena,
+                contact_info,
+                gossip_table,
+                my_shred_version,
+            )) |rpc_contact_info| {
+                try result_list.append(arena, rpc_contact_info);
+            }
+        }
+
+        return try result_list.toOwnedSlice(arena);
+    }
+
+    /// Converts a gossip ContactInfo into RpcContactInfo. Returns null if the contact
+    /// should be skipped (shred version mismatch or invalid gossip address).
+    fn contactInfoToRpc(
+        arena: std.mem.Allocator,
+        contact_info: *const sig.gossip.ContactInfo,
+        gossip_table: *const sig.gossip.GossipTable,
+        my_shred_version: u16,
+    ) !?common.RpcContactInfo {
+        // Filter by matching shred version (exclude spy nodes with shred_version 0)
+        // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3643
+        if (contact_info.shred_version != my_shred_version) return null;
+
+        // Check that gossip address is valid (not unspecified)
+        // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3644-3647
+        const gossip_addr = contact_info.getSocket(.gossip);
+        if (gossip_addr == null or gossip_addr.?.isUnspecified()) return null;
+
+        var rpc_contact_info = common.RpcContactInfo{
+            .pubkey = try std.fmt.allocPrint(
+                arena,
+                "{s}",
+                .{contact_info.pubkey.base58String().slice()},
+            ),
+        };
+
+        // Get version info for this node from the gossip table
+        // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3649-3655
+        if (gossip_table.get(.{ .Version = contact_info.pubkey })) |version_data| {
+            const v = version_data.data.Version.version;
+            rpc_contact_info.version = try std.fmt.allocPrint(
+                arena,
+                "{d}.{d}.{d}",
+                .{ v.major, v.minor, v.patch },
+            );
+            rpc_contact_info.featureSet = v.feature_set;
+        }
+
+        rpc_contact_info.shredVersion = my_shred_version;
+        rpc_contact_info.gossip = try formatSocketAddr(arena, gossip_addr);
+        rpc_contact_info.tvu = try formatSocketAddr(
+            arena,
+            contact_info.getSocket(.turbine_recv),
+        );
+        rpc_contact_info.tpu = try formatSocketAddr(arena, contact_info.getSocket(.tpu));
+        rpc_contact_info.tpuQuic = try formatSocketAddr(
+            arena,
+            contact_info.getSocket(.tpu_quic),
+        );
+        rpc_contact_info.tpuForwards = try formatSocketAddr(
+            arena,
+            contact_info.getSocket(.tpu_forwards),
+        );
+        rpc_contact_info.tpuForwardsQuic = try formatSocketAddr(
+            arena,
+            contact_info.getSocket(.tpu_forwards_quic),
+        );
+        rpc_contact_info.tpuVote = try formatSocketAddr(
+            arena,
+            contact_info.getSocket(.tpu_vote),
+        );
+        rpc_contact_info.serveRepair = try formatSocketAddr(
+            arena,
+            contact_info.getSocket(.serve_repair),
+        );
+        rpc_contact_info.rpc = try formatSocketAddr(
+            arena,
+            contact_info.getSocket(.rpc),
+        );
+        rpc_contact_info.pubsub = try formatSocketAddr(
+            arena,
+            contact_info.getSocket(.rpc_pubsub),
+        );
+
+        return rpc_contact_info;
+    }
+
+    fn formatSocketAddr(arena: std.mem.Allocator, addr: ?sig.net.SocketAddr) !?[]const u8 {
+        const socket_addr = addr orelse return null;
+        if (socket_addr.isUnspecified()) return null;
+        return try std.fmt.allocPrint(arena, "{f}", .{socket_addr.toAddress()});
     }
 };
 
