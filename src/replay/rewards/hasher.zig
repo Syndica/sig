@@ -41,6 +41,21 @@ pub fn hashRewardsIntoPartitions(
     return result;
 }
 
+/// Hash a single address to a partition index given a parent blockhash seed.
+/// Used by the RPC layer for getInflationReward to determine which partition
+/// block contains a given address's staking rewards.
+pub fn hashAddressToPartition(
+    address: *const Pubkey,
+    parent_blockhash: *const Hash,
+    num_partitions: usize,
+) usize {
+    const key: [SipHasher13.key_length]u8 = @splat(0);
+    var seeded_hasher = SipHasher13.init(&key);
+    _ = seeded_hasher.writer().write(&parent_blockhash.data) catch unreachable;
+    _ = seeded_hasher.writer().write(&address.data) catch unreachable;
+    return hashToPartition(seeded_hasher.finalInt(), num_partitions);
+}
+
 fn hashToPartition(hash: u128, partitions: u128) usize {
     return @intCast((hash * partitions) / (std.math.maxInt(u64) + 1));
 }
@@ -94,6 +109,14 @@ test hashRewardsIntoPartitions {
 
         try std.testing.expectEqual(expected_num, total_hashed);
     }
+}
+
+test hashAddressToPartition {
+    const seed = Hash.parse("4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM");
+    const address = Pubkey.parse("1113eKEmP3gmGaNeoKSVoYwPpyfTmrmizMbi1TqGj2");
+
+    const partition = hashAddressToPartition(&address, &seed, 10);
+    try std.testing.expectEqual(3, partition);
 }
 
 test hashToPartition {
