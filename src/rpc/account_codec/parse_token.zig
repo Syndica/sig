@@ -52,12 +52,12 @@ const AccountTypeDiscriminator = enum(u8) {
     account = 2,
 };
 
-const DetectedType = union(enum) {
+pub const DetectedType = union(enum) {
     token_account,
     mint,
     multisig,
 
-    fn parse(data: []const u8) ?DetectedType {
+    pub fn parse(data: []const u8) ?DetectedType {
         // Multisig: exactly 355 bytes (never has extensions)
         if (data.len == Multisig.LEN) return .multisig;
         // Token-2022 extended accounts: discriminator is ALWAYS at offset 165 (TokenAccount.LEN)

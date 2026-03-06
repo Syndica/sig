@@ -4,10 +4,12 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const account_codec = sig.rpc.account_codec;
+const parse_token = account_codec.parse_token;
 
 const GetAccountInfo = sig.rpc.methods.GetAccountInfo;
 const GetBalance = sig.rpc.methods.GetBalance;
 const GetTokenAccountBalance = sig.rpc.methods.GetTokenAccountBalance;
+const GetTokenSupply = sig.rpc.methods.GetTokenSupply;
 
 const AccountEncoding = account_codec.AccountEncoding;
 const CommitmentSlotConfig = sig.rpc.methods.common.CommitmentSlotConfig;
@@ -153,6 +155,68 @@ pub fn getTokenAccountBalance(
 
     const ui_token_amount = account_codec.parse_token.UiTokenAmount.init(
         token_account.amount,
+        spl_token_data,
+    );
+
+    return .{
+        .context = .{ .slot = slot },
+        .value = ui_token_amount,
+    };
+}
+
+pub fn getTokenSupply(
+    self: @This(),
+    arena: std.mem.Allocator,
+    params: GetTokenSupply,
+) !GetTokenSupply.Response {
+    const config: GetTokenSupply.Config = params.config orelse .{};
+    const commitment = config.commitment orelse .finalized;
+
+    const slot = self.slot_tracker.getSlotForCommitment(commitment);
+
+    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
+
+    // Fetch mint account
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1989-L1991
+    const maybe_account = try slot_reader.get(arena, params.mint);
+    const account = maybe_account orelse return error.RpcAccountNotFound;
+
+    // Validate that this is owned by a token program
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1992-L1996
+    const is_token_program = account.owner.equals(&sig.runtime.ids.TOKEN_PROGRAM_ID) or
+        account.owner.equals(&sig.runtime.ids.TOKEN_2022_PROGRAM_ID);
+    if (!is_token_program) return error.RpcNotATokenAccount;
+
+    // Read account data into contiguous buffer for mint parsing and extension extraction
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1997-L2009
+    const data_len = account.data.len();
+    const mint_data = try arena.alloc(u8, data_len);
+    var data_iter = account.data.iterator();
+    _ = data_iter.readBytes(mint_data) catch return error.RpcMintUnpackFailed;
+
+    // Validate this is actually a mint account, not a token account or multisig.
+    // Without this, a token account's garbage bytes at the decimals offset can cause
+    // a panic in formatTokenAmount. Agave performs similar validation.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1997
+    const detected = parse_token.DetectedType.parse(mint_data) orelse
+        return error.RpcMintUnpackFailed;
+    if (detected != .mint) return error.RpcMintUnpackFailed;
+
+    // Parse mint to get supply
+    const mint = parse_token.Mint.unpack(mint_data) catch return error.RpcMintUnpackFailed;
+    if (!mint.is_initialized) return error.RpcMintUnpackFailed;
+
+    // Extract decimals, extension configs, and clock timestamp from the raw mint data
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2011-L2019
+    const spl_token_data = account_codec.parseMintAdditionalData(
+        arena,
+        mint_data,
+        slot_reader,
+    ) orelse return error.RpcMintUnpackFailed;
+
+    const ui_token_amount = parse_token.UiTokenAmount.init(
+        mint.supply,
         spl_token_data,
     );
 
