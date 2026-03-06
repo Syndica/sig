@@ -74,7 +74,7 @@ pub const MethodAndParams = union(enum) {
     getLeaderSchedule: GetLeaderSchedule,
     getMaxRetransmitSlot: noreturn,
     getMaxShredInsertSlot: noreturn,
-    getMinimumBalanceForRentExemption: noreturn,
+    getMinimumBalanceForRentExemption: GetMinimumBalanceForRentExemption,
     getMultipleAccounts: noreturn,
     getProgramAccounts: noreturn,
     getRecentPerformanceSamples: noreturn,
@@ -84,7 +84,7 @@ pub const MethodAndParams = union(enum) {
     getSlot: GetSlot,
     getSlotLeader: noreturn,
     getSlotLeaders: noreturn,
-    getStakeMinimumDelegation: noreturn,
+    getStakeMinimumDelegation: GetStakeMinimumDelegation,
     getSupply: noreturn,
     getTokenAccountBalance: GetTokenAccountBalance,
     getTokenAccountsByDelegate: noreturn,
@@ -1084,7 +1084,18 @@ pub const GetLeaderSchedule = struct {
 
 // TODO: getMaxRetransmitSlot
 // TODO: getMaxShredInsertSlot
-// TODO: getMinimumBalanceForRentExemption
+
+/// Returns minimum balance required to make account rent exempt.
+/// https://solana.com/docs/rpc/http/getminimumbalanceforrentexemption
+pub const GetMinimumBalanceForRentExemption = struct {
+    /// The Account's data length
+    data_len: usize,
+    config: ?common.CommitmentSlotConfig = null,
+
+    /// Returns minimum lamports required in account to remain rent free.
+    pub const Response = u64;
+};
+
 // TODO: getMultipleAccounts
 // TODO: getProgramAccounts
 // TODO: getRecentPerformanceSamples
@@ -1123,7 +1134,16 @@ pub const GetSlot = struct {
 // TODO: getSlotLeader
 // TODO: getSlotLeaders
 // TODO: getStakeActivation
-// TODO: getStakeMinimumDelegation
+
+pub const GetStakeMinimumDelegation = struct {
+    config: ?common.CommitmentSlotConfig = null,
+
+    pub const Response = struct {
+        context: common.Context,
+        value: u64,
+    };
+};
+
 // TODO: getSupply
 pub const GetTokenAccountBalance = struct {
     pubkey: Pubkey,
@@ -1689,6 +1709,95 @@ pub const RpcHookContext = struct {
                 .apiVersion = ClientVersion.API_VERSION,
             },
             .value = is_valid,
+        };
+    }
+
+    /// Returns the minimum balance required to make account with given data length rent exempt.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L590-L597
+    pub fn getMinimumBalanceForRentExemption(
+        self: RpcHookContext,
+        _: std.mem.Allocator,
+        params: GetMinimumBalanceForRentExemption,
+    ) !GetMinimumBalanceForRentExemption.Response {
+        // Validate data_len doesn't exceed maximum allowed account size
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3003-L3004
+        if (params.data_len > sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH) {
+            return error.InvalidRequest;
+        }
+
+        const config = params.config orelse common.CommitmentSlotConfig{};
+        // [agave] Default commitment is finalized:
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
+        const commitment = config.commitment orelse .finalized;
+
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+        }
+
+        // Get slot reference to access rent collector
+        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        defer ref.release();
+        const rent = ref.constants().rent_collector.rent;
+
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2719-L2720
+        // minimum_balance returns 0 for empty accounts, but agave returns max(1, min_balance)
+        return @max(1, rent.minimumBalance(params.data_len));
+    }
+
+    /// Returns the stake minimum delegation, in lamports.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2377-L2384
+    pub fn getStakeMinimumDelegation(
+        self: RpcHookContext,
+        _: std.mem.Allocator,
+        params: GetStakeMinimumDelegation,
+    ) !GetStakeMinimumDelegation.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+        // [agave] Default commitment is finalized:
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
+        const commitment = config.commitment orelse .finalized;
+
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+        }
+
+        // Get slot reference to access feature_set
+        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        defer ref.release();
+        const feature_set = &ref.constants().feature_set;
+
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2379-L2382
+        const stake_minimum_delegation = sig.runtime.program.stake.getMinimumDelegation(
+            slot,
+            feature_set,
+        );
+
+        return .{
+            .context = .{
+                .slot = slot,
+                .apiVersion = ClientVersion.API_VERSION,
+            },
+            .value = stake_minimum_delegation,
+        };
+    }
+
+    /// Returns the epoch schedule information from this cluster's genesis config.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L911-L916
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3023-L3026
+    pub fn getEpochSchedule(
+        self: RpcHookContext,
+        _: std.mem.Allocator,
+        _: GetEpochSchedule,
+    ) !GetEpochSchedule.Response {
+        const epoch_schedule = &self.epoch_tracker.epoch_schedule;
+
+        return .{
+            .slotsPerEpoch = epoch_schedule.slots_per_epoch,
+            .leaderScheduleSlotOffset = epoch_schedule.leader_schedule_slot_offset,
+            .warmup = epoch_schedule.warmup,
+            .firstNormalEpoch = epoch_schedule.first_normal_epoch,
+            .firstNormalSlot = epoch_schedule.first_normal_slot,
         };
     }
 };

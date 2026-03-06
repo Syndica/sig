@@ -24,11 +24,13 @@ const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSlot = methods.GetSlot;
+const GetStakeMinimumDelegation = methods.GetStakeMinimumDelegation;
 const GetTransaction = methods.GetTransaction;
 const GetTransactionCount = methods.GetTransactionCount;
 const GetTokenAccountBalance = methods.GetTokenAccountBalance;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
+const GetMinimumBalanceForRentExemption = methods.GetMinimumBalanceForRentExemption;
 const IsBlockhashValid = methods.IsBlockhashValid;
 
 const Response = rpc.response.Response;
@@ -369,7 +371,17 @@ test GetLeaderSchedule {
 
 // TODO: test getMaxRetransmitSlot()
 // TODO: test getMaxShredInsertSlot()
-// TODO: test getMinimumBalanceForRentExemption()
+
+test GetMinimumBalanceForRentExemption {
+    try testRequest(.getMinimumBalanceForRentExemption, .{ .data_len = 50 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getMinimumBalanceForRentExemption","params":[50]}
+    );
+    // Response is just a u64 value representing minimum lamports
+    try testResponse(GetMinimumBalanceForRentExemption, .{ .result = 1238880 },
+        \\{"jsonrpc":"2.0","result":1238880,"id":1}
+    );
+}
+
 // TODO: test getMultipleAccounts()
 // TODO: test getProgramAccounts()
 // TODO: test getRecentPerformanceSamples()
@@ -409,7 +421,19 @@ test GetSlot {
 // TODO: test getSlotLeader()
 // TODO: test getSlotLeaders()
 // TODO: test getStakeActivation()
-// TODO: test getStakeMinimumDelegation()
+
+test GetStakeMinimumDelegation {
+    try testRequest(.getStakeMinimumDelegation, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getStakeMinimumDelegation","params":[]}
+    );
+    try testResponse(GetStakeMinimumDelegation, .{ .result = .{
+        .context = .{ .slot = 501, .apiVersion = "2.0.15" },
+        .value = 1000000000,
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.0.15","slot":501},"value":1000000000},"id":1}
+    );
+}
+
 // TODO: test getSupply()
 
 test GetTokenAccountBalance {
