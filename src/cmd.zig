@@ -1697,6 +1697,7 @@ fn validator(
     try app_base.rpc_hooks.set(allocator, sig.rpc.methods.RpcHookContext{
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
         .epoch_tracker = &epoch_tracker,
+        .ledger = &ledger,
     });
 
     try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.Ledger{
@@ -2666,15 +2667,6 @@ fn startGossip(
 
     try app_base.rpc_hooks.set(allocator, struct {
         info: ContactInfo,
-
-        pub fn getHealth(
-            _: @This(),
-            _: std.mem.Allocator,
-            _: anytype,
-        ) !sig.rpc.methods.GetHealth.Response {
-            // TODO: more intricate
-            return .ok;
-        }
 
         pub fn getIdentity(
             self: @This(),
