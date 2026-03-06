@@ -20,13 +20,15 @@ const GetLatestBlockhash = sig.rpc.methods.GetLatestBlockhash;
 const GetVoteAccounts = sig.rpc.methods.GetVoteAccounts;
 const IsBlockhashValid = sig.rpc.methods.IsBlockhashValid;
 
+const ConsensusHookContext = @This();
+
 slot_tracker: *sig.replay.trackers.SlotTracker,
 epoch_tracker: *sig.core.EpochTracker,
 
 /// Resolves commitment and minContextSlot config to a slot number.
 /// Defaults to finalized commitment if none is specified.
 fn resolveCommitmentSlot(
-    self: @This(),
+    self: ConsensusHookContext,
     commitment: ?Commitment,
     min_context_slot: ?Slot,
 ) !Slot {
@@ -44,7 +46,7 @@ fn resolveCommitmentSlot(
 /// with a reference to the slot's data. The caller must call `release()`
 /// on the returned `SlotRef` when done (typically via `defer`).
 fn resolveSlot(
-    self: @This(),
+    self: ConsensusHookContext,
     commitment: ?Commitment,
     min_context_slot: ?Slot,
 ) !struct { slot: Slot, ref: SlotRef } {
@@ -53,14 +55,14 @@ fn resolveSlot(
     return .{ .slot = slot, .ref = slot_ref };
 }
 
-pub fn getSlot(self: @This(), _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
+pub fn getSlot(self: ConsensusHookContext, _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
     const config: common.CommitmentSlotConfig = params.config orelse .{};
     return self.resolveCommitmentSlot(config.commitment, config.minContextSlot);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L955-L958
 pub fn getBlockHeight(
-    self: @This(),
+    self: ConsensusHookContext,
     _: std.mem.Allocator,
     params: GetBlockHeight,
 ) !GetBlockHeight.Response {
@@ -72,7 +74,7 @@ pub fn getBlockHeight(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1022-L1025
 pub fn getTransactionCount(
-    self: @This(),
+    self: ConsensusHookContext,
     _: std.mem.Allocator,
     params: GetTransactionCount,
 ) !GetTransactionCount.Response {
@@ -85,7 +87,7 @@ pub fn getTransactionCount(
 /// for the time being we will return null
 /// since accounts-db v2 don't have relevant implementation
 pub fn getHighestSnapshotSlot(
-    _: @This(),
+    _: ConsensusHookContext,
     _: std.mem.Allocator,
     _: GetHighestSnapshotSlot,
 ) !GetHighestSnapshotSlot.Response {
@@ -94,7 +96,7 @@ pub fn getHighestSnapshotSlot(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2791-L2799
 pub fn getEpochInfo(
-    self: @This(),
+    self: ConsensusHookContext,
     _: std.mem.Allocator,
     params: GetEpochInfo,
 ) !GetEpochInfo.Response {
@@ -121,7 +123,7 @@ pub fn getEpochInfo(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2352-L2365
 pub fn getLatestBlockhash(
-    self: @This(),
+    self: ConsensusHookContext,
     arena: std.mem.Allocator,
     params: GetLatestBlockhash,
 ) !GetLatestBlockhash.Response {
@@ -165,7 +167,7 @@ pub fn getLatestBlockhash(
 }
 
 pub fn getVoteAccounts(
-    self: @This(),
+    self: ConsensusHookContext,
     allocator: std.mem.Allocator,
     params: GetVoteAccounts,
 ) !GetVoteAccounts.Response {
@@ -281,7 +283,7 @@ pub fn getVoteAccounts(
 /// Checks if a blockhash is still valid for processing transactions.
 /// Analogous to [is_blockhash_valid](https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2367)
 pub fn isBlockhashValid(
-    self: @This(),
+    self: ConsensusHookContext,
     _: std.mem.Allocator,
     params: IsBlockhashValid,
 ) !IsBlockhashValid.Response {
@@ -354,7 +356,7 @@ fn testSetupSlotTracker(
     });
 }
 
-fn testRpcHookContext(slot_tracker: *sig.replay.trackers.SlotTracker) @This() {
+fn testRpcHookContext(slot_tracker: *sig.replay.trackers.SlotTracker) ConsensusHookContext {
     return .{
         .slot_tracker = slot_tracker,
         .epoch_tracker = undefined, // not used by getBlockHeight/getTransactionCount/getHighestSnapshotSlot
@@ -364,7 +366,7 @@ fn testRpcHookContext(slot_tracker: *sig.replay.trackers.SlotTracker) @This() {
 fn testRpcHookContextWithEpochTracker(
     slot_tracker: *sig.replay.trackers.SlotTracker,
     epoch_tracker: *sig.core.EpochTracker,
-) @This() {
+) ConsensusHookContext {
     return .{
         .slot_tracker = slot_tracker,
         .epoch_tracker = epoch_tracker,
