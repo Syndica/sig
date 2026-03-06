@@ -255,6 +255,16 @@ pub fn Connection(
                 self.user_handler.onOpen(self);
             }
 
+            // Notify handler about leftover handshake data that is already buffered since
+            // onBytesRead will not be called until more bytes are read from the socket, but
+            // we have read frame bytes already!
+            if (comptime has.on_bytes_read) {
+                const leftover = data_end - data_start;
+                if (leftover > 0) {
+                    self.user_handler.onBytesRead(self, leftover);
+                }
+            }
+
             // NOTE: we check state is still open here to avoid arming the idle
             // timer if the handler.onOpen() called close().
             if (self.state == .open) {

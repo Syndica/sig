@@ -300,7 +300,7 @@ pub fn build(b: *Build) !void {
     });
 
     // Feature set ID for version compatibility
-    const feature_set_id = b.createModule(.{ .root_source_file = generateFeatureSetId(b, base58_mod) });
+    const feature_set_id = b.createModule(.{ .root_source_file = generateFeatureSetId(b) });
 
     const sqlite_mod = genSqlite(b, config.target, config.optimize);
     const blst_mod = b.dependency("blst", .{
@@ -558,7 +558,11 @@ fn generateTable(b: *Build) Build.LazyPath {
     return table_file;
 }
 
-fn generateFeatureSetId(b: *Build, base58_mod: *Build.Module) Build.LazyPath {
+fn generateFeatureSetId(b: *Build) Build.LazyPath {
+    // This generator runs on the host at build time, so its dependencies must
+    // be fetched with default (host) target options — not the cross-compilation
+    // target used for the main build. This should be repeated for other scripts if they
+    // import a library in the future.
     const gen = b.addExecutable(.{
         .name = "gen_feature_set_id",
         .root_module = b.createModule(.{
@@ -566,10 +570,16 @@ fn generateFeatureSetId(b: *Build, base58_mod: *Build.Module) Build.LazyPath {
             .optimize = .Debug,
             .root_source_file = b.path("scripts/gen_feature_set_id.zig"),
             .imports = &.{
-                .{ .name = "base58", .module = base58_mod },
-                .{ .name = "features", .module = b.createModule(.{
-                    .root_source_file = b.path("src/core/features.zon"),
-                }) },
+                .{
+                    .name = "base58",
+                    .module = b.dependency("base58", .{}).module("base58"),
+                },
+                .{
+                    .name = "features",
+                    .module = b.createModule(.{
+                        .root_source_file = b.path("src/core/features.zon"),
+                    }),
+                },
             },
         }),
     });
