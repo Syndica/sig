@@ -191,13 +191,12 @@ pub fn computeFeatureSet(
     var new_activations = FeatureSet.ALL_DISABLED;
     var inactive_iterator = feature_set.iterator(slot, .inactive);
     while (inactive_iterator.next()) |feature| {
-        defer _ = arena.reset(.retain_capacity);
-
         const feature_id = features.map.get(feature).key;
         const feature_account = try slot_store.reader().get(
             arena.allocator(),
             feature_id,
         ) orelse continue;
+        defer feature_account.deinit(arena.allocator());
 
         switch (try features.activationStateFromAccount(feature_account)) {
             .activated => |activation_slot| if (slot >= activation_slot) feature_set.setSlot(
