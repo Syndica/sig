@@ -455,7 +455,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
     };
 }
 
-fn loadMessageNonceAccount(
+pub fn loadMessageNonceAccount(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     account_reader: SlotAccountReader,

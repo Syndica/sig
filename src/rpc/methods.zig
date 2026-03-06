@@ -29,6 +29,8 @@ const FeeBudgetLimits = sig.runtime.check_transactions.FeeBudgetLimits;
 const ComputeBudgetLimits = compute_budget.ComputeBudgetLimits;
 const FeeDetails = sig.runtime.check_transactions.FeeDetails;
 const SignatureCounts = sig.runtime.check_transactions.SignatureCounts;
+const Message = sig.core.transaction.Message;
+const Version = sig.core.transaction.Version;
 
 const account_codec = sig.rpc.account_codec;
 
@@ -1372,9 +1374,85 @@ pub const common = struct {
     };
 };
 
+/// Build a minimal Transaction from a Message for resolution (e.g. nonce lookup).
+/// Caller owns the returned transaction and must call deinit.
+///
+/// IMPORTANT: Signatures are zeroed because it's used only in getFeeForMessage
+/// and there only receives the message (unsigned transaction body)—
+/// the client asks for the fee before signing, so no real signatures
+/// exist. This has no downside: resolveTransaction and loadMessageNonceAccount only use
+/// the message structure (instructions, accounts, blockhash); they never verify or use
+/// the signature bytes. Signer checks use account metas (is_signer flags), not signature
+/// data.
+fn messageToTransaction(
+    allocator: Allocator,
+    message: sig.core.transaction.Message,
+    version: sig.core.transaction.Version,
+) Allocator.Error!sig.core.Transaction {
+    const signatures = try allocator.alloc(Signature, message.signature_count);
+    @memset(signatures, Signature.ZEROES);
+    return .{
+        .signatures = signatures,
+        .version = version,
+        .msg = message,
+    };
+}
+
+/// Nonce fallback: convert Message to RuntimeTransaction and use loadMessageNonceAccount.
+/// Returns lamports_per_signature from the nonce account, or null if not a durable nonce or on error.
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2737-L2740
+fn loadLamportsPerSignatureFromNonce(
+    allocator: Allocator,
+    message: sig.core.transaction.Message,
+    version: sig.core.transaction.Version,
+    slot: Slot,
+    slot_account_reader: sig.accounts_db.SlotAccountReader,
+    reserved_accounts: *const sig.core.ReservedAccounts,
+) ?u64 {
+    const transaction = messageToTransaction(allocator, message, version) catch return null;
+
+    const slot_hashes = sig.replay.update_sysvar.getSysvarFromAccount(
+        sig.runtime.sysvar.SlotHashes,
+        allocator,
+        slot_account_reader,
+    ) catch null orelse sig.runtime.sysvar.SlotHashes.INIT;
+
+    const resolved = sig.replay.resolve_lookup.resolveTransaction(allocator, transaction, .{
+        .slot = slot,
+        .account_reader = slot_account_reader,
+        .reserved_accounts = reserved_accounts,
+        .slot_hashes = slot_hashes,
+    }) catch return null;
+    defer {
+        resolved.deinit(allocator);
+        resolved.transaction.deinit(allocator);
+    }
+
+    const msg_hash = Message.hash((message.serializeBounded(version) catch return null).constSlice());
+    const runtime_txn = resolved.toRuntimeTransaction(
+        msg_hash,
+        .{},
+    );
+
+    const nonce_result = sig.runtime.check_transactions.loadMessageNonceAccount(
+        allocator,
+        &runtime_txn,
+        slot_account_reader,
+    ) catch return null;
+
+    if (nonce_result) |r| {
+        const nonce_address, const nonce_account, const nonce_data = r;
+        _ = nonce_address;
+        defer nonce_account.deinit(allocator);
+        return nonce_data.lamports_per_signature;
+    } else return null;
+}
+
 pub const RpcHookContext = struct {
     slot_tracker: *sig.replay.trackers.SlotTracker,
     epoch_tracker: *sig.core.EpochTracker,
+    /// Required for getFeeForMessage nonce fallback (load_message_nonce_data).
+    account_reader: sig.accounts_db.AccountReader,
 
     // Limit the length of the `epoch_credits` array for each validator in a `get_vote_accounts`
     // response.
@@ -1518,9 +1596,6 @@ pub const RpcHookContext = struct {
         allocator: std.mem.Allocator,
         params: GetFeeForMessage,
     ) !GetFeeForMessage.Response {
-        const Version = sig.core.transaction.Version;
-        const Message = sig.core.transaction.Message;
-
         const config = params.config orelse GetFeeForMessage.Config{};
         const commitment = config.commitment orelse .finalized;
 
@@ -1553,19 +1628,22 @@ pub const RpcHookContext = struct {
             return error.InvalidMessageFormat;
         defer message.deinit(allocator);
 
-        // Look up lamports_per_signature from the blockhash queue.
+        // Look up lamports_per_signature from the blockhash queue, or from nonce account if durable nonce.
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2732-L2741
         const lamports_per_signature: u64 = lps: {
             const bq, var bq_guard = slot_ref.state().blockhash_queue.readWithLock();
             defer bq_guard.unlock();
             break :lps bq.getLamportsPerSignature(message.recent_blockhash);
-        } orelse {
-            // TODO: nonce
-            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2737-L2740
-            return .{
-                .context = .{ .slot = slot },
-                .value = null,
-            };
+        } orelse loadLamportsPerSignatureFromNonce(
+            allocator,
+            message,
+            version,
+            slot,
+            self.account_reader.forSlot(&slot_ref.constants().ancestors),
+            &slot_ref.constants().reserved_accounts,
+        ) orelse return .{
+            .context = .{ .slot = slot },
+            .value = null,
         };
 
         const fee_details = result: {
