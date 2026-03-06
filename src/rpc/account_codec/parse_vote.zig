@@ -17,28 +17,28 @@ const BLS_PUBLIC_KEY_BASE58_MAX_SIZE = base58.encodedMaxSize(BLS_PUBLIC_KEY_COMP
 
 /// Parses a vote account's data into a `VoteAccountType` for JSON encoding in RPC responses.
 pub fn parseVote(
-    allocator: Allocator,
+    arena: Allocator,
     // std.io.Reader
     reader: anytype,
     vote_pubkey: Pubkey,
 ) ParseError!VoteAccountType {
     var vote_state_versions = sig.bincode.read(
-        allocator,
+        arena,
         vote_program.state.VoteStateVersions,
         reader,
         .{},
     ) catch return ParseError.InvalidAccountData;
-    defer vote_state_versions.deinit(allocator);
+    defer vote_state_versions.deinit(arena);
 
-    var vote_state = vote_state_versions.convertToV4(allocator, vote_pubkey) catch
+    var vote_state = vote_state_versions.convertToV4(arena, vote_pubkey) catch
         return ParseError.OutOfMemory;
-    defer vote_state.deinit(allocator);
+    defer vote_state.deinit(arena);
 
-    const votes = try allocator.alloc(
+    const votes = try arena.alloc(
         UiLandedVote,
         vote_state.votes.items.len,
     );
-    errdefer allocator.free(votes);
+    errdefer arena.free(votes);
     for (vote_state.votes.items, 0..) |vote, i| {
         votes[i] = UiLandedVote{
             .latency = vote.latency,
@@ -47,11 +47,11 @@ pub fn parseVote(
         };
     }
 
-    const auth_voters = try allocator.alloc(
+    const auth_voters = try arena.alloc(
         UiAuthorizedVoter,
         vote_state.authorized_voters.len(),
     );
-    errdefer allocator.free(auth_voters);
+    errdefer arena.free(auth_voters);
 
     const voter_keys = vote_state.authorized_voters.voters.keys();
     const voter_values = vote_state.authorized_voters.voters.values();
@@ -62,11 +62,11 @@ pub fn parseVote(
         };
     }
 
-    const epoch_credits = try allocator.alloc(
+    const epoch_credits = try arena.alloc(
         UiEpochCredits,
         vote_state.epoch_credits.items.len,
     );
-    errdefer allocator.free(epoch_credits);
+    errdefer arena.free(epoch_credits);
     for (epoch_credits, vote_state.epoch_credits.items) |*ec, vote_state_ec| {
         ec.* = UiEpochCredits{
             .epoch = vote_state_ec.epoch,

@@ -12,7 +12,7 @@ const State = sig.runtime.program.bpf_loader.v3.State;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_bpf_loader.rs#L13
 pub fn parseBpfUpgradeableLoader(
-    allocator: Allocator,
+    arena: Allocator,
     // std.io.Reader
     reader: anytype,
     data_len: u32,
@@ -28,7 +28,7 @@ pub fn parseBpfUpgradeableLoader(
             const auth_size: u32 = if (maybe_authority != null) Pubkey.SIZE else 0;
             const metadata_size: u32 = @sizeOf(u32) + 1 + auth_size;
             const data = readRemainingBytes(
-                allocator,
+                arena,
                 reader,
                 data_len,
                 metadata_size,
@@ -53,7 +53,7 @@ pub fn parseBpfUpgradeableLoader(
             const auth_size: u32 = if (maybe_upgrade_authority != null) Pubkey.SIZE else 0;
             const metadata_size: u32 = @sizeOf(u32) + @sizeOf(u64) + 1 + auth_size;
             const data = readRemainingBytes(
-                allocator,
+                arena,
                 reader,
                 data_len,
                 metadata_size,
@@ -85,7 +85,7 @@ fn readOptionPubkey(reader: anytype) !?Pubkey {
 }
 
 fn readRemainingBytes(
-    allocator: Allocator,
+    arena: Allocator,
     reader: anytype,
     data_len: u32,
     metadata_size: usize,
@@ -93,8 +93,8 @@ fn readRemainingBytes(
     if (data_len < metadata_size) return error.InvalidData;
     const bytecode_len = data_len - metadata_size;
     if (bytecode_len == 0) return &.{};
-    const bytecode = try allocator.alloc(u8, bytecode_len);
-    errdefer allocator.free(bytecode);
+    const bytecode = try arena.alloc(u8, bytecode_len);
+    errdefer arena.free(bytecode);
     const n = reader.readAll(bytecode) catch return error.InvalidData;
     if (n != bytecode_len) return error.InvalidData;
     return bytecode;

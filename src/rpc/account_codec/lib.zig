@@ -11,7 +11,7 @@ const parse_config = @import("parse_config.zig");
 const parse_nonce = @import("parse_nonce.zig");
 const parse_stake = @import("parse_stake.zig");
 const parse_sysvar = @import("parse_sysvar.zig");
-const parse_token = @import("parse_token.zig");
+pub const parse_token = @import("parse_token.zig");
 const parse_token_extension = @import("parse_token_extension.zig");
 const parse_vote = @import("parse_vote.zig");
 
@@ -92,24 +92,24 @@ pub const AccountData = union(enum) {
     }
 
     pub fn jsonParse(
-        allocator: std.mem.Allocator,
+        arena: std.mem.Allocator,
         source: anytype,
         options: std.json.ParseOptions,
     ) std.json.ParseError(@TypeOf(source.*))!AccountData {
         return switch (try source.peekNextTokenType()) {
             .array_begin => .{ .encoded = try std.json.innerParse(
                 struct { []const u8, AccountEncoding },
-                allocator,
+                arena,
                 source,
                 options,
             ) },
             .object_begin => {
-                const val = try std.json.innerParse(std.json.Value, allocator, source, options);
-                return .{ .jsonParsed = try std.json.Stringify.valueAlloc(allocator, val, .{}) };
+                const val = try std.json.innerParse(std.json.Value, arena, source, options);
+                return .{ .jsonParsed = try std.json.Stringify.valueAlloc(arena, val, .{}) };
             },
             .string => .{ .json_parsed_base64_fallback = try std.json.innerParse(
                 []const u8,
-                allocator,
+                arena,
                 source,
                 options,
             ) },
@@ -125,7 +125,7 @@ pub const AccountData = union(enum) {
 /// Handles jsonParsed encoding with fallback to base64.
 /// Attempts program-specific parsing; falls back to base64 if no parser is found.
 pub fn encodeJsonParsed(
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     pubkey: sig.core.Pubkey,
     account: sig.core.Account,
     slot_reader: sig.accounts_db.SlotAccountReader,
@@ -133,7 +133,7 @@ pub fn encodeJsonParsed(
 ) !AccountData {
     // Build additional data for token accounts, fetch mint and clock for Token-2022 responses.
     const additional_data = buildTokenAdditionalData(
-        allocator,
+        arena,
         account,
         slot_reader,
     );
@@ -142,7 +142,7 @@ pub fn encodeJsonParsed(
 
     // Try to parse based on owner program
     const maybe_parsed_account = parseAccount(
-        allocator,
+        arena,
         pubkey,
         account.owner,
         account_data_iter.reader(),
@@ -155,7 +155,7 @@ pub fn encodeJsonParsed(
 
     if (maybe_parsed_account) |parsed| {
         const json_str = try std.json.Stringify.valueAlloc(
-            allocator,
+            arena,
             parsed,
             .{},
         );
@@ -172,34 +172,34 @@ pub fn encodeJsonParsed(
         sig.runtime.ids.TOKEN_2022_PROGRAM_ID.equals(&account.owner);
     const fallback_slice = if (is_spl_token) null else data_slice;
     var encoded = try std.ArrayListUnmanaged(u8).initCapacity(
-        allocator,
+        arena,
         // If jsonParsed fails, we fallback to base64 encoding, so we need to allocate
         // enough capacity for the encoded string here.
         estimateEncodedSize(account, .base64, fallback_slice),
     );
-    errdefer encoded.deinit(allocator);
-    try encodeAccountData(allocator, account, .base64, fallback_slice, encoded.writer(allocator));
-    return .{ .json_parsed_base64_fallback = try encoded.toOwnedSlice(allocator) };
+    errdefer encoded.deinit(arena);
+    try encodeAccountData(arena, account, .base64, fallback_slice, encoded.writer(arena));
+    return .{ .json_parsed_base64_fallback = try encoded.toOwnedSlice(arena) };
 }
 
 /// Handles binary, base58, base64, base64+zstd encodings.
 pub fn encodeStandard(
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     account: sig.core.Account,
     encoding: AccountEncoding,
     data_slice: ?DataSlice,
 ) !AccountData {
     const estimated_size = estimateEncodedSize(account, encoding, data_slice);
-    var encoded_data = try std.ArrayListUnmanaged(u8).initCapacity(allocator, estimated_size);
-    errdefer encoded_data.deinit(allocator);
+    var encoded_data = try std.ArrayListUnmanaged(u8).initCapacity(arena, estimated_size);
+    errdefer encoded_data.deinit(arena);
     try encodeAccountData(
-        allocator,
+        arena,
         account,
         encoding,
         data_slice,
-        encoded_data.writer(allocator),
+        encoded_data.writer(arena),
     );
-    const slice = try encoded_data.toOwnedSlice(allocator);
+    const slice = try encoded_data.toOwnedSlice(arena);
     return if (encoding == .binary)
         .{ .legacy_binary = slice }
     else
@@ -223,7 +223,7 @@ fn estimateEncodedSize(
 }
 
 fn encodeAccountData(
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     account: sig.core.Account,
     encoding: AccountEncoding,
     data_slice: ?DataSlice,
@@ -276,11 +276,11 @@ fn encodeAccountData(
             // buffer set in AccountHookContext instead of allocating it on each call
             // since the server is single-threaded. Unfortunately, the zstd lib's doesn't give us a
             // comptime-known size to use for stack allocation. Instead of assuming, just allocate for now.
-            const zstd_out_buf = try allocator.alloc(
+            const zstd_out_buf = try arena.alloc(
                 u8,
                 zstd.Compressor.recommOutSize(),
             );
-            defer allocator.free(zstd_out_buf);
+            defer arena.free(zstd_out_buf);
 
             var zstd_ctx = zstd.writerCtx(
                 &adapter.new_interface,
@@ -412,8 +412,26 @@ pub fn JsonString(comptime max_len: usize) type {
             self.len += n;
         }
 
+        // Note: only used for unit tests
+        pub fn eql(self: *const Self, other: *const Self) bool {
+            return self.len == other.len and
+                std.mem.eql(u8, self.inner[0..self.len], other.inner[0..other.len]);
+        }
+
         pub fn jsonStringify(self: Self, jw: anytype) @TypeOf(jw.*).Error!void {
             try jw.write(self.constSlice());
+        }
+
+        // Note: only used for unit tests
+        pub fn jsonParse(
+            _: std.mem.Allocator,
+            source: anytype,
+            _: std.json.ParseOptions,
+        ) std.json.ParseError(@TypeOf(source.*))!Self {
+            return switch (try source.next()) {
+                .string => |str| Self.fromSlice(str),
+                else => error.UnexpectedToken,
+            };
         }
     };
 }
@@ -553,7 +571,7 @@ pub const AccountState = enum(u8) {
 };
 
 pub fn parseAccount(
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     pubkey: Pubkey,
     program_id: Pubkey,
     // std.io.Reader
@@ -563,19 +581,19 @@ pub fn parseAccount(
 ) ParseError!?ParsedAccount {
     const program = ParsableAccount.fromProgramId(program_id) orelse return null;
     const parsed: ParsedContent = switch (program) {
-        .vote => .{ .vote = try parse_vote.parseVote(allocator, reader, pubkey) },
-        .stake => .{ .stake = try parse_stake.parseStake(allocator, reader) },
-        .nonce => .{ .nonce = try parse_nonce.parseNonce(allocator, reader) },
+        .vote => .{ .vote = try parse_vote.parseVote(arena, reader, pubkey) },
+        .stake => .{ .stake = try parse_stake.parseStake(arena, reader) },
+        .nonce => .{ .nonce = try parse_nonce.parseNonce(arena, reader) },
         .address_lookup_table => .{
             .address_lookup_table = try parse_address_lookup_table.parseAddressLookupTable(
-                allocator,
+                arena,
                 reader,
                 data_len,
             ),
         },
         .bpf_upgradeable_loader => .{
             .bpf_upgradeable_loader = try parse_bpf_upgradeable_loader.parseBpfUpgradeableLoader(
-                allocator,
+                arena,
                 reader,
                 data_len,
             ),
@@ -584,7 +602,7 @@ pub fn parseAccount(
             // Sysvar parsing dispatches by the account's pubkey, not its owner.
             // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs#L24
             const sysvar_parsed = try parse_sysvar.parseSysvar(
-                allocator,
+                arena,
                 pubkey,
                 reader,
             );
@@ -600,7 +618,7 @@ pub fn parseAccount(
         },
         .config => {
             const config_parsed = try parse_config.parseConfig(
-                allocator,
+                arena,
                 pubkey,
                 reader,
                 data_len,
@@ -617,8 +635,8 @@ pub fn parseAccount(
         },
         .token, .token_2022 => {
             // Token parsing requires the full data slice.
-            const data = try allocator.alloc(u8, data_len);
-            defer allocator.free(data);
+            const data = try arena.alloc(u8, data_len);
+            defer arena.free(data);
             const bytes_read = reader.readAll(data) catch return ParseError.InvalidAccountData;
             if (bytes_read != data_len) return ParseError.InvalidAccountData;
 
@@ -650,7 +668,7 @@ pub fn parseAccount(
 /// Build SplTokenAdditionalData by fetching mint account and Clock syvar.
 /// Returns empty additional data if not a token account or fetch fails
 pub fn buildTokenAdditionalData(
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     account: sig.core.Account,
     slot_reader: sig.accounts_db.SlotAccountReader,
 ) AdditionalAccountData {
@@ -668,33 +686,50 @@ pub fn buildTokenAdditionalData(
     // Extract mint pubkey from token account (first 32 bytes)
     const mint_pubkey = parse_token.getTokenAccountMint(data_buf[0..bytes_read]) orelse return .{};
 
+    const spl_token = getMintAdditionalData(
+        arena,
+        mint_pubkey,
+        slot_reader,
+    ) orelse return .{};
+
+    return .{ .spl_token = spl_token };
+}
+
+/// Fetches a mint account by pubkey and extracts decimals, Token-2022 extension configs,
+/// and the clock timestamp needed for interest-bearing/scaled calculations.
+/// Returns null if the mint account cannot be found or parsed.
+pub fn getMintAdditionalData(
+    arena: std.mem.Allocator,
+    mint_pubkey: Pubkey,
+    slot_reader: sig.accounts_db.SlotAccountReader,
+) ?parse_token.SplTokenAdditionalData {
     // Fetch the mint account
-    const maybe_mint_account = slot_reader.get(allocator, mint_pubkey) catch return .{};
-    const mint_account = maybe_mint_account orelse return .{};
-    defer mint_account.deinit(allocator);
+    const maybe_mint_account = slot_reader.get(arena, mint_pubkey) catch return null;
+    const mint_account = maybe_mint_account orelse return null;
+    defer mint_account.deinit(arena);
 
     // Read mint data
     var mint_iter = mint_account.data.iterator();
-    const mint_data = allocator.alloc(u8, mint_account.data.len()) catch return .{};
-    defer allocator.free(mint_data);
-    _ = mint_iter.readBytes(mint_data) catch return .{};
+    const mint_data = arena.alloc(u8, mint_account.data.len()) catch return null;
+    defer arena.free(mint_data);
+    _ = mint_iter.readBytes(mint_data) catch return null;
 
     // Parse mint to get decimals
-    const mint = parse_token.Mint.unpack(mint_data) catch return .{};
+    const mint = parse_token.Mint.unpack(mint_data) catch return null;
 
     // Fetch Clock sysvar for timestamp
     const clock_id = sig.runtime.sysvar.Clock.ID;
-    const maybe_clock_account = slot_reader.get(allocator, clock_id) catch return .{};
-    const clock_account = maybe_clock_account orelse return .{};
-    defer clock_account.deinit(allocator);
+    const maybe_clock_account = slot_reader.get(arena, clock_id) catch return null;
+    const clock_account = maybe_clock_account orelse return null;
+    defer clock_account.deinit(arena);
 
     var clock_iter = clock_account.data.iterator();
     const clock = sig.bincode.read(
-        allocator,
+        arena,
         sig.runtime.sysvar.Clock,
         clock_iter.reader(),
         .{},
-    ) catch return .{};
+    ) catch return null;
 
     // Extract extension configs from mint data
     const InterestCfg = parse_token_extension.InterestBearingConfigData;
@@ -703,12 +738,10 @@ pub fn buildTokenAdditionalData(
     const scaled_config = ScaledCfg.extractFromMint(mint_data);
 
     return .{
-        .spl_token = .{
-            .decimals = mint.decimals,
-            .unix_timestamp = clock.unix_timestamp,
-            .interest_bearing_config = interest_config,
-            .scaled_ui_amount_config = scaled_config,
-        },
+        .decimals = mint.decimals,
+        .unix_timestamp = clock.unix_timestamp,
+        .interest_bearing_config = interest_config,
+        .scaled_ui_amount_config = scaled_config,
     };
 }
 
