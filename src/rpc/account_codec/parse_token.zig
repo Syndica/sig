@@ -404,7 +404,7 @@ pub const UiTokenAmount = struct {
     /// Create a UiTokenAmount from raw amount and additional data.
     /// Handles interest-bearing and scaled UI amount calculations if configured.
     /// Priority: interest-bearing > scaled > simple
-    fn init(amount: u64, additional_data: SplTokenAdditionalData) UiTokenAmount {
+    pub fn init(amount: u64, additional_data: SplTokenAdditionalData) UiTokenAmount {
         const decimals = additional_data.decimals;
 
         // Priority 1: Interest-bearing config
@@ -465,6 +465,36 @@ pub const UiTokenAmount = struct {
         try jw.objectField("uiAmountString");
         try jw.write(self.ui_amount_string);
         try jw.endObject();
+    }
+
+    // Note: only used for unit tests.
+    pub fn jsonParse(
+        arena: std.mem.Allocator,
+        source: anytype,
+        options: std.json.ParseOptions,
+    ) std.json.ParseError(@TypeOf(source.*))!UiTokenAmount {
+        const value = try std.json.Value.jsonParse(arena, source, options);
+        const intermediate = try std.json.parseFromValue(
+            struct {
+                uiAmount: ?f64 = null,
+                decimals: u8,
+                amount: []const u8,
+                uiAmountString: []const u8,
+            },
+            arena,
+            value,
+            options,
+        );
+        return .{
+            .ui_amount = intermediate.value.uiAmount,
+            .decimals = intermediate.value.decimals,
+            .amount = std.fmt.parseInt(
+                u64,
+                intermediate.value.amount,
+                10,
+            ) catch return error.UnexpectedToken,
+            .ui_amount_string = JsonString(40).fromSlice(intermediate.value.uiAmountString),
+        };
     }
 };
 
