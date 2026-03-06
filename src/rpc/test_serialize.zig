@@ -544,9 +544,9 @@ test GetTokenSupply {
         \\{"context":{"slot":123456789,"apiVersion":"2.1.6"},"value":{"uiAmount":1000000.0,"decimals":6,"amount":"1000000000000","uiAmountString":"1000000"}}
     , @as(GetTokenSupply.Response, .{
         .context = .{ .slot = 123456789, .apiVersion = "2.1.6" },
-        .value = rpc.account_codec.parse_token.UiTokenAmount.init(
-            1000000000000, // should be 1 million tokens with 6 decimals
-            rpc.account_codec.parse_token.SplTokenAdditionalData{ .decimals = 6 },
+        .value = .init(
+            1_000_000_000_000, // should be 1 million tokens with 6 decimals
+            .{ .decimals = 6 },
         ),
     }));
 }
