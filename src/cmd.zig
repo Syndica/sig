@@ -1825,6 +1825,8 @@ fn runRPCServer(
         .address = server_addr,
         .handler_context = &ws_runtime_ctx,
         .tcp_nodelay = true,
+        .close_timeout_ms = 5_000,
+        .upgrade_timeout_ms = 5_000,
     });
     defer ws_server.deinit();
 
@@ -1839,6 +1841,7 @@ fn runRPCServer(
 
     var ws_bridge = WebSocketBridge{
         .allocator = allocator,
+        .logger = logger.withScope("WebSocketBridge"),
         .runtime_ctx = &ws_runtime_ctx,
         .pending_connections = &pending_connections,
         .ws_server = &ws_server,
@@ -1866,7 +1869,11 @@ fn runRPCServer(
     });
     defer server_ctx.joinDeinit();
 
-    const loop_thread = try std.Thread.spawn(.{}, runXevLoopThread, .{&loop});
+    const loop_thread = try std.Thread.spawn(
+        .{},
+        runXevLoopThread,
+        .{ &loop, logger.withScope("runXevLoopThread") },
+    );
     defer loop_thread.join();
 
     // var maybe_liou = try sig.rpc.server.LinuxIoUring.init(&server_ctx);
@@ -1881,7 +1888,10 @@ fn runRPCServer(
     ws_bridge.shutdown_requested.store(true, .release);
     ws_runtime_ctx.running = false;
     ws_runtime_ctx.requestWakeup();
-    _ = ws_bridge.shutdown_complete.timedWait(5 * std.time.ns_per_s) catch {};
+    logger.info().log("Shutdown requested, waiting for WebSocketBridge to complete shutdown...");
+    ws_bridge.shutdown_complete.timedWait(15 * std.time.ns_per_s) catch {
+        logger.err().log("Timed out waiting for WebSocketBridge shutdown to complete");
+    };
 
     try serve_result;
 }
@@ -1893,6 +1903,7 @@ const PendingConnection = struct {
 
 const WebSocketBridge = struct {
     allocator: std.mem.Allocator,
+    logger: sig.trace.Logger("WebSocketBridge"),
     runtime_ctx: *WSRPCRuntimeContext,
     pending_connections: *sig.sync.Channel(PendingConnection),
     ws_server: *WSRPCServer,
@@ -1918,7 +1929,12 @@ const WebSocketBridge = struct {
 
         if (self.shutdown_requested.load(.acquire) and !self.shutdown_started) {
             self.shutdown_started = true;
-            self.ws_server.shutdown(10000, WebSocketBridge, self, onShutdownComplete);
+            self.ws_server.shutdown(
+                10 * std.time.ms_per_s,
+                WebSocketBridge,
+                self,
+                onShutdownComplete,
+            );
         }
     }
 
@@ -1934,7 +1950,10 @@ const WebSocketBridge = struct {
 
             setSocketNonBlocking(pending.fd) catch |err| {
                 // should never happen
-                std.log.err("Failed to set pending connection socket non-blocking: {}", .{err});
+                self.logger.err().logf(
+                    "Failed to set pending connection socket non-blocking: {}",
+                    .{err},
+                );
                 std.posix.close(pending.fd);
                 continue;
             };
@@ -1948,10 +1967,10 @@ const WebSocketBridge = struct {
     }
 };
 
-fn runXevLoopThread(loop: *xev.Loop) void {
+fn runXevLoopThread(loop: *xev.Loop, logger: sig.trace.Logger("runXevLoopThread")) void {
     loop.run(.until_done) catch |err| {
         // This should never happen, but if it does log it.
-        std.log.err("jrpc websocket loop thread exited with error: {}", .{err});
+        logger.err().logf("jrpc websocket loop thread exited with error: {}", .{err});
     };
 }
 
