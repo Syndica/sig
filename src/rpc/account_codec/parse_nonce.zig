@@ -14,12 +14,12 @@ const Stringified = account_codec.Stringified;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/account-decoder/src/parse_nonce.rs#L8
 pub fn parseNonce(
-    allocator: Allocator,
+    arena: Allocator,
     // std.io.Reader
     reader: anytype,
 ) ParseError!NonceAccountType {
     const versions = sig.bincode.read(
-        allocator,
+        arena,
         nonce.Versions,
         reader,
         .{},

@@ -19,11 +19,14 @@ const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
 const GetGenesisHash = methods.GetGenesisHash;
+const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSlot = methods.GetSlot;
 const GetTransaction = methods.GetTransaction;
+const GetTransactionCount = methods.GetTransactionCount;
+const GetTokenAccountBalance = methods.GetTokenAccountBalance;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
 
@@ -336,7 +339,26 @@ test GetGenesisHash {
 }
 
 // TODO: test getHealth()
-// TODO: test getHighestSnapshotSlot()
+test GetHighestSnapshotSlot {
+    try testRequest(.getHighestSnapshotSlot, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getHighestSnapshotSlot","params":[]}
+    );
+    try testResponse(GetHighestSnapshotSlot, .{ .result = .{
+        .full = 100,
+        .incremental = 110,
+    } },
+        \\{"jsonrpc":"2.0","result":{"full":100,"incremental":110},"id":1}
+    );
+    try testResponse(GetHighestSnapshotSlot, .{ .result = .{
+        .full = 100,
+        .incremental = null,
+    } },
+        \\{"jsonrpc":"2.0","result":{"full":100},"id":1}
+    );
+    try testResponse(GetHighestSnapshotSlot, .{ .result = null },
+        \\{"jsonrpc":"2.0","result":null,"id":1}
+    );
+}
 // TODO: test getIdentity()
 // TODO: test getInflationGovernor()
 // TODO: test getInflationRate()
@@ -424,7 +446,38 @@ test GetSlot {
 // TODO: test getStakeActivation()
 // TODO: test getStakeMinimumDelegation()
 // TODO: test getSupply()
-// TODO: test getTokenAccountBalance()
+
+test GetTokenAccountBalance {
+    const pubkey: Pubkey = .parse("7fUAJdStEuGbc3sM84cKRL6yYaaSstyLSU4ve5oovLS7");
+
+    // Request without config
+    try testRequest(
+        .getTokenAccountBalance,
+        .{ .pubkey = pubkey },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTokenAccountBalance","params":["7fUAJdStEuGbc3sM84cKRL6yYaaSstyLSU4ve5oovLS7"]}
+        ,
+    );
+
+    // Request with commitment config
+    try testRequest(
+        .getTokenAccountBalance,
+        .{ .pubkey = pubkey, .config = .{ .commitment = .finalized } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTokenAccountBalance","params":["7fUAJdStEuGbc3sM84cKRL6yYaaSstyLSU4ve5oovLS7",{"commitment":"finalized"}]}
+        ,
+    );
+
+    // Response deserialization
+    try testResponse(GetTokenAccountBalance, .{ .result = .{
+        .context = .{ .slot = 1114, .apiVersion = "2.1.6" },
+        .value = .init(
+            9864,
+            .{ .decimals = 2 },
+        ),
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"slot":1114,"apiVersion":"2.1.6"},"value":{"uiAmount":98.64,"decimals":2,"amount":"9864","uiAmountString":"98.64"}},"id":1}
+    );
+}
+
 // TODO: test getTokenAccountsByDelegate()
 // TODO: test getTockenAccountsByOwner()
 // TODO: test getTokenLargestAccounts()
@@ -492,7 +545,14 @@ test GetTransaction {
     } }));
 }
 
-// TODO: test getTransactionCount()
+test GetTransactionCount {
+    try testRequest(.getTransactionCount, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getTransactionCount","params":[]}
+    );
+    try testResponse(GetTransactionCount, .{ .result = 268651537 },
+        \\{"jsonrpc":"2.0","result":268651537,"id":1}
+    );
+}
 // TODO: test getVoteAccounts()
 // TODO: test isBlockhashValid()
 // TODO: test minimumLedgerSlot()

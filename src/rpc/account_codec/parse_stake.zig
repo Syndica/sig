@@ -14,12 +14,12 @@ const Stringified = account_codec.Stringified;
 
 /// Parses a stake account's data into a `StakeAccountType` for JSON encoding in RPC responses.
 pub fn parseStake(
-    allocator: Allocator,
+    arena: Allocator,
     // std.io.Reader
     reader: anytype,
 ) ParseError!StakeAccountType {
     const stake_state = sig.bincode.read(
-        allocator,
+        arena,
         StakeStateV2,
         reader,
         .{},
