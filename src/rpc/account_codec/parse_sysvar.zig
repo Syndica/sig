@@ -23,12 +23,12 @@ const UiFeeCalculator = parse_nonce.UiFeeCalculator;
 /// Returns null if the pubkey doesn't match any known sysvar.
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs#L24
 pub fn parseSysvar(
-    allocator: Allocator,
+    arena: Allocator,
     pubkey: Pubkey,
     reader: anytype,
 ) ParseError!?SysvarAccountType {
     if (pubkey.equals(&sysvar.Clock.ID)) {
-        const clock = bincode.read(allocator, sysvar.Clock, reader, .{}) catch
+        const clock = bincode.read(arena, sysvar.Clock, reader, .{}) catch
             return ParseError.InvalidAccountData;
         return SysvarAccountType{
             .clock = UiClock{
@@ -40,11 +40,11 @@ pub fn parseSysvar(
             },
         };
     } else if (pubkey.equals(&sysvar.EpochSchedule.ID)) {
-        const schedule = bincode.read(allocator, sysvar.EpochSchedule, reader, .{}) catch
+        const schedule = bincode.read(arena, sysvar.EpochSchedule, reader, .{}) catch
             return ParseError.InvalidAccountData;
         return SysvarAccountType{ .epoch_schedule = schedule };
     } else if (pubkey.equals(&sysvar.Fees.ID)) {
-        const fees = bincode.read(allocator, sysvar.Fees, reader, .{}) catch
+        const fees = bincode.read(arena, sysvar.Fees, reader, .{}) catch
             return ParseError.InvalidAccountData;
         return SysvarAccountType{
             .fees = UiFees{
@@ -55,7 +55,7 @@ pub fn parseSysvar(
         };
     } else if (pubkey.equals(&sysvar.RecentBlockhashes.ID)) {
         const blockhashes = bincode.read(
-            allocator,
+            arena,
             sysvar.RecentBlockhashes,
             reader,
             .{},
@@ -74,7 +74,7 @@ pub fn parseSysvar(
             .recent_blockhashes = entries,
         };
     } else if (pubkey.equals(&sysvar.Rent.ID)) {
-        const rent = bincode.read(allocator, sysvar.Rent, reader, .{}) catch
+        const rent = bincode.read(arena, sysvar.Rent, reader, .{}) catch
             return ParseError.InvalidAccountData;
         return SysvarAccountType{
             .rent = UiRent{
@@ -94,7 +94,7 @@ pub fn parseSysvar(
         };
     } else if (pubkey.equals(&sysvar.SlotHashes.ID)) {
         const slot_hashes = bincode.read(
-            allocator,
+            arena,
             sysvar.SlotHashes,
             reader,
             .{},
@@ -112,7 +112,7 @@ pub fn parseSysvar(
         };
     } else if (pubkey.equals(&sysvar.SlotHistory.ID)) {
         const slot_history = bincode.read(
-            allocator,
+            arena,
             sysvar.SlotHistory,
             reader,
             .{},
@@ -129,7 +129,7 @@ pub fn parseSysvar(
         };
     } else if (pubkey.equals(&sysvar.StakeHistory.ID)) {
         const stake_history = bincode.read(
-            allocator,
+            arena,
             sysvar.StakeHistory,
             reader,
             .{},
@@ -151,7 +151,7 @@ pub fn parseSysvar(
         };
     } else if (pubkey.equals(&sysvar.LastRestartSlot.ID)) {
         const last_restart = bincode.read(
-            allocator,
+            arena,
             sysvar.LastRestartSlot,
             reader,
             .{},
@@ -164,7 +164,7 @@ pub fn parseSysvar(
         };
     } else if (pubkey.equals(&sysvar.EpochRewards.ID)) {
         const epoch_rewards = bincode.read(
-            allocator,
+            arena,
             sysvar.EpochRewards,
             reader,
             .{},

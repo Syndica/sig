@@ -27,9 +27,11 @@ const GetSlot = methods.GetSlot;
 const GetStakeMinimumDelegation = methods.GetStakeMinimumDelegation;
 const GetTransaction = methods.GetTransaction;
 const GetTransactionCount = methods.GetTransactionCount;
+const GetTokenAccountBalance = methods.GetTokenAccountBalance;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
 const GetMinimumBalanceForRentExemption = methods.GetMinimumBalanceForRentExemption;
+const IsBlockhashValid = methods.IsBlockhashValid;
 
 const Response = rpc.response.Response;
 
@@ -433,7 +435,38 @@ test GetStakeMinimumDelegation {
 }
 
 // TODO: test getSupply()
-// TODO: test getTokenAccountBalance()
+
+test GetTokenAccountBalance {
+    const pubkey: Pubkey = .parse("7fUAJdStEuGbc3sM84cKRL6yYaaSstyLSU4ve5oovLS7");
+
+    // Request without config
+    try testRequest(
+        .getTokenAccountBalance,
+        .{ .pubkey = pubkey },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTokenAccountBalance","params":["7fUAJdStEuGbc3sM84cKRL6yYaaSstyLSU4ve5oovLS7"]}
+        ,
+    );
+
+    // Request with commitment config
+    try testRequest(
+        .getTokenAccountBalance,
+        .{ .pubkey = pubkey, .config = .{ .commitment = .finalized } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTokenAccountBalance","params":["7fUAJdStEuGbc3sM84cKRL6yYaaSstyLSU4ve5oovLS7",{"commitment":"finalized"}]}
+        ,
+    );
+
+    // Response deserialization
+    try testResponse(GetTokenAccountBalance, .{ .result = .{
+        .context = .{ .slot = 1114, .apiVersion = "2.1.6" },
+        .value = .init(
+            9864,
+            .{ .decimals = 2 },
+        ),
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"slot":1114,"apiVersion":"2.1.6"},"value":{"uiAmount":98.64,"decimals":2,"amount":"9864","uiAmountString":"98.64"}},"id":1}
+    );
+}
+
 // TODO: test getTokenAccountsByDelegate()
 // TODO: test getTockenAccountsByOwner()
 // TODO: test getTokenLargestAccounts()
@@ -510,7 +543,37 @@ test GetTransactionCount {
     );
 }
 // TODO: test getVoteAccounts()
-// TODO: test isBlockhashValid()
+
+test IsBlockhashValid {
+    try testRequest(
+        .isBlockhashValid,
+        .{ .blockhash = sig.core.Hash.parse("J7rBdM6AecPDEZp8aPq5iPSNKVkU5Q76F3oAV4eW5wsW") },
+        \\{"jsonrpc":"2.0","id":1,"method":"isBlockhashValid","params":["J7rBdM6AecPDEZp8aPq5iPSNKVkU5Q76F3oAV4eW5wsW"]}
+        ,
+    );
+    try testRequest(
+        .isBlockhashValid,
+        .{
+            .blockhash = sig.core.Hash.parse("J7rBdM6AecPDEZp8aPq5iPSNKVkU5Q76F3oAV4eW5wsW"),
+            .config = .{ .commitment = .processed },
+        },
+        \\{"jsonrpc":"2.0","id":1,"method":"isBlockhashValid","params":["J7rBdM6AecPDEZp8aPq5iPSNKVkU5Q76F3oAV4eW5wsW",{"commitment":"processed","minContextSlot":null}]}
+        ,
+    );
+    try testResponse(IsBlockhashValid, .{ .result = .{
+        .context = .{ .slot = 309275334, .apiVersion = "2.1.6" },
+        .value = true,
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275334},"value":true},"id":1}
+    );
+    try testResponse(IsBlockhashValid, .{ .result = .{
+        .context = .{ .slot = 309275334, .apiVersion = "2.1.6" },
+        .value = false,
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275334},"value":false},"id":1}
+    );
+}
+
 // TODO: test minimumLedgerSlot()
 // TODO: test requestAirdrop()
 // TODO: test sendTransaction()
