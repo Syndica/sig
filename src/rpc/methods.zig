@@ -1391,18 +1391,6 @@ pub const common = struct {
     };
 };
 
-pub const StaticHookContext = struct {
-    genesis_hash: sig.core.Hash,
-
-    pub fn getGenesisHash(
-        self: *const StaticHookContext,
-        _: std.mem.Allocator,
-        _: GetGenesisHash,
-    ) !GetGenesisHash.Response {
-        return .{ .hash = self.genesis_hash };
-    }
-};
-
 fn JsonSkippable(comptime T: type) type {
     return union(enum) {
         value: T,

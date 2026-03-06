@@ -1582,7 +1582,7 @@ fn validator(
     if (cfg.accounts_db.dbg_db_init and !init_db_exists)
         try saveDbInit(snapshot_dir, .from(app_base.logger));
 
-    const static_rpc_ctx: sig.rpc.methods.StaticHookContext = .{
+    const static_rpc_ctx: sig.rpc.hook_contexts.StaticHookContext = .{
         .genesis_hash = loaded_snapshot.genesis_config.hash,
     };
 
