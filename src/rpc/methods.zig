@@ -79,7 +79,7 @@ pub const MethodAndParams = union(enum) {
     getProgramAccounts: noreturn,
     getRecentPerformanceSamples: noreturn,
     getRecentPrioritizationFees: noreturn,
-    getSignaturesForAddress: noreturn,
+    getSignaturesForAddress: GetSignaturesForAddress,
     getSignatureStatuses: GetSignatureStatuses,
     getSlot: GetSlot,
     getSlotLeader: noreturn,
@@ -90,12 +90,12 @@ pub const MethodAndParams = union(enum) {
     getTokenAccountsByDelegate: noreturn,
     getTokenAccountsByOwner: noreturn,
     getTokenLargestAccounts: noreturn,
-    getTokenSupply: noreturn,
+    getTokenSupply: GetTokenSupply,
     getTransaction: GetTransaction,
     getTransactionCount: GetTransactionCount,
     getVersion: GetVersion,
     getVoteAccounts: GetVoteAccounts,
-    isBlockhashValid: noreturn,
+    isBlockhashValid: IsBlockhashValid,
     minimumLedgerSlot: noreturn,
     requestAirdrop: RequestAirdrop,
     sendTransaction: SendTransaction,
@@ -1116,7 +1116,35 @@ pub const GetSignatureStatuses = struct {
     };
 };
 
-// TODO: getSignaturesForAddress
+pub const GetSignaturesForAddress = struct {
+    address: Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        minContextSlot: ?u64 = null,
+        limit: ?usize = null,
+        before: ?Signature = null,
+        until: ?Signature = null,
+
+        pub fn getCommitment(self: Config) common.Commitment {
+            return self.commitment orelse common.Commitment.finalized;
+        }
+
+        pub fn getLimit(self: Config) usize {
+            return self.limit orelse 1000;
+        }
+    };
+
+    pub const Response = []const struct {
+        signature: Signature,
+        slot: u64,
+        err: ?sig.ledger.transaction_status.TransactionError,
+        memo: ?[]const u8,
+        blockTime: ?i64,
+        confirmationStatus: ?common.Commitment,
+    };
+};
 
 pub const GetSlot = struct {
     config: ?common.CommitmentSlotConfig = null,
@@ -1146,7 +1174,21 @@ pub const GetTokenAccountBalance = struct {
 // TODO: getTokenAccountsByDelegate
 // TODO: getTokenAccountsByOwner
 // TODO: getTokenLargestAccounts
-// TODO: getTokenSupply
+
+pub const GetTokenSupply = struct {
+    /// Pubkey of the token Mint to query, as base-58 encoded string
+    mint: Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        value: account_codec.parse_token.UiTokenAmount,
+    };
+};
 
 pub const GetTransaction = struct {
     /// Transaction signature, as base-58 encoded string
@@ -1282,7 +1324,16 @@ pub const GetVoteAccounts = struct {
     };
 };
 
-// TODO: isBlockhashValid
+pub const IsBlockhashValid = struct {
+    blockhash: sig.core.Hash,
+    config: ?common.CommitmentSlotConfig = null,
+
+    pub const Response = struct {
+        context: common.Context,
+        value: bool,
+    };
+};
+
 // TODO: minimumLedgerSlot
 
 pub const RequestAirdrop = struct {
@@ -1644,6 +1695,46 @@ pub const RpcHookContext = struct {
         return .{
             .current = current,
             .delinquent = dlinqt,
+        };
+    }
+
+    /// Checks if a blockhash is still valid for processing transactions.
+    /// Analogous to [is_blockhash_valid](https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2367)
+    pub fn isBlockhashValid(
+        self: RpcHookContext,
+        _: std.mem.Allocator,
+        params: IsBlockhashValid,
+    ) !IsBlockhashValid.Response {
+        const config = params.config orelse common.CommitmentSlotConfig{};
+        // [agave] Default commitment is finalized:
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
+        const commitment = config.commitment orelse .finalized;
+
+        const slot = self.slot_tracker.getSlotForCommitment(commitment);
+        if (config.minContextSlot) |min_slot| {
+            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+        }
+
+        // Get slot reference to access blockhash queue
+        const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        defer ref.release();
+
+        // Check if blockhash is valid for processing
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2714
+        const blockhash_queue, var bhq_lg = ref.state().blockhash_queue.readWithLock();
+        defer bhq_lg.unlock();
+
+        const is_valid = blockhash_queue.isHashValidForAge(
+            params.blockhash,
+            sig.core.BlockhashQueue.MAX_PROCESSING_AGE,
+        );
+
+        return .{
+            .context = .{
+                .slot = slot,
+                .apiVersion = ClientVersion.API_VERSION,
+            },
+            .value = is_valid,
         };
     }
 };

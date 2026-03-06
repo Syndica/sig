@@ -393,6 +393,7 @@ pub fn trackNewSlots(
                     &state,
                     store,
                     epoch_tracker,
+                    .from(logger),
                 );
             } else {
                 try replay.epoch_transitions.updateEpochStakes(
