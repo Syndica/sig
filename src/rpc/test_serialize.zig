@@ -18,6 +18,7 @@ const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
+const GetFeeForMessage = methods.GetFeeForMessage;
 const GetGenesisHash = methods.GetGenesisHash;
 const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
@@ -291,8 +292,6 @@ test GetEpochSchedule {
 }
 
 test "getFeeForMessage" {
-    const GetFeeForMessage = methods.GetFeeForMessage;
-
     // Request serialization with just the message
     try testRequest(.getFeeForMessage, .{
         .message = "AQABAgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAQA=",
