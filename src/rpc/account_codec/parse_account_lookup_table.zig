@@ -19,14 +19,14 @@ const LOOKUP_TABLE_META_SIZE = address_lookup_table.state.LOOKUP_TABLE_META_SIZE
 ///
 /// Caller owns the returned `.addresses` allocation and must free it.
 pub fn parseAddressLookupTable(
-    allocator: Allocator,
+    arena: Allocator,
     // std.io.Reader
     reader: anytype,
     data_len: u32,
 ) ParseError!LookupTableAccountType {
     // Read all data into buffer since the AddressLookupTable deserialize impl doesn't support borrowing from the reader.
-    const data = try allocator.alloc(u8, data_len);
-    defer allocator.free(data);
+    const data = try arena.alloc(u8, data_len);
+    defer arena.free(data);
 
     const bytes_read = reader.readAll(data) catch return ParseError.InvalidAccountData;
     if (bytes_read != data_len) return ParseError.InvalidAccountData;
@@ -36,8 +36,8 @@ pub fn parseAddressLookupTable(
         error.InvalidAccountData => return ParseError.InvalidAccountData,
     };
 
-    const addresses = try allocator.alloc(Pubkey, lookup_table.addresses.len);
-    errdefer allocator.free(addresses);
+    const addresses = try arena.alloc(Pubkey, lookup_table.addresses.len);
+    errdefer arena.free(addresses);
     @memcpy(addresses, lookup_table.addresses);
 
     return .{ .lookup_table = .{
