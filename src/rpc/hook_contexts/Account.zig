@@ -181,7 +181,6 @@ pub fn getTokenSupply(
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1989-L1991
     const maybe_account = try slot_reader.get(arena, params.mint);
     const account = maybe_account orelse return error.RpcAccountNotFound;
-    defer account.deinit(arena);
 
     // Validate that this is owned by a token program
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1992-L1996
@@ -193,7 +192,6 @@ pub fn getTokenSupply(
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1997-L2009
     const data_len = account.data.len();
     const mint_data = try arena.alloc(u8, data_len);
-    defer arena.free(mint_data);
     var data_iter = account.data.iterator();
     _ = data_iter.readBytes(mint_data) catch return error.RpcMintUnpackFailed;
 
