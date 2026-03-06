@@ -185,6 +185,8 @@ fn addStakeRewardsToDistributedRewards(
 ) !void {
     try distributed_rewards.ensureTotalCapacity(allocator, stake_rewards.len);
     for (stake_rewards) |sr| {
+        // skip zero-lamport stake rewards
+        if (sr.stake_reward_info.lamports == 0) continue;
         distributed_rewards.appendAssumeCapacity(.{
             .pubkey = sr.stake_pubkey,
             .lamports = @intCast(sr.stake_reward_info.lamports),
