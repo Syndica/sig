@@ -472,87 +472,47 @@ pub fn getProgramAccounts(
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;
-    const db = self.account_reader.accounts_db;
+    const slot_reader = self.account_reader.forSlot(ancestors);
 
-    var query = blk: {
+    var iter = blk: {
         const z = tracy.Zone.init(@src(), .{ .name = "rpc.gPA.ownerQuery" });
         defer z.deinit();
-        break :blk try db.ownerQuery(&params.program_id, ancestors);
+        break :blk try slot_reader.getByOwner(arena, &params.program_id);
     };
-    defer query.deinit();
-    const slot_reader = self.account_reader.forSlot(ancestors);
+    defer iter.deinit();
+
     var results = std.ArrayListUnmanaged(GetProgramAccounts.Value){};
-
-    {
-        const z = tracy.Zone.init(@src(), .{ .name = "rpc.gPA.rooted" });
-        defer z.deinit();
-        while (query.rooted_iter.next()) |entry| {
-            const account = if (query.unrooted_set.swapRemove(entry.pubkey))
-                // Unrooted has a newer version — resolve it via get().
-                query.unrooted.get(entry.pubkey, ancestors) orelse continue
-            else
-                sig.core.Account{
-                    .lamports = entry.lamports,
-                    .data = .{ .unowned_allocation = entry.data },
-                    .owner = entry.owner,
-                    .executable = entry.executable,
-                    .rent_epoch = entry.rent_epoch,
-                };
-            if (account.lamports == 0) continue;
-            // Owner may have changed in a newer unrooted slot; skip if no longer ours.
-            if (!account.owner.equals(&params.program_id)) continue;
-            const data_slice: []const u8 = switch (account.data) {
-                .unowned_allocation => |d| d,
-                .owned_allocation => |d| d,
-                else => @panic("gPA.rooted: unexpected AccountDataHandle variant"),
-            };
-            if (!sig.rpc.filters.filtersAllow(f, data_slice)) continue;
-
-            const data = try account_codec.encodeAccount(
-                arena,
-                entry.pubkey,
-                account,
-                encoding,
-                slot_reader,
-                config.dataSlice,
-            );
-            try results.append(arena, .{
-                .pubkey = entry.pubkey,
-                .account = .from(account, data),
-            });
-        }
+    defer {
+        for (results.items) |v| v.account.data.deinit(arena);
+        results.deinit(arena);
     }
 
-    {
-        const z = tracy.Zone.init(@src(), .{ .name = "rpc.gPA.unrooted" });
-        defer z.deinit();
-        for (query.unrooted_set.keys()) |pubkey| {
-            const account = query.unrooted.get(pubkey, ancestors) orelse continue;
-            if (account.lamports == 0) continue;
-            if (!account.owner.equals(&params.program_id)) continue;
-            const data_slice: []const u8 = switch (account.data) {
-                .unowned_allocation => |d| d,
-                .owned_allocation => |d| d,
-                else => @panic("gPA.unrooted: unexpected AccountDataHandle variant"),
-            };
-            if (!sig.rpc.filters.filtersAllow(f, data_slice)) continue;
+    while (try iter.next()) |entry| {
+        const pubkey, const account = entry;
+        defer account.deinit(arena);
+        if (account.lamports == 0) continue;
+        // Owner may have changed in a newer unrooted slot; skip if no longer ours.
+        if (!account.owner.equals(&params.program_id)) continue;
+        const data_slice: []const u8 = switch (account.data) {
+            .unowned_allocation => |d| d,
+            .owned_allocation => |d| d,
+            else => @panic("gPA: unexpected AccountDataHandle variant"),
+        };
+        if (!sig.rpc.filters.filtersAllow(f, data_slice)) continue;
 
-            const data = try account_codec.encodeAccount(
-                arena,
-                pubkey,
-                account,
-                encoding,
-                slot_reader,
-                config.dataSlice,
-            );
-            try results.append(
-                arena,
-                .{
-                    .pubkey = pubkey,
-                    .account = .from(account, data),
-                },
-            );
-        }
+        const data = try account_codec.encodeAccount(
+            arena,
+            pubkey,
+            account,
+            encoding,
+            slot_reader,
+            config.dataSlice,
+        );
+        errdefer data.deinit(arena);
+        try results.append(arena, .{
+            .pubkey = pubkey,
+            .account = .from(account, data),
+        });
     }
 
     if (config.sortResults orelse false) {
@@ -566,12 +526,7 @@ pub fn getProgramAccounts(
     }
     const values = try results.toOwnedSlice(arena);
     if (config.withContext orelse false) {
-        return .{
-            .context = .{
-                .context = .{ .slot = slot },
-                .value = values,
-            },
-        };
+        return .{ .context = .{ .context = .{ .slot = slot }, .value = values } };
     }
     return .{ .list = values };
 }
