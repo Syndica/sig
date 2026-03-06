@@ -1403,7 +1403,6 @@ pub const common = struct {
 
 pub const RpcHookContext = struct {
     slot_tracker: *sig.replay.trackers.SlotTracker,
-    account_reader: sig.accounts_db.AccountReader,
     gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable) = null,
     my_shred_version: ?*const std.atomic.Value(u16) = null,
     epoch_tracker: *sig.core.EpochTracker,
@@ -1746,7 +1745,7 @@ pub const RpcHookContext = struct {
         defer gossip_lock.unlock();
 
         var contact_info_iter = gossip_table.contactInfoIterator(0);
-        var result_list: std.ArrayListUnmanaged(common.RpcContactInfo) = .empty;
+        var result_list: std.ArrayList(common.RpcContactInfo) = .empty;
 
         while (contact_info_iter.next()) |contact_info| {
             if (try contactInfoToRpc(
@@ -1913,7 +1912,6 @@ fn testSetupSlotTracker(
 fn testRpcHookContext(slot_tracker: *sig.replay.trackers.SlotTracker) RpcHookContext {
     return .{
         .slot_tracker = slot_tracker,
-        .account_reader = .noop,
         .epoch_tracker = undefined, // not used by getBlockHeight/getTransactionCount/getHighestSnapshotSlot
     };
 }
@@ -1924,7 +1922,6 @@ fn testRpcHookContextWithEpochTracker(
 ) RpcHookContext {
     return .{
         .slot_tracker = slot_tracker,
-        .account_reader = .noop,
         .epoch_tracker = epoch_tracker,
     };
 }

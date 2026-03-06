@@ -1694,14 +1694,9 @@ fn validator(
     });
     defer replay_service_state.deinit(allocator);
 
-    const account_store = sig.accounts_db.AccountStore{
-        .accounts_db = &new_db,
-    };
-
     try app_base.rpc_hooks.set(allocator, sig.rpc.methods.RpcHookContext{
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
         .epoch_tracker = &epoch_tracker,
-        .account_reader = account_store.reader(),
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .my_shred_version = &gossip_service.my_shred_version,
     });
