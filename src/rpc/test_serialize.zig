@@ -18,6 +18,7 @@ const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
+const GetFeeForMessage = methods.GetFeeForMessage;
 const GetGenesisHash = methods.GetGenesisHash;
 const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
@@ -291,7 +292,41 @@ test GetEpochSchedule {
     );
 }
 
-// TODO: test getFeeForMessage()
+test "getFeeForMessage" {
+    // Request serialization with just the message
+    try testRequest(.getFeeForMessage, .{
+        .message = "AQABAgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAQA=",
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getFeeForMessage","params":["AQABAgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAQA="]}
+    );
+
+    // Request serialization with config
+    try testRequest(.getFeeForMessage, .{
+        .message = "AQABAgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAQA=",
+        .config = .{
+            .commitment = .confirmed,
+        },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getFeeForMessage","params":["AQABAgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAQA=",{"commitment":"confirmed","minContextSlot":null}]}
+    );
+
+    // Response with fee value
+    try testResponse(GetFeeForMessage, .{ .result = .{
+        .context = .{ .slot = 309275334, .apiVersion = "2.1.6" },
+        .value = 5000,
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275334},"value":5000},"id":1}
+    );
+
+    // Response with null value (blockhash expired)
+    try testResponse(GetFeeForMessage, .{ .result = .{
+        .context = .{ .slot = 309275334, .apiVersion = "2.1.6" },
+        .value = null,
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275334},"value":null},"id":1}
+    );
+}
+
 // TODO: test getFirstAvailableBlock()
 
 test GetGenesisHash {

@@ -1697,6 +1697,7 @@ fn validator(
     try app_base.rpc_hooks.set(allocator, sig.rpc.methods.RpcHookContext{
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
         .epoch_tracker = &epoch_tracker,
+        .account_reader = replay_service_state.replay_state.account_store.reader(),
     });
 
     try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.Ledger{
