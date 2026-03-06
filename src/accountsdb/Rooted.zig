@@ -210,6 +210,12 @@ pub fn get(
 /// The caller must ensure `owner` outlives the returned `OwnerIterator`
 /// (i.e. remains valid through all `next()` calls and `deinit()`),
 /// because the pointer is bound with `SQLITE_STATIC`.
+///
+/// TODO: Accept getProgramAccounts parameters and build a dynamic query that
+/// pushes filters down to the DB level. This would allow:
+/// - Filtering out zero-lamport accounts (`lamports > 0`)
+/// - Applying `dataSize` / `memcmp` filters in SQL
+/// - Fetching only the data slice requested via `dataSlice`
 pub fn getByOwner(self: *Rooted, owner: *const Pubkey) OwnerIterator {
     const stmt: *sql.sqlite3_stmt = if (get_by_owner_stmt) |stmt| stmt else blk: {
         const query =
