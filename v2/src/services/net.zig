@@ -74,7 +74,7 @@ fn mainInner(pairs: []const *Pair) !noreturn {
         // recv
         for (pairs, sockets[0..sockets_len]) |pair, sock| {
             var slice = pair.recv.getWritable() catch continue;
-            const ptr = slice.one();
+            const ptr = slice.get(0);
             ptr.size = @intCast(std.posix.recvfrom(
                 sock,
                 &ptr.data,

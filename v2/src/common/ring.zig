@@ -42,7 +42,7 @@ pub fn Ring(N: comptime_int, T: type) type {
 
             return .{
                 .ring = self,
-                .pos = tail % N,
+                .idx = tail % N,
                 .len = N - size,
             };
         }
