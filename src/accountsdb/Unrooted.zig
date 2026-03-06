@@ -126,43 +126,28 @@ pub fn get(
     return result;
 }
 
-pub const AccountWithSlot = struct {
-    account: Account,
-    slot: Slot,
-};
-
+/// Returns the set of pubkeys owned by `owner` visible to the given ancestor set.
+/// The caller is responsible for resolving each pubkey to its latest account state
+/// which avoids borrowing account data across lock boundaries.
 pub fn getByOwner(
     self: *Unrooted,
     allocator: std.mem.Allocator,
     owner: Pubkey,
     ancestors: *const Ancestors,
-) !PubkeyMap(AccountWithSlot) {
-    // struct hold SlotIndex and slot.
-    var map = PubkeyMap(AccountWithSlot){};
+) !PubkeyMap(void) {
+    var map = PubkeyMap(void){};
     errdefer map.deinit(allocator);
 
     for (self.slots) |*index| {
         if (index.is_empty.load(.acquire)) continue;
-
         if (!ancestors.containsSlot(index.slot)) continue;
 
         index.lock.lockShared();
         defer index.lock.unlockShared();
 
-        const accounts = index.entries.values();
-        const pubkeys = index.entries.keys();
-        for (accounts, pubkeys) |*acc, pk| {
+        for (index.entries.values(), index.entries.keys()) |*acc, pk| {
             if (!acc.owner.equals(&owner)) continue;
-
-            const gop = try map.getOrPut(allocator, pk);
-            if (!gop.found_existing or index.slot > gop.value_ptr.slot) {
-                gop.value_ptr.* = .{
-                    // Potential race here. Accumulate SlotIndex's we want to pull out later.
-                    // Then iterate over those and copy those out FROM the RPC side, calling Unrooted.get() for each.
-                    .account = acc.asAccount(),
-                    .slot = index.slot,
-                };
-            }
+            try map.put(allocator, pk, {});
         }
     }
 
