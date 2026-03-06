@@ -108,7 +108,7 @@ pub const WsRequest = struct {
         method: ?[]const u8 = null,
         params: ?[]const std.json.Value = null,
 
-        pub const ParseDiagnostic = union {
+        pub const ParseDiagnostic = union(enum) {
             ok: void,
             err: Err,
 
