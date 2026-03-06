@@ -1,0 +1,25 @@
+.{
+    .name = .sig,
+    .version = "0.2.0",
+    .paths = .{
+        "build.zig.zon",
+        "build.zig",
+        "src",
+    },
+    .minimum_zig_version = "0.15.2",
+    .fingerprint = 0xce1f2b0ea0d47009,
+    .dependencies = .{
+        .base58 = .{
+            .url = "git+https://github.com/Syndica/base58-zig#2acfa605d23d4d565a7e5a8ff35ea4a827eaaab9",
+            .hash = "base58-0.2.0-wW0iYMIiAABft2x6NlD5mMmFx7-VWfHJq5EAgVQw068t",
+        },
+        .binkode = .{
+            .url = "git+https://github.com/InKryption/binkode#3d22012ae244edcb6de51c10cdf059b2f84d1886",
+            .hash = "binkode-0.0.0-e5-DyDFxAwAw9fGEmGBG3SfdHJLWY_HEG4HUFupuRkNS",
+        },
+        .tracy = .{
+            .url = "git+https://github.com/Syndica/tracy-zig#a767a15d1b4d6d813e929cf352c2265ff97a16da",
+            .hash = "zig_tracy-0.13.0-4TLLR1ZkAAAKZh0Gimq4P-Hyyd3b38XfFecg00aAqIaR",
+        },
+    },
+}
