@@ -667,6 +667,19 @@ test "GetBlock" {
         , response);
     }
 
+    // Response serialization - with numRewardPartitions
+    {
+        const response = GetBlock.Response{
+            .previousBlockhash = Hash.ZEROES,
+            .blockhash = Hash.ZEROES,
+            .parentSlot = 99,
+            .numRewardPartitions = 4,
+        };
+        try expectJsonStringify(
+            \\{"blockhash":"11111111111111111111111111111111","numRewardPartitions":4,"parentSlot":99,"previousBlockhash":"11111111111111111111111111111111"}
+        , response);
+    }
+
     // UiReward serialization - Fee
     try expectJsonStringify(
         \\{"pubkey":"11111111111111111111111111111111","lamports":5000,"postBalance":1000000000,"rewardType":"Fee","commission":null}

@@ -234,3 +234,26 @@ pub const EpochRewardStatus = union(enum) {
         };
     }
 };
+
+test "clone preserves num_partitions" {
+    const allocator = std.testing.allocator;
+
+    const stake_entries = try allocator.alloc(PartitionedStakeReward, 0);
+    const vote_entries = try allocator.alloc(PartitionedVoteReward, 0);
+
+    var status: EpochRewardStatus = .{ .active = .{
+        .distribution_start_block_height = 100,
+        .num_partitions = 42,
+        .all_stake_rewards = try PartitionedStakeRewards.init(allocator, stake_entries),
+        .all_vote_rewards = try PartitionedVoteRewards.init(allocator, vote_entries),
+        .partitioned_indices = null,
+        .distributed_rewards = .empty,
+    } };
+    defer status.deinit(allocator);
+
+    var cloned = status.clone();
+    defer cloned.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u64, 42), cloned.active.num_partitions);
+    try std.testing.expectEqual(@as(u64, 100), cloned.active.distribution_start_block_height);
+}
