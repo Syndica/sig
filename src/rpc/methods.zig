@@ -1525,7 +1525,7 @@ pub const RpcHookContext = struct {
 
     pub fn getVoteAccounts(
         self: RpcHookContext,
-        arena: std.mem.Allocator,
+        allocator: std.mem.Allocator,
         params: GetVoteAccounts,
     ) !GetVoteAccounts.Response {
         const config: GetVoteAccounts.Config = params.config orelse .{};
@@ -1547,13 +1547,13 @@ pub const RpcHookContext = struct {
 
         var current_list: std.ArrayListUnmanaged(GetVoteAccounts.VoteAccount) = .empty;
         errdefer {
-            for (current_list.items) |va| arena.free(va.epochCredits);
-            current_list.deinit(arena);
+            for (current_list.items) |va| allocator.free(va.epochCredits);
+            current_list.deinit(allocator);
         }
         var delinqt_list: std.ArrayListUnmanaged(GetVoteAccounts.VoteAccount) = .empty;
         errdefer {
-            for (delinqt_list.items) |va| arena.free(va.epochCredits);
-            delinqt_list.deinit(arena);
+            for (delinqt_list.items) |va| allocator.free(va.epochCredits);
+            delinqt_list.deinit(allocator);
         }
 
         // Access stakes cache (takes read lock).
@@ -1596,8 +1596,8 @@ pub const RpcHookContext = struct {
                 MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY,
             );
             const epoch_credits = all_credits[all_credits.len - num_credits_to_return ..];
-            const credits = try arena.alloc([3]u64, num_credits_to_return);
-            errdefer arena.free(credits);
+            const credits = try allocator.alloc([3]u64, num_credits_to_return);
+            errdefer allocator.free(credits);
             for (epoch_credits, 0..) |ec, i| {
                 credits[i] = .{ ec.epoch, ec.credits, ec.prev_credits };
             }
@@ -1615,21 +1615,21 @@ pub const RpcHookContext = struct {
             };
 
             if (is_current) {
-                try current_list.append(arena, info);
+                try current_list.append(allocator, info);
             } else {
-                try delinqt_list.append(arena, info);
+                try delinqt_list.append(allocator, info);
             }
         }
 
-        const current = try current_list.toOwnedSlice(arena);
+        const current = try current_list.toOwnedSlice(allocator);
         errdefer {
-            for (current) |va| arena.free(va.epochCredits);
-            arena.free(current);
+            for (current) |va| allocator.free(va.epochCredits);
+            allocator.free(current);
         }
-        const dlinqt = try delinqt_list.toOwnedSlice(arena);
+        const dlinqt = try delinqt_list.toOwnedSlice(allocator);
         errdefer {
-            for (dlinqt) |va| arena.free(va.epochCredits);
-            arena.free(dlinqt);
+            for (dlinqt) |va| allocator.free(va.epochCredits);
+            allocator.free(dlinqt);
         }
         return .{
             .current = current,
