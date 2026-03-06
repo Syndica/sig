@@ -5,11 +5,12 @@ comptime {
 }
 
 const services = @import("services.zig");
+const common = @import("common");
 
 const Config = struct {
     sandboxing_mode: SandboxingMode,
 
-    cluster: Cluster,
+    cluster: common.solana.ClusterType,
 
     /// path to a file containing the output of `solana leader-schedule`
     leader_schedule_file: []const u8,
@@ -18,8 +19,6 @@ const Config = struct {
     shred_network: ShredNetwork,
 
     const SandboxingMode = enum { sandboxed, threaded };
-
-    const Cluster = enum { testnet, devnet, mainnet };
 
     const Gossip = struct {
         port: u16,
@@ -66,9 +65,11 @@ pub fn main() !void {
     const service_instances: []const services.ServiceInstance = &.{
         .{ .service = .shred_receiver },
         .{ .service = .net },
+        .{ .service = .gossip },
     };
 
     const shared_regions: []const services.SharedRegion = &.{
+        // net -> shred
         .{
             .region = .{ .net_pair = .{ .port = config.shred_network.recv_port } },
             .shares = &.{
@@ -76,12 +77,40 @@ pub fn main() !void {
                 .{ .instance = .{ .service = .net }, .rw = true },
             },
         },
+        // shred constants
         .{
             .region = .{ .leader_schedule = .{ .schedule_string = &reader.interface } },
             .shares = &.{
                 .{ .instance = .{ .service = .shred_receiver } },
             },
         },
+        // net -> gossip
+        .{
+            .region = .{ .net_pair = .{ .port = config.gossip.port } },
+            .shares = &.{
+                .{ .instance = .{ .service = .gossip }, .rw = true },
+                .{ .instance = .{ .service = .net }, .rw = true },
+            },
+        },
+        // gossip constants
+        .{
+            .region = .{ .gossip_config = .{
+                .cluster = config.cluster,
+                // TODO: read this from identity file in signer service
+                .keypair = .fromKeyPair(.generate()),
+                .turbine_recv_port = config.shred_network.recv_port,
+            } },
+            .shares = &.{
+                .{ .instance = .{ .service = .gossip } },
+            },
+        },
+        // gossip memory
+        .{
+            .region = .{ .scratch_buffer = .{ .size = common.gossip.scratch_memory_size } },
+            .shares = &.{
+                .{ .instance = .{ .service = .gossip }, .rw = true },
+            },
+        }
     };
 
     switch (config.sandboxing_mode) {

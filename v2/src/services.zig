@@ -26,6 +26,7 @@ const e = E.init;
 
 pub const Service = enum {
     net,
+    gossip,
     shred_receiver,
 
     pub fn entrypoint(self: Service) ServiceEntrypoint {
@@ -50,6 +51,12 @@ pub const Service = enum {
         return switch (self) {
             .net => &.{
                 .{ .region = .net_pair, .rw = true },
+                .{ .region = .net_pair, .rw = true },
+            },
+            .gossip => &.{
+                .{ .region = .net_pair, .rw = true },
+                .{ .region = .gossip_config },
+                .{ .region = .scratch_buffer, .rw = true },
             },
             .shred_receiver => &.{
                 .{ .region = .net_pair, .rw = true },
@@ -81,20 +88,33 @@ pub const SharedRegion = struct {
 
 pub const RegionType = enum {
     net_pair,
+    gossip_config,
     leader_schedule,
+    scratch_buffer,
 };
 
 pub const Region = union(RegionType) {
     net_pair: struct { port: u16 },
+    gossip_config: struct {
+        cluster: common.solana.ClusterType,
+        // TODO: this should live in signing service
+        keypair: common.gossip.KeyPair,
+        turbine_recv_port: u16,
+    },
     leader_schedule: struct {
         // TODO: this should not exist - remove once we can open snapshots again
         schedule_string: *std.Io.Reader,
+    },
+    scratch_buffer: struct {
+        size: usize,
     },
 
     pub fn size(self: Region) usize {
         return switch (self) {
             .net_pair => @sizeOf(common.net.Pair),
+            .gossip_config => @sizeOf(common.gossip.GossipConfig),
             .leader_schedule => @sizeOf(common.solana.LeaderSchedule),
+            .scratch_buffer => |s| s.size,
         };
     }
 
@@ -110,12 +130,25 @@ pub const Region = union(RegionType) {
                 data.send.init();
                 data.port = cfg.port;
             },
+            .gossip_config => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(common.gossip.GossipConfig));
+                const data: *common.gossip.GossipConfig = @ptrCast(buf);
+
+                data.cluster = cfg.cluster;
+                data.keypair = cfg.keypair;
+                data.turbine_recv_port = cfg.turbine_recv_port;
+            },
             .leader_schedule => |cfg| {
                 std.debug.assert(buf.len == @sizeOf(common.solana.LeaderSchedule));
                 const data: *common.solana.LeaderSchedule = @ptrCast(buf);
 
                 try common.solana.LeaderSchedule.fromCommand(data, cfg.schedule_string);
             },
+            .scratch_buffer => |cfg| {
+                std.debug.assert(buf.len == cfg.size);
+
+                // NOTE: no need to zero/undefined, right?
+            }
         };
     }
 };
@@ -140,6 +173,7 @@ const Map = std.AutoArrayHashMapUnmanaged(ServiceInstance, MapEntry);
 const MapEntry = std.ArrayListUnmanaged(LookupResult);
 
 const LookupResult = struct {
+    n: usize, // for supporting multiple regions of the same kind
     shared: SharedRegion,
     rw: bool,
     memfd: memfd.RW,
@@ -177,19 +211,33 @@ fn serviceMap(
             const found_region: LookupResult = blk: for (
                 regions,
                 region_memfds,
-            ) |shared_region, region_memfd| {
+                0..,
+            ) |shared_region, region_memfd, n| {
                 if (shared_region.region != required_region.region) continue;
 
                 for (shared_region.shares) |share| {
                     if (instance.service == share.instance.service and
                         instance.n == share.instance.n)
                     {
-                        std.debug.assert(region_memfd.size == shared_region.region.size());
-                        break :blk .{
+                        const result: LookupResult = .{
+                            .n = n,
                             .shared = shared_region,
                             .rw = required_region.rw,
                             .memfd = region_memfd,
                         };
+
+                        var exists = false;
+                        if (map.getPtr(instance)) |entry| {
+                            for (entry.items) |existing_result| {
+                                if (std.meta.eql(existing_result, result)) {
+                                    exists = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        std.debug.assert(region_memfd.size == shared_region.region.size());
+                        if (!exists) break :blk result;
                     }
                 }
             } else std.debug.panic(
