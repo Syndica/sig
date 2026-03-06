@@ -1694,15 +1694,21 @@ fn validator(
     });
     defer replay_service_state.deinit(allocator);
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
-        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-        .epoch_tracker = &epoch_tracker,
-    });
+    try app_base.rpc_hooks.set(
+        allocator,
+        sig.rpc.hook_contexts.ConsensusHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .epoch_tracker = &epoch_tracker,
+        },
+    );
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.Ledger{
-        .ledger = &ledger,
-        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-    });
+    try app_base.rpc_hooks.set(
+        allocator,
+        sig.rpc.hook_contexts.LedgerHookContext{
+            .ledger = &ledger,
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+        },
+    );
 
     try app_base.rpc_hooks.set(
         allocator,
