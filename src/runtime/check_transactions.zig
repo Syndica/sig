@@ -34,7 +34,6 @@ const deinitAccountMap = sig.runtime.testing.deinitAccountMap;
 const AccountLoadError = sig.runtime.account_loader.AccountLoadError;
 const wrapDB = sig.runtime.account_loader.wrapDB;
 
-const Message = sig.core.transaction.Message;
 const NONCED_TX_MARKER_IX_INDEX = 0;
 
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L186
@@ -226,7 +225,7 @@ pub const SignatureCounts = struct {
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/eb416825349ca376fa13249a0267cf7b35701938/svm-transaction/src/svm_message.rs#L139
-    fn fromTransaction(transaction: *const RuntimeTransaction) SignatureCounts {
+    pub fn fromTransaction(transaction: *const RuntimeTransaction) SignatureCounts {
         const precompiles = sig.runtime.program.precompiles;
 
         return .{
@@ -234,41 +233,6 @@ pub const SignatureCounts = struct {
             .num_secp256k1_signatures = sumPrecompileSigs(transaction, &precompiles.secp256k1.ID),
             .num_secp256r1_signatures = sumPrecompileSigs(transaction, &precompiles.secp256r1.ID),
             .num_transaction_signatures = transaction.signature_count,
-        };
-    }
-
-    /// [agave] default_precompile_signature_count in svm-transaction/src/svm_message.rs#L148-L156
-    /// Same as fromTransaction but for a deserialized Message (e.g. from getFeeForMessage RPC).
-    /// Program IDs are resolved via message.account_keys[inst.program_index]; precompile count is inst.data[0] (or 0 if empty).
-    fn sumPrecompileSigsFromMessage(message: *const Message, precompile: *const Pubkey) u64 {
-        var n_signatures: u64 = 0;
-        for (message.instructions) |inst| {
-            if (inst.program_index >= message.account_keys.len) continue;
-            const program_pubkey = message.account_keys[inst.program_index];
-            if (!program_pubkey.equals(precompile)) continue;
-            n_signatures += if (inst.data.len > 0) inst.data[0] else 0;
-        }
-        return n_signatures;
-    }
-
-    /// [agave] SignatureCounts::from(message) in fee/src/lib.rs#L101-L109; message implements SVMMessage (sanitized_message.rs: num_transaction_signatures = header.num_required_signatures, num_*_signatures via default_precompile_signature_count).
-    pub fn fromMessage(message: *const Message) SignatureCounts {
-        const precompiles = sig.runtime.program.precompiles;
-
-        return .{
-            .num_transaction_signatures = message.signature_count,
-            .num_ed25519_signatures = sumPrecompileSigsFromMessage(
-                message,
-                &precompiles.ed25519.ID,
-            ),
-            .num_secp256k1_signatures = sumPrecompileSigsFromMessage(
-                message,
-                &precompiles.secp256k1.ID,
-            ),
-            .num_secp256r1_signatures = sumPrecompileSigsFromMessage(
-                message,
-                &precompiles.secp256r1.ID,
-            ),
         };
     }
 };
