@@ -491,8 +491,6 @@ pub fn getProgramAccounts(
         const pubkey, const account = entry;
         defer account.deinit(arena);
         if (account.lamports == 0) continue;
-        // Owner may have changed in a newer unrooted slot; skip if no longer ours.
-        if (!account.owner.equals(&params.program_id)) continue;
         const data_slice: []const u8 = switch (account.data) {
             .unowned_allocation => |d| d,
             .owned_allocation => |d| d,
