@@ -9,12 +9,9 @@ const Atomic = std.atomic.Value;
 /// The ring that holds the packet buffers.
 pub fn Ring(N: comptime_int, T: type) type {
     return extern struct {
-        magic: Magic, // might want one at the end also?
         head: Pos align(std.atomic.cache_line),
         tail: Pos align(std.atomic.cache_line),
         array: [N]T,
-
-        const Magic = enum(u32) { valid = 0xAABBCCDD, _ };
 
         const Self = @This();
         const Pos = extern struct {
@@ -23,7 +20,6 @@ pub fn Ring(N: comptime_int, T: type) type {
         };
 
         pub fn init(ptr: *Self) void {
-            ptr.magic = .valid;
             ptr.head = .{};
             ptr.tail = .{};
         }
@@ -31,7 +27,6 @@ pub fn Ring(N: comptime_int, T: type) type {
         /// As the (sole) producer, get a view of items in the ring buffer that you can write to.
         /// If the ring buffer is full, retursn `error.Full`.
         pub fn getWritable(self: *Self) !Slice(.writer) {
-            std.debug.assert(self.magic == .valid);
             const tail = self.tail.value.raw;
             var size = tail -% self.tail.cached_other;
             std.debug.assert(size <= N);
@@ -55,7 +50,6 @@ pub fn Ring(N: comptime_int, T: type) type {
         /// As the (sole) consume, get a view of items in the ring buffer that you can read from.
         /// If the ring buffer is empty, retursn `error.Empty`.
         pub fn getReadable(self: *Self) !Slice(.reader) {
-            std.debug.assert(self.magic == .valid);
             const head = self.head.value.raw;
             var tail = self.head.cached_other;
 
