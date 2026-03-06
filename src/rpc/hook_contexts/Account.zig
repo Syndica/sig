@@ -257,8 +257,9 @@ pub fn getProgramAccounts(
         const z = tracy.Zone.init(@src(), .{ .name = "rpc.gPA.rooted" });
         defer z.deinit();
         while (query.rooted_iter.next()) |entry| {
-            const account = if (query.unrooted_map.fetchSwapRemove(entry.pubkey)) |kv|
-                kv.value.account
+            const account = if (query.unrooted_set.swapRemove(entry.pubkey))
+                // Unrooted has a newer version — resolve it via get().
+                query.unrooted.get(entry.pubkey, ancestors) orelse continue
             else
                 sig.core.Account{
                     .lamports = entry.lamports,
@@ -268,6 +269,8 @@ pub fn getProgramAccounts(
                     .rent_epoch = entry.rent_epoch,
                 };
             if (account.lamports == 0) continue;
+            // Owner may have changed in a newer unrooted slot; skip if no longer ours.
+            if (!account.owner.equals(&params.program_id)) continue;
             const data_slice: []const u8 = switch (account.data) {
                 .unowned_allocation => |d| d,
                 .owned_allocation => |d| d,
@@ -293,9 +296,10 @@ pub fn getProgramAccounts(
     {
         const z = tracy.Zone.init(@src(), .{ .name = "rpc.gPA.unrooted" });
         defer z.deinit();
-        for (query.unrooted_map.keys(), query.unrooted_map.values()) |pubkey, aws| {
-            const account = aws.account;
+        for (query.unrooted_set.keys()) |pubkey| {
+            const account = query.unrooted.get(pubkey, ancestors) orelse continue;
             if (account.lamports == 0) continue;
+            if (!account.owner.equals(&params.program_id)) continue;
             const data_slice: []const u8 = switch (account.data) {
                 .unowned_allocation => |d| d,
                 .owned_allocation => |d| d,
