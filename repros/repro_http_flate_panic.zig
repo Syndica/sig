@@ -1,17 +1,21 @@
-//! Minimal reproduction for a Zig 0.15.2 stdlib HTTP decompression panic.
-//!
-//! This script sends the same JSON-RPC request (`getLeaderSchedule`) twice to
-//! a provided endpoint:
-//! 1) with `Accept-Encoding: identity`
-//! 2) with default encodings (compression enabled)
-//!
-//! Expected behavior on affected endpoints:
-//! - identity request succeeds without panic
-//! - compressed request may panic in stdlib flate decompression with
-//!   `Writer.unreachableRebase`
-//!
-//! Usage:
-//! `zig run scripts/repro_http_flate_panic.zig -- <rpc-url>`
+/// Minimal reproduction for a Zig 0.15.2 stdlib HTTP decompression panic.
+///
+/// This script sends the same JSON-RPC request (`getLeaderSchedule`) twice to
+/// a provided endpoint:
+/// 1) with `Accept-Encoding: identity`
+/// 2) with default encodings (compression enabled)
+///
+/// Expected behavior on affected endpoints:
+/// - identity request succeeds without panic
+/// - compressed request may panic in stdlib flate decompression with
+///   `Writer.unreachableRebase`
+///
+/// Zig 0.16 removes decompression and compression integration from the stdlib HTTP client, so this issue should not be present in 0.16+.
+///
+/// Usage:
+/// `zig run scripts/repro_http_flate_panic.zig -- <rpc-url>`
+const repro_http_flate_panic = @This();
+
 const std = @import("std");
 
 pub fn main() !void {

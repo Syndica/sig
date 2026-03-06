@@ -85,7 +85,7 @@ fn downloadGenesisArchive(
         .headers = .{
             // Force an uncompressed response for stability.
             //
-            // See: scripts/repro_http_flate_panic.zig for more details.
+            // See: repros/repro_http_flate_panic.zig for more information.
             .accept_encoding = .{
                 .override = "identity",
             },
