@@ -1,5 +1,6 @@
 // all services inside the `services/` dir must be listed here
 .{
     "net",
+    "gossip",
     "shred_receiver",
 }
