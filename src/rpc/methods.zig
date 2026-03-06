@@ -68,7 +68,7 @@ pub const MethodAndParams = union(enum) {
     getIdentity: GetIdentity,
     getInflationGovernor: noreturn,
     getInflationRate: noreturn,
-    getInflationReward: noreturn,
+    getInflationReward: GetInflationReward,
     getLargestAccounts: noreturn,
     getLatestBlockhash: GetLatestBlockhash,
     getLeaderSchedule: GetLeaderSchedule,
@@ -1008,7 +1008,28 @@ pub const GetHighestSnapshotSlot = struct {
 // TODO: getIdentity
 // TODO: getInflationGovernor
 // TODO: getInflationRate
-// TODO: getInflationReward
+
+pub const GetInflationReward = struct {
+    addresses: []const Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        epoch: ?u64 = null,
+        minContextSlot: ?Slot = null,
+    };
+
+    pub const Response = []const ?InflationReward;
+
+    pub const InflationReward = struct {
+        epoch: u64,
+        effectiveSlot: Slot,
+        amount: u64,
+        postBalance: u64,
+        commission: ?u8,
+    };
+};
+
 // TODO: getLargeAccounts
 
 pub const GetLatestBlockhash = struct {

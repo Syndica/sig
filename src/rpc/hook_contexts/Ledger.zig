@@ -12,6 +12,7 @@ const AncestorIterator = sig.ledger.Reader.AncestorIterator;
 const GetBlock = methods.GetBlock;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
+const GetInflationReward = methods.GetInflationReward;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetTransaction = methods.GetTransaction;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
@@ -26,6 +27,7 @@ const LedgerHookContext = @This();
 
 ledger: *sig.ledger.Ledger,
 slot_tracker: *const sig.replay.trackers.SlotTracker,
+epoch_schedule: sig.core.EpochSchedule,
 
 pub fn getBlock(
     self: LedgerHookContext,
@@ -194,6 +196,146 @@ pub fn getBlocksWithLimit(
     }
 
     return try blocks.toOwnedSlice(arena);
+}
+
+pub fn getInflationReward(
+    self: LedgerHookContext,
+    arena: Allocator,
+    params: GetInflationReward,
+) !GetInflationReward.Response {
+    const config: GetInflationReward.Config = params.config orelse .{};
+    const commitment = config.commitment orelse .finalized;
+
+    if (commitment == .processed) {
+        return error.ProcessedNotSupported;
+    }
+
+    // Determine the epoch to query. Default: current_epoch - 1.
+    const current_slot = self.slot_tracker.getSlotForCommitment(commitment);
+
+    if (config.minContextSlot) |min_slot| {
+        if (current_slot < min_slot) return error.RpcMinContextSlotNotMet;
+    }
+
+    const current_epoch = self.epoch_schedule.getEpoch(current_slot);
+    const epoch = config.epoch orelse (current_epoch -| 1);
+
+    // Rewards are distributed in the first block of (epoch + 1).
+    const first_slot_in_reward_epoch = self.epoch_schedule.getFirstSlotInEpoch(epoch +| 1);
+
+    const first_confirmed_block_in_epoch: u64 = blk: {
+        const blocks = self.getBlocksWithLimit(arena, .{
+            .start_slot = first_slot_in_reward_epoch,
+            .limit = 1,
+            .config = .{ .commitment = commitment },
+        }) catch return error.BlockNotAvailable;
+        if (blocks.len == 0) return error.BlockNotAvailable;
+        break :blk blocks[0];
+    };
+
+    const epoch_boundary_block = self.getBlock(arena, .{
+        .slot = first_confirmed_block_in_epoch,
+        .encoding_or_config = .{ .config = .{
+            .commitment = commitment,
+            .transactionDetails = .none,
+        } },
+    }) catch return error.BlockNotAvailable;
+
+    if (epoch_boundary_block.parentSlot >= first_slot_in_reward_epoch) {
+        return error.SlotNotEpochBoundary;
+    }
+
+    const epoch_has_partitioned_rewards = epoch_boundary_block.numRewardPartitions != null;
+
+    var addresses = blk: {
+        var map = sig.utils.collections.PubkeyMap(void).empty;
+        for (params.addresses) |addr| _ = try map.getOrPut(arena, addr);
+        break :blk map;
+    };
+
+    var reward_map: sig.utils.collections.PubkeyMap(struct {
+        GetBlock.Response.UiReward,
+        Slot,
+    }) = .empty;
+    if (epoch_boundary_block.rewards) |rewards| {
+        for (rewards) |reward| {
+            if (!(reward.rewardType == .Voting or
+                (!epoch_has_partitioned_rewards and reward.rewardType == .Staking))) continue;
+            if (!addresses.contains(reward.pubkey)) continue;
+            try reward_map.put(
+                arena,
+                reward.pubkey,
+                .{ reward, first_confirmed_block_in_epoch },
+            );
+        }
+    }
+
+    if (epoch_has_partitioned_rewards) {
+        const num_partitions = epoch_boundary_block.numRewardPartitions orelse
+            @panic("numRewardPartitions should be set if epoch_has_partitioned_rewards is true");
+
+        var partition_index_addresses: std.AutoHashMapUnmanaged(
+            usize,
+            std.ArrayListUnmanaged(Pubkey),
+        ) = .empty;
+        for (addresses.entries.items(.key)) |addr| {
+            if (reward_map.contains(addr)) continue;
+            const partition_index = sig.replay.rewards.hasher.hashAddressToPartition(
+                &addr,
+                &epoch_boundary_block.previousBlockhash,
+                @intCast(num_partitions),
+            );
+            var entry = try partition_index_addresses.getOrPut(arena, partition_index);
+            if (!entry.found_existing) entry.value_ptr.* = std.ArrayListUnmanaged(Pubkey).empty;
+            try entry.value_ptr.append(arena, addr);
+        }
+
+        const block_list = try self.getBlocksWithLimit(arena, .{
+            .start_slot = first_confirmed_block_in_epoch + 1,
+            .limit = num_partitions,
+            .config = .{ .commitment = commitment },
+        });
+
+        var partition_idx_addr_iter = partition_index_addresses.iterator();
+        while (partition_idx_addr_iter.next()) |entry| {
+            const partition_index = entry.key_ptr.*;
+            const slot = if (block_list.len > partition_index)
+                block_list[partition_index]
+            else
+                return error.EpochRewardsPeriodActive;
+
+            const block = self.getBlock(arena, .{ .slot = slot, .encoding_or_config = .{
+                .config = .{
+                    .commitment = commitment,
+                    .transactionDetails = .none,
+                },
+            } }) catch return error.BlockNotAvailable;
+
+            const block_rewards = if (block.rewards) |rewards| rewards else continue;
+            for (block_rewards) |reward| {
+                if (reward.rewardType != .Staking) continue;
+                if (!addresses.contains(reward.pubkey)) continue;
+                try reward_map.put(arena, reward.pubkey, .{ reward, slot });
+            }
+        }
+    }
+
+    var results = try arena.alloc(?GetInflationReward.InflationReward, params.addresses.len);
+    for (addresses.entries.items(.key), 0..) |addr, i| {
+        const reward, const slot = reward_map.get(addr) orelse {
+            results[i] = null;
+            continue;
+        };
+        results[i] = .{
+            .epoch = epoch,
+            .effectiveSlot = slot,
+            .amount = @intCast(@abs(reward.lamports)),
+            .postBalance = reward.postBalance,
+            .commission = reward.commission,
+        };
+    }
+
+    return results;
 }
 
 pub fn getSignaturesForAddress(
