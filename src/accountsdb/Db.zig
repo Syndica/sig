@@ -179,6 +179,7 @@ pub const OwnerQuery = struct {
     db: *Db,
     ancestors: *const Ancestors,
     allocator: std.mem.Allocator,
+    owner: Pubkey,
     unrooted_index: usize = 0,
 
     pub fn next(self: *OwnerQuery) !?struct { Pubkey, Account } {
@@ -192,6 +193,11 @@ pub const OwnerQuery = struct {
                     pubkey,
                     self.ancestors,
                 ) orelse continue;
+                // Owner may have changed in the newer unrooted slot.
+                if (!resolved.owner.equals(&self.owner)) {
+                    resolved.deinit(self.allocator);
+                    continue;
+                }
                 return .{ pubkey, resolved };
             }
             return .{ pubkey, account };
@@ -207,6 +213,11 @@ pub const OwnerQuery = struct {
                 pubkey,
                 self.ancestors,
             ) orelse continue;
+            // Owner may have changed in a newer slot.
+            if (!account.owner.equals(&self.owner)) {
+                account.deinit(self.allocator);
+                continue;
+            }
             return .{ pubkey, account };
         }
         return null;
@@ -232,6 +243,7 @@ pub fn ownerQuery(self: *Db, owner: *const Pubkey, ancestors: *const Ancestors) 
         .db = self,
         .ancestors = ancestors,
         .allocator = self.allocator,
+        .owner = owner.*,
     };
 }
 
