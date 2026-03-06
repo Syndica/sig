@@ -64,6 +64,9 @@ pub const HttpPostFetcher = struct {
                     .content_type = .{
                         .override = "application/json",
                     },
+                    // Force an uncompressed response for stability.
+                    //
+                    // See: scripts/repro_http_flate_panic.zig for more details.
                     .accept_encoding = .{
                         .override = "identity",
                     },
