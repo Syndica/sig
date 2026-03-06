@@ -153,6 +153,7 @@ fn encodeAccountData(
         .base64, .jsonParsed => blk: {
             const buf = try allocator.alloc(u8, b64.calcSize(raw.len));
             const encoded = b64.encode(buf, raw);
+            std.debug.assert(encoded.len == buf.len);
             break :blk .{ .encoded = encoded, .encoding_name = "base64" };
         },
         .@"base64+zstd" => blk: {
