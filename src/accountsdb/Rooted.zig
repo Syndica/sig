@@ -206,7 +206,10 @@ pub fn get(
     };
 }
 
-threadlocal var owner_pk: Pubkey = undefined;
+/// Returns an iterator over all accounts with the given `owner`.
+/// The caller must ensure `owner` outlives the returned `OwnerIterator`
+/// (i.e. remains valid through all `next()` calls and `deinit()`),
+/// because the pointer is bound with `SQLITE_STATIC`.
 pub fn getByOwner(self: *Rooted, owner: *const Pubkey) OwnerIterator {
     const stmt: *sql.sqlite3_stmt = if (get_by_owner_stmt) |stmt| stmt else blk: {
         const query =
@@ -217,11 +220,10 @@ pub fn getByOwner(self: *Rooted, owner: *const Pubkey) OwnerIterator {
         break :blk get_by_owner_stmt.?;
     };
 
-    owner_pk = owner.*;
     self.err(sql.sqlite3_bind_blob(
         stmt,
         1,
-        &owner_pk,
+        owner,
         Pubkey.SIZE,
         sql.SQLITE_STATIC,
     ));
