@@ -1706,6 +1706,11 @@ fn validator(
         .my_shred_version = &gossip_service.my_shred_version,
     });
 
+    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.Ledger{
+        .ledger = &ledger,
+        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+    });
+
     try app_base.rpc_hooks.set(
         allocator,
         sig.rpc.hook_contexts.AccountHookContext{

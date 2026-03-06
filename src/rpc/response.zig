@@ -44,7 +44,8 @@ pub fn Response(comptime T: type) type {
                 .payload = if (raw_response.@"error") |err| .{
                     .err = err,
                 } else .{
-                    .result = raw_response.result orelse return error.MissingResult,
+                    .result = raw_response.result orelse
+                        if (@typeInfo(T) == .optional) @as(T, null) else return error.MissingResult,
                 },
             };
         }
