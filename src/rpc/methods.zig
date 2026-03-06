@@ -1371,7 +1371,7 @@ pub const RpcHookContext = struct {
     /// Maximum allowed slot distance before node is considered unhealthy.
     /// Default is 128 slots, matching agave's DELINQUENT_VALIDATOR_SLOT_DISTANCE.
     /// See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L158
-    health_check_slot_distance: u64 = 128,
+    health_check_slot_distance: u64 = DELINQUENT_VALIDATOR_SLOT_DISTANCE,
 
     // Limit the length of the `epoch_credits` array for each validator in a `get_vote_accounts`
     // response.

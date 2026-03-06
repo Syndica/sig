@@ -163,7 +163,10 @@ fn handleGetOrHead(
             request.respond(status_str, .{
                 .status = .ok,
                 .keep_alive = false,
-            }) catch return error.SystemIoError;
+            }) catch |err| switch (err) {
+                error.WriteFailed => return,
+                error.HttpExpectationFailed => return error.SystemIoError,
+            };
             return;
         }
 
