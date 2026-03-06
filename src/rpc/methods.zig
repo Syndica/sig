@@ -79,7 +79,7 @@ pub const MethodAndParams = union(enum) {
     getProgramAccounts: noreturn,
     getRecentPerformanceSamples: noreturn,
     getRecentPrioritizationFees: noreturn,
-    getSignaturesForAddress: noreturn,
+    getSignaturesForAddress: GetSignaturesForAddress,
     getSignatureStatuses: GetSignatureStatuses,
     getSlot: GetSlot,
     getSlotLeader: noreturn,
@@ -1112,7 +1112,35 @@ pub const GetSignatureStatuses = struct {
     };
 };
 
-// TODO: getSignaturesForAddress
+pub const GetSignaturesForAddress = struct {
+    address: Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        minContextSlot: ?u64 = null,
+        limit: ?usize = null,
+        before: ?Signature = null,
+        until: ?Signature = null,
+
+        pub fn getCommitment(self: Config) common.Commitment {
+            return self.commitment orelse common.Commitment.finalized;
+        }
+
+        pub fn getLimit(self: Config) usize {
+            return self.limit orelse 1000;
+        }
+    };
+
+    pub const Response = []const struct {
+        signature: Signature,
+        slot: u64,
+        err: ?sig.ledger.transaction_status.TransactionError,
+        memo: ?[]const u8,
+        blockTime: ?i64,
+        confirmationStatus: ?common.Commitment,
+    };
+};
 
 pub const GetSlot = struct {
     config: ?common.CommitmentSlotConfig = null,
