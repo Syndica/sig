@@ -176,8 +176,41 @@ pub fn slotModifiedIterator(self: *Db, slot: Slot) ?SlotModifiedIterator {
 pub const OwnerQuery = struct {
     rooted_iter: Rooted.OwnerIterator,
     unrooted_set: PubkeyMap(void),
-    unrooted: *Unrooted,
+    db: *Db,
+    ancestors: *const Ancestors,
     allocator: std.mem.Allocator,
+    unrooted_index: usize = 0,
+
+    pub fn next(self: *OwnerQuery) !?struct { Pubkey, Account } {
+        //  drain rooted iterator, deduplicating against unrooted.
+        while (self.rooted_iter.next()) |entry| {
+            const pubkey, const account = entry;
+            if (self.unrooted_set.swapRemove(pubkey)) {
+                // Unrooted has a newer version — resolve via Db.get().
+                const resolved = try self.db.get(
+                    self.allocator,
+                    pubkey,
+                    self.ancestors,
+                ) orelse continue;
+                return .{ pubkey, resolved };
+            }
+            return .{ pubkey, account };
+        }
+
+        // remaining unrooted-only pubkeys.
+        const keys = self.unrooted_set.keys();
+        while (self.unrooted_index < keys.len) {
+            const pubkey = keys[self.unrooted_index];
+            self.unrooted_index += 1;
+            const account = try self.db.get(
+                self.allocator,
+                pubkey,
+                self.ancestors,
+            ) orelse continue;
+            return .{ pubkey, account };
+        }
+        return null;
+    }
 
     pub fn deinit(self: *OwnerQuery) void {
         self.rooted_iter.deinit();
@@ -196,7 +229,8 @@ pub fn ownerQuery(self: *Db, owner: *const Pubkey, ancestors: *const Ancestors) 
     return .{
         .rooted_iter = rooted_iter,
         .unrooted_set = unrooted_set,
-        .unrooted = &self.unrooted,
+        .db = self,
+        .ancestors = ancestors,
         .allocator = self.allocator,
     };
 }
@@ -377,31 +411,29 @@ test "accounts_db: owner query" {
     {
         var query = try db.ownerQuery(&owner_x, &ancestors);
         defer query.deinit();
-        // Unrooted should have addr_a (the newer version from slot 3)
-        try std.testing.expectEqual(1, query.unrooted_set.count());
-        try std.testing.expect(query.unrooted_set.contains(addr_a));
-        // Resolve via get() — should return the slot 3 version
-        const resolved = db.unrooted.get(addr_a, &ancestors).?;
-        try std.testing.expectEqual(150, resolved.lamports);
-        // Rooted iterator should yield addr_a(100) and addr_b(200)
-        // (rooted still has the old addr_a from slot 1; the caller
-        //  is responsible for deduplicating against unrooted)
-        var rooted_count: usize = 0;
+        // The unified iterator should yield 3 accounts for owner_x:
+        // - addr_a (resolved from unrooted, slot 3 version with lamports=150)
+        // - addr_b (from rooted, lamports=200)
+        // The rooted also has addr_a at lamports=100, but the iterator
+        // deduplicates it in favor of the unrooted version.
+        var count: usize = 0;
         var found_a = false;
         var found_b = false;
-        while (query.rooted_iter.next()) |entry| {
-            rooted_count += 1;
-            if (entry.pubkey.equals(&addr_a)) {
-                try std.testing.expectEqual(100, entry.lamports);
+        while (try query.next()) |entry| {
+            const pubkey, const account = entry;
+            defer account.deinit(allocator);
+            count += 1;
+            if (pubkey.equals(&addr_a)) {
+                try std.testing.expectEqual(150, account.lamports);
                 found_a = true;
-            } else if (entry.pubkey.equals(&addr_b)) {
-                try std.testing.expectEqual(200, entry.lamports);
+            } else if (pubkey.equals(&addr_b)) {
+                try std.testing.expectEqual(200, account.lamports);
                 found_b = true;
             } else {
                 return error.UnexpectedAccount;
             }
         }
-        try std.testing.expectEqual(2, rooted_count);
+        try std.testing.expectEqual(2, count);
         try std.testing.expect(found_a);
         try std.testing.expect(found_b);
     }
@@ -410,12 +442,12 @@ test "accounts_db: owner query" {
     {
         var query = try db.ownerQuery(&owner_y, &ancestors);
         defer query.deinit();
-        // No unrooted accounts for owner_y (addr_c was in slot 2 which got rooted)
-        try std.testing.expectEqual(0, query.unrooted_set.count());
-        // Rooted should yield just addr_c
-        const entry = query.rooted_iter.next().?;
-        try std.testing.expectEqual(300, entry.lamports);
-        try std.testing.expect(entry.pubkey.equals(&addr_c));
-        try std.testing.expectEqual(query.rooted_iter.next(), null);
+        // Should yield just addr_c (rooted, lamports=300)
+        const entry = (try query.next()).?;
+        const pubkey, const account = entry;
+        defer account.deinit(allocator);
+        try std.testing.expectEqual(300, account.lamports);
+        try std.testing.expect(pubkey.equals(&addr_c));
+        try std.testing.expectEqual(null, try query.next());
     }
 }

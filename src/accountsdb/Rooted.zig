@@ -8,6 +8,7 @@ const Rooted = @This();
 
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
+const Account = sig.core.Account;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const Gauge = sig.prometheus.Gauge(u64);
 const ThreadPool = sig.sync.ThreadPool;
@@ -231,17 +232,7 @@ pub const OwnerIterator = struct {
     rooted: *Rooted,
     stmt: *sql.sqlite3_stmt,
 
-    // Return sig.core.Account here instead, or AccountSharedData.
-    pub const Entry = struct {
-        pubkey: Pubkey,
-        data: []const u8,
-        lamports: u64,
-        owner: Pubkey,
-        executable: bool,
-        rent_epoch: u64,
-    };
-
-    pub fn next(self: *OwnerIterator) ?Entry {
+    pub fn next(self: *OwnerIterator) ?struct { Pubkey, Account } {
         const rc = sql.sqlite3_step(self.stmt);
         switch (rc) {
             ROW => {},
@@ -266,12 +257,13 @@ pub const OwnerIterator = struct {
         const rent_epoch: u64 = @bitCast(sql.sqlite3_column_int64(self.stmt, 5));
 
         return .{
-            .pubkey = pubkey,
-            .lamports = lamports,
-            .data = data,
-            .owner = owner,
-            .executable = executable,
-            .rent_epoch = rent_epoch,
+            pubkey, .{
+                .lamports = lamports,
+                .data = .{ .unowned_allocation = data },
+                .owner = owner,
+                .executable = executable,
+                .rent_epoch = rent_epoch,
+            },
         };
     }
 
