@@ -198,7 +198,7 @@ pub fn getBlocksWithLimit(
 
 pub fn getSignaturesForAddress(
     self: LedgerHookContext,
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     params: GetSignaturesForAddress,
 ) !GetSignaturesForAddress.Response {
     const config: GetSignaturesForAddress.Config = params.config orelse .{};
@@ -222,7 +222,7 @@ pub fn getSignaturesForAddress(
     if (limit == 0 or limit > 1000) return error.InvalidParams;
 
     const result = try self.ledger.reader().getConfirmedSignaturesForAddress(
-        allocator,
+        arena,
         params.address,
         highest_slot,
         config.before,
@@ -230,7 +230,7 @@ pub fn getSignaturesForAddress(
         limit,
     );
 
-    const response = try allocator.alloc(
+    const response = try arena.alloc(
         @typeInfo(GetSignaturesForAddress.Response).pointer.child,
         result.infos.items.len,
     );
