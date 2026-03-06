@@ -433,9 +433,7 @@ pub const JRPCHandler = struct {
         var batch_bytes: u64 = 0;
 
         var start_idx: usize = 0;
-        var first_pick = true;
-        while (first_pick or batch_bytes < self.ctx.max_batch_bytes) {
-            first_pick = false;
+        while (true) {
             const pick = self.pickNextNotification(start_idx) orelse break;
             start_idx = pick.sub_idx;
             const payload_slice = pick.payload.payload();
@@ -453,6 +451,10 @@ pub const JRPCHandler = struct {
             batch_count += 1;
             batch_bytes += @intCast(payload_slice.len);
             runtime_mod.releasePayload(self.ctx, pick.payload);
+
+            if (batch_bytes >= self.ctx.max_batch_bytes) {
+                break;
+            }
         }
 
         if (batch_count == 0) {
