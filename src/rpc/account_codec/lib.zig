@@ -758,7 +758,6 @@ pub fn parseMintAdditionalData(
     };
 }
 
-// Tests
 test "rpc.account_codec.lib: parse account" {
     const allocator = std.testing.allocator;
 
