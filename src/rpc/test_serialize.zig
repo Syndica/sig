@@ -433,9 +433,9 @@ test GetTokenAccountBalance {
     // Response deserialization
     try testResponse(GetTokenAccountBalance, .{ .result = .{
         .context = .{ .slot = 1114, .apiVersion = "2.1.6" },
-        .value = sig.rpc.account_codec.parse_token.UiTokenAmount.init(
+        .value = .init(
             9864,
-            sig.rpc.account_codec.parse_token.SplTokenAdditionalData{ .decimals = 2 },
+            .{ .decimals = 2 },
         ),
     } },
         \\{"jsonrpc":"2.0","result":{"context":{"slot":1114,"apiVersion":"2.1.6"},"value":{"uiAmount":98.64,"decimals":2,"amount":"9864","uiAmountString":"98.64"}},"id":1}
