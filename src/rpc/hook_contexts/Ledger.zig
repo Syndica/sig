@@ -221,8 +221,7 @@ pub fn getSignaturesForAddress(
     const limit = config.getLimit();
     if (limit == 0 or limit > 1000) return error.InvalidParams;
 
-    const reader = self.ledger.reader();
-    const result = try reader.getConfirmedSignaturesForAddress(
+    const result = try self.ledger.reader().getConfirmedSignaturesForAddress(
         allocator,
         params.address,
         highest_slot,
