@@ -38,8 +38,11 @@ test "idle timeout: activity resets timer" {
     const fd_check = FdLeakDetector.baseline();
     defer _ = fd_check.detectLeaks();
 
-    // Worst-case close arrives 2 × idle_timeout after last message.
-    const ts = try servers.startEchoServerWithTimeouts(testing.allocator, 200, 200);
+    // Use a generous idle timeout so that CI scheduling jitter on individual
+    // sleeps (100ms requested, but could stretch on loaded machines) doesn't
+    // cause a spurious idle-close.  10 × 100ms ≈ 1s which still well exceeds
+    // the 500ms timeout, proving the timer resets on activity.
+    const ts = try servers.startEchoServerWithTimeouts(testing.allocator, 500, 200);
     defer ts.stop();
 
     var client = try RawClient.connectEx(testing.allocator, ts.port, .{
@@ -47,10 +50,10 @@ test "idle timeout: activity resets timer" {
     });
     defer client.deinit();
 
-    // Send messages at 50ms intervals for ~500ms, well past idle timeout
+    // Send messages at 100ms intervals for ~1s, well past idle timeout
     var i: usize = 0;
     while (i < 10) : (i += 1) {
-        std.Thread.sleep(50 * std.time.ns_per_ms);
+        std.Thread.sleep(100 * std.time.ns_per_ms);
         var msg = "ping".*;
         try client.write(&msg);
 

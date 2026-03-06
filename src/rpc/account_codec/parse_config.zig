@@ -20,33 +20,33 @@ const VALIDATOR_INFO_ID: Pubkey = .parse("Va1idator1nfo1111111111111111111111111
 /// Returns null if the config type is unknown (not StakeConfig or ValidatorInfo).
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_config.rs#L14-L33
 pub fn parseConfig(
-    allocator: Allocator,
+    arena: Allocator,
     pubkey: Pubkey,
     reader: anytype,
     data_len: u32,
 ) ParseError!?ConfigAccountType {
     // Read all data into buffer for simpler offset calculations
-    const data = try allocator.alloc(u8, data_len);
-    defer allocator.free(data);
+    const data = try arena.alloc(u8, data_len);
+    defer arena.free(data);
     reader.readNoEof(data) catch return ParseError.InvalidAccountData;
     if (pubkey.equals(&ids.STAKE_CONFIG_PROGRAM_ID)) {
-        return parseStakeConfig(allocator, data);
+        return parseStakeConfig(arena, data);
     } else {
-        return parseValidatorInfo(allocator, data);
+        return parseValidatorInfo(arena, data);
     }
 }
 
-fn parseStakeConfig(allocator: Allocator, data: []const u8) ParseError!?ConfigAccountType {
+fn parseStakeConfig(arena: Allocator, data: []const u8) ParseError!?ConfigAccountType {
     // First, deserialize ConfigKeys to find its serialized size
-    const config_keys = bincode.readFromSlice(allocator, ConfigKeys, data, .{}) catch
+    const config_keys = bincode.readFromSlice(arena, ConfigKeys, data, .{}) catch
         return ParseError.InvalidAccountData;
-    defer allocator.free(config_keys.keys);
+    defer arena.free(config_keys.keys);
     // Calculate offset: ConfigKeys serialized size
     const keys_size = getConfigKeysSerializedSize(config_keys.keys.len);
     if (keys_size > data.len) return ParseError.InvalidAccountData;
     const config_data = data[keys_size..];
     // Deserialize StakeConfig
-    const stake_config = bincode.readFromSlice(allocator, StakeConfig, config_data, .{}) catch
+    const stake_config = bincode.readFromSlice(arena, StakeConfig, config_data, .{}) catch
         return ParseError.InvalidAccountData;
     return ConfigAccountType{
         .stake_config = UiStakeConfig{
@@ -56,11 +56,11 @@ fn parseStakeConfig(allocator: Allocator, data: []const u8) ParseError!?ConfigAc
     };
 }
 
-fn parseValidatorInfo(allocator: Allocator, data: []const u8) ParseError!?ConfigAccountType {
+fn parseValidatorInfo(arena: Allocator, data: []const u8) ParseError!?ConfigAccountType {
     // Deserialize ConfigKeys
-    const config_keys = bincode.readFromSlice(allocator, ConfigKeys, data, .{}) catch
+    const config_keys = bincode.readFromSlice(arena, ConfigKeys, data, .{}) catch
         return ParseError.InvalidAccountData;
-    defer allocator.free(config_keys.keys);
+    defer arena.free(config_keys.keys);
     // Check if this is a ValidatorInfo config
     if (config_keys.keys.len == 0) return null;
     if (!config_keys.keys[0].pubkey.equals(&VALIDATOR_INFO_ID)) return null;
@@ -69,12 +69,12 @@ fn parseValidatorInfo(allocator: Allocator, data: []const u8) ParseError!?Config
     if (keys_size > data.len) return ParseError.InvalidAccountData;
     const config_data = data[keys_size..];
     // Deserialize ValidatorInfo (length-prefixed string)
-    const validator_info = bincode.readFromSlice(allocator, ValidatorInfo, config_data, .{}) catch
+    const validator_info = bincode.readFromSlice(arena, ValidatorInfo, config_data, .{}) catch
         return ParseError.InvalidAccountData;
-    defer allocator.free(validator_info.info);
+    defer arena.free(validator_info.info);
     // Build UI keys array
-    const ui_keys = try allocator.alloc(UiConfigKey, config_keys.keys.len);
-    errdefer allocator.free(ui_keys);
+    const ui_keys = try arena.alloc(UiConfigKey, config_keys.keys.len);
+    errdefer arena.free(ui_keys);
     for (config_keys.keys, 0..) |key, i| {
         ui_keys[i] = UiConfigKey{
             .pubkey = key.pubkey,
@@ -82,8 +82,8 @@ fn parseValidatorInfo(allocator: Allocator, data: []const u8) ParseError!?Config
         };
     }
     // Copy the info string (we need to own it since we're freeing validator_info)
-    const info_copy = try allocator.dupe(u8, validator_info.info);
-    errdefer allocator.free(info_copy);
+    const info_copy = try arena.dupe(u8, validator_info.info);
+    errdefer arena.free(info_copy);
     return ConfigAccountType{
         .validator_info = UiConfig{
             .keys = ui_keys,
