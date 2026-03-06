@@ -16,6 +16,7 @@ const Slot = sig.core.Slot;
 const Ancestors = sig.core.Ancestors;
 const Account = sig.core.Account;
 const AccountSharedData = sig.runtime.AccountSharedData;
+const PubkeyMap = sig.utils.collections.PubkeyMap;
 
 pub const MAX_SLOTS = 4096;
 
@@ -29,7 +30,7 @@ pub const SlotIndex = struct {
     lock: sig.sync.RwLock,
     slot: Slot,
     is_empty: Atomic(bool),
-    entries: sig.utils.collections.PubkeyMap(AccountSharedData),
+    entries: PubkeyMap(AccountSharedData),
 
     const empty: SlotIndex = .{
         .lock = .{},
@@ -123,6 +124,34 @@ pub fn get(
     }
 
     return result;
+}
+
+/// Returns the set of pubkeys owned by `owner` visible to the given ancestor set.
+/// The caller is responsible for resolving each pubkey to its latest account state
+/// which avoids borrowing account data across lock boundaries.
+pub fn getByOwner(
+    self: *Unrooted,
+    allocator: std.mem.Allocator,
+    owner: Pubkey,
+    ancestors: *const Ancestors,
+) !PubkeyMap(void) {
+    var map = PubkeyMap(void){};
+    errdefer map.deinit(allocator);
+
+    for (self.slots) |*index| {
+        if (index.is_empty.load(.acquire)) continue;
+        if (!ancestors.containsSlot(index.slot)) continue;
+
+        index.lock.lockShared();
+        defer index.lock.unlockShared();
+
+        for (index.entries.values(), index.entries.keys()) |*acc, pk| {
+            if (!acc.owner.equals(&owner)) continue;
+            try map.put(allocator, pk, {});
+        }
+    }
+
+    return map;
 }
 
 test "sanity check" {

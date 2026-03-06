@@ -25,6 +25,7 @@ const ClientVersion = sig.version.ClientVersion;
 const BlockhashQueue = sig.core.blockhash_queue.BlockhashQueue;
 
 const account_codec = sig.rpc.account_codec;
+const filters = sig.rpc.filters;
 const SlotRef = sig.replay.trackers.SlotTracker.Reference;
 
 pub fn Result(comptime method: MethodAndParams.Tag) type {
@@ -76,7 +77,7 @@ pub const MethodAndParams = union(enum) {
     getMaxShredInsertSlot: noreturn,
     getMinimumBalanceForRentExemption: noreturn,
     getMultipleAccounts: noreturn,
-    getProgramAccounts: noreturn,
+    getProgramAccounts: GetProgramAccounts,
     getRecentPerformanceSamples: noreturn,
     getRecentPrioritizationFees: noreturn,
     getSignaturesForAddress: GetSignaturesForAddress,
@@ -203,7 +204,53 @@ pub const GetAccountInfo = struct {
             owner: Pubkey,
             rentEpoch: u64,
             space: u64,
+
+            pub fn from(
+                account: sig.core.Account,
+                data: account_codec.AccountData,
+            ) Value {
+                return .{
+                    .data = data,
+                    .executable = account.executable,
+                    .lamports = account.lamports,
+                    .owner = account.owner,
+                    .rentEpoch = account.rent_epoch,
+                    .space = account.data.len(),
+                };
+            }
         };
+    };
+};
+
+pub const GetProgramAccounts = struct {
+    program_id: Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        filters: ?[]const filters.RpcFilterType = null,
+        encoding: ?common.AccountEncoding = null,
+        dataSlice: ?common.DataSlice = null,
+        commitment: ?common.Commitment = null,
+        minContextSlot: ?u64 = null,
+        withContext: ?bool = null,
+        sortResults: ?bool = null,
+    };
+
+    pub const Value = struct { pubkey: Pubkey, account: GetAccountInfo.Response.Value };
+
+    pub const Response = union(enum) {
+        list: []const Value,
+        context: struct {
+            context: common.Context,
+            value: []const Value,
+        },
+
+        pub fn jsonStringify(self: Response, jw: anytype) @TypeOf(jw.*).Error!void {
+            switch (self) {
+                .list => |list| try jw.write(list),
+                .context => |ctx| try jw.write(ctx),
+            }
+        }
     };
 };
 
@@ -1377,6 +1424,8 @@ pub const common = struct {
         slot: u64,
         apiVersion: []const u8 = ClientVersion.API_VERSION,
     };
+
+    pub const AccountEncoding = account_codec.AccountEncoding;
 
     // TODO field types
     pub const RpcContactInfo = struct {
