@@ -14,15 +14,19 @@ const GetBalance = methods.GetBalance;
 const GetBlock = methods.GetBlock;
 const GetBlockCommitment = methods.GetBlockCommitment;
 const GetBlockHeight = methods.GetBlockHeight;
+const GetBlocks = methods.GetBlocks;
+const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
 const GetGenesisHash = methods.GetGenesisHash;
+const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetSlot = methods.GetSlot;
 const GetTransaction = methods.GetTransaction;
+const GetTransactionCount = methods.GetTransactionCount;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
 
@@ -183,6 +187,78 @@ test GetBlockCommitment {
     );
 }
 
+test GetBlocks {
+    try testRequest(.getBlocks, .{ .start_slot = 5 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlocks","params":[5]}
+    );
+    try testRequest(.getBlocks, .{
+        .start_slot = 5,
+        .end_slot_or_config = .{ .end_slot = 10 },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlocks","params":[5,10]}
+    );
+    try testRequest(.getBlocks, .{
+        .start_slot = 5,
+        .end_slot_or_config = .{ .config = .{ .commitment = .finalized } },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlocks","params":[5,{"commitment":"finalized"}]}
+    );
+    try testResponse(GetBlocks, .{ .result = &.{ 5, 6, 7, 8, 9, 10 } },
+        \\{"jsonrpc":"2.0","result":[5,6,7,8,9,10],"id":1}
+    );
+    try testResponse(GetBlocks, .{ .result = &.{} },
+        \\{"jsonrpc":"2.0","result":[],"id":1}
+    );
+
+    // EndSlotOrConfig
+    {
+        const result = try GetBlocks.EndSlotOrConfig.jsonParseFromValue(
+            std.testing.allocator,
+            .{ .integer = 42 },
+            .{},
+        );
+        try std.testing.expectEqual(GetBlocks.EndSlotOrConfig{ .end_slot = 42 }, result);
+    }
+    {
+        var obj = std.json.ObjectMap.init(std.testing.allocator);
+        defer obj.deinit();
+        try obj.put("commitment", .{ .string = "confirmed" });
+        const result = try GetBlocks.EndSlotOrConfig.jsonParseFromValue(
+            std.testing.allocator,
+            .{ .object = obj },
+            .{},
+        );
+        try std.testing.expectEqual(.confirmed, result.config.commitment.?);
+    }
+    {
+        const result = GetBlocks.EndSlotOrConfig.jsonParseFromValue(
+            std.testing.allocator,
+            .{ .bool = true },
+            .{},
+        );
+        try std.testing.expectError(error.UnexpectedToken, result);
+    }
+}
+
+test GetBlocksWithLimit {
+    try testRequest(.getBlocksWithLimit, .{ .start_slot = 5, .limit = 3 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlocksWithLimit","params":[5,3]}
+    );
+    try testRequest(.getBlocksWithLimit, .{
+        .start_slot = 5,
+        .limit = 3,
+        .config = .{ .commitment = .confirmed },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlocksWithLimit","params":[5,3,{"commitment":"confirmed"}]}
+    );
+    try testResponse(GetBlocksWithLimit, .{ .result = &.{ 5, 6, 7 } },
+        \\{"jsonrpc":"2.0","result":[5,6,7],"id":1}
+    );
+    try testResponse(GetBlocksWithLimit, .{ .result = &.{} },
+        \\{"jsonrpc":"2.0","result":[],"id":1}
+    );
+}
+
 test GetEpochInfo {
     try testRequest(.getEpochInfo, .{},
         \\{"jsonrpc":"2.0","id":1,"method":"getEpochInfo","params":[]}
@@ -227,7 +303,26 @@ test GetGenesisHash {
 }
 
 // TODO: test getHealth()
-// TODO: test getHighestSnapshotSlot()
+test GetHighestSnapshotSlot {
+    try testRequest(.getHighestSnapshotSlot, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getHighestSnapshotSlot","params":[]}
+    );
+    try testResponse(GetHighestSnapshotSlot, .{ .result = .{
+        .full = 100,
+        .incremental = 110,
+    } },
+        \\{"jsonrpc":"2.0","result":{"full":100,"incremental":110},"id":1}
+    );
+    try testResponse(GetHighestSnapshotSlot, .{ .result = .{
+        .full = 100,
+        .incremental = null,
+    } },
+        \\{"jsonrpc":"2.0","result":{"full":100},"id":1}
+    );
+    try testResponse(GetHighestSnapshotSlot, .{ .result = null },
+        \\{"jsonrpc":"2.0","result":null,"id":1}
+    );
+}
 // TODO: test getIdentity()
 // TODO: test getInflationGovernor()
 // TODO: test getInflationRate()
@@ -451,7 +546,14 @@ test GetTransaction {
     } }));
 }
 
-// TODO: test getTransactionCount()
+test GetTransactionCount {
+    try testRequest(.getTransactionCount, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getTransactionCount","params":[]}
+    );
+    try testResponse(GetTransactionCount, .{ .result = 268651537 },
+        \\{"jsonrpc":"2.0","result":268651537,"id":1}
+    );
+}
 // TODO: test getVoteAccounts()
 // TODO: test isBlockhashValid()
 // TODO: test minimumLedgerSlot()
