@@ -28,6 +28,7 @@ pub const Config = struct {
     error_tracing: ?bool,
     long_tests: bool,
     rpc_enable_owner_index: bool,
+    rpc_enable_spl_token_owner_index: bool,
     version: std.SemanticVersion,
 
     pub fn fromBuild(b: *Build) !Config {
@@ -133,6 +134,13 @@ pub const Config = struct {
                     "that filter by owner at the cost of increased storage space and slower writes. This is disabled by default due to overhead" ++
                     "RPC requests that would otherwise benefit from the index will still function, but with worse performance. Not enabled by default.",
             ) orelse false,
+            .rpc_enable_spl_token_owner_index = b.option(
+                bool,
+                "rpc-enable-spl-token-owner-index",
+                "If enabled, a partial expression index is created on the SPL token owner field (bytes 32..64 of account data) " ++
+                    "for accounts owned by the SPL Token or Token-2022 programs. This speeds up getTokenAccountsByOwner RPC calls " ++
+                    "at the cost of increased storage space and slower writes. Not enabled by default.",
+            ) orelse false,
             .version = s: {
                 const maybe_version_string = b.option(
                     []const u8,
@@ -223,6 +231,7 @@ pub fn build(b: *Build) !void {
     build_options.addOption(bool, "no_network_tests", config.no_network_tests);
     build_options.addOption(bool, "long_tests", config.long_tests);
     build_options.addOption(bool, "rpc_enable_owner_index", config.rpc_enable_owner_index);
+    build_options.addOption(bool, "rpc_enable_spl_token_owner_index", config.rpc_enable_spl_token_owner_index);
     build_options.addOption(std.SemanticVersion, "version", config.version);
 
     const sig_step = b.step("sig", "Run the sig executable");

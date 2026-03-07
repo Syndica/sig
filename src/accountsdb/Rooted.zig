@@ -21,6 +21,16 @@ const ROW = sql.SQLITE_ROW;
 /// When disabled, the index is actively dropped (if it exists).
 const rpc_enable_owner_index = sig.build_options.rpc_enable_owner_index;
 
+/// Whether the materialized `token_owner` column and its index are enabled.
+/// When ON: the `token_owner` column is added to the `entries` table, populated
+/// during `put()` with `data[32..64]` for SPL Token / Token-2022 accounts, and
+/// indexed for efficient lookups in `getBySplTokenOwner()`.
+/// When OFF: the column is dropped (if it exists), and `getBySplTokenOwner()`
+/// falls back to a full table scan using `substr(data, 33, 32)`.
+const rpc_enable_spl_token_owner_index = sig.build_options.rpc_enable_spl_token_owner_index;
+
+const ids = sig.runtime.ids;
+
 /// Handle to the underlying sqlite database.
 handle: *sql.sqlite3,
 /// Tracks the largest rooted slot.
@@ -33,6 +43,7 @@ sqlite_mem_used: ?*Gauge = null,
 threadlocal var put_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_by_owner_stmt: ?*sql.sqlite3_stmt = null;
+threadlocal var get_by_spl_token_owner_stmt: ?*sql.sqlite3_stmt = null;
 
 pub fn init(file_path: [:0]const u8) !Rooted {
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.init" });
@@ -77,6 +88,11 @@ pub fn init(file_path: [:0]const u8) !Rooted {
             \\  executable INTEGER NOT NULL,
             \\  rent_epoch INTEGER NOT NULL,
             \\  last_modified_slot INTEGER NOT NULL
+        ++ (if (rpc_enable_spl_token_owner_index)
+            \\, token_owner BLOB(32) NOT NULL
+        else
+            \\
+        ) ++
             \\);
         ;
 
@@ -84,6 +100,21 @@ pub fn init(file_path: [:0]const u8) !Rooted {
             std.debug.print("err  {s}\n", .{sql.sqlite3_errmsg(db)});
             return error.FailedToCreateTables;
         }
+    }
+
+    // Migration: add or drop the materialized `token_owner` column for existing databases.
+    if (rpc_enable_spl_token_owner_index) {
+        // Add column if it doesn't exist (ignore error if it's already there).
+        _ = sql.sqlite3_exec(
+            db,
+            "ALTER TABLE entries ADD COLUMN token_owner BLOB(32) NOT NULL DEFAULT X'" ++ ("0" ** 64) ++ "'",
+            null,
+            null,
+            null,
+        );
+    } else {
+        // Drop column if it exists (ignore error if it's already gone).
+        _ = sql.sqlite3_exec(db, "ALTER TABLE entries DROP COLUMN token_owner", null, null, null);
     }
 
     if (rpc_enable_owner_index) {
@@ -99,6 +130,29 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         if (sql.sqlite3_exec(
             db,
             "DROP INDEX IF EXISTS rpc_owner_idx",
+            null,
+            null,
+            null,
+        ) != OK)
+            return error.FailedToDropIndex;
+    }
+
+    // Index on the materialized `token_owner` column. This column stores the SPL
+    // token owner (data[32..64]) for accounts owned by SPL Token or Token-2022,
+    // and zeroes for all other accounts. Populated during `put()`.
+    if (rpc_enable_spl_token_owner_index) {
+        if (sql.sqlite3_exec(
+            db,
+            "CREATE INDEX IF NOT EXISTS rpc_spl_token_owner_idx ON entries(token_owner)",
+            null,
+            null,
+            null,
+        ) != OK)
+            return error.FailedToCreateIndex;
+    } else {
+        if (sql.sqlite3_exec(
+            db,
+            "DROP INDEX IF EXISTS rpc_spl_token_owner_idx",
             null,
             null,
             null,
@@ -126,6 +180,10 @@ pub fn deinitThreadLocals() void {
     if (get_by_owner_stmt) |stmt| {
         _ = sql.sqlite3_finalize(stmt);
         get_by_owner_stmt = null;
+    }
+    if (get_by_spl_token_owner_stmt) |stmt| {
+        _ = sql.sqlite3_finalize(stmt);
+        get_by_spl_token_owner_stmt = null;
     }
 }
 
@@ -276,6 +334,89 @@ pub const OwnerIterator = struct {
     }
 
     pub fn deinit(self: *OwnerIterator) void {
+        defer std.debug.assert(sql.sqlite3_reset(self.stmt) == OK);
+    }
+};
+
+/// Returns an iterator over all SPL token accounts where the token owner
+/// (data[32..64]) matches `token_owner`.
+///
+/// When `rpc-enable-spl-token-owner-index` is set, this uses the materialized
+/// `token_owner` column with the `rpc_spl_token_owner_idx` index for an
+/// efficient indexed lookup.
+///
+/// When the flag is OFF, falls back to a full table scan filtering with
+/// `substr(data, 33, 32)` and restricting to SPL Token / Token-2022 owners.
+///
+/// The caller must ensure `token_owner` outlives the returned iterator
+/// (i.e. remains valid through all `next()` calls and `deinit()`),
+/// because the pointer is bound with `SQLITE_STATIC`.
+///
+/// Ref: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L818-L886
+pub fn getBySplTokenOwner(self: *Rooted, token_owner: *const Pubkey) SplTokenOwnerIterator {
+    const stmt: *sql.sqlite3_stmt = if (get_by_spl_token_owner_stmt) |stmt| stmt else blk: {
+        const query = if (rpc_enable_spl_token_owner_index)
+            \\ SELECT address, lamports, data, owner, executable, rent_epoch
+            \\ FROM entries WHERE token_owner = ?;
+        else
+            " SELECT address, lamports, data, owner, executable, rent_epoch" ++
+            " FROM entries WHERE substr(data, 33, 32) = ?" ++
+            " AND (owner = X'" ++ ids.TOKEN_PROGRAM_ID.hexBytesLower() ++ "'" ++
+            " OR owner = X'" ++ ids.TOKEN_2022_PROGRAM_ID.hexBytesLower() ++ "');";
+        self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_by_spl_token_owner_stmt, null));
+        break :blk get_by_spl_token_owner_stmt.?;
+    };
+
+    self.err(sql.sqlite3_bind_blob(
+        stmt,
+        1,
+        token_owner,
+        Pubkey.SIZE,
+        sql.SQLITE_STATIC,
+    ));
+    return .{ .stmt = stmt, .rooted = self };
+}
+
+pub const SplTokenOwnerIterator = struct {
+    rooted: *Rooted,
+    stmt: *sql.sqlite3_stmt,
+
+    pub fn next(self: *SplTokenOwnerIterator) ?struct { Pubkey, Account } {
+        const rc = sql.sqlite3_step(self.stmt);
+        switch (rc) {
+            ROW => {},
+            DONE => return null,
+            else => self.rooted.err(rc),
+        }
+
+        const pubkey: Pubkey = .{
+            .data = @as([*]const u8, @ptrCast(sql.sqlite3_column_blob(self.stmt, 0)))[0..32].*,
+        };
+        const lamports: u64 = @bitCast(sql.sqlite3_column_int64(self.stmt, 1));
+        const data = blk: {
+            const len: usize = @intCast(sql.sqlite3_column_bytes(self.stmt, 2));
+            if (len == 0) break :blk &.{};
+            const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(self.stmt, 2));
+            break :blk ptr[0..len];
+        };
+        const owner: Pubkey = .{
+            .data = @as([*]const u8, @ptrCast(sql.sqlite3_column_blob(self.stmt, 3)))[0..32].*,
+        };
+        const executable: bool = sql.sqlite3_column_int(self.stmt, 4) != 0;
+        const rent_epoch: u64 = @bitCast(sql.sqlite3_column_int64(self.stmt, 5));
+
+        return .{
+            pubkey, .{
+                .lamports = lamports,
+                .data = .{ .unowned_allocation = data },
+                .owner = owner,
+                .executable = executable,
+                .rent_epoch = rent_epoch,
+            },
+        };
+    }
+
+    pub fn deinit(self: *SplTokenOwnerIterator) void {
         defer std.debug.assert(sql.sqlite3_reset(self.stmt) == OK);
     }
 };
@@ -452,8 +593,14 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
         // https://sqlite.org/lang_upsert.html#examples
         const query =
             \\INSERT INTO entries
-            \\(address, lamports, data, owner, executable, rent_epoch, last_modified_slot)
+            \\(address, lamports, data, owner, executable, rent_epoch, last_modified_slot
+        ++ (if (rpc_enable_spl_token_owner_index)
+            \\, token_owner)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        else
+            \\)
             \\VALUES (?, ?, ?, ?, ?, ?, ?)
+        ) ++
             \\ON CONFLICT(address) DO UPDATE SET
             \\  lamports=excluded.lamports,
             \\  data=excluded.data,
@@ -461,6 +608,11 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
             \\  executable=excluded.executable,
             \\  rent_epoch=excluded.rent_epoch,
             \\  last_modified_slot=excluded.last_modified_slot
+        ++ (if (rpc_enable_spl_token_owner_index)
+            \\, token_owner=excluded.token_owner
+        else
+            \\
+        ) ++
             \\WHERE excluded.last_modified_slot > entries.last_modified_slot
             \\;
         ;
@@ -487,8 +639,21 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
     ));
     self.err(sql.sqlite3_bind_int(stmt, 5, @intFromBool(account.executable)));
     self.err(sql.sqlite3_bind_int64(stmt, 6, @bitCast(account.rent_epoch)));
-
     self.err(sql.sqlite3_bind_int64(stmt, 7, @bitCast(slot)));
+
+    // When the index flag is ON, materialize the SPL token owner field:
+    // if the account is owned by SPL Token or Token-2022 and has enough data,
+    // extract data[32..64]; otherwise store zeroes.
+    if (rpc_enable_spl_token_owner_index) {
+        const zero_token_owner = std.mem.zeroes([Pubkey.SIZE]u8);
+        const is_token_program = account.owner.equals(&ids.TOKEN_PROGRAM_ID) or
+            account.owner.equals(&ids.TOKEN_2022_PROGRAM_ID);
+        const token_owner: *const [Pubkey.SIZE]u8 = if (is_token_program and account.data.len >= 64)
+            account.data[32..64]
+        else
+            &zero_token_owner;
+        self.err(sql.sqlite3_bind_blob(stmt, 8, token_owner, Pubkey.SIZE, sql.SQLITE_STATIC));
+    }
 
     const result = sql.sqlite3_step(stmt);
     if (result != DONE) self.err(result);

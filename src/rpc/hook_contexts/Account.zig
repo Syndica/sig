@@ -13,6 +13,7 @@ const GetBalance = sig.rpc.methods.GetBalance;
 const GetTokenAccountBalance = sig.rpc.methods.GetTokenAccountBalance;
 const GetTokenSupply = sig.rpc.methods.GetTokenSupply;
 const GetProgramAccounts = sig.rpc.methods.GetProgramAccounts;
+const GetTokenAccountsByOwner = sig.rpc.methods.GetTokenAccountsByOwner;
 
 const AccountEncoding = account_codec.AccountEncoding;
 const CommitmentSlotConfig = sig.rpc.methods.common.CommitmentSlotConfig;
@@ -297,4 +298,116 @@ pub fn getProgramAccounts(
         return .{ .context = .{ .context = .{ .slot = slot }, .value = values } };
     }
     return .{ .list = values };
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L818-L886
+pub fn getTokenAccountsByOwner(
+    self: @This(),
+    arena: std.mem.Allocator,
+    params: GetTokenAccountsByOwner,
+) !GetTokenAccountsByOwner.Response {
+    const zone = tracy.Zone.init(@src(), .{ .name = "rpc.gTABO" });
+    defer zone.deinit();
+
+    const config = params.config orelse GetTokenAccountsByOwner.Config{};
+    const commitment = config.commitment orelse .finalized;
+    // [agave] Default encoding for gTABO is `Binary` (legacy base58), not base64:
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L840
+    const encoding = config.encoding orelse AccountEncoding.binary;
+
+    const slot = self.slot_tracker.getSlotForCommitment(commitment);
+    if (config.minContextSlot) |min_slot| {
+        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+    }
+
+    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    const ancestors = &ref.constants().ancestors;
+    const slot_reader = self.account_reader.forSlot(ancestors);
+
+    // Resolve the filter to a token program ID and optional mint.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2649-L2673
+    const resolved = try params.filter.resolve(arena, slot_reader);
+
+    // Build auto-filters:
+    // 1. tokenAccountState — ensures len==165 and state byte != 0
+    // 2. memcmp at offset 32 — matches the SPL token owner (data[32..64]) to the queried owner
+    // 3. (optional) memcmp at offset 0 — matches the mint (data[0..32])
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L854-L873
+    var filters: [3]sig.rpc.filters.RpcFilterType = undefined;
+    var n_filters: usize = 0;
+    filters[n_filters] = .tokenAccountState;
+    n_filters += 1;
+    filters[n_filters] = .{ .memcmp = .{ .offset = 32, .bytes = &params.owner.data } };
+    n_filters += 1;
+    if (resolved.mint) |mint| {
+        filters[n_filters] = .{ .memcmp = .{ .offset = 0, .bytes = &mint.data } };
+        n_filters += 1;
+    }
+    const auto_filters = filters[0..n_filters];
+
+    // Query by the resolved token program ID as the account owner.
+    // When `programId` filter is used, this queries by that program directly.
+    // When `mint` filter is used, it queries by the mint's owning program.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L875-L880
+    var iter = blk: {
+        const z = tracy.Zone.init(@src(), .{ .name = "rpc.gTABO.splTokenOwnerQuery" });
+        defer z.deinit();
+        break :blk try slot_reader.getBySplTokenOwner(arena, &params.owner);
+    };
+    defer iter.deinit();
+
+    var results = std.ArrayListUnmanaged(GetTokenAccountsByOwner.Value){};
+    defer {
+        for (results.items) |v| v.account.data.deinit(arena);
+        results.deinit(arena);
+    }
+
+    while (try iter.next()) |entry| {
+        const pubkey, const account = entry;
+        defer account.deinit(arena);
+        if (account.lamports == 0) continue;
+
+        // Verify the account owner matches the resolved token program.
+        if (!account.owner.equals(&resolved.token_program_id)) continue;
+
+        const data_slice: []const u8 = switch (account.data) {
+            .unowned_allocation => |d| d,
+            .owned_allocation => |d| d,
+            else => @panic("gTABO: unexpected AccountDataHandle variant"),
+        };
+        if (!sig.rpc.filters.filtersAllow(auto_filters, data_slice)) continue;
+
+        const data = try account_codec.encodeAccount(
+            arena,
+            pubkey,
+            account,
+            encoding,
+            slot_reader,
+            config.dataSlice,
+        );
+        errdefer data.deinit(arena);
+        try results.append(arena, .{
+            .pubkey = pubkey,
+            .account = .from(account, data),
+        });
+    }
+
+    // [agave] Results are always sorted by pubkey for gTABO.
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L882
+    {
+        const z = tracy.Zone.init(@src(), .{ .name = "rpc.gTABO.sort" });
+        defer z.deinit();
+        std.mem.sortUnstable(GetTokenAccountsByOwner.Value, results.items, {}, struct {
+            fn lessThan(_: void, a: GetTokenAccountsByOwner.Value, b: GetTokenAccountsByOwner.Value) bool {
+                return std.mem.order(u8, &a.pubkey.data, &b.pubkey.data) == .lt;
+            }
+        }.lessThan);
+    }
+
+    // [agave] Always context-wrapped for gTABO.
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2127-L2130
+    return .{
+        .context = .{ .slot = slot },
+        .value = try results.toOwnedSlice(arena),
+    };
 }
