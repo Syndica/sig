@@ -184,7 +184,7 @@ pub const RuntimeContext = struct {
             .event_data = event_data,
             .encoding = encoding,
             .sub_method = sub_method,
-            .submitted_ns = @intCast(std.time.nanoTimestamp()),
+            .submitted_at = std.time.Instant.now() catch unreachable,
         };
 
         serialize_mod.submitSerializeJob(
@@ -316,10 +316,10 @@ pub fn releasePayload(ctx: *RuntimeContext, payload: NotifPayload) void {
 }
 
 fn freePayloadBytes(ctx: *RuntimeContext, bytes: ReleasedPayloadBytes) void {
-    const start_ns: u64 = @intCast(std.time.nanoTimestamp());
+    var free_timer = std.time.Timer.start() catch unreachable;
     ctx.allocator.free(bytes);
-    const end_ns: u64 = @intCast(std.time.nanoTimestamp());
+    const elapsed_ns = free_timer.read();
 
     _ = ctx.metrics.payloads_freed.fetchAdd(1, .monotonic);
-    _ = ctx.metrics.payload_free_wall_ns.fetchAdd(end_ns -| start_ns, .monotonic);
+    _ = ctx.metrics.payload_free_wall_ns.fetchAdd(elapsed_ns, .monotonic);
 }

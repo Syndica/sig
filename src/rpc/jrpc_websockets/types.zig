@@ -394,7 +394,7 @@ pub const SerializeJob = struct {
     event_data: EventData,
     encoding: methods.Encoding,
     sub_method: SubMethod,
-    submitted_ns: u64,
+    submitted_at: std.time.Instant,
 };
 
 /// Commit result from worker -> loop thread.
