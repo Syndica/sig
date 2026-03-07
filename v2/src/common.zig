@@ -10,6 +10,7 @@ pub const net = @import("common/net.zig");
 pub const crypto = @import("common/crypto.zig");
 pub const solana = @import("common/solana.zig");
 pub const shred = @import("common/shred.zig");
+pub const observability = @import("common/observability.zig");
 
 pub const test_data_dir = "../data/test-data/";
 
