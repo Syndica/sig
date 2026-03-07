@@ -17,6 +17,7 @@ const Ancestors = sig.core.Ancestors;
 const Account = sig.core.Account;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const PubkeyMap = sig.utils.collections.PubkeyMap;
+const ids = sig.runtime.ids;
 
 pub const MAX_SLOTS = 4096;
 
@@ -147,6 +148,42 @@ pub fn getByOwner(
 
         for (index.entries.values(), index.entries.keys()) |*acc, pk| {
             if (!acc.owner.equals(&owner)) continue;
+            try map.put(allocator, pk, {});
+        }
+    }
+
+    return map;
+}
+
+/// Returns the set of pubkeys for SPL token accounts whose token owner (data[32..64])
+/// matches `token_owner` and whose account owner is SPL Token or Token-2022,
+/// visible to the given ancestor set.
+/// The caller is responsible for resolving each pubkey to its latest account state
+/// which avoids borrowing account data across lock boundaries.
+///
+/// Ref: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L818-L886
+pub fn getBySplTokenOwner(
+    self: *Unrooted,
+    allocator: std.mem.Allocator,
+    token_owner: Pubkey,
+    ancestors: *const Ancestors,
+) !PubkeyMap(void) {
+    var map = PubkeyMap(void){};
+    errdefer map.deinit(allocator);
+
+    for (self.slots) |*index| {
+        if (index.is_empty.load(.acquire)) continue;
+        if (!ancestors.containsSlot(index.slot)) continue;
+
+        index.lock.lockShared();
+        defer index.lock.unlockShared();
+
+        for (index.entries.values(), index.entries.keys()) |*acc, pk| {
+            const is_token_program = acc.owner.equals(&ids.TOKEN_PROGRAM_ID) or
+                acc.owner.equals(&ids.TOKEN_2022_PROGRAM_ID);
+            if (!is_token_program) continue;
+            if (acc.data.len < 64) continue;
+            if (!std.mem.eql(u8, acc.data[32..64], &token_owner.data)) continue;
             try map.put(allocator, pk, {});
         }
     }

@@ -247,6 +247,101 @@ pub fn ownerQuery(self: *Db, owner: *const Pubkey, ancestors: *const Ancestors) 
     };
 }
 
+/// Merges rooted and unrooted SPL token accounts whose token owner (data[32..64])
+/// matches `token_owner`. Follows the same merge strategy as `OwnerQuery`:
+/// rooted results are deduplicated against the unrooted set, then remaining
+/// unrooted-only pubkeys are resolved and verified.
+///
+/// Ref: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L818-L886
+pub const SplTokenOwnerQuery = struct {
+    rooted_iter: Rooted.SplTokenOwnerIterator,
+    unrooted_set: PubkeyMap(void),
+    db: *Db,
+    ancestors: *const Ancestors,
+    allocator: std.mem.Allocator,
+    token_owner: Pubkey,
+    unrooted_index: usize = 0,
+
+    const ids = sig.runtime.ids;
+
+    pub fn next(self: *SplTokenOwnerQuery) !?struct { Pubkey, Account } {
+        // Drain rooted iterator, deduplicating against unrooted.
+        while (self.rooted_iter.next()) |entry| {
+            const pubkey, const account = entry;
+            if (self.unrooted_set.swapRemove(pubkey)) {
+                // Unrooted has a newer version — resolve via Db.get().
+                const resolved = try self.db.get(
+                    self.allocator,
+                    pubkey,
+                    self.ancestors,
+                ) orelse continue;
+                // Token owner may have changed in the newer unrooted slot.
+                if (!isSplTokenWithOwner(resolved, self.token_owner)) {
+                    resolved.deinit(self.allocator);
+                    continue;
+                }
+                return .{ pubkey, resolved };
+            }
+            return .{ pubkey, account };
+        }
+
+        // Remaining unrooted-only pubkeys.
+        const keys = self.unrooted_set.keys();
+        while (self.unrooted_index < keys.len) {
+            const pubkey = keys[self.unrooted_index];
+            self.unrooted_index += 1;
+            const account = try self.db.get(
+                self.allocator,
+                pubkey,
+                self.ancestors,
+            ) orelse continue;
+            // Token owner may have changed in a newer slot.
+            if (!isSplTokenWithOwner(account, self.token_owner)) {
+                account.deinit(self.allocator);
+                continue;
+            }
+            return .{ pubkey, account };
+        }
+        return null;
+    }
+
+    fn isSplTokenWithOwner(account: Account, token_owner: Pubkey) bool {
+        const is_token_program = account.owner.equals(&ids.TOKEN_PROGRAM_ID) or
+            account.owner.equals(&ids.TOKEN_2022_PROGRAM_ID);
+        if (!is_token_program) return false;
+        if (account.data.len() < 64) return false;
+        const data: []const u8 = switch (account.data) {
+            .owned_allocation => |d| d,
+            .unowned_allocation => |d| d,
+            else => return false, // should not happen from Db.get()
+        };
+        return std.mem.eql(u8, data[32..64], &token_owner.data);
+    }
+
+    pub fn deinit(self: *SplTokenOwnerQuery) void {
+        self.rooted_iter.deinit();
+        self.unrooted_set.deinit(self.allocator);
+    }
+};
+
+pub fn splTokenOwnerQuery(self: *Db, token_owner: *const Pubkey, ancestors: *const Ancestors) !SplTokenOwnerQuery {
+    var unrooted_set = try self.unrooted.getBySplTokenOwner(
+        self.allocator,
+        token_owner.*,
+        ancestors,
+    );
+    errdefer unrooted_set.deinit(self.allocator);
+    const rooted_iter = self.rooted.getBySplTokenOwner(token_owner);
+    return .{
+        .rooted_iter = rooted_iter,
+        .unrooted_set = unrooted_set,
+        .db = self,
+        .ancestors = ancestors,
+        .allocator = self.allocator,
+        .token_owner = token_owner.*,
+    };
+}
+
 const testing = struct {
     fn convert(account: Account) AccountSharedData {
         return .{
