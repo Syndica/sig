@@ -40,11 +40,12 @@ See [examples/echo_server.zig](examples/echo_server.zig) and [examples/simple_cl
 
 - **macOS (kqueue) / Linux (epoll):** `xev.Loop` must be initialized with a `ThreadPool`. libxev dispatches socket close operations to the thread pool on these backends; without one, closes fail and FDs leak. Both `Server.init` and `Client.init` assert that the thread pool is set.
 
-### Timers
+### Timers and Socket Options
 
 - **Handshake upgrade timeout** (`upgrade_timeout_ms`, client+server, default `10_000`): absolute deadline for completing the HTTP upgrade handshake. Always enabled.
 - **Idle timeout** (`idle_timeout_ms`, server only, default `null`): sends close on inactivity. Resets on each read.
 - **Close timeout** (`close_timeout_ms`, client+server, default `5000`): maximum time allowed in `.closing` before force-disconnect.
+- **TCP_NODELAY** (`tcp_nodelay`, client+server, default `false`): disables Nagle's algorithm for lower-latency small writes. You likely want this enabled, and then add your own flush interval timer if throughput is an issue.
 - **libxev tip:** prefer `Timer.cancel()` over raw `.cancel` completions (different behavior across backends). Note: cancellation still delivers the original callback with `error.Canceled`.
 
 ### Event Loop
@@ -121,6 +122,7 @@ src/
 ├── frame.zig             Frame parsing/encoding (RFC 6455 §5)
 ├── http.zig              HTTP parsing/encoding
 ├── reader.zig            Frame reader with buffer management
+├── socket_opts.zig       Shared socket option helpers (e.g. TCP_NODELAY)
 ├── control_queue.zig     Ring buffer for outbound control frames
 ├── server/
 │   ├── server.zig        TCP listener, accept loop, graceful shutdown
@@ -159,6 +161,7 @@ const Config = struct {
     idle_timeout_ms: ?u32 = null,
     upgrade_timeout_ms: u32 = 10_000,
     close_timeout_ms: u32 = 5_000,
+    tcp_nodelay: bool = false,
     handler_context: …,  // if Handler.Context != void: *Handler.Context, else: void ({})
 };
 ```
@@ -175,6 +178,7 @@ const Config = struct {
     max_message_size: usize = 16 * 1024 * 1024,
     upgrade_timeout_ms: u32 = 10_000,
     close_timeout_ms: u32 = 5_000,
+    tcp_nodelay: bool = false,
 };
 ```
 
@@ -192,6 +196,7 @@ var client = SimpleClient.init(allocator, &loop, &handler, &conn, &csprng, .{
     .max_message_size = 16 * 1024 * 1024,
     .upgrade_timeout_ms = 10_000,
     .close_timeout_ms = 5_000,
+    .tcp_nodelay = false,
 });
 try client.connect();
 // After handshake, `conn` is live — client can be discarded
@@ -249,7 +254,11 @@ fn peekBufferedBytes() []const u8 // raw bytes in read buffer (transient slice)
 Unit tests colocated in source files. E2E tests in `e2e_tests/`.
 
 ```bash
+# Run all tests (unit + e2e)
 zig build test --summary all
+
+# Run only tests matching a substring (applies to unit + e2e tests)
+zig build test -Dtest-filter='server.stress_tests.test.rapid message burst' --summary all
 ```
 
 ## Autobahn Testsuite

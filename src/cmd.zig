@@ -3,10 +3,17 @@ const builtin = @import("builtin");
 const build_options = @import("build-options");
 const cli = @import("cli");
 const sig = @import("sig.zig");
+const xev = @import("xev");
 const config = @import("config.zig");
 const tracy = @import("tracy");
 
+const jrpc_ws = @import("rpc/jrpc_websockets/lib.zig");
+
 const replay = sig.replay;
+
+const WSRPCHandler = jrpc_ws.handler.JRPCHandler;
+const WSRPCRuntimeContext = jrpc_ws.runtime.RuntimeContext;
+const WSRPCServer = WSRPCHandler.WebSocketServer;
 
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
@@ -1680,6 +1687,12 @@ fn validator(
     else
         null;
 
+    const event_sink: ?*jrpc_ws.types.EventSink = if (cfg.rpc_port != null)
+        try jrpc_ws.types.EventSink.create(allocator)
+    else
+        null;
+    defer if (event_sink) |sink| sink.destroy(allocator);
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db = &new_db },
@@ -1691,6 +1704,7 @@ fn validator(
         .voting_enabled = voting_enabled,
         .vote_account_address = maybe_vote_pubkey,
         .stop_at_slot = cfg.stop_at_slot,
+        .event_sink = event_sink,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -1745,6 +1759,7 @@ fn validator(
             app_base.exit,
             std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port),
             &app_base.rpc_hooks,
+            event_sink.?,
         })
     else
         null;
@@ -1762,7 +1777,82 @@ fn runRPCServer(
     exit: *std.atomic.Value(bool),
     server_addr: std.net.Address,
     rpc_hooks: *sig.rpc.Hooks,
+    event_sink: *jrpc_ws.types.EventSink,
 ) !void {
+    var commit_queue = try sig.sync.Channel(jrpc_ws.types.CommitMsg).init(allocator);
+    defer commit_queue.deinit();
+
+    var xev_pool = xev.ThreadPool.init(.{});
+    defer {
+        xev_pool.shutdown();
+        xev_pool.deinit();
+    }
+
+    var loop = try xev.Loop.init(.{ .thread_pool = &xev_pool });
+    defer loop.deinit();
+
+    var serialization_pool = sig.sync.ThreadPool.init(.{ .max_threads = 4 });
+    defer {
+        serialization_pool.shutdown();
+        serialization_pool.deinit();
+    }
+
+    var metrics = jrpc_ws.metrics.Metrics{};
+
+    var sub_map = jrpc_ws.sub_map.RPCSubMap.init(allocator, 1024);
+    defer sub_map.deinit();
+
+    var ws_runtime_ctx = WSRPCRuntimeContext{
+        .allocator = allocator,
+        .sub_map = &sub_map,
+        .inbound_event_queue = &event_sink.channel,
+        .commit_queue = &commit_queue,
+        .loop_async = &event_sink.loop_async,
+        .serialization_pool = &serialization_pool,
+        .metrics = &metrics,
+        .max_batch_bytes = 64 * 1024,
+        .loop = &loop,
+        .notify_pending = &event_sink.notify_pending,
+    };
+    defer ws_runtime_ctx.deinit();
+
+    var ws_server = try WSRPCServer.initNoListen(allocator, &loop, .{
+        .address = server_addr,
+        .handler_context = &ws_runtime_ctx,
+        .tcp_nodelay = true,
+        .close_timeout_ms = 5_000,
+        .upgrade_timeout_ms = 5_000,
+    });
+    defer ws_server.deinit();
+
+    var pending_connections = try sig.sync.Channel(PendingConnection).init(allocator);
+    defer {
+        while (pending_connections.tryReceive()) |pending| {
+            allocator.free(pending.initial_data);
+            std.posix.close(pending.fd);
+        }
+        pending_connections.deinit();
+    }
+
+    var ws_bridge = WebSocketBridge{
+        .allocator = allocator,
+        .logger = logger.withScope("WebSocketBridge"),
+        .runtime_ctx = &ws_runtime_ctx,
+        .pending_connections = &pending_connections,
+        .ws_server = &ws_server,
+    };
+
+    ws_runtime_ctx.wakeup_hook = .{
+        .ptr = &ws_bridge,
+        .onWake = WebSocketBridge.onWake,
+    };
+    ws_runtime_ctx.armAsyncWait();
+
+    const ws_server_ref: sig.rpc.server.WsServerRef = .{
+        .ptr = &ws_bridge,
+        .feedFn = WebSocketBridge.feedConnection,
+    };
+
     var server_ctx = try sig.rpc.server.Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
@@ -1770,17 +1860,123 @@ fn runRPCServer(
         .read_buffer_size = sig.rpc.server.MIN_READ_BUFFER_SIZE,
         .socket_addr = server_addr,
         .reuse_address = true,
+        .ws_server = ws_server_ref,
     });
     defer server_ctx.joinDeinit();
+
+    const loop_thread = try std.Thread.spawn(
+        .{},
+        runXevLoopThread,
+        .{ &loop, logger.withScope("runXevLoopThread") },
+    );
+    defer loop_thread.join();
 
     // var maybe_liou = try sig.rpc.server.LinuxIoUring.init(&server_ctx);
     // defer if (maybe_liou) |*liou| liou.deinit();
 
-    try sig.rpc.server.serve(
+    const serve_result = sig.rpc.server.serve(
         exit,
         &server_ctx,
         .basic, // if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else .basic,
     );
+
+    ws_bridge.shutdown_requested.store(true, .release);
+    ws_runtime_ctx.running = false;
+    ws_runtime_ctx.requestWakeup();
+    logger.info().log("Shutdown requested, waiting for WebSocketBridge to complete shutdown...");
+    ws_bridge.shutdown_complete.timedWait(15 * std.time.ns_per_s) catch {
+        logger.err().log("Timed out waiting for WebSocketBridge shutdown to complete");
+    };
+
+    try serve_result;
+}
+
+const PendingConnection = struct {
+    fd: std.posix.fd_t,
+    initial_data: []u8,
+};
+
+const WebSocketBridge = struct {
+    allocator: std.mem.Allocator,
+    logger: sig.trace.Logger("WebSocketBridge"),
+    runtime_ctx: *WSRPCRuntimeContext,
+    pending_connections: *sig.sync.Channel(PendingConnection),
+    ws_server: *WSRPCServer,
+    shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    shutdown_started: bool = false,
+    shutdown_complete: std.Thread.ResetEvent = .{},
+
+    fn feedConnection(ptr: *anyopaque, fd: std.posix.fd_t, initial_data: []const u8) !void {
+        const self: *WebSocketBridge = @ptrCast(@alignCast(ptr));
+        const data_copy = try self.allocator.dupe(u8, initial_data);
+        // TODO: add bounded queue/backpressure to avoid unbounded pending fd/data growth.
+        self.pending_connections.send(.{ .fd = fd, .initial_data = data_copy }) catch |err| {
+            // TODO: metric counter for failed send
+            self.allocator.free(data_copy);
+            return err;
+        };
+        self.runtime_ctx.requestWakeup();
+    }
+
+    fn onWake(ptr: *anyopaque) void {
+        const self: *WebSocketBridge = @ptrCast(@alignCast(ptr));
+        self.drainPendingConnections();
+
+        if (self.shutdown_requested.load(.acquire) and !self.shutdown_started) {
+            self.shutdown_started = true;
+            self.ws_server.shutdown(
+                10 * std.time.ms_per_s,
+                WebSocketBridge,
+                self,
+                onShutdownComplete,
+            );
+        }
+    }
+
+    fn onShutdownComplete(self_opt: ?*WebSocketBridge, _: WSRPCServer.ShutdownResult) void {
+        const self = self_opt orelse return;
+        self.runtime_ctx.loop.stop();
+        self.shutdown_complete.set();
+    }
+
+    fn drainPendingConnections(self: *WebSocketBridge) void {
+        while (self.pending_connections.tryReceive()) |pending| {
+            defer self.allocator.free(pending.initial_data);
+
+            setSocketNonBlocking(pending.fd) catch |err| {
+                // should never happen
+                self.logger.err().logf(
+                    "Failed to set pending connection socket non-blocking: {}",
+                    .{err},
+                );
+                std.posix.close(pending.fd);
+                continue;
+            };
+
+            self.ws_server.feedConnection(pending.fd, pending.initial_data) catch {
+                // shutting down or oom
+                // TODO: metric counter?
+                std.posix.close(pending.fd);
+            };
+        }
+    }
+};
+
+fn runXevLoopThread(loop: *xev.Loop, logger: sig.trace.Logger("runXevLoopThread")) void {
+    loop.run(.until_done) catch |err| {
+        // This should never happen, but if it does log it.
+        logger.err().logf("jrpc websocket loop thread exited with error: {}", .{err});
+    };
+}
+
+fn setSocketNonBlocking(fd: std.posix.fd_t) !void {
+    const FlagsInt = @typeInfo(std.posix.O).@"struct".backing_integer.?;
+    var flags_int: FlagsInt = @intCast(try std.posix.fcntl(fd, std.posix.F.GETFL, 0));
+    const flags = std.mem.bytesAsValue(std.posix.O, std.mem.asBytes(&flags_int));
+    if (!flags.NONBLOCK) {
+        flags.NONBLOCK = true;
+        _ = try std.posix.fcntl(fd, std.posix.F.SETFL, flags_int);
+    }
 }
 
 /// entrypoint to run a minimal replay node
@@ -1924,6 +2120,7 @@ fn replayOffline(
         .voting_enabled = false,
         .vote_account_address = null,
         .stop_at_slot = cfg.stop_at_slot,
+        .event_sink = null,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -2731,6 +2928,7 @@ const ReplayAndConsensusServiceState = struct {
             voting_enabled: bool,
             vote_account_address: ?Pubkey,
             stop_at_slot: ?Slot,
+            event_sink: ?*jrpc_ws.types.EventSink,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
@@ -2787,6 +2985,7 @@ const ReplayAndConsensusServiceState = struct {
                 .hard_forks = hard_forks,
                 .replay_threads = params.replay_threads,
                 .stop_at_slot = params.stop_at_slot,
+                .event_sink = params.event_sink,
             }, if (params.disable_consensus) .disabled else .enabled);
         };
         errdefer replay_state.deinit();
