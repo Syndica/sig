@@ -31,7 +31,7 @@ const SerializeTask = struct {
         const self: *SerializeTask = @alignCast(@fieldParentPtr("task", task));
         defer self.deinit();
 
-        const start_ns = std.time.nanoTimestamp();
+        const start_ns: u64 = @intCast(std.time.nanoTimestamp());
 
         const result: types.CommitResult = if (protocol.serializeNotification(
             self.allocator,
@@ -44,17 +44,9 @@ const SerializeTask = struct {
         else |err|
             .{ .serialize_error = err };
 
-        const end_ns = std.time.nanoTimestamp();
-        const serialize_ns_i = end_ns - start_ns;
-        const serialize_ns: u64 = if (serialize_ns_i > 0)
-            @intCast(serialize_ns_i)
-        else
-            0;
-        const pipeline_ns_i = end_ns - self.job.submitted_ns;
-        const pipeline_latency_ns: u64 = if (pipeline_ns_i > 0)
-            @intCast(pipeline_ns_i)
-        else
-            0;
+        const end_ns: u64 = @intCast(std.time.nanoTimestamp());
+        const serialize_ns = end_ns -| start_ns;
+        const pipeline_latency_ns = end_ns -| self.job.submitted_ns;
         const payload_bytes: u64 = switch (result) {
             .payload => |p| @intCast(p.payload().len),
             .serialize_error => 0,
