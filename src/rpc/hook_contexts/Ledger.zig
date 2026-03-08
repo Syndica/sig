@@ -10,6 +10,7 @@ const AccountKeys = parse_instruction.AccountKeys;
 const Allocator = std.mem.Allocator;
 const AncestorIterator = sig.ledger.Reader.AncestorIterator;
 const GetBlock = methods.GetBlock;
+const GetBlockProduction = methods.GetBlockProduction;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
@@ -26,6 +27,7 @@ const LedgerHookContext = @This();
 
 ledger: *sig.ledger.Ledger,
 slot_tracker: *const sig.replay.trackers.SlotTracker,
+epoch_tracker: *sig.core.EpochTracker,
 
 pub fn getBlock(
     self: LedgerHookContext,
@@ -194,6 +196,108 @@ pub fn getBlocksWithLimit(
     }
 
     return try blocks.toOwnedSlice(arena);
+}
+
+pub fn getBlockProduction(
+    self: LedgerHookContext,
+    arena: Allocator,
+    params: GetBlockProduction,
+) !GetBlockProduction.Response {
+    const config: GetBlockProduction.Config = params.config orelse .{};
+    const commitment = config.commitment orelse .finalized;
+    if (commitment == .processed) return error.ProcessedNotSupported;
+
+    // Parse optional identity filter.
+    const identity_filter: ?Pubkey = if (config.identity) |id_str|
+        Pubkey.parseRuntime(id_str) catch return error.InvalidParams
+    else
+        null;
+
+    // Resolve current slot and epoch schedule.
+    const current_slot = self.slot_tracker.getSlotForCommitment(commitment);
+    const epoch_schedule = &self.epoch_tracker.epoch_schedule;
+
+    // Determine slot range (default: current epoch start to current slot).
+    const first_slot: Slot = if (config.range) |range| range.firstSlot else blk: {
+        const epoch = epoch_schedule.getEpoch(current_slot);
+        break :blk epoch_schedule.getFirstSlotInEpoch(epoch);
+    };
+    const last_slot: Slot = if (config.range) |range|
+        range.lastSlot orelse current_slot
+    else
+        current_slot;
+
+    if (last_slot < first_slot) return error.InvalidParams;
+
+    // Collect rooted slots in range using forward iterator (batch, efficient).
+    const highest_root = self.slot_tracker.getSlotForCommitment(.finalized);
+    var rooted_set = std.AutoHashMapUnmanaged(Slot, void){};
+    {
+        var rooted_iter = try self.ledger.db.iterator(
+            sig.ledger.schema.schema.rooted_slots,
+            .forward,
+            first_slot,
+        );
+        while (try rooted_iter.nextKey()) |slot| {
+            if (slot > last_slot or slot > highest_root) break;
+            try rooted_set.put(arena, slot, {});
+        }
+    }
+
+    // For confirmed commitment, also collect confirmed-but-unrooted slots.
+    var confirmed_set = std.AutoHashMapUnmanaged(Slot, void){};
+    if (commitment == .confirmed) {
+        const latest_confirmed = self.slot_tracker.getSlotForCommitment(.confirmed);
+        const confirmed_slots = try self.getConfirmedUnrootedSlots(
+            arena,
+            latest_confirmed,
+            highest_root,
+        );
+        for (confirmed_slots) |slot| {
+            if (slot >= first_slot and slot <= last_slot) {
+                try confirmed_set.put(arena, slot, {});
+            }
+        }
+    }
+
+    // Get leader schedules (RC-managed, must release).
+    const ls = try self.epoch_tracker.getLeaderSchedules();
+    defer ls.release();
+
+    // Iterate slot range, build by_identity map using PubkeyMap internally
+    // to avoid duplicate string key allocations.
+    var by_identity_raw = sig.utils.collections.PubkeyMap([2]u64){};
+
+    var slot = first_slot;
+    while (slot <= last_slot) : (slot += 1) {
+        const leader = ls.leader_schedules.getLeader(slot) catch continue;
+
+        if (identity_filter) |filter| {
+            if (!leader.equals(&filter)) continue;
+        }
+
+        const block_produced = rooted_set.contains(slot) or confirmed_set.contains(slot);
+
+        const gop = try by_identity_raw.getOrPut(arena, leader);
+        if (!gop.found_existing) gop.value_ptr.* = .{ 0, 0 };
+        gop.value_ptr.*[0] += 1; // leader_slots
+        if (block_produced) gop.value_ptr.*[1] += 1; // blocks_produced
+    }
+
+    // Convert PubkeyMap to StringArrayHashMap for JSON serialization.
+    var by_identity = std.StringArrayHashMapUnmanaged([2]u64){};
+    for (by_identity_raw.keys(), by_identity_raw.values()) |key, value| {
+        const key_str = try arena.dupe(u8, key.base58String().constSlice());
+        try by_identity.put(arena, key_str, value);
+    }
+
+    return .{
+        .context = .{ .slot = current_slot },
+        .value = .{
+            .byIdentity = .{ .map = by_identity },
+            .range = .{ .firstSlot = first_slot, .lastSlot = last_slot },
+        },
+    };
 }
 
 pub fn getSignaturesForAddress(
