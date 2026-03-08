@@ -12,6 +12,7 @@ const AncestorIterator = sig.ledger.Reader.AncestorIterator;
 const GetBlock = methods.GetBlock;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
+const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetTransaction = methods.GetTransaction;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
@@ -194,6 +195,48 @@ pub fn getBlocksWithLimit(
     }
 
     return try blocks.toOwnedSlice(arena);
+}
+
+pub fn getSignatureStatuses(
+    self: LedgerHookContext,
+    arena: Allocator,
+    params: GetSignatureStatuses,
+) !GetSignatureStatuses.Response {
+    if (params.signatures.len > 256) return error.InvalidParams;
+
+    const search_history = if (params.config) |c|
+        c.searchTransactionHistory orelse false
+    else
+        false;
+
+    const highest_finalized_slot = self.slot_tracker.getSlotForCommitment(.finalized);
+    const reader = self.ledger.reader();
+    const statuses = try arena.alloc(
+        ?GetSignatureStatuses.Response.TransactionStatus,
+        params.signatures.len,
+    );
+
+    for (params.signatures, 0..) |signature, i| {
+        statuses[i] = if (search_history) blk: {
+            const slot, const status_meta = try reader.getRootedTransactionStatus(
+                arena,
+                signature,
+            ) orelse
+                break :blk null;
+            if (slot > highest_finalized_slot) break :blk null;
+            break :blk .{
+                .slot = slot,
+                .confirmations = null,
+                .err = status_meta.status,
+                .confirmationStatus = .finalized,
+            };
+        } else null;
+    }
+
+    return .{
+        .context = .{ .slot = highest_finalized_slot },
+        .value = statuses,
+    };
 }
 
 pub fn getSignaturesForAddress(

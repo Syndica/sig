@@ -1107,7 +1107,7 @@ pub const GetSignatureStatuses = struct {
             confirmations: ?usize = null,
             // TODO: should transaction_status move to core?
             err: ?sig.ledger.transaction_status.TransactionError = null,
-            confirmationStatus: ?[]const u8 = null,
+            confirmationStatus: ?common.Commitment = null,
         };
     };
 };
