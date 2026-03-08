@@ -22,6 +22,7 @@ const GetGenesisHash = methods.GetGenesisHash;
 const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
+const GetRecentPerformanceSamples = methods.GetRecentPerformanceSamples;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetSlot = methods.GetSlot;
@@ -374,7 +375,36 @@ test GetLeaderSchedule {
 // TODO: test getMinimumBalanceForRentExemption()
 // TODO: test getMultipleAccounts()
 // TODO: test getProgramAccounts()
-// TODO: test getRecentPerformanceSamples()
+test GetRecentPerformanceSamples {
+    // Request with no limit
+    try testRequest(
+        .getRecentPerformanceSamples,
+        .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getRecentPerformanceSamples","params":[]}
+        ,
+    );
+
+    // Request with limit
+    try testRequest(
+        .getRecentPerformanceSamples,
+        .{ .limit = 5 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getRecentPerformanceSamples","params":[5]}
+        ,
+    );
+
+    // Response serialization
+    const samples: []const GetRecentPerformanceSamples.RpcPerfSample = &.{.{
+        .slot = 348125,
+        .numTransactions = 150,
+        .numNonVoteTransactions = 45,
+        .numSlots = 2,
+        .samplePeriodSecs = 60,
+    }};
+    try expectJsonStringify(
+        \\[{"slot":348125,"numTransactions":150,"numNonVoteTransactions":45,"numSlots":2,"samplePeriodSecs":60}]
+    , samples);
+}
+
 // TODO: test getRecentPrioritizationFees()
 
 test GetSignatureStatuses {

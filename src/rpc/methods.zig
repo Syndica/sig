@@ -77,7 +77,7 @@ pub const MethodAndParams = union(enum) {
     getMinimumBalanceForRentExemption: noreturn,
     getMultipleAccounts: noreturn,
     getProgramAccounts: noreturn,
-    getRecentPerformanceSamples: noreturn,
+    getRecentPerformanceSamples: GetRecentPerformanceSamples,
     getRecentPrioritizationFees: noreturn,
     getSignaturesForAddress: GetSignaturesForAddress,
     getSignatureStatuses: GetSignatureStatuses,
@@ -1087,7 +1087,23 @@ pub const GetLeaderSchedule = struct {
 // TODO: getMinimumBalanceForRentExemption
 // TODO: getMultipleAccounts
 // TODO: getProgramAccounts
-// TODO: getRecentPerformanceSamples
+pub const GetRecentPerformanceSamples = struct {
+    /// Number of samples to return (maximum 720).
+    limit: ?u64 = null,
+
+    pub const max_limit = 720;
+
+    pub const Response = []const RpcPerfSample;
+
+    pub const RpcPerfSample = struct {
+        slot: Slot,
+        numTransactions: u64,
+        numNonVoteTransactions: ?u64,
+        numSlots: u64,
+        samplePeriodSecs: u16,
+    };
+};
+
 // TODO: getRecentPrioritizationFees
 
 pub const GetSignatureStatuses = struct {
