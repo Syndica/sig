@@ -546,6 +546,7 @@ fn prepareSlot(
         .replay_votes_sender = state.replay_votes_channel,
         .ledger = state.ledger,
         .account_store = svm_gateway.params.account_store,
+        .prioritization_fee_cache = state.prioritization_fee_cache,
     };
 
     const verify_ticks_params = replay.execution.VerifyTicksParams{

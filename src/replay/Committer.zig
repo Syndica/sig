@@ -42,6 +42,8 @@ replay_votes_sender: ?*Channel(ParsedVote),
 ledger: ?*Ledger,
 /// Account store for looking up accounts (e.g. mint accounts for token balance resolution)
 account_store: ?SlotAccountStore,
+/// Cache for tracking per-slot prioritization fees for RPC queries
+prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
 
 pub fn commitTransactions(
     self: Committer,
@@ -78,6 +80,29 @@ pub fn commitTransactions(
         }
         transaction_fees += tx_result.fees.transaction_fee;
         priority_fees += tx_result.fees.prioritization_fee;
+
+        // Update prioritization fee cache for non-vote transactions
+        if (self.prioritization_fee_cache) |cache| {
+            if (!isSimpleVoteTransaction(transaction.transaction)) {
+                const pubkeys = transaction.accounts.items(.pubkey);
+                const writables = transaction.accounts.items(.is_writable);
+                const MAX_TX_ACCOUNT_LOCKS = sig.runtime.account_loader.MAX_TX_ACCOUNT_LOCKS;
+                var writable_keys: [MAX_TX_ACCOUNT_LOCKS]sig.core.Pubkey = undefined;
+                var writable_count: usize = 0;
+                for (pubkeys, writables) |pubkey, is_writable| {
+                    if (is_writable) {
+                        writable_keys[writable_count] = pubkey;
+                        writable_count += 1;
+                    }
+                }
+                try cache.update(
+                    persistent_allocator,
+                    slot,
+                    tx_result.fees.compute_unit_price,
+                    writable_keys[0..writable_count],
+                );
+            }
+        }
 
         // TODO: fix nesting, this sucks
 

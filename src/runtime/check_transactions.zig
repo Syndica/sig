@@ -159,6 +159,7 @@ pub fn checkFeePayer(
         5_000,
         enable_secp256r1,
         fee_budget_limits.prioritization_fee,
+        compute_budget_limits.compute_unit_price,
     );
 
     if (validateFeePayer(
@@ -240,14 +241,22 @@ const SignatureCounts = struct {
 pub const FeeDetails = struct {
     transaction_fee: u64,
     prioritization_fee: u64,
+    /// The compute unit price in micro-lamports per compute unit.
+    /// Used by PrioritizationFeeCache to track per-slot minimum fees for RPC queries.
+    compute_unit_price: u64,
 
-    const DEFAULT: FeeDetails = .{ .transaction_fee = 0, .prioritization_fee = 0 };
+    const DEFAULT: FeeDetails = .{
+        .transaction_fee = 0,
+        .prioritization_fee = 0,
+        .compute_unit_price = 0,
+    };
 
     fn init(
         sig_counts: SignatureCounts,
         lamports_per_signature: u64,
         enable_secp256r1: bool,
         prioritization_fee: u64,
+        compute_unit_price: u64,
     ) FeeDetails {
         return .{
             .transaction_fee = calculateSignatureFee(
@@ -256,6 +265,7 @@ pub const FeeDetails = struct {
                 enable_secp256r1,
             ),
             .prioritization_fee = prioritization_fee,
+            .compute_unit_price = compute_unit_price,
         };
     }
 

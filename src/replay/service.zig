@@ -170,6 +170,7 @@ pub const Dependencies = struct {
     hard_forks: sig.core.HardForks,
     replay_threads: u32,
     stop_at_slot: ?Slot,
+    prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
 };
 
 pub const ConsensusStatus = enum {
@@ -194,6 +195,7 @@ pub const ReplayState = struct {
     execution_log_helper: replay.execution.LogHelper,
     replay_votes_channel: ?*Channel(ParsedVote),
     stop_at_slot: ?sig.core.Slot,
+    prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
 
     pub fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
@@ -268,6 +270,7 @@ pub const ReplayState = struct {
             .execution_log_helper = .init(.from(deps.logger)),
             .replay_votes_channel = replay_votes_channel,
             .stop_at_slot = deps.stop_at_slot,
+            .prioritization_fee_cache = deps.prioritization_fee_cache,
         };
     }
 };
@@ -596,6 +599,9 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     last_entry_hash,
                     state.ledger,
                 ));
+                if (state.prioritization_fee_cache) |cache| {
+                    cache.finalizeSlot(state.allocator, slot);
+                }
                 processed_a_slot = true;
             } else {
                 state.logger.info().logf("partially replayed slot: {}", .{slot});

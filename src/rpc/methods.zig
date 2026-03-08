@@ -78,7 +78,7 @@ pub const MethodAndParams = union(enum) {
     getMultipleAccounts: noreturn,
     getProgramAccounts: noreturn,
     getRecentPerformanceSamples: noreturn,
-    getRecentPrioritizationFees: noreturn,
+    getRecentPrioritizationFees: GetRecentPrioritizationFees,
     getSignaturesForAddress: GetSignaturesForAddress,
     getSignatureStatuses: GetSignatureStatuses,
     getSlot: GetSlot,
@@ -1088,7 +1088,18 @@ pub const GetLeaderSchedule = struct {
 // TODO: getMultipleAccounts
 // TODO: getProgramAccounts
 // TODO: getRecentPerformanceSamples
-// TODO: getRecentPrioritizationFees
+
+pub const GetRecentPrioritizationFees = struct {
+    /// Optional list of up to 128 account pubkeys to filter by.
+    account_keys: ?[]const Pubkey = null,
+
+    pub const Response = []const FeeResult;
+
+    pub const FeeResult = struct {
+        slot: u64,
+        prioritizationFee: u64,
+    };
+};
 
 pub const GetSignatureStatuses = struct {
     signatures: []const Signature,
