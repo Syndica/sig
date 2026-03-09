@@ -250,7 +250,7 @@ pub fn getFeeForMessage(
     arena: std.mem.Allocator,
     params: GetFeeForMessage,
 ) !GetFeeForMessage.Response {
-    const config = params.config orelse GetFeeForMessage.Config{};
+    const config: GetFeeForMessage.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
     const slot = self.slot_tracker.getSlotForCommitment(commitment);
@@ -302,13 +302,12 @@ pub fn getFeeForMessage(
         break :blk bq.getLamportsPerSignature(message.recent_blockhash);
     };
 
-    if (maybe_bq_lps == null) {
+    const bq_lps = maybe_bq_lps orelse {
         const nonce_result = check_transactions.loadMessageNonceAccount(
             arena,
             &runtime_txn,
             slot_account_reader,
         ) catch return empty_result;
-
         if (nonce_result) |r| {
             const nonce_address, const nonce_account, const nonce_data = r;
             _ = nonce_address;
@@ -319,9 +318,7 @@ pub fn getFeeForMessage(
             };
         }
         return empty_result;
-    }
-
-    const bq_lps = maybe_bq_lps.?;
+    };
 
     var fee_details: FeeDetails = FeeDetails.DEFAULT;
     if (bq_lps != 0) {
@@ -371,7 +368,7 @@ fn messageToRuntimeTransaction(
 ) std.mem.Allocator.Error!?RuntimeTransaction {
     const signatures = try arena.alloc(Signature, message.signature_count);
     @memset(signatures, Signature.ZEROES);
-    const transaction = sig.core.Transaction{
+    const transaction: sig.core.Transaction = .{
         .signatures = signatures,
         .version = version,
         .msg = message,
