@@ -1699,9 +1699,12 @@ fn validator(
         .epoch_tracker = &epoch_tracker,
     });
 
+    var max_retransmit_slot: std.atomic.Value(sig.core.Slot) = .init(0);
+
     try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.Ledger{
         .ledger = &ledger,
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+        .max_retransmit_slot = &max_retransmit_slot,
     });
 
     try app_base.rpc_hooks.set(
@@ -1736,6 +1739,7 @@ fn validator(
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = turbine_config.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
+            .max_retransmit_slot = &max_retransmit_slot,
             .rpc_hooks = null,
             .duplicate = if (replay_service_state.consensus) |consensus| .{
                 .shred_receiver = &duplicate_shreds,
@@ -2038,6 +2042,7 @@ fn shredNetwork(
         .fromContactInfo(gossip_service.my_contact_info);
 
     // shred networking
+    var max_retransmit_slot_standalone: std.atomic.Value(sig.core.Slot) = .init(0);
     var shred_network_manager = try sig.shred_network.start(shred_network_conf, .{
         .allocator = allocator,
         .logger = .from(app_base.logger),
@@ -2052,6 +2057,7 @@ fn shredNetwork(
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,
+        .max_retransmit_slot = &max_retransmit_slot_standalone,
         .rpc_hooks = null,
         // No consensus in the standalone mode, so duplicate slots are not reported.
         .duplicate = null,

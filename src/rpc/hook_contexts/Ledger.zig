@@ -13,6 +13,7 @@ const GetBlock = methods.GetBlock;
 const GetBlocks = methods.GetBlocks;
 const GetBlockTime = methods.GetBlockTime;
 const GetFirstAvailableBlock = methods.GetFirstAvailableBlock;
+const GetMaxRetransmitSlot = methods.GetMaxRetransmitSlot;
 const MinimumLedgerSlot = methods.MinimumLedgerSlot;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
@@ -29,6 +30,7 @@ const LedgerHookContext = @This();
 
 ledger: *sig.ledger.Ledger,
 slot_tracker: *const sig.replay.trackers.SlotTracker,
+max_retransmit_slot: *const std.atomic.Value(Slot),
 
 pub fn getBlock(
     self: LedgerHookContext,
@@ -98,6 +100,14 @@ pub fn getBlockTime(
     } else {
         return error.BlockNotAvailable;
     }
+}
+
+pub fn getMaxRetransmitSlot(
+    self: LedgerHookContext,
+    _: Allocator,
+    _: GetMaxRetransmitSlot,
+) !GetMaxRetransmitSlot.Response {
+    return self.max_retransmit_slot.load(.monotonic);
 }
 
 pub fn getBlocks(
