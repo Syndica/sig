@@ -171,6 +171,75 @@ pub const MetricId = struct {
     }
 };
 
+pub const MetricAppender = struct {
+    id_mem: []u8,
+    id_mem_end: *std.atomic.Value(u32),
+
+    gauges: []std.atomic.Value(u64),
+    gauges_end: *std.atomic.Value(u32),
+
+    histogram_data: []u64,
+    histogram_data_end: *std.atomic.Value(u32),
+
+    pub const GaugeKind = enum {
+        int,
+        float,
+
+        pub fn Type(comptime kind: GaugeKind) type {
+            return switch (kind) {
+                .int => u64,
+                .float => f64,
+            };
+        }
+    };
+
+    pub fn appendGauge(
+        self: MetricAppender,
+        metric_id: MetricId,
+        comptime kind: GaugeKind,
+        init_value: kind.Type(),
+    ) *std.atomic.Value(kind.Type()) {
+        const gauge_index = self.gauges_end.fetchAdd(1, .acq_rel);
+        self.appendMetricId(.{
+            .id = metric_id,
+            .kind = switch (kind) {
+                .int => .gauge_int,
+                .float => .gauge_float,
+            },
+            .index = gauge_index,
+        });
+        const gauge = &self.gauges[gauge_index];
+        gauge.* = .init(init_value);
+        return @ptrCast(gauge);
+    }
+
+    pub fn appendHistogram(
+        self: MetricAppender,
+        metric_id: MetricId,
+        bucket_count: u32,
+    ) Histogram.Raw {
+        const elem_count = Histogram.elementsFromBucketCount(bucket_count);
+        const elem_offs = self.histogram_data_end.fetchAdd(elem_count + 1, .acq_rel);
+        self.appendMetricId(.{
+            .id = metric_id,
+            .kind = .histogram,
+            .index = elem_offs,
+        });
+        self.histogram_data[elem_offs] = bucket_count;
+        return .{ .elements = self.histogram_data[elem_offs + 1 ..][0..elem_count] };
+    }
+
+    fn appendMetricId(self: MetricAppender, metric_detail: MetricDetail) void {
+        const id_mem_len = metric_detail.binaryLength();
+        const id_mem_offset = self.id_mem_end.fetchAdd(@intCast(id_mem_len), .acq_rel);
+
+        var id_mem_w: std.Io.Writer = .fixed(self.id_mem[id_mem_offset..][0..id_mem_len]);
+        metric_detail.binaryWrite(&id_mem_w) catch |err| switch (err) {
+            error.WriteFailed => unreachable,
+        };
+    }
+};
+
 /// This struct consists of pointers to a contiguous list of elements of size `@sizeOf(u64)`
 /// and alignment `@alignOf(u64)`.
 /// The order of the elements match the field order.
