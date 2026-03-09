@@ -364,7 +364,7 @@ pub fn getProgramAccounts(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1105-L1137
 pub fn getSupply(
-    self: @This(),
+    self: AccountHookContext,
     arena: std.mem.Allocator,
     params: GetSupply,
 ) !GetSupply.Response {
@@ -407,7 +407,6 @@ pub fn getSupply(
     while (try owner_iter.next()) |entry| {
         const pubkey, const account = entry;
         defer account.deinit(arena);
-        if (account.lamports == 0) continue;
 
         const data_slice: []const u8 = switch (account.data) {
             .unowned_allocation => |d| d,
@@ -421,17 +420,19 @@ pub fn getSupply(
     }
 
     // Sum lamports for all non-circulating accounts.
+    // [agave] All accounts in the set are included in the returned list regardless
+    // of balance; only the lamport sum is affected by actual balances.
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L48-L58
     var non_circulating_lamports: u64 = 0;
     var non_circulating_accounts = std.ArrayListUnmanaged(sig.core.Pubkey){};
 
     for (account_set.keys()) |pubkey| {
-        const maybe_account = slot_reader.get(arena, pubkey) catch continue;
-        if (maybe_account) |account| {
+        if (slot_reader.get(arena, pubkey) catch null) |account| {
             defer account.deinit(arena);
             non_circulating_lamports += account.lamports;
-            if (!exclude_accounts) {
-                try non_circulating_accounts.append(arena, pubkey);
-            }
+        }
+        if (!exclude_accounts) {
+            try non_circulating_accounts.append(arena, pubkey);
         }
     }
 
