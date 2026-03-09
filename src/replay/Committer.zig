@@ -122,16 +122,17 @@ pub fn commitTransactions(
         {
             const status_cache_zone = tracy.Zone.init(
                 @src(),
-                .{ .name = "status_cache.insert: signature.toBytes()" },
+                .{ .name = "status_cache.insertSignature" },
             );
             defer status_cache_zone.deinit();
 
-            try self.status_cache.insert(
+            try self.status_cache.insertSignature(
                 persistent_allocator,
                 rng.random(),
                 recent_blockhash,
-                &signature.toBytes(),
+                signature,
                 slot,
+                tx_result.err,
             );
         }
 

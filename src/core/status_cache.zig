@@ -8,6 +8,7 @@ const RwMux = sig.sync.RwMux;
 const bincode = sig.bincode;
 
 const Hash = sig.core.Hash;
+const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 const Ancestors = sig.core.Ancestors;
 
@@ -19,13 +20,23 @@ const Fork = struct { slot: Slot, maybe_err: T = null };
 /// This is internally locking and thread safe.
 /// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/runtime/src/status_cache.rs#L39
 pub const StatusCache = struct {
+    /// Replay validation state (duplicate transaction detection).
     state: RwMux(State),
+    /// RPC state for `getSignatureStatuses` lookups (separate lock to avoid contention).
+    rpc_state: RwMux(RpcState),
 
     const State = struct {
         cache: HashMap(Hash, HighestFork),
         roots: HashMap(Slot, void),
         /// all keys seen during a fork/slot
         slot_deltas: HashMap(Slot, StatusKv),
+    };
+
+    const RpcState = struct {
+        /// Signature → status entry.
+        entries: HashMap(Signature, Fork),
+        /// Slot → list of signatures in that slot (for slot-based eviction).
+        slot_sigs: HashMap(Slot, ArrayList(Signature)),
     };
 
     const CACHED_KEY_SIZE = 20;
@@ -46,31 +57,50 @@ pub const StatusCache = struct {
             .roots = .empty,
             .slot_deltas = .empty,
         }),
+        .rpc_state = .init(.{
+            .entries = .empty,
+            .slot_sigs = .empty,
+        }),
     };
 
     pub fn deinit(self: *StatusCache, allocator: std.mem.Allocator) void {
-        var state = self.state.tryWrite() orelse
-            @panic("attempted to deinit StatusCache while still in use");
-        defer state.unlock();
+        {
+            var state = self.state.tryWrite() orelse
+                @panic("attempted to deinit StatusCache while still in use");
+            defer state.unlock();
 
-        state.mut().roots.deinit(allocator);
+            state.mut().roots.deinit(allocator);
 
-        for (state.mut().cache.values()) |*highest_fork| {
-            const highest_fork_map: *KeyMap = &highest_fork.key_map;
-            for (highest_fork_map.values()) |*fork_status| {
-                fork_status.deinit(allocator);
+            for (state.mut().cache.values()) |*highest_fork| {
+                const highest_fork_map: *KeyMap = &highest_fork.key_map;
+                for (highest_fork_map.values()) |*fork_status| {
+                    fork_status.deinit(allocator);
+                }
+                highest_fork_map.deinit(allocator);
             }
-            highest_fork_map.deinit(allocator);
-        }
-        state.mut().cache.deinit(allocator);
+            state.mut().cache.deinit(allocator);
 
-        for (state.mut().slot_deltas.values()) |*status_kv| {
-            for (status_kv.values()) |*value| {
-                value.status.deinit(allocator);
+            for (state.mut().slot_deltas.values()) |*status_kv| {
+                for (status_kv.values()) |*value| {
+                    value.status.deinit(allocator);
+                }
+                status_kv.deinit(allocator);
             }
-            status_kv.deinit(allocator);
+            state.mut().slot_deltas.deinit(allocator);
         }
-        state.mut().slot_deltas.deinit(allocator);
+
+        {
+            var rpc = self.rpc_state.tryWrite() orelse
+                @panic("attempted to deinit StatusCache rpc_state while still in use");
+            defer rpc.unlock();
+            const s = rpc.mut();
+
+            for (s.slot_sigs.values()) |*sigs| {
+                sigs.deinit(allocator);
+            }
+            s.slot_sigs.deinit(allocator);
+            s.entries.deinit(allocator);
+        }
     }
 
     pub fn getStatus(
@@ -98,6 +128,44 @@ pub const StatusCache = struct {
                 break fork;
             }
         } else null;
+    }
+
+    /// Look up a recent transaction status by signature (called from RPC thread).
+    /// Returns `null` if the signature is not in the cache (either too old or never seen).
+    pub fn getTransactionStatus(self: *StatusCache, signature: Signature) ?Fork {
+        var guard = self.rpc_state.read();
+        defer guard.unlock();
+        return guard.get().entries.get(signature);
+    }
+
+    /// Insert a transaction signature into both the replay validation cache and the
+    /// RPC status cache.
+    pub fn insertSignature(
+        self: *StatusCache,
+        allocator: std.mem.Allocator,
+        prng: std.Random,
+        blockhash: *const Hash,
+        signature: Signature,
+        slot: Slot,
+        err: T,
+    ) !void {
+        {
+            const zone = tracy.Zone.init(
+                @src(),
+                .{ .name = "status_cache.insert: signature.toBytes()" },
+            );
+            defer zone.deinit();
+            try self.insert(allocator, prng, blockhash, &signature.toBytes(), slot);
+        }
+
+        var guard = self.rpc_state.write();
+        defer guard.unlock();
+        const s = guard.mut();
+
+        try s.entries.put(allocator, signature, .{ .slot = slot, .maybe_err = err });
+
+        const slot_list = try s.slot_sigs.getOrPutValue(allocator, slot, .empty);
+        try slot_list.value_ptr.append(allocator, signature);
     }
 
     pub fn insert(
@@ -192,21 +260,47 @@ pub const StatusCache = struct {
         }
 
         {
+            var rpc = self.rpc_state.write();
+            defer rpc.unlock();
+            const rpc_s = rpc.mut();
+
             const slot_deltas = &state.mut().slot_deltas;
             var entries = slot_deltas.entries.slice();
             var i: usize = 0;
 
             while (i < slot_deltas.count()) {
-                if (entries.items(.key)[i] <= min_root) {
+                const evicted_slot = entries.items(.key)[i];
+                if (evicted_slot <= min_root) {
                     var status_kv = entries.items(.value)[i];
                     for (status_kv.values()) |*value| value.status.deinit(allocator);
                     status_kv.deinit(allocator);
 
                     slot_deltas.swapRemoveAt(i);
                     entries = slot_deltas.entries.slice();
+
+                    // Evict matching RPC state for this slot.
+                    if (rpc_s.slot_sigs.fetchSwapRemove(evicted_slot)) |kv| {
+                        var sigs = kv.value;
+                        for (sigs.items) |sig_key| _ = rpc_s.entries.swapRemove(sig_key);
+                        sigs.deinit(allocator);
+                    }
                 } else {
                     i += 1;
                 }
+            }
+
+            // Clean up any orphaned RPC slots not present in slot_deltas.
+            var j: usize = 0;
+            while (j < rpc_s.slot_sigs.count()) {
+                if (rpc_s.slot_sigs.keys()[j] > min_root) {
+                    j += 1;
+                    continue;
+                }
+
+                var sigs = rpc_s.slot_sigs.values()[j];
+                for (sigs.items) |sig_key| _ = rpc_s.entries.swapRemove(sig_key);
+                sigs.deinit(allocator);
+                rpc_s.slot_sigs.swapRemoveAt(j);
             }
         }
     }
@@ -366,4 +460,104 @@ test "status cache root expires" {
         null,
         status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
     );
+}
+
+test "RpcState: insert and get transaction status" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+    const blockhash = Hash.ZEROES;
+
+    var cache: StatusCache = .DEFAULT;
+    defer cache.deinit(allocator);
+
+    const sig1 = Signature.fromBytes([_]u8{1} ** 64);
+    const sig2 = Signature.fromBytes([_]u8{2} ** 64);
+
+    try cache.insertSignature(allocator, random, &blockhash, sig1, 100, null);
+    try cache.insertSignature(allocator, random, &blockhash, sig2, 100, null);
+
+    const entry1 = cache.getTransactionStatus(sig1).?;
+    try std.testing.expectEqual(@as(Slot, 100), entry1.slot);
+    try std.testing.expect(entry1.maybe_err == null);
+
+    const entry2 = cache.getTransactionStatus(sig2).?;
+    try std.testing.expectEqual(@as(Slot, 100), entry2.slot);
+
+    const sig3 = Signature.fromBytes([_]u8{3} ** 64);
+    try std.testing.expect(cache.getTransactionStatus(sig3) == null);
+}
+
+test "RpcState: addRoot evicts old transaction statuses" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+    const blockhash = Hash.ZEROES;
+
+    var cache: StatusCache = .DEFAULT;
+    defer cache.deinit(allocator);
+
+    const sig1 = Signature.fromBytes([_]u8{1} ** 64);
+    const sig2 = Signature.fromBytes([_]u8{2} ** 64);
+    const sig3 = Signature.fromBytes([_]u8{3} ** 64);
+
+    try cache.insertSignature(allocator, random, &blockhash, sig1, 0, null);
+    try cache.insertSignature(allocator, random, &blockhash, sig2, 1, null);
+    try cache.insertSignature(allocator, random, &blockhash, sig3, 2, null);
+
+    // Add enough roots to trigger eviction of slot 0.
+    for (0..StatusCache.MAX_CACHE_ENTRIES + 1) |i| try cache.addRoot(allocator, i);
+
+    try std.testing.expect(cache.getTransactionStatus(sig1) == null);
+    try std.testing.expect(cache.getTransactionStatus(sig2) != null);
+    try std.testing.expect(cache.getTransactionStatus(sig3) != null);
+}
+
+test "RpcState: orphaned slot_sigs are cleaned up by addRoot" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+    const blockhash = Hash.ZEROES;
+
+    var cache: StatusCache = .DEFAULT;
+    defer cache.deinit(allocator);
+
+    const sig1 = Signature.fromBytes([_]u8{1} ** 64);
+
+    // Insert into rpc_state only (bypassing slot_deltas) to simulate an orphan.
+    {
+        var rpc = cache.rpc_state.write();
+        defer rpc.unlock();
+        const s = rpc.mut();
+        try s.entries.put(allocator, sig1, .{ .slot = 0, .maybe_err = null });
+        const slot_list = try s.slot_sigs.getOrPutValue(allocator, 0, .empty);
+        try slot_list.value_ptr.append(allocator, sig1);
+    }
+
+    // Verify the orphan is visible.
+    try std.testing.expect(cache.getTransactionStatus(sig1) != null);
+
+    // Fill roots with slots 1..MAX_CACHE_ENTRIES+1 to trigger eviction of slot 0.
+    // Start at 1 so slot 0 never appears in slot_deltas, keeping the orphan truly orphaned.
+    for (1..StatusCache.MAX_CACHE_ENTRIES + 2) |i| {
+        try cache.insert(
+            allocator,
+            random,
+            &blockhash,
+            &(Signature.fromBytes([_]u8{0} ** 64)).toBytes(),
+            i,
+        );
+        try cache.addRoot(allocator, i);
+    }
+
+    // The orphaned rpc_state entry for slot 0 should be cleaned up.
+    try std.testing.expect(cache.getTransactionStatus(sig1) == null);
+
+    // Verify both slot_sigs and entries are cleaned up.
+    {
+        var rpc = cache.rpc_state.read();
+        defer rpc.unlock();
+        try std.testing.expect(rpc.get().slot_sigs.get(0) == null);
+        try std.testing.expect(rpc.get().entries.get(sig1) == null);
+    }
 }

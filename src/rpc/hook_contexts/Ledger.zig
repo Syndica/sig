@@ -27,6 +27,7 @@ const LedgerHookContext = @This();
 
 ledger: *sig.ledger.Ledger,
 slot_tracker: *const sig.replay.trackers.SlotTracker,
+status_cache: *sig.core.StatusCache,
 
 pub fn getBlock(
     self: LedgerHookContext,
@@ -217,6 +218,22 @@ pub fn getSignatureStatuses(
     );
 
     for (params.signatures, 0..) |signature, i| {
+        // First, try the in-memory recent transaction status cache.
+        // This covers transactions from approximately the last ~300 slots.
+        if (self.status_cache.getTransactionStatus(signature)) |entry| {
+            statuses[i] = .{
+                .slot = entry.slot,
+                .confirmations = null,
+                .err = entry.maybe_err,
+                .confirmationStatus = if (entry.slot <= highest_finalized_slot)
+                    .finalized
+                else
+                    .confirmed,
+            };
+            continue;
+        }
+
+        // If searchTransactionHistory is set, fall back to the persistent blockstore.
         statuses[i] = if (search_history) blk: {
             const slot, const status_meta = try reader.getRootedTransactionStatus(
                 arena,
