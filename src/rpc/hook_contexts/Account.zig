@@ -317,17 +317,11 @@ pub fn getProgramAccounts(
         defer z.deinit();
         break :blk try slot_reader.getByOwner(arena, &params.program_id);
     };
-    defer iter.deinit();
 
     var results = std.ArrayListUnmanaged(GetProgramAccounts.Value){};
-    defer {
-        for (results.items) |v| v.account.data.deinit(arena);
-        results.deinit(arena);
-    }
 
     while (try iter.next()) |entry| {
         const pubkey, const account = entry;
-        defer account.deinit(arena);
         if (account.lamports == 0) continue;
         const data_slice: []const u8 = switch (account.data) {
             .unowned_allocation => |d| d,
@@ -344,7 +338,6 @@ pub fn getProgramAccounts(
             slot_reader,
             config.dataSlice,
         );
-        errdefer data.deinit(arena);
         try results.append(arena, .{
             .pubkey = pubkey,
             .account = .from(account, data),
