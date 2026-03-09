@@ -12,6 +12,7 @@ const AncestorIterator = sig.ledger.Reader.AncestorIterator;
 const GetBlock = methods.GetBlock;
 const GetBlocks = methods.GetBlocks;
 const GetBlockTime = methods.GetBlockTime;
+const GetFirstAvailableBlock = methods.GetFirstAvailableBlock;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetTransaction = methods.GetTransaction;
@@ -216,6 +217,14 @@ pub fn getBlocksWithLimit(
     }
 
     return try blocks.toOwnedSlice(arena);
+}
+
+pub fn getFirstAvailableBlock(
+    self: LedgerHookContext,
+    _: Allocator,
+    _: GetFirstAvailableBlock,
+) !GetFirstAvailableBlock.Response {
+    return self.ledger.reader().getFirstAvailableBlock() catch 0;
 }
 
 pub fn getSignaturesForAddress(

@@ -19,6 +19,7 @@ const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
+const GetFirstAvailableBlock = methods.GetFirstAvailableBlock;
 const GetGenesisHash = methods.GetGenesisHash;
 const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
@@ -309,7 +310,15 @@ test GetEpochSchedule {
 }
 
 // TODO: test getFeeForMessage()
-// TODO: test getFirstAvailableBlock()
+
+test GetFirstAvailableBlock {
+    try testRequest(.getFirstAvailableBlock, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getFirstAvailableBlock","params":[]}
+    );
+    try testResponse(GetFirstAvailableBlock, .{ .result = 250000 },
+        \\{"jsonrpc":"2.0","result":250000,"id":1}
+    );
+}
 
 test GetGenesisHash {
     try testRequest(.getGenesisHash, .{},

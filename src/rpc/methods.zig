@@ -55,7 +55,7 @@ pub const MethodAndParams = union(enum) {
     getEpochInfo: GetEpochInfo,
     getEpochSchedule: GetEpochSchedule,
     getFeeForMessage: noreturn,
-    getFirstAvailableBlock: noreturn,
+    getFirstAvailableBlock: GetFirstAvailableBlock,
 
     /// https://github.com/Syndica/sig/issues/557
     getGenesisHash: GetGenesisHash,
@@ -970,7 +970,10 @@ pub const GetEpochSchedule = struct {
 };
 
 // TODO: getFeeForMessage
-// TODO: getFirstAvailableBlock
+
+pub const GetFirstAvailableBlock = struct {
+    pub const Response = Slot;
+};
 
 pub const GetGenesisHash = struct {
     pub const Response = struct {
