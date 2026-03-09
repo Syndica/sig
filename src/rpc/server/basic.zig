@@ -502,19 +502,20 @@ fn handleRpcRequest(
             }
 
             const allocator = json_arena;
-            const handler_zone = tracy.Zone.init(@src(), .{ .name = "rpc.handler" });
-            const result = server_ctx.rpc_hooks.call(
-                allocator,
-                method,
-                @field(rpc_request.method, @tagName(method)),
-            ) catch |e| switch (e) {
-                error.MethodNotImplemented => {
-                    handler_zone.deinit();
-                    try sendFinalMethodNotFound(request, logger, method, rpc_request.id);
-                    return;
-                },
+            const result = blk: {
+                const handler_zone = tracy.Zone.init(@src(), .{ .name = "rpc.handler" });
+                defer handler_zone.deinit();
+                break :blk server_ctx.rpc_hooks.call(
+                    allocator,
+                    method,
+                    @field(rpc_request.method, @tagName(method)),
+                ) catch |e| switch (e) {
+                    error.MethodNotImplemented => {
+                        try sendFinalMethodNotFound(request, logger, method, rpc_request.id);
+                        return;
+                    },
+                };
             };
-            handler_zone.deinit();
 
             return switch (result) {
                 .ok => |response_result| try writeFinalJsonResponse(request, .{}, .{
