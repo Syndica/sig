@@ -84,7 +84,7 @@ pub const MethodAndParams = union(enum) {
     getSlotLeader: noreturn,
     getSlotLeaders: noreturn,
     getStakeMinimumDelegation: noreturn,
-    getSupply: noreturn,
+    getSupply: GetSupply,
     getTokenAccountBalance: GetTokenAccountBalance,
     getTokenAccountsByDelegate: noreturn,
     getTokenAccountsByOwner: noreturn,
@@ -1230,7 +1230,28 @@ pub const GetSlot = struct {
 // TODO: getSlotLeaders
 // TODO: getStakeActivation
 // TODO: getStakeMinimumDelegation
-// TODO: getSupply
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1105-L1137
+pub const GetSupply = struct {
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        excludeNonCirculatingAccountsList: ?bool = null,
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        value: Value,
+
+        pub const Value = struct {
+            total: u64,
+            circulating: u64,
+            nonCirculating: u64,
+            nonCirculatingAccounts: []const Pubkey,
+        };
+    };
+};
+
 pub const GetTokenAccountBalance = struct {
     pubkey: Pubkey,
     config: ?Config = null,
