@@ -14,6 +14,7 @@ const GetBalance = methods.GetBalance;
 const GetBlock = methods.GetBlock;
 const GetBlockCommitment = methods.GetBlockCommitment;
 const GetBlockHeight = methods.GetBlockHeight;
+const GetBlockTime = methods.GetBlockTime;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetEpochInfo = methods.GetEpochInfo;
@@ -170,6 +171,20 @@ test GetBlockHeight {
     );
     try testResponse(GetBlockHeight, .{ .result = 268651537 },
         \\{"jsonrpc":"2.0","result":268651537,"id":1}
+    );
+}
+
+test GetBlockTime {
+    try testRequest(.getBlockTime, .{ .slot = 5 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockTime","params":[5]}
+    );
+    // Response with a timestamp
+    try testResponse(GetBlockTime, .{ .result = 1574721591 },
+        \\{"jsonrpc":"2.0","result":1574721591,"id":1}
+    );
+    // Response with null (block time not available)
+    try testResponse(GetBlockTime, .{ .result = null },
+        \\{"jsonrpc":"2.0","result":null,"id":1}
     );
 }
 

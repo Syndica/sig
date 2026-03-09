@@ -50,7 +50,7 @@ pub const MethodAndParams = union(enum) {
     getBlockProduction: noreturn,
     getBlocks: GetBlocks,
     getBlocksWithLimit: GetBlocksWithLimit,
-    getBlockTime: noreturn,
+    getBlockTime: GetBlockTime,
     getClusterNodes: GetClusterNodes,
     getEpochInfo: GetEpochInfo,
     getEpochSchedule: GetEpochSchedule,
@@ -847,7 +847,12 @@ pub const GetBlockHeight = struct {
 };
 
 // TODO: getBlockProduction
-// TODO: getBlockTime
+
+pub const GetBlockTime = struct {
+    slot: Slot,
+
+    pub const Response = ?i64;
+};
 
 pub const GetBlocks = struct {
     start_slot: Slot,

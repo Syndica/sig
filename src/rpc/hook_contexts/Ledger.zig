@@ -11,6 +11,7 @@ const Allocator = std.mem.Allocator;
 const AncestorIterator = sig.ledger.Reader.AncestorIterator;
 const GetBlock = methods.GetBlock;
 const GetBlocks = methods.GetBlocks;
+const GetBlockTime = methods.GetBlockTime;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetTransaction = methods.GetTransaction;
@@ -74,6 +75,27 @@ pub fn getBlock(
         .show_rewards = show_rewards,
         .max_supported_version = max_supported_version,
     });
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/rpc/src/rpc.rs#L1577-L1609
+pub fn getBlockTime(
+    self: LedgerHookContext,
+    arena: Allocator,
+    params: GetBlockTime,
+) !GetBlockTime.Response {
+    const reader = self.ledger.reader();
+    const highest_root = self.slot_tracker.getSlotForCommitment(.finalized);
+
+    if (params.slot <= highest_root) {
+        return reader.getRootedBlockTime(arena, params.slot) catch |err| switch (err) {
+            error.SlotNotRooted => return error.BlockNotAvailable,
+            error.SlotUnavailable => return null,
+            error.SlotCleanedUp => return error.SlotCleanedUp,
+            else => return err,
+        };
+    } else {
+        return error.BlockNotAvailable;
+    }
 }
 
 pub fn getBlocks(
