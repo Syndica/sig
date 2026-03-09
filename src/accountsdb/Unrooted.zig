@@ -135,7 +135,7 @@ pub fn getByOwner(
     owner: Pubkey,
     ancestors: *const Ancestors,
 ) !PubkeyMap(void) {
-     var map: PubkeyMap(void) = .empty;
+    var map: PubkeyMap(void) = .empty;
     errdefer map.deinit(allocator);
 
     for (self.slots) |*index| {
