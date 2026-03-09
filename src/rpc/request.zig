@@ -115,7 +115,7 @@ pub const Request = struct {
                 inline else => |tag| @unionInit(MethodAndParams, @tagName(tag), blk: {
                     const Params = @FieldType(MethodAndParams, @tagName(tag));
                     if (Params == noreturn) {
-                        return error.MethodNotImplemented;
+                        return diag.initErr(error.MethodNotImplemented, .{ .id = id });
                     }
 
                     break :blk jsonParseValuesAsParamsArray(

@@ -1,0 +1,12 @@
+.{
+    .sandboxing_mode = .sandboxed,
+
+    .cluster = .testnet,
+    .leader_schedule_file = "schedule.txt",
+    .gossip = .{
+        .port = 8001,
+    },
+    .shred_network = .{
+        .recv_port = 8002,
+    },
+}

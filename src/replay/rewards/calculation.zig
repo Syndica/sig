@@ -32,6 +32,7 @@ const StakeRewards = sig.replay.rewards.StakeRewards;
 const PointValue = sig.replay.rewards.inflation_rewards.PointValue;
 const PartitionedStakeReward = sig.replay.rewards.PartitionedStakeReward;
 const PartitionedStakeRewards = sig.replay.rewards.PartitionedStakeRewards;
+const PartitionedVoteRewards = sig.replay.rewards.PartitionedVoteRewards;
 const PartitionedVoteReward = sig.replay.rewards.PartitionedVoteReward;
 
 const redeemRewards = sig.replay.rewards.inflation_rewards.redeemRewards;
@@ -59,6 +60,7 @@ pub fn beginPartitionedRewards(
         slot,
         &slot_constants.ancestors,
     );
+    defer current_epoch_info.release();
     const epoch_vote_accounts = current_epoch_info.stakes.stakes.vote_accounts;
 
     const slots_per_year = epoch_tracker.cluster.slotsPerYear();
@@ -72,7 +74,7 @@ pub fn beginPartitionedRewards(
         epoch_schedule,
     );
 
-    const distributed_rewards, const point_value, const stake_rewards =
+    const distributed_rewards, const point_value, const stake_rewards, const vote_rewards =
         try calculateRewardsAndDistributeVoteRewards(
             allocator,
             slot,
@@ -99,7 +101,9 @@ pub fn beginPartitionedRewards(
     slot_state.reward_status = .{ .active = .{
         .distribution_start_block_height = distribution_starting_blockheight,
         .all_stake_rewards = stake_rewards,
+        .all_vote_rewards = vote_rewards,
         .partitioned_indices = null,
+        .distributed_rewards = .empty,
     } };
 
     const blockhash_queue, var blockhash_queue_lg = slot_state.blockhash_queue.readWithLock();
@@ -195,6 +199,7 @@ fn calculateRewardsAndDistributeVoteRewards(
     u64,
     PointValue,
     PartitionedStakeRewards,
+    PartitionedVoteRewards,
 } {
     // TODO: Lookup in rewards calculation cache
     var rewards_for_partitioning = try calculateRewardsForPartitioning(
@@ -221,9 +226,6 @@ fn calculateRewardsAndDistributeVoteRewards(
         new_warmup_and_cooldown_rate_epoch,
     );
 
-    // TODO: Update vote rewards
-    // Looks like this is for metadata, and not protocol defining
-
     std.debug.assert(rewards_for_partitioning.point_value.rewards >=
         rewards_for_partitioning.vote_rewards.total_vote_rewards_lamports +
             rewards_for_partitioning.stake_rewards.total_stake_rewards_lamports);
@@ -234,10 +236,12 @@ fn calculateRewardsAndDistributeVoteRewards(
     );
 
     rewards_for_partitioning.stake_rewards.stake_rewards.acquire();
+    rewards_for_partitioning.vote_rewards.vote_rewards.acquire();
     return .{
         rewards_for_partitioning.vote_rewards.total_vote_rewards_lamports,
         rewards_for_partitioning.point_value,
         rewards_for_partitioning.stake_rewards.stake_rewards,
+        rewards_for_partitioning.vote_rewards.vote_rewards,
     };
 }
 
@@ -745,6 +749,7 @@ test calculateRewardsAndDistributeVoteRewards {
         slot_store,
     );
     defer result[2].deinit(allocator);
+    defer result[3].deinit(allocator);
 
     const updated_vote_account = try slot_store.reader().get(
         allocator,

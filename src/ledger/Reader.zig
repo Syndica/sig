@@ -1517,9 +1517,8 @@ pub const VersionedConfirmedBlock = struct {
     block_time: ?UnixTimestamp,
     block_height: ?u64,
 
-    pub fn deinit(self: @This(), allocator: Allocator) void {
+    pub fn deinit(self: VersionedConfirmedBlock, allocator: Allocator) void {
         for (self.transactions) |it| it.deinit(allocator);
-        for (self.rewards) |it| it.deinit(allocator);
         allocator.free(self.transactions);
         allocator.free(self.rewards);
     }
@@ -1546,20 +1545,31 @@ const ConfirmedTransactionWithStatusMeta = struct {
     slot: Slot,
     tx_with_meta: TransactionWithStatusMeta,
     block_time: ?UnixTimestamp,
+
+    pub fn deinit(self: ConfirmedTransactionWithStatusMeta, allocator: Allocator) void {
+        self.tx_with_meta.deinit(allocator);
+    }
 };
 
-const TransactionWithStatusMeta = union(enum) {
+pub const TransactionWithStatusMeta = union(enum) {
     // Very old transactions may be missing metadata
     missing_metadata: Transaction,
     // Versioned stored transaction always have metadata
     complete: VersionedTransactionWithStatusMeta,
+
+    pub fn deinit(self: TransactionWithStatusMeta, allocator: Allocator) void {
+        switch (self) {
+            .missing_metadata => |tx| tx.deinit(allocator),
+            .complete => |versioned| versioned.deinit(allocator),
+        }
+    }
 };
 
 pub const VersionedTransactionWithStatusMeta = struct {
     transaction: Transaction,
     meta: TransactionStatusMeta,
 
-    pub fn deinit(self: @This(), allocator: Allocator) void {
+    pub fn deinit(self: VersionedTransactionWithStatusMeta, allocator: Allocator) void {
         self.transaction.deinit(allocator);
         self.meta.deinit(allocator);
     }
@@ -2498,6 +2508,7 @@ test getTransactionStatus {
         .loaded_addresses = .{},
         .return_data = .{},
         .compute_units_consumed = 1000,
+        .cost_units = null,
     };
 
     // insert transaction status and root it
@@ -2689,6 +2700,7 @@ test getConfirmedSignaturesForAddress {
         .loaded_addresses = .{},
         .return_data = .{},
         .compute_units_consumed = 1000,
+        .cost_units = null,
     };
     try write_batch.put(schema.transaction_status, .{ sig1, slot }, status_meta);
 

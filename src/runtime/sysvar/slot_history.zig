@@ -9,8 +9,6 @@ const Pubkey = sig.core.Pubkey;
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
 
-pub const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
-
 /// Analogous to [Check](https://github.com/anza-xyz/agave/blob/fc2a8794be2526e9fd6cdbc9b304c055b2d9cc57/sdk/program/src/slot_history.rs#L46)
 pub const SlotCheckResult = enum { future, too_old, found, not_found };
 
@@ -24,6 +22,8 @@ pub const SlotHistory = struct {
     pub const ID: Pubkey = .parse("SysvarS1otHistory11111111111111111111111111");
 
     pub const STORAGE_SIZE: u64 = 131_097;
+
+    pub const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
 
     /// Agave initialises new slot history with the first slot set.
     /// This only impacts gensis when the slot history is not fully populated.

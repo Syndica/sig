@@ -19,6 +19,8 @@ const PartitionedStakeRewards = sig.replay.rewards.PartitionedStakeRewards;
 const PartitionedIndices = sig.replay.rewards.PartitionedIndices;
 const StakeReward = sig.replay.rewards.StakeReward;
 
+const Reward = sig.ledger.transaction_status.Reward;
+
 const EpochRewards = sig.runtime.sysvar.EpochRewards;
 const Rent = sig.runtime.sysvar.Rent;
 
@@ -38,8 +40,8 @@ pub fn distributePartitionedEpochRewards(
     slot_store: SlotAccountStore,
     new_rate_activation_epoch: ?Epoch,
 ) !void {
-    var stake_rewards = switch (epoch_reward_status.*) {
-        .active => |active| active,
+    const stake_rewards = switch (epoch_reward_status.*) {
+        .active => |*active| active,
         .inactive => return,
     };
 
@@ -63,7 +65,6 @@ pub fn distributePartitionedEpochRewards(
             );
 
         stake_rewards.partitioned_indices = try .init(allocator, partition_indices);
-        epoch_reward_status.* = .{ .active = stake_rewards };
     }
 
     const partition_rewards, const partition_indices = .{
@@ -92,6 +93,7 @@ pub fn distributePartitionedEpochRewards(
             stakes_cache,
             slot_store,
             new_rate_activation_epoch,
+            &stake_rewards.distributed_rewards,
         );
     }
 
@@ -129,6 +131,7 @@ fn distributeEpochRewardsInPartition(
     stakes_cache: *StakesCache,
     slot_store: SlotAccountStore,
     new_rate_activation_epoch: ?Epoch,
+    distributed_rewards: *std.ArrayListUnmanaged(Reward),
 ) !void {
     const lamports_distributed, const lamports_burnt, const updated_stake_rewards =
         try storeStakeAccountsInPartition(
@@ -168,8 +171,28 @@ fn distributeEpochRewardsInPartition(
         },
     );
 
-    // NOTE: Used for metadata
-    // updateRewardHistoryInPartition(updated_stake_rewards);
+    try addStakeRewardsToDistributedRewards(
+        allocator,
+        updated_stake_rewards,
+        distributed_rewards,
+    );
+}
+
+fn addStakeRewardsToDistributedRewards(
+    allocator: Allocator,
+    stake_rewards: []const StakeReward,
+    distributed_rewards: *std.ArrayListUnmanaged(Reward),
+) !void {
+    try distributed_rewards.ensureTotalCapacity(allocator, stake_rewards.len);
+    for (stake_rewards) |sr| {
+        distributed_rewards.appendAssumeCapacity(.{
+            .pubkey = sr.stake_pubkey,
+            .lamports = @intCast(sr.stake_reward_info.lamports),
+            .post_balance = sr.stake_reward_info.post_balance,
+            .reward_type = .staking,
+            .commission = sr.stake_reward_info.commission,
+        });
+    }
 }
 
 fn storeStakeAccountsInPartition(
@@ -415,6 +438,11 @@ test distributePartitionedEpochRewards {
                     &[_]PartitionedStakeReward{partitioned_reward},
                 ),
             ),
+            .all_vote_rewards = try sig.replay.rewards.PartitionedVoteRewards.init(
+                allocator,
+                &[_]sig.replay.rewards.PartitionedVoteReward{},
+            ),
+            .distributed_rewards = .empty,
         },
     };
     defer epoch_reward_status.deinit(allocator);
@@ -538,6 +566,9 @@ test distributeEpochRewardsInPartition {
     );
     defer partitioned_rewards.deinit(allocator);
 
+    var distributed_rewards: std.ArrayListUnmanaged(Reward) = .empty;
+    defer distributed_rewards.deinit(allocator);
+
     const epoch_rewards = sig.runtime.sysvar.EpochRewards{
         .distribution_starting_block_height = 0,
         .num_partitions = 1,
@@ -565,6 +596,7 @@ test distributeEpochRewardsInPartition {
         &stakes_cache,
         slot_store,
         null,
+        &distributed_rewards,
     );
 }
 

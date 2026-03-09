@@ -29,14 +29,17 @@ pub fn transfer(
     to: Pubkey,
     lamports: u64,
 ) error{OutOfMemory}!sig.core.Instruction {
+    const accounts = try allocator.dupe(sig.core.instruction.InstructionAccount, &.{
+        .{ .pubkey = from, .is_signer = true, .is_writable = true },
+        .{ .pubkey = to, .is_signer = false, .is_writable = true },
+    });
+    errdefer allocator.free(accounts);
+
     return try sig.core.Instruction.initUsingBincodeAlloc(
         allocator,
         Instruction,
         ID,
-        &.{
-            .{ .pubkey = from, .is_signer = true, .is_writable = true },
-            .{ .pubkey = to, .is_signer = false, .is_writable = true },
-        },
+        accounts,
         &.{ .transfer = .{ .lamports = lamports } },
     );
 }
@@ -47,13 +50,18 @@ pub fn allocate(
     pubkey: Pubkey,
     space: u64,
 ) error{OutOfMemory}!sig.core.Instruction {
+    const accounts = try allocator.dupe(sig.core.instruction.InstructionAccount, &.{.{
+        .pubkey = pubkey,
+        .is_signer = true,
+        .is_writable = true,
+    }});
+    errdefer allocator.free(accounts);
+
     return try sig.core.Instruction.initUsingBincodeAlloc(
         allocator,
         Instruction,
         ID,
-        &.{
-            .{ .pubkey = pubkey, .is_signer = true, .is_writable = true },
-        },
+        accounts,
         &.{ .allocate = .{ .space = space } },
     );
 }
@@ -64,13 +72,63 @@ pub fn assign(
     pubkey: Pubkey,
     owner: Pubkey,
 ) error{OutOfMemory}!sig.core.Instruction {
+    const accounts = try allocator.dupe(sig.core.instruction.InstructionAccount, &.{.{
+        .pubkey = pubkey,
+        .is_signer = true,
+        .is_writable = true,
+    }});
+    errdefer allocator.free(accounts);
+
     return try sig.core.Instruction.initUsingBincodeAlloc(
         allocator,
         Instruction,
         ID,
-        &.{
-            .{ .pubkey = pubkey, .is_signer = true, .is_writable = true },
-        },
+        accounts,
         &.{ .assign = .{ .owner = owner } },
     );
+}
+
+test "allocate creates instruction with correct program id and accounts" {
+    const allocator = std.testing.allocator;
+    const pubkey = Pubkey{ .data = [_]u8{0xAA} ** 32 };
+
+    const ix = try allocate(allocator, pubkey, 1024);
+    defer ix.deinit(allocator);
+
+    // Program ID should be the system program
+    try std.testing.expect(ix.program_id.equals(&ID));
+
+    // Should have exactly 1 account
+    try std.testing.expectEqual(@as(usize, 1), ix.accounts.len);
+    try std.testing.expect(ix.accounts[0].pubkey.equals(&pubkey));
+    try std.testing.expect(ix.accounts[0].is_signer);
+    try std.testing.expect(ix.accounts[0].is_writable);
+
+    // Data should deserialize back to the allocate instruction
+    const decoded = sig.bincode.readFromSlice(allocator, Instruction, ix.data, .{}) catch
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 1024), decoded.allocate.space);
+}
+
+test "assign creates instruction with correct program id and accounts" {
+    const allocator = std.testing.allocator;
+    const pubkey = Pubkey{ .data = [_]u8{0xBB} ** 32 };
+    const owner = Pubkey{ .data = [_]u8{0xCC} ** 32 };
+
+    const ix = try assign(allocator, pubkey, owner);
+    defer ix.deinit(allocator);
+
+    // Program ID should be the system program
+    try std.testing.expect(ix.program_id.equals(&ID));
+
+    // Should have exactly 1 account
+    try std.testing.expectEqual(@as(usize, 1), ix.accounts.len);
+    try std.testing.expect(ix.accounts[0].pubkey.equals(&pubkey));
+    try std.testing.expect(ix.accounts[0].is_signer);
+    try std.testing.expect(ix.accounts[0].is_writable);
+
+    // Data should deserialize back to the assign instruction
+    const decoded = sig.bincode.readFromSlice(allocator, Instruction, ix.data, .{}) catch
+        return error.TestUnexpectedResult;
+    try std.testing.expect(decoded.assign.owner.equals(&owner));
 }
