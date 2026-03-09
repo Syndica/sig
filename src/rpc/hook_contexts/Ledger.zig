@@ -20,6 +20,7 @@ const Pubkey = sig.core.Pubkey;
 const ReservedAccounts = sig.core.ReservedAccounts;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
+const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const TransactionDetails = methods.common.TransactionDetails;
 const TransactionEncoding = methods.common.TransactionEncoding;
 
@@ -209,7 +210,7 @@ pub fn getBlockProduction(
 
     // Parse optional identity filter.
     const identity_filter: ?Pubkey = if (config.identity) |id_str|
-        Pubkey.parseRuntime(id_str) catch return error.InvalidParams
+        Pubkey.parseRuntime(id_str) catch return error.InvalidParams // TODO: invalid params should return a more specific error
     else
         null;
 
@@ -227,11 +228,20 @@ pub fn getBlockProduction(
     else
         current_slot;
 
-    if (last_slot < first_slot) return error.InvalidParams;
+    if (last_slot < first_slot) return error.InvalidParams; // TODO: invalid params should return a more specific error
 
-    // Collect rooted slots in range using forward iterator (batch, efficient).
+    // Validate slot range against slot history bounds (mirrors Agave's
+    // bank.get_slot_history() validation). current_slot corresponds to the
+    // bank slot which equals slot_history.newest(), and oldest is
+    // newest -| MAX_ENTRIES.
+    const slot_history_oldest = current_slot -| SlotHistory.MAX_ENTRIES;
+    if (first_slot < slot_history_oldest) return error.FirstSlotTooSmall;
+    if (last_slot > current_slot) return error.LastSlotTooLarge;
+
+    var slot_set: std.AutoHashMapUnmanaged(Slot, void) = .empty;
+
+    // Collect rooted slots in range using forward iterator
     const highest_root = self.slot_tracker.getSlotForCommitment(.finalized);
-    var rooted_set = std.AutoHashMapUnmanaged(Slot, void){};
     {
         var rooted_iter = try self.ledger.db.iterator(
             sig.ledger.schema.schema.rooted_slots,
@@ -240,12 +250,10 @@ pub fn getBlockProduction(
         );
         while (try rooted_iter.nextKey()) |slot| {
             if (slot > last_slot or slot > highest_root) break;
-            try rooted_set.put(arena, slot, {});
+            try slot_set.put(arena, slot, {});
         }
     }
-
     // For confirmed commitment, also collect confirmed-but-unrooted slots.
-    var confirmed_set = std.AutoHashMapUnmanaged(Slot, void){};
     if (commitment == .confirmed) {
         const latest_confirmed = self.slot_tracker.getSlotForCommitment(.confirmed);
         const confirmed_slots = try self.getConfirmedUnrootedSlots(
@@ -254,9 +262,11 @@ pub fn getBlockProduction(
             highest_root,
         );
         for (confirmed_slots) |slot| {
-            if (slot >= first_slot and slot <= last_slot) {
-                try confirmed_set.put(arena, slot, {});
-            }
+            if (slot >= first_slot and slot <= last_slot) try slot_set.put(
+                arena,
+                slot,
+                {},
+            );
         }
     }
 
@@ -266,29 +276,18 @@ pub fn getBlockProduction(
 
     // Iterate slot range, build by_identity map using PubkeyMap internally
     // to avoid duplicate string key allocations.
-    var by_identity_raw = sig.utils.collections.PubkeyMap([2]u64){};
+    var by_identity: sig.utils.collections.PubkeyMap(struct { u64, u64 }) = .empty;
 
     var slot = first_slot;
     while (slot <= last_slot) : (slot += 1) {
-        const leader = ls.leader_schedules.getLeader(slot) catch continue;
+        const leader = ls.leader_schedules.getLeaderOrNull(slot) orelse continue;
 
-        if (identity_filter) |filter| {
-            if (!leader.equals(&filter)) continue;
-        }
+        if (identity_filter) |filter| if (!leader.equals(&filter)) continue;
 
-        const block_produced = rooted_set.contains(slot) or confirmed_set.contains(slot);
-
-        const gop = try by_identity_raw.getOrPut(arena, leader);
+        const gop = try by_identity.getOrPut(arena, leader);
         if (!gop.found_existing) gop.value_ptr.* = .{ 0, 0 };
         gop.value_ptr.*[0] += 1; // leader_slots
-        if (block_produced) gop.value_ptr.*[1] += 1; // blocks_produced
-    }
-
-    // Convert PubkeyMap to StringArrayHashMap for JSON serialization.
-    var by_identity = std.StringArrayHashMapUnmanaged([2]u64){};
-    for (by_identity_raw.keys(), by_identity_raw.values()) |key, value| {
-        const key_str = try arena.dupe(u8, key.base58String().constSlice());
-        try by_identity.put(arena, key_str, value);
+        if (slot_set.contains(slot)) gop.value_ptr.*[1] += 1; // blocks_produced
     }
 
     return .{
@@ -323,7 +322,7 @@ pub fn getSignaturesForAddress(
     }
 
     const limit = config.getLimit();
-    if (limit == 0 or limit > 1000) return error.InvalidParams;
+    if (limit == 0 or limit > 1000) return error.InvalidParams; // TODO: invalid params should return a more specific error
 
     const result = try self.ledger.reader().getConfirmedSignaturesForAddress(
         arena,

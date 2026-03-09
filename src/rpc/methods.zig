@@ -878,16 +878,14 @@ pub const GetBlockProduction = struct {
 
     /// Map of base58 pubkey string -> [leader_slots, blocks_produced]
     pub const ByIdentity = struct {
-        map: std.StringArrayHashMapUnmanaged([2]u64),
+        map: sig.utils.collections.PubkeyMap(struct { u64, u64 }),
 
         pub fn jsonStringify(self: ByIdentity, jw: anytype) !void {
             try jw.beginObject();
             for (self.map.keys(), self.map.values()) |key, value| {
-                try jw.objectField(key);
-                try jw.beginArray();
-                try jw.write(value[0]);
-                try jw.write(value[1]);
-                try jw.endArray();
+                const base58string = key.base58String();
+                try jw.objectField(base58string.constSlice());
+                try jw.write(value);
             }
             try jw.endObject();
         }

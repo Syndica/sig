@@ -223,9 +223,9 @@ test GetBlockProduction {
 
     // ByIdentity serialization
     {
-        var map = std.StringArrayHashMapUnmanaged([2]u64){};
+        var map = sig.utils.collections.PubkeyMap(struct { u64, u64 }){};
         defer map.deinit(std.testing.allocator);
-        try map.put(std.testing.allocator, "85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr", .{ 9888, 9886 });
+        try map.put(std.testing.allocator, .parse("85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr"), .{ 9888, 9886 });
 
         try expectJsonStringify(
             \\{"85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr":[9888,9886]}
@@ -234,19 +234,19 @@ test GetBlockProduction {
 
     // ByIdentity serialization: multiple validators
     {
-        var map = std.StringArrayHashMapUnmanaged([2]u64){};
+        var map = sig.utils.collections.PubkeyMap(struct { u64, u64 }){};
         defer map.deinit(std.testing.allocator);
-        try map.put(std.testing.allocator, "11111111111111111111111111111111", .{ 100, 90 });
-        try map.put(std.testing.allocator, "22222222222222222222222222222222", .{ 50, 45 });
+        try map.put(std.testing.allocator, .parse("11111111111111111111111111111111"), .{ 100, 90 });
+        try map.put(std.testing.allocator, .parse("11111111111111111111111111111113"), .{ 50, 45 });
 
         try expectJsonStringify(
-            \\{"11111111111111111111111111111111":[100,90],"22222222222222222222222222222222":[50,45]}
+            \\{"11111111111111111111111111111111":[100,90],"11111111111111111111111111111113":[50,45]}
         , GetBlockProduction.ByIdentity{ .map = map });
     }
 
     // ByIdentity serialization: empty map
     {
-        const map = std.StringArrayHashMapUnmanaged([2]u64){};
+        const map = sig.utils.collections.PubkeyMap(struct { u64, u64 }){};
         try expectJsonStringify(
             \\{}
         , GetBlockProduction.ByIdentity{ .map = map });
@@ -254,9 +254,9 @@ test GetBlockProduction {
 
     // Full response serialization
     {
-        var map = std.StringArrayHashMapUnmanaged([2]u64){};
+        var map = sig.utils.collections.PubkeyMap(struct { u64, u64 }){};
         defer map.deinit(std.testing.allocator);
-        try map.put(std.testing.allocator, "85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr", .{ 9888, 9886 });
+        try map.put(std.testing.allocator, .parse("85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr"), .{ 9888, 9886 });
 
         const response = GetBlockProduction.Response{
             .context = .{ .slot = 9887 },
