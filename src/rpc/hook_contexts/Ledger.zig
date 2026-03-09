@@ -272,7 +272,10 @@ pub fn getInflationReward(
         const num_partitions = epoch_boundary_block.numRewardPartitions orelse
             @panic("numRewardPartitions should be set if epoch_has_partitioned_rewards is true");
 
-        var partition_index_addresses: std.AutoArrayHashMapUnmanaged(usize, PubkeyMap(void)) = .empty;
+        var partition_index_addresses: std.AutoArrayHashMapUnmanaged(
+            usize,
+            PubkeyMap(void),
+        ) = .empty;
         for (addresses.entries.items(.key)) |addr| {
             if (reward_map.contains(addr)) continue;
             const partition_index = sig.replay.rewards.hasher.hashAddressToPartition(
