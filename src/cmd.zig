@@ -1718,9 +1718,7 @@ fn validator(
 
     try app_base.rpc_hooks.set(
         allocator,
-        sig.rpc.hook_contexts.PrioritizationFeeHookContext{
-            .cache = &prioritization_fee_cache,
-        },
+        sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
     );
 
     const replay_thread = try replay_service_state.spawnService(

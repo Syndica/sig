@@ -29,6 +29,8 @@ pub const PrioritizationFeeHookContext = struct {
 };
 
 pub const PrioritizationFeeCache = struct {
+    data: RwMux(Inner),
+
     /// The maximum number of finalized blocks to keep in the cache.
     /// Matches Agave's MAX_NUM_RECENT_BLOCKS.
     pub const NUM_RECENT_BLOCKS: usize = 150;
@@ -59,8 +61,6 @@ pub const PrioritizationFeeCache = struct {
         /// In-progress (unfinalized) slot data, keyed by slot.
         unfinalized: std.AutoArrayHashMapUnmanaged(Slot, SlotFeeEntry) = .{},
     };
-
-    data: RwMux(Inner),
 
     pub const EMPTY: PrioritizationFeeCache = .{
         .data = RwMux(Inner).init(.{}),
@@ -179,7 +179,7 @@ pub const PrioritizationFeeCache = struct {
         defer rlock.unlock();
         const inner = rlock.get();
 
-        var results = try std.ArrayList(GetRecentPrioritizationFees.FeeResult).initCapacity(
+        var results: std.ArrayList(GetRecentPrioritizationFees.FeeResult) = try .initCapacity(
             allocator,
             inner.len,
         );
