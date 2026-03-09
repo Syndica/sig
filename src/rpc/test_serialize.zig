@@ -14,14 +14,18 @@ const GetBalance = methods.GetBalance;
 const GetBlock = methods.GetBlock;
 const GetBlockCommitment = methods.GetBlockCommitment;
 const GetBlockHeight = methods.GetBlockHeight;
+const GetBlockTime = methods.GetBlockTime;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
+const GetFirstAvailableBlock = methods.GetFirstAvailableBlock;
 const GetGenesisHash = methods.GetGenesisHash;
 const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
+const GetMaxRetransmitSlot = methods.GetMaxRetransmitSlot;
+const GetMaxShredInsertSlot = methods.GetMaxShredInsertSlot;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetSlot = methods.GetSlot;
@@ -32,6 +36,7 @@ const GetTokenSupply = methods.GetTokenSupply;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
 const IsBlockhashValid = methods.IsBlockhashValid;
+const MinimumLedgerSlot = methods.MinimumLedgerSlot;
 
 const Response = rpc.response.Response;
 
@@ -173,6 +178,20 @@ test GetBlockHeight {
     );
 }
 
+test GetBlockTime {
+    try testRequest(.getBlockTime, .{ .slot = 5 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockTime","params":[5]}
+    );
+    // Response with a timestamp
+    try testResponse(GetBlockTime, .{ .result = 1574721591 },
+        \\{"jsonrpc":"2.0","result":1574721591,"id":1}
+    );
+    // Response with null (block time not available)
+    try testResponse(GetBlockTime, .{ .result = null },
+        \\{"jsonrpc":"2.0","result":null,"id":1}
+    );
+}
+
 test GetBlockCommitment {
     try testRequest(.getBlockCommitment, .{ .slot = 309275321 },
         \\{"jsonrpc":"2.0","id":1,"method":"getBlockCommitment","params":[309275321]}
@@ -294,7 +313,15 @@ test GetEpochSchedule {
 }
 
 // TODO: test getFeeForMessage()
-// TODO: test getFirstAvailableBlock()
+
+test GetFirstAvailableBlock {
+    try testRequest(.getFirstAvailableBlock, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getFirstAvailableBlock","params":[]}
+    );
+    try testResponse(GetFirstAvailableBlock, .{ .result = 250000 },
+        \\{"jsonrpc":"2.0","result":250000,"id":1}
+    );
+}
 
 test GetGenesisHash {
     try testRequest(.getGenesisHash, .{},
@@ -369,8 +396,22 @@ test GetLeaderSchedule {
     );
 }
 
-// TODO: test getMaxRetransmitSlot()
-// TODO: test getMaxShredInsertSlot()
+test GetMaxRetransmitSlot {
+    try testRequest(.getMaxRetransmitSlot, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getMaxRetransmitSlot","params":[]}
+    );
+    try testResponse(GetMaxRetransmitSlot, .{ .result = 1234 },
+        \\{"jsonrpc":"2.0","result":1234,"id":1}
+    );
+}
+test GetMaxShredInsertSlot {
+    try testRequest(.getMaxShredInsertSlot, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getMaxShredInsertSlot","params":[]}
+    );
+    try testResponse(GetMaxShredInsertSlot, .{ .result = 1234 },
+        \\{"jsonrpc":"2.0","result":1234,"id":1}
+    );
+}
 // TODO: test getMinimumBalanceForRentExemption()
 // TODO: test getMultipleAccounts()
 // TODO: test getProgramAccounts()
@@ -653,7 +694,14 @@ test IsBlockhashValid {
     );
 }
 
-// TODO: test minimumLedgerSlot()
+test MinimumLedgerSlot {
+    try testRequest(.minimumLedgerSlot, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"minimumLedgerSlot","params":[]}
+    );
+    try testResponse(MinimumLedgerSlot, .{ .result = 1234 },
+        \\{"jsonrpc":"2.0","result":1234,"id":1}
+    );
+}
 // TODO: test requestAirdrop()
 // TODO: test sendTransaction()
 // TODO: test simulateTransaction()

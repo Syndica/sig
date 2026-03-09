@@ -46,6 +46,7 @@ pub const ShredRetransmitterParams = struct {
     exit: *AtomicBool,
     rand: Random,
     logger: Logger,
+    max_retransmit_slot: *AtomicU64,
 };
 
 /// Retransmit Service
@@ -96,6 +97,7 @@ pub fn runShredRetransmitter(params: ShredRetransmitterParams) !void {
             params.logger,
             &metrics,
             params.overwrite_stake_for_testing,
+            params.max_retransmit_slot,
         },
     ));
 
@@ -140,6 +142,7 @@ fn receiveShreds(
     logger: Logger,
     metrics: *RetransmitServiceMetrics,
     overwrite_stake_for_testing: bool,
+    max_retransmit_slot: *AtomicU64,
 ) !void {
     var turbine_tree_cache = TurbineTreeCache.init(allocator);
     defer turbine_tree_cache.deinit();
@@ -198,6 +201,7 @@ fn receiveShreds(
                 sender,
                 metrics,
                 overwrite_stake_for_testing,
+                max_retransmit_slot,
             );
         }
 
@@ -258,12 +262,14 @@ fn createAndSendRetransmitInfo(
     retransmit_shred_sender: *Channel(RetransmitShredInfo),
     metrics: *RetransmitServiceMetrics,
     overwrite_stake_for_testing: bool,
+    max_retransmit_slot: *AtomicU64,
 ) !void {
     var create_and_send_retransmit_info_timer = sig.time.Timer.start();
     const leader_schedules_with_infos = epoch_tracker.getLeaderSchedules() catch return;
     defer leader_schedules_with_infos.release();
     const leader_schedule = leader_schedules_with_infos.leader_schedules;
     for (shreds.keys(), shreds.values()) |slot, slot_shreds| {
+        _ = max_retransmit_slot.fetchMax(slot, .monotonic);
         // NOTE: On transition boundaries we might want ancestors here so that we can get stakes
         // for the new epoch which will be unrooted for a period of time.
         const epoch = epoch_tracker.epoch_schedule.getEpoch(slot);

@@ -69,6 +69,8 @@ pub const ShredReceiver = struct {
 
         /// Handler for duplicate slot detection and reporting
         duplicate_handler: DuplicateShredHandler,
+
+        max_shred_insert_slot: *Atomic(u64),
     };
 
     pub fn init(
@@ -198,6 +200,14 @@ pub const ShredReceiver = struct {
         );
         self.metrics.passed_to_inserter_count.add(self.shred_batch.len);
 
+        var current_max_insert_slot = self.params.max_shred_insert_slot.load(.monotonic);
+        for (self.shred_batch.items(.shred)) |shred| {
+            if (shred.id().slot > current_max_insert_slot) {
+                current_max_insert_slot = shred.id().slot;
+                self.params.max_shred_insert_slot.store(current_max_insert_slot, .monotonic);
+            }
+        }
+
         try self.params.duplicate_handler.handleDuplicateSlots(allocator, &result);
 
         result.deinit();
@@ -323,6 +333,7 @@ test "handleBatch/handlePacket" {
 
     var exit: Atomic(bool) = .init(false);
     const shred_version: Atomic(u16) = .init(0);
+    var max_shred_insert_slot: Atomic(u64) = .init(0);
 
     var shred_receiver = try ShredReceiver.init(allocator, .noop, &registry, .{
         .keypair = &keypair,
@@ -343,6 +354,7 @@ test "handleBatch/handlePacket" {
             .keypair = &keypair,
             .logger = .noop,
         },
+        .max_shred_insert_slot = &max_shred_insert_slot,
     });
     defer shred_receiver.deinit(allocator);
 

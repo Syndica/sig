@@ -50,12 +50,12 @@ pub const MethodAndParams = union(enum) {
     getBlockProduction: noreturn,
     getBlocks: GetBlocks,
     getBlocksWithLimit: GetBlocksWithLimit,
-    getBlockTime: noreturn,
+    getBlockTime: GetBlockTime,
     getClusterNodes: GetClusterNodes,
     getEpochInfo: GetEpochInfo,
     getEpochSchedule: GetEpochSchedule,
     getFeeForMessage: noreturn,
-    getFirstAvailableBlock: noreturn,
+    getFirstAvailableBlock: GetFirstAvailableBlock,
 
     /// https://github.com/Syndica/sig/issues/557
     getGenesisHash: GetGenesisHash,
@@ -72,8 +72,8 @@ pub const MethodAndParams = union(enum) {
     getLargestAccounts: noreturn,
     getLatestBlockhash: GetLatestBlockhash,
     getLeaderSchedule: GetLeaderSchedule,
-    getMaxRetransmitSlot: noreturn,
-    getMaxShredInsertSlot: noreturn,
+    getMaxRetransmitSlot: GetMaxRetransmitSlot,
+    getMaxShredInsertSlot: GetMaxShredInsertSlot,
     getMinimumBalanceForRentExemption: noreturn,
     getMultipleAccounts: noreturn,
     getProgramAccounts: noreturn,
@@ -96,7 +96,7 @@ pub const MethodAndParams = union(enum) {
     getVersion: GetVersion,
     getVoteAccounts: GetVoteAccounts,
     isBlockhashValid: IsBlockhashValid,
-    minimumLedgerSlot: noreturn,
+    minimumLedgerSlot: MinimumLedgerSlot,
     requestAirdrop: RequestAirdrop,
     sendTransaction: SendTransaction,
     simulateTransaction: noreturn,
@@ -847,7 +847,12 @@ pub const GetBlockHeight = struct {
 };
 
 // TODO: getBlockProduction
-// TODO: getBlockTime
+
+pub const GetBlockTime = struct {
+    slot: Slot,
+
+    pub const Response = ?i64;
+};
 
 pub const GetBlocks = struct {
     start_slot: Slot,
@@ -965,7 +970,10 @@ pub const GetEpochSchedule = struct {
 };
 
 // TODO: getFeeForMessage
-// TODO: getFirstAvailableBlock
+
+pub const GetFirstAvailableBlock = struct {
+    pub const Response = Slot;
+};
 
 pub const GetGenesisHash = struct {
     pub const Response = struct {
@@ -1082,8 +1090,12 @@ pub const GetLeaderSchedule = struct {
     };
 };
 
-// TODO: getMaxRetransmitSlot
-// TODO: getMaxShredInsertSlot
+pub const GetMaxRetransmitSlot = struct {
+    pub const Response = Slot;
+};
+pub const GetMaxShredInsertSlot = struct {
+    pub const Response = Slot;
+};
 // TODO: getMinimumBalanceForRentExemption
 // TODO: getMultipleAccounts
 // TODO: getProgramAccounts
@@ -1330,7 +1342,9 @@ pub const IsBlockhashValid = struct {
     };
 };
 
-// TODO: minimumLedgerSlot
+pub const MinimumLedgerSlot = struct {
+    pub const Response = Slot;
+};
 
 pub const RequestAirdrop = struct {
     pubkey: Pubkey,

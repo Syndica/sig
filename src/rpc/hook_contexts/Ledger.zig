@@ -11,10 +11,15 @@ const Allocator = std.mem.Allocator;
 const AncestorIterator = sig.ledger.Reader.AncestorIterator;
 const GetBlock = methods.GetBlock;
 const GetBlocks = methods.GetBlocks;
+const GetBlockTime = methods.GetBlockTime;
+const GetFirstAvailableBlock = methods.GetFirstAvailableBlock;
+const GetMaxRetransmitSlot = methods.GetMaxRetransmitSlot;
+const GetMaxShredInsertSlot = methods.GetMaxShredInsertSlot;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetTransaction = methods.GetTransaction;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
+const MinimumLedgerSlot = methods.MinimumLedgerSlot;
 const Pubkey = sig.core.Pubkey;
 const ReservedAccounts = sig.core.ReservedAccounts;
 const Signature = sig.core.Signature;
@@ -26,6 +31,8 @@ const LedgerHookContext = @This();
 
 ledger: *sig.ledger.Ledger,
 slot_tracker: *const sig.replay.trackers.SlotTracker,
+max_retransmit_slot: *const std.atomic.Value(Slot),
+max_shred_insert_slot: *const std.atomic.Value(Slot),
 
 pub fn getBlock(
     self: LedgerHookContext,
@@ -74,6 +81,43 @@ pub fn getBlock(
         .show_rewards = show_rewards,
         .max_supported_version = max_supported_version,
     });
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/rpc/src/rpc.rs#L1577-L1609
+pub fn getBlockTime(
+    self: LedgerHookContext,
+    arena: Allocator,
+    params: GetBlockTime,
+) !GetBlockTime.Response {
+    const reader = self.ledger.reader();
+    const highest_root = self.slot_tracker.getSlotForCommitment(.finalized);
+
+    if (params.slot <= highest_root) {
+        return reader.getRootedBlockTime(arena, params.slot) catch |err| switch (err) {
+            error.SlotNotRooted => return error.BlockNotAvailable,
+            error.SlotUnavailable => return null,
+            error.SlotCleanedUp => return error.SlotCleanedUp,
+            else => return err,
+        };
+    } else {
+        return error.BlockNotAvailable;
+    }
+}
+
+pub fn getMaxRetransmitSlot(
+    self: LedgerHookContext,
+    _: Allocator,
+    _: GetMaxRetransmitSlot,
+) !GetMaxRetransmitSlot.Response {
+    return self.max_retransmit_slot.load(.monotonic);
+}
+
+pub fn getMaxShredInsertSlot(
+    self: LedgerHookContext,
+    _: Allocator,
+    _: GetMaxShredInsertSlot,
+) !GetMaxShredInsertSlot.Response {
+    return self.max_shred_insert_slot.load(.monotonic);
 }
 
 pub fn getBlocks(
@@ -196,6 +240,14 @@ pub fn getBlocksWithLimit(
     return try blocks.toOwnedSlice(arena);
 }
 
+pub fn getFirstAvailableBlock(
+    self: LedgerHookContext,
+    _: Allocator,
+    _: GetFirstAvailableBlock,
+) !GetFirstAvailableBlock.Response {
+    return self.ledger.reader().getFirstAvailableBlock() catch 0;
+}
+
 pub fn getSignaturesForAddress(
     self: LedgerHookContext,
     arena: std.mem.Allocator,
@@ -285,6 +337,20 @@ pub fn getTransaction(
         ),
         .block_time = confirmed_tx_with_meta.block_time,
     } };
+}
+
+pub fn minimumLedgerSlot(
+    self: LedgerHookContext,
+    _: Allocator,
+    _: MinimumLedgerSlot,
+) !MinimumLedgerSlot.Response {
+    var meta_iter = try self.ledger.db.iterator(
+        sig.ledger.schema.schema.slot_meta,
+        .forward,
+        0,
+    );
+    defer meta_iter.deinit();
+    return try meta_iter.nextKey() orelse error.InvalidRequest;
 }
 
 /// Walk from latest_confirmed back to the root, collecting confirmed-but-unrooted slots.
