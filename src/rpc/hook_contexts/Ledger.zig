@@ -14,11 +14,12 @@ const GetBlocks = methods.GetBlocks;
 const GetBlockTime = methods.GetBlockTime;
 const GetFirstAvailableBlock = methods.GetFirstAvailableBlock;
 const GetMaxRetransmitSlot = methods.GetMaxRetransmitSlot;
-const MinimumLedgerSlot = methods.MinimumLedgerSlot;
+const GetMaxShredInsertSlot = methods.GetMaxShredInsertSlot;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetTransaction = methods.GetTransaction;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
+const MinimumLedgerSlot = methods.MinimumLedgerSlot;
 const Pubkey = sig.core.Pubkey;
 const ReservedAccounts = sig.core.ReservedAccounts;
 const Signature = sig.core.Signature;
@@ -31,6 +32,7 @@ const LedgerHookContext = @This();
 ledger: *sig.ledger.Ledger,
 slot_tracker: *const sig.replay.trackers.SlotTracker,
 max_retransmit_slot: *const std.atomic.Value(Slot),
+max_shred_insert_slot: *const std.atomic.Value(Slot),
 
 pub fn getBlock(
     self: LedgerHookContext,
@@ -108,6 +110,14 @@ pub fn getMaxRetransmitSlot(
     _: GetMaxRetransmitSlot,
 ) !GetMaxRetransmitSlot.Response {
     return self.max_retransmit_slot.load(.monotonic);
+}
+
+pub fn getMaxShredInsertSlot(
+    self: LedgerHookContext,
+    _: Allocator,
+    _: GetMaxShredInsertSlot,
+) !GetMaxShredInsertSlot.Response {
+    return self.max_shred_insert_slot.load(.monotonic);
 }
 
 pub fn getBlocks(

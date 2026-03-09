@@ -25,6 +25,7 @@ const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetMaxRetransmitSlot = methods.GetMaxRetransmitSlot;
+const GetMaxShredInsertSlot = methods.GetMaxShredInsertSlot;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetSlot = methods.GetSlot;
@@ -403,7 +404,14 @@ test GetMaxRetransmitSlot {
         \\{"jsonrpc":"2.0","result":1234,"id":1}
     );
 }
-// TODO: test getMaxShredInsertSlot()
+test GetMaxShredInsertSlot {
+    try testRequest(.getMaxShredInsertSlot, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getMaxShredInsertSlot","params":[]}
+    );
+    try testResponse(GetMaxShredInsertSlot, .{ .result = 1234 },
+        \\{"jsonrpc":"2.0","result":1234,"id":1}
+    );
+}
 // TODO: test getMinimumBalanceForRentExemption()
 // TODO: test getMultipleAccounts()
 // TODO: test getProgramAccounts()

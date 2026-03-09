@@ -73,7 +73,7 @@ pub const MethodAndParams = union(enum) {
     getLatestBlockhash: GetLatestBlockhash,
     getLeaderSchedule: GetLeaderSchedule,
     getMaxRetransmitSlot: GetMaxRetransmitSlot,
-    getMaxShredInsertSlot: noreturn,
+    getMaxShredInsertSlot: GetMaxShredInsertSlot,
     getMinimumBalanceForRentExemption: noreturn,
     getMultipleAccounts: noreturn,
     getProgramAccounts: noreturn,
@@ -1093,7 +1093,9 @@ pub const GetLeaderSchedule = struct {
 pub const GetMaxRetransmitSlot = struct {
     pub const Response = Slot;
 };
-// TODO: getMaxShredInsertSlot
+pub const GetMaxShredInsertSlot = struct {
+    pub const Response = Slot;
+};
 // TODO: getMinimumBalanceForRentExemption
 // TODO: getMultipleAccounts
 // TODO: getProgramAccounts
