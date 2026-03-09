@@ -41,6 +41,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             return error.PendingServicesIncremented;
         }
     }
+    const log_streams = rw.log_streams[0..ro.startup.log_streams.load(.acquire)];
 
     try collectMetrics(gpa, &metrics, .{
         .id_mem = ro.id_mem[0..ro.startup.id_mem_end.load(.acquire)],
@@ -49,11 +50,31 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     });
 
     const listen_addr: std.net.Address = .initIp4(.{ 0, 0, 0, 0 }, ro.startup.port);
-    var server = try listen_addr.listen(.{});
+    var server = try listen_addr.listen(.{ .force_nonblocking = true });
     defer server.deinit();
 
     while (true) {
-        const conn = try server.accept();
+        {
+            var stderr_buf: [4096]u8 = undefined;
+            const stderr = std.debug.lockStderrWriter(&stderr_buf);
+            defer std.debug.unlockStderrWriter();
+            outer: for (log_streams) |*log_stream| {
+                // stream out at most 16 logs at a time from each service.
+                // limit chosen arbitrarily.
+                inner: for (0..16) |_| {
+                    switch (try streamLogs(stderr, log_stream.name.slice(), log_stream)) {
+                        .empty => continue :outer,
+                        .sent => break :inner,
+                    }
+                }
+            }
+            try stderr.flush();
+        }
+
+        const conn = server.accept() catch |err| switch (err) {
+            error.WouldBlock => continue,
+            else => |e| return e,
+        };
         defer conn.stream.close();
 
         var conn_reader_state_buf: [4096 * 16]u8 = undefined;
@@ -104,6 +125,48 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         try writePrometheusBody(response_body_writer, &metrics);
         try response_body_writer_state.end();
     }
+}
+
+fn streamLogs(
+    output: *std.Io.Writer,
+    service_name: []const u8,
+    log_stream: *api.log.MessageStream,
+) (std.Io.Reader.StreamError || error{InvalidMagicField})!enum { empty, sent } {
+    var log_slice = log_stream.ring.getReadable() catch |err| switch (err) {
+        error.Empty => return .empty,
+    };
+    var log_reader_buf: [@sizeOf(api.log.MessageHeader)]u8 = undefined;
+    var log_reader_state = log_slice.reader(&log_reader_buf);
+    const log_reader = &log_reader_state.interface;
+
+    const log_msg_header = log_reader.takeStruct(
+        api.log.MessageHeader,
+        api.endian,
+    ) catch |err| switch (err) {
+        error.ReadFailed => unreachable,
+        error.EndOfStream => {
+            std.log.err("Expected log message header, found end of stream.", .{});
+            return err;
+        },
+    };
+    defer log_reader_state.release(log_msg_header.encodedLength());
+
+    if (log_msg_header.magic != .valid) {
+        std.log.err(
+            "Invalid magic field with value '{d}'.",
+            .{@intFromEnum(log_msg_header.magic)},
+        );
+        return error.InvalidMagicField;
+    }
+
+    try log_msg_header.logfmtStream(
+        &.{.init("service", .fromValue(.literal, "{s}", &service_name))},
+        output,
+        log_reader,
+    );
+    try output.writeByte('\n');
+
+    return .sent;
 }
 
 const MetricPtrs = union(api.MetricKind) {

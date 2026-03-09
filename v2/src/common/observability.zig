@@ -1,9 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+pub const log = @import("observability/log.zig");
+
+comptime {
+    _ = log;
+}
+
 pub const ReadWrite = struct {
     /// NOTE: some of these actually represent floats, and `std.atomic.Value(T)`s.
     histogram_data: []u64,
+    log_streams: []log.MessageStream,
 };
 
 pub const ReadOnly = struct {
@@ -32,9 +39,114 @@ pub const Startup = extern struct {
     /// Represents the end of `histogram_data`. Can be incremented atomically by other services to
     /// claim space in `histogram_data`.
     histogram_data_end: std.atomic.Value(u32),
+    /// Represents the end of `log_streams`. Can be incremented atomically by other services to
+    /// claim elements in `log_streams`.
+    log_streams: std.atomic.Value(u32),
 };
 
 pub const endian = builtin.target.cpu.arch.endian();
+
+pub fn Logger(comptime scope_str: []const u8) type {
+    return struct {
+        sink: log.MessageSink,
+        max_level: log.Level,
+        const LoggerSelf = @This();
+
+        pub const scope = scope_str;
+
+        pub const noop: LoggerSelf = .{
+            .ring = null,
+            .max_level = .err,
+        };
+
+        pub fn from(logger: anytype) LoggerSelf {
+            const LoggerOther = Logger(@TypeOf(logger).scope);
+            return LoggerOther.withScope(logger, scope);
+        }
+
+        pub fn withScope(
+            self: LoggerSelf,
+            comptime new_scope: []const u8,
+        ) Logger(new_scope) {
+            return .{
+                .ring = self.ring,
+                .max_level = self.max_level,
+            };
+        }
+
+        pub fn err(self: LoggerSelf) Entry(0) {
+            return self.entry(.err);
+        }
+
+        pub fn warn(self: LoggerSelf) Entry(0) {
+            return self.entry(.warn);
+        }
+
+        pub fn info(self: LoggerSelf) Entry(0) {
+            return self.entry(.info);
+        }
+
+        pub fn debug(self: LoggerSelf) Entry(0) {
+            return self.entry(.debug);
+        }
+
+        pub fn trace(self: LoggerSelf) Entry(0) {
+            return self.entry(.trace);
+        }
+
+        pub fn entry(self: LoggerSelf, level: log.Level) Entry(0) {
+            return .{
+                .logger = self,
+                .level = level,
+                .entries = .{},
+            };
+        }
+
+        pub fn Entry(comptime entry_count: usize) type {
+            return struct {
+                logger: LoggerSelf,
+                level: log.Level,
+                entries: [entry_count]log.EntryField,
+                const EntrySelf = @This();
+
+                pub fn field(
+                    self: *const EntrySelf,
+                    name: []const u8,
+                    value: log.AnyFmt,
+                ) Entry(entry_count + 1) {
+                    return .{
+                        .logger = self.logger,
+                        .level = self.level,
+                        .entries = self.entries ++ .{.{
+                            .name = name,
+                            .value = value,
+                        }},
+                    };
+                }
+
+                pub fn logf(
+                    self: *const EntrySelf,
+                    comptime fmt_str: []const u8,
+                    args: anytype,
+                ) void {
+                    if (@intFromEnum(self.level) > @intFromEnum(self.logger.max_level)) return;
+                    self.logger.sink.sendMessage(
+                        @intCast(std.time.milliTimestamp()),
+                        self.level,
+                        scope,
+                        &self.entries,
+                        fmt_str,
+                        args,
+                    ) catch |e| switch (e) {
+                        // TODO: maybe try to handle these in some way? Maybe panic?
+                        error.Full => {},
+                        error.WriteFailed => {},
+                    };
+                }
+            };
+        }
+    };
+}
 
 pub const MetricKind = enum(u8) {
     gauge_int,
