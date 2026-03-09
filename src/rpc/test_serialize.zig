@@ -24,10 +24,12 @@ const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
+const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetSlot = methods.GetSlot;
 const GetTransaction = methods.GetTransaction;
 const GetTransactionCount = methods.GetTransactionCount;
 const GetTokenAccountBalance = methods.GetTokenAccountBalance;
+const GetTokenSupply = methods.GetTokenSupply;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
 const IsBlockhashValid = methods.IsBlockhashValid;
@@ -430,7 +432,75 @@ test GetSignatureStatuses {
     );
 }
 
-// TODO: test getSignaturesForAddress()
+test GetSignaturesForAddress {
+    // Request with address only (no config)
+    try testRequest(.getSignaturesForAddress, .{
+        .address = .parse("Vote111111111111111111111111111111111111111"),
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getSignaturesForAddress","params":["Vote111111111111111111111111111111111111111"]}
+    );
+
+    // Request with config (limit and commitment)
+    try testRequest(.getSignaturesForAddress, .{
+        .address = .parse("Vote111111111111111111111111111111111111111"),
+        .config = .{
+            .limit = 5,
+            .commitment = .confirmed,
+        },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getSignaturesForAddress","params":["Vote111111111111111111111111111111111111111",{"commitment":"confirmed","minContextSlot":null,"limit":5,"before":null,"until":null}]}
+    );
+
+    // Request with before and until signatures
+    try testRequest(.getSignaturesForAddress, .{
+        .address = .parse("Vote111111111111111111111111111111111111111"),
+        .config = .{
+            .before = .parse("56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp"),
+            .until = .parse("4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz"),
+        },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getSignaturesForAddress","params":["Vote111111111111111111111111111111111111111",{"commitment":null,"minContextSlot":null,"limit":null,"before":"56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp","until":"4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz"}]}
+    );
+
+    // Response with single signature entry (all fields populated)
+    try testResponse(GetSignaturesForAddress, .{ .result = &.{.{
+        .signature = .parse("56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp"),
+        .slot = 309275388,
+        .err = null,
+        .memo = null,
+        .blockTime = 1700000000,
+        .confirmationStatus = .finalized,
+    }} },
+        \\{"jsonrpc":"2.0","result":[{"blockTime":1700000000,"confirmationStatus":"finalized","err":null,"memo":null,"signature":"56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp","slot":309275388}],"id":1}
+    );
+
+    // Response with empty results
+    try testResponse(GetSignaturesForAddress, .{ .result = &.{} },
+        \\{"jsonrpc":"2.0","result":[],"id":1}
+    );
+
+    // Response with multiple entries and mixed optional fields
+    try testResponse(GetSignaturesForAddress, .{ .result = &.{
+        .{
+            .signature = .parse("56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp"),
+            .slot = 309275388,
+            .err = null,
+            .memo = null,
+            .blockTime = 1700000000,
+            .confirmationStatus = .finalized,
+        },
+        .{
+            .signature = .parse("4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz"),
+            .slot = 309275300,
+            .err = null,
+            .memo = null,
+            .blockTime = null,
+            .confirmationStatus = .confirmed,
+        },
+    } },
+        \\{"jsonrpc":"2.0","result":[{"blockTime":1700000000,"confirmationStatus":"finalized","err":null,"memo":null,"signature":"56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp","slot":309275388},{"blockTime":null,"confirmationStatus":"confirmed","err":null,"memo":null,"signature":"4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz","slot":309275300}],"id":1}
+    );
+}
 
 test GetSlot {
     try testRequest(.getSlot, .{},
@@ -481,7 +551,6 @@ test GetTokenAccountBalance {
 // TODO: test getTokenAccountsByDelegate()
 // TODO: test getTockenAccountsByOwner()
 // TODO: test getTokenLargestAccounts()
-// TODO: test getTokenSupply()
 test GetTransaction {
     const tx_sig: Signature = .parse(
         "56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp",
@@ -553,6 +622,40 @@ test GetTransactionCount {
         \\{"jsonrpc":"2.0","result":268651537,"id":1}
     );
 }
+
+test GetTokenSupply {
+    const mint_pubkey: Pubkey = .parse("So11111111111111111111111111111111111111112");
+
+    // Request without config
+    try testRequest(
+        .getTokenSupply,
+        .{ .mint = mint_pubkey },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTokenSupply","params":["So11111111111111111111111111111111111111112"]}
+        ,
+    );
+
+    // Request with commitment config
+    try testRequest(
+        .getTokenSupply,
+        .{ .mint = mint_pubkey, .config = .{ .commitment = .confirmed } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTokenSupply","params":["So11111111111111111111111111111111111111112",{"commitment":"confirmed"}]}
+        ,
+    );
+
+    // Response serialization: construct a UiTokenAmount and verify JSON output.
+    // UiTokenAmount uses custom jsonStringify (camelCase fields, amount as string),
+    // so we test serialization directly rather than round-trip deserialization.
+    try expectJsonStringify(
+        \\{"context":{"slot":123456789,"apiVersion":"2.1.6"},"value":{"uiAmount":1000000.0,"decimals":6,"amount":"1000000000000","uiAmountString":"1000000"}}
+    , @as(GetTokenSupply.Response, .{
+        .context = .{ .slot = 123456789, .apiVersion = "2.1.6" },
+        .value = .init(
+            1_000_000_000_000, // should be 1 million tokens with 6 decimals
+            .{ .decimals = 6 },
+        ),
+    }));
+}
+
 // TODO: test getVoteAccounts()
 
 test IsBlockhashValid {

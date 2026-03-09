@@ -90,7 +90,7 @@ pub const MethodAndParams = union(enum) {
     getProgramAccounts: noreturn,
     getRecentPerformanceSamples: noreturn,
     getRecentPrioritizationFees: noreturn,
-    getSignaturesForAddress: noreturn,
+    getSignaturesForAddress: GetSignaturesForAddress,
     getSignatureStatuses: GetSignatureStatuses,
     getSlot: GetSlot,
     getSlotLeader: noreturn,
@@ -101,7 +101,7 @@ pub const MethodAndParams = union(enum) {
     getTokenAccountsByDelegate: noreturn,
     getTokenAccountsByOwner: noreturn,
     getTokenLargestAccounts: noreturn,
-    getTokenSupply: noreturn,
+    getTokenSupply: GetTokenSupply,
     getTransaction: GetTransaction,
     getTransactionCount: GetTransactionCount,
     getVersion: GetVersion,
@@ -1141,7 +1141,35 @@ pub const GetSignatureStatuses = struct {
     };
 };
 
-// TODO: getSignaturesForAddress
+pub const GetSignaturesForAddress = struct {
+    address: Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        minContextSlot: ?u64 = null,
+        limit: ?usize = null,
+        before: ?Signature = null,
+        until: ?Signature = null,
+
+        pub fn getCommitment(self: Config) common.Commitment {
+            return self.commitment orelse common.Commitment.finalized;
+        }
+
+        pub fn getLimit(self: Config) usize {
+            return self.limit orelse 1000;
+        }
+    };
+
+    pub const Response = []const struct {
+        signature: Signature,
+        slot: u64,
+        err: ?sig.ledger.transaction_status.TransactionError,
+        memo: ?[]const u8,
+        blockTime: ?i64,
+        confirmationStatus: ?common.Commitment,
+    };
+};
 
 pub const GetSlot = struct {
     config: ?common.CommitmentSlotConfig = null,
@@ -1171,7 +1199,21 @@ pub const GetTokenAccountBalance = struct {
 // TODO: getTokenAccountsByDelegate
 // TODO: getTokenAccountsByOwner
 // TODO: getTokenLargestAccounts
-// TODO: getTokenSupply
+
+pub const GetTokenSupply = struct {
+    /// Pubkey of the token Mint to query, as base-58 encoded string
+    mint: Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        value: account_codec.parse_token.UiTokenAmount,
+    };
+};
 
 pub const GetTransaction = struct {
     /// Transaction signature, as base-58 encoded string
