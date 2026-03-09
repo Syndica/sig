@@ -70,6 +70,7 @@ const AutobahnRunner = struct {
                 .address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001),
                 .path = path,
                 .max_message_size = max_message_size,
+                .tcp_nodelay = true,
             },
         );
         try self.client.connect();

@@ -4,6 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
 
     const optimize = b.standardOptimizeOption(.{});
+    const test_filter = b.option([]const u8, "test-filter", "Filter for tests");
 
     const xev_dep = b.dependency("libxev", .{ .target = target, .optimize = optimize });
 
@@ -138,6 +139,7 @@ pub fn build(b: *std.Build) void {
 
     const lib_unit_tests = b.addTest(.{
         .root_module = lib_mod,
+        .filters = if (test_filter) |filter| &.{filter} else &.{},
     });
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
@@ -154,6 +156,7 @@ pub fn build(b: *std.Build) void {
 
     const e2e_tests = b.addTest(.{
         .root_module = e2e_mod,
+        .filters = if (test_filter) |filter| &.{filter} else &.{},
     });
     const run_e2e_tests = b.addRunArtifact(e2e_tests);
 
