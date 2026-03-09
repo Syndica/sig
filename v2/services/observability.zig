@@ -25,6 +25,7 @@ pub const ReadOnly = struct {
 pub const ReadWrite = struct {
     /// NOTE: some of these actually represent floats, and `std.atomic.Value(T)`s.
     histogram_data: []u64,
+    log_streams: []api.log.MessageStream,
 };
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
@@ -52,6 +53,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             return error.PendingServicesIncremented;
         }
     }
+    const log_streams = rw.log_streams[0..ro.startup.log_streams.load(.acquire)];
 
     try collectMetrics(gpa, &metrics, .{
         .id_mem = ro.id_mem[0..ro.startup.id_mem_end.load(.acquire)],
@@ -60,11 +62,32 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     });
 
     const listen_addr: std.net.Address = .initIp4(.{ 0, 0, 0, 0 }, ro.startup.port);
-    var server = try listen_addr.listen(.{});
+    var server = try listen_addr.listen(.{ .force_nonblocking = true });
     defer server.deinit();
 
     while (true) {
-        const conn = try server.accept();
+        {
+            var stderr_buf: [4096]u8 = undefined;
+            var stderr_fw: std.fs.File.Writer = .init(
+                .{ .handle = start.panic_state.stderr },
+                &stderr_buf,
+            );
+            const stderr = &stderr_fw.interface;
+            defer stderr.flush() catch {};
+            for (log_streams) |*log_stream| {
+                try api.log.streamLogs(.{
+                    .output = stderr,
+                    .service_name = log_stream.name.slice(),
+                    .log_messages_buffer = log_stream.swap_buffer.swap(),
+                });
+            }
+            try stderr.flush();
+        }
+
+        const conn = server.accept() catch |err| switch (err) {
+            error.WouldBlock => continue,
+            else => |e| return e,
+        };
         defer conn.stream.close();
 
         var conn_reader_state_buf: [4096 * 16]u8 = undefined;

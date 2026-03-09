@@ -1,6 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+pub const log = @import("observability/log.zig");
+
+comptime {
+    _ = log;
+}
+
 /// This comprises all the regions exposed by observability for other services to write to.
 pub const Regions = struct {
     startup: *Startup,
@@ -9,11 +15,29 @@ pub const Regions = struct {
     gauges: []std.atomic.Value(u64),
     /// NOTE: some of these actually represent floats, and `std.atomic.Value(T)`s.
     histogram_data: []u64,
+    log_streams: []log.MessageStream,
 
     /// A service should call this when they want to signal to the observability service
     /// that it has acquired a logger stream, and has registered all desired metrics.
     pub fn signalReady(self: Regions) void {
         std.debug.assert(self.startup.pending_services.fetchSub(1, .release) != 0);
+    }
+
+    pub fn acquireLogger(
+        self: Regions,
+        /// Asserts `str.len <= log.MessageStream.Name.MAX_LEN`.
+        name: []const u8,
+        comptime scope: []const u8,
+    ) Logger(scope) {
+        const obs_log_stream_index = self.startup.log_streams.fetchAdd(1, .release);
+        const stream = &self.log_streams[obs_log_stream_index];
+
+        std.debug.assert(name.len <= log.MessageStream.Name.MAX_LEN); // see `stream.name.init`
+        stream.name.init(name);
+        return .{
+            .sink = .{ .swap_buffer = &stream.swap_buffer },
+            .max_level = self.startup.max_log_level,
+        };
     }
 
     /// Low-level helper for registering metrics.
@@ -36,6 +60,9 @@ pub const Startup = extern struct {
     /// The port to listen on for the prometheus client.
     /// Mutating this is after initialization illegal.
     port: u16,
+    /// The maximum log level to emit.
+    /// Mutating this after initialization is illegal.
+    max_log_level: log.Level,
     /// Should start with a value equal to the number of other services that are going to
     /// be writing metrics to the trace service. The trace service will wait until this
     /// value is equal to zero before starting up, giving all other services a chance to
@@ -50,9 +77,157 @@ pub const Startup = extern struct {
     /// Represents the end of `histogram_data`. Can be incremented atomically by other services to
     /// claim space in `histogram_data`.
     histogram_data_end: std.atomic.Value(u32),
+    /// Represents the end of `log_streams`. Can be incremented atomically by other services to
+    /// claim elements in `log_streams`.
+    log_streams: std.atomic.Value(u32),
 };
 
 pub const endian = builtin.target.cpu.arch.endian();
+
+pub fn Logger(comptime scope_str: []const u8) type {
+    return struct {
+        sink: log.MessageSink,
+        max_level: log.Level,
+        const LoggerSelf = @This();
+
+        pub const scope = scope_str;
+
+        pub const noop: LoggerSelf = .{
+            .sink = .noop,
+            .max_level = .err,
+        };
+
+        pub fn from(logger: anytype) LoggerSelf {
+            const LoggerOther = Logger(@TypeOf(logger).scope);
+            return LoggerOther.withScope(logger, scope);
+        }
+
+        pub fn withScope(
+            self: LoggerSelf,
+            comptime new_scope: []const u8,
+        ) Logger(new_scope) {
+            return .{
+                .sink = self.sink,
+                .max_level = self.max_level,
+            };
+        }
+
+        pub fn err(self: LoggerSelf) Entry(0) {
+            return self.entry(.err);
+        }
+
+        pub fn warn(self: LoggerSelf) Entry(0) {
+            return self.entry(.warn);
+        }
+
+        pub fn info(self: LoggerSelf) Entry(0) {
+            return self.entry(.info);
+        }
+
+        pub fn debug(self: LoggerSelf) Entry(0) {
+            return self.entry(.debug);
+        }
+
+        pub fn trace(self: LoggerSelf) Entry(0) {
+            return self.entry(.trace);
+        }
+
+        pub fn entry(self: LoggerSelf, level: log.Level) Entry(0) {
+            return .{
+                .logger = self,
+                .level = level,
+                .entries = .{},
+            };
+        }
+
+        pub fn Entry(comptime entry_count: usize) type {
+            return struct {
+                logger: LoggerSelf,
+                level: log.Level,
+                entries: [entry_count]log.EntryField,
+                const EntrySelf = @This();
+
+                pub fn field(
+                    self: *const EntrySelf,
+                    name: []const u8,
+                    value: log.EntryValueFmt,
+                ) Entry(entry_count + 1) {
+                    const new_entry: log.EntryField = .{
+                        .name = name,
+                        .value = value,
+                    };
+                    return .{
+                        .logger = self.logger,
+                        .level = self.level,
+                        .entries = self.entries ++ .{new_entry},
+                    };
+                }
+
+                /// If `self.logger.sink == .noop`, this is guaranteed to succeed.
+                ///
+                /// If `self.logger.sink == .writer`, failure to write is ignored; ability to
+                /// detect such a failure is defined by the writer implementation.
+                ///
+                /// If `self.logger.sink == .swap_buffer`, it is assumed there is another thread
+                /// actively consuming the buffer, so this function will re-attempt transmission
+                /// a number of times; when a retry threshold is reached, it will panic.
+                pub fn logf(
+                    self: *const EntrySelf,
+                    comptime fmt_str: []const u8,
+                    args: anytype,
+                ) void {
+                    if (@intFromEnum(self.level) > @intFromEnum(self.logger.max_level)) return;
+                    const message: log.Message = .{
+                        .epoch_millis = @intCast(std.time.milliTimestamp()),
+                        .scope = scope,
+                        .fields = &self.entries,
+                        .msg = .fromFmt(.literal, fmt_str, &args),
+                        .level = self.level,
+                    };
+
+                    switch (self.logger.sink) {
+                        .noop => return,
+                        .writer => |w| {
+                            _ = message.write(w) catch |e| switch (e) {
+                                error.WriteFailed => {},
+                            };
+                        },
+                        .swap_buffer => |sb| {
+                            const expected_header = message.computeHeader();
+                            const encoded_len = expected_header.encodedLength();
+
+                            // NOTE: although the retry path is highly unlikely assuming the swapbuffer is sufficiently large,
+                            // there's an extremely slim but non-zero chance it could happen.
+                            // If it does happen, but the reader is actually still responsive, it is unlikely to happen many
+                            // times in a row, so we'll retry a handful of times before considering the channel to be dead,
+                            // and subsequently panic.
+                            const max_retries = 100;
+
+                            const writable: log.MessageStream.SwapBuffer.Writable =
+                                for (0..max_retries) |_| {
+                                    const writable = sb.getWritable();
+                                    if (writable.slice.len >= encoded_len) break writable;
+                                    writable.commit(0);
+                                } else std.debug.panic(
+                                    "Failed to log message after {d} retries.",
+                                    .{max_retries},
+                                );
+
+                            var fbw: std.Io.Writer = .fixed(writable.slice);
+                            const message_header = message.write(&fbw) catch |e| switch (e) {
+                                // we already know there's enough space in the buffer for the message.
+                                error.WriteFailed => unreachable,
+                            };
+                            std.debug.assert(message_header.encodedLength() == encoded_len);
+                            std.debug.assert(std.meta.eql(message_header, expected_header));
+                            writable.commit(encoded_len);
+                        },
+                    }
+                }
+            };
+        }
+    };
+}
 
 pub const MetricKind = enum(u8) {
     gauge_int,
