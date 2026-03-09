@@ -33,7 +33,7 @@ pub fn getAccountInfo(
     // Despite the fact that `Binary` is deprecated and `Base64` is better for performance.
     const encoding = config.encoding orelse AccountEncoding.binary;
 
-    const slot = self.slot_tracker.getSlotForCommitment(commitment);
+    const slot = self.slot_tracker.commitments.get(commitment);
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
@@ -85,7 +85,7 @@ pub fn getBalance(
     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.slot_tracker.getSlotForCommitment(commitment);
+    const slot = self.slot_tracker.commitments.get(commitment);
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
@@ -117,7 +117,7 @@ pub fn getTokenAccountBalance(
     const config: GetTokenAccountBalance.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.slot_tracker.getSlotForCommitment(commitment);
+    const slot = self.slot_tracker.commitments.get(commitment);
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
@@ -174,7 +174,7 @@ pub fn getTokenSupply(
     const config: GetTokenSupply.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.slot_tracker.getSlotForCommitment(commitment);
+    const slot = self.slot_tracker.commitments.get(commitment);
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
