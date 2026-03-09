@@ -475,7 +475,7 @@ fn isNonCirculatingStake(data: []const u8, clock: *const sig.runtime.sysvar.Cloc
     if (meta.lockup.isInForce(clock, null)) return true;
 
     for (&non_circulating_supply.withdraw_authorities) |*authority| {
-        if (meta.authorized.withdrawer.data == authority.*) return true;
+        if (std.mem.eql(u8, &meta.authorized.withdrawer.data, authority)) return true;
     }
 
     return false;

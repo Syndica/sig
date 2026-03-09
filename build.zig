@@ -621,7 +621,7 @@ fn generateNonCirculatingSupply(b: *Build) Build.LazyPath {
             },
         }),
     });
-    return b.addRunArtifact(gen).addOutputFileArg("non_circulating_supply.zig");
+    return b.addRunArtifact(gen).addOutputFileArg("non-circulating-supply.zig");
 }
 
 fn genSqlite(
