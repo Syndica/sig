@@ -73,7 +73,7 @@ pub const MethodAndParams = union(enum) {
     getMaxRetransmitSlot: noreturn,
     getMaxShredInsertSlot: noreturn,
     getMinimumBalanceForRentExemption: noreturn,
-    getMultipleAccounts: noreturn,
+    getMultipleAccounts: GetMultipleAccounts,
     getProgramAccounts: noreturn,
     getRecentPerformanceSamples: noreturn,
     getRecentPrioritizationFees: noreturn,
@@ -1083,7 +1083,20 @@ pub const GetLeaderSchedule = struct {
 // TODO: getMaxRetransmitSlot
 // TODO: getMaxShredInsertSlot
 // TODO: getMinimumBalanceForRentExemption
-// TODO: getMultipleAccounts
+
+pub const GetMultipleAccounts = struct {
+    pubkeys: []const Pubkey,
+    config: ?GetAccountInfo.Config = null,
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L148
+    pub const MAX_PUBKEYS = 100;
+
+    pub const Response = struct {
+        context: common.Context,
+        value: []const ?GetAccountInfo.Response.Value,
+    };
+};
+
 // TODO: getProgramAccounts
 // TODO: getRecentPerformanceSamples
 // TODO: getRecentPrioritizationFees
@@ -1384,6 +1397,8 @@ pub const common = struct {
         slot: u64,
         apiVersion: []const u8 = ClientVersion.API_VERSION,
     };
+
+    pub const AccountEncoding = account_codec.AccountEncoding;
 
     // TODO field types
     pub const RpcContactInfo = struct {
