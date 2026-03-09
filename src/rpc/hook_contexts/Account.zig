@@ -47,7 +47,7 @@ pub fn getAccountInfo(
     // [agave] Default commitment is finalized:
     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
     const commitment = config.commitment orelse .finalized;
-    // [agave] Default encoding in AGave is `Binary` (legacy base58):
+    // [agave] Default encoding in agave is `Binary` (legacy base58):
     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L545
     // However, `Binary` is deprecated and `Base64` is preferred for performance.
     // We default to base64 as it's more efficient and the recommended encoding.
