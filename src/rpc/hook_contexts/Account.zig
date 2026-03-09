@@ -40,6 +40,7 @@ pub fn getAccountInfo(
     }
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    defer ref.release();
     const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
     const account = try slot_reader.get(arena, params.pubkey) orelse return .{
         .context = .{ .slot = slot },
@@ -93,6 +94,7 @@ pub fn getBalance(
 
     // Get slot reference to access ancestors
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    defer ref.release();
     const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
 
     // Look up account
@@ -121,6 +123,7 @@ pub fn getTokenAccountBalance(
     const slot = self.slot_tracker.getSlotForCommitment(commitment);
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    defer ref.release();
     const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
     const maybe_account = try slot_reader.get(arena, params.pubkey);
 
@@ -168,7 +171,7 @@ pub fn getTokenAccountBalance(
 }
 
 pub fn getTokenSupply(
-    self: @This(),
+    self: AccountHookContext,
     arena: std.mem.Allocator,
     params: GetTokenSupply,
 ) !GetTokenSupply.Response {
@@ -178,6 +181,7 @@ pub fn getTokenSupply(
     const slot = self.slot_tracker.getSlotForCommitment(commitment);
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    defer ref.release();
     const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
 
     // Fetch mint account
@@ -230,7 +234,7 @@ pub fn getTokenSupply(
 }
 
 pub fn getMultipleAccounts(
-    self: @This(),
+    self: AccountHookContext,
     arena: std.mem.Allocator,
     params: GetMultipleAccounts,
 ) !GetMultipleAccounts.Response {
@@ -245,6 +249,7 @@ pub fn getMultipleAccounts(
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    defer ref.release();
     const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
     const values = try arena.alloc(?GetAccountInfo.Response.Value, params.pubkeys.len);
 
