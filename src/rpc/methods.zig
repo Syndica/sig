@@ -96,7 +96,7 @@ pub const MethodAndParams = union(enum) {
     getVersion: GetVersion,
     getVoteAccounts: GetVoteAccounts,
     isBlockhashValid: IsBlockhashValid,
-    minimumLedgerSlot: noreturn,
+    minimumLedgerSlot: MinimumLedgerSlot,
     requestAirdrop: RequestAirdrop,
     sendTransaction: SendTransaction,
     simulateTransaction: noreturn,
@@ -1338,7 +1338,9 @@ pub const IsBlockhashValid = struct {
     };
 };
 
-// TODO: minimumLedgerSlot
+pub const MinimumLedgerSlot = struct {
+    pub const Response = Slot;
+};
 
 pub const RequestAirdrop = struct {
     pubkey: Pubkey,

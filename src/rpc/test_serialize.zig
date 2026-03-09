@@ -34,6 +34,7 @@ const GetTokenSupply = methods.GetTokenSupply;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
 const IsBlockhashValid = methods.IsBlockhashValid;
+const MinimumLedgerSlot = methods.MinimumLedgerSlot;
 
 const Response = rpc.response.Response;
 
@@ -677,7 +678,14 @@ test IsBlockhashValid {
     );
 }
 
-// TODO: test minimumLedgerSlot()
+test MinimumLedgerSlot {
+    try testRequest(.minimumLedgerSlot, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"minimumLedgerSlot","params":[]}
+    );
+    try testResponse(MinimumLedgerSlot, .{ .result = 1234 },
+        \\{"jsonrpc":"2.0","result":1234,"id":1}
+    );
+}
 // TODO: test requestAirdrop()
 // TODO: test sendTransaction()
 // TODO: test simulateTransaction()

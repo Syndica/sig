@@ -13,6 +13,7 @@ const GetBlock = methods.GetBlock;
 const GetBlocks = methods.GetBlocks;
 const GetBlockTime = methods.GetBlockTime;
 const GetFirstAvailableBlock = methods.GetFirstAvailableBlock;
+const MinimumLedgerSlot = methods.MinimumLedgerSlot;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetTransaction = methods.GetTransaction;
@@ -316,6 +317,20 @@ pub fn getTransaction(
         ),
         .block_time = confirmed_tx_with_meta.block_time,
     } };
+}
+
+pub fn minimumLedgerSlot(
+    self: LedgerHookContext,
+    _: Allocator,
+    _: MinimumLedgerSlot,
+) !MinimumLedgerSlot.Response {
+    var meta_iter = try self.ledger.db.iterator(
+        sig.ledger.schema.schema.slot_meta,
+        .forward,
+        0,
+    );
+    defer meta_iter.deinit();
+    return try meta_iter.nextKey() orelse error.InvalidRequest;
 }
 
 /// Walk from latest_confirmed back to the root, collecting confirmed-but-unrooted slots.
