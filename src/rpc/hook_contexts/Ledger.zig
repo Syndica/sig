@@ -17,6 +17,7 @@ const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetTransaction = methods.GetTransaction;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
 const Pubkey = sig.core.Pubkey;
+const PubkeyMap = sig.utils.collections.PubkeyMap;
 const ReservedAccounts = sig.core.ReservedAccounts;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
@@ -248,15 +249,12 @@ pub fn getInflationReward(
     const epoch_has_partitioned_rewards = epoch_boundary_block.numRewardPartitions != null;
 
     var addresses = blk: {
-        var map = sig.utils.collections.PubkeyMap(void).empty;
+        var map = PubkeyMap(void).empty;
         for (params.addresses) |addr| _ = try map.getOrPut(arena, addr);
         break :blk map;
     };
 
-    var reward_map: sig.utils.collections.PubkeyMap(struct {
-        GetBlock.Response.UiReward,
-        Slot,
-    }) = .empty;
+    var reward_map: PubkeyMap(struct { GetBlock.Response.UiReward, Slot }) = .empty;
     if (epoch_boundary_block.rewards) |rewards| {
         for (rewards) |reward| {
             if (!(reward.rewardType == .Voting or
@@ -274,10 +272,7 @@ pub fn getInflationReward(
         const num_partitions = epoch_boundary_block.numRewardPartitions orelse
             @panic("numRewardPartitions should be set if epoch_has_partitioned_rewards is true");
 
-        var partition_index_addresses: std.AutoHashMapUnmanaged(
-            usize,
-            std.ArrayListUnmanaged(Pubkey),
-        ) = .empty;
+        var partition_index_addresses: std.AutoArrayHashMapUnmanaged(usize, PubkeyMap(void)) = .empty;
         for (addresses.entries.items(.key)) |addr| {
             if (reward_map.contains(addr)) continue;
             const partition_index = sig.replay.rewards.hasher.hashAddressToPartition(
@@ -286,8 +281,8 @@ pub fn getInflationReward(
                 @intCast(num_partitions),
             );
             var entry = try partition_index_addresses.getOrPut(arena, partition_index);
-            if (!entry.found_existing) entry.value_ptr.* = std.ArrayListUnmanaged(Pubkey).empty;
-            try entry.value_ptr.append(arena, addr);
+            if (!entry.found_existing) entry.value_ptr.* = PubkeyMap(void).empty;
+            _ = try entry.value_ptr.getOrPut(arena, addr);
         }
 
         const block_list = try self.getBlocksWithLimit(arena, .{
@@ -296,9 +291,10 @@ pub fn getInflationReward(
             .config = .{ .commitment = commitment },
         });
 
-        var partition_idx_addr_iter = partition_index_addresses.iterator();
-        while (partition_idx_addr_iter.next()) |entry| {
-            const partition_index = entry.key_ptr.*;
+        for (
+            partition_index_addresses.keys(),
+            partition_index_addresses.values(),
+        ) |partition_index, partition_addresses| {
             const slot = if (block_list.len > partition_index)
                 block_list[partition_index]
             else
@@ -314,19 +310,17 @@ pub fn getInflationReward(
             const block_rewards = if (block.rewards) |rewards| rewards else continue;
             for (block_rewards) |reward| {
                 if (reward.rewardType != .Staking) continue;
-                if (!addresses.contains(reward.pubkey)) continue;
+                if (!partition_addresses.contains(reward.pubkey)) continue;
                 try reward_map.put(arena, reward.pubkey, .{ reward, slot });
             }
         }
     }
 
-    var results = try arena.alloc(?GetInflationReward.InflationReward, params.addresses.len);
-    for (addresses.entries.items(.key), 0..) |addr, i| {
-        const reward, const slot = reward_map.get(addr) orelse {
-            results[i] = null;
-            continue;
-        };
-        results[i] = .{
+    const results = try arena.alloc(?GetInflationReward.InflationReward, params.addresses.len);
+    @memset(results, null);
+    for (addresses.entries.items(.key), results) |addr, *result| {
+        const reward, const slot = reward_map.get(addr) orelse continue;
+        result.* = .{
             .epoch = epoch,
             .effectiveSlot = slot,
             .amount = @intCast(@abs(reward.lamports)),

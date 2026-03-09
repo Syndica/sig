@@ -51,8 +51,8 @@ pub fn hashAddressToPartition(
 ) usize {
     const key: [SipHasher13.key_length]u8 = @splat(0);
     var seeded_hasher = SipHasher13.init(&key);
-    _ = seeded_hasher.writer().write(&parent_blockhash.data) catch unreachable;
-    _ = seeded_hasher.writer().write(&address.data) catch unreachable;
+    seeded_hasher.update(&parent_blockhash.data);
+    seeded_hasher.update(&address.data);
     return hashToPartition(seeded_hasher.finalInt(), num_partitions);
 }
 
