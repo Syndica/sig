@@ -239,12 +239,10 @@ pub fn getMultipleAccounts(
     const config = params.config orelse GetAccountInfo.Config{};
     const commitment = config.commitment orelse .finalized;
     const encoding = config.encoding orelse AccountEncoding.base64;
-
-    const slot = self.slot_tracker.getSlotForCommitment(commitment);
+    const slot = self.slot_tracker.commitments.get(commitment);
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
-
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
@@ -302,7 +300,7 @@ pub fn getProgramAccounts(
     const f = config.filters orelse &.{};
     try sig.rpc.filters.verifyFilters(f);
 
-    const slot = self.slot_tracker.getSlotForCommitment(commitment);
+    const slot = self.slot_tracker.commitments.get(commitment);
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
@@ -317,6 +315,7 @@ pub fn getProgramAccounts(
         defer z.deinit();
         break :blk try slot_reader.getByOwner(arena, &params.program_id);
     };
+    defer iter.deinit();
 
     var results = std.ArrayListUnmanaged(GetProgramAccounts.Value){};
 
