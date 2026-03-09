@@ -116,8 +116,11 @@ const LegacyContactInfo = struct {
     };
 };
 
+/// A vote by the `origin` node for a specific slot. Gossip tracks at most 12 of them for each node.
+/// The vote is represented as a transaction, with an instruction being to TowerSync (or the legacy
+/// VoteStateUpdate or Vote instructions). 
 const Vote = struct {
-    index: u8, // <= 12
+    index: u8, // < 12
     origin: [32]u8, // pubkey
     transaction: struct {
         // signatures.len <= message.header.num_required_signatures
@@ -250,8 +253,45 @@ const SnapshotHashes = struct {
     wallclock: u64, // < 1_000_000_000_000_000
 };
 
+/// Like LegacyContactInfo, holds the SocketAddresses for all the services on `origin` node.
+/// This version however tries really hard to compress their representations.
 const ContactInfo = struct {
-
+    origin: [32]u8, // pubkey
+    wallclock: VarInt(u64), // < 1_000_000_000_000_000
+    created: u64, // < 1_000_000_000_000_000
+    shred_version: u16,
+    version: struct {
+        major: VarInt(u16),
+        minor: VarInt(u16),
+        patch: VarInt(u16),
+        commit: u32, // first 4-bytes of git sha commit hash
+        feature_set: u32, // first 4-bytes of FeatureSet identifier
+    },
+    ips: ShortVec(IpAddr),
+    addrs: ShortVect(struct {
+        key: enum(u8) {
+            gossip,
+            serve_repair_quic,
+            rpc,
+            rpc_pubsub,
+            serve_repair,
+            tpu,
+            tpu_forwards,
+            tpu_forwards_quic,
+            tpu_quic,
+            tpu_vote,
+            tvu,
+            tvu_quic,
+            tpu_vote_quic,
+            alpenglow,
+        },
+        ip_index: u8, // ip = ips[ip_index],
+        port_offset: VarInt(u16), // port = sum(addrs[0..i].port_offset) + addr[i].port_offset
+    }),
+    extensions: ShortVec(struct { // usually ignored
+        tlv_type: u8,
+        tlv_bytes: ShortVec(u8),
+    }),
 };
 
 /// Phase 1 of the wen-restart protocol (SIMD-0046).
@@ -288,6 +328,110 @@ const RestartHeaviestFork = struct {
 ```
 
 </details>
+
+### Gossip Messages
+
+The `CrdsValue`s, as well as other actions to perform, are communicated through a `GossipMessage`:
+```zig
+const GossipMessage = union(enum(u32)) {
+    // For querying existing data
+    pull_request: PullRequest,
+    pull_response: PullResponse,
+    // For receiving live data
+    push_message: PushMessage,
+    prune_message: PruneMessage,
+    // For tracking peers
+    ping_message: PingMessage,
+    pong_message: PongMessage,
+};
+```
+
+A gossip node keeps track of other nodes as three conceptual overlapping sets: 
+* **Tracked** nodes: Those who we have sent a `PingMessage` to.
+* **Verified** nodes: Subset in **Tracked** who have "recently" responded with a valid `PongMessage`.
+* **Active** nodes: Subset in **Verified** who we have "recent" `ContactInfo`s for.
+
+#### Pings & Pongs
+
+```zig
+const PingMessage = struct {
+    origin: [32]u8, // pubkey
+    token: [32]u8, // random bytes
+    signature: [64]u8, // ed25519 signature over `token` by the `origin` private key
+};
+
+const PongMessage = struct {
+    origin: [32]u8, // pubkey
+    hash: [32]u8, // sha256("SOLANA_PING_PONG" ++ ping.token)
+    signature: [64]u8, // ed25519 signature over `hash` by the `origin` private key
+};
+```
+
+A gossip node may send a `PingMessage` to others to check if they're still alive.
+A node receiving one should respond back with a `PongMessage` containing the hash of the Ping's token. Once received, that node is deemed a **Verified** peer.
+
+Agave in particular only sends out Pings when interacting with a node:
+- If not in **Tracked**, sends Ping and starts tracking it.
+- If last Pong was 1280s (~21 min) ago, sends a final Ping and evicts the node from **Tracked**.
+- If last Pong was 1280/8 = 160s ago, sends a preemptive Ping before the eviction cutoff.
+
+A rate limit of at most 1 Ping every 20s per node is also applied to prevent flooding.
+
+### Pull Requests
+
+```zig
+const PullRequest = struct {
+    bloom_filter: BloomFilter,
+    mask: u64,
+    mask_bits: u32,
+    contact_info: CrdsValue,
+};
+```
+
+Occasionally, nodes will send out `PullRequest`s to their peers to query for existing data. To help discover what to return, a PullRequest contains two things:
+- A bloom filter of hashes for `CrdsValues` a node already has (skip over these when returning)
+- A mask which returning `CrdsValue` hashes should start with (skip those without this starting hash)
+
+```zig
+const BloomFilter = struct {
+    keys: List(u64),
+    bit_set: BitVec(u64),
+    num_bits: u64,
+};
+```
+
+The bloom filter is populated with N randomly generated `keys` and an empty K-sized bit-set. A slice of bytes is added to the bloom filter by, for each key, Fnv1a hashing the bytes with the `key` as the seed, modulo reducing the `u64` result into the `bit_set` range get the bit position, and setting that bit in the `bit_set`, incrementing `num_bits` if that bit was not previously set. Checking membership of a slice does similar: for each key, compute bit position, check if it's set in the `bit_set`.
+
+A node will usually build a set of `PullRequest`s to send out using 1. the hashes of `CrdsValue`s it has in the table 2. the hashes of `CrdsValue`s that failed to stay (evicted) or make it into (older than existing entry) the table. 
+
+The math to compute how many PullRequests to make is as follows:
+```rs
+max_bloom_bytes = 928
+max_bloom_bits: f64 = max_bloom_bytes * 8
+max_false_rate: f64 = 0.1
+max_keys: f64 = 8
+
+num_items: f64 = table_hashes.count() + failed_hashes.count()
+
+
+mask_bits = (num_bits)
+```
+
+
+Agave in particular builds a batch of `PullRequest`s to send out every 500ms. Separately, a pull request to the entrypoint is sent every 7.5s, stopping when the entrypoint is in the **Active** set. The peers to send PullRequests to are taken from a random (stake-weighted) sample of those who have an updated `CrdsValue` (from either `PullResponse`, or `ContactInfo` specifically from `PushMessage`) in the last 60s. Only `1/8`th of the built PullRequests are sent out, with a limit of 1024.
+
+### Pull Responses
+
+#### Push & Prune
+
+```zig
+const PushMessage = struct {
+    origin: [32]u8, // pubkey
+    values: List(CrdsValue),
+};
+```
+
+
 
 TODO:
 - tracking (Ping, Pong), live data (Push, Prune), existing data (PullReq, PullResp) 
