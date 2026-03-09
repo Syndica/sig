@@ -211,31 +211,25 @@ pub fn getSignatureStatuses(
         false;
 
     const highest_finalized_slot = self.slot_tracker.getSlotForCommitment(.finalized);
-    const reader = self.ledger.reader();
     const statuses = try arena.alloc(
         ?GetSignatureStatuses.Response.TransactionStatus,
         params.signatures.len,
     );
+    @memset(statuses, null);
 
-    for (params.signatures, 0..) |signature, i| {
+    for (params.signatures, statuses) |signature, *status| {
         // First, try the in-memory recent transaction status cache.
         // This covers transactions from approximately the last ~300 slots.
-        if (self.status_cache.getTransactionStatus(signature)) |entry| {
-            statuses[i] = .{
-                .slot = entry.slot,
-                .confirmations = null,
-                .err = entry.maybe_err,
-                .confirmationStatus = if (entry.slot <= highest_finalized_slot)
-                    .finalized
-                else
-                    .confirmed,
-            };
-            continue;
-        }
-
-        // If searchTransactionHistory is set, fall back to the persistent blockstore.
-        statuses[i] = if (search_history) blk: {
-            const slot, const status_meta = try reader.getRootedTransactionStatus(
+        status.* = if (self.status_cache.getTransactionStatus(signature)) |entry| .{
+            .slot = entry.slot,
+            .confirmations = null,
+            .err = entry.maybe_err,
+            .confirmationStatus = if (entry.slot <= highest_finalized_slot)
+                .finalized
+            else
+                .confirmed,
+        } else if (search_history) blk: { // If searchTransactionHistory is set, fall back to the Ledger.
+            const slot, const status_meta = try self.ledger.reader().getRootedTransactionStatus(
                 arena,
                 signature,
             ) orelse
