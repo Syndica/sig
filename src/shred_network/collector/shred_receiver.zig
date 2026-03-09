@@ -202,7 +202,7 @@ pub const ShredReceiver = struct {
 
         var current_max_insert_slot = self.params.max_shred_insert_slot.load(.monotonic);
         for (self.shred_batch.items(.shred)) |shred| {
-            if(shred.id().slot > current_max_insert_slot) {
+            if (shred.id().slot > current_max_insert_slot) {
                 current_max_insert_slot = shred.id().slot;
                 self.params.max_shred_insert_slot.store(current_max_insert_slot, .monotonic);
             }
