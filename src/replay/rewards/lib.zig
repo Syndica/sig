@@ -189,6 +189,7 @@ pub const PreviousEpochInflationRewards = struct {
 pub const EpochRewardStatus = union(enum) {
     active: struct {
         distribution_start_block_height: u64,
+        num_partitions: u64,
         all_stake_rewards: PartitionedStakeRewards,
         all_vote_rewards: PartitionedVoteRewards,
         partitioned_indices: ?PartitionedIndices,
@@ -218,6 +219,7 @@ pub const EpochRewardStatus = union(enum) {
         return .{
             .active = .{
                 .distribution_start_block_height = active.distribution_start_block_height,
+                .num_partitions = active.num_partitions,
                 .all_stake_rewards = active.all_stake_rewards.getAcquire(),
                 .all_vote_rewards = active.all_vote_rewards.getAcquire(),
                 .partitioned_indices = if (active.partitioned_indices) |pi|
@@ -232,3 +234,26 @@ pub const EpochRewardStatus = union(enum) {
         };
     }
 };
+
+test "clone preserves num_partitions" {
+    const allocator = std.testing.allocator;
+
+    const stake_entries = try allocator.alloc(PartitionedStakeReward, 0);
+    const vote_entries = try allocator.alloc(PartitionedVoteReward, 0);
+
+    var status: EpochRewardStatus = .{ .active = .{
+        .distribution_start_block_height = 100,
+        .num_partitions = 42,
+        .all_stake_rewards = try PartitionedStakeRewards.init(allocator, stake_entries),
+        .all_vote_rewards = try PartitionedVoteRewards.init(allocator, vote_entries),
+        .partitioned_indices = null,
+        .distributed_rewards = .empty,
+    } };
+    defer status.deinit(allocator);
+
+    var cloned = status.clone();
+    defer cloned.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u64, 42), cloned.active.num_partitions);
+    try std.testing.expectEqual(@as(u64, 100), cloned.active.distribution_start_block_height);
+}

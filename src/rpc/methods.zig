@@ -344,6 +344,10 @@ pub const GetBlock = struct {
             }
             try jw.objectField("blockhash");
             try jw.write(self.blockhash);
+            if (self.numRewardPartitions) |npw| {
+                try jw.objectField("numRewardPartitions");
+                try jw.write(npw);
+            }
             try jw.objectField("parentSlot");
             try jw.write(self.parentSlot);
             try jw.objectField("previousBlockhash");

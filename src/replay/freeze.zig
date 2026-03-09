@@ -295,17 +295,13 @@ fn getRewardsAndNumPartitions(
             if (is_epoch_boundary) {
                 // Epoch boundary: record vote rewards + fee reward + num_partitions.
                 const vote_entries = active.all_vote_rewards.entries;
-                const num_partitions: u64 = if (active.partitioned_indices) |pi|
-                    pi.entries.len
-                else
-                    0;
+                const num_partitions: u64 = active.num_partitions;
 
                 const all_rewards = try allocator.alloc(
                     sig.ledger.meta.Reward,
                     1 + vote_entries.len,
                 );
-                all_rewards[0] = fee_reward;
-                for (vote_entries, 1..) |vr, i| {
+                for (vote_entries, 0..) |vr, i| {
                     all_rewards[i] = .{
                         .pubkey = vr.vote_pubkey,
                         .lamports = @intCast(vr.rewards.lamports),
@@ -314,6 +310,7 @@ fn getRewardsAndNumPartitions(
                         .commission = vr.rewards.commission,
                     };
                 }
+                all_rewards[all_rewards.len - 1] = fee_reward;
                 return .{ all_rewards, num_partitions };
             } else {
                 // Distribution block: record distributed stake rewards + fee reward.
@@ -321,8 +318,11 @@ fn getRewardsAndNumPartitions(
                     sig.ledger.meta.Reward,
                     1 + active.distributed_rewards.items.len,
                 );
-                all_rewards[0] = fee_reward;
-                @memcpy(all_rewards[1..], active.distributed_rewards.items);
+                @memcpy(
+                    all_rewards[0..active.distributed_rewards.items.len],
+                    active.distributed_rewards.items,
+                );
+                all_rewards[all_rewards.len - 1] = fee_reward;
                 return .{ all_rewards, null };
             }
         },
@@ -865,4 +865,123 @@ test "delta hashes with many accounts" {
 
     try std.testing.expectEqualSlices(u16, &expected_lt_hash, &actual_lt_hash.data);
     try std.testing.expectEqualSlices(u8, &expected_merkle_hash.data, &actual_merkle_hash.data);
+}
+
+test "getRewardsAndNumPartitions: epoch boundary returns vote rewards and num_partitions" {
+    const allocator = std.testing.allocator;
+
+    const vote_entries = try allocator.alloc(rewards.PartitionedVoteReward, 2);
+    vote_entries[0] = .{
+        .vote_pubkey = Pubkey.ZEROES,
+        .rewards = .{
+            .reward_type = .voting,
+            .lamports = 1000,
+            .post_balance = 5000,
+            .commission = 10,
+        },
+        .account = .{ .lamports = 5000, .owner = Pubkey.ZEROES },
+    };
+    vote_entries[1] = .{
+        .vote_pubkey = Pubkey.ZEROES,
+        .rewards = .{
+            .reward_type = .voting,
+            .lamports = 2000,
+            .post_balance = 8000,
+            .commission = 5,
+        },
+        .account = .{ .lamports = 8000, .owner = Pubkey.ZEROES },
+    };
+
+    const stake_entries = try allocator.alloc(rewards.PartitionedStakeReward, 0);
+
+    var status: rewards.EpochRewardStatus = .{
+        .active = .{
+            .distribution_start_block_height = 101, // block_height + 1 == 101, so epoch boundary at block_height=100
+            .num_partitions = 7,
+            .all_stake_rewards = try rewards.PartitionedStakeRewards.init(allocator, stake_entries),
+            .all_vote_rewards = try rewards.PartitionedVoteRewards.init(allocator, vote_entries),
+            .partitioned_indices = null,
+            .distributed_rewards = .empty,
+        },
+    };
+    defer status.deinit(allocator);
+
+    const fee_reward: sig.ledger.meta.Reward = .{
+        .pubkey = Pubkey.ZEROES,
+        .lamports = 500,
+        .post_balance = 10000,
+        .reward_type = .fee,
+        .commission = null,
+    };
+
+    const result_rewards, const num_partitions = try getRewardsAndNumPartitions(
+        allocator,
+        &status,
+        100, // block_height: epoch boundary since 100 + 1 == 101
+        fee_reward,
+    );
+    defer allocator.free(result_rewards);
+
+    try std.testing.expectEqual(@as(?u64, 7), num_partitions);
+    // 2 vote rewards + 1 fee reward = 3 entries
+    try std.testing.expectEqual(@as(usize, 3), result_rewards.len);
+    // Vote rewards come first
+    try std.testing.expectEqual(@as(i64, 1000), result_rewards[0].lamports);
+    try std.testing.expectEqual(@as(i64, 2000), result_rewards[1].lamports);
+    // Fee reward is last
+    try std.testing.expectEqual(@as(i64, 500), result_rewards[2].lamports);
+}
+
+test "getRewardsAndNumPartitions: distribution block returns stake rewards" {
+    const allocator = std.testing.allocator;
+
+    const vote_entries = try allocator.alloc(rewards.PartitionedVoteReward, 0);
+    const stake_entries = try allocator.alloc(rewards.PartitionedStakeReward, 0);
+
+    var distributed = std.ArrayListUnmanaged(sig.ledger.meta.Reward){};
+    defer distributed.deinit(allocator);
+    try distributed.append(allocator, .{
+        .pubkey = Pubkey.ZEROES,
+        .lamports = 3000,
+        .post_balance = 20000,
+        .reward_type = .staking,
+        .commission = 5,
+    });
+
+    var status: rewards.EpochRewardStatus = .{ .active = .{
+        .distribution_start_block_height = 100,
+        .num_partitions = 7,
+        .all_stake_rewards = try rewards.PartitionedStakeRewards.init(allocator, stake_entries),
+        .all_vote_rewards = try rewards.PartitionedVoteRewards.init(allocator, vote_entries),
+        .partitioned_indices = null,
+        .distributed_rewards = .{ .items = distributed.items, .capacity = distributed.capacity },
+    } };
+    defer status.deinit(allocator);
+    // Prevent double-free: status.deinit will free the distributed_rewards buffer
+    distributed.items = &.{};
+    distributed.capacity = 0;
+
+    const fee_reward: sig.ledger.meta.Reward = .{
+        .pubkey = Pubkey.ZEROES,
+        .lamports = 500,
+        .post_balance = 10000,
+        .reward_type = .fee,
+        .commission = null,
+    };
+
+    // block_height=105, distribution_start=100, so this is a distribution block (not epoch boundary)
+    const result_rewards, const num_partitions = try getRewardsAndNumPartitions(
+        allocator,
+        &status,
+        105,
+        fee_reward,
+    );
+    defer allocator.free(result_rewards);
+
+    try std.testing.expectEqual(@as(?u64, null), num_partitions);
+    try std.testing.expectEqual(@as(usize, 2), result_rewards.len);
+    // Stake rewards come first
+    try std.testing.expectEqual(@as(i64, 3000), result_rewards[0].lamports);
+    // Fee reward is last
+    try std.testing.expectEqual(@as(i64, 500), result_rewards[1].lamports);
 }
