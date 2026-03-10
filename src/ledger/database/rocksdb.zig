@@ -279,7 +279,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
         ///
         /// The returned `Iterator` holds a reference to the underlying RocksDB
         /// iterator, which pins an SST snapshot and associated memory.
-        /// 
+        ///
         /// **Callers must call `deinit` on the returned iterator** when they are
         /// done with it; otherwise the pinned RocksDB resources (memtable refs,
         /// block cache entries, and read-snapshot state) will be leaked for the
