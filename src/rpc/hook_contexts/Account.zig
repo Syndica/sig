@@ -368,14 +368,13 @@ pub fn getSupply(
     arena: std.mem.Allocator,
     params: GetSupply,
 ) !GetSupply.Response {
-    // TODO: remove all deallocations.
-
     const config = params.config orelse GetSupply.Config{};
     const commitment = config.commitment orelse .finalized;
     const exclude_accounts = config.excludeNonCirculatingAccountsList orelse false;
 
     const slot = self.slot_tracker.getSlotForCommitment(commitment);
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    defer ref.release();
     const ancestors = &ref.constants().ancestors;
     const slot_reader = self.account_reader.forSlot(ancestors);
 
@@ -385,7 +384,6 @@ pub fn getSupply(
     const clock = blk: {
         const clock_account = try slot_reader.get(arena, sig.runtime.sysvar.Clock.ID) orelse
             return error.SlotNotAvailable;
-        defer clock_account.deinit(arena);
         var iter = clock_account.data.iterator();
         break :blk try sig.bincode.read(arena, sig.runtime.sysvar.Clock, iter.reader(), .{});
     };
@@ -406,7 +404,6 @@ pub fn getSupply(
 
     while (try owner_iter.next()) |entry| {
         const pubkey, const account = entry;
-        defer account.deinit(arena);
 
         const data_slice: []const u8 = switch (account.data) {
             .unowned_allocation => |d| d,
@@ -428,7 +425,6 @@ pub fn getSupply(
 
     for (account_set.keys()) |pubkey| {
         if (slot_reader.get(arena, pubkey) catch null) |account| {
-            defer account.deinit(arena);
             non_circulating_lamports += account.lamports;
         }
         if (!exclude_accounts) {

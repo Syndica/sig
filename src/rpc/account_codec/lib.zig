@@ -761,7 +761,6 @@ pub fn parseMintAdditionalData(
     const clock_id = sig.runtime.sysvar.Clock.ID;
     const maybe_clock_account = slot_reader.get(arena, clock_id) catch return null;
     const clock_account = maybe_clock_account orelse return null;
-    defer clock_account.deinit(arena);
 
     var clock_iter = clock_account.data.iterator();
     const clock = sig.bincode.read(
