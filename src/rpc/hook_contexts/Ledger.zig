@@ -276,11 +276,14 @@ pub fn getInflationReward(
             usize,
             PubkeyMap(void),
         ) = .empty;
+        const hasher = sig.replay.rewards.hasher.initHasher(
+            &epoch_boundary_block.previousBlockhash,
+        );
         for (addresses.entries.items(.key)) |addr| {
             if (reward_map.contains(addr)) continue;
             const partition_index = sig.replay.rewards.hasher.hashAddressToPartition(
+                hasher,
                 &addr,
-                &epoch_boundary_block.previousBlockhash,
                 @intCast(num_partitions),
             );
             var entry = try partition_index_addresses.getOrPut(arena, partition_index);
@@ -322,9 +325,9 @@ pub fn getInflationReward(
         }
     }
 
-    const results = try arena.alloc(?GetInflationReward.InflationReward, params.addresses.len);
+    const results = try arena.alloc(?GetInflationReward.InflationReward, addresses.count());
     @memset(results, null);
-    for (addresses.entries.items(.key), results) |addr, *result| {
+    for (addresses.keys(), results) |addr, *result| {
         const reward, const slot = reward_map.get(addr) orelse continue;
         result.* = .{
             .epoch = epoch,
