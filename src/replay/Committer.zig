@@ -81,20 +81,23 @@ pub fn commitTransactions(
         transaction_fees += tx_result.fees.transaction_fee;
         priority_fees += tx_result.fees.prioritization_fee;
 
+        const is_simple_vote_transaction = transaction.transaction.isSimpleVoteTransaction(
+            transaction.instructions,
+        );
+
         // Update prioritization fee cache for non-vote transactions
         if (self.prioritization_fee_cache) |cache| {
-            if (!isSimpleVoteTransaction(transaction.transaction)) {
-                const pubkeys = transaction.accounts.items(.pubkey);
-                const writables = transaction.accounts.items(.is_writable);
+            if (!is_simple_vote_transaction) {
                 const MAX_TX_ACCOUNT_LOCKS = sig.runtime.account_loader.MAX_TX_ACCOUNT_LOCKS;
                 var writable_keys: [MAX_TX_ACCOUNT_LOCKS]sig.core.Pubkey = undefined;
                 var writable_count: usize = 0;
-                for (pubkeys, writables) |pubkey, is_writable| {
-                    if (is_writable) {
-                        writable_keys[writable_count] = pubkey;
-                        writable_count += 1;
-                    }
-                }
+                for (
+                    transaction.accounts.items(.pubkey),
+                    transaction.accounts.items(.is_writable),
+                ) |pubkey, is_writable| if (is_writable) {
+                    writable_keys[writable_count] = pubkey;
+                    writable_count += 1;
+                };
                 try cache.update(
                     persistent_allocator,
                     slot,
@@ -112,7 +115,7 @@ pub fn commitTransactions(
             // Skip non successful or non vote transactions.
             // Only send votes if consensus is enabled (sender exists)
             if (self.replay_votes_sender) |sender| {
-                if (tx_result.err == null and isSimpleVoteTransaction(transaction.transaction)) {
+                if (tx_result.err == null and is_simple_vote_transaction) {
                     if (try parseSanitizedVoteTransaction(
                         persistent_allocator,
                         transaction,
@@ -450,11 +453,3 @@ const FallbackAccountReader = struct {
         return null;
     }
 };
-
-fn isSimpleVoteTransaction(tx: Transaction) bool {
-    const msg = tx.msg;
-    if (msg.instructions.len == 0) return false;
-    const ix = msg.instructions[0];
-    if (ix.program_index >= msg.account_keys.len) return false;
-    return sig.runtime.program.vote.ID.equals(&msg.account_keys[ix.program_index]);
-}

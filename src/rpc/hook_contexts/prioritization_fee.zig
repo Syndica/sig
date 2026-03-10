@@ -54,9 +54,11 @@ pub const PrioritizationFeeCache = struct {
     };
 
     const Inner = struct {
-        /// Finalized slot entries, ordered by insertion (oldest first).
+        /// Finalized slot entries stored as a ring buffer.
         entries: [NUM_RECENT_BLOCKS]?SlotFeeEntry = .{null} ** NUM_RECENT_BLOCKS,
-        /// Number of valid finalized entries (from index 0).
+        /// Index of the oldest entry (next to be evicted when full).
+        head: usize = 0,
+        /// Number of valid finalized entries.
         len: usize = 0,
         /// In-progress (unfinalized) slot data, keyed by slot.
         unfinalized: std.AutoArrayHashMapUnmanaged(Slot, SlotFeeEntry) = .{},
@@ -67,19 +69,18 @@ pub const PrioritizationFeeCache = struct {
     };
 
     pub fn deinit(self: *PrioritizationFeeCache, allocator: Allocator) void {
-        var wlock = self.data.write();
+        const inner, var wlock = self.data.writeWithLock();
         defer wlock.unlock();
-        const inner = wlock.mut();
 
-        for (&inner.entries) |*maybe_entry| {
-            if (maybe_entry.*) |*entry| {
+        // Free only the valid entries in the ring buffer
+        for (0..inner.len) |i| {
+            const idx = (inner.head + i) % NUM_RECENT_BLOCKS;
+            if (inner.entries[idx]) |*entry| {
                 entry.deinit(allocator);
-                maybe_entry.* = null;
+                inner.entries[idx] = null;
             }
         }
-        for (inner.unfinalized.values()) |*entry| {
-            entry.deinit(allocator);
-        }
+        for (inner.unfinalized.values()) |*entry| entry.deinit(allocator);
         inner.unfinalized.deinit(allocator);
     }
 
@@ -113,11 +114,10 @@ pub const PrioritizationFeeCache = struct {
         // Update per-account minimums
         for (writable_accounts) |pubkey| {
             const acc_gop = try entry.writable_account_fees.getOrPut(allocator, pubkey);
-            if (!acc_gop.found_existing) {
-                acc_gop.value_ptr.* = compute_unit_price;
-            } else {
-                acc_gop.value_ptr.* = @min(acc_gop.value_ptr.*, compute_unit_price);
-            }
+            acc_gop.value_ptr.* = if (acc_gop.found_existing)
+                @min(acc_gop.value_ptr.*, compute_unit_price)
+            else
+                compute_unit_price;
         }
     }
 
@@ -132,6 +132,21 @@ pub const PrioritizationFeeCache = struct {
         var wlock = self.data.write();
         defer wlock.unlock();
         const inner = wlock.mut();
+
+        // Prune stale unfinalized entries (slots older than the finalization window).
+        // These are likely skipped/abandoned slots that will never be finalized.
+        const prune_threshold = slot -| NUM_RECENT_BLOCKS;
+        var j: usize = 0;
+        while (j < inner.unfinalized.count()) {
+            const entry_slot = inner.unfinalized.keys()[j];
+            if (entry_slot < prune_threshold) {
+                var entry = inner.unfinalized.values()[j];
+                entry.deinit(allocator);
+                inner.unfinalized.swapRemoveAt(j);
+            } else {
+                j += 1;
+            }
+        }
 
         const fetched = inner.unfinalized.fetchSwapRemove(slot) orelse return;
         var fee_entry = fetched.value;
@@ -152,16 +167,13 @@ pub const PrioritizationFeeCache = struct {
 
         // Add to finalized entries, evicting oldest if full
         if (inner.len == NUM_RECENT_BLOCKS) {
-            // Evict oldest entry (index 0), shift everything down
-            if (inner.entries[0]) |*old| {
-                old.deinit(allocator);
-            }
-            for (0..NUM_RECENT_BLOCKS - 1) |j| {
-                inner.entries[j] = inner.entries[j + 1];
-            }
-            inner.entries[NUM_RECENT_BLOCKS - 1] = fee_entry;
+            // Evict oldest entry at head, insert new entry there
+            if (inner.entries[inner.head]) |*old| old.deinit(allocator);
+            inner.entries[inner.head] = fee_entry;
+            inner.head = (inner.head + 1) % NUM_RECENT_BLOCKS;
         } else {
-            inner.entries[inner.len] = fee_entry;
+            const insert_idx = (inner.head + inner.len) % NUM_RECENT_BLOCKS;
+            inner.entries[insert_idx] = fee_entry;
             inner.len += 1;
         }
     }
@@ -184,8 +196,10 @@ pub const PrioritizationFeeCache = struct {
             inner.len,
         );
 
-        for (inner.entries[0..inner.len]) |maybe_entry| {
-            const entry = maybe_entry orelse continue;
+        // Iterate ring buffer from oldest (head) to newest
+        for (0..inner.len) |i| {
+            const idx = (inner.head + i) % NUM_RECENT_BLOCKS;
+            const entry = inner.entries[idx] orelse continue;
             if (!entry.is_finalized) continue;
 
             const block_min: u64 = if (entry.min_compute_unit_price == std.math.maxInt(u64))

@@ -558,6 +558,7 @@ test "checkAge: recent blockhash" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
         .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
     };
 
     var blockhash_queue = try BlockhashQueue.initWithSingleEntry(
@@ -694,6 +695,7 @@ test "checkAge: nonce account" {
         }},
         .accounts = accounts,
         .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
     };
 
     var blockhash_queue = BlockhashQueue{
@@ -760,6 +762,7 @@ test "checkFeePayer: happy path fee payer only" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
         .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
     };
     defer transaction.accounts.deinit(allocator);
 
@@ -816,6 +819,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
         .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
     };
     defer transaction.accounts.deinit(allocator);
 
@@ -884,6 +888,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
         .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
     };
     defer transaction.accounts.deinit(allocator);
 

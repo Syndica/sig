@@ -72,6 +72,7 @@ pub const ResolvedTransaction = struct {
             .accounts = self.accounts,
             .compute_budget_instruction_details = compute_budget_instruction_details,
             .num_lookup_tables = self.transaction.msg.address_lookups.len,
+            .is_simple_vote_transaction = self.transaction.isSimpleVoteTransaction(self.instructions),
         };
     }
 };
