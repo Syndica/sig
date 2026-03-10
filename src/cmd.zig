@@ -1557,7 +1557,7 @@ fn validator(
     else
         false;
 
-    var rooted_db: sig.accounts_db.Db.Rooted = try .init(rooted_file);
+    var rooted_db: sig.accounts_db.Db.Rooted = try .init(allocator, rooted_file);
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
 
@@ -1838,7 +1838,7 @@ fn replayOffline(
     else
         false;
 
-    var rooted_db: sig.accounts_db.Db.Rooted = try .init(rooted_file);
+    var rooted_db: sig.accounts_db.Db.Rooted = try .init(allocator, rooted_file);
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
 
@@ -2179,7 +2179,7 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
     defer allocator.free(rooted_file);
 
-    var rooted_db: sig.accounts_db.Db.Rooted = try .init(rooted_file);
+    var rooted_db: sig.accounts_db.Db.Rooted = try .init(allocator, rooted_file);
     defer rooted_db.deinit();
 
     var loaded_snapshot = try loadSnapshot(
