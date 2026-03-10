@@ -244,7 +244,7 @@ pub fn getMultipleAccounts(
     const config = params.config orelse GetAccountInfo.Config{};
     const commitment = config.commitment orelse .finalized;
     const encoding = config.encoding orelse AccountEncoding.base64;
-    const slot = self.slot_tracker.getSlotForCommitment(commitment);
+    const slot = self.slot_tracker.commitments.get(commitment);
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
