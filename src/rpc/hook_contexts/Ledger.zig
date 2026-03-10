@@ -257,8 +257,8 @@ pub fn getInflationReward(
     var reward_map: PubkeyMap(struct { GetBlock.Response.UiReward, Slot }) = .empty;
     if (epoch_boundary_block.rewards) |rewards| {
         for (rewards) |reward| {
-            if (!(reward.rewardType == .Voting or
-                (!epoch_has_partitioned_rewards and reward.rewardType == .Staking))) continue;
+            if (reward.rewardType != .Voting and
+                (reward.rewardType != .Staking or epoch_has_partitioned_rewards)) continue;
             if (!addresses.contains(reward.pubkey)) continue;
             try reward_map.put(
                 arena,
@@ -303,18 +303,21 @@ pub fn getInflationReward(
             else
                 return error.EpochRewardsPeriodActive;
 
-            const block = self.getBlock(arena, .{ .slot = slot, .encoding_or_config = .{
-                .config = .{
-                    .commitment = commitment,
-                    .transactionDetails = .none,
-                },
-            } }) catch return error.BlockNotAvailable;
-
-            const block_rewards = if (block.rewards) |rewards| rewards else continue;
+            const block_rewards = blk: {
+                const maybe_rewards_res = self.ledger.reader().getBlockRewards(
+                    arena,
+                    slot,
+                ) catch return error.BlockNotAvailable;
+                if (maybe_rewards_res) |res| break :blk res.rewards else continue;
+            };
             for (block_rewards) |reward| {
-                if (reward.rewardType != .Staking) continue;
+                if (reward.reward_type != .staking) continue;
                 if (!partition_addresses.contains(reward.pubkey)) continue;
-                try reward_map.put(arena, reward.pubkey, .{ reward, slot });
+                try reward_map.put(
+                    arena,
+                    reward.pubkey,
+                    .{ .fromLedgerReward(reward), slot },
+                );
             }
         }
     }
