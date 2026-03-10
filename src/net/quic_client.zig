@@ -216,19 +216,13 @@ pub fn Client(
             const self = maybe_self.?;
 
             const local_endpoint = try self.socket.getLocalEndPoint();
-            const local_socketaddr = switch (toSocketAddress(local_endpoint)) {
-                .V4 => |addr| addr,
-                .V6 => @panic("add ipv6 support"),
-            };
-
-            const peer_sockaddr = peer_address.in.sa;
 
             if (0 > lsquic.lsquic_engine_packet_in(
                 self.lsquic_engine,
                 xev_read_buffer.slice.ptr,
                 bytes,
-                @ptrCast(&local_socketaddr),
-                @ptrCast(&peer_sockaddr),
+                @ptrCast(&local_endpoint.any),
+                @ptrCast(&peer_address.any),
                 self,
                 0,
             )) {
@@ -268,7 +262,7 @@ pub fn Client(
                 0,
                 null,
                 0,
-                null,
+                @ptrCast(&[_]u8{}),
                 0,
             ) == null) {
                 @panic("lsquic_engine_connect failed");

@@ -222,6 +222,7 @@ pub fn build(b: *Build) !void {
     const benchmark_step = b.step("benchmark", "Benchmark client");
     const geyser_reader_step = b.step("geyser_reader", "Read data from geyser");
     const vm_step = b.step("vm", "Run the VM client");
+    const test_send_transactions_step = b.step("test_send_transactions", "Attempt to land transactions on testnet using QUIC client");
     const docs_step = b.step("docs", "Generate and install documentation for the Sig Library");
 
     // Dependencies
@@ -483,6 +484,23 @@ pub fn build(b: *Build) !void {
     vm_exe.root_module.addImport("cli", cli_mod);
     vm_exe.root_module.addImport("std14", std14_mod);
     addInstallAndRun(b, vm_step, vm_exe, config);
+
+    const test_send_transactions_exe = b.addExecutable(.{
+        .name = "test_send_transactions",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/transaction_sender/test_send_transactions.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = imports,
+            .sanitize_thread = config.enable_tsan,
+            .error_tracing = config.error_tracing,
+            .link_libc = true,
+        }),
+        .use_llvm = config.use_llvm,
+    });
+    test_send_transactions_exe.root_module.addObject(memcpy);
+    test_send_transactions_exe.root_module.addImport("sig", sig_mod);
+    addInstallAndRun(b, test_send_transactions_step, test_send_transactions_exe, config);
 
     // docs for the Sig library
     const install_sig_docs = b.addInstallDirectory(.{
