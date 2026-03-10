@@ -27,6 +27,10 @@ largest_rooted_slot: ?Slot,
 sqlite_mem_used: ?*Gauge = null,
 /// Whether the SPL token owner index column is enabled (runtime CLI flag).
 enable_spl_token_owner_index: bool,
+/// In-memory top-N accounts by lamport balance, updated on every put().
+largest_tracker: LargestTracker = .{},
+/// Allocator used for the largest_tracker map.
+allocator: std.mem.Allocator,
 
 /// These aren't thread safe, but we can have as many as we want. Clean up with deinitThreadLocals
 /// on any threads that use put or get.
@@ -37,6 +41,7 @@ threadlocal var get_by_owner_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_by_spl_token_owner_stmt: ?*sql.sqlite3_stmt = null;
 
 pub fn init(
+    allocator: std.mem.Allocator,
     file_path: [:0]const u8,
     enable_owner_index: bool,
     enable_spl_token_owner_index: bool,
@@ -55,7 +60,11 @@ pub fn init(
         .handle = db,
         .largest_rooted_slot = null,
         .enable_spl_token_owner_index = enable_spl_token_owner_index,
+        .allocator = allocator,
     };
+
+    try self.largest_tracker.init(allocator);
+    errdefer self.largest_tracker.deinit(allocator);
 
     {
         const pragmas =
@@ -148,6 +157,7 @@ pub fn init(
 }
 
 pub fn deinit(self: *Rooted) void {
+    self.largest_tracker.deinit(self.allocator);
     _ = sql.sqlite3_close(self.handle);
 }
 
@@ -623,6 +633,8 @@ fn putWithoutTokenOwner(
 
     const result = sql.sqlite3_step(stmt);
     if (result != DONE) self.err(result);
+
+    self.largest_tracker.update(address, account.lamports);
 }
 
 fn putWithTokenOwner(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedData) void {
@@ -680,3 +692,123 @@ fn putWithTokenOwner(self: *Rooted, address: Pubkey, slot: Slot, account: Accoun
     const result = sql.sqlite3_step(stmt);
     if (result != DONE) self.err(result);
 }
+
+/// Tracks the top-N accounts by lamport balance in rooted storage.
+/// Populated incrementally during snapshot loading and slot rooting
+/// via Rooted.put(). RPC threads read via snapshot().
+pub const LargestTracker = struct {
+    const PubkeyMap = sig.utils.collections.PubkeyMap;
+
+    pub const CAPACITY = 20;
+    pub const Entry = struct { Pubkey, u64 };
+
+    /// Pubkey -> lamports for the current top-N. Pre-allocated to CAPACITY.
+    map: PubkeyMap(u64) = .{},
+    /// Cached minimum lamports in the map. Enables fast rejection of puts
+    /// that can't enter the top-N. Only meaningful when map is full.
+    /// Only accessed by the single writer thread (snapshot load or replay).
+    min_lamports: u64 = 0,
+    /// Protects map mutations for concurrent RPC snapshot() readers.
+    lock: sig.sync.RwLock = .{},
+
+    pub fn init(self: *LargestTracker, allocator: std.mem.Allocator) !void {
+        // errdefer handles partial allocation failure inside ensureTotalCapacity:
+        // the std ArrayHashMap allocates entries + index header separately,
+        // and if the second alloc fails, the first is only reachable via self.map.
+        errdefer self.map.deinit(allocator);
+        try self.map.ensureTotalCapacity(allocator, CAPACITY);
+    }
+
+    pub fn deinit(self: *LargestTracker, allocator: std.mem.Allocator) void {
+        self.map.deinit(allocator);
+    }
+
+    /// Update the tracker with a new account balance.
+    /// Called from Rooted.put() on the single writer thread (snapshot load or replay).
+    pub fn update(self: *LargestTracker, pubkey: Pubkey, lamports: u64) void {
+        // Fast path: tracker is full, balance is below the minimum, and the
+        // pubkey isn't already tracked. Reading the map here without a lock
+        // is safe because we are the single writer thread.
+        if (lamports > 0 and self.map.count() == CAPACITY and
+            lamports <= self.min_lamports and
+            !self.map.contains(pubkey))
+        {
+            return;
+        }
+
+        self.lock.lock();
+        defer self.lock.unlock();
+
+        if (self.map.getPtr(pubkey)) |existing| {
+            // Already tracked — update or remove.
+            if (lamports == 0) {
+                const was_min = existing.* == self.min_lamports;
+                _ = self.map.swapRemove(pubkey);
+                if (was_min) self.recomputeMin();
+            } else {
+                existing.* = lamports;
+                if (lamports < self.min_lamports) {
+                    self.min_lamports = lamports;
+                }
+            }
+        } else {
+            // Not tracked.
+            if (lamports == 0) return;
+
+            if (self.map.count() < CAPACITY) {
+                self.map.putAssumeCapacity(pubkey, lamports);
+                // Track min incrementally as the map fills up.
+                const min = self.min_lamports;
+                if (min == 0 or lamports < min) {
+                    self.min_lamports = lamports;
+                }
+            } else if (lamports > self.min_lamports) {
+                // Displace the minimum entry.
+                // NOTE: removeMin only runs on two unavoidable cases:
+                // * When removing the current min (lamports -> 0)
+                // * displacement (a new entry knocked the min entry out)
+                // Both cases require finding the second-smallest, which we don't track (just 20 entries).
+                self.removeMin();
+                self.map.putAssumeCapacity(pubkey, lamports);
+                self.recomputeMin();
+            }
+        }
+    }
+
+    /// Copy current entries into caller's buffer. Returns count of entries copied.
+    /// Safe to call from any RPC thread (takes shared lock).
+    pub fn snapshot(self: *LargestTracker, buf: *[CAPACITY]Entry) u8 {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        const keys = self.map.keys();
+        const vals = self.map.values();
+        const len: u8 = @intCast(keys.len);
+        for (0..len) |i| {
+            buf[i] = .{ keys[i], vals[i] };
+        }
+        return len;
+    }
+
+    fn recomputeMin(self: *LargestTracker) void {
+        const vals = self.map.values();
+        if (vals.len == 0) {
+            self.min_lamports = 0;
+            return;
+        }
+        var min: u64 = std.math.maxInt(u64);
+        for (vals) |v| {
+            if (v < min) min = v;
+        }
+        self.min_lamports = min;
+    }
+
+    fn removeMin(self: *LargestTracker) void {
+        const keys = self.map.keys();
+        const vals = self.map.values();
+        var min_idx: usize = 0;
+        for (1..vals.len) |i| {
+            if (vals[i] < vals[min_idx]) min_idx = i;
+        }
+        _ = self.map.swapRemove(keys[min_idx]);
+    }
+};

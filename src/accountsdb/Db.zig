@@ -49,7 +49,7 @@ pub fn initTest(allocator: std.mem.Allocator) !TestContext {
     var buffer: [std.fs.max_path_bytes + 1]u8 = undefined;
     const path = try std.fmt.bufPrintZ(&buffer, "{s}/accounts.db", .{tmp_path});
 
-    var rooted: Rooted = try .init(path, false, false);
+    var rooted: Rooted = try .init(allocator, path, false, false);
     errdefer rooted.deinit();
 
     const db: @This() = try .init(allocator, rooted);
@@ -146,6 +146,39 @@ pub fn getOwned(
         return data.toOwnedAccount();
     }
     return null;
+}
+
+/// Returns the top `limit` accounts by lamport balance (descending).
+/// Snapshots the rooted tracker then applies unrooted overrides for
+/// processed/confirmed commitment levels.
+pub fn getLargest(
+    self: *Db,
+    allocator: std.mem.Allocator,
+    ancestors: *const Ancestors,
+    limit: u32,
+) ![]const struct { Pubkey, u64 } {
+    const Tracker = Rooted.LargestTracker;
+    var buf: [Tracker.CAPACITY]Tracker.Entry = undefined;
+    const len = self.rooted.largest_tracker.snapshot(&buf);
+
+    // Override rooted balances with unrooted versions where they exist.
+    for (buf[0..len]) |*entry| {
+        if (self.unrooted.get(entry[0], ancestors)) |account| {
+            entry[1] = account.lamports;
+        }
+    }
+
+    // Sort descending by lamports.
+    std.mem.sortUnstable(Tracker.Entry, buf[0..len], {}, struct {
+        pub fn lessThan(_: void, a: Tracker.Entry, b: Tracker.Entry) bool {
+            return a[1] > b[1];
+        }
+    }.lessThan);
+
+    const result_len = @min(len, limit);
+    const result = try allocator.alloc(Tracker.Entry, result_len);
+    @memcpy(result, buf[0..result_len]);
+    return result;
 }
 
 pub const SlotModifiedIterator = struct {
