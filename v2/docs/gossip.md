@@ -305,7 +305,7 @@ const RestartLastVotedForkSlots = struct {
     origin: [32]u8, // pubkey
     wallclock: u64, // < 1_000_000_000_000_000
     offsets: union(enum(u32)) {
-        run_length_encoded: List(u16), // rle[i] slots ARE voted on, rle[i+1] AREN'T voted on, i+=2
+        run_length_encoded: List(VarInt(u16)), // rle[i] slots ARE voted on, rle[i+1] AREN'T voted on, i+=2
         raw_offset_mask: BitVec(u8), // mask[bit=i] == {last_voted_slot + i} was voted on 
     },
     last_voted_slot: u64, // < 1_000_000_000_000_000
