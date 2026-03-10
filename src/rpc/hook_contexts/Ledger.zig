@@ -114,6 +114,7 @@ pub fn getBlocks(
         .forward,
         params.start_slot,
     );
+    defer rooted_iter.deinit();
 
     while (try rooted_iter.nextKey()) |slot| {
         if (slot > end_slot or slot > highest_root) break;
@@ -168,6 +169,7 @@ pub fn getBlocksWithLimit(
         .forward,
         params.start_slot,
     );
+    defer rooted_iter.deinit();
 
     while (blocks.items.len < params.limit) {
         const slot = try rooted_iter.nextKey() orelse break;
@@ -248,6 +250,7 @@ pub fn getBlockProduction(
             .forward,
             first_slot,
         );
+        defer rooted_iter.deinit();
         while (try rooted_iter.nextKey()) |slot| {
             if (slot > last_slot or slot > highest_root) break;
             try slot_set.put(arena, slot, {});
@@ -277,9 +280,7 @@ pub fn getBlockProduction(
     // Iterate slot range, build by_identity map using PubkeyMap internally
     // to avoid duplicate string key allocations.
     var by_identity: sig.utils.collections.PubkeyMap(struct { u64, u64 }) = .empty;
-
-    var slot = first_slot;
-    while (slot <= last_slot) : (slot += 1) {
+    for (first_slot..last_slot + 1) |slot| {
         const leader = ls.leader_schedules.getLeaderOrNull(slot) orelse continue;
 
         if (identity_filter) |filter| if (!leader.equals(&filter)) continue;
