@@ -168,6 +168,10 @@ pub fn RingSlice(
         pub fn reader(self: *RingSlice(u8, .reader), buffer: []u8) Reader {
             return .init(self, buffer);
         }
+
+        pub fn writer(self: *RingSlice(u8, .writer), buffer: []u8) Writer {
+            return .init(self, buffer);
+        }
     };
 }
 
@@ -250,6 +254,85 @@ pub const Reader = struct {
     }
 
     fn second(self: *const Reader) []const u8 {
+        const second_slice = self.slice.second();
+        const offset = @min(second_slice.len, self.advanced -| self.slice.first().len);
+        return second_slice[offset..];
+    }
+};
+
+/// This writer delays committing data to the ring buffer until an explicit call to `commit`,
+/// to allow writing full, well-formed, and logically contiguous data, to facilitate cooperative
+/// message-based communication.
+pub const Writer = struct {
+    slice: *RingSlice(u8, .writer),
+    /// Number of elements from the slice that have been written to.
+    /// Can be used for `slice.markUsed(advanced)`, as is done in `commit`.
+    advanced: u32,
+    interface: std.Io.Writer,
+
+    pub fn init(
+        slice: *RingSlice(u8, .writer),
+        buffer: []u8,
+    ) Writer {
+        return .{
+            .slice = slice,
+            .advanced = 0,
+            .interface = .{
+                .vtable = &vtable,
+                .buffer = buffer,
+            },
+        };
+    }
+
+    /// Commit some or all of the bytes that have been written to the ring slice.
+    pub fn commit(self: *const Writer, n: u32) void {
+        std.debug.assert(n <= self.advanced);
+        self.slice.markUsed(self.advanced);
+    }
+
+    const vtable: std.Io.Writer.VTable = .{
+        .drain = drain,
+    };
+
+    fn drain(
+        w: *std.Io.Writer,
+        data: []const []const u8,
+        splat: usize,
+    ) std.Io.Writer.Error!usize {
+        const self: *Writer = @fieldParentPtr("interface", w);
+
+        std.debug.assert(data.len != 0);
+        if (self.advanced == self.slice.len) return error.WriteFailed;
+
+        if (w.end != 0) {
+            var dst = self.first();
+            if (dst.len == 0) dst = self.second();
+            const amt = @min(dst.len, w.end);
+            @memcpy(dst[0..amt], w.buffered()[0..amt]);
+            _ = w.consume(amt);
+            self.advanced += @intCast(amt);
+            if (self.advanced == self.slice.len) return 0;
+        }
+
+        const dst = if (self.first().len != 0) self.first() else self.second();
+        std.debug.assert(dst.len != 0);
+
+        var dst_w: std.Io.Writer = .fixed(dst);
+        const written = dst_w.writeSplat(data, splat) catch |err| switch (err) {
+            error.WriteFailed => dst_w.end,
+        };
+        std.debug.assert(written == dst_w.end);
+        self.advanced += @intCast(dst_w.end);
+        return dst_w.end;
+    }
+
+    fn first(self: *const Writer) []u8 {
+        const first_slice = self.slice.first();
+        const offset = @min(first_slice.len, self.advanced);
+        return first_slice[offset..];
+    }
+
+    fn second(self: *const Writer) []u8 {
         const second_slice = self.slice.second();
         const offset = @min(second_slice.len, self.advanced -| self.slice.first().len);
         return second_slice[offset..];
