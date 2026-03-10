@@ -6,6 +6,7 @@ const tracy = @import("tracy");
 const sig = @import("../../sig.zig");
 
 const account_codec = sig.rpc.account_codec;
+const parse_stake = account_codec.parse_stake;
 const parse_token = account_codec.parse_token;
 
 const GetAccountInfo = sig.rpc.methods.GetAccountInfo;
@@ -378,15 +379,10 @@ pub fn getSupply(
     const ancestors = &ref.constants().ancestors;
     const slot_reader = self.account_reader.forSlot(ancestors);
 
-    // TODO: can prob refactor to have a clock decoder helper in account_codec. There's other stuff in there that also reads clock sysvar.
     // Read the Clock sysvar to check lockup conditions.
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L18-L22
-    const clock = blk: {
-        const clock_account = try slot_reader.get(arena, sig.runtime.sysvar.Clock.ID) orelse
-            return error.SlotNotAvailable;
-        var iter = clock_account.data.iterator();
-        break :blk try sig.bincode.read(arena, sig.runtime.sysvar.Clock, iter.reader(), .{});
-    };
+    const clock = try account_codec.getSysvar(sig.runtime.sysvar.Clock, arena, slot_reader) orelse
+        return error.SlotNotAvailable;
 
     // Collect non-circulating accounts into a set (deduplicates static + stake accounts).
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L24-L46
@@ -411,7 +407,7 @@ pub fn getSupply(
             else => continue,
         };
 
-        if (isNonCirculatingStake(data_slice, &clock)) {
+        if (parse_stake.isNonCirculatingStake(data_slice, &clock)) {
             try account_set.put(pubkey, {});
         }
     }
@@ -447,33 +443,4 @@ pub fn getSupply(
             .nonCirculatingAccounts = try non_circulating_accounts.toOwnedSlice(arena),
         },
     };
-}
-
-/// TODO: Could this be in account_codec instead?
-/// Returns true if the stake account data represents a stake whose lockup is
-/// in force or whose withdraw authority is a known autostake authority.
-///
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L48-L69
-fn isNonCirculatingStake(data: []const u8, clock: *const sig.runtime.sysvar.Clock) bool {
-    const StakeStateV2 = sig.runtime.program.stake.state.StakeStateV2;
-    const stake_state = sig.bincode.readFromSlice(
-        std.heap.page_allocator,
-        StakeStateV2,
-        data,
-        .{},
-    ) catch return false;
-
-    const meta = switch (stake_state) {
-        .initialized => |m| m,
-        .stake => |s| s.meta,
-        else => return false,
-    };
-
-    if (meta.lockup.isInForce(clock, null)) return true;
-
-    for (&non_circulating_supply.withdraw_authorities) |*authority| {
-        if (std.mem.eql(u8, &meta.authorized.withdrawer.data, authority)) return true;
-    }
-
-    return false;
 }
