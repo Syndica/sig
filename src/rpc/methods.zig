@@ -75,7 +75,7 @@ pub const MethodAndParams = union(enum) {
     getMinimumBalanceForRentExemption: noreturn,
     getMultipleAccounts: GetMultipleAccounts,
     getProgramAccounts: noreturn,
-    getRecentPerformanceSamples: noreturn,
+    getRecentPerformanceSamples: GetRecentPerformanceSamples,
     getRecentPrioritizationFees: GetRecentPrioritizationFees,
     getSignaturesForAddress: GetSignaturesForAddress,
     getSignatureStatuses: GetSignatureStatuses,
@@ -1102,7 +1102,23 @@ pub const GetMultipleAccounts = struct {
 };
 
 // TODO: getProgramAccounts
-// TODO: getRecentPerformanceSamples
+
+pub const GetRecentPerformanceSamples = struct {
+    /// Number of samples to return (maximum 720).
+    limit: ?u64 = null,
+
+    pub const max_limit = 720;
+
+    pub const Response = []const RpcPerfSample;
+
+    pub const RpcPerfSample = struct {
+        slot: Slot,
+        numTransactions: u64,
+        numNonVoteTransactions: ?u64,
+        numSlots: u64,
+        samplePeriodSecs: u16,
+    };
+};
 
 pub const GetRecentPrioritizationFees = struct {
     /// Optional list of up to 128 account pubkeys to filter by.
