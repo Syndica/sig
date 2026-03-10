@@ -100,6 +100,7 @@ pub fn beginPartitionedRewards(
 
     slot_state.reward_status = .{ .active = .{
         .distribution_start_block_height = distribution_starting_blockheight,
+        .num_partitions = num_partitions,
         .all_stake_rewards = stake_rewards,
         .all_vote_rewards = vote_rewards,
         .partitioned_indices = null,
