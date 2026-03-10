@@ -311,6 +311,9 @@ pub fn build(b: *Build) !void {
     // Feature set ID for version compatibility
     const feature_set_id = b.createModule(.{ .root_source_file = generateFeatureSetId(b) });
 
+    // Non-circulating supply pubkeys (pre-decoded at build time)
+    const non_circulating_supply = b.createModule(.{ .root_source_file = generateNonCirculatingSupply(b) });
+
     const sqlite_mod = genSqlite(b, config.target, config.optimize);
     const blst_mod = b.dependency("blst", .{
         .target = config.target,
@@ -324,6 +327,7 @@ pub fn build(b: *Build) !void {
         .{ .name = "blst",          .module = blst_mod },
         .{ .name = "build-options", .module = build_options.createModule() },
         .{ .name = "feature-set-id", .module = feature_set_id },
+        .{ .name = "non-circulating-supply", .module = non_circulating_supply },
         .{ .name = "bzip2",         .module = bzip2_mod },
         .{ .name = "httpz",         .module = httpz_mod },
         .{ .name = "lsquic",        .module = lsquic_mod },
@@ -593,6 +597,31 @@ fn generateFeatureSetId(b: *Build) Build.LazyPath {
         }),
     });
     return b.addRunArtifact(gen).addOutputFileArg("feature-set-id.zig");
+}
+
+fn generateNonCirculatingSupply(b: *Build) Build.LazyPath {
+    const gen = b.addExecutable(.{
+        .name = "gen_non_circulating_supply",
+        .use_llvm = true,
+        .root_module = b.createModule(.{
+            .target = b.graph.host,
+            .optimize = .Debug,
+            .root_source_file = b.path("scripts/gen_non_circulating_supply.zig"),
+            .imports = &.{
+                .{
+                    .name = "base58",
+                    .module = b.dependency("base58", .{}).module("base58"),
+                },
+                .{
+                    .name = "non-circulating-supply-zon",
+                    .module = b.createModule(.{
+                        .root_source_file = b.path("src/rpc/non_circulating_supply.zon"),
+                    }),
+                },
+            },
+        }),
+    });
+    return b.addRunArtifact(gen).addOutputFileArg("non-circulating-supply.zig");
 }
 
 fn genSqlite(

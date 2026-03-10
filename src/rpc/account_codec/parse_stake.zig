@@ -2,6 +2,7 @@
 //! [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_stake.rs
 const std = @import("std");
 const sig = @import("../../sig.zig");
+const non_circulating_supply = @import("non-circulating-supply");
 
 const account_codec = sig.rpc.account_codec;
 
@@ -141,6 +142,37 @@ pub const UiDelegation = struct {
     deactivationEpoch: Stringified(u64),
     warmupCooldownRate: RyuF64,
 };
+
+/// Returns true if the stake account data represents a stake whose lockup is
+/// in force or whose withdraw authority is a known autostake authority.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L48-L69
+pub fn isNonCirculatingStake(
+    arena: std.mem.Allocator,
+    data: []const u8,
+    clock: *const sig.runtime.sysvar.Clock,
+) bool {
+    const stake_state = sig.bincode.readFromSlice(
+        arena,
+        StakeStateV2,
+        data,
+        .{},
+    ) catch return false;
+
+    const meta = switch (stake_state) {
+        .initialized => |m| m,
+        .stake => |s| s.meta,
+        else => return false,
+    };
+
+    if (meta.lockup.isInForce(clock, null)) return true;
+
+    for (&non_circulating_supply.withdraw_authorities) |*authority| {
+        if (std.mem.eql(u8, &meta.authorized.withdrawer.data, authority)) return true;
+    }
+
+    return false;
+}
 
 // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_stake.rs#L142-L209
 test "rpc.account_codec.parse_stake: parse stake accounts" {
