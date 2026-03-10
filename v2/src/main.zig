@@ -57,6 +57,9 @@ pub fn main() !void {
 
     std.log.info("config: {}", .{config});
 
+    const gossip_cluster_info: common.gossip.ClusterInfo =
+        try .getFromEcho(config.gossip.port, config.cluster);
+
     const schedule_file = try std.fs.cwd().openFile(config.leader_schedule_file, .{});
     defer schedule_file.close();
     var reader_buf: [4096]u8 = undefined;
@@ -95,7 +98,7 @@ pub fn main() !void {
         // gossip constants
         .{
             .region = .{ .gossip_config = .{
-                .cluster = config.cluster,
+                .cluster_info = gossip_cluster_info,
                 // TODO: read this from identity file in signer service
                 .keypair = .fromKeyPair(.generate()),
                 .turbine_recv_port = config.shred_network.recv_port,
