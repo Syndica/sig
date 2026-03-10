@@ -96,7 +96,7 @@ pub const RegionType = enum {
 pub const Region = union(RegionType) {
     net_pair: struct { port: u16 },
     gossip_config: struct {
-        cluster: common.solana.ClusterType,
+        cluster_info: common.gossip.ClusterInfo,
         // TODO: this should live in signing service
         keypair: common.gossip.KeyPair,
         turbine_recv_port: u16,
@@ -112,7 +112,7 @@ pub const Region = union(RegionType) {
     pub fn size(self: Region) usize {
         return switch (self) {
             .net_pair => @sizeOf(common.net.Pair),
-            .gossip_config => @sizeOf(common.gossip.GossipConfig),
+            .gossip_config => @sizeOf(common.gossip.Config),
             .leader_schedule => @sizeOf(common.solana.LeaderSchedule),
             .scratch_buffer => |s| s.size,
         };
@@ -131,11 +131,11 @@ pub const Region = union(RegionType) {
                 data.port = cfg.port;
             },
             .gossip_config => |cfg| {
-                std.debug.assert(buf.len == @sizeOf(common.gossip.GossipConfig));
-                const data: *common.gossip.GossipConfig = @ptrCast(buf);
+                std.debug.assert(buf.len == @sizeOf(common.gossip.Config));
+                const data: *common.gossip.Config = @ptrCast(buf);
 
-                data.cluster = cfg.cluster;
                 data.keypair = cfg.keypair;
+                data.cluster_info = cfg.cluster_info;
                 data.turbine_recv_port = cfg.turbine_recv_port;
             },
             .leader_schedule => |cfg| {
