@@ -373,7 +373,7 @@ pub fn getSupply(
     const commitment = config.commitment orelse .finalized;
     const exclude_accounts = config.excludeNonCirculatingAccountsList orelse false;
 
-    const slot = self.slot_tracker.getSlotForCommitment(commitment);
+    const slot = self.slot_tracker.commitments.get(commitment);
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;
@@ -407,7 +407,7 @@ pub fn getSupply(
             else => continue,
         };
 
-        if (parse_stake.isNonCirculatingStake(data_slice, &clock)) {
+        if (parse_stake.isNonCirculatingStake(arena, data_slice, &clock)) {
             try account_set.put(pubkey, {});
         }
     }
