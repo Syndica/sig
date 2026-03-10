@@ -678,7 +678,7 @@ pub const TowerConsensus = struct {
             // This matches Agave's behavior: the processed slot is updated inside
             // handle_votable_bank(), which is only called when vote_bank.is_some().
             // See: https://github.com/anza-xyz/agave/blob/5e900421520a10933642d5e9a21e191a70f9b125/core/src/replay_stage.rs#L2683
-            slot_tracker.latest_processed_slot.set(voted.slot);
+            slot_tracker.commitments.update(.processed, voted.slot);
         }
 
         // Reset onto a fork
@@ -1635,6 +1635,7 @@ fn checkAndHandleNewRoot(
     // Update the slot tracker.
     // Set new root.
     slot_tracker.root.store(new_root, .monotonic);
+    slot_tracker.commitments.update(.finalized, new_root); // TODO should be supermajority root
     // Prune non rooted slots
     slot_tracker.pruneNonRooted(maybe_thread_pool);
 
@@ -2612,8 +2613,8 @@ test "checkAndHandleNewRoot - missing slot" {
     try testing.expectError(error.MissingSlot, result);
 
     // Verify slot trackers remain at initial state after failure
-    try testing.expectEqual(0, slot_tracker.getSlotForCommitment(.processed));
-    try testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
+    try testing.expectEqual(0, slot_tracker.commitments.get(.processed));
+    try testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
 }
 
 test "checkAndHandleNewRoot - missing hash" {
@@ -2677,8 +2678,8 @@ test "checkAndHandleNewRoot - missing hash" {
     try testing.expectError(error.MissingHash, result);
 
     // Verify slot trackers remain at initial state after failure
-    try testing.expectEqual(0, slot_tracker2.getSlotForCommitment(.processed));
-    try testing.expectEqual(0, slot_tracker2.getSlotForCommitment(.confirmed));
+    try testing.expectEqual(0, slot_tracker2.commitments.get(.processed));
+    try testing.expectEqual(0, slot_tracker2.commitments.get(.confirmed));
 }
 
 test "checkAndHandleNewRoot - empty slot tracker" {
@@ -2729,8 +2730,8 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     try testing.expectError(error.EmptySlotTracker, result);
 
     // Verify slot trackers remain at initial state after failure
-    try testing.expectEqual(0, slot_tracker3.getSlotForCommitment(.processed));
-    try testing.expectEqual(0, slot_tracker3.getSlotForCommitment(.confirmed));
+    try testing.expectEqual(0, slot_tracker3.commitments.get(.processed));
+    try testing.expectEqual(0, slot_tracker3.commitments.get(.confirmed));
 }
 
 test "checkAndHandleNewRoot - success" {
@@ -5452,7 +5453,7 @@ test "edge cases - gossip verified vote hashes" {
     );
 
     // Optimisic confirmation threshold not reached during this test.
-    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
+    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
 }
 
 // TODO: Re-implement tests for the new consolidated API
@@ -5660,9 +5661,9 @@ test "vote on heaviest frozen descendant with no switch" {
 
     // 6. Assert trackers
     // processed slot is updated to slot_1 when the tower votes on it
-    try std.testing.expectEqual(slot_1, slot_tracker.getSlotForCommitment(.processed));
+    try std.testing.expectEqual(slot_1, slot_tracker.commitments.get(.processed));
     // confirmed slot remains at 0 (no optimistic confirmation votes processed)
-    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
+    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
 }
 
 // State setup
@@ -5891,9 +5892,9 @@ test "vote accounts with landed votes populate bank stats" {
 
     // Assert trackers
     // processed slot is updated to slot_1 when the tower votes on it
-    try std.testing.expectEqual(slot_1, slot_tracker.getSlotForCommitment(.processed));
+    try std.testing.expectEqual(slot_1, slot_tracker.commitments.get(.processed));
     // confirmed slot remains at 0 (no optimistic confirmation votes processed)
-    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
+    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
 }
 
 // Test case:
@@ -6368,9 +6369,9 @@ test "root advances after vote satisfies lockouts" {
 
     // Assert trackers
     // processed slot is updated to slot 33 when the tower votes on it
-    try std.testing.expectEqual(33, slot_tracker.getSlotForCommitment(.processed));
+    try std.testing.expectEqual(33, slot_tracker.commitments.get(.processed));
     // confirmed slot remains at 0 (no optimistic confirmation votes processed)
-    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
+    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
 }
 
 // Test case:
@@ -6577,9 +6578,9 @@ test "vote refresh when no new vote available" {
 
     // Assert trackers
     // processed slot is updated to slot 1 when the tower votes on it
-    try std.testing.expectEqual(1, slot_tracker.getSlotForCommitment(.processed));
+    try std.testing.expectEqual(1, slot_tracker.commitments.get(.processed));
     // confirmed slot remains at 0 (no optimistic confirmation votes processed)
-    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
+    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
 }
 
 // Test case:

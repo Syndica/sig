@@ -626,13 +626,14 @@ fn bypassConsensus(state: *ReplayState) !void {
     // See: https://github.com/anza-xyz/agave/blob/5e900421520a10933642d5e9a21e191a70f9b125/core/src/replay_stage.rs#L2683
     //
     // TowerConsensus implements Agave's processed slot semantics when consensus is enabled.
-    state.slot_tracker.latest_processed_slot.set(state.slot_tree.tip());
+    state.slot_tracker.commitments.update(.processed, state.slot_tree.tip());
 
     if (state.slot_tree.reRoot(state.allocator)) |new_root| {
         const slot_tracker = &state.slot_tracker;
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root.store(new_root, .monotonic);
+        slot_tracker.commitments.update(.finalized, new_root);
         slot_tracker.pruneNonRooted(&state.thread_pool);
 
         try state.status_cache.addRoot(state.allocator, new_root);
@@ -856,8 +857,8 @@ test trackNewSlots {
         &.{ 3, 5 },
     );
 
-    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.processed));
-    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
+    try std.testing.expectEqual(0, slot_tracker.commitments.get(.processed));
+    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
 }
 
 fn expectSlotTracker(
