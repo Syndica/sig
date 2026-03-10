@@ -13,6 +13,7 @@ const GetBlock = methods.GetBlock;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetInflationReward = methods.GetInflationReward;
+const GetRecentPerformanceSamples = methods.GetRecentPerformanceSamples;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetTransaction = methods.GetTransaction;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
@@ -339,6 +340,42 @@ pub fn getInflationReward(
     }
 
     return results;
+}
+
+pub fn getRecentPerformanceSamples(
+    self: LedgerHookContext,
+    arena: Allocator,
+    params: GetRecentPerformanceSamples,
+) !GetRecentPerformanceSamples.Response {
+    const limit: usize = if (params.limit) |l|
+        std.math.cast(usize, l) orelse return error.InvalidParams
+    else
+        GetRecentPerformanceSamples.max_limit;
+
+    if (limit > GetRecentPerformanceSamples.max_limit) {
+        return error.InvalidParams;
+    }
+
+    const reader = self.ledger.reader();
+    const samples = try reader.getRecentPerfSamples(arena, limit);
+
+    const result = try arena.alloc(GetRecentPerformanceSamples.RpcPerfSample, samples.items.len);
+    for (samples.items, 0..) |entry, i| {
+        const slot = entry[0];
+        const sample = entry[1];
+        result[i] = .{
+            .slot = slot,
+            .numTransactions = sample.num_transactions,
+            .numNonVoteTransactions = if (sample.version == 0)
+                null // V1 samples don't have non-vote tx count
+            else
+                sample.num_non_vote_transactions,
+            .numSlots = sample.num_slots,
+            .samplePeriodSecs = sample.sample_period_secs,
+        };
+    }
+
+    return result;
 }
 
 pub fn getSignaturesForAddress(
