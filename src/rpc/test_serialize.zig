@@ -22,6 +22,8 @@ const GetGenesisHash = methods.GetGenesisHash;
 const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
+const GetMultipleAccounts = methods.GetMultipleAccounts;
+const GetRecentPerformanceSamples = methods.GetRecentPerformanceSamples;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetSlot = methods.GetSlot;
@@ -372,9 +374,75 @@ test GetLeaderSchedule {
 // TODO: test getMaxRetransmitSlot()
 // TODO: test getMaxShredInsertSlot()
 // TODO: test getMinimumBalanceForRentExemption()
-// TODO: test getMultipleAccounts()
+
+test GetMultipleAccounts {
+    var pubkeys = try std.testing.allocator.alloc(Pubkey, 2);
+    defer std.testing.allocator.free(pubkeys);
+    pubkeys[0] = .parse("vines1vzrYbzLMRdu58ou5XTby4qAqVRLmqo36NKPTg");
+    pubkeys[1] = .parse("4fYNw3dojWmQ4dXtSGE9epjRGy9pFSx62YypT7avPYvA");
+
+    try testRequest(.getMultipleAccounts, .{ .pubkeys = pubkeys },
+        \\{"jsonrpc":"2.0","id":1,"method":"getMultipleAccounts","params":[["vines1vzrYbzLMRdu58ou5XTby4qAqVRLmqo36NKPTg","4fYNw3dojWmQ4dXtSGE9epjRGy9pFSx62YypT7avPYvA"]]}
+    );
+
+    // Response with one account found and one null
+    try testResponse(GetMultipleAccounts, .{ .result = .{
+        .context = .{ .apiVersion = "2.1.6", .slot = 309275280 },
+        .value = &.{
+            .{
+                .data = .{ .encoded = .{ "SGVsbG8gV29ybGQ=", .base64 } },
+                .executable = false,
+                .lamports = 1000000000,
+                .owner = .parse("11111111111111111111111111111111"),
+                .rentEpoch = 18446744073709551615,
+                .space = 11,
+            },
+            null,
+        },
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275280},"value":[{"data":["SGVsbG8gV29ybGQ=","base64"],"executable":false,"lamports":1000000000,"owner":"11111111111111111111111111111111","rentEpoch":18446744073709551615,"space":11},null]},"id":1}
+    );
+
+    // Response with all nulls
+    try testResponse(GetMultipleAccounts, .{ .result = .{
+        .context = .{ .apiVersion = "2.1.6", .slot = 309275280 },
+        .value = &.{ null, null },
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275280},"value":[null,null]},"id":1}
+    );
+}
+
 // TODO: test getProgramAccounts()
-// TODO: test getRecentPerformanceSamples()
+test GetRecentPerformanceSamples {
+    // Request with no limit
+    try testRequest(
+        .getRecentPerformanceSamples,
+        .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getRecentPerformanceSamples","params":[]}
+        ,
+    );
+
+    // Request with limit
+    try testRequest(
+        .getRecentPerformanceSamples,
+        .{ .limit = 5 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getRecentPerformanceSamples","params":[5]}
+        ,
+    );
+
+    // Response serialization
+    const samples: []const GetRecentPerformanceSamples.RpcPerfSample = &.{.{
+        .slot = 348125,
+        .numTransactions = 150,
+        .numNonVoteTransactions = 45,
+        .numSlots = 2,
+        .samplePeriodSecs = 60,
+    }};
+    try expectJsonStringify(
+        \\[{"slot":348125,"numTransactions":150,"numNonVoteTransactions":45,"numSlots":2,"samplePeriodSecs":60}]
+    , samples);
+}
+
 // TODO: test getRecentPrioritizationFees()
 
 test GetSignatureStatuses {
@@ -851,6 +919,19 @@ test "GetBlock" {
         };
         try expectJsonStringify(
             \\{"blockhash":"11111111111111111111111111111111","parentSlot":99,"previousBlockhash":"11111111111111111111111111111111","signatures":["1111111111111111111111111111111111111111111111111111111111111111"]}
+        , response);
+    }
+
+    // Response serialization - with numRewardPartitions
+    {
+        const response = GetBlock.Response{
+            .previousBlockhash = Hash.ZEROES,
+            .blockhash = Hash.ZEROES,
+            .parentSlot = 99,
+            .numRewardPartitions = 4,
+        };
+        try expectJsonStringify(
+            \\{"blockhash":"11111111111111111111111111111111","numRewardPartitions":4,"parentSlot":99,"previousBlockhash":"11111111111111111111111111111111"}
         , response);
     }
 
