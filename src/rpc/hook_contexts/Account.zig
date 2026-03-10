@@ -371,15 +371,10 @@ pub fn getFeeForMessage(
             &runtime_txn,
             slot_account_reader,
         ) catch return empty_result;
-        if (nonce_result) |r| {
-            const nonce_address, const nonce_account, const nonce_data = r;
-            _ = nonce_address;
-            _ = nonce_account;
-            return .{
-                .context = .{ .slot = slot },
-                .value = nonce_data.lamports_per_signature,
-            };
-        }
+        if (nonce_result) |r| return .{
+            .context = .{ .slot = slot },
+            .value = r[2].lamports_per_signature,
+        };
         return empty_result;
     };
 
