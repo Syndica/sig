@@ -33,7 +33,7 @@ fn resolveCommitmentSlot(
     min_context_slot: ?Slot,
 ) !Slot {
     const resolved_commitment = commitment orelse .finalized;
-    const slot = self.slot_tracker.getSlotForCommitment(resolved_commitment);
+    const slot = self.slot_tracker.commitments.get(resolved_commitment);
 
     if (min_context_slot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
@@ -276,7 +276,7 @@ pub fn isBlockhashValid(
     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.slot_tracker.getSlotForCommitment(commitment);
+    const slot = self.slot_tracker.commitments.get(commitment);
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }

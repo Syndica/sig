@@ -1,5 +1,5 @@
 //! RPC hook context for block-related methods.
-//! Requires access to the Ledger and SlotTracker for commitment checks.
+//! Requires access to the Ledger and CommitmentTracker for commitment checks.
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const base58 = @import("base58");
@@ -13,6 +13,7 @@ const GetBlock = methods.GetBlock;
 const GetBlockProduction = methods.GetBlockProduction;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
+const GetRecentPerformanceSamples = methods.GetRecentPerformanceSamples;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetTransaction = methods.GetTransaction;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
@@ -27,8 +28,8 @@ const TransactionEncoding = methods.common.TransactionEncoding;
 const LedgerHookContext = @This();
 
 ledger: *sig.ledger.Ledger,
-slot_tracker: *const sig.replay.trackers.SlotTracker,
 epoch_tracker: *sig.core.EpochTracker,
+commitments: *const sig.replay.trackers.CommitmentTracker,
 
 pub fn getBlock(
     self: LedgerHookContext,
@@ -52,7 +53,7 @@ pub fn getBlock(
     // matching Agave's get_rooted_block).
     // Confirmed path uses getCompleteBlock (no cleanup check, slot may not be rooted yet).
     const reader = self.ledger.reader();
-    const latest_confirmed_slot = self.slot_tracker.getSlotForCommitment(.confirmed);
+    const latest_confirmed_slot = self.commitments.get(.confirmed);
     const block = if (params.slot <= latest_confirmed_slot) reader.getRootedBlock(
         arena,
         params.slot,
@@ -87,11 +88,11 @@ pub fn getBlocks(
     const commitment = params.commitment();
     if (commitment == .processed) return error.ProcessedNotSupported;
 
-    const highest_root = self.slot_tracker.getSlotForCommitment(.finalized);
+    const highest_root = self.commitments.get(.finalized);
     const upper_bound = if (commitment == .finalized)
         highest_root
     else
-        self.slot_tracker.getSlotForCommitment(.confirmed);
+        self.commitments.get(.confirmed);
 
     const end_slot = @min(
         params.endSlot() orelse params.start_slot +| GetBlocks.MAX_GET_CONFIRMED_BLOCKS_RANGE,
@@ -129,7 +130,7 @@ pub fn getBlocks(
             params.start_slot -| 1;
 
         if (last_rooted < end_slot) {
-            const latest_confirmed = self.slot_tracker.getSlotForCommitment(.confirmed);
+            const latest_confirmed = self.commitments.get(.confirmed);
             const confirmed = try self.getConfirmedUnrootedSlots(
                 arena,
                 latest_confirmed,
@@ -159,7 +160,7 @@ pub fn getBlocksWithLimit(
         return error.SlotRangeTooLarge;
     }
 
-    const highest_root = self.slot_tracker.getSlotForCommitment(.finalized);
+    const highest_root = self.commitments.get(.finalized);
 
     // Collect rooted (finalized) slots starting from start_slot, up to limit.
     var blocks = try std.ArrayList(Slot).initCapacity(arena, params.limit);
@@ -184,7 +185,7 @@ pub fn getBlocksWithLimit(
         else
             params.start_slot -| 1;
 
-        const latest_confirmed = self.slot_tracker.getSlotForCommitment(.confirmed);
+        const latest_confirmed = self.commitments.get(.confirmed);
         const confirmed = try self.getConfirmedUnrootedSlots(
             arena,
             latest_confirmed,
@@ -217,7 +218,7 @@ pub fn getBlockProduction(
         null;
 
     // Resolve current slot and epoch schedule.
-    const current_slot = self.slot_tracker.getSlotForCommitment(commitment);
+    const current_slot = self.commitments.get(commitment);
     const epoch_schedule = &self.epoch_tracker.epoch_schedule;
 
     // Determine slot range (default: current epoch start to current slot).
@@ -243,7 +244,7 @@ pub fn getBlockProduction(
     var slot_set: std.AutoHashMapUnmanaged(Slot, void) = .empty;
 
     // Collect rooted slots in range using forward iterator
-    const highest_root = self.slot_tracker.getSlotForCommitment(.finalized);
+    const highest_root = self.commitments.get(.finalized);
     {
         var rooted_iter = try self.ledger.db.iterator(
             sig.ledger.schema.schema.rooted_slots,
@@ -258,7 +259,7 @@ pub fn getBlockProduction(
     }
     // For confirmed commitment, also collect confirmed-but-unrooted slots.
     if (commitment == .confirmed) {
-        const latest_confirmed = self.slot_tracker.getSlotForCommitment(.confirmed);
+        const latest_confirmed = self.commitments.get(.confirmed);
         const confirmed_slots = try self.getConfirmedUnrootedSlots(
             arena,
             latest_confirmed,
@@ -300,6 +301,42 @@ pub fn getBlockProduction(
     };
 }
 
+pub fn getRecentPerformanceSamples(
+    self: LedgerHookContext,
+    arena: Allocator,
+    params: GetRecentPerformanceSamples,
+) !GetRecentPerformanceSamples.Response {
+    const limit: usize = if (params.limit) |l|
+        std.math.cast(usize, l) orelse return error.InvalidParams
+    else
+        GetRecentPerformanceSamples.max_limit;
+
+    if (limit > GetRecentPerformanceSamples.max_limit) {
+        return error.InvalidParams;
+    }
+
+    const reader = self.ledger.reader();
+    const samples = try reader.getRecentPerfSamples(arena, limit);
+
+    const result = try arena.alloc(GetRecentPerformanceSamples.RpcPerfSample, samples.items.len);
+    for (samples.items, 0..) |entry, i| {
+        const slot = entry[0];
+        const sample = entry[1];
+        result[i] = .{
+            .slot = slot,
+            .numTransactions = sample.num_transactions,
+            .numNonVoteTransactions = if (sample.version == 0)
+                null // V1 samples don't have non-vote tx count
+            else
+                sample.num_non_vote_transactions,
+            .numSlots = sample.num_slots,
+            .samplePeriodSecs = sample.sample_period_secs,
+        };
+    }
+
+    return result;
+}
+
 pub fn getSignaturesForAddress(
     self: LedgerHookContext,
     arena: std.mem.Allocator,
@@ -311,9 +348,9 @@ pub fn getSignaturesForAddress(
     // processed is not supported
     if (commitment == .processed) return error.ProcessedNotSupported;
 
-    const highest_finalized_slot = self.slot_tracker.getSlotForCommitment(.finalized);
+    const highest_finalized_slot = self.commitments.get(.finalized);
     const highest_slot: Slot = switch (commitment) {
-        .confirmed => self.slot_tracker.getSlotForCommitment(.confirmed),
+        .confirmed => self.commitments.get(.confirmed),
         .finalized => highest_finalized_slot,
         .processed => unreachable,
     };
@@ -365,7 +402,7 @@ pub fn getTransaction(
     const max_supported_version = config.maxSupportedTransactionVersion;
 
     const reader = self.ledger.reader();
-    const highest_confirmed_slot = self.slot_tracker.getSlotForCommitment(.confirmed);
+    const highest_confirmed_slot = self.commitments.get(.confirmed);
 
     // Get transaction from ledger.
     const confirmed_tx_with_meta = switch (commitment) {
