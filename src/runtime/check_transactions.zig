@@ -205,7 +205,7 @@ pub fn checkFeePayer(
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/dad81b9b2ecf81ceb518dd9f7cc91e83ba33bda8/fee/src/lib.rs#L85
-const SignatureCounts = struct {
+pub const SignatureCounts = struct {
     num_transaction_signatures: u64,
     num_ed25519_signatures: u64,
     num_secp256k1_signatures: u64,
@@ -226,7 +226,7 @@ const SignatureCounts = struct {
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/eb416825349ca376fa13249a0267cf7b35701938/svm-transaction/src/svm_message.rs#L139
-    fn fromTransaction(transaction: *const RuntimeTransaction) SignatureCounts {
+    pub fn fromTransaction(transaction: *const RuntimeTransaction) SignatureCounts {
         const precompiles = sig.runtime.program.precompiles;
 
         return .{
@@ -245,13 +245,13 @@ pub const FeeDetails = struct {
     /// Used by PrioritizationFeeCache to track per-slot minimum fees for RPC queries.
     compute_unit_price: u64,
 
-    const DEFAULT: FeeDetails = .{
+    pub const DEFAULT: FeeDetails = .{
         .transaction_fee = 0,
         .prioritization_fee = 0,
         .compute_unit_price = 0,
     };
 
-    fn init(
+    pub fn init(
         sig_counts: SignatureCounts,
         lamports_per_signature: u64,
         enable_secp256r1: bool,
@@ -288,7 +288,7 @@ pub const FeeDetails = struct {
     }
 };
 
-const FeeBudgetLimits = struct {
+pub const FeeBudgetLimits = struct {
     /// non-zero
     loaded_accounts_data_size_limit: u32,
     heap_cost: u64,
@@ -308,7 +308,7 @@ const FeeBudgetLimits = struct {
         ) orelse std.math.maxInt(u64);
     }
 
-    fn fromComputeBudgetLimits(val: ComputeBudgetLimits) FeeBudgetLimits {
+    pub fn fromComputeBudgetLimits(val: ComputeBudgetLimits) FeeBudgetLimits {
         const prioritization_fee = getPrioritizationFee(
             val.compute_unit_price,
             val.compute_unit_limit,
@@ -429,7 +429,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
     };
 }
 
-fn loadMessageNonceAccount(
+pub fn loadMessageNonceAccount(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     account_reader: SlotAccountReader,
