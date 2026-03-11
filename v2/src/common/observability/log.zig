@@ -187,6 +187,7 @@ pub const MessageHeader = extern struct {
 
         // message
         try dst.writeByte(' ');
+        try dst.writeAll("message=");
         try dst.writeByte('"');
         try src.streamExact(dst, self.msg_len);
         try dst.writeByte('"');
@@ -199,6 +200,86 @@ pub const MessageHeader = extern struct {
             self.msg_len;
     }
 };
+
+test MessageHeader {
+    const gpa = std.testing.allocator;
+
+    const expected_header: MessageHeader = .{
+        .epoch_millis = 0,
+        .level = .err,
+        .scope_len = "foo".len,
+        .fields_len = "fizz=buzz".len,
+        .msg_len = "bar".len,
+    };
+    try std.testing.expectEqual(
+        expected_header,
+        MessageHeader.compute(
+            0,
+            .err,
+            "foo",
+            &.{.init("fizz", .fromValue(.literal, "{s}", &"buzz"))},
+            "{s}",
+            .{"bar"},
+        ),
+    );
+
+    var encoded: std.Io.Writer.Allocating = .init(gpa);
+    defer encoded.deinit();
+    const written_header = try MessageHeader.writeMessage(
+        &encoded.writer,
+        1_999,
+        .debug,
+        "scope1",
+        &.{
+            .init("field_a", .fromValue(.quoted, "0x{X}", &0xFAF0)),
+            .init("field_b", .fromValue(.literal, "{s}", &"value")),
+        },
+        "message {s} here",
+        .{"goes"},
+    );
+
+    var encoded_r: std.Io.Reader = .fixed(encoded.written());
+    const decoded_header = try encoded_r.takeStruct(MessageHeader, obs.endian);
+    try std.testing.expectEqual(written_header, decoded_header);
+
+    var decoded: std.Io.Writer.Allocating = .init(gpa);
+    defer decoded.deinit();
+    try decoded_header.logfmtStream(&.{}, &decoded.writer, &encoded_r);
+    try std.testing.expectEqualStrings(
+        "time=1970-01-01T00:00:01.999Z" ++
+            " level=debug" ++
+            " scope=scope1" ++
+            " field_a=\"0xFAF0\"" ++
+            " field_b=value" ++
+            " message=\"message goes here\"",
+        decoded.written(),
+    );
+
+    encoded_r.seek = 0;
+    try std.testing.expectEqual(
+        decoded_header,
+        encoded_r.takeStruct(MessageHeader, obs.endian),
+    );
+
+    decoded.clearRetainingCapacity();
+    try decoded_header.logfmtStream(
+        &.{
+            .init("field_c", .fromFmt(.literal, "{}{d}", &.{ .foo, 178 })),
+        },
+        &decoded.writer,
+        &encoded_r,
+    );
+    try std.testing.expectEqualStrings(
+        "time=1970-01-01T00:00:01.999Z" ++
+            " level=debug" ++
+            " scope=scope1" ++
+            " field_a=\"0xFAF0\"" ++
+            " field_b=value" ++
+            " field_c=.foo178" ++
+            " message=\"message goes here\"",
+        decoded.written(),
+    );
+}
 
 pub const EntryField = struct {
     name: []const u8,
@@ -228,6 +309,16 @@ pub const EntryField = struct {
         return .{ .data = list };
     }
 };
+
+test EntryField {
+    try std.testing.expectFmt("foo=bar", "{f}", .{
+        EntryField.init("foo", .fromValue(.literal, "{s}", &"bar")),
+    });
+    try std.testing.expectFmt("", "{f}", .{EntryField.listFmt(&.{})});
+    try std.testing.expectFmt("foo=\"bar\"", "{f}", .{
+        EntryField.listFmt(&.{.init("foo", .fromValue(.quoted, "{s}", &"bar"))}),
+    });
+}
 
 /// Type-erased formatter.
 pub const EntryValueFmt = struct {
@@ -315,6 +406,15 @@ pub const EntryValueFmt = struct {
     }
 };
 
+test EntryValueFmt {
+    try std.testing.expectFmt("123", "{f}", .{
+        EntryValueFmt.fromValue(.literal, "{d}", &123),
+    });
+    try std.testing.expectFmt("321 foo", "{f}", .{
+        EntryValueFmt.fromFmt(.literal, "{d} {s}", &.{ 321, "foo" }),
+    });
+}
+
 /// Formats epoch milliseconds as `YYYY-MM-DDTHH:mm:ss.SSSZ`
 const Iso8601Fmt = struct {
     /// Milliseconds since epoch Jan 1, 1970 at 12:00 AM
@@ -352,6 +452,33 @@ const Iso8601Fmt = struct {
         try w.writeByte('Z');
     }
 };
+
+test Iso8601Fmt {
+    try std.testing.expectFmt("1970-01-01T00:00:00.000Z", "{f}", .{
+        Iso8601Fmt.fromEpochMillis(0),
+    });
+    try std.testing.expectFmt("1970-01-01T00:00:00.001Z", "{f}", .{
+        Iso8601Fmt.fromEpochMillis(1),
+    });
+    try std.testing.expectFmt("1970-01-01T00:00:00.999Z", "{f}", .{
+        Iso8601Fmt.fromEpochMillis(999),
+    });
+    try std.testing.expectFmt("1970-01-01T00:00:01.000Z", "{f}", .{
+        Iso8601Fmt.fromEpochMillis(1 * std.time.ms_per_s),
+    });
+    try std.testing.expectFmt("1971-01-01T00:00:00.000Z", "{f}", .{
+        Iso8601Fmt.fromEpochMillis(365 * std.time.ms_per_day),
+    });
+    try std.testing.expectFmt("2000-01-01T00:00:00.000Z", "{f}", .{
+        Iso8601Fmt.fromEpochMillis(std.time.ms_per_day * days_in_thirty_years: {
+            var days: u64 = 0;
+            for (1970..2000, 0..30) |year, _| {
+                days += std.time.epoch.getDaysInYear(@intCast(year));
+            }
+            break :days_in_thirty_years days;
+        }),
+    });
+}
 
 inline fn isComptimeKnown(value: anytype) bool {
     return @typeInfo(@TypeOf(.{value})).@"struct".fields[0].is_comptime;
