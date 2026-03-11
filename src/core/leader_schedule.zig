@@ -317,9 +317,9 @@ pub fn computeFromStakedNodes(
 
 /// Inverse of computeFromMap: builds PubkeyMap from LeaderSchedule.
 /// Maps each leader identity to the slot indices (0-based in epoch) where they lead.
-/// [agave] leader_schedule_by_identity: https://github.com/anza-xyz/agave/blob/v3.1.8/ledger/src/leader_schedule_utils.rs#L38-L54
+/// only used in RPC, so arena is used for all allocations.
 pub fn leaderScheduleByIdentity(
-    allocator: Allocator,
+    arena: Allocator,
     schedule: *const LeaderSchedule,
     maybe_filter_identity: ?Pubkey,
 ) !sig.utils.collections.PubkeyMap([]const u64) {
@@ -327,32 +327,25 @@ pub fn leaderScheduleByIdentity(
 
     // Group slot indices by leader identity
     var by_identity = std.AutoArrayHashMapUnmanaged(Pubkey, std.ArrayListUnmanaged(u64)).empty;
-    defer {
-        var it = by_identity.iterator();
-        while (it.next()) |e| e.value_ptr.deinit(allocator);
-        by_identity.deinit(allocator);
-    }
 
     for (0..slots_in_epoch) |slot_index| {
         const leader = schedule.leaders[slot_index];
         if (maybe_filter_identity) |filter| if (!leader.equals(&filter)) continue;
 
-        const gop = try by_identity.getOrPut(allocator, leader);
+        const gop = try by_identity.getOrPut(arena, leader);
         if (!gop.found_existing) gop.value_ptr.* = .{};
-        try gop.value_ptr.append(allocator, @intCast(slot_index));
+        try gop.value_ptr.append(arena, @intCast(slot_index));
     }
 
     // Convert to owned slices for the result map. Each entry's slice is allocated
     // separately, so ensure we free them if an error occurs while building the map.
     var result = sig.utils.collections.PubkeyMap([]const u64).empty;
-    errdefer {
-        for (result.values()) |v| allocator.free(v);
-        result.deinit(allocator);
-    }
+
     var it = by_identity.iterator();
     while (it.next()) |e| {
-        try result.put(allocator, e.key_ptr.*, try allocator.dupe(u64, e.value_ptr.items));
+        try result.put(arena, e.key_ptr.*, try arena.dupe(u64, e.value_ptr.items));
     }
+
     return result;
 }
 
