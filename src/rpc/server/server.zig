@@ -170,15 +170,15 @@ test "serveSpawn hook alloc" {
             gpa: std.mem.Allocator,
             _: anytype,
         ) !sig.rpc.methods.GetLeaderSchedule.Response {
-            var resp: sig.rpc.methods.GetLeaderSchedule.Response = .{ .value = .{} };
-            errdefer resp.value.deinit(gpa);
+            var map = sig.utils.collections.PubkeyMap([]const u64){};
+            errdefer map.deinit(gpa);
 
             const buf = try gpa.alloc(u64, 4);
             errdefer gpa.free(buf);
             @memset(buf, 42);
 
-            try resp.value.put(gpa, sig.core.Pubkey.ZEROES, buf);
-            return resp;
+            try map.put(gpa, sig.core.Pubkey.ZEROES, buf);
+            return .{ .value = map };
         }
     }{});
 
@@ -208,7 +208,7 @@ test "serveSpawn hook alloc" {
         allocator.free(resp_str);
     }
 
-    const res = try resp_json.result();
+    const res = (try resp_json.result()).?;
     var it = res.value.iterator();
     const entry = it.next().?;
     try std.testing.expectEqual(entry.key_ptr.*, sig.core.Pubkey.ZEROES);

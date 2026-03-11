@@ -80,8 +80,8 @@ pub const MethodAndParams = union(enum) {
     getSignaturesForAddress: GetSignaturesForAddress,
     getSignatureStatuses: GetSignatureStatuses,
     getSlot: GetSlot,
-    getSlotLeader: noreturn,
-    getSlotLeaders: noreturn,
+    getSlotLeader: GetSlotLeader,
+    getSlotLeaders: GetSlotLeaders,
     getStakeMinimumDelegation: noreturn,
     getSupply: noreturn,
     getTokenAccountBalance: GetTokenAccountBalance,
@@ -1057,10 +1057,13 @@ pub const GetLeaderSchedule = struct {
         identity: ?[]const u8 = null,
     };
 
-    pub const Response = struct {
+    /// [agave] RpcLeaderSchedule = HashMap<String, Vec<usize>>; returns null when epoch not in cache
+    pub const Response = ?LeaderScheduleValue;
+
+    pub const LeaderScheduleValue = struct {
         value: sig.utils.collections.PubkeyMap([]const u64),
 
-        pub fn deinit(self: Response, allocator: std.mem.Allocator) void {
+        pub fn deinit(self: LeaderScheduleValue, allocator: std.mem.Allocator) void {
             self.value.deinit(allocator);
         }
 
@@ -1068,7 +1071,7 @@ pub const GetLeaderSchedule = struct {
             allocator: std.mem.Allocator,
             source: anytype,
             options: std.json.ParseOptions,
-        ) std.json.ParseError(@TypeOf(source.*))!Response {
+        ) std.json.ParseError(@TypeOf(source.*))!LeaderScheduleValue {
             const json_object = switch (try std.json.Value.jsonParse(allocator, source, options)) {
                 .object => |obj| obj,
                 else => return error.UnexpectedToken,
@@ -1088,7 +1091,7 @@ pub const GetLeaderSchedule = struct {
         }
 
         pub fn jsonStringify(
-            self: Response,
+            self: LeaderScheduleValue,
             /// `*std.json.WriteStream(...)`
             jw: anytype,
         ) !void {
@@ -1200,8 +1203,25 @@ pub const GetSlot = struct {
     pub const Response = Slot;
 };
 
-// TODO: getSlotLeader
-// TODO: getSlotLeaders
+/// Returns the current slot leader.
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L968-L971
+pub const GetSlotLeader = struct {
+    config: ?common.CommitmentSlotConfig = null,
+
+    pub const Response = Pubkey;
+};
+
+/// Returns the slot leaders for a range of slots.
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L973-L1007
+/// [agave] MAX_GET_SLOT_LEADERS: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L151
+pub const GetSlotLeaders = struct {
+    start_slot: Slot,
+    limit: u64,
+
+    pub const MAX_GET_SLOT_LEADERS: u64 = 5000;
+    pub const Response = []const Pubkey;
+};
+
 // TODO: getStakeActivation
 // TODO: getStakeMinimumDelegation
 // TODO: getSupply
