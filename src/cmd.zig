@@ -1680,6 +1680,9 @@ fn validator(
     else
         null;
 
+    var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
+    defer prioritization_fee_cache.deinit(allocator);
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db = &new_db },
@@ -1691,6 +1694,7 @@ fn validator(
         .voting_enabled = voting_enabled,
         .vote_account_address = maybe_vote_pubkey,
         .stop_at_slot = cfg.stop_at_slot,
+        .prioritization_fee_cache = &prioritization_fee_cache,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -1703,6 +1707,7 @@ fn validator(
 
     try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
         .ledger = &ledger,
+        .epoch_schedule = loaded_snapshot.genesis_config.epoch_schedule,
         .epoch_tracker = &epoch_tracker,
         .commitments = &replay_service_state.replay_state.slot_tracker.commitments,
     });
@@ -1711,6 +1716,11 @@ fn validator(
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
         .account_reader = replay_service_state.replay_state.account_store.reader(),
     });
+
+    try app_base.rpc_hooks.set(
+        allocator,
+        sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
+    );
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
@@ -2667,15 +2677,6 @@ fn startGossip(
     try app_base.rpc_hooks.set(allocator, struct {
         info: ContactInfo,
 
-        pub fn getHealth(
-            _: @This(),
-            _: std.mem.Allocator,
-            _: anytype,
-        ) !sig.rpc.methods.GetHealth.Response {
-            // TODO: more intricate
-            return .ok;
-        }
-
         pub fn getIdentity(
             self: @This(),
             _: std.mem.Allocator,
@@ -2740,6 +2741,7 @@ const ReplayAndConsensusServiceState = struct {
             voting_enabled: bool,
             vote_account_address: ?Pubkey,
             stop_at_slot: ?Slot,
+            prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
@@ -2796,6 +2798,7 @@ const ReplayAndConsensusServiceState = struct {
                 .hard_forks = hard_forks,
                 .replay_threads = params.replay_threads,
                 .stop_at_slot = params.stop_at_slot,
+                .prioritization_fee_cache = params.prioritization_fee_cache,
             }, if (params.disable_consensus) .disabled else .enabled);
         };
         errdefer replay_state.deinit();

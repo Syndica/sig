@@ -30,6 +30,7 @@ const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetMultipleAccounts = methods.GetMultipleAccounts;
 const GetRecentPerformanceSamples = methods.GetRecentPerformanceSamples;
+const GetRecentPrioritizationFees = methods.GetRecentPrioritizationFees;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetSlot = methods.GetSlot;
@@ -708,7 +709,30 @@ test GetRecentPerformanceSamples {
     , samples);
 }
 
-// TODO: test getRecentPrioritizationFees()
+test GetRecentPrioritizationFees {
+    // Request with no account keys
+    try testRequest(.getRecentPrioritizationFees, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getRecentPrioritizationFees","params":[]}
+    );
+
+    // Request with account keys
+    try testRequest(.getRecentPrioritizationFees, .{
+        .account_keys = &.{
+            .parse("CxELquR1gPP8wHe33gZ4QxqGB3sZ9RSwbn2uHj1vDgAy"),
+            .parse("6D2jqw9hyVCpppZj7GfMMpjStMBKbGBopuBCsJtoaGtv"),
+        },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getRecentPrioritizationFees","params":[["CxELquR1gPP8wHe33gZ4QxqGB3sZ9RSwbn2uHj1vDgAy","6D2jqw9hyVCpppZj7GfMMpjStMBKbGBopuBCsJtoaGtv"]]}
+    );
+
+    // Response
+    try testResponse(GetRecentPrioritizationFees, .{ .result = &.{
+        .{ .slot = 348125, .prioritizationFee = 0 },
+        .{ .slot = 348126, .prioritizationFee = 1000 },
+    } },
+        \\{"jsonrpc":"2.0","result":[{"slot":348125,"prioritizationFee":0},{"slot":348126,"prioritizationFee":1000}],"id":1}
+    );
+}
 
 test GetSignatureStatuses {
     var signatures = try std.testing.allocator.alloc(Signature, 2);

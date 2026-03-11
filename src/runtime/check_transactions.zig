@@ -159,6 +159,7 @@ pub fn checkFeePayer(
         5_000,
         enable_secp256r1,
         fee_budget_limits.prioritization_fee,
+        compute_budget_limits.compute_unit_price,
     );
 
     if (validateFeePayer(
@@ -240,14 +241,22 @@ pub const SignatureCounts = struct {
 pub const FeeDetails = struct {
     transaction_fee: u64,
     prioritization_fee: u64,
+    /// The compute unit price in micro-lamports per compute unit.
+    /// Used by PrioritizationFeeCache to track per-slot minimum fees for RPC queries.
+    compute_unit_price: u64,
 
-    pub const DEFAULT: FeeDetails = .{ .transaction_fee = 0, .prioritization_fee = 0 };
+    pub const DEFAULT: FeeDetails = .{
+        .transaction_fee = 0,
+        .prioritization_fee = 0,
+        .compute_unit_price = 0,
+    };
 
     pub fn init(
         sig_counts: SignatureCounts,
         lamports_per_signature: u64,
         enable_secp256r1: bool,
         prioritization_fee: u64,
+        compute_unit_price: u64,
     ) FeeDetails {
         return .{
             .transaction_fee = calculateSignatureFee(
@@ -256,6 +265,7 @@ pub const FeeDetails = struct {
                 enable_secp256r1,
             ),
             .prioritization_fee = prioritization_fee,
+            .compute_unit_price = compute_unit_price,
         };
     }
 
@@ -548,6 +558,7 @@ test "checkAge: recent blockhash" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
         .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
     };
 
     var blockhash_queue = try BlockhashQueue.initWithSingleEntry(
@@ -684,6 +695,7 @@ test "checkAge: nonce account" {
         }},
         .accounts = accounts,
         .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
     };
 
     var blockhash_queue = BlockhashQueue{
@@ -750,6 +762,7 @@ test "checkFeePayer: happy path fee payer only" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
         .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
     };
     defer transaction.accounts.deinit(allocator);
 
@@ -806,6 +819,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
         .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
     };
     defer transaction.accounts.deinit(allocator);
 
@@ -874,6 +888,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
         .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
     };
     defer transaction.accounts.deinit(allocator);
 

@@ -856,7 +856,7 @@ test "TransactionStatusMetaBuilder.build - successful transaction" {
     return_data.data.appendSliceAssumeCapacity("result");
 
     const processed = ProcessedTransaction{
-        .fees = .{ .transaction_fee = 5_000, .prioritization_fee = 1_000 },
+        .fees = .{ .transaction_fee = 5_000, .prioritization_fee = 1_000, .compute_unit_price = 0 },
         .rent = 0,
         .writes = .{},
         .err = null,
@@ -920,7 +920,7 @@ test "TransactionStatusMetaBuilder.build - transaction with no outputs" {
 
     // A transaction that failed before execution (no outputs)
     const processed = ProcessedTransaction{
-        .fees = .{ .transaction_fee = 5_000, .prioritization_fee = 0 },
+        .fees = .{ .transaction_fee = 5_000, .prioritization_fee = 0, .compute_unit_price = 0 },
         .rent = 0,
         .writes = .{},
         .err = .AccountNotFound,
@@ -961,7 +961,7 @@ test "TransactionStatusMetaBuilder.build - outputs with null sub-fields" {
 
     // Outputs exist but log_collector, instruction_trace, and return_data are all null
     const processed = ProcessedTransaction{
-        .fees = .{ .transaction_fee = 5_000, .prioritization_fee = 0 },
+        .fees = .{ .transaction_fee = 5_000, .prioritization_fee = 0, .compute_unit_price = 0 },
         .rent = 0,
         .writes = .{},
         .err = null,
@@ -1008,7 +1008,7 @@ test "TransactionStatusMetaBuilder.build - with loaded addresses" {
     const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 
     const processed = ProcessedTransaction{
-        .fees = .{ .transaction_fee = 5_000, .prioritization_fee = 0 },
+        .fees = .{ .transaction_fee = 5_000, .prioritization_fee = 0, .compute_unit_price = 0 },
         .rent = 0,
         .writes = .{},
         .err = null,
