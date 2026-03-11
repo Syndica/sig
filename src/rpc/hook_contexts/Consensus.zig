@@ -320,19 +320,9 @@ pub fn getMinimumBalanceForRentExemption(
     }
 
     const config = params.config orelse common.CommitmentSlotConfig{};
-    // [agave] Default commitment is finalized:
-    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
-    const commitment = config.commitment orelse .finalized;
-
-    const slot = self.slot_tracker.getSlotForCommitment(commitment);
-    if (config.minContextSlot) |min_slot| {
-        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
-
-    // Get slot reference to access rent collector
-    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-    defer ref.release();
-    const rent = ref.constants().rent_collector.rent;
+    const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
+    defer resolved.ref.release();
+    const rent = resolved.ref.constants().rent_collector.rent;
 
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2719-L2720
     // minimum_balance returns 0 for empty accounts, but agave returns max(1, min_balance)
@@ -347,29 +337,19 @@ pub fn getStakeMinimumDelegation(
     params: GetStakeMinimumDelegation,
 ) !GetStakeMinimumDelegation.Response {
     const config = params.config orelse common.CommitmentSlotConfig{};
-    // [agave] Default commitment is finalized:
-    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
-    const commitment = config.commitment orelse .finalized;
-
-    const slot = self.slot_tracker.getSlotForCommitment(commitment);
-    if (config.minContextSlot) |min_slot| {
-        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
-
-    // Get slot reference to access feature_set
-    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-    defer ref.release();
-    const feature_set = &ref.constants().feature_set;
+    const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
+    defer resolved.ref.release();
+    const feature_set = &resolved.ref.constants().feature_set;
 
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2379-L2382
     const stake_minimum_delegation = sig.runtime.program.stake.getMinimumDelegation(
-        slot,
+        resolved.slot,
         feature_set,
     );
 
     return .{
         .context = .{
-            .slot = slot,
+            .slot = resolved.slot,
             .apiVersion = ClientVersion.API_VERSION,
         },
         .value = stake_minimum_delegation,
