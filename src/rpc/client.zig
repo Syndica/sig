@@ -160,6 +160,13 @@ pub const Client = struct {
         return self.fetch(.null, .getLeaderSchedule, request);
     }
 
+    pub fn getMinimumBalanceForRentExemption(
+        self: *Client,
+        request: rpc.methods.GetMinimumBalanceForRentExemption,
+    ) Error!Response(rpc.methods.GetMinimumBalanceForRentExemption.Response) {
+        return self.fetch(.null, .getMinimumBalanceForRentExemption, request);
+    }
+
     pub fn getSignatureStatuses(
         self: *Client,
         request: rpc.methods.GetSignatureStatuses,
@@ -172,6 +179,13 @@ pub const Client = struct {
         request: rpc.methods.GetSlot,
     ) Error!Response(rpc.methods.GetSlot.Response) {
         return self.fetch(.null, .getSlot, request);
+    }
+
+    pub fn getStakeMinimumDelegation(
+        self: *Client,
+        request: rpc.methods.GetStakeMinimumDelegation,
+    ) Error!Response(rpc.methods.GetStakeMinimumDelegation.Response) {
+        return self.fetch(.null, .getStakeMinimumDelegation, request);
     }
 
     pub fn getTransaction(

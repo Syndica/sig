@@ -13,12 +13,14 @@ const GetAccountInfo = methods.GetAccountInfo;
 const GetBalance = methods.GetBalance;
 const GetBlock = methods.GetBlock;
 const GetBlockCommitment = methods.GetBlockCommitment;
+const GetBlockProduction = methods.GetBlockProduction;
 const GetBlockHeight = methods.GetBlockHeight;
 const GetClusterNodes = methods.GetClusterNodes;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
+const GetFeeForMessage = methods.GetFeeForMessage;
 const GetGenesisHash = methods.GetGenesisHash;
 const GetInflationGovernor = methods.GetInflationGovernor;
 const GetInflationRate = methods.GetInflationRate;
@@ -31,12 +33,14 @@ const GetRecentPerformanceSamples = methods.GetRecentPerformanceSamples;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetSlot = methods.GetSlot;
+const GetStakeMinimumDelegation = methods.GetStakeMinimumDelegation;
 const GetTransaction = methods.GetTransaction;
 const GetTransactionCount = methods.GetTransactionCount;
 const GetTokenAccountBalance = methods.GetTokenAccountBalance;
 const GetTokenSupply = methods.GetTokenSupply;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
+const GetMinimumBalanceForRentExemption = methods.GetMinimumBalanceForRentExemption;
 const IsBlockhashValid = methods.IsBlockhashValid;
 
 const Response = rpc.response.Response;
@@ -241,6 +245,91 @@ test GetClusterNodes {
     );
 }
 
+test GetBlockProduction {
+    // Request: no config (default)
+    try testRequest(.getBlockProduction, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockProduction","params":[]}
+    );
+
+    // Request: with identity filter
+    try testRequest(.getBlockProduction, .{
+        .config = .{ .identity = "85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr" },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockProduction","params":[{"commitment":null,"identity":"85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr","range":null}]}
+    );
+
+    // Request: with range
+    try testRequest(.getBlockProduction, .{
+        .config = .{ .range = .{ .firstSlot = 100, .lastSlot = 200 } },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockProduction","params":[{"commitment":null,"identity":null,"range":{"firstSlot":100,"lastSlot":200}}]}
+    );
+
+    // Request: with commitment and range
+    try testRequest(.getBlockProduction, .{
+        .config = .{
+            .commitment = .finalized,
+            .range = .{ .firstSlot = 0, .lastSlot = 9887 },
+        },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockProduction","params":[{"commitment":"finalized","identity":null,"range":{"firstSlot":0,"lastSlot":9887}}]}
+    );
+
+    // ByIdentity serialization
+    {
+        var map = sig.utils.collections.PubkeyMap(struct { u64, u64 }){};
+        defer map.deinit(std.testing.allocator);
+        try map.put(std.testing.allocator, .parse("85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr"), .{ 9888, 9886 });
+
+        try expectJsonStringify(
+            \\{"85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr":[9888,9886]}
+        , GetBlockProduction.ByIdentity{ .map = map });
+    }
+
+    // ByIdentity serialization: multiple validators
+    {
+        var map = sig.utils.collections.PubkeyMap(struct { u64, u64 }){};
+        defer map.deinit(std.testing.allocator);
+        try map.put(std.testing.allocator, .parse("11111111111111111111111111111111"), .{ 100, 90 });
+        try map.put(std.testing.allocator, .parse("11111111111111111111111111111113"), .{ 50, 45 });
+
+        try expectJsonStringify(
+            \\{"11111111111111111111111111111111":[100,90],"11111111111111111111111111111113":[50,45]}
+        , GetBlockProduction.ByIdentity{ .map = map });
+    }
+
+    // ByIdentity serialization: empty map
+    {
+        const map = sig.utils.collections.PubkeyMap(struct { u64, u64 }){};
+        try expectJsonStringify(
+            \\{}
+        , GetBlockProduction.ByIdentity{ .map = map });
+    }
+
+    // Full response serialization
+    {
+        var map = sig.utils.collections.PubkeyMap(struct { u64, u64 }){};
+        defer map.deinit(std.testing.allocator);
+        try map.put(std.testing.allocator, .parse("85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr"), .{ 9888, 9886 });
+
+        const response = GetBlockProduction.Response{
+            .context = .{ .slot = 9887 },
+            .value = .{
+                .byIdentity = .{ .map = map },
+                .range = .{ .firstSlot = 0, .lastSlot = 9887 },
+            },
+        };
+
+        const actual = try std.json.Stringify.valueAlloc(std.testing.allocator, response, .{});
+        defer std.testing.allocator.free(actual);
+
+        // Verify key structural elements are present
+        try std.testing.expect(std.mem.indexOf(u8, actual, "\"context\":{\"slot\":9887") != null);
+        try std.testing.expect(std.mem.indexOf(u8, actual, "\"byIdentity\":{\"85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr\":[9888,9886]}") != null);
+        try std.testing.expect(std.mem.indexOf(u8, actual, "\"range\":{\"firstSlot\":0,\"lastSlot\":9887}") != null);
+    }
+}
+
 test GetBlocks {
     try testRequest(.getBlocks, .{ .start_slot = 5 },
         \\{"jsonrpc":"2.0","id":1,"method":"getBlocks","params":[5]}
@@ -344,7 +433,41 @@ test GetEpochSchedule {
     );
 }
 
-// TODO: test getFeeForMessage()
+test "getFeeForMessage" {
+    // Request serialization with just the message
+    try testRequest(.getFeeForMessage, .{
+        .message = "AQABAgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAQA=",
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getFeeForMessage","params":["AQABAgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAQA="]}
+    );
+
+    // Request serialization with config
+    try testRequest(.getFeeForMessage, .{
+        .message = "AQABAgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAQA=",
+        .config = .{
+            .commitment = .confirmed,
+        },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getFeeForMessage","params":["AQABAgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAQA=",{"commitment":"confirmed","minContextSlot":null}]}
+    );
+
+    // Response with fee value
+    try testResponse(GetFeeForMessage, .{ .result = .{
+        .context = .{ .slot = 309275334, .apiVersion = "2.1.6" },
+        .value = 5000,
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275334},"value":5000},"id":1}
+    );
+
+    // Response with null value (blockhash expired)
+    try testResponse(GetFeeForMessage, .{ .result = .{
+        .context = .{ .slot = 309275334, .apiVersion = "2.1.6" },
+        .value = null,
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275334},"value":null},"id":1}
+    );
+}
+
 // TODO: test getFirstAvailableBlock()
 
 test GetGenesisHash {
@@ -506,7 +629,16 @@ test GetLeaderSchedule {
 
 // TODO: test getMaxRetransmitSlot()
 // TODO: test getMaxShredInsertSlot()
-// TODO: test getMinimumBalanceForRentExemption()
+
+test GetMinimumBalanceForRentExemption {
+    try testRequest(.getMinimumBalanceForRentExemption, .{ .data_len = 50 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getMinimumBalanceForRentExemption","params":[50]}
+    );
+    // Response is just a u64 value representing minimum lamports
+    try testResponse(GetMinimumBalanceForRentExemption, .{ .result = 1238880 },
+        \\{"jsonrpc":"2.0","result":1238880,"id":1}
+    );
+}
 
 test GetMultipleAccounts {
     var pubkeys = try std.testing.allocator.alloc(Pubkey, 2);
@@ -680,7 +812,19 @@ test GetSlot {
 // TODO: test getSlotLeader()
 // TODO: test getSlotLeaders()
 // TODO: test getStakeActivation()
-// TODO: test getStakeMinimumDelegation()
+
+test GetStakeMinimumDelegation {
+    try testRequest(.getStakeMinimumDelegation, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getStakeMinimumDelegation","params":[]}
+    );
+    try testResponse(GetStakeMinimumDelegation, .{ .result = .{
+        .context = .{ .slot = 501, .apiVersion = "2.0.15" },
+        .value = 1000000000,
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.0.15","slot":501},"value":1000000000},"id":1}
+    );
+}
+
 // TODO: test getSupply()
 
 test GetTokenAccountBalance {

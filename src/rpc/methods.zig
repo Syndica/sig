@@ -45,14 +45,14 @@ pub const MethodAndParams = union(enum) {
     getBlock: GetBlock,
     getBlockCommitment: GetBlockCommitment,
     getBlockHeight: GetBlockHeight,
-    getBlockProduction: noreturn,
+    getBlockProduction: GetBlockProduction,
     getBlocks: GetBlocks,
     getBlocksWithLimit: GetBlocksWithLimit,
     getBlockTime: noreturn,
     getClusterNodes: GetClusterNodes,
     getEpochInfo: GetEpochInfo,
     getEpochSchedule: GetEpochSchedule,
-    getFeeForMessage: noreturn,
+    getFeeForMessage: GetFeeForMessage,
     getFirstAvailableBlock: noreturn,
 
     /// https://github.com/Syndica/sig/issues/557
@@ -72,7 +72,7 @@ pub const MethodAndParams = union(enum) {
     getLeaderSchedule: GetLeaderSchedule,
     getMaxRetransmitSlot: noreturn,
     getMaxShredInsertSlot: noreturn,
-    getMinimumBalanceForRentExemption: noreturn,
+    getMinimumBalanceForRentExemption: GetMinimumBalanceForRentExemption,
     getMultipleAccounts: GetMultipleAccounts,
     getProgramAccounts: noreturn,
     getRecentPerformanceSamples: GetRecentPerformanceSamples,
@@ -82,7 +82,7 @@ pub const MethodAndParams = union(enum) {
     getSlot: GetSlot,
     getSlotLeader: noreturn,
     getSlotLeaders: noreturn,
-    getStakeMinimumDelegation: noreturn,
+    getStakeMinimumDelegation: GetStakeMinimumDelegation,
     getSupply: noreturn,
     getTokenAccountBalance: GetTokenAccountBalance,
     getTokenAccountsByDelegate: noreturn,
@@ -848,7 +848,52 @@ pub const GetBlockHeight = struct {
     pub const Response = u64;
 };
 
-// TODO: getBlockProduction
+pub const GetBlockProduction = struct {
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        /// Filter results to a single validator identity (base-58 encoded pubkey)
+        identity: ?[]const u8 = null,
+        range: ?Range = null,
+    };
+
+    pub const Range = struct {
+        firstSlot: Slot,
+        lastSlot: ?Slot = null,
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        value: Value,
+    };
+
+    pub const Value = struct {
+        byIdentity: ByIdentity,
+        range: ResponseRange,
+    };
+
+    pub const ResponseRange = struct {
+        firstSlot: Slot,
+        lastSlot: Slot,
+    };
+
+    /// Map of base58 pubkey string -> [leader_slots, blocks_produced]
+    pub const ByIdentity = struct {
+        map: sig.utils.collections.PubkeyMap(struct { u64, u64 }),
+
+        pub fn jsonStringify(self: ByIdentity, jw: anytype) !void {
+            try jw.beginObject();
+            for (self.map.keys(), self.map.values()) |key, value| {
+                const base58string = key.base58String();
+                try jw.objectField(base58string.constSlice());
+                try jw.write(value);
+            }
+            try jw.endObject();
+        }
+    };
+};
+
 // TODO: getBlockTime
 
 pub const GetBlocks = struct {
@@ -998,6 +1043,24 @@ pub const GetGenesisHash = struct {
 
 // TODO: getHealth
 
+/// [agave] https://github.com/anza-xyz/agave/blob/d70b1714b1153674c16e2b15b68790d274dfe953/rpc/src/rpc.rs#L3580-L3586
+pub const GetFeeForMessage = struct {
+    /// Base64-encoded serialized VersionedMessage
+    message: []const u8,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        minContextSlot: ?Slot = null,
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        /// Fee in lamports, or null if the blockhash has expired.
+        value: ?u64,
+    };
+};
+
 pub const GetHighestSnapshotSlot = struct {
     pub const Response = ?SnapshotSlotInfo;
 
@@ -1132,7 +1195,17 @@ pub const GetLeaderSchedule = struct {
 
 // TODO: getMaxRetransmitSlot
 // TODO: getMaxShredInsertSlot
-// TODO: getMinimumBalanceForRentExemption
+
+/// Returns minimum balance required to make account rent exempt.
+/// https://solana.com/docs/rpc/http/getminimumbalanceforrentexemption
+pub const GetMinimumBalanceForRentExemption = struct {
+    /// The Account's data length
+    data_len: usize,
+    config: ?common.CommitmentSlotConfig = null,
+
+    /// Returns minimum lamports required in account to remain rent free.
+    pub const Response = u64;
+};
 
 pub const GetMultipleAccounts = struct {
     pubkeys: []const Pubkey,
@@ -1228,7 +1301,16 @@ pub const GetSlot = struct {
 // TODO: getSlotLeader
 // TODO: getSlotLeaders
 // TODO: getStakeActivation
-// TODO: getStakeMinimumDelegation
+
+pub const GetStakeMinimumDelegation = struct {
+    config: ?common.CommitmentSlotConfig = null,
+
+    pub const Response = struct {
+        context: common.Context,
+        value: u64,
+    };
+};
+
 // TODO: getSupply
 pub const GetTokenAccountBalance = struct {
     pubkey: Pubkey,
