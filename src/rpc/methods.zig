@@ -72,7 +72,7 @@ pub const MethodAndParams = union(enum) {
     getLeaderSchedule: GetLeaderSchedule,
     getMaxRetransmitSlot: noreturn,
     getMaxShredInsertSlot: noreturn,
-    getMinimumBalanceForRentExemption: noreturn,
+    getMinimumBalanceForRentExemption: GetMinimumBalanceForRentExemption,
     getMultipleAccounts: GetMultipleAccounts,
     getProgramAccounts: noreturn,
     getRecentPerformanceSamples: GetRecentPerformanceSamples,
@@ -82,7 +82,7 @@ pub const MethodAndParams = union(enum) {
     getSlot: GetSlot,
     getSlotLeader: noreturn,
     getSlotLeaders: noreturn,
-    getStakeMinimumDelegation: noreturn,
+    getStakeMinimumDelegation: GetStakeMinimumDelegation,
     getSupply: noreturn,
     getTokenAccountBalance: GetTokenAccountBalance,
     getTokenAccountsByDelegate: noreturn,
@@ -1107,7 +1107,17 @@ pub const GetLeaderSchedule = struct {
 
 // TODO: getMaxRetransmitSlot
 // TODO: getMaxShredInsertSlot
-// TODO: getMinimumBalanceForRentExemption
+
+/// Returns minimum balance required to make account rent exempt.
+/// https://solana.com/docs/rpc/http/getminimumbalanceforrentexemption
+pub const GetMinimumBalanceForRentExemption = struct {
+    /// The Account's data length
+    data_len: usize,
+    config: ?common.CommitmentSlotConfig = null,
+
+    /// Returns minimum lamports required in account to remain rent free.
+    pub const Response = u64;
+};
 
 pub const GetMultipleAccounts = struct {
     pubkeys: []const Pubkey,
@@ -1203,7 +1213,16 @@ pub const GetSlot = struct {
 // TODO: getSlotLeader
 // TODO: getSlotLeaders
 // TODO: getStakeActivation
-// TODO: getStakeMinimumDelegation
+
+pub const GetStakeMinimumDelegation = struct {
+    config: ?common.CommitmentSlotConfig = null,
+
+    pub const Response = struct {
+        context: common.Context,
+        value: u64,
+    };
+};
+
 // TODO: getSupply
 pub const GetTokenAccountBalance = struct {
     pubkey: Pubkey,
