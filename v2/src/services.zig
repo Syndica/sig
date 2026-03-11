@@ -148,7 +148,7 @@ pub const Region = union(RegionType) {
                 std.debug.assert(buf.len == cfg.size);
 
                 // NOTE: no need to zero/undefined, right?
-            }
+            },
         };
     }
 };

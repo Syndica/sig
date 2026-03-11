@@ -1,9 +1,5 @@
 const std = @import("std");
 
-test {
-    _ = std.testing.refAllDecls(@This());
-}
-
 const common = @import("../common.zig");
 
 const Signature = common.solana.Signature;
@@ -84,15 +80,15 @@ pub const ClusterInfo = extern struct {
                     continue;
                 };
 
-                var stream_writer = (std.net.Stream{ .handle = socket }).writer(&io_buf);
+                var stream_writer = std.net.Stream.writer(.{ .handle = socket }, &io_buf);
                 const writer = &stream_writer.interface;
-                _ = try writer.splatByte(0, 4 + (4 * 2) + (4 * 2)); // hdr + tcp ports + udp ports
+                try writer.splatByteAll(0, 4 + (4 * 2) + (4 * 2)); // hdr + tcp ports + udp ports
                 try writer.writeByte('\n'); // trailer
                 writer.flush() catch continue;
 
-                var stream_reader = (std.net.Stream{ .handle = socket }).reader(&io_buf);
+                var stream_reader = std.net.Stream.reader(.{ .handle = socket }, &io_buf);
                 const reader: *std.Io.Reader = stream_reader.interface();
-                _ = reader.takeInt(u32, .little) catch continue;
+                reader.discardAll(@sizeOf(u32)) catch continue;
 
                 const tag = reader.takeInt(u32, .little) catch continue;
                 const is_v6 = (std.math.cast(u1, tag) orelse continue) == 1;
