@@ -37,27 +37,32 @@ pub const ReadOnly = struct {
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     const cluster_info = &ro.config.cluster_info;
     std.log.debug(
-        "Gossip started on :{} (shred_version:{} entrypoint:{f})",
-        .{ rw.pair.port, cluster_info.shred_version, cluster_info.entry_addr },
+        "Gossip started on :{} as {f}:\n\tshred_version:{}\n\tentrypoint:{f}",
+        .{
+            rw.pair.port,
+            ro.config.keypair.pubkey,
+            cluster_info.shred_version,
+            cluster_info.entry_addr.toNetAddress(),
+        },
     );
 
     var socket_entries: [2]GossipData.SocketEntry = .{
-        .{ .key = .gossip, .ip_idx = 0, .port_offset = rw.pair.port },
-        .{ .key = .tvu, .ip_idx = 0, .port_offset = ro.config.turbine_recv_port },
+        .{ .key = .gossip, .ip_idx = 0, .port_offset = .{ .value = rw.pair.port } },
+        .{ .key = .tvu, .ip_idx = 0, .port_offset = .{ .value = ro.config.turbine_recv_port } },
     };
     {
         // Sort by ports.
         std.mem.sort(GossipData.SocketEntry, &socket_entries, {}, struct {
             fn lessThan(_: void, a: GossipData.SocketEntry, b: GossipData.SocketEntry) bool {
-                return a.port_offset < b.port_offset;
+                return a.port_offset.value < b.port_offset.value;
             }
         }.lessThan);
 
         // Convert ports into offsets of each other.
         var port: u16 = 0;
-        for (socket_entries) |*e| {
-            e.port_offset -= port;
-            port += e.port_offset;
+        for (&socket_entries) |*e| {
+            e.port_offset.value -= port;
+            port += e.port_offset.value;
         }
     }
 
@@ -74,11 +79,10 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         .feature_set = 0,
         .client_id = .{ .value = 0 },
         .ips = .{ .items = &.{
-            switch (cluster_info.public_ip.any.family) {
-                std.posix.AF.INET => .{ .v4 = @bitCast(cluster_info.public_ip.in.sa.addr) },
-                std.posix.AF.INET6 => .{ .v6 = cluster_info.public_ip.in6.sa.addr },
-                else => unreachable,
-            },
+            if (cluster_info.public_ip.is_v6)
+                .{ .v6 = cluster_info.public_ip.ip }
+            else
+                .{ .v4 = cluster_info.public_ip.ip[0..4].* },
         } },
         .sockets = .{ .items = &socket_entries },
         .extensions = .{ .items = &.{} },
@@ -88,7 +92,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     var gossip = try Gossip.init(&fba, .{
         .netpair = rw.pair,
         .keypair = &ro.config.keypair,
-        .entry_addr = cluster_info.entry_addr,
+        .entry_addr = cluster_info.entry_addr.toNetAddress(),
         .contact_info = contact_info,
     });
 
@@ -102,35 +106,60 @@ const Gossip = struct {
     table: Table,
     peers: Peers,
     expired: Expired,
+
+    push_buf: PushBuf,
+    filter_set: *FilterSet,
+    push_active_set: PushActiveSet,
+    ping_token_window: [2][32]u8 = @splat(@splat(0xff)),
+
     config: Config,
     prng: std.Random.DefaultPrng = .init(0),
-    ping_token: [32]u8 = @splat(0xff),
+
     ping_timeout: u64 = 0,
     push_timeout: u64 = 0,
     pull_timeout: u64 = 0,
+    no_peers_timeout: u64 = 0,
 
     const PULL_INTERVAL_MS = 500;
-    const PUSH_INTERVAL_MS = 7500;
-    const PING_INTERVAL_MS = 60 * 1000;
+    const PUSH_INTERVAL_MS = 5 * 1000;
+    const PING_INTERVAL_MS = ACTIVE_PONG_THRESHOLD_MS;
 
-    const ACTIVE_CONTACT_THRESHOLD_MS = 30 * 1000;
+    const ACTIVE_VALUE_THRESHOLD_MS = 60 * 1000;
     const ACTIVE_PONG_THRESHOLD_MS = 60 * 1000;
     const STALE_PUSH_THRESHOLD_MS = 15 * 1000;
+    const STALE_EXPIRED_THRESHOLD_MS = 20 * 1000;
+    const STALE_TABLE_THRESHOLD_MS = 15 * 1000;
+    const NO_PEERS_THRESHOLD_MS = 2 * 1000;
+
+    const PUSH_PEER_FANOUT = 9;
+    const PUSH_BUFFER_MAX = 64;
+    const PINGS_BEFORE_STOP_TRACKING = 8;
+    const DUPLICATE_THRESHOLD_UNTIL_PRUNE = 20;
 
     const PRUNE_PREFIX = "\xffSOLANA_PRUNE_DATA";
     const PING_PONG_PREFIX = "SOLANA_PING_PONG";
 
     const MAX_BLOOM_KEYS = 8;
     const MAX_BLOOM_BYTES = 928;
+    const MAX_BLOOM_FALSE_RATE = 0.1;
+    const MAX_PULL_REQUESTS = 256; // must be pow2
 
     const Key = struct {
         from: Pubkey,
-        tag: std.meta.Tag(GossipValue),
+        tag: std.meta.Tag(GossipData),
         index: u16,
+
+        pub fn format(self: *const Key, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+            try writer.print(
+                "Key({s}:{}, from:{f})",
+                .{ @tagName(self.tag), self.index, self.from },
+            );
+        }
     };
     const Table = std.AutoArrayHashMapUnmanaged(Key, struct {
         hash: Hash,
         wallclock: u64,
+        last_updated: u64,
         duplicates: u8,
         size: u16,
         value: [Packet.len]u8,
@@ -139,34 +168,72 @@ const Gossip = struct {
         hash: Hash,
         wallclock: u64,
     });
+
     const Peers = std.AutoArrayHashMapUnmanaged(Pubkey, Peer);
     const Peer = struct {
         addr: std.net.Address,
-        last_ping: u64,
+        shred_version: ?u16,
+        last_ping: struct { wallclock: u64, count_since_pong: u8 },
         last_pong: ?u64,
-        last_contact: ?u64,
         ignoring: BlockBloomFilter,
-    };
 
+        fn getExpiryWallclock(self: *const Peer) u64 {
+            return self.last_pong orelse {
+                const since = @as(u64, self.last_ping.count_since_pong) * ACTIVE_PONG_THRESHOLD_MS;
+                return self.last_ping.wallclock -| since;
+            };
+        }
+    };
     const BlockBloomFilter = struct {
         keys: [MAX_BLOOM_KEYS]u64,
         words: [MAX_BLOOM_BYTES / 8]u64,
 
         fn init(prng: std.Random) @This() {
             var keys: [MAX_BLOOM_KEYS]u64 = undefined;
-            for (&keys) |k| k.* = prng.int(u64);
+            for (&keys) |*key| key.* = prng.int(u64);
             return .{ .keys = keys, .words = @splat(0) };
         }
 
-        fn asBloomFilter(self: *@This()) BloomFilter {
+        fn asBloomFilter(self: *@This(), num_keys: ?usize, num_bits: ?usize) BloomFilter {
+            const n_keys = num_keys orelse self.keys.len;
+            const n_bits = num_bits orelse self.words.len * 64;
+            const num_words = std.math.divCeil(usize, n_bits, 64) catch unreachable;
+
             var bits_set: u64 = 0;
-            for (self.words) |w| bits_set += @popCount(w);
+            for (self.words[0..num_words]) |w| bits_set += @popCount(w);
+
             return .{
-                .keys = .{ .items = &self.keys },
-                .bits = .{ .words = &self.words, .capacity = self.words.len * 64 },
+                .keys = .{ .items = self.keys[0..n_keys] },
+                .bits = .{ .words = self.words[0..num_words], .capacity = n_bits },
                 .bits_set = bits_set,
             };
         }
+    };
+
+    const PushBuf = std.AutoArrayHashMapUnmanaged(Key, void);
+    const PushActiveSet = std.ArrayListUnmanaged(Pubkey);
+
+    const FilterSet = struct {
+        blocks: [MAX_PULL_REQUESTS]BlockBloomFilter,
+
+        const max_items: f64 = blk: {
+            const max_bits: f64 = MAX_BLOOM_BYTES * 8;
+            const max_keys: f64 = MAX_BLOOM_KEYS;
+            const false_rate: f64 = MAX_BLOOM_FALSE_RATE;
+            const x = @as(u64, 1.0) - @exp(@log(false_rate) / max_keys);
+            break :blk @ceil(max_bits / (-max_keys / @log(x)));
+        };
+        const num_bits: usize = blk: {
+            const false_rate: f64 = MAX_BLOOM_FALSE_RATE;
+            const denom = @log(@as(f64, 1.0) / std.math.pow(f64, 2.0, std.math.ln2));
+            break :blk @intFromFloat(@ceil((max_items * @log(false_rate)) / denom));
+        };
+        const num_keys: usize = blk: {
+            assert(max_items != 0.0);
+            const n_bits: f64 = @floatFromInt(num_bits);
+            const n = @max(1.0, @round((n_bits / max_items) * std.math.ln2));
+            break :blk @intFromFloat(n);
+        };
     };
 
     pub const Config = struct {
@@ -188,10 +255,21 @@ const Gossip = struct {
         var peers: Peers = .empty;
         try peers.ensureTotalCapacity(fba.allocator(), 65535);
 
+        var push_buf: PushBuf = .empty;
+        try push_buf.ensureTotalCapacity(fba.allocator(), PUSH_BUFFER_MAX);
+
+        var push_active_set: PushActiveSet = .empty;
+        try push_active_set.ensureTotalCapacity(fba.allocator(), PUSH_PEER_FANOUT);
+
+        const filter_set = try fba.allocator().create(FilterSet);
+
         return .{
             .table = table,
             .peers = peers,
             .expired = expired,
+            .push_buf = push_buf,
+            .filter_set = filter_set,
+            .push_active_set = push_active_set,
             .config = config,
         };
     }
@@ -204,7 +282,7 @@ const Gossip = struct {
 
         if (self.push_timeout <= now) {
             self.push_timeout = now + PUSH_INTERVAL_MS;
-            try self.sendPushMessages(now);
+            try self.processPushMessages(now);
         }
 
         if (self.ping_timeout <= now) {
@@ -231,30 +309,31 @@ const Gossip = struct {
     }
 
     fn processMessage(self: *Gossip, now: u64, addr: std.net.Address, msg: GossipMessage) !void {
-        std.log.debug("{s}", .{@tagName(msg)});
-
         switch (msg) {
             .pull_request => |pr| {
-                const from = switch (pr.contact_info.data) {
-                    inline .legacy_contact_info, .contact_info => |ci| ci.from,
+                const from, const shred_version = switch (pr.contact_info.data) {
+                    inline .legacy_contact_info, .contact_info => |v| .{ v.from, v.shred_version },
                     else => return error.InvalidPullRequestContactInfo,
                 };
 
+                std.log.debug("Received PullRequest(from:{f})", .{from});
+
                 // Unverified peers must respond to a ping first.
-                const peer = self.getOrTrackPeer(addr, from) orelse
+                const peer = (try self.getOrTrackPeer(now, shred_version, addr, from)) orelse
                     return error.PullRequestFromUnverifiedPeer;
-                const mask_bits = std.math.cast(u6, pr.mask_bits) catch
-                    return error.InvalidPullRequestMaskBits;
 
                 // Update the ContactInfo
-                try self.insertValue(now, .pull, pr.contact_info);
+                _ = try self.insertValue(now, .pull, pr.contact_info);
+
+                const mask_bits = std.math.cast(u6, pr.mask_bits) orelse
+                    return error.InvalidPullRequestMaskBits;
 
                 // Find a value that match the PullRequest mask + bloom filter
                 for (self.table.values()) |v| {
                     const lsb_mask = (~@as(u64, 0)) >> mask_bits;
-                    const h: u64 = std.mem.readInt(u64, v.hash[0..8], .little);
+                    const h: u64 = std.mem.readInt(u64, v.hash.data[0..8], .little);
                     if ((h | lsb_mask) != (pr.mask | lsb_mask)) continue;
-                    if (pr.ignoring.contains(&v.hash)) continue;
+                    if (pr.ignoring.contains(&v.hash.data)) continue;
 
                     var found_buf: [16 * 1024]u8 = undefined;
                     var found_fba = std.heap.FixedBufferAllocator.init(&found_buf);
@@ -271,22 +350,102 @@ const Gossip = struct {
                 }
             },
             .pull_response => |pr| {
-                @compileError("TODO");
+                std.log.debug(
+                    "Received PullResponse(from:{f}, values:{})",
+                    .{ pr.from, pr.values.items.len },
+                );
+
+                // PullResponse should only be returned from a peer that we couldve sent it to.
+                const peer = self.peers.getPtr(pr.from) orelse
+                    return error.PullResponseFromUntrackedPeer;
+                const last_pong = peer.last_pong orelse
+                    return error.PullResponseFromUnverifiedPeer;
+
+                // *1 for when selected during PullRequest. another *1 for recv window after that.
+                if (last_pong <= now -| (ACTIVE_PONG_THRESHOLD_MS * 2))
+                    return error.PullResponseFromExpiredPeer;
+
+                for (pr.values.items) |value| {
+                    _ = try self.insertValue(now, .pull, value);
+                }
             },
             .push_message => |push| {
-                @compileError("TODO");
+                std.log.debug(
+                    "Received PushMessage(from:{f}, values:{})",
+                    .{ push.from, push.values.items.len },
+                );
+
+                // missing std.BoundedArray :(
+                var prune_buf: [64]Pubkey = undefined;
+                var prune_len: usize = 0;
+
+                for (push.values.items) |value| {
+                    const key, const duplicates =
+                        (try self.insertValue(now, .push, value)) orelse continue;
+
+                    // Add to prunes if enough duplicates.
+                    if (duplicates >= DUPLICATE_THRESHOLD_UNTIL_PRUNE) {
+                        if (prune_len < prune_buf.len) {
+                            const exists = for (prune_buf[0..prune_len]) |pk| {
+                                if (pk.equals(&key.from)) break true;
+                            } else false;
+                            if (!exists) {
+                                prune_buf[prune_len] = key.from;
+                                prune_len += 1;
+                            }
+                        }
+                    }
+                }
+
+                // Prune duplicates.
+                if (prune_len > 0) blk: {
+                    const prunes: Vec(Pubkey) = .{ .items = prune_buf[0..prune_len] };
+
+                    // Dont send back prunes from pushes that arent peers with a ContactInfo.
+                    const peer = self.peers.getPtr(push.from) orelse break :blk;
+                    const ci_key: Key = .{ .from = push.from, .tag = .contact_info, .index = 0 };
+                    if (!self.table.contains(ci_key)) break :blk;
+
+                    var sign_buf: [Packet.len]u8 = undefined;
+                    var sign_writer: std.Io.Writer = .fixed(&sign_buf);
+                    try bincode.write(&sign_writer, .{
+                        .prefix = PRUNE_PREFIX.*,
+                        .pubkey = self.identity(),
+                        .prunes = prunes,
+                        .dest = push.from,
+                        .wallclock = now,
+                    });
+
+                    try self.sendMessage(peer.addr, .{ .prune_message = .{
+                        .from = self.identity(),
+                        .data = .{
+                            .sender = self.identity(),
+                            .receiver = push.from,
+                            .filter_out = prunes,
+                            .wallclock = now,
+                            .signature = self.sign(sign_writer.buffered()),
+                        },
+                    } });
+                }
+
+                // Push fanout.
+                try self.sendPushMessages();
             },
             .prune_message => |prune| {
+                std.log.debug(
+                    "Received PruneMessage(from:{f}, prunes:{})",
+                    .{ prune.from, prune.data.filter_out.items.len },
+                );
+
                 if (!prune.from.equals(&prune.data.sender))
                     return error.InvalidPruneDataSender;
                 if (!prune.data.receiver.equals(&self.identity()))
                     return error.InvalidPruneDataDestination;
 
-                const peer = self.peers.get(prune.from) orelse
+                const peer = self.peers.getPtr(prune.from) orelse
                     return error.PruneSentByUntrackedPeer;
-                if ((peer.last_contact orelse 0) < (now -| ACTIVE_CONTACT_THRESHOLD_MS))
-                    return error.PruneSentByInactivePeer;
 
+                // TODO: verify this with msg directly from the Packet
                 var sign_buf: [Packet.len]u8 = undefined;
                 var sign_writer: std.Io.Writer = .fixed(&sign_buf);
                 try bincode.write(&sign_writer, .{
@@ -305,14 +464,16 @@ const Gossip = struct {
                     };
                 };
 
-                var bloom_filter = peer.ignoring.asBloomFilter();
+                var bloom_filter = peer.ignoring.asBloomFilter(null, null);
                 for (prune.data.filter_out.items) |*pubkey| {
                     bloom_filter.add(&pubkey.data);
                 }
             },
             .ping_message => |ping| {
+                std.log.debug("Received PingMessage(from:{f} @ {f})", .{ ping.from, addr });
+
                 ping.signature.verify(&ping.from, &ping.token) catch {
-                    std.log.err("invalid Ping signature from {}:{}", .{ ping.from, addr });
+                    std.log.err("invalid Ping signature from {f}:{f}", .{ ping.from, addr });
                     return;
                 };
 
@@ -320,40 +481,301 @@ const Gossip = struct {
                 try self.sendMessage(addr, .{ .pong_message = .{
                     .from = self.identity(),
                     .hash = hash,
-                    .signature = try self.sign(&hash.data),
+                    .signature = self.sign(&hash.data),
                 } });
+
+                // NOTE: differs from agave.
+                //
+                // The flow is: send PullRequest to entrypoint. It starts tracking us & sends Ping.
+                // We respond back with Pong & future PullRequests to entrypoint get PullResponses.
+                //
+                // But PullResponses are rejected from untracked peers, so when the entrypoint Pings
+                // us, we need to start having a way to track it as well.
+                _ = try self.getOrTrackPeer(now, null, addr, ping.from);
             },
             .pong_message => |pong| {
-                pong.signature.verify(&pong.from, &pong.hash) catch {
-                    std.log.err("invalid Pong signature from {}:{}", .{ pong.from, addr });
-                    return;
-                };
+                std.log.debug("Received PongMessage(from:{f} @ {f})", .{ pong.from, addr });
 
-                const hash = Hash.initMany(&.{ PING_PONG_PREFIX, &self.ping_token });
-                if (!pong.hash.eql(&hash)) {
-                    std.log.err("invalid Pong hash from {}:{}", .{ pong.from, addr });
+                // If not a hash in window (prev, current), not worth verifying the signature either
+                const h1 = Hash.initMany(&.{ PING_PONG_PREFIX, &self.ping_token_window[0] });
+                const h2 = Hash.initMany(&.{ PING_PONG_PREFIX, &self.ping_token_window[1] });
+                if (!pong.hash.eql(&h1) and !pong.hash.eql(&h2)) {
+                    std.log.err("invalid Pong hash from {f}:{f}", .{ pong.from, addr });
                     return;
                 }
 
-                const peer = self.peers.get(pong.from) orelse return;
+                pong.signature.verify(&pong.from, &pong.hash.data) catch {
+                    std.log.err("invalid Pong signature from {f}:{f}", .{ pong.from, addr });
+                    return;
+                };
+
+                const peer = self.peers.getPtr(pong.from) orelse {
+                    std.log.err("pong from untracked peer {f}:{f}", .{ pong.from, addr });
+                    return;
+                };
+
                 peer.last_pong = now;
+                peer.last_ping.count_since_pong = 0;
             },
         }
     }
 
     fn processPings(self: *Gossip, now: u64) !void {
-        @compileError("TODO");
+        // Update the ping tokens
+        self.ping_token_window[0] = self.ping_token_window[1];
+        self.prng.fill(&self.ping_token_window[1]);
+
+        // Re-ping or purge unresponsive peers.
+        var i: usize = 0;
+        while (i < self.peers.count()) {
+            const peer = &self.peers.values()[i];
+
+            const wallclock = peer.getExpiryWallclock();
+            if (wallclock <= now -| (ACTIVE_PONG_THRESHOLD_MS * PINGS_BEFORE_STOP_TRACKING)) {
+                self.peers.swapRemoveAt(i);
+                continue;
+            }
+
+            i += 1;
+            if (peer.last_ping.wallclock <= now -| ACTIVE_PONG_THRESHOLD_MS) {
+                try self.sendPing(peer.addr);
+                peer.last_ping.wallclock = now;
+                peer.last_ping.count_since_pong += 1;
+            }
+        }
     }
 
-    fn sendPushMessages(self: *Gossip, now: u64) !void {
-        @compileError("TODO");
+    fn processPushMessages(self: *Gossip, now: u64) !void {
+        // Refresh push active set
+        self.push_active_set.clearRetainingCapacity();
+
+        // TODO: stake-weighted random sampling
+        const peer_keys = self.peers.keys();
+        if (peer_keys.len > 0) {
+            const peer_values = self.peers.values();
+            const rng_start = self.prng.random().uintLessThan(usize, peer_keys.len);
+            for (0..peer_keys.len) |i| {
+                const idx = (rng_start +% i) % peer_keys.len;
+                const from = peer_keys[idx];
+                const peer = &peer_values[idx];
+
+                // TODO: if staked & rng.change(1/16), then skip checks below
+
+                // Past the ping check
+                if (peer.last_pong == null)
+                    continue;
+
+                // TODO: enable this? matching shred_version
+                // if (peer.shred_version != self.config.contact_info.contact_info.shred_version)
+                //     continue;
+
+                // TODO: enable this? active-enough ContactInfo
+                // const ci_key: Key = .{ .from = from, .tag = .contact_info, .index = 0 };
+                // const ci = self.table.getPtr(ci_key) orelse continue;
+                // if (ci.last_updated <= now -| ACTIVE_VALUE_THRESHOLD_MS)
+                //     continue;
+
+                self.push_active_set.appendAssumeCapacity(from);
+                if (self.push_active_set.items.len == self.push_active_set.capacity) break;
+            }
+        }
+
+        // Add a new instance of our contact info.
+        try self.insertOurOwnData(now, self.config.contact_info);
+
+        // Send out push messages
+        try self.sendPushMessages();
+    }
+
+    fn sendPushMessages(self: *Gossip) !void {
+        // Consume pushed keys.
+        const pushed_keys = self.push_buf.keys();
+        if (pushed_keys.len == 0) return;
+        defer self.push_buf.clearRetainingCapacity();
+
+        for (self.push_active_set.items) |pubkey| {
+            const peer = self.peers.getPtr(pubkey) orelse continue;
+            const ignored = peer.ignoring.asBloomFilter(null, null);
+
+            var value_buf: [PUSH_BUFFER_MAX]GossipValue = undefined;
+            var values: std.ArrayListUnmanaged(GossipValue) = .initBuffer(&value_buf);
+            assert(pushed_keys.len <= value_buf.len);
+
+            var packet_size: usize = 4 + 32 + 8;
+            for (pushed_keys) |key| {
+                if (ignored.contains(&key.from.data)) continue;
+                const v = self.table.getPtr(key) orelse continue;
+
+                // Would overflow push message. Send one out with whats collected so far.
+                if (packet_size + v.size > Packet.len) {
+                    try self.sendMessage(peer.addr, .{ .push_message = .{
+                        .from = self.identity(),
+                        .values = .{ .items = values.items },
+                    } });
+                    values.clearRetainingCapacity();
+                    packet_size = 4 + 32 + 8;
+                }
+
+                // TODO: no need to actually deserialize here.
+                var alloc_buf: [16 * 1024]u8 = undefined;
+                var fba = std.heap.FixedBufferAllocator.init(&alloc_buf);
+                var reader: std.Io.Reader = .fixed(v.value[0..v.size]);
+                const value = try bincode.read(&fba, &reader, GossipValue);
+                values.appendAssumeCapacity(value);
+            }
+
+            // Send out remaining push message.
+            if (values.items.len > 0) {
+                try self.sendMessage(peer.addr, .{ .push_message = .{
+                    .from = self.identity(),
+                    .values = .{ .items = values.items },
+                } });
+            }
+        }
     }
 
     fn sendPullRequests(self: *Gossip, now: u64) !void {
-        @compileError("TODO");
+        const num_items: f64 = @floatFromInt(self.table.count() + self.expired.items.len);
+        const mask_bits: u6 = blk: {
+            comptime assert(std.math.isPowerOfTwo(MAX_PULL_REQUESTS));
+            const n = @max(0, @ceil(@log2(num_items / FilterSet.max_items)));
+            break :blk @intFromFloat(@min(n, @ctz(@as(usize, MAX_PULL_REQUESTS))));
+        };
+
+        var bloom_filter_buf: [MAX_PULL_REQUESTS]BloomFilter = undefined;
+        var bloom_filters: std.ArrayListUnmanaged(BloomFilter) = .initBuffer(&bloom_filter_buf);
+
+        for (0..@as(u64, 1) << mask_bits) |i| {
+            const bf_block = &self.filter_set.blocks[i];
+            bf_block.* = .init(self.prng.random());
+
+            const bf = bloom_filters.addOneAssumeCapacity();
+            bf.* = bf_block.asBloomFilter(FilterSet.num_keys, FilterSet.num_bits);
+        }
+
+        // Add the expired hashes to the filters, while also expiring old ones.
+        var i: usize = 0;
+        while (i < self.expired.items.len) {
+            const item = &self.expired.items[i];
+            const h: u64 = std.mem.readInt(u64, item.hash.data[0..8], .little);
+            const idx: u64 = @intCast(@as(u65, h) >> (@as(u7, 64) - mask_bits));
+            bloom_filters.items[idx].add(&item.hash.data);
+
+            if (item.wallclock <= now -| STALE_EXPIRED_THRESHOLD_MS) {
+                _ = self.expired.swapRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+
+        // Add the table hashes into filters, while also moving old/purged ones to `expired`
+        i = 0;
+        while (i < self.table.count()) {
+            const v = &self.table.values()[i];
+            const h: u64 = std.mem.readInt(u64, v.hash.data[0..8], .little);
+            const idx: u64 = @intCast(@as(u65, h) >> (@as(u7, 64) - mask_bits));
+            bloom_filters.items[idx].add(&v.hash.data);
+
+            if (v.wallclock <= now -| STALE_TABLE_THRESHOLD_MS) {
+                self.addExpired(now, v.hash);
+                self.table.swapRemoveAt(i);
+            } else {
+                i += 1;
+            }
+        }
+
+        const signed_ci = try self.signData(now, self.config.contact_info);
+
+        // Select random active peers to send pull requests to.
+        i = 0;
+        const peer_values = self.peers.values();
+        if (peer_values.len > 0) {
+            const rng_start = self.prng.random().uintLessThan(usize, peer_values.len);
+            for (0..peer_values.len) |offset| {
+                const idx = (rng_start +% offset) % peer_values.len;
+                const peer = &peer_values[idx];
+
+                const last_pong = peer.last_pong orelse continue;
+                if (last_pong <= now -| ACTIVE_PONG_THRESHOLD_MS) continue;
+
+                const mask =
+                    (@as(u65, i) << (@as(u7, 64) - mask_bits)) | (~@as(u64, 0) >> mask_bits);
+
+                try self.sendMessage(peer.addr, .{ .pull_request = .{
+                    .ignoring = bloom_filters.items[i],
+                    .mask = @intCast(mask),
+                    .mask_bits = mask_bits,
+                    .contact_info = signed_ci,
+                } });
+                i += 1;
+                if (i == bloom_filters.items.len) break;
+            }
+        }
+
+        // Check if there were no peers & send to entrypoint (rate limited).
+        // If reconnect to network, entrypoint will get our ContactInfo & ping us to start tracking.
+        // We get pong, start tracking entrypoint, and start getting PullResponses from it in later
+        // calls to `sendPullRequests`.
+        //
+        // Then processPushMessages will eventually trigger, send our ContactInfo, and gets us back
+        // into the cluster receiving PushMessages from others.
+        //
+        // That, or the entrypoint PullResponses will give back other node's ContactInfos, which we
+        // will ping in `insertValue`, they pong back, they become peers eligible to send
+        // PullRequests to, we get more PullResponses back (of potentially other node ContactInfos)
+        // & it repeats.
+        if (i == 0) {
+            if (self.no_peers_timeout <= now -| NO_PEERS_THRESHOLD_MS) {
+                self.no_peers_timeout = now + NO_PEERS_THRESHOLD_MS;
+                std.log.debug("No peers...", .{});
+
+                const mask =
+                    (@as(u65, i) << (@as(u7, 64) - mask_bits)) | (~@as(u64, 0) >> mask_bits);
+
+                try self.sendMessage(self.config.entry_addr, .{ .pull_request = .{
+                    .ignoring = bloom_filters.items[i],
+                    .mask = @intCast(mask),
+                    .mask_bits = mask_bits,
+                    .contact_info = signed_ci,
+                } });
+            }
+        }
     }
 
-    fn insertValue(self: *Gossip, now: u64, caller: enum { pull, push }, value: GossipValue) !?u8 {
+    fn signData(self: *Gossip, now: u64, data_: GossipData) !GossipValue {
+        var data = data_;
+        switch (std.meta.activeTag(data)) {
+            .contact_info => data.contact_info.wallclock = .{ .value = now },
+            inline else => |tag| {
+                @field(data, @tagName(tag)).wallclock = now;
+            },
+        }
+
+        // TODO: serialize directly table.
+        var buf: [Packet.len]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(&buf);
+        try bincode.write(&writer, data);
+        return .{
+            .signature = self.sign(writer.buffered()),
+            .data = data,
+        };
+    }
+
+    fn insertOurOwnData(self: *Gossip, now: u64, data: GossipData) !void {
+        const value = try self.signData(now, data);
+        const key, _ = (try self.insertValue(now, .us, value)) orelse unreachable;
+        assert(key.from.equals(&self.identity()));
+    }
+
+    fn insertValue(
+        self: *Gossip,
+        now: u64,
+        caller: enum { us, pull, push },
+        value: GossipValue,
+    ) !?struct { Key, u8 } {
+        var deprecated = false;
+
+        // Extract key information from the data.
         const from: Pubkey, const wallclock: u64, const index: u16 = switch (value.data) {
             inline .vote, .lowest_slot, .epoch_slots, .duplicate_shred => |v| blk: {
                 break :blk .{ v.from, v.wallclock, v.index };
@@ -361,11 +783,17 @@ const Gossip = struct {
             inline .snapshot_hashes, .restart_last_voted_fork, .restart_heaviest_fork => |v| blk: {
                 break :blk .{ v.from, v.wallclock, 0 };
             },
-            .contact_info => |v| .{ v.from, v.wallclock.value, 0 },
-            else => return null, // deprecated
+            .contact_info => |ci| blk: {
+                break :blk .{ ci.from, ci.wallclock.value, 0 };
+            },
+            inline else => |v| blk: {
+                deprecated = true;
+                break :blk .{ v.from, v.wallclock, 0 };
+            },
         };
 
         // Serialize the value & validate its signature.
+        // TODO: verify directly from packet & memcpy from packet directly into table entry.
         var value_buf: [Packet.len]u8 = undefined;
         var value_writer: std.Io.Writer = .fixed(&value_buf);
         try bincode.write(&value_writer, value);
@@ -375,41 +803,67 @@ const Gossip = struct {
         const hash = Hash.init(value_bytes);
 
         // Check wallclock in general
-        const update_last_contact = switch (caller) {
+        const key: Key = .{ .from = from, .tag = std.meta.activeTag(value.data), .index = index };
+        const update_contact = switch (caller) {
+            .us => true,
             .push => blk: {
                 if (wallclock <= (now -| STALE_PUSH_THRESHOLD_MS)) return null;
                 if (wallclock >= (now +| STALE_PUSH_THRESHOLD_MS)) return null;
-                break :blk true;
+                if (from.equals(&self.identity())) return null;
+                break :blk false;
             },
             .pull => blk: {
-                const threshold: u64 = // TODO: 2 days for staked `from`
-                    if (from.equals(&self.identity())) std.math.maxInt(u64) else 15 * 1000;
-                if (now <= wallclock +| threshold) break :blk true;
-                if (value.data == .contact_info) break :blk false;
+                // TODO: currently assumes all nodes are staked.
+                const stake = 1;
+
+                var threshold: u64 = 15 * 1000;
+                if (from.equals(&self.identity())) {
+                    threshold = std.math.maxInt(u64);
+                } else if (stake > 0) {
+                    threshold = 432_000 * 400; // slots_in_epoch * slot_ms
+                }
+
+                if (!deprecated) {
+                    if (now <= wallclock +| threshold) break :blk true;
+                    if (value.data == .contact_info) break :blk false;
+                    try self.onDiscoveredValue(now, key, value);
+                }
+
+                // Value is deprecated, or too old while not being a ContactInfo.
+                // Record that we've seen it, but dont insert it.
                 self.addExpired(now, hash);
                 return null;
             },
         };
 
-        const key: Key = .{ .from = from, .tag = std.meta.activeTag(value.data), .index = index };
         const exists, const v = blk: {
             if (self.table.count() == self.table.capacity()) {
                 if (self.table.getPtr(key)) |v| break :blk .{ true, v };
-                const i = findOldest(self.table.values());
+
+                // findOldest (TODO: replace with accompanied min-heap)
+                var i: usize = 0;
+                for (self.table.values()[1..], 1..) |*v, j| {
+                    if (v.wallclock < self.table.values()[i].wallclock) i = j;
+                }
                 self.table.swapRemoveAt(i);
             }
+
             const gop = self.table.getOrPutAssumeCapacity(key);
             break :blk .{ gop.found_existing, gop.value_ptr };
         };
+
+        try self.onDiscoveredValue(now, key, value);
 
         if (exists) {
             // duplicate
             if (hash.eql(&v.hash)) {
                 v.duplicates +|= 1;
-                return v.duplicates;
+                return .{ key, v.duplicates };
             }
             // failed_push
-            if (wallclock < v.wallclock or hash.order(&v.hash) == .lt) {
+            if (wallclock < v.wallclock or
+                (wallclock == v.wallclock and hash.order(&v.hash) == .lt))
+            {
                 self.addExpired(now, hash);
                 return null;
             }
@@ -420,138 +874,176 @@ const Gossip = struct {
         v.* = .{
             .hash = hash,
             .wallclock = wallclock,
-            .duplicate = 0,
+            .last_updated = now,
+            .duplicates = 0,
             .size = @intCast(value_bytes.len),
             .value = undefined,
         };
         @memcpy(v.value[0..v.size], value_bytes);
 
-        // handle newly inserted value
-        switch (value.data) {
-            .vote => {}, // TODO: send to consensus service
-            .lowest_slot => {}, // TODO: send to repair service
-            .epoch_slots => {}, // TODO: send to consensus service
-            .duplicate_shred => {}, // TODO: send to shred/consensus service
-            .snapshot_hashes => {}, // TODO: send to snapshot service
-            .contact_info => |ci| blk: {
-                // validate & create socket map for ContactInfo
-                var map: std.EnumMap(GossipData.SocketKey, std.net.Address) = .init(.{});
-                var port: u16 = 0;
-                for (ci.sockets.items) |s| {
-                    if (s.ip_idx >= ci.ips.items.len) break :blk; // invalid ip_idx
-                    port += s.port_offset;
-                    if (map.fetchPut(s.key, switch (ci.ips.items[s.ip_idx]) {
-                        .v4 => |ip| .initIp4(ip, port),
-                        .v6 => |ip| .initIp6(ip, port, 0, 0),
-                    })) |_| break :blk; // duplicate keys
-                }
-
-                if (map.get(.gossip)) |gossip_addr| b: {
-                    const peer = self.getOrTrackPeer(now, gossip_addr, ci.from) orelse break :b;
-                    if (update_last_contact) peer.last_contact = wallclock;
-                }
-
-                // TODO: if map.get(.serve_repair): send to repair service
-                // TODO: if map.get(.tpu_vote): send to consensus service
-                // TODO: if map.get(.rpc): send to snapshot service
-            },
-            .restart_last_voted_fork => {}, // TODO: implement wen-restart protocol (SIMD-0046).
-            .restart_heaviest_fork => {}, // TODO: implement wen-restart protocol (SIMD-0046).
-            else => {},
+        // Inserting a new value updates the node's ContactInfo timestamp
+        if (update_contact) b: {
+            const ci_key: Key = .{ .from = from, .tag = .contact_info, .index = 0 };
+            const ci = self.table.getPtr(ci_key) orelse break :b;
+            ci.last_updated = now;
         }
 
-        return 0;
+        // Add them as push messages
+        switch (caller) {
+            .pull => {},
+            .us, .push => {
+                if (self.push_buf.count() == self.push_buf.capacity())
+                    try self.sendPushMessages();
+                self.push_buf.putAssumeCapacity(key, {});
+            },
+        }
+
+        return .{ key, 0 };
+    }
+
+    fn onDiscoveredValue(self: *Gossip, now: u64, key: Key, value: GossipValue) !void {
+        std.log.debug("Discovered {f}", .{key});
+
+        if (!key.from.equals(&self.identity())) {
+            switch (value.data) {
+                .vote => {}, // TODO: send to consensus service
+                .lowest_slot => {}, // TODO: send to repair service
+                .epoch_slots => {}, // TODO: send to consensus service
+                .duplicate_shred => {}, // TODO: send to shred/consensus service
+                .snapshot_hashes => {}, // TODO: send to snapshot service
+                .contact_info => |ci| {
+                    // read out socket map
+                    var map: std.EnumMap(GossipData.SocketKey, std.net.Address) = .init(.{});
+                    var port: u16 = 0;
+                    for (ci.sockets.items) |s| {
+                        if (s.ip_idx >= ci.ips.items.len)
+                            return error.InvalidValue;
+
+                        port += s.port_offset.value;
+                        const maybe_addr: ?std.net.Address = switch (ci.ips.items[s.ip_idx]) {
+                            inline else => |ip| b: {
+                                if (std.mem.allEqual(u8, &ip, 0)) break :b null;
+                                if (@sizeOf(@TypeOf(ip)) == 4) break :b .initIp4(ip, port);
+                                break :b .initIp6(ip, port, 0, 0);
+                            },
+                        };
+
+                        const addr = maybe_addr orelse continue;
+                        if (map.fetchPut(s.key, addr)) |_| // duplicate SocketKey
+                            return error.InvalidValue;
+                    }
+
+                    if (map.get(.gossip)) |addr| {
+                        if (try self.getOrTrackPeer(now, ci.shred_version, addr, key.from)) |peer| {
+                            peer.addr = addr;
+                            peer.shred_version = ci.shred_version;
+                        }
+                    }
+
+                    // TODO: if map.get(.serve_repair): send to repair service
+                    // TODO: if map.get(.tpu_vote): send to consensus service
+                    // TODO: if map.get(.rpc): send to snapshot service
+                },
+                .restart_last_voted_fork => {}, // TODO: implement wen-restart protocol (SIMD-0046).
+                .restart_heaviest_fork => {}, // TODO: implement wen-restart protocol (SIMD-0046).
+                else => {},
+            }
+        }
     }
 
     fn addExpired(self: *Gossip, now: u64, hash: Hash) void {
         if (self.expired.items.len == self.expired.capacity) {
-            const i = findOldest(self.expired.items);
+            // findOldest (TODO: replace with accompanied min-heap)
+            var i: usize = 0;
+            for (self.expired.items[1..], 1..) |*v, j| {
+                if (v.wallclock < self.expired.items[i].wallclock) i = j;
+            }
             _ = self.expired.swapRemove(i);
         }
+
         self.expired.appendAssumeCapacity(.{ .hash = hash, .wallclock = now });
     }
 
-    fn getOrTrackPeer(self: *Gossip, now: u64, addr: std.net.Address, from: Pubkey) ?*Peer {
-        if (self.peers.count() == self.peers.capacity()) {
-            if (self.peers.getPtr(from)) |peer|
-                return peer;
-            const i = findOldest(self.peers.values());
-            self.peers.swapRemoveAt(i);
-        }
-
-        const gop = self.peers.getOrPutAssumeCapacity(from);
-        if (!gop.found_existing) {
-            const maybe_ci = self.table.getPtr(.{ .from = from, .tag = .contact_info, .index = 0 });
-            gop.value_ptr.* = .{
+    fn getOrTrackPeer(
+        self: *Gossip,
+        now: u64,
+        maybe_shred_version: ?u16,
+        addr: std.net.Address,
+        from: Pubkey,
+    ) !?*Peer {
+        const exists, const peer = self.getOrPutPeer(from);
+        if (!exists) {
+            peer.* = .{
                 .addr = addr,
-                .last_ping = now,
+                .shred_version = maybe_shred_version,
+                .last_ping = .{ .wallclock = now, .count_since_pong = 0 },
                 .last_pong = null,
-                .last_contact = if (maybe_ci) |v| v.wallclock else null,
                 .ignoring = .init(self.prng.random()),
             };
             try self.sendPing(addr);
             return null;
         }
 
-        return gop.value_ptr;
+        return peer;
     }
 
-    fn findOldest(slice: anytype) usize {
-        var oldest: usize = 0;
-        for (1..slice.len) |i| {
-            if (slice[i].wallclock < slice[oldest].wallclock)
-                oldest = i;
+    fn getOrPutPeer(self: *Gossip, from: Pubkey) struct { bool, *Peer } {
+        if (self.peers.count() == self.peers.capacity()) {
+            if (self.peers.getPtr(from)) |peer| {
+                return .{ true, peer };
+            }
+
+            // findOldest (TODO: replace with accompanied min-heap)
+            var i: usize = 0;
+            for (self.peers.values()[1..], 1..) |*p, j| {
+                if (p.getExpiryWallclock() < self.peers.values()[i].getExpiryWallclock()) i = j;
+            }
+            self.peers.swapRemoveAt(i);
         }
-        return oldest;
+
+        const gop = self.peers.getOrPutAssumeCapacity(from);
+        return .{ gop.found_existing, gop.value_ptr };
     }
 
     fn identity(self: *const Gossip) Pubkey {
         return self.config.keypair.pubkey;
     }
 
-    fn sign(self: *Gossip, msg: []const u8) !Signature {
-        return self.config.keypair.sign(msg);
-    }
-
-    fn signData(self: *const Gossip, now: u64, data_: GossipData) !GossipValue {
-        var data = data_;
-        switch (std.meta.activeTag(data)) {
-            inline else => |tag| {
-                @field(data, @tagName(tag)).wallclock = now;
-            },
-        }
-
-        var buf: [Packet.len]u8 = undefined;
-        var writer: std.Io.Writer = .fixed(&buf);
-        try bincode.write(&writer, data);
-        return .{
-            .signature = try self.sign(writer.buffered()),
-            .data = data,
+    fn sign(self: *Gossip, msg: []const u8) Signature {
+        return self.config.keypair.sign(msg) catch |e| {
+            std.debug.panic("failed to sign message: {}", .{e});
         };
     }
 
     fn sendPing(self: *Gossip, addr: std.net.Address) !void {
-        return self.sendMessage(addr, .{ .ping_message = .{
+        const token = &self.ping_token_window[1]; // latest ping token.
+        return try self.sendMessage(addr, .{ .ping_message = .{
             .from = self.identity(),
-            .token = self.ping_token,
-            .signature = try self.sign(self.ping_token),
+            .token = token.*,
+            .signature = self.sign(token),
         } });
     }
 
     fn sendMessage(self: *Gossip, addr: std.net.Address, msg: GossipMessage) !void {
+        std.log.debug("Sending {s} to {f}", .{ @tagName(msg), addr });
+
         var slice = while (true) break self.config.netpair.send.getWritable() catch continue;
         const packet: *Packet = slice.get(0);
         packet.addr = addr;
+
         var writer: std.Io.Writer = .fixed(&packet.data);
         try bincode.write(&writer, msg);
         packet.size = @intCast(writer.buffered().len);
+
         slice.markUsed(1);
     }
 };
 
 const bincode = struct {
+    const read_func_overload = "bincodeRead";
+    const write_func_overload = "bincodeWrite";
+
     fn read(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader, comptime T: type) !T {
-        if (@hasDecl(T, "bincodeRead")) return T.read(fba, reader);
         switch (@typeInfo(T)) {
             .int => return try reader.takeInt(T, .little),
             .optional => |info| switch (try reader.takeByte()) {
@@ -567,13 +1059,15 @@ const bincode = struct {
                 const tag = try reader.takeInt(info.tag_type, .little);
                 return try std.meta.intToEnum(T, tag);
             },
-            .@"union" => |info| switch (try read(reader, info.tag_type.?)) {
+            .@"union" => |info| switch (try read(fba, reader, info.tag_type.?)) {
                 inline else => |tag| {
                     const Variant = @TypeOf(@field(@as(T, undefined), @tagName(tag)));
                     return @unionInit(T, @tagName(tag), try read(fba, reader, Variant));
                 },
             },
             .@"struct" => |info| {
+                if (@hasDecl(T, read_func_overload))
+                    return @field(T, read_func_overload)(fba, reader);
                 var value: T = undefined;
                 inline for (info.fields) |f| @field(value, f.name) = try read(fba, reader, f.type);
                 return value;
@@ -584,7 +1078,7 @@ const bincode = struct {
 
     fn write(writer: *std.Io.Writer, value: anytype) !void {
         const T = @TypeOf(value);
-        if (@hasDecl(T, "bincodeWrite")) return value.bincodeWrite(writer);
+
         switch (@typeInfo(T)) {
             .int => try writer.writeInt(T, value, .little),
             .optional => {
@@ -603,6 +1097,8 @@ const bincode = struct {
                 },
             },
             .@"struct" => |info| {
+                if (@hasDecl(T, write_func_overload))
+                    return @field(T, write_func_overload)(&value, writer);
                 inline for (info.fields) |f| try write(writer, @field(value, f.name));
             },
             else => @compileError("unsupported type: " ++ @typeName(T)),
@@ -686,7 +1182,7 @@ fn BitVec(comptime T: type) type {
             const capacity = try reader.takeInt(u64, .little);
 
             const words: []T = if (maybe_vec) |vec| @constCast(vec.items) else &.{};
-            if (capacity > words.len * @sizeOf(T)) return error.InvalidBitCapacity;
+            if (capacity > words.len * @bitSizeOf(T)) return error.InvalidBitCapacity;
             return .{ .words = words, .capacity = capacity };
         }
 
@@ -698,16 +1194,14 @@ fn BitVec(comptime T: type) type {
         }
 
         pub fn get(self: *const @This(), bit: usize) u1 {
-            const words = self.words orelse return 0;
-            return @truncate(words.items[bit / @sizeOf(T)] >> @intCast(bit % @sizeOf(T)));
+            return @truncate(self.words[bit / @bitSizeOf(T)] >> @intCast(bit % @bitSizeOf(T)));
         }
 
         pub fn set(self: *@This(), bit: usize) u1 {
-            const words = self.words orelse return 0;
-            const mask = @as(T, 1) << @intCast(bit % @sizeOf(T));
-            const word = &words.items[bit / @sizeOf(T)];
+            const mask = @as(T, 1) << @intCast(bit % @bitSizeOf(T));
+            const word = &self.words[bit / @bitSizeOf(T)];
             defer word.* |= mask;
-            return @intFromBool(word & mask > 0);
+            return @intFromBool(word.* & mask > 0);
         }
     };
 }
@@ -923,7 +1417,7 @@ const GossipData = union(enum(u32)) {
     },
     restart_heaviest_fork: struct {
         from: Pubkey,
-        wallclock: u16,
+        wallclock: u64,
         last_slot: SlotAndHash,
         observed_stake: u64,
         shred_version: u16,
