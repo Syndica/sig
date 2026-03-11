@@ -3,6 +3,7 @@ Dependencies:
 - cargo/rust
 - zig 0.15.2
 - git 2.49
+- cmake
 
 ```bash
 # set up the test environment

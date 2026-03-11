@@ -66,7 +66,7 @@ pub const MethodAndParams = union(enum) {
     getIdentity: GetIdentity,
     getInflationGovernor: noreturn,
     getInflationRate: noreturn,
-    getInflationReward: noreturn,
+    getInflationReward: GetInflationReward,
     getLargestAccounts: noreturn,
     getLatestBlockhash: GetLatestBlockhash,
     getLeaderSchedule: GetLeaderSchedule,
@@ -75,7 +75,7 @@ pub const MethodAndParams = union(enum) {
     getMinimumBalanceForRentExemption: noreturn,
     getMultipleAccounts: GetMultipleAccounts,
     getProgramAccounts: noreturn,
-    getRecentPerformanceSamples: noreturn,
+    getRecentPerformanceSamples: GetRecentPerformanceSamples,
     getRecentPrioritizationFees: noreturn,
     getSignaturesForAddress: GetSignaturesForAddress,
     getSignatureStatuses: GetSignatureStatuses,
@@ -1028,7 +1028,28 @@ pub const GetHighestSnapshotSlot = struct {
 // TODO: getIdentity
 // TODO: getInflationGovernor
 // TODO: getInflationRate
-// TODO: getInflationReward
+
+pub const GetInflationReward = struct {
+    addresses: []const Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        epoch: ?u64 = null,
+        minContextSlot: ?Slot = null,
+    };
+
+    pub const Response = []const ?InflationReward;
+
+    pub const InflationReward = struct {
+        epoch: u64,
+        effectiveSlot: Slot,
+        amount: u64,
+        postBalance: u64,
+        commission: ?u8,
+    };
+};
+
 // TODO: getLargeAccounts
 
 pub const GetLatestBlockhash = struct {
@@ -1120,7 +1141,23 @@ pub const GetMultipleAccounts = struct {
 };
 
 // TODO: getProgramAccounts
-// TODO: getRecentPerformanceSamples
+pub const GetRecentPerformanceSamples = struct {
+    /// Number of samples to return (maximum 720).
+    limit: ?u64 = null,
+
+    pub const max_limit = 720;
+
+    pub const Response = []const RpcPerfSample;
+
+    pub const RpcPerfSample = struct {
+        slot: Slot,
+        numTransactions: u64,
+        numNonVoteTransactions: ?u64,
+        numSlots: u64,
+        samplePeriodSecs: u16,
+    };
+};
+
 // TODO: getRecentPrioritizationFees
 
 pub const GetSignatureStatuses = struct {

@@ -1,5 +1,5 @@
 //! RPC hook context for block-related methods.
-//! Requires access to the Ledger and SlotTracker for commitment checks.
+//! Requires access to the Ledger and CommitmentTracker for commitment checks.
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const base58 = @import("base58");
@@ -12,10 +12,13 @@ const AncestorIterator = sig.ledger.Reader.AncestorIterator;
 const GetBlock = methods.GetBlock;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
+const GetInflationReward = methods.GetInflationReward;
+const GetRecentPerformanceSamples = methods.GetRecentPerformanceSamples;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetTransaction = methods.GetTransaction;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
 const Pubkey = sig.core.Pubkey;
+const PubkeyMap = sig.utils.collections.PubkeyMap;
 const ReservedAccounts = sig.core.ReservedAccounts;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
@@ -25,7 +28,8 @@ const TransactionEncoding = methods.common.TransactionEncoding;
 const LedgerHookContext = @This();
 
 ledger: *sig.ledger.Ledger,
-slot_tracker: *const sig.replay.trackers.SlotTracker,
+epoch_schedule: sig.core.EpochSchedule,
+commitments: *const sig.replay.trackers.CommitmentTracker,
 
 pub fn getBlock(
     self: LedgerHookContext,
@@ -49,7 +53,7 @@ pub fn getBlock(
     // matching Agave's get_rooted_block).
     // Confirmed path uses getCompleteBlock (no cleanup check, slot may not be rooted yet).
     const reader = self.ledger.reader();
-    const latest_confirmed_slot = self.slot_tracker.getSlotForCommitment(.confirmed);
+    const latest_confirmed_slot = self.commitments.get(.confirmed);
     const block = if (params.slot <= latest_confirmed_slot) reader.getRootedBlock(
         arena,
         params.slot,
@@ -84,11 +88,11 @@ pub fn getBlocks(
     const commitment = params.commitment();
     if (commitment == .processed) return error.ProcessedNotSupported;
 
-    const highest_root = self.slot_tracker.getSlotForCommitment(.finalized);
+    const highest_root = self.commitments.get(.finalized);
     const upper_bound = if (commitment == .finalized)
         highest_root
     else
-        self.slot_tracker.getSlotForCommitment(.confirmed);
+        self.commitments.get(.confirmed);
 
     const end_slot = @min(
         params.endSlot() orelse params.start_slot +| GetBlocks.MAX_GET_CONFIRMED_BLOCKS_RANGE,
@@ -125,7 +129,7 @@ pub fn getBlocks(
             params.start_slot -| 1;
 
         if (last_rooted < end_slot) {
-            const latest_confirmed = self.slot_tracker.getSlotForCommitment(.confirmed);
+            const latest_confirmed = self.commitments.get(.confirmed);
             const confirmed = try self.getConfirmedUnrootedSlots(
                 arena,
                 latest_confirmed,
@@ -155,7 +159,7 @@ pub fn getBlocksWithLimit(
         return error.SlotRangeTooLarge;
     }
 
-    const highest_root = self.slot_tracker.getSlotForCommitment(.finalized);
+    const highest_root = self.commitments.get(.finalized);
 
     // Collect rooted (finalized) slots starting from start_slot, up to limit.
     var blocks = try std.ArrayList(Slot).initCapacity(arena, params.limit);
@@ -179,7 +183,7 @@ pub fn getBlocksWithLimit(
         else
             params.start_slot -| 1;
 
-        const latest_confirmed = self.slot_tracker.getSlotForCommitment(.confirmed);
+        const latest_confirmed = self.commitments.get(.confirmed);
         const confirmed = try self.getConfirmedUnrootedSlots(
             arena,
             latest_confirmed,
@@ -196,6 +200,184 @@ pub fn getBlocksWithLimit(
     return try blocks.toOwnedSlice(arena);
 }
 
+pub fn getInflationReward(
+    self: LedgerHookContext,
+    arena: Allocator,
+    params: GetInflationReward,
+) !GetInflationReward.Response {
+    const config: GetInflationReward.Config = params.config orelse .{};
+    const commitment = config.commitment orelse .finalized;
+
+    if (commitment == .processed) {
+        return error.ProcessedNotSupported;
+    }
+
+    // Determine the epoch to query. Default: current_epoch - 1.
+    const current_slot = self.commitments.get(commitment);
+
+    if (config.minContextSlot) |min_slot| {
+        if (current_slot < min_slot) return error.RpcMinContextSlotNotMet;
+    }
+
+    const current_epoch = self.epoch_schedule.getEpoch(current_slot);
+    const epoch = config.epoch orelse (current_epoch -| 1);
+
+    // Rewards are distributed in the first block of (epoch + 1).
+    const first_slot_in_reward_epoch = self.epoch_schedule.getFirstSlotInEpoch(epoch +| 1);
+
+    const first_confirmed_block_in_epoch: u64 = blk: {
+        const blocks = self.getBlocksWithLimit(arena, .{
+            .start_slot = first_slot_in_reward_epoch,
+            .limit = 1,
+            .config = .{ .commitment = commitment },
+        }) catch return error.BlockNotAvailable;
+        if (blocks.len == 0) return error.BlockNotAvailable;
+        break :blk blocks[0];
+    };
+
+    const epoch_boundary_block = self.getBlock(arena, .{
+        .slot = first_confirmed_block_in_epoch,
+        .encoding_or_config = .{ .config = .{
+            .commitment = commitment,
+            .transactionDetails = .none,
+        } },
+    }) catch return error.BlockNotAvailable;
+
+    if (epoch_boundary_block.parentSlot >= first_slot_in_reward_epoch) {
+        return error.SlotNotEpochBoundary;
+    }
+
+    const epoch_has_partitioned_rewards = epoch_boundary_block.numRewardPartitions != null;
+
+    var addresses = blk: {
+        var map = PubkeyMap(void).empty;
+        for (params.addresses) |addr| _ = try map.getOrPut(arena, addr);
+        break :blk map;
+    };
+
+    var reward_map: PubkeyMap(struct { GetBlock.Response.UiReward, Slot }) = .empty;
+    if (epoch_boundary_block.rewards) |rewards| {
+        for (rewards) |reward| {
+            if (reward.rewardType != .Voting and
+                (reward.rewardType != .Staking or epoch_has_partitioned_rewards)) continue;
+            if (!addresses.contains(reward.pubkey)) continue;
+            try reward_map.put(
+                arena,
+                reward.pubkey,
+                .{ reward, first_confirmed_block_in_epoch },
+            );
+        }
+    }
+
+    if (epoch_has_partitioned_rewards) {
+        const num_partitions = epoch_boundary_block.numRewardPartitions orelse
+            @panic("numRewardPartitions should be set if epoch_has_partitioned_rewards is true");
+
+        var partition_index_addresses: std.AutoArrayHashMapUnmanaged(
+            usize,
+            PubkeyMap(void),
+        ) = .empty;
+        const hasher = sig.replay.rewards.hasher.initHasher(
+            &epoch_boundary_block.previousBlockhash,
+        );
+        for (addresses.entries.items(.key)) |addr| {
+            if (reward_map.contains(addr)) continue;
+            const partition_index = sig.replay.rewards.hasher.hashAddressToPartition(
+                hasher,
+                &addr,
+                @intCast(num_partitions),
+            );
+            var entry = try partition_index_addresses.getOrPut(arena, partition_index);
+            if (!entry.found_existing) entry.value_ptr.* = PubkeyMap(void).empty;
+            _ = try entry.value_ptr.getOrPut(arena, addr);
+        }
+
+        const block_list = try self.getBlocksWithLimit(arena, .{
+            .start_slot = first_confirmed_block_in_epoch + 1,
+            .limit = num_partitions,
+            .config = .{ .commitment = commitment },
+        });
+
+        for (
+            partition_index_addresses.keys(),
+            partition_index_addresses.values(),
+        ) |partition_index, partition_addresses| {
+            const slot = if (block_list.len > partition_index)
+                block_list[partition_index]
+            else
+                return error.EpochRewardsPeriodActive;
+
+            const block_rewards = blk: {
+                const maybe_rewards_res = self.ledger.reader().getBlockRewards(
+                    arena,
+                    slot,
+                ) catch return error.BlockNotAvailable;
+                if (maybe_rewards_res) |res| break :blk res.rewards else continue;
+            };
+            for (block_rewards) |reward| {
+                if (reward.reward_type != .staking) continue;
+                if (!partition_addresses.contains(reward.pubkey)) continue;
+                try reward_map.put(
+                    arena,
+                    reward.pubkey,
+                    .{ .fromLedgerReward(reward), slot },
+                );
+            }
+        }
+    }
+
+    const results = try arena.alloc(?GetInflationReward.InflationReward, addresses.count());
+    @memset(results, null);
+    for (addresses.keys(), results) |addr, *result| {
+        const reward, const slot = reward_map.get(addr) orelse continue;
+        result.* = .{
+            .epoch = epoch,
+            .effectiveSlot = slot,
+            .amount = @intCast(@abs(reward.lamports)),
+            .postBalance = reward.postBalance,
+            .commission = reward.commission,
+        };
+    }
+
+    return results;
+}
+
+pub fn getRecentPerformanceSamples(
+    self: LedgerHookContext,
+    arena: Allocator,
+    params: GetRecentPerformanceSamples,
+) !GetRecentPerformanceSamples.Response {
+    const limit: usize = if (params.limit) |l|
+        std.math.cast(usize, l) orelse return error.InvalidParams
+    else
+        GetRecentPerformanceSamples.max_limit;
+
+    if (limit > GetRecentPerformanceSamples.max_limit) {
+        return error.InvalidParams;
+    }
+
+    const reader = self.ledger.reader();
+    const samples = try reader.getRecentPerfSamples(arena, limit);
+
+    const result = try arena.alloc(GetRecentPerformanceSamples.RpcPerfSample, samples.items.len);
+    for (samples.items, 0..) |entry, i| {
+        const slot = entry[0];
+        const sample = entry[1];
+        result[i] = .{
+            .slot = slot,
+            .numTransactions = sample.num_transactions,
+            .numNonVoteTransactions = if (sample.version == 0)
+                null // V1 samples don't have non-vote tx count
+            else
+                sample.num_non_vote_transactions,
+            .numSlots = sample.num_slots,
+            .samplePeriodSecs = sample.sample_period_secs,
+        };
+    }
+
+    return result;
+}
+
 pub fn getSignaturesForAddress(
     self: LedgerHookContext,
     arena: std.mem.Allocator,
@@ -207,9 +389,9 @@ pub fn getSignaturesForAddress(
     // processed is not supported
     if (commitment == .processed) return error.ProcessedNotSupported;
 
-    const highest_finalized_slot = self.slot_tracker.getSlotForCommitment(.finalized);
+    const highest_finalized_slot = self.commitments.get(.finalized);
     const highest_slot: Slot = switch (commitment) {
-        .confirmed => self.slot_tracker.getSlotForCommitment(.confirmed),
+        .confirmed => self.commitments.get(.confirmed),
         .finalized => highest_finalized_slot,
         .processed => unreachable,
     };
@@ -261,7 +443,7 @@ pub fn getTransaction(
     const max_supported_version = config.maxSupportedTransactionVersion;
 
     const reader = self.ledger.reader();
-    const highest_confirmed_slot = self.slot_tracker.getSlotForCommitment(.confirmed);
+    const highest_confirmed_slot = self.commitments.get(.confirmed);
 
     // Get transaction from ledger.
     const confirmed_tx_with_meta = switch (commitment) {
