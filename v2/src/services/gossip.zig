@@ -418,18 +418,18 @@ const Gossip = struct {
                         .prefix = PRUNE_PREFIX.*,
                         .pubkey = self.identity(),
                         .prunes = prunes,
-                        .dest = push.from,
+                        .destination = push.from,
                         .wallclock = now,
                     });
 
                     try self.sendMessage(peer.addr, .{ .prune_message = .{
                         .from = self.identity(),
                         .data = .{
-                            .sender = self.identity(),
-                            .receiver = push.from,
-                            .filter_out = prunes,
-                            .wallclock = now,
+                            .pubkey = self.identity(),
+                            .prunes = prunes,
                             .signature = self.sign(sign_writer.buffered()),
+                            .destination = push.from,
+                            .wallclock = now,
                         },
                     } });
                 }
@@ -440,12 +440,12 @@ const Gossip = struct {
             .prune_message => |prune| {
                 std.log.debug(
                     "Received PruneMessage(from:{f}, prunes:{})",
-                    .{ prune.from, prune.data.filter_out.items.len },
+                    .{ prune.from, prune.data.prunes.items.len },
                 );
 
-                if (!prune.from.equals(&prune.data.sender))
+                if (!prune.from.equals(&prune.data.pubkey))
                     return error.InvalidPruneDataSender;
-                if (!prune.data.receiver.equals(&self.identity()))
+                if (!prune.data.destination.equals(&self.identity()))
                     return error.InvalidPruneDataDestination;
 
                 const peer = self.peers.getPtr(prune.from) orelse
@@ -456,9 +456,9 @@ const Gossip = struct {
                 var sign_writer: std.Io.Writer = .fixed(&sign_buf);
                 try bincode.write(&sign_writer, .{
                     .prefix = PRUNE_PREFIX.*,
-                    .pubkey = prune.data.sender,
-                    .prunes = prune.data.filter_out,
-                    .dest = prune.data.receiver,
+                    .pubkey = prune.data.pubkey,
+                    .prunes = prune.data.prunes,
+                    .destination = prune.data.destination,
                     .wallclock = prune.data.wallclock,
                 });
 
@@ -471,7 +471,7 @@ const Gossip = struct {
                 };
 
                 var bloom_filter = peer.ignoring.asBloomFilter(null, null);
-                for (prune.data.filter_out.items) |*pubkey| {
+                for (prune.data.prunes.items) |*pubkey| {
                     bloom_filter.add(&pubkey.data);
                 }
             },
@@ -1262,10 +1262,10 @@ const GossipMessage = union(enum(u32)) {
     prune_message: struct {
         from: Pubkey,
         data: struct {
-            receiver: Pubkey,
-            filter_out: Vec(Pubkey),
+            pubkey: Pubkey,
+            prunes: Vec(Pubkey),
             signature: Signature,
-            sender: Pubkey,
+            destination: Pubkey,
             wallclock: u64,
         },
     },
