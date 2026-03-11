@@ -268,6 +268,16 @@ pub const EntryField = struct {
     }
 };
 
+test EntryField {
+    try std.testing.expectFmt("foo=bar", "{f}", .{
+        EntryField.init("foo", .fromValue(.literal, "{s}", &"bar")),
+    });
+    try std.testing.expectFmt("", "{f}", .{EntryField.listFmt(&.{})});
+    try std.testing.expectFmt("foo=\"bar\"", "{f}", .{
+        EntryField.listFmt(&.{.init("foo", .fromValue(.quoted, "{s}", &"bar"))}),
+    });
+}
+
 /// Type-erased formatter.
 pub const EntryValueFmt = struct {
     surround: Surround,
@@ -466,6 +476,33 @@ const Iso8601Fmt = struct {
         try w.writeByte('Z');
     }
 };
+
+test Iso8601Fmt {
+    try std.testing.expectFmt("1970-01-01T00:00:00.000Z", "{f}", .{
+        Iso8601Fmt.fromEpochMillis(0),
+    });
+    try std.testing.expectFmt("1970-01-01T00:00:00.001Z", "{f}", .{
+        Iso8601Fmt.fromEpochMillis(1),
+    });
+    try std.testing.expectFmt("1970-01-01T00:00:00.999Z", "{f}", .{
+        Iso8601Fmt.fromEpochMillis(999),
+    });
+    try std.testing.expectFmt("1970-01-01T00:00:01.000Z", "{f}", .{
+        Iso8601Fmt.fromEpochMillis(1 * std.time.ms_per_s),
+    });
+    try std.testing.expectFmt("1971-01-01T00:00:00.000Z", "{f}", .{
+        Iso8601Fmt.fromEpochMillis(365 * std.time.ms_per_day),
+    });
+    try std.testing.expectFmt("2000-01-01T00:00:00.000Z", "{f}", .{
+        Iso8601Fmt.fromEpochMillis(std.time.ms_per_day * days_in_thirty_years: {
+            var days: u64 = 0;
+            for (1970..2000, 0..30) |year, _| {
+                days += std.time.epoch.getDaysInYear(@intCast(year));
+            }
+            break :days_in_thirty_years days;
+        }),
+    });
+}
 
 inline fn isComptimeKnown(value: anytype) bool {
     return @typeInfo(@TypeOf(.{value})).@"struct".fields[0].is_comptime;
