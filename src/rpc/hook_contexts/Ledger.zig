@@ -12,6 +12,7 @@ const AncestorIterator = sig.ledger.Reader.AncestorIterator;
 const GetBlock = methods.GetBlock;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
+const GetHealth = methods.GetHealth;
 const GetInflationReward = methods.GetInflationReward;
 const GetRecentPerformanceSamples = methods.GetRecentPerformanceSamples;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
@@ -25,9 +26,15 @@ const Slot = sig.core.Slot;
 const TransactionDetails = methods.common.TransactionDetails;
 const TransactionEncoding = methods.common.TransactionEncoding;
 
+// Maximum allowed slot distance before node is considered unhealthy.
+// See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L158
+const DELINQUENT_VALIDATOR_SLOT_DISTANCE: u64 = 128;
+
 const LedgerHookContext = @This();
 
 ledger: *sig.ledger.Ledger,
+/// Maximum allowed slot distance before node is considered unhealthy.
+health_check_slot_distance: u64 = DELINQUENT_VALIDATOR_SLOT_DISTANCE,
 epoch_schedule: sig.core.EpochSchedule,
 commitments: *const sig.replay.trackers.CommitmentTracker,
 
@@ -78,6 +85,48 @@ pub fn getBlock(
         .show_rewards = show_rewards,
         .max_supported_version = max_supported_version,
     });
+}
+
+/// Check the health of the node.
+///
+/// A node is considered healthy if the node's latest optimistically confirmed
+/// slot is within `health_check_slot_distance` of the cluster's latest
+/// optimistically confirmed slot.
+///
+/// Returns `RpcHealthStatus` which is then formatted by the server layer:
+/// - JSON-RPC: "ok" result on success, error with code -32005 on failure
+/// - HTTP GET /health: always 200 OK with "ok", "behind", or "unknown"
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2806-L2818
+pub fn getHealth(
+    self: LedgerHookContext,
+    arena: std.mem.Allocator,
+    _: GetHealth,
+) !GetHealth.Response {
+    // Get the node's latest optimistically confirmed slot from replay
+    const latest_optimistically_confirmed_slot = self.commitments.get(.confirmed);
+
+    // Get the cluster's latest optimistically confirmed slot from ledger
+    var optimistic_slots = self.ledger.reader().getLatestOptimisticSlots(arena, 1) catch {
+        return .unknown;
+    };
+    defer optimistic_slots.deinit();
+
+    if (optimistic_slots.items.len == 0) {
+        return .unknown;
+    }
+
+    const cluster_latest_optimistically_confirmed_slot, _, _ = optimistic_slots.items[0];
+
+    if (latest_optimistically_confirmed_slot >=
+        cluster_latest_optimistically_confirmed_slot -| self.health_check_slot_distance)
+    {
+        return .ok;
+    } else {
+        const num_slots_behind = cluster_latest_optimistically_confirmed_slot -|
+            latest_optimistically_confirmed_slot;
+        return .{ .behind = num_slots_behind };
+    }
 }
 
 pub fn getBlocks(

@@ -216,21 +216,21 @@ pub const GetBalance = struct {
 };
 
 pub const GetHealth = struct {
-    pub const Response = union(enum) {
-        ok,
-        err: struct {}, // TODO: Our implementation-specifc error information
+    /// Response carries the health status of the node.
+    ///
+    /// When healthy, the JSON-RPC response is: `{"result": "ok"}`
+    /// When unhealthy, the JSON-RPC response is an error:
+    ///   `{"error": {"code": -32005, "message": "...", "data": {"numSlotsBehind": ...}}}`
+    ///
+    /// The HTTP GET /health endpoint always returns 200 with "ok", "behind", or "unknown".
+    ///
+    /// See agave: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2806-L2818
+    /// See agave: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-api/src/custom_error.rs#L49-L50
+    pub const Response = RpcHealthStatus;
 
-        pub fn jsonStringify(
-            self: Response,
-            /// `*std.json.WriteStream(...)`
-            jw: anytype,
-        ) !void {
-            switch (self) {
-                .ok => try jw.write("ok"),
-                .err => |e| try jw.write(e),
-            }
-        }
-    };
+    /// JSON-RPC error code for NodeUnhealthy, matching agave's JSON_RPC_SERVER_ERROR_NODE_UNHEALTHY.
+    /// See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-api/src/custom_error.rs#L16
+    pub const node_unhealthy_code: i64 = -32005;
 };
 
 pub const GetBlock = struct {
@@ -1487,6 +1487,66 @@ pub const common = struct {
         signatures,
         none,
     };
+};
+
+/// Health check status for the RPC node.
+/// Analogous to [RpcHealthStatus](https://github.com/anza-xyz/agave/blob/8803776d/rpc/src/rpc_health.rs#L11-L16)
+pub const RpcHealthStatus = union(enum) {
+    /// Node is healthy
+    ok,
+    /// Cannot determine health (unknown state)
+    unknown,
+    /// Node is behind cluster by specified number of slots
+    behind: u64,
+
+    pub fn eql(self: RpcHealthStatus, other: RpcHealthStatus) bool {
+        return switch (self) {
+            .ok => other == .ok,
+            .unknown => other == .unknown,
+            .behind => |n| switch (other) {
+                .behind => |m| n == m,
+                else => false,
+            },
+        };
+    }
+
+    /// Returns the HTTP /health endpoint response string.
+    /// Agave always returns "ok", "behind", or "unknown" with HTTP 200.
+    /// See: https://github.com/anza-xyz/agave/blob/master/rpc/src/rpc_service.rs#L332-L340
+    pub fn httpStatusString(self: RpcHealthStatus) []const u8 {
+        return switch (self) {
+            .ok => "ok",
+            .behind => "behind",
+            .unknown => "unknown",
+        };
+    }
+
+    /// Custom JSON serialization for the JSON-RPC response.
+    ///
+    /// When healthy, serializes as the string "ok" (the JSON-RPC result value).
+    /// When unhealthy, this should NOT be used directly - the server layer must
+    /// intercept and format it as a JSON-RPC error response with code -32005.
+    pub fn jsonStringify(
+        self: RpcHealthStatus,
+        /// `*std.json.WriteStream(...)`
+        jw: anytype,
+    ) !void {
+        switch (self) {
+            .ok => try jw.write("ok"),
+            // These cases shouldn't be serialized via the normal .result path.
+            // They're handled by the server as JSON-RPC errors.
+            // But if they are serialized, output something reasonable.
+            .unknown => try jw.write("unknown"),
+            .behind => |n| {
+                try jw.beginObject();
+                try jw.objectField("status");
+                try jw.write("behind");
+                try jw.objectField("numSlotsBehind");
+                try jw.write(n);
+                try jw.endObject();
+            },
+        }
+    }
 };
 
 fn JsonSkippable(comptime T: type) type {
