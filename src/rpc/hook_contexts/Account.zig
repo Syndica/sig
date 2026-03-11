@@ -397,6 +397,7 @@ pub fn getFeeForMessage(
             5_000,
             enable_secp256r1,
             fee_budget_limits.prioritization_fee,
+            budget_limits.compute_unit_price,
         );
     }
 

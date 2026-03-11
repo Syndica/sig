@@ -24,11 +24,16 @@ const GetLatestBlockhash = sig.rpc.methods.GetLatestBlockhash;
 const GetMinimumBalanceForRentExemption = sig.rpc.methods.GetMinimumBalanceForRentExemption;
 const GetStakeMinimumDelegation = sig.rpc.methods.GetStakeMinimumDelegation;
 const GetVoteAccounts = sig.rpc.methods.GetVoteAccounts;
+const GetClusterNodes = sig.rpc.methods.GetClusterNodes;
+const GetInflationGovernor = sig.rpc.methods.GetInflationGovernor;
+const GetInflationRate = sig.rpc.methods.GetInflationRate;
 const IsBlockhashValid = sig.rpc.methods.IsBlockhashValid;
 
 const ConsensusHookContext = @This();
 
 slot_tracker: *sig.replay.trackers.SlotTracker,
+gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable) = null,
+my_shred_version: ?*const std.atomic.Value(u16) = null,
 epoch_tracker: *sig.core.EpochTracker,
 
 /// Resolves commitment and minContextSlot config to a slot number.
@@ -350,22 +355,12 @@ pub fn isBlockhashValid(
     params: IsBlockhashValid,
 ) !IsBlockhashValid.Response {
     const config = params.config orelse common.CommitmentSlotConfig{};
-    // [agave] Default commitment is finalized:
-    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
-    const commitment = config.commitment orelse .finalized;
-
-    const slot = self.slot_tracker.commitments.get(commitment);
-    if (config.minContextSlot) |min_slot| {
-        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
-
-    // Get slot reference to access blockhash queue
-    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-    defer ref.release();
+    const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
+    defer resolved.ref.release();
 
     // Check if blockhash is valid for processing
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2714
-    const blockhash_queue, var bhq_lg = ref.state().blockhash_queue.readWithLock();
+    const blockhash_queue, var bhq_lg = resolved.ref.state().blockhash_queue.readWithLock();
     defer bhq_lg.unlock();
 
     const is_valid = blockhash_queue.isHashValidForAge(
@@ -375,10 +370,177 @@ pub fn isBlockhashValid(
 
     return .{
         .context = .{
-            .slot = slot,
+            .slot = resolved.slot,
         },
         .value = is_valid,
     };
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2791-L2799
+pub fn getInflationGovernor(
+    self: ConsensusHookContext,
+    _: std.mem.Allocator,
+    params: GetInflationGovernor,
+) !GetInflationGovernor.Response {
+    const config: GetInflationGovernor.Config = params.config orelse .{};
+    const resolved = try self.resolveSlot(config.commitment, null);
+    defer resolved.ref.release();
+
+    const inflation = &resolved.ref.constants().inflation;
+
+    return .{
+        .initial = inflation.initial,
+        .terminal = inflation.terminal,
+        .taper = inflation.taper,
+        .foundation = inflation.foundation,
+        .foundationTerm = inflation.foundation_term,
+    };
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v2.1.6/rpc/src/rpc.rs#L897-909
+pub fn getInflationRate(
+    self: ConsensusHookContext,
+    _: std.mem.Allocator,
+    _: GetInflationRate,
+) !GetInflationRate.Response {
+    // Agave uses bank(None) which means default commitment (finalized)
+    const resolved = try self.resolveSlot(.finalized, null);
+    defer resolved.ref.release();
+
+    const epoch = self.epoch_tracker.epoch_schedule.getEpoch(resolved.slot);
+    const slots_per_year = self.epoch_tracker.cluster.slotsPerYear();
+
+    const slot_in_years = sig.replay.rewards.inflation_rewards.getSlotInYearsForInflation(
+        resolved.slot,
+        epoch,
+        slots_per_year,
+        &resolved.ref.constants().feature_set,
+        &self.epoch_tracker.epoch_schedule,
+    );
+
+    const inflation = &resolved.ref.constants().inflation;
+
+    return .{
+        .total = inflation.total(slot_in_years),
+        .validator = inflation.validatorRate(slot_in_years),
+        .foundation = inflation.foundationRate(slot_in_years),
+        .epoch = epoch,
+    };
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3634-3695
+pub fn getClusterNodes(
+    self: ConsensusHookContext,
+    arena: std.mem.Allocator,
+    _: GetClusterNodes,
+) !GetClusterNodes.Response {
+    const gossip_table_rw = self.gossip_table_rw orelse
+        return error.GossipTableNotAvailable;
+    const my_shred_version_atomic = self.my_shred_version orelse
+        return error.ShredVersionNotAvailable;
+
+    const my_shred_version = my_shred_version_atomic.load(.monotonic);
+
+    const gossip_table, var gossip_lock = gossip_table_rw.readWithLock();
+    defer gossip_lock.unlock();
+
+    var contact_info_iter = gossip_table.contactInfoIterator(0);
+    var result_list: std.ArrayList(common.RpcContactInfo) = .empty;
+
+    while (contact_info_iter.next()) |contact_info| {
+        if (try contactInfoToRpc(
+            arena,
+            contact_info,
+            gossip_table,
+            my_shred_version,
+        )) |rpc_contact_info| {
+            try result_list.append(arena, rpc_contact_info);
+        }
+    }
+
+    return try result_list.toOwnedSlice(arena);
+}
+
+/// Converts a gossip ContactInfo into RpcContactInfo. Returns null if the contact
+/// should be skipped (shred version mismatch or invalid gossip address).
+fn contactInfoToRpc(
+    arena: std.mem.Allocator,
+    contact_info: *const sig.gossip.ContactInfo,
+    gossip_table: *const sig.gossip.GossipTable,
+    my_shred_version: u16,
+) !?common.RpcContactInfo {
+    // Filter by matching shred version (exclude spy nodes with shred_version 0)
+    // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3643
+    if (contact_info.shred_version != my_shred_version) return null;
+
+    // Check that gossip address is valid (not unspecified)
+    // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3644-3647
+    const gossip_addr = contact_info.getSocket(.gossip);
+    if (gossip_addr == null or gossip_addr.?.isUnspecified()) return null;
+
+    var rpc_contact_info = common.RpcContactInfo{
+        .pubkey = try std.fmt.allocPrint(
+            arena,
+            "{s}",
+            .{contact_info.pubkey.base58String().slice()},
+        ),
+    };
+
+    // Get version info for this node from the gossip table
+    // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3649-3655
+    if (gossip_table.get(.{ .Version = contact_info.pubkey })) |version_data| {
+        const v = version_data.data.Version.version;
+        rpc_contact_info.version = try std.fmt.allocPrint(
+            arena,
+            "{d}.{d}.{d}",
+            .{ v.major, v.minor, v.patch },
+        );
+        rpc_contact_info.featureSet = v.feature_set;
+    }
+
+    rpc_contact_info.shredVersion = my_shred_version;
+    rpc_contact_info.gossip = try formatSocketAddr(arena, gossip_addr);
+    rpc_contact_info.tvu = try formatSocketAddr(
+        arena,
+        contact_info.getSocket(.turbine_recv),
+    );
+    rpc_contact_info.tpu = try formatSocketAddr(arena, contact_info.getSocket(.tpu));
+    rpc_contact_info.tpuQuic = try formatSocketAddr(
+        arena,
+        contact_info.getSocket(.tpu_quic),
+    );
+    rpc_contact_info.tpuForwards = try formatSocketAddr(
+        arena,
+        contact_info.getSocket(.tpu_forwards),
+    );
+    rpc_contact_info.tpuForwardsQuic = try formatSocketAddr(
+        arena,
+        contact_info.getSocket(.tpu_forwards_quic),
+    );
+    rpc_contact_info.tpuVote = try formatSocketAddr(
+        arena,
+        contact_info.getSocket(.tpu_vote),
+    );
+    rpc_contact_info.serveRepair = try formatSocketAddr(
+        arena,
+        contact_info.getSocket(.serve_repair),
+    );
+    rpc_contact_info.rpc = try formatSocketAddr(
+        arena,
+        contact_info.getSocket(.rpc),
+    );
+    rpc_contact_info.pubsub = try formatSocketAddr(
+        arena,
+        contact_info.getSocket(.rpc_pubsub),
+    );
+
+    return rpc_contact_info;
+}
+
+fn formatSocketAddr(arena: std.mem.Allocator, addr: ?sig.net.SocketAddr) !?[]const u8 {
+    const socket_addr = addr orelse return null;
+    if (socket_addr.isUnspecified()) return null;
+    return try std.fmt.allocPrint(arena, "{f}", .{socket_addr.toAddress()});
 }
 
 /// Returns the minimum balance required to make account with given data length rent exempt.
@@ -490,6 +652,8 @@ fn testSetupSlotTracker(
 fn testConsensusHookContext(slot_tracker: *sig.replay.trackers.SlotTracker) ConsensusHookContext {
     return .{
         .slot_tracker = slot_tracker,
+        .gossip_table_rw = null,
+        .my_shred_version = null,
         .epoch_tracker = undefined, // not used by getBlockHeight/getTransactionCount/getHighestSnapshotSlot
     };
 }
@@ -500,6 +664,8 @@ fn testConsensusHookContextWithEpochTracker(
 ) ConsensusHookContext {
     return .{
         .slot_tracker = slot_tracker,
+        .gossip_table_rw = null,
+        .my_shred_version = null,
         .epoch_tracker = epoch_tracker,
     };
 }

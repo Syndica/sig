@@ -260,6 +260,30 @@ pub const Transaction = struct {
 
         try self.msg.validate();
     }
+
+    /// Check if this transaction is a simple vote transaction.
+    /// A simple vote transaction has:
+    /// - Exactly 1 instruction
+    /// - That instruction is a Vote program instruction
+    /// - 1 or 2 signatures
+    /// - No address lookup tables (legacy message)
+    pub fn isSimpleVoteTransaction(
+        self: *const Transaction,
+        instructions: []const sig.runtime.InstructionInfo,
+    ) bool {
+        // Must have exactly 1 instruction
+        if (instructions.len != 1) return false;
+
+        // Must have 1 or 2 signatures
+        if (self.signatures.len == 0 or self.signatures.len > 2) return false;
+
+        // Must be a legacy message (no lookup tables)
+        if (self.msg.address_lookups.len > 0) return false;
+
+        // First instruction must be vote program
+        const instr = instructions[0];
+        return instr.program_meta.pubkey.equals(&sig.runtime.program.vote.ID);
+    }
 };
 
 pub const Version = enum(u8) {
