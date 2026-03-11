@@ -86,6 +86,10 @@ fn Definition(
                     .big => bytes.*,
                 };
                 var r: Aff = undefined;
+
+                // Reject the point if the compressed or parity flag is set.
+                if (in[0] & 0xA0 != 0) return error.Failed;
+
                 if (api.deserialize(&r, &in) != c.SUCCESS) return error.Failed;
                 return .{ .p = r };
             }
