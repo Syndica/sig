@@ -7,7 +7,6 @@ test {
 const common = @import("../common.zig");
 
 const Signature = common.solana.Signature;
-const Slot = common.solana.Slot;
 const Pubkey = common.solana.Pubkey;
 
 /// Extern struct compatibility for stdlib KeyPair type
