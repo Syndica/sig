@@ -273,6 +273,20 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             }
         };
 
+        /// Returns an iterator over the given column family, optionally starting
+        /// from the provided key. If `start` is `null`, the iterator begins at
+        /// the first (or last, for reverse) entry in the column family.
+        ///
+        /// The returned `Iterator` holds a reference to the underlying RocksDB
+        /// iterator, which pins an SST snapshot and associated memory.
+        ///
+        /// **Callers must call `deinit` on the returned iterator** when they are
+        /// done with it; otherwise the pinned RocksDB resources (memtable refs,
+        /// block cache entries, and read-snapshot state) will be leaked for the
+        /// lifetime of the database.
+        ///
+        /// Additionally, all key/value slices yielded by `next()` are backed by
+        /// the iterator's internal buffer and become invalid after `deinit`.
         pub fn iterator(
             self: Self,
             comptime cf: ColumnFamily,

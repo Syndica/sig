@@ -1701,7 +1701,7 @@ fn validator(
 
     try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
         .ledger = &ledger,
-        .epoch_schedule = epoch_tracker.epoch_schedule,
+        .epoch_tracker = &epoch_tracker,
         .commitments = &replay_service_state.replay_state.slot_tracker.commitments,
     });
 
