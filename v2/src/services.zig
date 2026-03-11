@@ -56,7 +56,6 @@ pub const Service = enum {
             .gossip => &.{
                 .{ .region = .net_pair, .rw = true },
                 .{ .region = .gossip_config },
-                .{ .region = .scratch_buffer, .rw = true },
             },
             .shred_receiver => &.{
                 .{ .region = .net_pair, .rw = true },
@@ -90,7 +89,6 @@ pub const RegionType = enum {
     net_pair,
     gossip_config,
     leader_schedule,
-    scratch_buffer,
 };
 
 pub const Region = union(RegionType) {
@@ -105,16 +103,12 @@ pub const Region = union(RegionType) {
         // TODO: this should not exist - remove once we can open snapshots again
         schedule_string: *std.Io.Reader,
     },
-    scratch_buffer: struct {
-        size: usize,
-    },
 
     pub fn size(self: Region) usize {
         return switch (self) {
             .net_pair => @sizeOf(common.net.Pair),
             .gossip_config => @sizeOf(common.gossip.Config),
             .leader_schedule => @sizeOf(common.solana.LeaderSchedule),
-            .scratch_buffer => |s| s.size,
         };
     }
 
@@ -143,11 +137,6 @@ pub const Region = union(RegionType) {
                 const data: *common.solana.LeaderSchedule = @ptrCast(buf);
 
                 try common.solana.LeaderSchedule.fromCommand(data, cfg.schedule_string);
-            },
-            .scratch_buffer => |cfg| {
-                std.debug.assert(buf.len == cfg.size);
-
-                // NOTE: no need to zero/undefined, right?
             },
         };
     }

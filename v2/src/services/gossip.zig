@@ -26,12 +26,13 @@ pub const std_options = start.options;
 
 pub const ReadWrite = struct {
     pair: *Pair,
-    scratch_mem: *[common.gossip.scratch_memory_size]u8,
 };
 
 pub const ReadOnly = struct {
     config: *const common.gossip.Config,
 };
+
+var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     const cluster_info = &ro.config.cluster_info;
@@ -87,7 +88,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         .extensions = .{ .items = &.{} },
     } };
 
-    var fba = std.heap.FixedBufferAllocator.init(rw.scratch_mem);
+    var fba = std.heap.FixedBufferAllocator.init(&scratch_memory);
     var gossip = try Gossip.init(&fba, .{
         .netpair = rw.pair,
         .keypair = &ro.config.keypair,
@@ -318,7 +319,7 @@ const Gossip = struct {
                 std.log.debug("Received PullRequest(from:{f})", .{from});
 
                 // Unverified peers must respond to a ping first.
-                const peer = (try self.getOrTrackPeer(now, shred_version, addr, from)) orelse
+                const peer = try self.getOrTrackPeer(now, shred_version, addr, from) orelse
                     return error.PullRequestFromUnverifiedPeer;
 
                 // Update the ContactInfo
@@ -1217,6 +1218,7 @@ const BloomFilter = struct {
     }
 
     fn add(self: *BloomFilter, bytes: []const u8) void {
+        if (self.bits.capacity == 0 or self.bits.words.len == 0) return;
         for (self.keys.items) |key| {
             const pos = self.getBitPos(key, bytes);
             self.bits_set += self.bits.set(pos);
@@ -1224,6 +1226,7 @@ const BloomFilter = struct {
     }
 
     fn contains(self: *const BloomFilter, bytes: []const u8) bool {
+        if (self.bits.capacity == 0 or self.bits.words.len == 0) return false;
         for (self.keys.items) |key| {
             const pos = self.getBitPos(key, bytes);
             if (self.bits.get(pos) == 0) return false;

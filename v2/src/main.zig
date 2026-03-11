@@ -109,13 +109,6 @@ pub fn main() !void {
                 .{ .instance = .{ .service = .gossip } },
             },
         },
-        // gossip memory
-        .{
-            .region = .{ .scratch_buffer = .{ .size = common.gossip.scratch_memory_size } },
-            .shares = &.{
-                .{ .instance = .{ .service = .gossip }, .rw = true },
-            },
-        },
     };
 
     switch (config.sandboxing_mode) {

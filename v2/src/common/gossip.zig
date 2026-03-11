@@ -33,8 +33,6 @@ pub const Config = extern struct {
     turbine_recv_port: u16,
 };
 
-pub const scratch_memory_size = 256 * 1024 * 1024;
-
 pub const ClusterInfo = extern struct {
     public_ip: Address,
     entry_addr: Address,
