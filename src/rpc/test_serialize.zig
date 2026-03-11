@@ -20,6 +20,7 @@ const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
 const GetGenesisHash = methods.GetGenesisHash;
 const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
+const GetInflationReward = methods.GetInflationReward;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetMultipleAccounts = methods.GetMultipleAccounts;
@@ -332,7 +333,59 @@ test GetHighestSnapshotSlot {
 // TODO: test getIdentity()
 // TODO: test getInflationGovernor()
 // TODO: test getInflationRate()
-// TODO: test getInflationReward()
+test GetInflationReward {
+    const addr1: Pubkey = .parse("Vote111111111111111111111111111111111111111");
+
+    // Request with single address, no config
+    try testRequest(.getInflationReward, .{
+        .addresses = &.{addr1},
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getInflationReward","params":[["Vote111111111111111111111111111111111111111"]]}
+    );
+
+    // Request with multiple addresses and config
+    const addr2: Pubkey = .parse("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
+    try testRequest(.getInflationReward, .{
+        .addresses = &.{ addr1, addr2 },
+        .config = .{
+            .commitment = .finalized,
+            .epoch = 100,
+        },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getInflationReward","params":[["Vote111111111111111111111111111111111111111","Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm"],{"commitment":"finalized","epoch":100,"minContextSlot":null}]}
+    );
+
+    // Response with single reward entry
+    try testResponse(GetInflationReward, .{ .result = &.{.{
+        .epoch = 100,
+        .effectiveSlot = 43200,
+        .amount = 2500,
+        .postBalance = 1000002500,
+        .commission = 10,
+    }} },
+        \\{"jsonrpc":"2.0","result":[{"amount":2500,"commission":10,"effectiveSlot":43200,"epoch":100,"postBalance":1000002500}],"id":1}
+    );
+
+    // Response with null entry (address has no reward)
+    try testResponse(GetInflationReward, .{ .result = &.{null} },
+        \\{"jsonrpc":"2.0","result":[null],"id":1}
+    );
+
+    // Response with mixed results (one reward, one null)
+    try testResponse(GetInflationReward, .{ .result = &.{
+        .{
+            .epoch = 100,
+            .effectiveSlot = 43200,
+            .amount = 2500,
+            .postBalance = 1000002500,
+            .commission = null,
+        },
+        null,
+    } },
+        \\{"jsonrpc":"2.0","result":[{"amount":2500,"commission":null,"effectiveSlot":43200,"epoch":100,"postBalance":1000002500},null],"id":1}
+    );
+}
+
 // TODO: test getLargeAccounts()
 
 test GetLatestBlockhash {
