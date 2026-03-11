@@ -13,6 +13,7 @@ const GetAccountInfo = methods.GetAccountInfo;
 const GetBalance = methods.GetBalance;
 const GetBlock = methods.GetBlock;
 const GetBlockCommitment = methods.GetBlockCommitment;
+const GetBlockProduction = methods.GetBlockProduction;
 const GetBlockHeight = methods.GetBlockHeight;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
@@ -191,6 +192,91 @@ test GetBlockCommitment {
         \\{"jsonrpc":"2.0","result":{"commitment":[56410821025255,33711292695244,27701727782831,55401460131423,72618639807497,0,27796008663080,0,28095671118333,0,0,55401620019031,0,0,27705104515750,55503391231079,55401283113964,38837474545660,38948031805667,59470578427800,0,0,11133899193586,0,11133899193587,27704990400041,66439189441453,0,2085408698601000,2095104661986814,4274561647461058,282363342888089693],"totalStake":302884919142324276},"id":1}
         ,
     );
+}
+
+test GetBlockProduction {
+    // Request: no config (default)
+    try testRequest(.getBlockProduction, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockProduction","params":[]}
+    );
+
+    // Request: with identity filter
+    try testRequest(.getBlockProduction, .{
+        .config = .{ .identity = "85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr" },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockProduction","params":[{"commitment":null,"identity":"85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr","range":null}]}
+    );
+
+    // Request: with range
+    try testRequest(.getBlockProduction, .{
+        .config = .{ .range = .{ .firstSlot = 100, .lastSlot = 200 } },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockProduction","params":[{"commitment":null,"identity":null,"range":{"firstSlot":100,"lastSlot":200}}]}
+    );
+
+    // Request: with commitment and range
+    try testRequest(.getBlockProduction, .{
+        .config = .{
+            .commitment = .finalized,
+            .range = .{ .firstSlot = 0, .lastSlot = 9887 },
+        },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockProduction","params":[{"commitment":"finalized","identity":null,"range":{"firstSlot":0,"lastSlot":9887}}]}
+    );
+
+    // ByIdentity serialization
+    {
+        var map = sig.utils.collections.PubkeyMap(struct { u64, u64 }){};
+        defer map.deinit(std.testing.allocator);
+        try map.put(std.testing.allocator, .parse("85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr"), .{ 9888, 9886 });
+
+        try expectJsonStringify(
+            \\{"85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr":[9888,9886]}
+        , GetBlockProduction.ByIdentity{ .map = map });
+    }
+
+    // ByIdentity serialization: multiple validators
+    {
+        var map = sig.utils.collections.PubkeyMap(struct { u64, u64 }){};
+        defer map.deinit(std.testing.allocator);
+        try map.put(std.testing.allocator, .parse("11111111111111111111111111111111"), .{ 100, 90 });
+        try map.put(std.testing.allocator, .parse("11111111111111111111111111111113"), .{ 50, 45 });
+
+        try expectJsonStringify(
+            \\{"11111111111111111111111111111111":[100,90],"11111111111111111111111111111113":[50,45]}
+        , GetBlockProduction.ByIdentity{ .map = map });
+    }
+
+    // ByIdentity serialization: empty map
+    {
+        const map = sig.utils.collections.PubkeyMap(struct { u64, u64 }){};
+        try expectJsonStringify(
+            \\{}
+        , GetBlockProduction.ByIdentity{ .map = map });
+    }
+
+    // Full response serialization
+    {
+        var map = sig.utils.collections.PubkeyMap(struct { u64, u64 }){};
+        defer map.deinit(std.testing.allocator);
+        try map.put(std.testing.allocator, .parse("85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr"), .{ 9888, 9886 });
+
+        const response = GetBlockProduction.Response{
+            .context = .{ .slot = 9887 },
+            .value = .{
+                .byIdentity = .{ .map = map },
+                .range = .{ .firstSlot = 0, .lastSlot = 9887 },
+            },
+        };
+
+        const actual = try std.json.Stringify.valueAlloc(std.testing.allocator, response, .{});
+        defer std.testing.allocator.free(actual);
+
+        // Verify key structural elements are present
+        try std.testing.expect(std.mem.indexOf(u8, actual, "\"context\":{\"slot\":9887") != null);
+        try std.testing.expect(std.mem.indexOf(u8, actual, "\"byIdentity\":{\"85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr\":[9888,9886]}") != null);
+        try std.testing.expect(std.mem.indexOf(u8, actual, "\"range\":{\"firstSlot\":0,\"lastSlot\":9887}") != null);
+    }
 }
 
 test GetBlocks {

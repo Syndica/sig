@@ -45,7 +45,7 @@ pub const MethodAndParams = union(enum) {
     getBlock: GetBlock,
     getBlockCommitment: GetBlockCommitment,
     getBlockHeight: GetBlockHeight,
-    getBlockProduction: noreturn,
+    getBlockProduction: GetBlockProduction,
     getBlocks: GetBlocks,
     getBlocksWithLimit: GetBlocksWithLimit,
     getBlockTime: noreturn,
@@ -848,7 +848,52 @@ pub const GetBlockHeight = struct {
     pub const Response = u64;
 };
 
-// TODO: getBlockProduction
+pub const GetBlockProduction = struct {
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        /// Filter results to a single validator identity (base-58 encoded pubkey)
+        identity: ?[]const u8 = null,
+        range: ?Range = null,
+    };
+
+    pub const Range = struct {
+        firstSlot: Slot,
+        lastSlot: ?Slot = null,
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        value: Value,
+    };
+
+    pub const Value = struct {
+        byIdentity: ByIdentity,
+        range: ResponseRange,
+    };
+
+    pub const ResponseRange = struct {
+        firstSlot: Slot,
+        lastSlot: Slot,
+    };
+
+    /// Map of base58 pubkey string -> [leader_slots, blocks_produced]
+    pub const ByIdentity = struct {
+        map: sig.utils.collections.PubkeyMap(struct { u64, u64 }),
+
+        pub fn jsonStringify(self: ByIdentity, jw: anytype) !void {
+            try jw.beginObject();
+            for (self.map.keys(), self.map.values()) |key, value| {
+                const base58string = key.base58String();
+                try jw.objectField(base58string.constSlice());
+                try jw.write(value);
+            }
+            try jw.endObject();
+        }
+    };
+};
+
 // TODO: getBlockTime
 
 pub const GetBlocks = struct {
