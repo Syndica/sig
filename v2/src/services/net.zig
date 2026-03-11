@@ -20,7 +20,7 @@ pub const ReadWrite = struct {
 };
 
 pub fn serviceMain(rw: ReadWrite) !noreturn {
-    try mainInner(&.{rw.gossip_pair, rw.shred_pair});
+    try mainInner(&.{ rw.gossip_pair, rw.shred_pair });
 }
 
 const MAX_SOCKETS = 10;

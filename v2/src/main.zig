@@ -97,12 +97,14 @@ pub fn main() !void {
         },
         // gossip constants
         .{
-            .region = .{ .gossip_config = .{
-                .cluster_info = gossip_cluster_info,
-                // TODO: read this from identity file in signer service
-                .keypair = .fromKeyPair(.generate()),
-                .turbine_recv_port = config.shred_network.recv_port,
-            } },
+            .region = .{
+                .gossip_config = .{
+                    .cluster_info = gossip_cluster_info,
+                    // TODO: read this from identity file in signer service
+                    .keypair = .fromKeyPair(.generate()),
+                    .turbine_recv_port = config.shred_network.recv_port,
+                },
+            },
             .shares = &.{
                 .{ .instance = .{ .service = .gossip } },
             },
@@ -113,7 +115,7 @@ pub fn main() !void {
             .shares = &.{
                 .{ .instance = .{ .service = .gossip }, .rw = true },
             },
-        }
+        },
     };
 
     switch (config.sandboxing_mode) {
