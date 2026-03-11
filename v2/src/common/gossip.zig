@@ -38,12 +38,24 @@ pub const Config = extern struct {
     turbine_recv_port: u16,
 };
 
-pub const scratch_memory_size = 64 * 1024 * 1024;
+pub const scratch_memory_size = 256 * 1024 * 1024;
 
 pub const ClusterInfo = extern struct {
-    public_ip: std.net.Address,
-    entry_addr: std.net.Address,
+    public_ip: Address,
+    entry_addr: Address,
     shred_version: u16,
+
+    // For std.meta.eql compatibility insice `serviceMap`
+    pub const Address = extern struct {
+        is_v6: bool,
+        ip: [16]u8,
+        port: u16,
+
+        pub fn toNetAddress(self: *const Address) std.net.Address {
+            if (self.is_v6) return .initIp6(self.ip, self.port, 0, 0);
+            return .initIp4(self.ip[0..4].*, self.port);
+        }
+    };
 
     pub fn getFromEcho(gossip_port: u16, cluster: common.solana.ClusterType) !ClusterInfo {
         var io_buf: [4096]u8 = undefined;
@@ -51,7 +63,7 @@ pub const ClusterInfo = extern struct {
 
         for (cluster.getEntrypoints()) |entrypoint| {
             const split = std.mem.indexOfScalar(u8, entrypoint, ':') orelse continue;
-            const port = std.fmt.parseInt(u16, entrypoint[split + 1..], 10) catch continue;
+            const port = std.fmt.parseInt(u16, entrypoint[split + 1 ..], 10) catch continue;
 
             var fba = std.heap.FixedBufferAllocator.init(&addr_buf);
             const addr_list =
@@ -75,19 +87,22 @@ pub const ClusterInfo = extern struct {
 
                 var stream_writer = (std.net.Stream{ .handle = socket }).writer(&io_buf);
                 const writer = &stream_writer.interface;
-                try writer.splatByte(0, 4 + (4 * 2) + (4 * 2)); // header + tcp ports + udp ports
-                try writer.writeByte('\n');
+                _ = try writer.splatByte(0, 4 + (4 * 2) + (4 * 2)); // hdr + tcp ports + udp ports
+                try writer.writeByte('\n'); // trailer
                 writer.flush() catch continue;
 
                 var stream_reader = (std.net.Stream{ .handle = socket }).reader(&io_buf);
                 const reader: *std.Io.Reader = stream_reader.interface();
                 _ = reader.takeInt(u32, .little) catch continue;
 
-                const addr: std.net.Address = switch (reader.takeInt(u32, .little) catch continue) {
-                    0 => .initIp4(reader.takeArray(4) catch continue, gossip_port),
-                    1 => .initIp6(reader.takeArray(16) catch continue, gossip_port, 0, 0),
-                    else => continue,
-                };
+                const tag = reader.takeInt(u32, .little) catch continue;
+                const is_v6 = (std.math.cast(u1, tag) orelse continue) == 1;
+                var ip: [16]u8 = @splat(0);
+                if (is_v6) {
+                    ip = (reader.takeArray(16) catch continue).*;
+                } else {
+                    ip[0..4].* = (reader.takeArray(4) catch continue).*;
+                }
 
                 const shred_version: u16 = switch (reader.takeByte() catch continue) {
                     0 => 0,
@@ -96,8 +111,20 @@ pub const ClusterInfo = extern struct {
                 };
 
                 return .{
-                    .public_ip = addr,
-                    .entry_addr = entry_addr,
+                    .public_ip = .{
+                        .is_v6 = is_v6,
+                        .ip = ip,
+                        .port = gossip_port,
+                    },
+                    .entry_addr = .{
+                        .is_v6 = entry_addr.any.family == std.posix.AF.INET6,
+                        .ip = switch (entry_addr.any.family) {
+                            std.posix.AF.INET6 => entry_addr.in6.sa.addr,
+                            std.posix.AF.INET => @bitCast([_]u32{ entry_addr.in.sa.addr, 0, 0, 0 }),
+                            else => unreachable,
+                        },
+                        .port = entry_addr.getPort(),
+                    },
                     .shred_version = shred_version,
                 };
             }
