@@ -5,7 +5,6 @@
 const std = @import("std");
 const start = @import("start");
 const common = @import("common");
-const tracy = @import("tracy");
 
 const assert = std.debug.assert;
 
