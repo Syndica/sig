@@ -16,6 +16,11 @@ const Signature = common.solana.Signature;
 const Slot = common.solana.Slot;
 const Pubkey = common.solana.Pubkey;
 
+pub const RecvConfig = struct {
+    leader_schedule: common.solana.LeaderSchedule,
+    shred_version: u16,
+};
+
 pub const MAX_SHREDS_PER_SLOT: usize =
     CodeShred.constants.max_per_slot +
     DataShred.constants.max_per_slot;

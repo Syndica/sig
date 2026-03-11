@@ -82,7 +82,10 @@ pub fn main() !void {
         },
         // shred constants
         .{
-            .region = .{ .leader_schedule = .{ .schedule_string = &reader.interface } },
+            .region = .{ .shred_recv_config = .{
+                .schedule_string = &reader.interface,
+                .shred_version = gossip_cluster_info.shred_version,
+            } },
             .shares = &.{
                 .{ .instance = .{ .service = .shred_receiver } },
             },

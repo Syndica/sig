@@ -59,7 +59,7 @@ pub const Service = enum {
             },
             .shred_receiver => &.{
                 .{ .region = .net_pair, .rw = true },
-                .{ .region = .leader_schedule },
+                .{ .region = .shred_recv_config },
             },
         };
     }
@@ -88,7 +88,7 @@ pub const SharedRegion = struct {
 pub const RegionType = enum {
     net_pair,
     gossip_config,
-    leader_schedule,
+    shred_recv_config,
 };
 
 pub const Region = union(RegionType) {
@@ -99,16 +99,17 @@ pub const Region = union(RegionType) {
         keypair: common.gossip.KeyPair,
         turbine_recv_port: u16,
     },
-    leader_schedule: struct {
+    shred_recv_config: struct {
         // TODO: this should not exist - remove once we can open snapshots again
         schedule_string: *std.Io.Reader,
+        shred_version: u16,
     },
 
     pub fn size(self: Region) usize {
         return switch (self) {
             .net_pair => @sizeOf(common.net.Pair),
             .gossip_config => @sizeOf(common.gossip.Config),
-            .leader_schedule => @sizeOf(common.solana.LeaderSchedule),
+            .shred_recv_config => @sizeOf(common.shred.RecvConfig),
         };
     }
 
@@ -132,11 +133,15 @@ pub const Region = union(RegionType) {
                 data.cluster_info = cfg.cluster_info;
                 data.turbine_recv_port = cfg.turbine_recv_port;
             },
-            .leader_schedule => |cfg| {
-                std.debug.assert(buf.len == @sizeOf(common.solana.LeaderSchedule));
-                const data: *common.solana.LeaderSchedule = @ptrCast(buf);
+            .shred_recv_config => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(common.shred.RecvConfig));
+                const data: *common.shred.RecvConfig = @ptrCast(buf);
 
-                try common.solana.LeaderSchedule.fromCommand(data, cfg.schedule_string);
+                try common.solana.LeaderSchedule.fromCommand(
+                    &data.leader_schedule,
+                    cfg.schedule_string,
+                );
+                data.shred_version = cfg.shred_version;
             },
         };
     }
