@@ -317,6 +317,7 @@ pub fn computeFromStakedNodes(
 
 /// Inverse of computeFromMap: builds PubkeyMap from LeaderSchedule.
 /// Maps each leader identity to the slot indices (0-based in epoch) where they lead.
+/// NOTE: Caller must fully deallocate the returned map: free each value slice with the same allocator
 /// [agave] leader_schedule_by_identity: https://github.com/anza-xyz/agave/blob/v3.1.8/ledger/src/leader_schedule_utils.rs#L38-L54
 pub fn leaderScheduleByIdentity(
     allocator: Allocator,
@@ -351,7 +352,9 @@ pub fn leaderScheduleByIdentity(
     }
     var it = by_identity.iterator();
     while (it.next()) |e| {
-        try result.put(allocator, e.key_ptr.*, try allocator.dupe(u64, e.value_ptr.items));
+        const slots = try allocator.dupe(u64, e.value_ptr.items);
+        errdefer allocator.free(slots);
+        try result.put(allocator, e.key_ptr.*, slots);
     }
     return result;
 }
