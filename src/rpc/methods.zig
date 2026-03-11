@@ -52,7 +52,7 @@ pub const MethodAndParams = union(enum) {
     getClusterNodes: GetClusterNodes,
     getEpochInfo: GetEpochInfo,
     getEpochSchedule: GetEpochSchedule,
-    getFeeForMessage: noreturn,
+    getFeeForMessage: GetFeeForMessage,
     getFirstAvailableBlock: noreturn,
 
     /// https://github.com/Syndica/sig/issues/557
@@ -1042,6 +1042,24 @@ pub const GetGenesisHash = struct {
 };
 
 // TODO: getHealth
+
+/// [agave] https://github.com/anza-xyz/agave/blob/d70b1714b1153674c16e2b15b68790d274dfe953/rpc/src/rpc.rs#L3580-L3586
+pub const GetFeeForMessage = struct {
+    /// Base64-encoded serialized VersionedMessage
+    message: []const u8,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        minContextSlot: ?Slot = null,
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        /// Fee in lamports, or null if the blockhash has expired.
+        value: ?u64,
+    };
+};
 
 pub const GetHighestSnapshotSlot = struct {
     pub const Response = ?SnapshotSlotInfo;
