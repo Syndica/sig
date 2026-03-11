@@ -316,7 +316,7 @@ pub fn getFeeForMessage(
     const config: GetFeeForMessage.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.slot_tracker.getSlotForCommitment(commitment);
+    const slot = self.slot_tracker.commitments.get(commitment);
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
