@@ -91,11 +91,11 @@ pub const PrioritizationFeeCache = struct {
         allocator: Allocator,
         slot: Slot,
         compute_unit_price: u64,
-        writable_accounts: []const Pubkey,
+        pubkey_slice: []const Pubkey,
+        is_writable_slice: []const bool,
     ) !void {
-        var wlock = self.data.write();
+        const inner, var wlock = self.data.writeWithLock();
         defer wlock.unlock();
-        const inner = wlock.mut();
 
         const gop = try inner.unfinalized.getOrPut(allocator, slot);
         if (!gop.found_existing) {
@@ -112,7 +112,11 @@ pub const PrioritizationFeeCache = struct {
         entry.min_compute_unit_price = @min(entry.min_compute_unit_price, compute_unit_price);
 
         // Update per-account minimums
-        for (writable_accounts) |pubkey| {
+        for (
+            pubkey_slice,
+            is_writable_slice,
+        ) |pubkey, is_writable| {
+            if (!is_writable) continue;
             const acc_gop = try entry.writable_account_fees.getOrPut(allocator, pubkey);
             acc_gop.value_ptr.* = if (acc_gop.found_existing)
                 @min(acc_gop.value_ptr.*, compute_unit_price)
@@ -248,11 +252,11 @@ test "single slot with multiple transactions tracks minimums" {
     const acct_b = Pubkey{ .data = .{1} ** 32 };
 
     // Tx 1: price 1000, writable accounts: [A, B]
-    try cache.update(std.testing.allocator, 100, 1000, &.{ acct_a, acct_b });
+    try cache.update(std.testing.allocator, 100, 1000, &.{ acct_a, acct_b }, &.{ true, true });
     // Tx 2: price 500, writable accounts: [A]
-    try cache.update(std.testing.allocator, 100, 500, &.{acct_a});
+    try cache.update(std.testing.allocator, 100, 500, &.{acct_a}, &.{true});
     // Tx 3: price 2000, writable accounts: [B]
-    try cache.update(std.testing.allocator, 100, 2000, &.{acct_b});
+    try cache.update(std.testing.allocator, 100, 2000, &.{acct_b}, &.{true});
 
     cache.finalizeSlot(std.testing.allocator, 100);
 
@@ -289,7 +293,7 @@ test "finalization prunes accounts at or below block minimum" {
     const acct_a = Pubkey.ZEROES;
 
     // Single tx: price 100, writable: [A]
-    try cache.update(std.testing.allocator, 50, 100, &.{acct_a});
+    try cache.update(std.testing.allocator, 50, 100, &.{acct_a}, &.{true});
 
     cache.finalizeSlot(std.testing.allocator, 50);
 
@@ -307,7 +311,7 @@ test "ring buffer eviction at capacity" {
     // Fill cache with NUM_RECENT_BLOCKS + 1 slots
     for (0..PrioritizationFeeCache.NUM_RECENT_BLOCKS + 1) |i| {
         const slot: u64 = @intCast(i);
-        try cache.update(std.testing.allocator, slot, @intCast(i * 10), &.{});
+        try cache.update(std.testing.allocator, slot, @intCast(i * 10), &.{}, &.{});
         cache.finalizeSlot(std.testing.allocator, slot);
     }
 
@@ -334,11 +338,11 @@ test "slot with no updates reports fee 0" {
     defer cache.deinit(std.testing.allocator);
 
     // Create an entry with no transactions (e.g. empty block)
-    try cache.update(std.testing.allocator, 200, std.math.maxInt(u64), &.{});
+    try cache.update(std.testing.allocator, 200, std.math.maxInt(u64), &.{}, &.{});
 
     // Actually, let's test the case where a slot gets finalized but had
     // compute_unit_price of 0 (non-prioritized transactions)
-    try cache.update(std.testing.allocator, 201, 0, &.{Pubkey.ZEROES});
+    try cache.update(std.testing.allocator, 201, 0, &.{Pubkey.ZEROES}, &.{true});
     cache.finalizeSlot(std.testing.allocator, 201);
 
     const results = try cache.getRecentFees(std.testing.allocator, &.{});
@@ -351,7 +355,7 @@ test "unfinalized slots are not returned" {
     var cache = PrioritizationFeeCache.EMPTY;
     defer cache.deinit(std.testing.allocator);
 
-    try cache.update(std.testing.allocator, 300, 1000, &.{Pubkey.ZEROES});
+    try cache.update(std.testing.allocator, 300, 1000, &.{Pubkey.ZEROES}, &.{true});
     // Don't finalize
 
     const results = try cache.getRecentFees(std.testing.allocator, &.{});

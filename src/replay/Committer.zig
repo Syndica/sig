@@ -80,31 +80,18 @@ pub fn commitTransactions(
         transaction_fees += tx_result.fees.transaction_fee;
         priority_fees += tx_result.fees.prioritization_fee;
 
-        const is_simple_vote_transaction = transaction.transaction.isSimpleVoteTransaction(
+        const is_simple_vote_tx = transaction.transaction.isSimpleVoteTransaction(
             transaction.instructions,
         );
 
         // Update prioritization fee cache for non-vote transactions
-        if (self.prioritization_fee_cache) |cache| {
-            if (!is_simple_vote_transaction) {
-                const MAX_TX_ACCOUNT_LOCKS = sig.runtime.account_loader.MAX_TX_ACCOUNT_LOCKS;
-                var writable_keys: [MAX_TX_ACCOUNT_LOCKS]sig.core.Pubkey = undefined;
-                var writable_count: usize = 0;
-                for (
-                    transaction.accounts.items(.pubkey),
-                    transaction.accounts.items(.is_writable),
-                ) |pubkey, is_writable| if (is_writable) {
-                    writable_keys[writable_count] = pubkey;
-                    writable_count += 1;
-                };
-                try cache.update(
-                    persistent_allocator,
-                    slot,
-                    tx_result.fees.compute_unit_price,
-                    writable_keys[0..writable_count],
-                );
-            }
-        }
+        if (self.prioritization_fee_cache) |cache| if (!is_simple_vote_tx) try cache.update(
+            persistent_allocator,
+            slot,
+            tx_result.fees.compute_unit_price,
+            transaction.accounts.items(.pubkey),
+            transaction.accounts.items(.is_writable),
+        );
 
         // TODO: fix nesting, this sucks
 
@@ -114,7 +101,7 @@ pub fn commitTransactions(
             // Skip non successful or non vote transactions.
             // Only send votes if consensus is enabled (sender exists)
             if (self.replay_votes_sender) |sender| {
-                if (tx_result.err == null and is_simple_vote_transaction) {
+                if (tx_result.err == null and is_simple_vote_tx) {
                     if (try parseSanitizedVoteTransaction(
                         persistent_allocator,
                         transaction,
