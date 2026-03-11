@@ -108,6 +108,7 @@ const Gossip = struct {
     expired: Expired,
 
     push_buf: PushBuf,
+    push_alloc_buf: PushAllocBuf,
     filter_set: *FilterSet,
     push_active_set: PushActiveSet,
     ping_token_window: [2][32]u8 = @splat(@splat(0xff)),
@@ -210,6 +211,7 @@ const Gossip = struct {
         }
     };
 
+    const PushAllocBuf = std.ArrayListUnmanaged(u8);
     const PushBuf = std.AutoArrayHashMapUnmanaged(Key, void);
     const PushActiveSet = std.ArrayListUnmanaged(Pubkey);
 
@@ -258,6 +260,9 @@ const Gossip = struct {
         var push_buf: PushBuf = .empty;
         try push_buf.ensureTotalCapacity(fba.allocator(), PUSH_BUFFER_MAX);
 
+        var push_alloc_buf: PushAllocBuf = .empty;
+        try push_alloc_buf.ensureTotalCapacity(fba.allocator(), PUSH_BUFFER_MAX * (16 * 1024));
+
         var push_active_set: PushActiveSet = .empty;
         try push_active_set.ensureTotalCapacity(fba.allocator(), PUSH_PEER_FANOUT);
 
@@ -268,6 +273,7 @@ const Gossip = struct {
             .peers = peers,
             .expired = expired,
             .push_buf = push_buf,
+            .push_alloc_buf = push_alloc_buf,
             .filter_set = filter_set,
             .push_active_set = push_active_set,
             .config = config,
@@ -593,6 +599,7 @@ const Gossip = struct {
         if (pushed_keys.len == 0) return;
         defer self.push_buf.clearRetainingCapacity();
 
+        self.push_alloc_buf.clearRetainingCapacity();
         for (self.push_active_set.items) |pubkey| {
             const peer = self.peers.getPtr(pubkey) orelse continue;
             const ignored = peer.ignoring.asBloomFilter(null, null);
@@ -612,13 +619,15 @@ const Gossip = struct {
                         .from = self.identity(),
                         .values = .{ .items = values.items },
                     } });
+                    self.push_alloc_buf.clearRetainingCapacity();
                     values.clearRetainingCapacity();
                     packet_size = 4 + 32 + 8;
                 }
 
-                // TODO: no need to actually deserialize here.
-                var alloc_buf: [16 * 1024]u8 = undefined;
-                var fba = std.heap.FixedBufferAllocator.init(&alloc_buf);
+                // TODO: no need to actually deserialize here. Ideally, just write the v.values
+                // directly into the PushMessage packet being sent out.
+                const alloc_buf = self.push_alloc_buf.addManyAsSliceAssumeCapacity(16 * 1024);
+                var fba = std.heap.FixedBufferAllocator.init(alloc_buf);
                 var reader: std.Io.Reader = .fixed(v.value[0..v.size]);
                 const value = try bincode.read(&fba, &reader, GossipValue);
                 values.appendAssumeCapacity(value);
