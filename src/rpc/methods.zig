@@ -64,8 +64,8 @@ pub const MethodAndParams = union(enum) {
 
     getHighestSnapshotSlot: GetHighestSnapshotSlot,
     getIdentity: GetIdentity,
-    getInflationGovernor: noreturn,
-    getInflationRate: noreturn,
+    getInflationGovernor: GetInflationGovernor,
+    getInflationRate: GetInflationRate,
     getInflationReward: GetInflationReward,
     getLargestAccounts: noreturn,
     getLatestBlockhash: GetLatestBlockhash,
@@ -1071,8 +1071,6 @@ pub const GetHighestSnapshotSlot = struct {
 };
 
 // TODO: getIdentity
-// TODO: getInflationGovernor
-// TODO: getInflationRate
 
 pub const GetInflationReward = struct {
     addresses: []const Pubkey,
@@ -1092,6 +1090,33 @@ pub const GetInflationReward = struct {
         amount: u64,
         postBalance: u64,
         commission: ?u8,
+    };
+};
+
+pub const GetInflationGovernor = struct {
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+    };
+
+    pub const Response = struct {
+        initial: f64,
+        terminal: f64,
+        taper: f64,
+        foundation: f64,
+        foundationTerm: f64,
+    };
+};
+
+pub const GetInflationRate = struct {
+    // This RPC method takes no parameters (matches Agave behavior)
+
+    pub const Response = struct {
+        total: f64,
+        validator: f64,
+        foundation: f64,
+        epoch: u64,
     };
 };
 
