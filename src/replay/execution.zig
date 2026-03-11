@@ -1031,6 +1031,7 @@ pub const TestState = struct {
     // committer
     slot_state: sig.core.SlotState,
     stakes_cache: sig.core.StakesCache,
+    prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache,
 
     // resolver
     slot_hashes: SlotHashes,
@@ -1075,6 +1076,7 @@ pub const TestState = struct {
             .epoch_stakes = epoch_stakes,
             .slot_state = slot_state,
             .stakes_cache = stakes_cache,
+            .prioritization_fee_cache = sig.rpc.hook_contexts.PrioritizationFeeCache.EMPTY,
             .slot_hashes = .INIT,
             .replay_votes_channel = replay_votes_channel,
             .exit = .init(false),
@@ -1091,6 +1093,7 @@ pub const TestState = struct {
         self.epoch_stakes.deinit(allocator);
         self.slot_state.deinit(allocator);
         self.stakes_cache.deinit(allocator);
+        self.prioritization_fee_cache.deinit(allocator);
         while (self.replay_votes_channel.tryReceive()) |pv| pv.deinit(allocator);
         self.replay_votes_channel.destroy();
     }
@@ -1124,6 +1127,7 @@ pub const TestState = struct {
             .replay_votes_sender = self.replay_votes_channel,
             .ledger = null,
             .account_store = null,
+            .prioritization_fee_cache = &self.prioritization_fee_cache,
         };
     }
 

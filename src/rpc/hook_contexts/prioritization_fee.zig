@@ -372,3 +372,76 @@ test "finalizing nonexistent slot is a no-op" {
 
     try std.testing.expectEqual(@as(usize, 0), cache.availableBlockCount());
 }
+
+test "getRecentPrioritizationFees rejects too many account keys" {
+    var cache = PrioritizationFeeCache.EMPTY;
+    defer cache.deinit(std.testing.allocator);
+
+    const ctx = PrioritizationFeeHookContext{ .cache = &cache };
+
+    // MAX_TX_ACCOUNT_LOCKS + 1 keys should trigger InvalidParams
+    const too_many_keys: [sig.runtime.account_loader.MAX_TX_ACCOUNT_LOCKS + 1]Pubkey =
+        .{Pubkey.ZEROES} ** (sig.runtime.account_loader.MAX_TX_ACCOUNT_LOCKS + 1);
+
+    try std.testing.expectError(
+        error.InvalidParams,
+        ctx.getRecentPrioritizationFees(std.testing.allocator, .{ .account_keys = &too_many_keys }),
+    );
+}
+
+test "getRecentPrioritizationFees returns fees for valid params" {
+    var cache = PrioritizationFeeCache.EMPTY;
+    defer cache.deinit(std.testing.allocator);
+
+    const ctx = PrioritizationFeeHookContext{ .cache = &cache };
+
+    const acct = Pubkey.ZEROES;
+
+    // Populate and finalize a slot
+    try cache.update(std.testing.allocator, 42, 500, &.{acct}, &.{true});
+    cache.finalizeSlot(std.testing.allocator, 42);
+
+    // Happy path with no account filter (null)
+    {
+        const results = try ctx.getRecentPrioritizationFees(
+            std.testing.allocator,
+            .{ .account_keys = null },
+        );
+        defer std.testing.allocator.free(results);
+        try std.testing.expectEqual(@as(usize, 1), results.len);
+        try std.testing.expectEqual(@as(u64, 42), results[0].slot);
+        try std.testing.expectEqual(@as(u64, 500), results[0].prioritizationFee);
+    }
+
+    // Happy path with an account filter
+    {
+        const results = try ctx.getRecentPrioritizationFees(
+            std.testing.allocator,
+            .{ .account_keys = &.{acct} },
+        );
+        defer std.testing.allocator.free(results);
+        try std.testing.expectEqual(@as(usize, 1), results.len);
+    }
+}
+
+test "stale unfinalized slots are pruned during finalization" {
+    var cache = PrioritizationFeeCache.EMPTY;
+    defer cache.deinit(std.testing.allocator);
+
+    const acct = Pubkey.ZEROES;
+
+    // Add an unfinalized entry at slot 5 with writable accounts
+    try cache.update(std.testing.allocator, 5, 100, &.{acct}, &.{true});
+
+    // Finalize a much later slot (slot 5 + NUM_RECENT_BLOCKS + 1),
+    // which should prune slot 5 as stale.
+    const late_slot: u64 = 5 + PrioritizationFeeCache.NUM_RECENT_BLOCKS + 1;
+    try cache.update(std.testing.allocator, late_slot, 200, &.{acct}, &.{true});
+    cache.finalizeSlot(std.testing.allocator, late_slot);
+
+    // Only the late slot should be in results (stale slot 5 was pruned)
+    const results = try cache.getRecentFees(std.testing.allocator, &.{});
+    defer std.testing.allocator.free(results);
+    try std.testing.expectEqual(@as(usize, 1), results.len);
+    try std.testing.expectEqual(late_slot, results[0].slot);
+}
