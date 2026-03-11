@@ -10,6 +10,7 @@ const AccountKeys = parse_instruction.AccountKeys;
 const Allocator = std.mem.Allocator;
 const AncestorIterator = sig.ledger.Reader.AncestorIterator;
 const GetBlock = methods.GetBlock;
+const GetBlockProduction = methods.GetBlockProduction;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetHealth = methods.GetHealth;
@@ -23,6 +24,7 @@ const PubkeyMap = sig.utils.collections.PubkeyMap;
 const ReservedAccounts = sig.core.ReservedAccounts;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
+const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const TransactionDetails = methods.common.TransactionDetails;
 const TransactionEncoding = methods.common.TransactionEncoding;
 
@@ -36,6 +38,7 @@ ledger: *sig.ledger.Ledger,
 /// Maximum allowed slot distance before node is considered unhealthy.
 health_check_slot_distance: u64 = DELINQUENT_VALIDATOR_SLOT_DISTANCE,
 epoch_schedule: sig.core.EpochSchedule,
+epoch_tracker: *sig.core.EpochTracker,
 commitments: *const sig.replay.trackers.CommitmentTracker,
 
 pub fn getBlock(
@@ -164,6 +167,7 @@ pub fn getBlocks(
         .forward,
         params.start_slot,
     );
+    defer rooted_iter.deinit();
 
     while (try rooted_iter.nextKey()) |slot| {
         if (slot > end_slot or slot > highest_root) break;
@@ -218,6 +222,7 @@ pub fn getBlocksWithLimit(
         .forward,
         params.start_slot,
     );
+    defer rooted_iter.deinit();
 
     while (blocks.items.len < params.limit) {
         const slot = try rooted_iter.nextKey() orelse break;
@@ -249,6 +254,105 @@ pub fn getBlocksWithLimit(
     return try blocks.toOwnedSlice(arena);
 }
 
+pub fn getBlockProduction(
+    self: LedgerHookContext,
+    arena: Allocator,
+    params: GetBlockProduction,
+) !GetBlockProduction.Response {
+    const config: GetBlockProduction.Config = params.config orelse .{};
+    const commitment = config.commitment orelse .finalized;
+    if (commitment == .processed) return error.ProcessedNotSupported;
+
+    // Parse optional identity filter.
+    const identity_filter: ?Pubkey = if (config.identity) |id_str|
+        Pubkey.parseRuntime(id_str) catch return error.InvalidParams // TODO: invalid params should return a more specific error
+    else
+        null;
+
+    // Resolve current slot and epoch schedule.
+    const current_slot = self.commitments.get(commitment);
+    const epoch_schedule = &self.epoch_tracker.epoch_schedule;
+
+    // Determine slot range (default: current epoch start to current slot).
+    const first_slot: Slot = if (config.range) |range| range.firstSlot else blk: {
+        const epoch = epoch_schedule.getEpoch(current_slot);
+        break :blk epoch_schedule.getFirstSlotInEpoch(epoch);
+    };
+    const last_slot: Slot = if (config.range) |range|
+        range.lastSlot orelse current_slot
+    else
+        current_slot;
+
+    if (last_slot < first_slot) return error.InvalidParams; // TODO: invalid params should return a more specific error
+
+    // Validate slot range against slot history bounds (mirrors Agave's
+    // bank.get_slot_history() validation). current_slot corresponds to the
+    // bank slot which equals slot_history.newest(), and oldest is
+    // newest -| MAX_ENTRIES.
+    const slot_history_oldest = current_slot -| SlotHistory.MAX_ENTRIES;
+    if (first_slot < slot_history_oldest) return error.FirstSlotTooSmall;
+    if (last_slot > current_slot) return error.LastSlotTooLarge;
+
+    var slot_set: std.AutoHashMapUnmanaged(Slot, void) = .empty;
+
+    // Collect rooted slots in range using forward iterator
+    const highest_root = self.commitments.get(.finalized);
+    {
+        var rooted_iter = try self.ledger.db.iterator(
+            sig.ledger.schema.schema.rooted_slots,
+            .forward,
+            first_slot,
+        );
+        defer rooted_iter.deinit();
+        while (try rooted_iter.nextKey()) |slot| {
+            if (slot > last_slot or slot > highest_root) break;
+            try slot_set.put(arena, slot, {});
+        }
+    }
+    // For confirmed commitment, also collect confirmed-but-unrooted slots.
+    if (commitment == .confirmed) {
+        const latest_confirmed = self.commitments.get(.confirmed);
+        const confirmed_slots = try self.getConfirmedUnrootedSlots(
+            arena,
+            latest_confirmed,
+            highest_root,
+        );
+        for (confirmed_slots) |slot| {
+            if (slot >= first_slot and slot <= last_slot) try slot_set.put(
+                arena,
+                slot,
+                {},
+            );
+        }
+    }
+
+    // Get leader schedules (RC-managed, must release).
+    const ls = try self.epoch_tracker.getLeaderSchedules();
+    defer ls.release();
+
+    // Iterate slot range, build by_identity map using PubkeyMap internally
+    // to avoid duplicate string key allocations.
+    var by_identity: sig.utils.collections.PubkeyMap(struct { u64, u64 }) = .empty;
+    for (first_slot..last_slot + 1) |slot| {
+        const leader = ls.leader_schedules.getLeaderOrNull(slot) orelse continue;
+
+        if (identity_filter) |filter| if (!leader.equals(&filter)) continue;
+
+        const gop = try by_identity.getOrPut(arena, leader);
+        if (!gop.found_existing) gop.value_ptr.* = .{ 0, 0 };
+        gop.value_ptr.*[0] += 1; // leader_slots
+        if (slot_set.contains(slot)) gop.value_ptr.*[1] += 1; // blocks_produced
+    }
+
+    return .{
+        .context = .{ .slot = current_slot },
+        .value = .{
+            .byIdentity = .{ .map = by_identity },
+            .range = .{ .firstSlot = first_slot, .lastSlot = last_slot },
+        },
+    };
+}
+
 pub fn getInflationReward(
     self: LedgerHookContext,
     arena: Allocator,
@@ -257,10 +361,6 @@ pub fn getInflationReward(
     const config: GetInflationReward.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
-    if (commitment == .processed) {
-        return error.ProcessedNotSupported;
-    }
-
     // Determine the epoch to query. Default: current_epoch - 1.
     const current_slot = self.commitments.get(commitment);
 
@@ -268,11 +368,12 @@ pub fn getInflationReward(
         if (current_slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
 
-    const current_epoch = self.epoch_schedule.getEpoch(current_slot);
-    const epoch = config.epoch orelse (current_epoch -| 1);
+    const epoch = config.epoch orelse self.epoch_tracker.epoch_schedule.getEpoch(current_slot) -| 1;
 
     // Rewards are distributed in the first block of (epoch + 1).
-    const first_slot_in_reward_epoch = self.epoch_schedule.getFirstSlotInEpoch(epoch +| 1);
+    const first_slot_in_reward_epoch = self.epoch_tracker.epoch_schedule.getFirstSlotInEpoch(
+        epoch +| 1,
+    );
 
     const first_confirmed_block_in_epoch: u64 = blk: {
         const blocks = self.getBlocksWithLimit(arena, .{
@@ -450,7 +551,7 @@ pub fn getSignaturesForAddress(
     }
 
     const limit = config.getLimit();
-    if (limit == 0 or limit > 1000) return error.InvalidParams;
+    if (limit == 0 or limit > 1000) return error.InvalidParams; // TODO: invalid params should return a more specific error
 
     const result = try self.ledger.reader().getConfirmedSignaturesForAddress(
         arena,
