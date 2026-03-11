@@ -1,6 +1,8 @@
 //! The Account RPC hook context. Contains references to the necessary state in the validator required for reading out account data and for serving RPC.
 
 const std = @import("std");
+const tracy = @import("tracy");
+
 const sig = @import("../../sig.zig");
 
 const account_codec = sig.rpc.account_codec;
@@ -26,6 +28,7 @@ const GetFeeForMessage = sig.rpc.methods.GetFeeForMessage;
 const GetTokenAccountBalance = sig.rpc.methods.GetTokenAccountBalance;
 const GetTokenSupply = sig.rpc.methods.GetTokenSupply;
 const GetMultipleAccounts = sig.rpc.methods.GetMultipleAccounts;
+const GetProgramAccounts = sig.rpc.methods.GetProgramAccounts;
 
 const AccountEncoding = account_codec.AccountEncoding;
 const CommitmentSlotConfig = sig.rpc.methods.common.CommitmentSlotConfig;
@@ -44,9 +47,10 @@ pub fn getAccountInfo(
     // [agave] Default commitment is finalized:
     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
     const commitment = config.commitment orelse .finalized;
-    // [agave] Default encoding in Agave is `Binary` (legacy base58):
+    // [agave] Default encoding in agave is `Binary` (legacy base58):
     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L545
-    // Despite the fact that `Binary` is deprecated and `Base64` is better for performance.
+    // However, `Binary` is deprecated and `Base64` is preferred for performance.
+    // We default to base64 as it's more efficient and the recommended encoding.
     const encoding = config.encoding orelse AccountEncoding.binary;
 
     const slot = self.slot_tracker.commitments.get(commitment);
@@ -62,33 +66,24 @@ pub fn getAccountInfo(
         .value = null,
     };
 
-    const data: account_codec.AccountData = if (encoding == .jsonParsed)
-        try account_codec.encodeJsonParsed(
-            arena,
-            params.pubkey,
-            account,
-            slot_reader,
-            config.dataSlice,
-        )
-    else
-        // TODO: [agave conformance] When base58 encoding is requested and account data exceeds
-        // 128 bytes, Agave returns JSON-RPC error code -32600 (InvalidRequest) with the message:
-        // "Encoded binary (base 58) data should be less than 128 bytes, please use Base64 encoding."
-        // Currently, `error.Base58DataTooLarge` propagates to hooks.zig's generic error mapper,
-        // which produces a non-deterministic positive error code via `@intFromError` and the raw
-        // error name as the message.
-        try account_codec.encodeStandard(arena, account, encoding, config.dataSlice);
+    // TODO: [agave conformance] When base58 encoding is requested and account data exceeds
+    // 128 bytes, Agave returns JSON-RPC error code -32600 (InvalidRequest) with the message:
+    // "Encoded binary (base 58) data should be less than 128 bytes, please use Base64 encoding."
+    // Currently, `error.Base58DataTooLarge` propagates to hooks.zig's generic error mapper,
+    // which produces a non-deterministic positive error code via `@intFromError` and the raw
+    // error name as the message.
+    const data = try account_codec.encodeAccount(
+        arena,
+        params.pubkey,
+        account,
+        encoding,
+        slot_reader,
+        config.dataSlice,
+    );
 
     return .{
         .context = .{ .slot = slot },
-        .value = .{
-            .data = data,
-            .executable = account.executable,
-            .lamports = account.lamports,
-            .owner = account.owner,
-            .rentEpoch = account.rent_epoch,
-            .space = account.data.len(),
-        },
+        .value = .from(account, data),
     };
 }
 
@@ -317,6 +312,7 @@ pub fn getFeeForMessage(
     const commitment = config.commitment orelse .finalized;
 
     const slot = self.slot_tracker.commitments.get(commitment);
+
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
@@ -454,4 +450,77 @@ fn messageToRuntimeTransaction(
     );
 
     return runtime_txn;
+}
+
+pub fn getProgramAccounts(
+    self: AccountHookContext,
+    arena: std.mem.Allocator,
+    params: GetProgramAccounts,
+) !GetProgramAccounts.Response {
+    const zone = tracy.Zone.init(@src(), .{ .name = "rpc.gPA" });
+    defer zone.deinit();
+
+    const config = params.config orelse GetProgramAccounts.Config{};
+    const commitment = config.commitment orelse .finalized;
+    const encoding = config.encoding orelse .base64;
+    const f = config.filters orelse &.{};
+    try sig.rpc.filters.verifyFilters(f);
+
+    const slot = self.slot_tracker.commitments.get(commitment);
+    if (config.minContextSlot) |min_slot| {
+        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+    }
+
+    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    defer ref.release();
+    const ancestors = &ref.constants().ancestors;
+    const slot_reader = self.account_reader.forSlot(ancestors);
+
+    var iter = blk: {
+        const z = tracy.Zone.init(@src(), .{ .name = "rpc.gPA.ownerQuery" });
+        defer z.deinit();
+        break :blk try slot_reader.getByOwner(arena, &params.program_id);
+    };
+    defer iter.deinit();
+
+    var results = std.ArrayListUnmanaged(GetProgramAccounts.Value){};
+
+    while (try iter.next()) |entry| {
+        const pubkey, const account = entry;
+        if (account.lamports == 0) continue;
+        const data_slice: []const u8 = switch (account.data) {
+            .unowned_allocation => |d| d,
+            .owned_allocation => |d| d,
+            else => @panic("gPA: unexpected AccountDataHandle variant"),
+        };
+        if (!sig.rpc.filters.filtersAllow(f, data_slice)) continue;
+
+        const data = try account_codec.encodeAccount(
+            arena,
+            pubkey,
+            account,
+            encoding,
+            slot_reader,
+            config.dataSlice,
+        );
+        try results.append(arena, .{
+            .pubkey = pubkey,
+            .account = .from(account, data),
+        });
+    }
+
+    if (config.sortResults orelse false) {
+        const z = tracy.Zone.init(@src(), .{ .name = "rpc.gPA.sort" });
+        defer z.deinit();
+        std.mem.sortUnstable(GetProgramAccounts.Value, results.items, {}, struct {
+            fn lessThan(_: void, a: GetProgramAccounts.Value, b: GetProgramAccounts.Value) bool {
+                return std.mem.order(u8, &a.pubkey.data, &b.pubkey.data) == .lt;
+            }
+        }.lessThan);
+    }
+    const values = try results.toOwnedSlice(arena);
+    if (config.withContext orelse false) {
+        return .{ .context = .{ .context = .{ .slot = slot }, .value = values } };
+    }
+    return .{ .list = values };
 }

@@ -8,6 +8,7 @@ const Rooted = @This();
 
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
+const Account = sig.core.Account;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const Gauge = sig.prometheus.Gauge(u64);
 const ThreadPool = sig.sync.ThreadPool;
@@ -15,6 +16,10 @@ const ThreadPool = sig.sync.ThreadPool;
 const OK = sql.SQLITE_OK;
 const DONE = sql.SQLITE_DONE;
 const ROW = sql.SQLITE_ROW;
+
+/// Whether an index on the `owner` column of Rooted is created at startup.
+/// When disabled, the index is actively dropped (if it exists).
+const rpc_enable_owner_index = sig.build_options.rpc_enable_owner_index;
 
 /// Handle to the underlying sqlite database.
 handle: *sql.sqlite3,
@@ -27,6 +32,7 @@ sqlite_mem_used: ?*Gauge = null,
 /// on any threads that use put or get.
 threadlocal var put_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_stmt: ?*sql.sqlite3_stmt = null;
+threadlocal var get_by_owner_stmt: ?*sql.sqlite3_stmt = null;
 
 pub fn init(file_path: [:0]const u8) !Rooted {
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.init" });
@@ -80,6 +86,26 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         }
     }
 
+    if (rpc_enable_owner_index) {
+        if (sql.sqlite3_exec(
+            db,
+            "CREATE INDEX IF NOT EXISTS rpc_owner_idx ON entries(owner)",
+            null,
+            null,
+            null,
+        ) != OK)
+            return error.FailedToCreateIndex;
+    } else {
+        if (sql.sqlite3_exec(
+            db,
+            "DROP INDEX IF EXISTS rpc_owner_idx",
+            null,
+            null,
+            null,
+        ) != OK)
+            return error.FailedToDropIndex;
+    }
+
     return self;
 }
 
@@ -96,6 +122,10 @@ pub fn deinitThreadLocals() void {
     if (get_stmt) |stmt| {
         _ = sql.sqlite3_finalize(stmt);
         get_stmt = null;
+    }
+    if (get_by_owner_stmt) |stmt| {
+        _ = sql.sqlite3_finalize(stmt);
+        get_by_owner_stmt = null;
     }
 }
 
@@ -136,7 +166,7 @@ pub fn get(
 
     const stmt: *sql.sqlite3_stmt = if (get_stmt) |stmt| stmt else blk: {
         const query =
-            \\SELECT lamports, data, owner, executable, rent_epoch 
+            \\SELECT lamports, data, owner, executable, rent_epoch
             \\FROM entries WHERE address = ?;
         ;
         self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_stmt, null));
@@ -175,6 +205,80 @@ pub fn get(
         .rent_epoch = @bitCast(sql.sqlite3_column_int64(stmt, 4)),
     };
 }
+
+/// Returns an iterator over all accounts with the given `owner`.
+/// The caller must ensure `owner` outlives the returned `OwnerIterator`
+/// (i.e. remains valid through all `next()` calls and `deinit()`),
+/// because the pointer is bound with `SQLITE_STATIC`.
+///
+/// TODO: Accept getProgramAccounts parameters and build a dynamic query that
+/// pushes filters down to the DB level. This would allow:
+/// - Filtering out zero-lamport accounts (`lamports > 0`)
+/// - Applying `dataSize` / `memcmp` filters in SQL
+/// - Fetching only the data slice requested via `dataSlice`
+pub fn getByOwner(self: *Rooted, owner: *const Pubkey) OwnerIterator {
+    const stmt: *sql.sqlite3_stmt = if (get_by_owner_stmt) |stmt| stmt else blk: {
+        const query =
+            \\ SELECT address, lamports, data, owner, executable, rent_epoch
+            \\ FROM entries WHERE owner = ?;
+        ;
+        self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_by_owner_stmt, null));
+        break :blk get_by_owner_stmt.?;
+    };
+
+    self.err(sql.sqlite3_bind_blob(
+        stmt,
+        1,
+        owner,
+        Pubkey.SIZE,
+        sql.SQLITE_STATIC,
+    ));
+    return .{ .stmt = stmt, .rooted = self };
+}
+
+pub const OwnerIterator = struct {
+    rooted: *Rooted,
+    stmt: *sql.sqlite3_stmt,
+
+    pub fn next(self: *OwnerIterator) ?struct { Pubkey, Account } {
+        const rc = sql.sqlite3_step(self.stmt);
+        switch (rc) {
+            ROW => {},
+            DONE => return null,
+            else => self.rooted.err(rc),
+        }
+
+        const pubkey: Pubkey = .{
+            .data = @as([*]const u8, @ptrCast(sql.sqlite3_column_blob(self.stmt, 0)))[0..32].*,
+        };
+        const lamports: u64 = @bitCast(sql.sqlite3_column_int64(self.stmt, 1));
+        const data = blk: {
+            const len: usize = @intCast(sql.sqlite3_column_bytes(self.stmt, 2));
+            if (len == 0) break :blk &.{};
+            const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(self.stmt, 2));
+            break :blk ptr[0..len];
+        };
+        const owner: Pubkey = .{
+            .data = @as([*]const u8, @ptrCast(sql.sqlite3_column_blob(self.stmt, 3)))[0..32].*,
+        };
+        const executable: bool = sql.sqlite3_column_int(self.stmt, 4) != 0;
+        const rent_epoch: u64 = @bitCast(sql.sqlite3_column_int64(self.stmt, 5));
+
+        return .{
+            pubkey, .{
+                .lamports = lamports,
+                .data = .{ .unowned_allocation = data },
+                .owner = owner,
+                .executable = executable,
+                .rent_epoch = rent_epoch,
+            },
+        };
+    }
+
+    pub fn deinit(self: *OwnerIterator) void {
+        defer std.debug.assert(sql.sqlite3_reset(self.stmt) == OK);
+    }
+};
 
 pub fn computeLtHash(
     self: *const Rooted,
@@ -249,7 +353,7 @@ fn computeLtHashForAccountRange(
     defer zone.deinit();
 
     const query =
-        \\SELECT 
+        \\SELECT
         \\address, owner, data, lamports, executable, rent_epoch
         \\FROM entries LIMIT ? OFFSET ?;
     ;
@@ -347,7 +451,7 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
         // Insert or update only if last_modified_slot is greater (excluded = VALUES)
         // https://sqlite.org/lang_upsert.html#examples
         const query =
-            \\INSERT INTO entries 
+            \\INSERT INTO entries
             \\(address, lamports, data, owner, executable, rent_epoch, last_modified_slot)
             \\VALUES (?, ?, ?, ?, ?, ?, ?)
             \\ON CONFLICT(address) DO UPDATE SET

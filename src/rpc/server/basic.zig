@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../../sig.zig");
 const rpc = sig.rpc;
 
@@ -20,6 +21,9 @@ pub const AcceptAndServeConnectionError =
     error{WriteFailed};
 
 pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConnectionError!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "rpc.accept" });
+    defer zone.deinit();
+
     const logger = Logger.from(server_ctx.logger);
 
     const conn = acceptHandled(
@@ -289,6 +293,9 @@ fn handleRpcRequest(
     logger: Logger,
     content_body: []const u8,
 ) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "rpc.request" });
+    defer zone.deinit();
+
     var json_arena_state = std.heap.ArenaAllocator.init(server_ctx.allocator);
     defer json_arena_state.deinit();
     const json_arena = json_arena_state.allocator();
@@ -386,6 +393,8 @@ fn handleRpcRequest(
             return;
         },
         inline else => |method| {
+            zone.name(@tagName(method));
+
             // For unimplemented methods, hard-code sending a not-found error.
             const FieldType = @FieldType(sig.rpc.methods.MethodAndParams, @tagName(method));
             if (comptime FieldType == noreturn) {
@@ -394,15 +403,19 @@ fn handleRpcRequest(
             }
 
             const allocator = json_arena;
-            const result = server_ctx.rpc_hooks.call(
-                allocator,
-                method,
-                @field(rpc_request.method, @tagName(method)),
-            ) catch |e| switch (e) {
-                error.MethodNotImplemented => {
-                    try sendFinalMethodNotFound(request, logger, method, rpc_request.id);
-                    return;
-                },
+            const result = blk: {
+                const handler_zone = tracy.Zone.init(@src(), .{ .name = "rpc.handler" });
+                defer handler_zone.deinit();
+                break :blk server_ctx.rpc_hooks.call(
+                    allocator,
+                    method,
+                    @field(rpc_request.method, @tagName(method)),
+                ) catch |e| switch (e) {
+                    error.MethodNotImplemented => {
+                        try sendFinalMethodNotFound(request, logger, method, rpc_request.id);
+                        return;
+                    },
+                };
             };
 
             return switch (result) {
@@ -451,6 +464,9 @@ fn writeFinalJsonResponse(
     http_respond_opts: std.http.Server.Request.RespondOptions,
     json_value: anytype,
 ) (std.mem.Allocator.Error || error{SystemIoError})!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "rpc.serialize" });
+    defer zone.deinit();
+
     const content_length = blk: {
         var cw = std.io.Writer.Discarding.init(&.{});
         std.json.Stringify.value(json_value, .{}, &cw.writer) catch unreachable;

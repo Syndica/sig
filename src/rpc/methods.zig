@@ -24,6 +24,7 @@ const Slot = sig.core.Slot;
 const ClientVersion = sig.version.ClientVersion;
 
 const account_codec = sig.rpc.account_codec;
+const filters = sig.rpc.filters;
 
 pub fn Result(comptime method: MethodAndParams.Tag) type {
     return union(enum) {
@@ -74,8 +75,8 @@ pub const MethodAndParams = union(enum) {
     getMaxShredInsertSlot: noreturn,
     getMinimumBalanceForRentExemption: GetMinimumBalanceForRentExemption,
     getMultipleAccounts: GetMultipleAccounts,
-    getProgramAccounts: noreturn,
     getRecentPerformanceSamples: GetRecentPerformanceSamples,
+    getProgramAccounts: GetProgramAccounts,
     getRecentPrioritizationFees: noreturn,
     getSignaturesForAddress: GetSignaturesForAddress,
     getSignatureStatuses: GetSignatureStatuses,
@@ -201,7 +202,53 @@ pub const GetAccountInfo = struct {
             owner: Pubkey,
             rentEpoch: u64,
             space: u64,
+
+            pub fn from(
+                account: sig.core.Account,
+                data: account_codec.AccountData,
+            ) Value {
+                return .{
+                    .data = data,
+                    .executable = account.executable,
+                    .lamports = account.lamports,
+                    .owner = account.owner,
+                    .rentEpoch = account.rent_epoch,
+                    .space = account.data.len(),
+                };
+            }
         };
+    };
+};
+
+pub const GetProgramAccounts = struct {
+    program_id: Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        filters: ?[]const filters.RpcFilterType = null,
+        encoding: ?common.AccountEncoding = null,
+        dataSlice: ?common.DataSlice = null,
+        commitment: ?common.Commitment = null,
+        minContextSlot: ?u64 = null,
+        withContext: ?bool = null,
+        sortResults: ?bool = null,
+    };
+
+    pub const Value = struct { pubkey: Pubkey, account: GetAccountInfo.Response.Value };
+
+    pub const Response = union(enum) {
+        list: []const Value,
+        context: struct {
+            context: common.Context,
+            value: []const Value,
+        },
+
+        pub fn jsonStringify(self: Response, jw: anytype) @TypeOf(jw.*).Error!void {
+            switch (self) {
+                .list => |list| try jw.write(list),
+                .context => |ctx| try jw.write(ctx),
+            }
+        }
     };
 };
 
