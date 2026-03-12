@@ -175,49 +175,27 @@ pub fn slotModifiedIterator(self: *Db, slot: Slot) ?SlotModifiedIterator {
 
 pub const OwnerQuery = struct {
     rooted_iter: Rooted.OwnerIterator,
-    unrooted_set: PubkeyMap(void),
-    db: *Db,
-    ancestors: *const Ancestors,
+    unrooted_map: PubkeyMap(Unrooted.OwnerEntry),
     allocator: std.mem.Allocator,
-    owner: Pubkey,
     unrooted_index: usize = 0,
 
     pub fn next(self: *OwnerQuery) !?struct { Pubkey, Account } {
-        //  drain rooted iterator, deduplicating against unrooted.
+        // drain rooted iterator, replacing with unrooted where newer.
         while (self.rooted_iter.next()) |entry| {
             const pubkey, const account = entry;
-            if (self.unrooted_set.swapRemove(pubkey)) {
-                // Unrooted has a newer version — resolve via Db.get().
-                const resolved = try self.db.get(
-                    self.allocator,
-                    pubkey,
-                    self.ancestors,
-                ) orelse continue;
-                // Owner may have changed in the newer unrooted slot.
-                if (!resolved.owner.equals(&self.owner)) {
-                    resolved.deinit(self.allocator);
-                    continue;
-                }
-                return .{ pubkey, resolved };
+            if (self.unrooted_map.fetchSwapRemove(pubkey)) |kv| {
+                return .{ pubkey, kv.value[1] };
             }
             return .{ pubkey, account };
         }
 
-        // remaining unrooted-only pubkeys.
-        const keys = self.unrooted_set.keys();
+        // remaining unrooted-only entries.
+        const values = self.unrooted_map.values();
+        const keys = self.unrooted_map.keys();
         while (self.unrooted_index < keys.len) {
             const pubkey = keys[self.unrooted_index];
+            const account = values[self.unrooted_index][1];
             self.unrooted_index += 1;
-            const account = try self.db.get(
-                self.allocator,
-                pubkey,
-                self.ancestors,
-            ) orelse continue;
-            // Owner may have changed in a newer slot.
-            if (!account.owner.equals(&self.owner)) {
-                account.deinit(self.allocator);
-                continue;
-            }
             return .{ pubkey, account };
         }
         return null;
@@ -225,25 +203,29 @@ pub const OwnerQuery = struct {
 
     pub fn deinit(self: *OwnerQuery) void {
         self.rooted_iter.deinit();
-        self.unrooted_set.deinit(self.allocator);
+        // Only free entries not yet yielded (some entries were already removed from the map via fetchSwapRemove).
+        for (self.unrooted_map.values()[self.unrooted_index..]) |*entry|
+            entry[1].deinit(self.allocator);
+        self.unrooted_map.deinit(self.allocator);
     }
 };
 
 pub fn ownerQuery(self: *Db, owner: *const Pubkey, ancestors: *const Ancestors) !OwnerQuery {
-    var unrooted_set = try self.unrooted.getByOwner(
+    var unrooted_map = try self.unrooted.getByOwner(
         self.allocator,
         owner.*,
         ancestors,
     );
-    errdefer unrooted_set.deinit(self.allocator);
+    errdefer {
+        for (unrooted_map.values()) |*entry| entry[1].deinit(self.allocator);
+        unrooted_map.deinit(self.allocator);
+    }
+
     const rooted_iter = self.rooted.getByOwner(owner);
     return .{
         .rooted_iter = rooted_iter,
-        .unrooted_set = unrooted_set,
-        .db = self,
-        .ancestors = ancestors,
+        .unrooted_map = unrooted_map,
         .allocator = self.allocator,
-        .owner = owner.*,
     };
 }
 
