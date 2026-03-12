@@ -28,7 +28,8 @@ const LedgerHookContext = @This();
 
 ledger: *sig.ledger.Ledger,
 status_cache: *sig.core.StatusCache,
-commitments: *const sig.replay.trackers.CommitmentTracker,
+slot_tracker: *sig.replay.trackers.SlotTracker,
+block_commitment_cache: *sig.replay.trackers.BlockCommitmentCache,
 
 pub fn getBlock(
     self: LedgerHookContext,
@@ -52,7 +53,7 @@ pub fn getBlock(
     // matching Agave's get_rooted_block).
     // Confirmed path uses getCompleteBlock (no cleanup check, slot may not be rooted yet).
     const reader = self.ledger.reader();
-    const latest_confirmed_slot = self.commitments.get(.confirmed);
+    const latest_confirmed_slot = self.slot_tracker.commitments.get(.confirmed);
     const block = if (params.slot <= latest_confirmed_slot) reader.getRootedBlock(
         arena,
         params.slot,
@@ -87,11 +88,11 @@ pub fn getBlocks(
     const commitment = params.commitment();
     if (commitment == .processed) return error.ProcessedNotSupported;
 
-    const highest_root = self.commitments.get(.finalized);
+    const highest_root = self.slot_tracker.commitments.get(.finalized);
     const upper_bound = if (commitment == .finalized)
         highest_root
     else
-        self.commitments.get(.confirmed);
+        self.slot_tracker.commitments.get(.confirmed);
 
     const end_slot = @min(
         params.endSlot() orelse params.start_slot +| GetBlocks.MAX_GET_CONFIRMED_BLOCKS_RANGE,
@@ -128,7 +129,7 @@ pub fn getBlocks(
             params.start_slot -| 1;
 
         if (last_rooted < end_slot) {
-            const latest_confirmed = self.commitments.get(.confirmed);
+            const latest_confirmed = self.slot_tracker.commitments.get(.confirmed);
             const confirmed = try self.getConfirmedUnrootedSlots(
                 arena,
                 latest_confirmed,
@@ -158,7 +159,7 @@ pub fn getBlocksWithLimit(
         return error.SlotRangeTooLarge;
     }
 
-    const highest_root = self.commitments.get(.finalized);
+    const highest_root = self.slot_tracker.commitments.get(.finalized);
 
     // Collect rooted (finalized) slots starting from start_slot, up to limit.
     var blocks = try std.ArrayList(Slot).initCapacity(arena, params.limit);
@@ -182,7 +183,7 @@ pub fn getBlocksWithLimit(
         else
             params.start_slot -| 1;
 
-        const latest_confirmed = self.commitments.get(.confirmed);
+        const latest_confirmed = self.slot_tracker.commitments.get(.confirmed);
         const confirmed = try self.getConfirmedUnrootedSlots(
             arena,
             latest_confirmed,
@@ -235,55 +236,87 @@ pub fn getRecentPerformanceSamples(
     return result;
 }
 
+/// Look up the status of one or more transaction signatures.
+///
+/// Tier 1: Check the in-memory StatusCache for recent transactions (covers
+/// processed, confirmed, and finalized that haven't been evicted yet).
+/// Tier 2: If `searchTransactionHistory` is true, fall back to the on-disk
+/// ledger for older finalized transactions.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v2.2.6/rpc/src/rpc.rs#L1641
 pub fn getSignatureStatuses(
     self: LedgerHookContext,
     arena: Allocator,
     params: GetSignatureStatuses,
 ) !GetSignatureStatuses.Response {
-    if (params.signatures.len > 256) return error.InvalidParams;
+    const config: GetSignatureStatuses.Config = params.config orelse .{};
+    const search_history = config.searchTransactionHistory orelse false;
 
-    const search_history = if (params.config) |c|
-        c.searchTransactionHistory orelse false
-    else
-        false;
+    const processed_slot = self.slot_tracker.commitments.get(.processed);
+    const confirmed_slot = self.slot_tracker.commitments.get(.confirmed);
+    const finalized_slot = self.slot_tracker.commitments.get(.finalized);
 
-    const highest_finalized_slot = self.commitments.get(.finalized);
-    const statuses = try arena.alloc(
+    // Build ancestors from the processed tip for fork-aware StatusCache lookups.
+    // Ancestors = processed slot + all its parents on the current fork.
+    var ancestors: sig.core.Ancestors = .{};
+    const parent_slots = try self.slot_tracker.parents(arena, processed_slot);
+    try ancestors.ancestors.ensureTotalCapacity(arena, @intCast(parent_slots.len + 1));
+    ancestors.ancestors.putAssumeCapacity(processed_slot, {});
+    for (parent_slots) |slot| ancestors.ancestors.putAssumeCapacity(
+        slot,
+        {},
+    );
+
+    const results = try arena.alloc(
         ?GetSignatureStatuses.Response.TransactionStatus,
         params.signatures.len,
     );
-    @memset(statuses, null);
+    @memset(results, null);
 
-    for (params.signatures, statuses) |signature, *status| {
-        // First, try the in-memory recent transaction status cache.
-        // This covers transactions from approximately the last ~300 slots.
-        status.* = if (self.status_cache.getTransactionStatus(signature)) |entry| .{
-            .slot = entry.slot,
-            .confirmations = null,
-            .err = entry.maybe_err,
-            .confirmationStatus = if (entry.slot <= highest_finalized_slot)
-                .finalized
-            else
-                .confirmed,
-        } else if (search_history) blk: { // If searchTransactionHistory is set, fall back to the Ledger.
-            const slot, const status_meta = try self.ledger.reader().getRootedTransactionStatus(
-                arena,
-                signature,
-            ) orelse
-                break :blk null;
-            if (slot > highest_finalized_slot) break :blk null;
-            break :blk .{
-                .slot = slot,
-                .confirmations = null,
-                .err = status_meta.status,
-                .confirmationStatus = .finalized,
+    for (params.signatures, results) |signature, *result| {
+        // Tier 1: StatusCache (recent in-memory transactions)
+        if (self.status_cache.getStatusAnyBlockhash(
+            &signature.toBytes(),
+            &ancestors,
+        )) |fork| {
+            result.* = .{
+                .slot = fork.slot,
+                .status = if (fork.maybe_err) |err| .{ .Err = err } else .{ .Ok = .{} },
+                .confirmations = if (fork.slot <= finalized_slot)
+                    null
+                else
+                    self.block_commitment_cache.getConfirmationCount(fork.slot) orelse 0,
+                .err = fork.maybe_err,
+                .confirmationStatus = if (fork.slot <= finalized_slot)
+                    .finalized
+                else if (fork.slot <= confirmed_slot)
+                    .confirmed
+                else
+                    .processed,
             };
-        } else null;
+            continue;
+        }
+
+        // Tier 2: Blockstore (historical finalized transactions)
+        if (!search_history) continue;
+
+        if (try self.ledger.reader().getRootedTransactionStatus(arena, signature)) |status| {
+            const slot, const status_meta = status;
+            if (slot <= finalized_slot) {
+                result.* = .{
+                    .slot = slot,
+                    .status = if (status_meta.status) |err| .{ .Err = err } else .{ .Ok = .{} },
+                    .confirmations = null,
+                    .err = status_meta.status,
+                    .confirmationStatus = .finalized,
+                };
+            }
+        }
     }
 
     return .{
-        .context = .{ .slot = highest_finalized_slot },
-        .value = statuses,
+        .context = .{ .slot = processed_slot },
+        .value = results,
     };
 }
 
@@ -298,9 +331,9 @@ pub fn getSignaturesForAddress(
     // processed is not supported
     if (commitment == .processed) return error.ProcessedNotSupported;
 
-    const highest_finalized_slot = self.commitments.get(.finalized);
+    const highest_finalized_slot = self.slot_tracker.commitments.get(.finalized);
     const highest_slot: Slot = switch (commitment) {
-        .confirmed => self.commitments.get(.confirmed),
+        .confirmed => self.slot_tracker.commitments.get(.confirmed),
         .finalized => highest_finalized_slot,
         .processed => unreachable,
     };
@@ -352,7 +385,7 @@ pub fn getTransaction(
     const max_supported_version = config.maxSupportedTransactionVersion;
 
     const reader = self.ledger.reader();
-    const highest_confirmed_slot = self.commitments.get(.confirmed);
+    const highest_confirmed_slot = self.slot_tracker.commitments.get(.confirmed);
 
     // Get transaction from ledger.
     const confirmed_tx_with_meta = switch (commitment) {

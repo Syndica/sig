@@ -1680,6 +1680,8 @@ fn validator(
     else
         null;
 
+    const rpc_enabled = cfg.rpc_port != null;
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db = &new_db },
@@ -1691,24 +1693,28 @@ fn validator(
         .voting_enabled = voting_enabled,
         .vote_account_address = maybe_vote_pubkey,
         .stop_at_slot = cfg.stop_at_slot,
+        .rpc_enabled = rpc_enabled,
     });
     defer replay_service_state.deinit(allocator);
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
-        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-        .epoch_tracker = &epoch_tracker,
-    });
+    if (rpc_enabled) {
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .epoch_tracker = &epoch_tracker,
+        });
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
-        .ledger = &ledger,
-        .status_cache = &replay_service_state.replay_state.status_cache,
-        .commitments = &replay_service_state.replay_state.slot_tracker.commitments,
-    });
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
+            .ledger = &ledger,
+            .status_cache = &replay_service_state.replay_state.status_cache,
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .block_commitment_cache = &replay_service_state.replay_state.block_commitment_cache.?,
+        });
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
-        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-        .account_reader = replay_service_state.replay_state.account_store.reader(),
-    });
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .account_reader = replay_service_state.replay_state.account_store.reader(),
+        });
+    }
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
@@ -1930,6 +1936,8 @@ fn replayOffline(
         .voting_enabled = false,
         .vote_account_address = null,
         .stop_at_slot = cfg.stop_at_slot,
+        // TODO: thread rpc_port through replayOffline
+        .rpc_enabled = false,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -2738,6 +2746,7 @@ const ReplayAndConsensusServiceState = struct {
             voting_enabled: bool,
             vote_account_address: ?Pubkey,
             stop_at_slot: ?Slot,
+            rpc_enabled: bool,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
@@ -2765,36 +2774,40 @@ const ReplayAndConsensusServiceState = struct {
             const hard_forks = try bank_fields.hard_forks.clone(allocator);
             errdefer hard_forks.deinit(allocator);
 
-            break :replay_state try .init(.{
-                .allocator = allocator,
-                .logger = .from(params.app_base.logger),
-                .identity = .{
-                    .validator = .fromPublicKey(&params.app_base.my_keypair.public_key),
-                    .vote_account = params.vote_account_address,
+            break :replay_state try .init(
+                .{
+                    .allocator = allocator,
+                    .logger = .from(params.app_base.logger),
+                    .identity = .{
+                        .validator = .fromPublicKey(&params.app_base.my_keypair.public_key),
+                        .vote_account = params.vote_account_address,
+                    },
+                    .signing = .{
+                        .node = params.app_base.my_keypair,
+                        .authorized_voters = if (params.voting_enabled)
+                            // TODO: Parse authorized voter keypairs from CLI args (--authorized-voter)
+                            // For now, default to using the node keypair as the authorized voter
+                            // (same as Agave's default behavior when no --authorized-voter is specified)
+                            // ref https://github.com/anza-xyz/agave/blob/67a1cc9ef4222187820818d95325a0c8e700312f/validator/src/commands/run/execute.rs#L136-L138
+                            (&params.app_base.my_keypair)[0..1]
+                        else
+                            &.{},
+                    },
+                    .account_store = account_store,
+                    .ledger = params.ledger,
+                    .epoch_tracker = params.epoch_tracker,
+                    .root = .{
+                        .slot = bank_fields.slot,
+                        .constants = root_slot_constants,
+                        .state = root_slot_state,
+                    },
+                    .hard_forks = hard_forks,
+                    .replay_threads = params.replay_threads,
+                    .stop_at_slot = params.stop_at_slot,
                 },
-                .signing = .{
-                    .node = params.app_base.my_keypair,
-                    .authorized_voters = if (params.voting_enabled)
-                        // TODO: Parse authorized voter keypairs from CLI args (--authorized-voter)
-                        // For now, default to using the node keypair as the authorized voter
-                        // (same as Agave's default behavior when no --authorized-voter is specified)
-                        // ref https://github.com/anza-xyz/agave/blob/67a1cc9ef4222187820818d95325a0c8e700312f/validator/src/commands/run/execute.rs#L136-L138
-                        (&params.app_base.my_keypair)[0..1]
-                    else
-                        &.{},
-                },
-                .account_store = account_store,
-                .ledger = params.ledger,
-                .epoch_tracker = params.epoch_tracker,
-                .root = .{
-                    .slot = bank_fields.slot,
-                    .constants = root_slot_constants,
-                    .state = root_slot_state,
-                },
-                .hard_forks = hard_forks,
-                .replay_threads = params.replay_threads,
-                .stop_at_slot = params.stop_at_slot,
-            }, if (params.disable_consensus) .disabled else .enabled);
+                if (params.disable_consensus) .disabled else .enabled,
+                if (params.rpc_enabled) .enabled else .disabled,
+            );
         };
         errdefer replay_state.deinit();
 

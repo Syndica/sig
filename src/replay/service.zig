@@ -128,6 +128,10 @@ pub fn advanceReplay(
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
             .results = slot_results,
+            .block_commitment_cache = if (replay_state.block_commitment_cache) |*cache|
+                cache
+            else
+                null,
         });
     } else try bypassConsensus(replay_state);
 
@@ -177,6 +181,11 @@ pub const ConsensusStatus = enum {
     disabled,
 };
 
+pub const RPCStatus = enum {
+    enabled,
+    disabled,
+};
+
 pub const ReplayState = struct {
     allocator: Allocator,
     logger: Logger,
@@ -191,6 +200,7 @@ pub const ReplayState = struct {
     progress_map: ProgressMap,
     ledger: *Ledger,
     status_cache: sig.core.StatusCache,
+    block_commitment_cache: ?sig.replay.trackers.BlockCommitmentCache,
     execution_log_helper: replay.execution.LogHelper,
     replay_votes_channel: ?*Channel(ParsedVote),
     stop_at_slot: ?sig.core.Slot,
@@ -209,10 +219,15 @@ pub const ReplayState = struct {
 
         self.slot_tree.deinit(self.allocator);
         self.status_cache.deinit(self.allocator);
+        if (self.block_commitment_cache) |*cache| cache.deinit(self.allocator);
         self.hard_forks.deinit(self.allocator);
     }
 
-    pub fn init(deps: Dependencies, consensus_status: ConsensusStatus) !ReplayState {
+    pub fn init(
+        deps: Dependencies,
+        consensus_status: ConsensusStatus,
+        rpc_status: RPCStatus,
+    ) !ReplayState {
         const zone = tracy.Zone.init(@src(), .{ .name = "ReplayState init" });
         defer zone.deinit();
 
@@ -265,6 +280,10 @@ pub const ReplayState = struct {
             .ledger = deps.ledger,
             .progress_map = progress_map,
             .status_cache = .DEFAULT,
+            .block_commitment_cache = switch (rpc_status) {
+                .enabled => .DEFAULT,
+                .disabled => null,
+            },
             .execution_log_helper = .init(.from(deps.logger)),
             .replay_votes_channel = replay_votes_channel,
             .stop_at_slot = deps.stop_at_slot,
@@ -1315,7 +1334,7 @@ pub const DependencyStubs = struct {
 
             .replay_threads = 1,
             .stop_at_slot = null,
-        }, .enabled);
+        }, .enabled, .disabled);
     }
 
     // TODO: consider deduplicating with above and similar function in cmd.zig
@@ -1387,7 +1406,7 @@ pub const DependencyStubs = struct {
 
             .replay_threads = num_threads,
             .stop_at_slot = null,
-        }, .enabled);
+        }, .enabled, .disabled);
     }
 };
 

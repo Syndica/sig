@@ -480,12 +480,13 @@ test GetSignatureStatuses {
         .context = .{ .slot = 309275388, .apiVersion = "2.1.6" },
         .value = &.{.{
             .slot = 309275300,
+            .status = .{},
             .confirmations = null,
             .err = null,
             .confirmationStatus = .finalized,
         }},
     } },
-        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275388},"value":[{"confirmationStatus":"finalized","confirmations":null,"err":null,"slot":309275300}]},"id":1}
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275388},"value":[{"confirmationStatus":"finalized","confirmations":null,"err":null,"slot":309275300,"status":{"Ok":null}}]},"id":1}
     );
 
     // Response with a confirmed status (confirmations=10)
@@ -493,12 +494,13 @@ test GetSignatureStatuses {
         .context = .{ .slot = 309275388, .apiVersion = "2.1.6" },
         .value = &.{.{
             .slot = 309275350,
+            .status = .{},
             .confirmations = 10,
             .err = null,
             .confirmationStatus = .confirmed,
         }},
     } },
-        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275388},"value":[{"confirmationStatus":"confirmed","confirmations":10,"err":null,"slot":309275350}]},"id":1}
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275388},"value":[{"confirmationStatus":"confirmed","confirmations":10,"err":null,"slot":309275350,"status":{"Ok":null}}]},"id":1}
     );
 
     // Response with mixed: one found (finalized), one not found (null)
@@ -507,6 +509,7 @@ test GetSignatureStatuses {
         .value = &.{
             @as(?GetSignatureStatuses.Response.TransactionStatus, .{
                 .slot = 309275300,
+                .status = .{},
                 .confirmations = null,
                 .err = null,
                 .confirmationStatus = .finalized,
@@ -514,7 +517,7 @@ test GetSignatureStatuses {
             null,
         },
     } },
-        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275388},"value":[{"confirmationStatus":"finalized","confirmations":null,"err":null,"slot":309275300},null]},"id":1}
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275388},"value":[{"confirmationStatus":"finalized","confirmations":null,"err":null,"slot":309275300,"status":{"Ok":null}},null]},"id":1}
     );
 }
 
