@@ -13,7 +13,6 @@ const Pair = common.net.Pair;
 const Packet = common.net.Packet;
 const Slot = common.solana.Slot;
 const Hash = common.solana.Hash;
-const Atomic = std.atomic.Value;
 
 comptime {
     _ = start;
