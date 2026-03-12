@@ -453,7 +453,7 @@ pub fn loadMessageNonceAccount(
     return .{ nonce_address, nonce_account, nonce_data };
 }
 
-fn verifyNonceAccount(account: Account, recent_blockhash: *const Hash) ?NonceData {
+pub fn verifyNonceAccount(account: Account, recent_blockhash: *const Hash) ?NonceData {
     if (!account.owner.equals(&sig.runtime.program.system.ID)) return null;
 
     // could probably be smaller
@@ -475,7 +475,7 @@ fn verifyNonceAccount(account: Account, recent_blockhash: *const Hash) ?NonceDat
 
 // [agave] https://github.com/anza-xyz/agave/blob/eb416825349ca376fa13249a0267cf7b35701938/svm-transaction/src/svm_message.rs#L84
 /// If the message uses a durable nonce, return the pubkey of the nonce account
-fn getDurableNonce(transaction: *const RuntimeTransaction) ?Pubkey {
+pub fn getDurableNonce(transaction: *const RuntimeTransaction) ?Pubkey {
     if (transaction.instructions.len <= 0) return null;
     const instruction = transaction.instructions[NONCED_TX_MARKER_IX_INDEX];
 
