@@ -62,8 +62,8 @@ pub fn getAccountInfo(
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
-    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
-    const account = try slot_reader.getOwned(arena, params.pubkey) orelse return .{
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
+    const account = try slot_reader.get(arena, params.pubkey) orelse return .{
         .context = .{ .slot = slot },
         .value = null,
     };
@@ -107,10 +107,10 @@ pub fn getBalance(
     // Get slot reference to access ancestors
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
-    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
 
     // Look up account
-    const maybe_account = try slot_reader.getOwned(arena, params.pubkey);
+    const maybe_account = try slot_reader.get(arena, params.pubkey);
 
     const lamports: u64 = if (maybe_account) |account| blk: {
         break :blk account.lamports;
@@ -136,8 +136,8 @@ pub fn getTokenAccountBalance(
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
-    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
-    const maybe_account = try slot_reader.getOwned(arena, params.pubkey);
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
+    const maybe_account = try slot_reader.get(arena, params.pubkey);
 
     const account = maybe_account orelse return error.RpcAccountNotFound;
 
@@ -194,11 +194,11 @@ pub fn getTokenSupply(
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
-    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
 
     // Fetch mint account
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1989-L1991
-    const maybe_account = try slot_reader.getOwned(arena, params.mint);
+    const maybe_account = try slot_reader.get(arena, params.mint);
     const account = maybe_account orelse return error.RpcAccountNotFound;
 
     // Validate that this is owned by a token program
@@ -262,11 +262,11 @@ pub fn getMultipleAccounts(
     }
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
-    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
     const values = try arena.alloc(?GetAccountInfo.Response.Value, params.pubkeys.len);
 
     for (params.pubkeys, values) |pubkey, *value| {
-        const account = try slot_reader.getOwned(arena, pubkey) orelse {
+        const account = try slot_reader.get(arena, pubkey) orelse {
             value.* = null;
             continue;
         };
@@ -339,7 +339,7 @@ pub fn getFeeForMessage(
     const message = Message.deserialize(&limit_allocator, peekable.reader(), version) catch
         return error.InvalidMessageFormat;
 
-    const slot_account_reader = self.account_reader.forSlot(&slot_ref.constants().ancestors);
+    const slot_reader = self.account_reader.forSlot(&slot_ref.constants().ancestors).toOwnedReader();
 
     const empty_result: GetFeeForMessage.Response = .{
         .context = .{ .slot = slot },
@@ -350,7 +350,7 @@ pub fn getFeeForMessage(
         arena,
         message,
         version,
-        slot_account_reader,
+        slot_reader,
         &slot_ref.constants().reserved_accounts,
         slot,
     ) catch return empty_result) orelse return empty_result;
@@ -364,17 +364,16 @@ pub fn getFeeForMessage(
     };
 
     const bq_lps = maybe_bq_lps orelse {
-        // Use local nonce loader that calls getOwned() to avoid the
-        // use-after-free race in check_transactions.loadMessageNonceAccount (which uses .get()).
-        const lps = loadNonceLamportsPerSignature(
+        const nonce_result = check_transactions.loadMessageNonceAccount(
             arena,
             &runtime_txn,
-            slot_account_reader,
-        ) orelse return empty_result;
-        return .{
+            slot_reader,
+        ) catch return empty_result;
+        if (nonce_result) |r| return .{
             .context = .{ .slot = slot },
-            .value = lps,
+            .value = r[2].lamports_per_signature,
         };
+        return empty_result;
     };
 
     var fee_details: FeeDetails = FeeDetails.DEFAULT;
@@ -432,25 +431,12 @@ fn messageToRuntimeTransaction(
         .msg = message,
     };
 
-    // Inline the SlotHashes sysvar read using getOwned() to avoid the
-    // use-after-free race in getSysvarFromAccount (which uses .get()).
-    const SlotHashes = sig.runtime.sysvar.SlotHashes;
-    const slot_hashes: SlotHashes = blk: {
-        const maybe_account = slot_account_reader.getOwned(
-            arena,
-            SlotHashes.ID,
-        ) catch break :blk SlotHashes.INIT;
-        const account = maybe_account orelse break :blk SlotHashes.INIT;
-        defer account.deinit(arena);
-        var data = account.data.iterator();
-        break :blk sig.bincode.read(arena, SlotHashes, data.reader(), .{}) catch SlotHashes.INIT;
-    };
+    const slot_hashes = sig.replay.update_sysvar.getSysvarFromAccount(
+        sig.runtime.sysvar.SlotHashes,
+        arena,
+        slot_account_reader,
+    ) catch null orelse sig.runtime.sysvar.SlotHashes.INIT;
 
-    // TODO: resolveTransaction calls getLookupTable which internally uses .get() (borrowed pointer),
-    // which still has the use-after-free race with slot pruning. This only affects versioned
-    // transactions that use address lookup tables in fee estimation. Fixing it would require
-    // modifying replay code (resolve_lookup.zig) which is out of scope for this v1 fix.
-    // v2 will have a different accountsdb approach that eliminates this class of race.
     const resolved = sig.replay.resolve_lookup.resolveTransaction(arena, transaction, .{
         .slot = slot,
         .account_reader = slot_account_reader,
@@ -523,7 +509,7 @@ pub fn getProgramAccounts(
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;
-    const slot_reader = self.account_reader.forSlot(ancestors);
+    const slot_reader = self.account_reader.forSlot(ancestors).toOwnedReader();
 
     var iter = blk: {
         const z = tracy.Zone.init(@src(), .{ .name = "rpc.getProgramAccounts.ownerQuery" });
@@ -592,7 +578,7 @@ pub fn getTokenAccountsByOwner(
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;
-    const slot_reader = self.account_reader.forSlot(ancestors);
+    const slot_reader = self.account_reader.forSlot(ancestors).toOwnedReader();
 
     // Resolve filter -> token program ID + optional mint.
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2649-L2673

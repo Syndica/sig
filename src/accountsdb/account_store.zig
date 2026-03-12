@@ -257,6 +257,10 @@ pub const SlotAccountStore = union(enum) {
 
 pub const SlotAccountReader = union(enum) {
     accounts_db: struct { *accounts_db.Db, *const Ancestors },
+    /// Like `accounts_db`, but `.get()` returns caller-owned (cloned) data.
+    /// Use this variant in RPC contexts where the caller outlives the lock
+    /// that protects unrooted account data from pruning.
+    accounts_db_owned: struct { *accounts_db.Db, *const Ancestors },
     /// Contains many versions of accounts and becomes fork-aware using
     /// ancestors, like accountsdb.
     thread_safe_map: struct { *ThreadSafeAccountMap, *const Ancestors },
@@ -271,6 +275,18 @@ pub const SlotAccountReader = union(enum) {
         return switch (self) {
             .accounts_db => |pair| {
                 const account = try pair[0].get(
+                    alloc,
+                    address,
+                    pair[1],
+                ) orelse return null;
+                if (account.lamports == 0) {
+                    account.deinit(alloc);
+                    return null;
+                }
+                return account;
+            },
+            .accounts_db_owned => |pair| {
+                const account = try pair[0].getOwned(
                     alloc,
                     address,
                     pair[1],
@@ -299,7 +315,7 @@ pub const SlotAccountReader = union(enum) {
 
     pub fn getByOwner(self: SlotAccountReader, _: Allocator, owner: *const Pubkey) !OwnerIterator {
         return switch (self) {
-            .accounts_db => |pair| {
+            .accounts_db, .accounts_db_owned => |pair| {
                 const db, const ancestors = pair;
                 return .{ .accounts_db = try db.ownerQuery(owner, ancestors) };
             },
@@ -331,7 +347,8 @@ pub const SlotAccountReader = union(enum) {
         token_owner: *const Pubkey,
     ) !OwnerIterator {
         return switch (self) {
-            .accounts_db => |pair| {
+            // NOTE: either variant is fine here since both will allocate and copy out the accounts from Unrooted.
+            .accounts_db, .accounts_db_owned => |pair| {
                 const db, const ancestors = pair;
                 return .{ .accounts_db = try db.splTokenOwnerQuery(token_owner, ancestors) };
             },
@@ -339,23 +356,14 @@ pub const SlotAccountReader = union(enum) {
         };
     }
 
-    /// Similar to `get`, but allocates and copies out the account on both the Unrooted and Rooted lookup paths.
-    /// The allocation is caller-owned.
-    pub fn getOwned(self: SlotAccountReader, alloc: std.mem.Allocator, address: Pubkey) !?Account {
+    /// Returns a version of this reader where `.get()` returns caller-owned
+    /// (cloned) data. Use in contexts where the caller outlives the lock that
+    /// protects unrooted account data from pruning (e.g. RPC).
+    pub fn toOwnedReader(self: SlotAccountReader) SlotAccountReader {
         return switch (self) {
-            .accounts_db => |pair| {
-                const account = try pair[0].getOwned(
-                    alloc,
-                    address,
-                    pair[1],
-                ) orelse return null;
-                if (account.lamports == 0) {
-                    account.deinit(alloc);
-                    return null;
-                }
-                return account;
-            },
-            else => @panic("TODO: getOwned not yet implemented for this variant"),
+            .accounts_db => |pair| .{ .accounts_db_owned = pair },
+            .accounts_db_owned => self,
+            else => @panic("TODO: toOwned not yet implemented for this variant"),
         };
     }
 };
