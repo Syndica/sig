@@ -704,7 +704,7 @@ pub fn getMintAdditionalData(
     slot_reader: sig.accounts_db.SlotAccountReader,
 ) ?parse_token.SplTokenAdditionalData {
     // Fetch the mint account
-    const maybe_mint_account = slot_reader.getOwned(arena, mint_pubkey) catch return null;
+    const maybe_mint_account = slot_reader.get(arena, mint_pubkey) catch return null;
     const mint_account = maybe_mint_account orelse return null;
     defer mint_account.deinit(arena);
 
@@ -732,7 +732,7 @@ pub fn parseMintAdditionalData(
 
     // Fetch Clock sysvar for timestamp
     const clock_id = sig.runtime.sysvar.Clock.ID;
-    const maybe_clock_account = slot_reader.getOwned(arena, clock_id) catch return null;
+    const maybe_clock_account = slot_reader.get(arena, clock_id) catch return null;
     const clock_account = maybe_clock_account orelse return null;
     defer clock_account.deinit(arena);
 
