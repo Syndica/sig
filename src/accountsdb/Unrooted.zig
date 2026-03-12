@@ -93,6 +93,50 @@ pub fn put(
     entry.is_empty.store(false, .release);
 }
 
+/// Like `get`, but returns an account with caller-owned data (allocates and copies out the account).
+pub fn getOwned(
+    self: *Unrooted,
+    allocator: std.mem.Allocator,
+    address: Pubkey,
+    ancestors: *const Ancestors,
+) error{OutOfMemory}!?Account {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.getOwned" });
+    defer zone.deinit();
+
+    var n_gets: u32 = 0;
+    defer zone.value(n_gets);
+
+    var best_slot: Slot = 0;
+    var result: ?Account = null;
+    errdefer if (result) |*prev| prev.data.deinit(allocator);
+
+    for (self.slots) |*index| {
+        if (index.is_empty.load(.acquire)) continue;
+
+        index.lock.lockShared();
+        defer index.lock.unlockShared();
+
+        if (index.slot >= best_slot and ancestors.containsSlot(index.slot)) {
+            n_gets += 1;
+            const data = index.entries.get(address) orelse continue;
+            // Free previous clone if we found a better slot.
+            if (result) |*prev| prev.data.deinit(allocator);
+            // Clone data while still holding the shared lock.
+            const owned_data = try allocator.dupe(u8, data.data);
+            result = .{
+                .lamports = data.lamports,
+                .data = .{ .owned_allocation = owned_data },
+                .owner = data.owner,
+                .executable = data.executable,
+                .rent_epoch = data.rent_epoch,
+            };
+            best_slot = index.slot;
+        }
+    }
+
+    return result;
+}
+
 /// Gets the latest state of the account keyed by `address` visible to the given ancestor set.
 pub fn get(
     self: *Unrooted,

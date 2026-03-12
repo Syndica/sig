@@ -296,6 +296,26 @@ pub const SlotAccountReader = union(enum) {
             .noop => null,
         };
     }
+
+    /// Similar to `get`, but allocates and copies out the account on both the Unrooted and Rooted lookup paths.
+    /// The allocation is caller-owned.
+    pub fn getOwned(self: SlotAccountReader, alloc: std.mem.Allocator, address: Pubkey) !?Account {
+        return switch (self) {
+            .accounts_db => |pair| {
+                const account = try pair[0].getOwned(
+                    alloc,
+                    address,
+                    pair[1],
+                ) orelse return null;
+                if (account.lamports == 0) {
+                    account.deinit(alloc);
+                    return null;
+                }
+                return account;
+            },
+            else => @panic("TODO: getOwned not yet implemented for this variant"),
+        };
+    }
 };
 
 /// Simple implementation of AccountReader and AccountStore, used for tests
