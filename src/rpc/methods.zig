@@ -1272,6 +1272,7 @@ pub const GetSignatureStatuses = struct {
             // TODO: should transaction_status move to core?
             err: ?sig.ledger.transaction_status.TransactionError = null,
             confirmationStatus: ?[]const u8 = null,
+            status: GetBlock.Response.UiTransactionResultStatus,
         };
     };
 };
