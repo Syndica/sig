@@ -100,6 +100,18 @@ pub const StatusCache = struct {
         } else null;
     }
 
+    pub const StatusSummary = enum { unprocessed, succeeded, failed };
+
+    pub fn getStatusSummary(
+        self: *StatusCache,
+        key: []const u8,
+        blockhash: *const Hash,
+        ancestors: *const Ancestors,
+    ) StatusSummary {
+        const fork = self.getStatus(key, blockhash, ancestors) orelse return .unprocessed;
+        return if (fork.maybe_err) |_| .failed else .succeeded;
+    }
+
     pub fn insert(
         self: *StatusCache,
         allocator: std.mem.Allocator,

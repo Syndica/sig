@@ -443,7 +443,7 @@ pub fn loadMessageNonceAccount(
     return .{ nonce_address, nonce_account, nonce_data };
 }
 
-fn verifyNonceAccount(account: Account, recent_blockhash: *const Hash) ?NonceData {
+pub fn verifyNonceAccount(account: Account, recent_blockhash: *const Hash) ?NonceData {
     if (!account.owner.equals(&sig.runtime.program.system.ID)) return null;
 
     // could probably be smaller

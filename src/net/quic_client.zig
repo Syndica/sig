@@ -217,16 +217,21 @@ pub fn Client(
 
             const local_endpoint = try self.socket.getLocalEndPoint();
 
-            if (0 > lsquic.lsquic_engine_packet_in(
+            const packet_in_result = lsquic.lsquic_engine_packet_in(
                 self.lsquic_engine,
                 xev_read_buffer.slice.ptr,
                 bytes,
                 @ptrCast(&local_endpoint.any),
                 @ptrCast(&peer_address.any),
-                self,
+                self.ssl_ctx,
                 0,
-            )) {
-                @panic("lsquic_engine_packet_in failed");
+            );
+            if (packet_in_result < 0) {
+                self.logger.warn().logf(
+                    "lsquic_engine_packet_in failed with: err={d} source={f}",
+                    .{ packet_in_result, toSocketAddress(peer_address) },
+                );
+                @panic("lsquic_engine_packet_in failed!");
             }
 
             return .rearm;
