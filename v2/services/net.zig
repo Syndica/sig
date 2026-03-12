@@ -5,6 +5,7 @@ const std = @import("std");
 const start = @import("start");
 const lib = @import("lib");
 const Pair = lib.net.Pair;
+const obs = lib.observability;
 
 comptime {
     _ = start;
@@ -19,6 +20,7 @@ pub const ReadOnly = struct {};
 pub const ReadWrite = struct {
     gossip_pair: *Pair,
     shred_pair: *Pair,
+    obs: obs.Regions,
 };
 
 pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {

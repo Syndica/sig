@@ -5,6 +5,12 @@
 
         .net_to_gossip = .net_pair,
         .gossip_config = .gossip_config,
+
+        .obs_startup = .obs_startup,
+        .obs_id_mem = .obs_id_mem,
+        .obs_gauges = .obs_gauges,
+        .obs_histogram_data = .obs_histogram_data,
+        .obs_log_streams = .obs_log_streams,
     },
     .services = .{
         .{
@@ -12,6 +18,11 @@
             .regions = .{
                 .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .net_to_gossip, .access = .rw },
+                .{ .name = .obs_startup, .access = .rw },
+                .{ .name = .obs_id_mem, .access = .rw },
+                .{ .name = .obs_gauges, .access = .rw },
+                .{ .name = .obs_histogram_data, .access = .rw },
+                .{ .name = .obs_log_streams, .access = .rw },
             },
         },
         .{
@@ -19,6 +30,11 @@
             .regions = .{
                 .{ .name = .net_to_gossip, .access = .rw },
                 .{ .name = .gossip_config, .access = .readonly },
+                .{ .name = .obs_startup, .access = .rw },
+                .{ .name = .obs_id_mem, .access = .rw },
+                .{ .name = .obs_gauges, .access = .rw },
+                .{ .name = .obs_histogram_data, .access = .rw },
+                .{ .name = .obs_log_streams, .access = .rw },
             },
         },
         .{
@@ -26,11 +42,22 @@
             .regions = .{
                 .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .shred_recv_config, .access = .readonly },
+                .{ .name = .obs_startup, .access = .rw },
+                .{ .name = .obs_id_mem, .access = .rw },
+                .{ .name = .obs_gauges, .access = .rw },
+                .{ .name = .obs_histogram_data, .access = .rw },
+                .{ .name = .obs_log_streams, .access = .rw },
             },
         },
         .{
             .name = .observability,
-            .regions = .{},
+            .regions = .{
+                .{ .name = .obs_startup, .access = .readonly },
+                .{ .name = .obs_id_mem, .access = .readonly },
+                .{ .name = .obs_gauges, .access = .readonly },
+                .{ .name = .obs_histogram_data, .access = .rw },
+                .{ .name = .obs_log_streams, .access = .rw },
+            },
         },
     },
 }

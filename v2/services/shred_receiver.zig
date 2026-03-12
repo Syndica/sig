@@ -6,6 +6,7 @@ const start = @import("start");
 const lib = @import("lib");
 const tracy = @import("tracy");
 
+const obs = lib.observability;
 const shred = lib.shred;
 const layout = shred.layout;
 
@@ -22,12 +23,13 @@ pub const name = .shred_receiver;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadWrite = struct {
-    net_pair: *Pair,
-};
-
 pub const ReadOnly = struct {
     config: *const lib.shred.RecvConfig,
+};
+
+pub const ReadWrite = struct {
+    net_pair: *Pair,
+    obs: obs.Regions,
 };
 
 // stubs

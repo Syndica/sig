@@ -16,6 +16,7 @@ comptime {
 const page_size_min = std.heap.page_size_min;
 
 const lib = @import("lib");
+const obs = lib.observability;
 const ServiceEntrypoint = lib.ipc.ServiceFn;
 
 const linux = std.os.linux;
@@ -94,15 +95,13 @@ const RequiredRegion = struct {
     rw: bool = false,
 };
 
-const service_region_fields = std.meta.fields(@TypeOf(services_zon.regions));
+const service_region_fields = @typeInfo(@TypeOf(services_zon.regions)).@"struct".fields;
 
 pub const SharedRegionInstances = blk: {
     var fields: []const std.builtin.Type.StructField = &.{};
     for (service_region_fields) |r| {
-        const RegionType = @TypeOf(@field(
-            @as(Region, undefined),
-            @tagName(@field(services_zon.regions, r.name)),
-        ));
+        const region_tag = @field(services_zon.regions, r.name);
+        const RegionType = @FieldType(Region, @tagName(region_tag));
         fields = fields ++ [_]std.builtin.Type.StructField{.{
             .name = r.name,
             .type = RegionType,
@@ -181,11 +180,35 @@ pub const Region = union(enum) {
         shred_version: u16,
     },
 
+    obs_startup: obs.Startup.InitParams,
+    obs_id_mem: struct {
+        /// The maximum number of bytes to allow for storing metric ids.
+        max_bytes: usize,
+    },
+    obs_gauges: struct {
+        /// The maximum number of (`u64`-sized) elements to support.
+        max_elements: usize,
+    },
+    obs_histogram_data: struct {
+        /// The maximum number of histogram (`u64`-sized) elements to support.
+        max_elements: usize,
+    },
+    obs_log_streams: struct {
+        /// Maximum number of log streams to support.
+        max_log_streams: usize,
+    },
+
     pub fn size(self: Region) usize {
         return switch (self) {
             .net_pair => @sizeOf(lib.net.Pair),
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
+
+            .obs_startup => @sizeOf(obs.Startup),
+            .obs_id_mem => |cfg| cfg.max_bytes,
+            .obs_gauges => |cfg| cfg.max_elements * @sizeOf(u64),
+            .obs_histogram_data => |cfg| cfg.max_elements * @sizeOf(u64),
+            .obs_log_streams => |cfg| cfg.max_log_streams * @sizeOf(obs.log.MessageStream),
         };
     }
 
@@ -218,6 +241,40 @@ pub const Region = union(enum) {
                     cfg.schedule_string,
                 );
                 data.shred_version = cfg.shred_version;
+            },
+
+            .obs_startup => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(obs.Startup));
+                const data: *obs.Startup = @ptrCast(buf);
+
+                data.init(cfg);
+            },
+            .obs_id_mem => |cfg| {
+                std.debug.assert(buf.len == cfg.max_bytes);
+                const data: []u8 = buf;
+
+                _ = data; // currently don't need to do anything else; could @memset(data, 0), but that seems wasteful.
+            },
+            .obs_gauges => |cfg| {
+                std.debug.assert(buf.len == cfg.max_elements * @sizeOf(u64));
+                const data: []std.atomic.Value(u64) = @ptrCast(buf);
+
+                _ = data; // currently don't need to do anything else; could @memset(data, .init(0)), but that seems wasteful.
+            },
+            .obs_histogram_data => |cfg| {
+                std.debug.assert(buf.len == cfg.max_elements * @sizeOf(u64));
+                const data: []u64 = @ptrCast(buf);
+
+                _ = data; // currently don't need to do anything else; could @memset(data, 0), but that seems wasteful.
+            },
+            .obs_log_streams => |cfg| {
+                std.debug.assert(buf.len == cfg.max_log_streams * @sizeOf(obs.log.MessageStream));
+                const data: []obs.log.MessageStream = @ptrCast(buf);
+
+                for (data) |*stream| {
+                    stream.name.init("");
+                    stream.swap_buffer.init();
+                }
             },
         };
     }
@@ -340,7 +397,7 @@ pub fn spawnAndWait(
         for (region_memfds, regions) |*region_memfd, shared_region| {
             // Providing a name - this name should be visible from a debugger, but serves no other
             // purpose.
-            var fmt_buf: [100]u8 = undefined;
+            var fmt_buf: [4096]u8 = undefined;
             const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{shared_region});
 
             region_memfd.* = try .init(.{
@@ -656,7 +713,7 @@ pub fn spawnAndWaitNoSandbox(
         for (region_memfds, regions) |*region_memfd, shared_region| {
             // Providing a name - this name should be visible from a debugger, but serves no other
             // purpose.
-            var fmt_buf: [100]u8 = undefined;
+            var fmt_buf: [4096]u8 = undefined;
             const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{shared_region});
 
             region_memfd.* = try .init(.{
