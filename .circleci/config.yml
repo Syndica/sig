@@ -102,6 +102,30 @@ jobs:
           name: Check conformance commits
           command: conformance/scripts/verify-commits.sh
 
+  build_linux:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted
+      - run:
+          name: Build
+          command: |
+            sudo apt update && sudo apt install wget -y
+            ./scripts/proxy_workaround.sh workspace/zig/zig
+            workspace/zig/zig build -Denable-tsan=true -p workspace/zig-out -Dcpu=x86_64_v3 --summary all
+      - save_cache:
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted
+          paths:
+            - .zig-cache
+            - ~/.cache/zig
+      - persist_to_workspace:
+          root: workspace
+          paths:
+            - "zig-out/bin/test"
+
   build_linux_release:
     executor: linux-executor
     steps:
@@ -215,6 +239,24 @@ jobs:
       - run:
           name: Build Tests
           command: workspace/zig/zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
+      - run:
+          name: Run Tests
+          command: zig-out/bin/test 2>&1 | cat
+
+  test_linux:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      # Restore the cache in order to have access to the files which the DWARF info
+      # is referencing when dumping stack traces.
+      - restore_cache:
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted
+      - run:
+          name: Build Tests
+          # Disable network-accessing tests for this job, which behave badly on circleci
+          command: workspace/zig/zig build test -Dno-run -Dlong-tests -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --summary all
       - run:
           name: Run Tests
           command: zig-out/bin/test 2>&1 | cat
@@ -385,12 +427,18 @@ workflows:
       - build_linux_release:
           requires:
             - setup_zig_linux
+      - build_linux:
+          requires:
+            - setup_zig_linux
       - build_and_test_hashmap:
           requires:
             - setup_zig_linux
+      - test_linux:
+          requires:
+            - build_linux
       - test_webzockets:
           requires:
-            - build_and_test_hashmap
+            - setup_zig_linux
       - test_kcov_linux:
           requires:
             - setup_zig_linux
