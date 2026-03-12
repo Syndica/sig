@@ -34,7 +34,7 @@ jobs:
       - run:
           name: Download Zig
           command: |
-            sudo apt update && sudo apt install -y wget unzip xz-utils
+            sudo apt-get update -y && sudo apt-get install -y wget unzip xz-utils
             wget https://ziglang.org/download/0.15.2/zig-<< parameters.target >>-0.15.2.tar.xz
             tar xf zig-<< parameters.target >>-0.15.2.tar.xz
             mkdir -p workspace
@@ -55,7 +55,7 @@ jobs:
       - run:
           name: Build
           command: |
-            sudo apt update && sudo apt install wget -y
+            sudo apt-get update -y && sudo apt-get install wget -y
             ./scripts/proxy_workaround.sh workspace/zig/zig
             workspace/zig/zig build -Denable-tsan=true -p workspace/zig-out -Dcpu=x86_64_v3 --summary all
       - save_cache:
@@ -86,7 +86,7 @@ jobs:
       - run:
           name: Build
           command: |
-            sudo apt update && sudo apt install wget -y
+            sudo apt-get update -y && sudo apt-get install wget -y
             ./scripts/proxy_workaround.sh workspace/zig/zig
             workspace/zig/zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p workspace/zig-out-release --summary all
       - run:
@@ -291,7 +291,7 @@ jobs:
       - run:
           name: Install Python
           command: |
-            sudo apt update && sudo apt install -y python3 python3-pip
+            sudo apt-get update -y && sudo apt-get install -y python3 python3-pip
       - run:
           name: Lint (Zig)
           command: |
@@ -314,7 +314,7 @@ jobs:
       - run:
           name: V2 checks
           command: |
-            sudo apt update && sudo apt install wget -y
+            sudo apt-get update -y && sudo apt-get install wget -y
             ./scripts/proxy_workaround.sh workspace/zig/zig
             cd v2/
             ../workspace/zig/zig build ci --summary all
