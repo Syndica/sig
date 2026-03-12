@@ -126,17 +126,22 @@ pub fn get(
     return result;
 }
 
-/// Returns the set of pubkeys owned by `owner` visible to the given ancestor set.
-/// The caller is responsible for resolving each pubkey to its latest account state
-/// which avoids borrowing account data across lock boundaries.
+pub const OwnerEntry = struct { Slot, Account };
+
+/// Returns a map of accounts owned by `owner` visible to the given ancestor set.
+/// Account data is cloned so the caller owns all returned data and is responsible
+/// for deallocating  when done.
 pub fn getByOwner(
     self: *Unrooted,
     allocator: std.mem.Allocator,
     owner: Pubkey,
     ancestors: *const Ancestors,
-) !PubkeyMap(void) {
-    var map: PubkeyMap(void) = .empty;
-    errdefer map.deinit(allocator);
+) !PubkeyMap(OwnerEntry) {
+    var map: PubkeyMap(OwnerEntry) = .empty;
+    errdefer {
+        for (map.values()) |*entry| entry[1].deinit(allocator);
+        map.deinit(allocator);
+    }
 
     for (self.slots) |*index| {
         if (index.is_empty.load(.acquire)) continue;
@@ -147,7 +152,23 @@ pub fn getByOwner(
 
         for (index.entries.values(), index.entries.keys()) |*acc, pk| {
             if (!acc.owner.equals(&owner)) continue;
-            try map.put(allocator, pk, {});
+
+            // Same pubkey can appear in multiple unrooted slots; keep only the latest (highest slot).
+            const gop = try map.getOrPut(allocator, pk);
+            if (gop.found_existing and index.slot <= gop.value_ptr[0]) continue;
+            if (gop.found_existing) gop.value_ptr[1].deinit(allocator);
+
+            const data = try allocator.dupe(u8, acc.data);
+            gop.value_ptr.* = .{
+                index.slot,
+                .{
+                    .lamports = acc.lamports,
+                    .data = .{ .owned_allocation = data },
+                    .owner = acc.owner,
+                    .executable = acc.executable,
+                    .rent_epoch = acc.rent_epoch,
+                },
+            };
         }
     }
 
