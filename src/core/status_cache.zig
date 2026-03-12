@@ -73,6 +73,12 @@ pub const StatusCache = struct {
         state.mut().slot_deltas.deinit(allocator);
     }
 
+    fn cachedKeySlice(key: []const u8, map_index: usize) [CACHED_KEY_SIZE]u8 {
+        const max_key_index = key.len -| (CACHED_KEY_SIZE + 1);
+        const index = @min(map_index, max_key_index);
+        return key[index..][0..CACHED_KEY_SIZE].*;
+    }
+
     pub fn getStatus(
         self: *StatusCache,
         key: []const u8,
@@ -86,11 +92,7 @@ pub const StatusCache = struct {
         defer state.unlock();
 
         const map = state.get().cache.get(blockhash.*) orelse return null;
-
-        const max_key_index = key.len -| (CACHED_KEY_SIZE + 1);
-        const index = @min(map.index, max_key_index);
-
-        const lookup_key: [CACHED_KEY_SIZE]u8 = key[index..][0..CACHED_KEY_SIZE].*;
+        const lookup_key = cachedKeySlice(key, map.index);
 
         const stored_forks: ArrayList(Fork) = map.key_map.get(lookup_key) orelse return null;
         return for (stored_forks.items) |fork| {
@@ -116,10 +118,7 @@ pub const StatusCache = struct {
         defer state.unlock();
 
         for (state.get().cache.values()) |map| {
-            const max_key_index = key.len -| (CACHED_KEY_SIZE + 1);
-            const index = @min(map.index, max_key_index);
-
-            const lookup_key: [CACHED_KEY_SIZE]u8 = key[index..][0..CACHED_KEY_SIZE].*;
+            const lookup_key = cachedKeySlice(key, map.index);
 
             const stored_forks: ArrayList(Fork) = map.key_map.get(lookup_key) orelse continue;
             for (stored_forks.items) |fork| {

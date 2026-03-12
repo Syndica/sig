@@ -513,7 +513,7 @@ pub const TowerConsensus = struct {
 
         // Commit accumulated commitment data to the cache in one atomic swap.
         if (params.block_commitment_cache) |cache| {
-            cache.commitAccumulated(allocator, &commitment_ctx.acc);
+            cache.commitAccumulated(&commitment_ctx.acc);
         }
     }
 

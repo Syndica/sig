@@ -452,20 +452,17 @@ pub const BlockCommitmentCache = struct {
     /// Atomically swap the cache contents with the data from an Accumulator.
     /// The accumulator's map is consumed (moved); the caller must not use it
     /// afterwards.
-    pub fn commitAccumulated(
-        self: *BlockCommitmentCache,
-        allocator: Allocator,
-        acc: *Accumulator,
-    ) void {
+    pub fn commitAccumulated(self: *BlockCommitmentCache, acc: *Accumulator) void {
         var state = self.state.write();
         defer state.unlock();
-        state.mut().block_commitment.deinit(allocator);
+        const old = state.mut().block_commitment;
         state.mut().* = .{
             .block_commitment = acc.new_commitment,
             .total_stake = acc.total_stake,
         };
-        // Prevent double-free: the map is now owned by the cache.
-        acc.new_commitment = .empty;
+        // Give the old map back to the accumulator for reuse next cycle.
+        acc.new_commitment = old;
+        acc.new_commitment.clearRetainingCapacity();
         acc.total_stake = 0;
     }
 };

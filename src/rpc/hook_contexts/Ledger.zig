@@ -302,6 +302,8 @@ pub fn getSignatureStatuses(
 
         if (try self.ledger.reader().getRootedTransactionStatus(arena, signature)) |status| {
             const slot, const status_meta = status;
+            // The blockstore may contain rooted slots beyond our finalized_slot snapshot.
+            // Only report results up to the finalized_slot captured at query start for consistency.
             if (slot <= finalized_slot) {
                 result.* = .{
                     .slot = slot,
