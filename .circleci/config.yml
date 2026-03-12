@@ -438,7 +438,7 @@ workflows:
             - build_linux
       - test_webzockets:
           requires:
-            - setup_zig_linux
+            - build_and_test_hashmap
       - test_kcov_linux:
           requires:
             - setup_zig_linux
