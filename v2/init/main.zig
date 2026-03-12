@@ -6,6 +6,7 @@ comptime {
 
 const services = @import("services.zig");
 const lib = @import("lib");
+const obs = lib.observability;
 
 const Config = struct {
     sandboxing_mode: SandboxingMode,
@@ -18,6 +19,8 @@ const Config = struct {
     gossip: Gossip,
     shred_network: ShredNetwork,
 
+    observability: Observability,
+
     const SandboxingMode = enum { sandboxed, threaded };
 
     const Gossip = struct {
@@ -27,6 +30,10 @@ const Config = struct {
     const ShredNetwork = struct {
         recv_port: u16,
     };
+
+    const Observability = struct {
+        port: u16,
+    };
 };
 
 pub fn main() !void {
@@ -34,10 +41,19 @@ pub fn main() !void {
     defer _ = dba_state.deinit();
     const allocator = dba_state.allocator();
 
-    const config: Config = cfg: {
+    const config: Config, //
+    const log_level: obs.log.Level //
+    = cfg: {
         var args = std.process.args();
         _ = args.next();
         const cfg_path = args.next() orelse return error.ConfigPathMissing;
+        const log_level = level: {
+            const str = args.next() orelse "info";
+            break :level std.meta.stringToEnum(obs.log.Level, str) orelse {
+                std.log.err("Invalid log level '{s}'", .{str});
+                return error.InvalidLogLevel;
+            };
+        };
 
         const cfg_file = try std.fs.cwd().openFile(cfg_path, .{});
         defer cfg_file.close();
@@ -48,10 +64,11 @@ pub fn main() !void {
         var diag: std.zon.parse.Diagnostics = .{};
         defer diag.deinit(allocator);
 
-        break :cfg std.zon.parse.fromSlice(Config, allocator, cfg_str, &diag, .{}) catch |err| {
+        const config = std.zon.parse.fromSlice(Config, allocator, cfg_str, &diag, .{}) catch |err| {
             std.log.err("{f}", .{diag});
             return err;
         };
+        break :cfg .{ config, log_level };
     };
     defer std.zon.parse.free(allocator, config);
 
@@ -69,6 +86,7 @@ pub fn main() !void {
         .{ .service = .shred_receiver },
         .{ .service = .net },
         .{ .service = .gossip },
+        .{ .service = .observability },
     };
 
     const shared_regions = services.toSharedRegions(.{
@@ -88,6 +106,24 @@ pub fn main() !void {
             // TODO: read this from identity file in signer service
             .keypair = .fromKeyPair(.generate()),
             .turbine_recv_port = config.shred_network.recv_port,
+        },
+
+        .obs_startup = .{
+            .port = config.observability.port,
+            .max_log_level = log_level,
+            .service_count = service_instances.len - 1,
+        },
+        .obs_id_mem = .{
+            .max_bytes = 4096 * 16,
+        },
+        .obs_gauges = .{
+            .max_elements = 4096 * 2,
+        },
+        .obs_histogram_data = .{
+            .max_elements = 4096 * 3,
+        },
+        .obs_log_streams = .{
+            .max_log_streams = service_instances.len - 1,
         },
     });
 
