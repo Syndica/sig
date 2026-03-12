@@ -152,6 +152,7 @@ pub fn getByOwner(
 
         for (index.entries.values(), index.entries.keys()) |*acc, pk| {
             if (!acc.owner.equals(&owner)) continue;
+            if (acc.lamports == 0) continue;
 
             // Same pubkey can appear in multiple unrooted slots; keep only the latest (highest slot).
             const gop = try map.getOrPut(allocator, pk);

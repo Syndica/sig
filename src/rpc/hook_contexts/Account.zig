@@ -487,7 +487,6 @@ pub fn getProgramAccounts(
 
     while (try iter.next()) |entry| {
         const pubkey, const account = entry;
-        if (account.lamports == 0) continue;
         const data_slice: []const u8 = switch (account.data) {
             .unowned_allocation => |d| d,
             .owned_allocation => |d| d,

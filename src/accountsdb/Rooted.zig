@@ -220,7 +220,7 @@ pub fn getByOwner(self: *Rooted, owner: *const Pubkey) OwnerIterator {
     const stmt: *sql.sqlite3_stmt = if (get_by_owner_stmt) |stmt| stmt else blk: {
         const query =
             \\ SELECT address, lamports, data, owner, executable, rent_epoch
-            \\ FROM entries WHERE owner = ?;
+            \\ FROM entries WHERE owner = ? AND lamports > 0;
         ;
         self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_by_owner_stmt, null));
         break :blk get_by_owner_stmt.?;
