@@ -37,7 +37,16 @@ const stub_root_slot = 0;
 const stub_max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
-    std.log.info("Waiting for shreds on port {}", .{rw.net_pair.port});
+    const logger = rw.obs.acquireLogger(@tagName(name), "main");
+
+    {
+        const metric_appender = rw.obs.metricAppender();
+        _ = metric_appender;
+    }
+
+    rw.obs.signalReady();
+
+    logger.info().logf("Waiting for shreds on port {}", .{rw.net_pair.port});
 
     var verified_roots_fba_buf: [64 * 1024]u8 = undefined;
     var verified_roots_fba: std.heap.FixedBufferAllocator = .init(&verified_roots_fba_buf);
@@ -55,31 +64,31 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         defer zone.deinit();
 
         validateShred(packet, stub_root_slot, ro.config.shred_version, stub_max_slot) catch |err| {
-            std.log.debug("invalid shred: {}", .{err});
+            logger.debug().logf("invalid shred: {}", .{err});
             continue;
         };
 
         verifyShred(packet, &ro.config.leader_schedule, &verified_roots) catch |err| {
-            std.log.debug("failed to verify shred: {}", .{err});
+            logger.debug().logf("failed to verify shred: {}", .{err});
             continue;
         };
 
         // TODO: this is where we might retransmit
 
         const payload = layout.getShred(packet, false) orelse {
-            std.log.debug("failed to get shred", .{});
+            logger.debug().logf("failed to get shred", .{});
             continue;
         };
 
         const packet_shred = shred.Shred.fromPayload(payload) catch |err| {
-            std.log.debug(
+            logger.debug().logf(
                 "failed to deserialize verified shred {?}.{?}: {}",
                 .{ layout.getSlot(payload), layout.getIndex(payload), err },
             );
             continue;
         };
 
-        std.log.debug(
+        logger.debug().logf(
             \\slot: {}
             \\erasure_set_index: {}
             \\index: {}
