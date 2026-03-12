@@ -15,6 +15,7 @@ const Ancestors = sig.core.Ancestors;
 const T = ?sig.ledger.transaction_status.TransactionError;
 
 const Fork = struct { slot: Slot, maybe_err: T = null };
+const Status = enum { pending, failed, succeeded };
 
 /// This is internally locking and thread safe.
 /// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/runtime/src/status_cache.rs#L39
@@ -73,7 +74,7 @@ pub const StatusCache = struct {
         state.mut().slot_deltas.deinit(allocator);
     }
 
-    pub fn getStatus(
+    pub fn getFork(
         self: *StatusCache,
         key: []const u8,
         blockhash: *const Hash,
@@ -98,6 +99,16 @@ pub const StatusCache = struct {
                 break fork;
             }
         } else null;
+    }
+
+    pub fn getStatus(
+        self: *StatusCache,
+        key: []const u8,
+        blockhash: *const Hash,
+        ancestors: *const Ancestors,
+    ) Status {
+        const fork = self.getFork(key, blockhash, ancestors) orelse return .pending;
+        return if (fork.maybe_err) .failed else .succeeded;
     }
 
     pub fn insert(
@@ -245,7 +256,7 @@ test "status cache empty" {
 
     try std.testing.expectEqual(
         null,
-        status_cache.getStatus(
+        status_cache.getFork(
             &signature.toBytes(),
             &block_hash,
             &Ancestors{},
@@ -273,7 +284,7 @@ test "status cache find with ancestor fork" {
 
     try std.testing.expectEqual(
         Fork{ .slot = 0 },
-        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
+        status_cache.getFork(&signature.toBytes(), &blockhash, &ancestors),
     );
 }
 
@@ -294,7 +305,7 @@ test "status cache find without ancestor fork" {
 
     try std.testing.expectEqual(
         null,
-        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
+        status_cache.getFork(&signature.toBytes(), &blockhash, &ancestors),
     );
 }
 
@@ -316,7 +327,7 @@ test "status cache find with root ancestor fork" {
 
     try std.testing.expectEqual(
         Fork{ .slot = 0 },
-        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
+        status_cache.getFork(&signature.toBytes(), &blockhash, &ancestors),
     );
 }
 
@@ -342,7 +353,7 @@ test "status cache insert picks latest blockhash fork" {
     for (0..StatusCache.MAX_CACHE_ENTRIES + 1) |i| try status_cache.addRoot(allocator, i);
 
     try std.testing.expect(
-        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors) != null,
+        status_cache.getFork(&signature.toBytes(), &blockhash, &ancestors) != null,
     );
 }
 
@@ -364,6 +375,6 @@ test "status cache root expires" {
 
     try std.testing.expectEqual(
         null,
-        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
+        status_cache.getFork(&signature.toBytes(), &blockhash, &ancestors),
     );
 }
