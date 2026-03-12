@@ -4,11 +4,13 @@
 //! Shared across all 6 scanning methods.
 //! TODO: Move all this into methods.zig and move the unit tests into test_serialize.zig.
 const std = @import("std");
+const sig = @import("../sig.zig");
 const base58 = @import("base58");
 
 const parse_token = @import("account_codec/parse_token.zig");
 
 const Allocator = std.mem.Allocator;
+const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 
 const BASE58_ENDEC = base58.Table.BITCOIN;
 
@@ -35,17 +37,19 @@ pub const RpcFilterType = union(enum) {
     tokenAccountState,
 
     /// Returns `true` if `account_data` passes this filter.
-    pub fn allows(self: RpcFilterType, account_data: []const u8) bool {
+    pub fn allows(self: RpcFilterType, account_data: *const AccountDataHandle) bool {
         return switch (self) {
-            .dataSize => |size| account_data.len == size,
+            .dataSize => |size| account_data.len() == size,
             .memcmp => |m| m.matches(account_data),
             .tokenAccountState => {
                 // [agave] Account::valid_account_data: data.len == TokenAccount::LEN (165)
                 // and AccountState byte at offset 108 is Initialized (1) or Frozen (2), not
                 // Uninitialized (0).
                 // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/filter.rs#L11
-                return account_data.len == TOKEN_ACCOUNT_LEN and
-                    account_data[TOKEN_ACCOUNT_STATE_OFFSET] != 0;
+                if (account_data.len() != TOKEN_ACCOUNT_LEN) return false;
+                var buf: [1]u8 = undefined;
+                _ = account_data.read(TOKEN_ACCOUNT_STATE_OFFSET, &buf);
+                return buf[0] != 0;
             },
         };
     }
@@ -83,9 +87,10 @@ pub const Memcmp = struct {
     bytes: []const u8,
 
     /// Returns `true` if the account data matches at the specified offset.
-    pub fn matches(self: Memcmp, data: []const u8) bool {
-        if (self.offset +| self.bytes.len > data.len) return false;
-        return std.mem.eql(u8, data[self.offset..][0..self.bytes.len], self.bytes);
+    pub fn matches(self: Memcmp, data: *const AccountDataHandle) bool {
+        if (self.offset +| self.bytes.len > data.len()) return false;
+        const sub = data.slice(@intCast(self.offset), @intCast(self.offset + self.bytes.len));
+        return sub.eql(AccountDataHandle.initAllocated(self.bytes));
     }
 
     pub fn jsonParseFromValue(
@@ -171,7 +176,10 @@ pub fn verifyFilters(
 
 /// Returns `true` if account data passes all filters (conjunction).
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/filter.rs#L7-L12
-pub fn filtersAllow(filters_slice: []const RpcFilterType, account_data: []const u8) bool {
+pub fn filtersAllow(
+    filters_slice: []const RpcFilterType,
+    account_data: *const AccountDataHandle,
+) bool {
     for (filters_slice) |f| {
         if (!f.allows(account_data)) return false;
     }
@@ -180,39 +188,51 @@ pub fn filtersAllow(filters_slice: []const RpcFilterType, account_data: []const 
 
 test "rpc.filters" {
     const testing = std.testing;
+    const h = AccountDataHandle.initAllocated;
 
     // allows: dataSize matches exact length
     {
         const filter = RpcFilterType{ .dataSize = 10 };
-        try testing.expect(filter.allows(&.{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 }));
-        try testing.expect(!filter.allows(&.{ 0, 1, 2 }));
-        try testing.expect(!filter.allows(&.{}));
+        const d1 = h(&.{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 });
+        const d2 = h(&.{ 0, 1, 2 });
+        const d3 = h(&.{});
+        try testing.expect(filter.allows(&d1));
+        try testing.expect(!filter.allows(&d2));
+        try testing.expect(!filter.allows(&d3));
     }
 
     // allows: memcmp matches at offset
     {
         const filter = RpcFilterType{ .memcmp = .{ .offset = 2, .bytes = &.{ 0xAA, 0xBB } } };
-        try testing.expect(filter.allows(&.{ 0, 0, 0xAA, 0xBB, 0 }));
-        try testing.expect(!filter.allows(&.{ 0, 0, 0xAA, 0xCC, 0 }));
+        const d1 = h(&.{ 0, 0, 0xAA, 0xBB, 0 });
+        const d2 = h(&.{ 0, 0, 0xAA, 0xCC, 0 });
+        const d3 = h(&.{ 0, 0, 0xAA });
+        const d4 = h(&.{});
+        try testing.expect(filter.allows(&d1));
+        try testing.expect(!filter.allows(&d2));
         // Too short — offset + bytes extends past end.
-        try testing.expect(!filter.allows(&.{ 0, 0, 0xAA }));
-        try testing.expect(!filter.allows(&.{}));
+        try testing.expect(!filter.allows(&d3));
+        try testing.expect(!filter.allows(&d4));
     }
 
     // allows: memcmp offset at boundary
     {
         const filter = RpcFilterType{ .memcmp = .{ .offset = 3, .bytes = &.{0xFF} } };
         // Exactly fits.
-        try testing.expect(filter.allows(&.{ 0, 0, 0, 0xFF }));
+        const d1 = h(&.{ 0, 0, 0, 0xFF });
+        const d2 = h(&.{ 0, 0, 0 });
+        try testing.expect(filter.allows(&d1));
         // One byte short.
-        try testing.expect(!filter.allows(&.{ 0, 0, 0 }));
+        try testing.expect(!filter.allows(&d2));
     }
 
     // allows: memcmp empty bytes always matches
     {
         const filter = RpcFilterType{ .memcmp = .{ .offset = 0, .bytes = &.{} } };
-        try testing.expect(filter.allows(&.{}));
-        try testing.expect(filter.allows(&.{42}));
+        const d1 = h(&.{});
+        const d2 = h(&.{42});
+        try testing.expect(filter.allows(&d1));
+        try testing.expect(filter.allows(&d2));
     }
 
     // allows: memcmp saturating offset overflow
@@ -224,39 +244,45 @@ test "rpc.filters" {
                 .bytes = &.{1},
             },
         };
-        try testing.expect(!filter.allows(&.{1}));
+        const d1 = h(&.{1});
+        try testing.expect(!filter.allows(&d1));
     }
 
     // allows: tokenAccountState initialized
     {
         var data = [_]u8{0} ** 165;
         data[108] = 1; // Initialized
-        try testing.expect((RpcFilterType{ .tokenAccountState = {} }).allows(&data));
+        const d = h(&data);
+        try testing.expect((RpcFilterType{ .tokenAccountState = {} }).allows(&d));
     }
 
     // allows: tokenAccountState frozen
     {
         var data = [_]u8{0} ** 165;
         data[108] = 2; // Frozen
-        try testing.expect((RpcFilterType{ .tokenAccountState = {} }).allows(&data));
+        const d = h(&data);
+        try testing.expect((RpcFilterType{ .tokenAccountState = {} }).allows(&d));
     }
 
     // allows: tokenAccountState rejects uninitialized
     {
         var data = [_]u8{0} ** 165;
         data[108] = 0; // Uninitialized
-        try testing.expect(!(RpcFilterType{ .tokenAccountState = {} }).allows(&data));
+        const d = h(&data);
+        try testing.expect(!(RpcFilterType{ .tokenAccountState = {} }).allows(&d));
     }
 
     // allows: tokenAccountState rejects wrong length
     {
         var data = [_]u8{0} ** 100;
         data[99] = 1;
-        try testing.expect(!(RpcFilterType{ .tokenAccountState = {} }).allows(&data));
+        const d1 = h(&data);
+        try testing.expect(!(RpcFilterType{ .tokenAccountState = {} }).allows(&d1));
         // Also 166 bytes (too long).
         var data2 = [_]u8{0} ** 166;
         data2[108] = 1;
-        try testing.expect(!(RpcFilterType{ .tokenAccountState = {} }).allows(&data2));
+        const d2 = h(&data2);
+        try testing.expect(!(RpcFilterType{ .tokenAccountState = {} }).allows(&d2));
     }
 
     // filtersAllow: conjunction of multiple filters
@@ -265,17 +291,22 @@ test "rpc.filters" {
             .{ .dataSize = 5 },
             .{ .memcmp = .{ .offset = 0, .bytes = &.{0xAA} } },
         };
-        try testing.expect(filtersAllow(f, &.{ 0xAA, 0, 0, 0, 0 }));
+        const d1 = h(&.{ 0xAA, 0, 0, 0, 0 });
+        const d2 = h(&.{ 0xBB, 0, 0, 0, 0 });
+        const d3 = h(&.{ 0xAA, 0, 0 });
+        try testing.expect(filtersAllow(f, &d1));
         // Right length but wrong byte.
-        try testing.expect(!filtersAllow(f, &.{ 0xBB, 0, 0, 0, 0 }));
+        try testing.expect(!filtersAllow(f, &d2));
         // Right byte but wrong length.
-        try testing.expect(!filtersAllow(f, &.{ 0xAA, 0, 0 }));
+        try testing.expect(!filtersAllow(f, &d3));
     }
 
     // filtersAllow: empty filters allows everything
     {
-        try testing.expect(filtersAllow(&.{}, &.{}));
-        try testing.expect(filtersAllow(&.{}, &.{ 1, 2, 3 }));
+        const d1 = h(&.{});
+        const d2 = h(&.{ 1, 2, 3 });
+        try testing.expect(filtersAllow(&.{}, &d1));
+        try testing.expect(filtersAllow(&.{}, &d2));
     }
 
     // verifyFilters: accepts valid filters
@@ -379,7 +410,8 @@ test "rpc.filters" {
         // Verify the filter actually works.
         var data = [_]u8{0} ** 20;
         @memcpy(data[10..14], &expected_bytes);
-        try testing.expect(filter.allows(&data));
+        const handle = h(&data);
+        try testing.expect(filter.allows(&handle));
     }
 
     // parse: memcmp with explicit base58 encoding
