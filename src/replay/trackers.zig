@@ -381,6 +381,21 @@ pub const BlockCommitmentCache = struct {
         state.mut().block_commitment.deinit(allocator);
     }
 
+    /// Returns the commitment data for a given slot along with the total active stake.
+    ///
+    /// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/runtime/src/commitment.rs#L82
+    pub fn getBlockCommitment(self: *BlockCommitmentCache, slot: Slot) struct {
+        commitment: ?BlockCommitmentArray,
+        total_stake: u64,
+    } {
+        var state = self.state.read();
+        defer state.unlock();
+        return .{
+            .commitment = state.get().block_commitment.get(slot),
+            .total_stake = state.get().total_stake,
+        };
+    }
+
     /// Returns the lowest confirmation depth at which >2/3 of total stake
     /// has confirmed the given slot. Returns null if the slot is not tracked.
     pub fn getConfirmationCount(self: *BlockCommitmentCache, slot: Slot) ?usize {

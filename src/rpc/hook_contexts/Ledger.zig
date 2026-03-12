@@ -10,6 +10,7 @@ const AccountKeys = parse_instruction.AccountKeys;
 const Allocator = std.mem.Allocator;
 const AncestorIterator = sig.ledger.Reader.AncestorIterator;
 const GetBlock = methods.GetBlock;
+const GetBlockCommitment = methods.GetBlockCommitment;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetRecentPerformanceSamples = methods.GetRecentPerformanceSamples;
@@ -78,6 +79,29 @@ pub fn getBlock(
         .show_rewards = show_rewards,
         .max_supported_version = max_supported_version,
     });
+}
+
+/// Returns the commitment data for a given slot along with the total active stake.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/rpc/src/rpc.rs#L940
+pub fn getBlockCommitment(
+    self: LedgerHookContext,
+    arena: Allocator,
+    params: GetBlockCommitment,
+) !GetBlockCommitment.Response {
+    const result = self.block_commitment_cache.getBlockCommitment(params.slot);
+    if (result.commitment) |commitment| {
+        const slice = try arena.alloc(u64, commitment.len);
+        @memcpy(slice, &commitment);
+        return .{
+            .commitment = slice,
+            .totalStake = result.total_stake,
+        };
+    }
+    return .{
+        .commitment = null,
+        .totalStake = result.total_stake,
+    };
 }
 
 pub fn getBlocks(
