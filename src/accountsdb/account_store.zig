@@ -661,6 +661,16 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
         allocator,
         one_lamport_address,
     )).?.lamports);
+
+    // Same checks via the owned reader variant
+    const owned_reader = slot_reader.toOwnedReader();
+
+    try std.testing.expectEqual(null, try owned_reader.get(allocator, zero_lamport_address));
+    {
+        const account = (try owned_reader.get(allocator, one_lamport_address)).?;
+        defer account.deinit(allocator);
+        try std.testing.expectEqual(1, account.lamports);
+    }
 }
 
 test ThreadSafeAccountMap {
@@ -1204,7 +1214,8 @@ fn expectAccountFromStores(
     for (stores) |store| {
         errdefer std.log.err("Occurred with store impl '{s}'", .{@tagName(store)});
         const reader = store.reader();
-        const actual_account = try reader.forSlot(ancestors).get(allocator, address) orelse {
+        const slot_reader = reader.forSlot(ancestors);
+        const actual_account = try slot_reader.get(allocator, address) orelse {
             try std.testing.expectEqual(maybe_expected_account, null);
             continue;
         };
@@ -1215,6 +1226,16 @@ fn expectAccountFromStores(
             continue;
         };
         try actual_account.expectEquals(expected_account);
+
+        // Also test the owned reader variant for accounts_db stores
+        if (store == .accounts_db) {
+            const owned_reader = slot_reader.toOwnedReader();
+            const owned_account = try owned_reader.get(allocator, address) orelse {
+                return error.TestOwnedReaderReturnedNullUnexpectedly;
+            };
+            defer owned_account.deinit(allocator);
+            try owned_account.expectEquals(expected_account);
+        }
     }
 }
 
