@@ -51,13 +51,11 @@ pub const ClusterInfo = extern struct {
     };
 
     pub fn getFromEcho(gossip_port: u16, cluster: common.solana.ClusterType) !ClusterInfo {
-        var io_buf: [4096]u8 = undefined;
-        var addr_buf: [4096]u8 = undefined;
-
         for (cluster.getEntrypoints()) |entrypoint| {
             const split = std.mem.indexOfScalar(u8, entrypoint, ':') orelse continue;
             const port = std.fmt.parseInt(u16, entrypoint[split + 1 ..], 10) catch continue;
 
+            var addr_buf: [4096]u8 = undefined;
             var fba = std.heap.FixedBufferAllocator.init(&addr_buf);
             const addr_list =
                 try std.net.getAddressList(fba.allocator(), entrypoint[0..split], port);
@@ -77,6 +75,9 @@ pub const ClusterInfo = extern struct {
                 std.posix.connect(socket, &entry_addr.any, entry_addr.getOsSockLen()) catch {
                     continue;
                 };
+
+                // Used for writing, then for reading.
+                var io_buf: [4096]u8 = undefined;
 
                 var stream_writer = std.net.Stream.writer(.{ .handle = socket }, &io_buf);
                 const writer = &stream_writer.interface;
