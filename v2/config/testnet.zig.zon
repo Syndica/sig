@@ -9,4 +9,7 @@
     .shred_network = .{
         .recv_port = 8002,
     },
+    .observability = .{
+        .port = 12345,
+    },
 }

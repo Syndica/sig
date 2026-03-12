@@ -17,6 +17,8 @@ const Config = struct {
     gossip: Gossip,
     shred_network: ShredNetwork,
 
+    observability: Observability,
+
     const SandboxingMode = enum { sandboxed, threaded };
 
     const Cluster = enum { testnet, devnet, mainnet };
@@ -27,6 +29,10 @@ const Config = struct {
 
     const ShredNetwork = struct {
         recv_port: u16,
+    };
+
+    const Observability = struct {
+        port: u16,
     };
 };
 
@@ -66,6 +72,7 @@ pub fn main() !void {
     const service_instances: []const services.ServiceInstance = &.{
         .{ .service = .shred_receiver },
         .{ .service = .net },
+        .{ .service = .observability },
     };
 
     const shared_regions: []const services.SharedRegion = &.{
@@ -80,6 +87,55 @@ pub fn main() !void {
             .region = .{ .leader_schedule = .{ .schedule_string = &reader.interface } },
             .shares = &.{
                 .{ .instance = .{ .service = .shred_receiver } },
+            },
+        },
+        .{
+            .region = .{
+                .obs_init = .{
+                    .port = config.observability.port,
+                    .service_count = service_instances.len - 1,
+                },
+            },
+            .shares = &.{
+                .{ .instance = .{ .service = .observability } },
+                .{ .instance = .{ .service = .net }, .rw = true },
+                .{ .instance = .{ .service = .shred_receiver }, .rw = true },
+            },
+        },
+        .{
+            .region = .{
+                .obs_log_streams = .{
+                    .max_log_streams = service_instances.len - 1,
+                },
+            },
+            .shares = &.{
+                .{ .instance = .{ .service = .observability }, .rw = true },
+                .{ .instance = .{ .service = .net }, .rw = true },
+                .{ .instance = .{ .service = .shred_receiver }, .rw = true },
+            },
+        },
+        .{
+            .region = .{ .obs_id_mem = .{} },
+            .shares = &.{
+                .{ .instance = .{ .service = .observability } },
+                .{ .instance = .{ .service = .net }, .rw = true },
+                .{ .instance = .{ .service = .shred_receiver }, .rw = true },
+            },
+        },
+        .{
+            .region = .{ .obs_gauges = .{} },
+            .shares = &.{
+                .{ .instance = .{ .service = .observability } },
+                .{ .instance = .{ .service = .net }, .rw = true },
+                .{ .instance = .{ .service = .shred_receiver }, .rw = true },
+            },
+        },
+        .{
+            .region = .{ .obs_histogram_data = .{} },
+            .shares = &.{
+                .{ .instance = .{ .service = .observability }, .rw = true },
+                .{ .instance = .{ .service = .net }, .rw = true },
+                .{ .instance = .{ .service = .shred_receiver }, .rw = true },
             },
         },
     };

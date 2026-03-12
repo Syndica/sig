@@ -5,6 +5,7 @@ const std = @import("std");
 const start = @import("start");
 const common = @import("common");
 const Pair = common.net.Pair;
+const obs = common.observability;
 
 comptime {
     _ = start;
@@ -16,6 +17,12 @@ pub const std_options = start.options;
 
 pub const ReadWrite = struct {
     pair: *Pair,
+
+    obs_startup: *obs.Startup,
+    obs_log_streams: []obs.log.MessageStream,
+    obs_id_mem: []u8,
+    obs_gauges: []std.atomic.Value(u64),
+    obs_histogram_data: []u64,
 };
 
 pub fn serviceMain(rw: ReadWrite) !noreturn {

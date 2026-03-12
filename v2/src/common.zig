@@ -23,7 +23,7 @@ pub const ResolvedArgs = extern struct {
     ro: [max_regions]?[*]align(page_size_min) const u8,
     ro_len: [max_regions]usize,
 
-    pub const max_regions = 4; // chosen arbitrarily
+    pub const max_regions = 8; // chosen arbitrarily
     const page_size_min = std.heap.page_size_min;
 };
 

@@ -42,6 +42,27 @@ pub const Startup = extern struct {
     /// Represents the end of `log_streams`. Can be incremented atomically by other services to
     /// claim elements in `log_streams`.
     log_streams: std.atomic.Value(u32),
+
+    pub const InitParams = struct {
+        /// The port to listen on for the prometheus client.
+        port: u16,
+        /// Number of other services excluding the observability service (of which there is presumably only instance).
+        service_count: u32,
+    };
+
+    pub fn init(
+        self: *Startup,
+        params: InitParams,
+    ) void {
+        self.* = .{
+            .port = params.port,
+            .pending_services = .init(params.service_count),
+            .id_mem_end = .init(0),
+            .gauges_end = .init(0),
+            .histogram_data_end = .init(0),
+            .log_streams = .init(0),
+        };
+    }
 };
 
 pub const endian = builtin.target.cpu.arch.endian();
