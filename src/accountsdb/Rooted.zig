@@ -17,10 +17,6 @@ const OK = sql.SQLITE_OK;
 const DONE = sql.SQLITE_DONE;
 const ROW = sql.SQLITE_ROW;
 
-/// Whether an index on the `owner` column of Rooted is created at startup.
-/// When disabled, the index is actively dropped (if it exists).
-const rpc_enable_owner_index = sig.build_options.rpc_enable_owner_index;
-
 /// Handle to the underlying sqlite database.
 handle: *sql.sqlite3,
 /// Tracks the largest rooted slot.
@@ -34,7 +30,7 @@ threadlocal var put_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_by_owner_stmt: ?*sql.sqlite3_stmt = null;
 
-pub fn init(file_path: [:0]const u8) !Rooted {
+pub fn init(file_path: [:0]const u8, enable_owner_index: bool) !Rooted {
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.init" });
     defer zone.deinit();
 
@@ -86,7 +82,7 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         }
     }
 
-    if (rpc_enable_owner_index) {
+    if (enable_owner_index) {
         if (sql.sqlite3_exec(
             db,
             "CREATE INDEX IF NOT EXISTS rpc_owner_idx ON entries(owner)",

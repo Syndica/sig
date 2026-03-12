@@ -49,7 +49,7 @@ pub fn initTest(allocator: std.mem.Allocator) !TestContext {
     var buffer: [std.fs.max_path_bytes + 1]u8 = undefined;
     const path = try std.fmt.bufPrintZ(&buffer, "{s}/accounts.db", .{tmp_path});
 
-    var rooted: Rooted = try .init(path);
+    var rooted: Rooted = try .init(path, false);
     errdefer rooted.deinit();
 
     const db: @This() = try .init(allocator, rooted);
