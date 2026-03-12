@@ -487,12 +487,7 @@ pub fn getProgramAccounts(
 
     while (try iter.next()) |entry| {
         const pubkey, const account = entry;
-        const data_slice: []const u8 = switch (account.data) {
-            .unowned_allocation => |d| d,
-            .owned_allocation => |d| d,
-            else => @panic("gPA: unexpected AccountDataHandle variant"),
-        };
-        if (!sig.rpc.filters.filtersAllow(f, data_slice)) continue;
+        if (!sig.rpc.filters.filtersAllow(f, &account.data)) continue;
 
         const data = try account_codec.encodeAccount(
             arena,
