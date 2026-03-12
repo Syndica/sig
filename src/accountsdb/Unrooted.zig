@@ -110,7 +110,7 @@ pub fn getOwned(
 
     var best_slot: Slot = 0;
     var result: ?Account = null;
-    errdefer if (result) |*prev| prev.data.deinit(allocator);
+    errdefer if (result) |*prev| prev.deinit(allocator);
 
     for (self.slots) |*index| {
         if (index.is_empty.load(.acquire)) continue;
@@ -122,16 +122,9 @@ pub fn getOwned(
             n_gets += 1;
             const data = index.entries.get(address) orelse continue;
             // Free previous clone if we found a better slot.
-            if (result) |*prev| prev.data.deinit(allocator);
+            if (result) |*prev| prev.deinit(allocator);
             // Clone data while still holding the shared lock.
-            const owned_data = try allocator.dupe(u8, data.data);
-            result = .{
-                .lamports = data.lamports,
-                .data = .{ .owned_allocation = owned_data },
-                .owner = data.owner,
-                .executable = data.executable,
-                .rent_epoch = data.rent_epoch,
-            };
+            result = (try data.clone(allocator)).toOwnedAccount();
             best_slot = index.slot;
         }
     }
@@ -305,7 +298,9 @@ test "sanity check" {
     defer ancestors.deinit(allocator);
 
     const result = db.get(account_a, &ancestors).?;
+    const result_owned = (try db.getOwned(allocator, account_a, &ancestors)).?;
     try std.testing.expectEqual(result.lamports, 250_000); // should return slot 3
+    try std.testing.expectEqual(result_owned.lamports, 250_000); // should return slot 3
 }
 
 test "forked behaviour" {
@@ -360,7 +355,9 @@ test "forked behaviour" {
     defer ancestors.deinit(allocator);
 
     const result = db.get(account_a, &ancestors).?;
+    const result_owned = (try db.getOwned(allocator, account_a, &ancestors)).?;
     try std.testing.expectEqual(result.lamports, 750_000);
+    try std.testing.expectEqual(result_owned.lamports, 750_000);
 }
 
 test "account not in ancestor set" {
@@ -389,7 +386,13 @@ test "account not in ancestor set" {
     defer ancestors.deinit(allocator);
 
     const result = db.get(account_a, &ancestors);
+    const result_owned = try db.getOwned(
+        allocator,
+        account_a,
+        &ancestors,
+    );
     try std.testing.expectEqual(result, null);
+    try std.testing.expectEqual(result_owned, null);
 }
 
 test "multiple accounts across slots" {
@@ -458,19 +461,43 @@ test "multiple accounts across slots" {
         defer ancestors.deinit(allocator);
 
         const result_a = db.get(account_a, &ancestors).?;
+        const result_a_owned = (try db.getOwned(
+            allocator,
+            account_a,
+            &ancestors,
+        )).?;
         try std.testing.expectEqual(result_a.lamports, 500_000);
+        try std.testing.expectEqual(result_a_owned.lamports, 500_000);
 
         const result_b = db.get(account_b, &ancestors).?;
+        const result_b_owned = (try db.getOwned(
+            allocator,
+            account_b,
+            &ancestors,
+        )).?;
         try std.testing.expectEqual(result_b.lamports, 2_000_000);
+        try std.testing.expectEqual(result_b_owned.lamports, 2_000_000);
 
         const result_c = db.get(account_c, &ancestors).?;
+        const result_c_owned = (try db.getOwned(
+            allocator,
+            account_c,
+            &ancestors,
+        )).?;
         try std.testing.expectEqual(result_c.lamports, 3_000_000);
+        try std.testing.expectEqual(result_c_owned.lamports, 3_000_000);
     }
     {
         var ancestors: Ancestors = try .initWithSlots(allocator, &.{ 1, 2 });
         defer ancestors.deinit(allocator);
 
         const result_a = db.get(account_a, &ancestors).?;
+        const result_a_owned = (try db.getOwned(
+            allocator,
+            account_a,
+            &ancestors,
+        )).?;
         try std.testing.expectEqual(result_a.lamports, 1_000_000);
+        try std.testing.expectEqual(result_a_owned.lamports, 1_000_000);
     }
 }
