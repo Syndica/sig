@@ -24,13 +24,26 @@ pub const ReadWrite = struct {
 };
 
 pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
-    try mainInner(&.{ rw.gossip_pair, rw.shred_pair });
+    const logger = rw.obs.acquireLogger(@tagName(name), "main");
+
+    const metric_appender = rw.obs.metricAppender();
+    _ = metric_appender;
+
+    rw.obs.signalReady();
+
+    try mainInner(
+        logger,
+        &.{ rw.gossip_pair, rw.shred_pair },
+    );
 }
 
 const MAX_SOCKETS = 10;
 
 /// `ports` is the list of ports it'll listen on.
-fn mainInner(pairs: []const *Pair) !noreturn {
+fn mainInner(
+    logger: obs.Logger("main"),
+    pairs: []const *Pair,
+) !noreturn {
     std.debug.assert(pairs.len <= MAX_SOCKETS);
 
     var sockets: [MAX_SOCKETS]std.posix.fd_t = undefined;
@@ -45,7 +58,7 @@ fn mainInner(pairs: []const *Pair) !noreturn {
         );
         errdefer std.posix.close(socket);
 
-        std.log.info("binding 0.0.0.0:{}", .{pair.port});
+        logger.info().logf("binding 0.0.0.0:{}", .{pair.port});
 
         const local: std.net.Address = .initIp4(.{ 0, 0, 0, 0 }, pair.port);
         try std.posix.bind(socket, &local.any, local.getOsSockLen());

@@ -4,6 +4,7 @@
 const std = @import("std");
 const start = @import("start");
 const lib = @import("lib");
+const obs = lib.observability;
 
 const Pair = lib.net.Pair;
 const Packet = lib.net.Packet;
@@ -23,6 +24,7 @@ pub const std_options = start.options;
 
 pub const ReadWrite = struct {
     net_pair: *Pair,
+    obs: obs.Regions,
 };
 
 pub const ReadOnly = struct {
@@ -32,7 +34,10 @@ pub const ReadOnly = struct {
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
-    std.log.info(
+    const logger = rw.obs.acquireLogger(@tagName(name), "main");
+    rw.obs.signalReady();
+
+    logger.info().logf(
         "Gossip started on :{} as {f}:\n\tshred_version:{}\n\tentrypoints:{f}",
         .{
             rw.net_pair.port,
@@ -91,10 +96,10 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     var it = rw.net_pair.recv.get(.reader);
     while (true) {
         now = @intCast(std.time.milliTimestamp());
-        try gossip.poll(now);
+        try gossip.poll(.from(logger), now);
 
         const packet = it.next() orelse continue;
-        gossip.processPacket(now, packet);
+        gossip.processPacket(.from(logger), now, packet);
         it.markUsed();
     }
 }

@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const lib = @import("../lib.zig");
+const obs = lib.observability;
 
 const assert = std.debug.assert;
 
@@ -274,15 +275,15 @@ pub fn GossipNode(comptime Effects: type) type {
             };
         }
 
-        pub fn poll(self: *Self, now: u64) !void {
+        pub fn poll(self: *Self, logger: obs.Logger("poll"), now: u64) !void {
             if (self.pull_timeout <= now) {
                 self.pull_timeout = now + PULL_INTERVAL_MS;
-                try self.sendPullRequests(now);
+                try self.sendPullRequests(.from(logger), now);
             }
 
             if (self.push_timeout <= now) {
                 self.push_timeout = now + PUSH_INTERVAL_MS;
-                try self.updatePushSet(now);
+                try self.updatePushSet(.from(logger), now);
             }
 
             if (self.ping_timeout <= now) {
@@ -291,20 +292,25 @@ pub fn GossipNode(comptime Effects: type) type {
             }
         }
 
-        pub fn processPacket(self: *Self, now: u64, packet: *const Packet) void {
+        pub fn processPacket(
+            self: *Self,
+            logger: obs.Logger("processPacket"),
+            now: u64,
+            packet: *const Packet,
+        ) void {
             var msg_buf: [16 * 1024]u8 = undefined;
             var msg_fba = std.heap.FixedBufferAllocator.init(&msg_buf);
             var msg_reader: std.Io.Reader = .fixed(packet.data[0..packet.size]);
             const msg = bincode.read(&msg_fba, &msg_reader, GossipMessage) catch |e| {
-                std.log.err(
+                logger.err().logf(
                     "invalid msg from ({f}, size={}): {}",
                     .{ packet.addr, packet.size, e },
                 );
                 return;
             };
 
-            self.processMessage(now, packet.addr, msg) catch |e| {
-                std.log.err(
+            self.processMessage(.from(logger), now, packet.addr, msg) catch |e| {
+                logger.err().logf(
                     "failed to process msg ({f}, {s}) {}",
                     .{ packet.addr, @tagName(msg), e },
                 );
@@ -312,7 +318,13 @@ pub fn GossipNode(comptime Effects: type) type {
             };
         }
 
-        fn processMessage(self: *Self, now: u64, addr: std.net.Address, msg: GossipMessage) !void {
+        fn processMessage(
+            self: *Self,
+            logger: obs.Logger("processMessage"),
+            now: u64,
+            addr: std.net.Address,
+            msg: GossipMessage,
+        ) !void {
             switch (msg) {
                 .pull_request => |pr| {
                     const from, const shred_version = switch (pr.contact_info.data) {
@@ -325,7 +337,7 @@ pub fn GossipNode(comptime Effects: type) type {
                         return error.PullRequestFromUnverifiedPeer;
 
                     // Update the ContactInfo
-                    _ = try self.insertValue(now, .pull, pr.contact_info);
+                    _ = try self.insertValue(.from(logger), now, .pull, pr.contact_info);
 
                     const mask_bits = std.math.cast(u6, pr.mask_bits) orelse
                         return error.InvalidPullRequestMaskBits;
@@ -363,7 +375,7 @@ pub fn GossipNode(comptime Effects: type) type {
                         return error.PullResponseFromExpiredPeer;
 
                     for (pr.values.items) |value| {
-                        _ = try self.insertValue(now, .pull, value);
+                        _ = try self.insertValue(.from(logger), now, .pull, value);
                     }
                 },
                 .push_message => |push| {
@@ -373,7 +385,7 @@ pub fn GossipNode(comptime Effects: type) type {
 
                     for (push.values.items) |value| {
                         const key, const duplicates =
-                            (try self.insertValue(now, .push, value)) orelse continue;
+                            (try self.insertValue(.from(logger), now, .push, value)) orelse continue;
 
                         // Add to prunes if enough duplicates.
                         if (duplicates >= DUPLICATE_THRESHOLD_UNTIL_PRUNE) {
@@ -464,7 +476,10 @@ pub fn GossipNode(comptime Effects: type) type {
                 },
                 .ping_message => |ping| {
                     ping.signature.verify(&ping.from, &ping.token) catch {
-                        std.log.err("invalid Ping signature from {f}:{f}", .{ ping.from, addr });
+                        logger.err().logf(
+                            "invalid Ping signature from {f}:{f}",
+                            .{ ping.from, addr },
+                        );
                         return;
                     };
 
@@ -487,17 +502,26 @@ pub fn GossipNode(comptime Effects: type) type {
                 .pong_message => |pong| {
                     // If not a hash in window (prev, current), not worth verifying the signature either
                     if (!self.ping_window.contains(&pong.hash)) {
-                        std.log.err("invalid Pong hash from {f}:{f}", .{ pong.from, addr });
+                        logger.err().logf(
+                            "invalid Pong hash from {f}:{f}",
+                            .{ pong.from, addr },
+                        );
                         return;
                     }
 
                     pong.signature.verify(&pong.from, &pong.hash.data) catch {
-                        std.log.err("invalid Pong signature from {f}:{f}", .{ pong.from, addr });
+                        logger.err().logf(
+                            "invalid Pong signature from {f}:{f}",
+                            .{ pong.from, addr },
+                        );
                         return;
                     };
 
                     const peer = self.peers.getPtr(pong.from) orelse {
-                        std.log.err("pong from untracked peer {f}:{f}", .{ pong.from, addr });
+                        logger.err().logf(
+                            "pong from untracked peer {f}:{f}",
+                            .{ pong.from, addr },
+                        );
                         return;
                     };
 
@@ -531,13 +555,13 @@ pub fn GossipNode(comptime Effects: type) type {
             }
         }
 
-        fn updatePushSet(self: *Self, now: u64) !void {
+        fn updatePushSet(self: *Self, logger: obs.Logger("updatePushSet"), now: u64) !void {
             // refresh what nodes we will be sending push messages to for the near future.
             self.refreshPushActiveSet(now);
 
             // Re-sign our contact info & update it to be pushed to active set.
             self.signed_contact = try signData(now, self.config.effects, self.signed_contact.data);
-            try self.insertSigned(now, self.signed_contact);
+            try self.insertSigned(.from(logger), now, self.signed_contact);
 
             // Send out any queued values as push messages to active set.
             try self.sendPushMessages();
@@ -650,7 +674,7 @@ pub fn GossipNode(comptime Effects: type) type {
             }
         }
 
-        fn sendPullRequests(self: *Self, now: u64) !void {
+        fn sendPullRequests(self: *Self, logger: obs.Logger("sendPullRequests"), now: u64) !void {
             const num_items: f64 = @floatFromInt(self.table.count() + self.expired.items.len);
             const mask_bits: u6 = blk: {
                 comptime assert(std.math.isPowerOfTwo(MAX_PULL_REQUESTS));
@@ -741,7 +765,7 @@ pub fn GossipNode(comptime Effects: type) type {
             if (i == 0) {
                 if (self.no_peers_timeout <= now -| NO_PEERS_THRESHOLD_MS) {
                     self.no_peers_timeout = now + NO_PEERS_THRESHOLD_MS;
-                    std.log.debug("No peers...", .{});
+                    logger.debug().logf("No peers...", .{});
 
                     const mask =
                         (@as(u65, 0) << (@as(u7, 64) - mask_bits)) | (~@as(u64, 0) >> mask_bits);
@@ -789,13 +813,19 @@ pub fn GossipNode(comptime Effects: type) type {
             return try self.insertSigned(now, signed_value);
         }
 
-        fn insertSigned(self: *Self, now: u64, value: GossipValue) !void {
-            const key, _ = (try self.insertValue(now, .us, value)) orelse unreachable;
+        fn insertSigned(
+            self: *Self,
+            logger: obs.Logger("insertSigned"),
+            now: u64,
+            value: GossipValue,
+        ) !void {
+            const key, _ = (try self.insertValue(.from(logger), now, .us, value)) orelse unreachable;
             assert(key.from.equals(&self.identity()));
         }
 
         fn insertValue(
             self: *Self,
+            logger: obs.Logger("insertValue"),
             now: u64,
             caller: enum { us, pull, push },
             value: GossipValue,
@@ -871,7 +901,7 @@ pub fn GossipNode(comptime Effects: type) type {
                 },
             }) orelse {
                 // Record that we've seen it, but don't insert it.
-                try self.onDiscoveredValue(now, key, value);
+                try self.onDiscoveredValue(.from(logger), now, key, value);
                 self.addExpired(now, hash);
                 return null;
             };
@@ -892,7 +922,7 @@ pub fn GossipNode(comptime Effects: type) type {
                 break :blk .{ gop.found_existing, gop.value_ptr };
             };
 
-            try self.onDiscoveredValue(now, key, value);
+            try self.onDiscoveredValue(.from(logger), now, key, value);
 
             if (exists) {
                 // duplicate
@@ -941,9 +971,15 @@ pub fn GossipNode(comptime Effects: type) type {
             return .{ key, 0 };
         }
 
-        fn onDiscoveredValue(self: *Self, now: u64, key: Key, value: GossipValue) !void {
+        fn onDiscoveredValue(
+            self: *Self,
+            logger: obs.Logger("onDiscoveredValue"),
+            now: u64,
+            key: Key,
+            value: GossipValue,
+        ) !void {
             if (!key.from.equals(&self.identity())) {
-                std.log.debug("Discovered {f}", .{key});
+                logger.debug().logf("Discovered {f}", .{key});
 
                 switch (value.data) {
                     .vote => {}, // TODO: send to consensus service
