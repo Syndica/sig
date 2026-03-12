@@ -181,6 +181,20 @@ pub const Client = struct {
         return self.fetch(.null, .getSlot, request);
     }
 
+    pub fn getSlotLeader(
+        self: *Client,
+        request: rpc.methods.GetSlotLeader,
+    ) Error!Response(rpc.methods.GetSlotLeader.Response) {
+        return self.fetch(.null, .getSlotLeader, request);
+    }
+
+    pub fn getSlotLeaders(
+        self: *Client,
+        request: rpc.methods.GetSlotLeaders,
+    ) Error!Response(rpc.methods.GetSlotLeaders.Response) {
+        return self.fetch(.null, .getSlotLeaders, request);
+    }
+
     pub fn getStakeMinimumDelegation(
         self: *Client,
         request: rpc.methods.GetStakeMinimumDelegation,

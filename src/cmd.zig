@@ -2235,10 +2235,11 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
             const response = try rpc_client.getLeaderSchedule(.{ .slot = slot });
             defer response.deinit();
 
-            const rpc_schedule = (try response.result()).value;
+            const rpc_schedule = (try response.result()) orelse
+                return error.LeaderScheduleNotAvailable;
             break :blk try sig.core.leader_schedule.computeFromMap(
                 allocator,
-                &rpc_schedule,
+                &rpc_schedule.value,
             );
         };
         break :b leader_schedule;
@@ -3070,10 +3071,10 @@ const RpcLeaderScheduleService = struct {
     ) !LeaderSchedule {
         const response = try self.rpc_client.getLeaderSchedule(.{ .slot = slot });
         defer response.deinit();
-        const rpc_schedule = (try response.result()).value;
+        const rpc_schedule = (try response.result()) orelse return error.LeaderScheduleNotAvailable;
         var leaders = try sig.core.leader_schedule.computeFromMap(
             self.allocator,
-            &rpc_schedule,
+            &rpc_schedule.value,
         );
         const epoch = epoch_schedule.getEpoch(slot);
         leaders.start = epoch_schedule.getFirstSlotInEpoch(epoch);

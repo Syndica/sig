@@ -48,6 +48,17 @@ pub const LeaderSchedules = struct {
     prev: ?LeaderSchedule,
     next: ?LeaderSchedule,
 
+    /// Returns the schedule covering `slot`, or null if none.
+    /// Same result as Agave's [get_epoch_leader_schedule(epoch)](https://github.com/anza-xyz/agave/blob/v3.1.8/ledger/src/leader_schedule_cache.rs#L194-L196)
+    /// where epoch = get_epoch(slot): both return the LeaderSchedule for the epoch containing slot.
+    /// Agave: HashMap lookup by epoch. Sig: curr/prev/next each have [start,end]; we return the one with start <= slot <= end.
+    pub fn getLeaderScheduleForSlot(self: *const LeaderSchedules, slot: Slot) ?*const LeaderSchedule {
+        if (self.curr.contains(slot)) return &self.curr;
+        if (self.prev) |*prev| if (prev.contains(slot)) return prev;
+        if (self.next) |*next| if (next.contains(slot)) return next;
+        return null;
+    }
+
     pub fn getLeader(self: *const LeaderSchedules, slot: Slot) !Pubkey {
         return if (slot < self.curr.start)
             if (self.prev) |prev| prev.getLeader(slot) else error.SlotOutOfRange
@@ -67,6 +78,10 @@ pub const LeaderSchedule = struct {
     leaders: []const Pubkey,
     start: Slot,
     end: Slot,
+
+    fn contains(self: *const LeaderSchedule, slot: Slot) bool {
+        return self.start <= slot and slot <= self.end;
+    }
 
     pub fn deinit(self: *const LeaderSchedule, allocator: Allocator) void {
         allocator.free(self.leaders);
@@ -298,6 +313,50 @@ pub fn computeFromStakedNodes(
     }
 
     return slot_leaders;
+}
+
+/// Inverse of computeFromMap: builds PubkeyMap from LeaderSchedule.
+/// Maps each leader identity to the slot indices (0-based in epoch) where they lead.
+/// NOTE: Caller must fully deallocate the returned map: free each value slice with the same allocator
+/// [agave] leader_schedule_by_identity: https://github.com/anza-xyz/agave/blob/v3.1.8/ledger/src/leader_schedule_utils.rs#L38-L54
+pub fn leaderScheduleByIdentity(
+    allocator: Allocator,
+    schedule: *const LeaderSchedule,
+    maybe_filter_identity: ?Pubkey,
+) !sig.utils.collections.PubkeyMap([]const u64) {
+    const slots_in_epoch: usize = @intCast(schedule.end - schedule.start + 1);
+
+    // Group slot indices by leader identity
+    var by_identity = std.AutoArrayHashMapUnmanaged(Pubkey, std.ArrayListUnmanaged(u64)).empty;
+    defer {
+        var it = by_identity.iterator();
+        while (it.next()) |e| e.value_ptr.deinit(allocator);
+        by_identity.deinit(allocator);
+    }
+
+    for (0..slots_in_epoch) |slot_index| {
+        const leader = schedule.leaders[slot_index];
+        if (maybe_filter_identity) |filter| if (!leader.equals(&filter)) continue;
+
+        const gop = try by_identity.getOrPut(allocator, leader);
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        try gop.value_ptr.append(allocator, @intCast(slot_index));
+    }
+
+    // Convert to owned slices for the result map. Each entry's slice is allocated
+    // separately, so ensure we free them if an error occurs while building the map.
+    var result = sig.utils.collections.PubkeyMap([]const u64).empty;
+    errdefer {
+        for (result.values()) |v| allocator.free(v);
+        result.deinit(allocator);
+    }
+    var it = by_identity.iterator();
+    while (it.next()) |e| {
+        const slots = try allocator.dupe(u64, e.value_ptr.items);
+        errdefer allocator.free(slots);
+        try result.put(allocator, e.key_ptr.*, slots);
+    }
+    return result;
 }
 
 pub fn computeFromMap(

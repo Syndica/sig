@@ -34,6 +34,8 @@ const GetRecentPrioritizationFees = methods.GetRecentPrioritizationFees;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetSlot = methods.GetSlot;
+const GetSlotLeader = methods.GetSlotLeader;
+const GetSlotLeaders = methods.GetSlotLeaders;
 const GetStakeMinimumDelegation = methods.GetStakeMinimumDelegation;
 const GetTransaction = methods.GetTransaction;
 const GetTransactionCount = methods.GetTransactionCount;
@@ -614,7 +616,7 @@ test GetLeaderSchedule {
         \\{"jsonrpc":"2.0","result":{"111uPd5xQyRHSmPzFJuHNUiuHbF55QXsuEbmqxE4ro":[1,3],"123vij84ecQEKUvQ7gYMKxKwKF6PbYSzCzzURYA4xULY":[2,4]},"id":1}
     );
     defer response.deinit();
-    const result: GetLeaderSchedule.Response = try response.result();
+    const result = (try response.result()).?;
     try std.testing.expectEqual(2, result.value.count());
     try std.testing.expectEqualSlices(
         u64,
@@ -833,8 +835,29 @@ test GetSlot {
     );
 }
 
-// TODO: test getSlotLeader()
-// TODO: test getSlotLeaders()
+test GetSlotLeader {
+    try testRequest(.getSlotLeader, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getSlotLeader","params":[]}
+    );
+    const leader_pubkey: Pubkey = .parse("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn");
+    try testResponse(GetSlotLeader, .{ .result = leader_pubkey },
+        \\{"jsonrpc":"2.0","result":"2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn","id":1}
+    );
+}
+
+test GetSlotLeaders {
+    try testRequest(.getSlotLeaders, .{ .start_slot = 100, .limit = 3 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getSlotLeaders","params":[100,3]}
+    );
+    const leaders = [_]Pubkey{
+        Pubkey.parse("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn"),
+        Pubkey.parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
+        Pubkey.parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
+    };
+    try testResponse(GetSlotLeaders, .{ .result = &leaders },
+        \\{"jsonrpc":"2.0","result":["2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn","Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk","GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"],"id":1}
+    );
+}
 // TODO: test getStakeActivation()
 
 test GetStakeMinimumDelegation {
