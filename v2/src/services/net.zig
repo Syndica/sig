@@ -26,13 +26,39 @@ pub const ReadWrite = struct {
 };
 
 pub fn serviceMain(rw: ReadWrite) !noreturn {
-    try mainInner(&.{rw.pair});
+    const obs_log_stream = &rw.obs_log_streams[rw.obs_startup.log_streams.fetchAdd(1, .release)];
+    obs_log_stream.name.init(@tagName(name));
+
+    const metric_appender: obs.MetricAppender = .{
+        .id_mem = rw.obs_id_mem,
+        .id_mem_end = &rw.obs_startup.id_mem_end,
+
+        .gauges = rw.obs_gauges,
+        .gauges_end = &rw.obs_startup.gauges_end,
+
+        .histogram_data = rw.obs_histogram_data,
+        .histogram_data_end = &rw.obs_startup.histogram_data_end,
+    };
+    _ = metric_appender;
+
+    rw.obs_startup.signalReady();
+
+    try mainInner(
+        .{
+            .sink = .{ .ring = &obs_log_stream.ring },
+            .max_level = rw.obs_startup.max_log_level,
+        },
+        &.{rw.pair},
+    );
 }
 
 const MAX_SOCKETS = 10;
 
 /// `ports` is the list of ports it'll listen on.
-fn mainInner(pairs: []const *Pair) !noreturn {
+fn mainInner(
+    logger: obs.Logger("main"),
+    pairs: []const *Pair,
+) !noreturn {
     std.debug.assert(pairs.len <= MAX_SOCKETS);
 
     var sockets: [MAX_SOCKETS]std.posix.fd_t = undefined;
@@ -47,7 +73,7 @@ fn mainInner(pairs: []const *Pair) !noreturn {
         );
         errdefer std.posix.close(socket);
 
-        std.log.info("binding 0.0.0.0:{}", .{pair.port});
+        logger.info().logf("binding 0.0.0.0:{}", .{pair.port});
 
         const local: std.net.Address = .initIp4(.{ 0, 0, 0, 0 }, pair.port);
         try std.posix.bind(socket, &local.any, local.getOsSockLen());

@@ -56,8 +56,12 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     while (true) {
         {
             var stderr_buf: [4096]u8 = undefined;
-            const stderr = std.debug.lockStderrWriter(&stderr_buf);
-            defer std.debug.unlockStderrWriter();
+            var stderr_fw: std.fs.File.Writer = .init(
+                .{ .handle = start.panic_state.stderr },
+                &stderr_buf,
+            );
+            const stderr = &stderr_fw.interface;
+            defer stderr.flush() catch {};
             outer: for (log_streams) |*log_stream| {
                 // stream out at most 16 logs at a time from each service.
                 // limit chosen arbitrarily.

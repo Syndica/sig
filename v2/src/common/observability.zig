@@ -25,6 +25,9 @@ pub const Startup = extern struct {
     /// The port to listen on for the prometheus client.
     /// Mutating this is after initialization illegal.
     port: u16,
+    /// The maximum log level to emit.
+    /// Mutating this is after initialization illegal.
+    max_log_level: log.Level,
     /// Should start with a value equal to the number of other services that are going to
     /// be writing metrics to the trace service. The trace service will wait until this
     /// value is equal to zero before starting up, giving all other services a chance to
@@ -46,6 +49,8 @@ pub const Startup = extern struct {
     pub const InitParams = struct {
         /// The port to listen on for the prometheus client.
         port: u16,
+        /// The maximum log level to emit.
+        max_log_level: log.Level,
         /// Number of other services excluding the observability service (of which there is presumably only instance).
         service_count: u32,
     };
@@ -56,12 +61,19 @@ pub const Startup = extern struct {
     ) void {
         self.* = .{
             .port = params.port,
+            .max_log_level = params.max_log_level,
             .pending_services = .init(params.service_count),
             .id_mem_end = .init(0),
             .gauges_end = .init(0),
             .histogram_data_end = .init(0),
             .log_streams = .init(0),
         };
+    }
+
+    /// A service should call this when they want to signal to the observability service
+    /// that it has acquired a logger stream, and has registered all desired metrics.
+    pub fn signalReady(self: *Startup) void {
+        std.debug.assert(self.pending_services.fetchSub(1, .release) != 0);
     }
 };
 

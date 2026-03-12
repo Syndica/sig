@@ -44,7 +44,33 @@ const stub_shred_version: Atomic(u16) = .{ .raw = 29062 }; // TODO: port over ge
 const stub_max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
-    std.log.info("Waiting for shreds on port {}", .{rw.pair.port});
+    const logger: obs.Logger("main") = .{
+        .sink = .{ .ring = sink: {
+            const obs_log_stream_index = rw.obs_startup.log_streams.fetchAdd(1, .release);
+            const obs_log_stream = &rw.obs_log_streams[obs_log_stream_index];
+            obs_log_stream.name.init(@tagName(name));
+            break :sink &obs_log_stream.ring;
+        } },
+        .max_level = rw.obs_startup.max_log_level,
+    };
+
+    {
+        const metric_appender: obs.MetricAppender = .{
+            .id_mem = rw.obs_id_mem,
+            .id_mem_end = &rw.obs_startup.id_mem_end,
+
+            .gauges = rw.obs_gauges,
+            .gauges_end = &rw.obs_startup.gauges_end,
+
+            .histogram_data = rw.obs_histogram_data,
+            .histogram_data_end = &rw.obs_startup.histogram_data_end,
+        };
+        _ = metric_appender;
+    }
+
+    rw.obs_startup.signalReady();
+
+    logger.info().logf("Waiting for shreds on port {}", .{rw.pair.port});
 
     var verified_roots_fba_buf: [64 * 1024]u8 = undefined;
     var verified_roots_fba: std.heap.FixedBufferAllocator = .init(&verified_roots_fba_buf);
@@ -63,31 +89,31 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         defer slice.markUsed(1);
 
         validateShred(packet, stub_root_slot, &stub_shred_version, stub_max_slot) catch |err| {
-            std.log.debug("invalid shred: {}", .{err});
+            logger.debug().logf("invalid shred: {}", .{err});
             continue;
         };
 
         verifyShred(packet, ro.leader_schedule, &verified_roots) catch |err| {
-            std.log.debug("failed to verify shred: {}", .{err});
+            logger.debug().logf("failed to verify shred: {}", .{err});
             continue;
         };
 
         // TODO: this is where we might retransmit
 
         const payload = layout.getShred(packet, false) orelse {
-            std.log.debug("failed to get shred", .{});
+            logger.debug().logf("failed to get shred", .{});
             continue;
         };
 
         const packet_shred = shred.Shred.fromPayload(payload) catch |err| {
-            std.log.debug(
+            logger.debug().logf(
                 "failed to deserialize verified shred {?}.{?}: {}",
                 .{ layout.getSlot(payload), layout.getIndex(payload), err },
             );
             continue;
         };
 
-        std.log.debug(
+        logger.debug().logf(
             \\slot: {}
             \\erasure_set_index: {}
             \\index: {}

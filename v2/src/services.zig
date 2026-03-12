@@ -621,7 +621,7 @@ pub fn spawnAndWaitNoSandbox(
         for (region_memfds, regions) |*region_memfd, shared_region| {
             // Providing a name - this name should be visible from a debugger, but serves no other
             // purpose.
-            var fmt_buf: [100]u8 = undefined;
+            var fmt_buf: [4096]u8 = undefined;
             const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{shared_region});
 
             region_memfd.* = try .init(.{
