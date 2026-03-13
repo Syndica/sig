@@ -164,5 +164,94 @@ pub fn RingSlice(
             };
             position.value.store(position.value.raw +% n, .release);
         }
+
+        pub fn reader(self: *RingSlice(u8, .reader), buffer: []u8) Reader {
+            return .init(self, buffer);
+        }
     };
 }
+
+/// This reader delays releasing data in the ring buffer until an explicit call to `release`,
+/// to allow reading full, well-formed, and logically contiguous data, to facilitate cooperative
+/// message-based communication, without having to retain the reader's buffer.
+pub const Reader = struct {
+    slice: *RingSlice(u8, .reader),
+    /// Number of elements from the slice that have been read.
+    /// Can be used for `slice.markUsed(advanced)`, as is done in `release`.
+    advanced: u32,
+    interface: std.Io.Reader,
+
+    pub fn init(
+        slice: *RingSlice(u8, .reader),
+        buffer: []u8,
+    ) Reader {
+        return .{
+            .slice = slice,
+            .advanced = 0,
+            .interface = .{
+                .vtable = &vtable,
+                .buffer = buffer,
+                .seek = 0,
+                .end = 0,
+            },
+        };
+    }
+
+    /// Release some or all of the bytes that have been read from the ring slice.
+    pub fn release(self: *const Reader, n: u32) void {
+        std.debug.assert(n <= self.advanced);
+        self.slice.markUsed(n);
+    }
+
+    const vtable: std.Io.Reader.VTable = .{
+        .stream = stream,
+    };
+
+    fn stream(
+        r: *std.Io.Reader,
+        w: *std.Io.Writer,
+        limit: std.Io.Limit,
+    ) std.Io.Reader.StreamError!usize {
+        const self: *Reader = @fieldParentPtr("interface", r);
+        if (self.advanced == self.slice.len) return error.EndOfStream;
+
+        const first_slice = self.first();
+        const second_slice = self.second();
+        std.debug.assert(first_slice.len != 0 or second_slice.len != 0);
+
+        var remaining_limit = limit;
+        const one = remaining_limit.sliceConst(first_slice);
+        remaining_limit = remaining_limit.subtract(first_slice.len) orelse .nothing;
+        const two = remaining_limit.sliceConst(second_slice);
+        remaining_limit = remaining_limit.subtract(second_slice.len) orelse .nothing;
+
+        var vecs: [2][]const u8 = undefined;
+        var vecs_len: usize = 0;
+
+        if (one.len != 0) {
+            vecs[vecs_len] = one;
+            vecs_len += 1;
+        }
+        if (two.len != 0) {
+            vecs[vecs_len] = two;
+            vecs_len += 1;
+        }
+        std.debug.assert(vecs_len != 0);
+
+        const n = try w.writeVec(vecs[0..vecs_len]);
+        self.advanced += @intCast(n);
+        return n;
+    }
+
+    fn first(self: *const Reader) []const u8 {
+        const first_slice = self.slice.first();
+        const offset = @min(first_slice.len, self.advanced);
+        return first_slice[offset..];
+    }
+
+    fn second(self: *const Reader) []const u8 {
+        const second_slice = self.slice.second();
+        const offset = @min(second_slice.len, self.advanced -| self.slice.first().len);
+        return second_slice[offset..];
+    }
+};
