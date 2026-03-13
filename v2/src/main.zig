@@ -5,11 +5,12 @@ comptime {
 }
 
 const services = @import("services.zig");
+const common = @import("common");
 
 const Config = struct {
     sandboxing_mode: SandboxingMode,
 
-    cluster: Cluster,
+    cluster: common.solana.ClusterType,
 
     /// path to a file containing the output of `solana leader-schedule`
     leader_schedule_file: []const u8,
@@ -18,8 +19,6 @@ const Config = struct {
     shred_network: ShredNetwork,
 
     const SandboxingMode = enum { sandboxed, threaded };
-
-    const Cluster = enum { testnet, devnet, mainnet };
 
     const Gossip = struct {
         port: u16,
@@ -58,6 +57,9 @@ pub fn main() !void {
 
     std.log.info("config: {}", .{config});
 
+    const gossip_cluster_info: common.gossip.ClusterInfo =
+        try .getFromEcho(config.gossip.port, config.cluster);
+
     const schedule_file = try std.fs.cwd().openFile(config.leader_schedule_file, .{});
     defer schedule_file.close();
     var reader_buf: [4096]u8 = undefined;
@@ -66,9 +68,11 @@ pub fn main() !void {
     const service_instances: []const services.ServiceInstance = &.{
         .{ .service = .shred_receiver },
         .{ .service = .net },
+        .{ .service = .gossip },
     };
 
     const shared_regions: []const services.SharedRegion = &.{
+        // net -> shred
         .{
             .region = .{ .net_pair = .{ .port = config.shred_network.recv_port } },
             .shares = &.{
@@ -76,10 +80,36 @@ pub fn main() !void {
                 .{ .instance = .{ .service = .net }, .rw = true },
             },
         },
+        // shred constants
         .{
-            .region = .{ .leader_schedule = .{ .schedule_string = &reader.interface } },
+            .region = .{ .shred_recv_config = .{
+                .schedule_string = &reader.interface,
+                .shred_version = gossip_cluster_info.shred_version,
+            } },
             .shares = &.{
                 .{ .instance = .{ .service = .shred_receiver } },
+            },
+        },
+        // net -> gossip
+        .{
+            .region = .{ .net_pair = .{ .port = config.gossip.port } },
+            .shares = &.{
+                .{ .instance = .{ .service = .gossip }, .rw = true },
+                .{ .instance = .{ .service = .net }, .rw = true },
+            },
+        },
+        // gossip constants
+        .{
+            .region = .{
+                .gossip_config = .{
+                    .cluster_info = gossip_cluster_info,
+                    // TODO: read this from identity file in signer service
+                    .keypair = .fromKeyPair(.generate()),
+                    .turbine_recv_port = config.shred_network.recv_port,
+                },
+            },
+            .shares = &.{
+                .{ .instance = .{ .service = .gossip } },
             },
         },
     };
