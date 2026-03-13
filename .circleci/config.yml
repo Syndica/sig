@@ -291,7 +291,8 @@ jobs:
       - run:
           name: Install Python PIP
           command: |
-            DEBIAN_FRONTEND=noninteractive sudo apt-get update -y && sudo apt-get install -y python3-pip
+            sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -yq update
+            sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -yq install python3-pip
       - run:
           name: Lint (Zig)
           command: |
