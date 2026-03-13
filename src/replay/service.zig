@@ -1019,6 +1019,31 @@ test "advance calls consensus.process with empty replay results" {
     try std.testing.expectEqual(0, replay_state.slot_tracker.root.load(.monotonic));
 }
 
+test "advance with RPC enabled passes block commitment cache" {
+    const allocator = std.testing.allocator;
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
+    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
+    defer dep_stubs.deinit();
+
+    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .enabled);
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit();
+        allocator.destroy(replay_state.epoch_tracker);
+    }
+
+    // block_commitment_cache should be initialised.
+    try std.testing.expect(replay_state.block_commitment_cache != null);
+
+    try advanceReplay(&replay_state, try registry.initStruct(Metrics), null);
+
+    // No slots were replayed
+    try std.testing.expectEqual(0, replay_state.slot_tracker.root.load(.monotonic));
+}
+
 test "Execute testnet block single threaded" {
     if (!sig.build_options.long_tests) return error.SkipZigTest;
 

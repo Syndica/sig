@@ -7867,3 +7867,23 @@ test "process populates block commitment cache when provided" {
         .block_commitment_cache = &block_commitment_cache,
     });
 }
+
+test "CommitmentVisitorCtx visit delegates to accumulator" {
+    const gpa = std.testing.allocator;
+
+    var ctx: CommitmentVisitorCtx = .{
+        .acc = .{},
+        .allocator = gpa,
+    };
+    defer ctx.acc.deinit(gpa);
+
+    var tower: Tower = .{ .root = null };
+    try tower.votes.append(.{ .slot = 42, .confirmation_count = 3 });
+
+    CommitmentVisitorCtx.visit(@ptrCast(&ctx), &tower, 500);
+
+    // The accumulator should have recorded the vote.
+    try std.testing.expectEqual(@as(u64, 500), ctx.acc.total_stake);
+    const entry = ctx.acc.new_commitment.get(42).?;
+    try std.testing.expectEqual(@as(u64, 500), entry[2]); // depth index = min(3-1, 30) = 2
+}

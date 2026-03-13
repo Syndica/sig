@@ -480,3 +480,34 @@ test "status cache root expires" {
         status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
     );
 }
+
+test "status cache insert and retrieve with transaction error" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const signature = sig.core.Signature.ZEROES;
+    const blockhash = Hash.ZEROES;
+
+    var ancestors: Ancestors = .{
+        .ancestors = try HashMap(Slot, void).init(allocator, &.{0}, &.{}),
+    };
+    defer ancestors.ancestors.deinit(allocator);
+
+    var status_cache: StatusCache = .DEFAULT;
+    defer status_cache.deinit(allocator);
+
+    const tx_err: sig.ledger.transaction_status.TransactionError = .AccountNotFound;
+    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0, tx_err);
+
+    // getStatus should return a Fork with the error set.
+    const result = status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqual(@as(Slot, 0), result.?.slot);
+    try std.testing.expectEqual(tx_err, result.?.maybe_err.?);
+
+    // getStatusAnyBlockhash should also return the error.
+    const result2 = status_cache.getStatusAnyBlockhash(&signature.toBytes(), &ancestors);
+    try std.testing.expect(result2 != null);
+    try std.testing.expectEqual(tx_err, result2.?.maybe_err.?);
+}
