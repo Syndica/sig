@@ -13,6 +13,7 @@ echo Setup solana-conformance
 sudo add-apt-repository ppa:deadsnakes/ppa -y
 sudo apt install -y python3.11 python3.11-dev python3.11-venv rename gcc
 scripts/setup-env.sh get-solana-conformance
+scripts/setup-env.sh get-test-vectors
 
 echo Parse fixture lists
 PASSING_DIRS=()
