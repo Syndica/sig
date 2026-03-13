@@ -292,7 +292,7 @@ jobs:
           name: Install Python PIP
           command: |
             sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -yq update
-            sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -yq install python3-pip
+            sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -yq install python3 python3-pip
       - run:
           name: Lint (Zig)
           command: |
@@ -307,11 +307,14 @@ jobs:
             python3 scripts/style.py --check conformance/src
             python3 scripts/style.py --check v2/src
       - run:
-          name: Check docs and conformance commits
-          command: |
-            python3 -m pip install --upgrade pip
-            python3 docs/check.py ./
-            conformance/scripts/verify-commits.sh
+          name: Install dependencies
+          command: pip install --upgrade pip
+      - run:
+          name: Check docs
+          command: python3 docs/check.py ./
+      - run:
+          name: Check conformance commits
+          command: conformance/scripts/verify-commits.sh
       - run:
           name: V2 checks
           command: |
