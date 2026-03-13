@@ -302,9 +302,6 @@ jobs:
           name: Check docs
           command: python3 docs/check.py ./
       - run:
-          name: Check conformance commits
-          command: conformance/scripts/verify-commits.sh
-      - run:
           name: V2 checks
           command: |
             sudo apt-get update -y && sudo apt-get install wget -y

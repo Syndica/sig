@@ -113,7 +113,9 @@ pub const FeatureSet = struct {
             const len = try decodeInt(u32, buf[vec_pos..]);
             try result.features.ensureTotalCapacity(allocator, len);
             for (0..len) |i| {
-                result.features.appendAssumeCapacity(try decodeInt(u64, buf[vec_pos + 4 + i * 8 ..]));
+                result.features.appendAssumeCapacity(
+                    try decodeInt(u64, buf[vec_pos + 4 + i * 8 ..]),
+                );
             }
         }
         return result;
