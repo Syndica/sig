@@ -26,16 +26,27 @@ get-repo-at-commit() {
     popd
 }
 
-full-setup() {
+ask() {
     if [[ -d "$env" ]]; then
         echo Any local changes you have to solana-conformance, solfuzz-agave, or test-vectors will be deleted.
         read -p "Do you want to continue? [y/N]: " confirm
         if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
             echo "Aborted."
-            exit 1
+            return 1
         fi
     fi
+}
 
+# everything you need to run the conformance tests
+basic() {
+    ask || exit 0
+    get-test-vectors
+    get-solana-conformance
+}
+
+# useful if you want to locally debug agave
+full() {
+    ask || exit 0
     get-solfuzz-agave
     get-test-vectors
     get-solana-conformance
@@ -98,7 +109,7 @@ EOF
 }
 
 if [ $# -eq 0 ]; then
-    full-setup
+    basic
 else
     "$@"
 fi

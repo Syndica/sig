@@ -209,7 +209,8 @@ elf_loader/fixtures/fbb6b3b4412ef81cbf7e4395d34b68f26f61504b_2457913.fix
 elf_loader/fixtures/fd079efae7cd2049b690829e9bb68b67ae4ed988_2457913.fix
 elf_loader/fixtures/ff02e3a0e659ffaf15f8720a3a1038b9c7688f93_2457913.fix
 elf_loader/fixtures/txt_rel_overflow.fix
-elf_loader/fixtures/zero_key_syscall_hash.fixinstr/fixtures/bpf-loader-v3-programs/f0fbc9e7-32f9-477d-9c89-2e7a2675f7b7.fix
+elf_loader/fixtures/zero_key_syscall_hash.fix
+instr/fixtures/bpf-loader-v3-programs/f0fbc9e7-32f9-477d-9c89-2e7a2675f7b7.fix
 instr/fixtures/bpf-loader-v3/7d17b624b75a988a5ce30d2ae187800b93a65965_2.fix
 instr/fixtures/vote/00a44dc50eee61f0b1d38dbd505398f49a634085_3247128.fix
 instr/fixtures/vote/0231a48ba8f372da88bcc63837a2eaf8093f0e1b.fix
@@ -480,7 +481,8 @@ instr/fixtures/zk_sdk/wacc5_6a9b1525cf8f5452.fix
 instr/fixtures/zk_sdk/wacc6_5f3bf70e8572e52b.fix
 instr/fixtures/zk_sdk/wacc7_a08f10406aee35a4.fix
 instr/fixtures/zk_sdk/wacc8_4370fd00b238a5a0.fix
-instr/fixtures/zk_sdk/wacc9_d13848d723bd8cfa.fixtxn/fixtures/006cec687919df8ddc4fd111e60e4864c7a94a79_2288978.fix
+instr/fixtures/zk_sdk/wacc9_d13848d723bd8cfa.fix
+txn/fixtures/006cec687919df8ddc4fd111e60e4864c7a94a79_2288978.fix
 txn/fixtures/00af752d1f13d997b80e291115dd08907fc04653_265678.fix
 txn/fixtures/00dc63d6f5824efa900302649eeca7983e5d3f5a_1834424.fix
 txn/fixtures/0103115bd3ec4f27fcf4dbd7cee22a530e68f797_2135631.fix
