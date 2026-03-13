@@ -17,6 +17,7 @@ const page_size_min = std.heap.page_size_min;
 
 const common = @import("common");
 const ServiceEntrypoint = common.ServiceFn;
+const obs = common.observability;
 
 const linux = std.os.linux;
 const sigaction_fn = linux.Sigaction.sigaction_fn;
@@ -27,6 +28,7 @@ const e = E.init;
 pub const Service = enum {
     net,
     shred_receiver,
+    observability,
 
     pub fn entrypoint(self: Service) ServiceEntrypoint {
         return switch (self) {
@@ -48,15 +50,31 @@ pub const Service = enum {
 
     pub fn requiredRegions(self: Service) []const RequiredRegion {
         return switch (self) {
-            .net => &.{
+            .net => &[_]RequiredRegion{
                 .{ .region = .net_pair, .rw = true },
-            },
-            .shred_receiver => &.{
+            } ++ observability_regions,
+            .shred_receiver => &[_]RequiredRegion{
                 .{ .region = .net_pair, .rw = true },
                 .{ .region = .leader_schedule },
+            } ++ observability_regions,
+            .observability => &.{
+                .{ .region = .obs_histogram_data, .rw = true },
+                .{ .region = .obs_log_streams, .rw = true },
+
+                .{ .region = .obs_init },
+                .{ .region = .obs_id_mem },
+                .{ .region = .obs_gauges },
             },
         };
     }
+
+    const observability_regions = [_]RequiredRegion{
+        .{ .region = .obs_init, .rw = true },
+        .{ .region = .obs_log_streams, .rw = true },
+        .{ .region = .obs_id_mem, .rw = true },
+        .{ .region = .obs_gauges, .rw = true },
+        .{ .region = .obs_histogram_data, .rw = true },
+    };
 };
 
 const RequiredRegion = struct {
@@ -82,6 +100,13 @@ pub const SharedRegion = struct {
 pub const RegionType = enum {
     net_pair,
     leader_schedule,
+
+    // observability regions
+    obs_init,
+    obs_log_streams,
+    obs_id_mem,
+    obs_gauges,
+    obs_histogram_data,
 };
 
 pub const Region = union(RegionType) {
@@ -91,10 +116,34 @@ pub const Region = union(RegionType) {
         schedule_string: *std.Io.Reader,
     },
 
+    obs_init: obs.Startup.InitParams,
+    obs_log_streams: struct {
+        /// Maximum number of log streams to support.
+        max_log_streams: usize,
+    },
+    obs_id_mem: struct {
+        /// The maximum number of bytes to allow for storing metric ids.
+        max_bytes: usize = 4096 * 16,
+    },
+    obs_gauges: struct {
+        /// The maximum number of (`u64`-sized) elements to support.
+        max_elements: usize = 4096 * 2,
+    },
+    obs_histogram_data: struct {
+        /// The maximum number of histogram (`u64`-sized) elements to support.
+        max_elements: usize = 4096 * 3,
+    },
+
     pub fn size(self: Region) usize {
         return switch (self) {
             .net_pair => @sizeOf(common.net.Pair),
             .leader_schedule => @sizeOf(common.solana.LeaderSchedule),
+
+            .obs_init => @sizeOf(obs.Startup),
+            .obs_log_streams => |cfg| cfg.max_log_streams * @sizeOf(obs.log.MessageStream),
+            .obs_id_mem => |cfg| cfg.max_bytes,
+            .obs_gauges => |cfg| cfg.max_elements * @sizeOf(u64),
+            .obs_histogram_data => |cfg| cfg.max_elements * @sizeOf(u64),
         };
     }
 
@@ -115,6 +164,40 @@ pub const Region = union(RegionType) {
                 const data: *common.solana.LeaderSchedule = @ptrCast(buf);
 
                 try common.solana.LeaderSchedule.fromCommand(data, cfg.schedule_string);
+            },
+
+            .obs_init => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(obs.Startup));
+                const data: *obs.Startup = @ptrCast(buf);
+
+                data.init(cfg);
+            },
+            .obs_log_streams => |cfg| {
+                std.debug.assert(buf.len == cfg.max_log_streams * @sizeOf(obs.log.MessageStream));
+                const data: []obs.log.MessageStream = @ptrCast(buf);
+
+                for (data) |*stream| {
+                    stream.name.init("");
+                    stream.ring.init();
+                }
+            },
+            .obs_id_mem => |cfg| {
+                std.debug.assert(buf.len == cfg.max_bytes);
+                const data: []u8 = buf;
+
+                _ = data; // currently don't need to do anything else; could @memset(data, 0), but that seems wasteful.
+            },
+            .obs_gauges => |cfg| {
+                std.debug.assert(buf.len == cfg.max_elements * @sizeOf(u64));
+                const data: []std.atomic.Value(u64) = @ptrCast(buf);
+
+                _ = data; // currently don't need to do anything else; could @memset(data, .init(0)), but that seems wasteful.
+            },
+            .obs_histogram_data => |cfg| {
+                std.debug.assert(buf.len == cfg.max_elements * @sizeOf(u64));
+                const data: []u64 = @ptrCast(buf);
+
+                _ = data; // currently don't need to do anything else; could @memset(data, 0), but that seems wasteful.
             },
         };
     }
@@ -222,7 +305,7 @@ pub fn spawnAndWait(
         for (region_memfds, regions) |*region_memfd, shared_region| {
             // Providing a name - this name should be visible from a debugger, but serves no other
             // purpose.
-            var fmt_buf: [100]u8 = undefined;
+            var fmt_buf: [4096]u8 = undefined;
             const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{shared_region});
 
             region_memfd.* = try .init(.{
@@ -538,7 +621,7 @@ pub fn spawnAndWaitNoSandbox(
         for (region_memfds, regions) |*region_memfd, shared_region| {
             // Providing a name - this name should be visible from a debugger, but serves no other
             // purpose.
-            var fmt_buf: [100]u8 = undefined;
+            var fmt_buf: [4096]u8 = undefined;
             const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{shared_region});
 
             region_memfd.* = try .init(.{

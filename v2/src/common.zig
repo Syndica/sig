@@ -10,6 +10,7 @@ pub const net = @import("common/net.zig");
 pub const crypto = @import("common/crypto.zig");
 pub const solana = @import("common/solana.zig");
 pub const shred = @import("common/shred.zig");
+pub const observability = @import("common/observability.zig");
 
 pub const test_data_dir = "../data/test-data/";
 
@@ -22,7 +23,7 @@ pub const ResolvedArgs = extern struct {
     ro: [max_regions]?[*]align(page_size_min) const u8,
     ro_len: [max_regions]usize,
 
-    pub const max_regions = 4; // chosen arbitrarily
+    pub const max_regions = 8; // chosen arbitrarily
     const page_size_min = std.heap.page_size_min;
 };
 

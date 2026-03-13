@@ -5,6 +5,7 @@ const std = @import("std");
 const start = @import("start");
 const common = @import("common");
 const Pair = common.net.Pair;
+const obs = common.observability;
 
 comptime {
     _ = start;
@@ -14,18 +15,31 @@ pub const name = .net;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
+pub const ReadOnly = struct {};
+
 pub const ReadWrite = struct {
     pair: *Pair,
+    obs: obs.Regions,
 };
 
-pub fn serviceMain(rw: ReadWrite) !noreturn {
-    try mainInner(&.{rw.pair});
+pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
+    const logger = rw.obs.acquireLogger(@tagName(name), "main");
+
+    const metric_appender = rw.obs.metricAppender();
+    _ = metric_appender;
+
+    rw.obs.signalReady();
+
+    try mainInner(logger, &.{rw.pair});
 }
 
 const MAX_SOCKETS = 10;
 
 /// `ports` is the list of ports it'll listen on.
-fn mainInner(pairs: []const *Pair) !noreturn {
+fn mainInner(
+    logger: obs.Logger("main"),
+    pairs: []const *Pair,
+) !noreturn {
     std.debug.assert(pairs.len <= MAX_SOCKETS);
 
     var sockets: [MAX_SOCKETS]std.posix.fd_t = undefined;
@@ -40,7 +54,7 @@ fn mainInner(pairs: []const *Pair) !noreturn {
         );
         errdefer std.posix.close(socket);
 
-        std.log.info("binding 0.0.0.0:{}", .{pair.port});
+        logger.info().logf("binding 0.0.0.0:{}", .{pair.port});
 
         const local: std.net.Address = .initIp4(.{ 0, 0, 0, 0 }, pair.port);
         try std.posix.bind(socket, &local.any, local.getOsSockLen());
