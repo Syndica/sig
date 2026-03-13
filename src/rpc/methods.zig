@@ -68,7 +68,7 @@ pub const MethodAndParams = union(enum) {
     getInflationGovernor: noreturn,
     getInflationRate: noreturn,
     getInflationReward: noreturn,
-    getLargestAccounts: noreturn,
+    getLargestAccounts: GetLargestAccounts,
     getLatestBlockhash: GetLatestBlockhash,
     getLeaderSchedule: GetLeaderSchedule,
     getMaxRetransmitSlot: noreturn,
@@ -1058,7 +1058,30 @@ pub const GetHighestSnapshotSlot = struct {
 // TODO: getInflationGovernor
 // TODO: getInflationRate
 // TODO: getInflationReward
-// TODO: getLargeAccounts
+
+pub const GetLargestAccounts = struct {
+    config: ?Config = null,
+
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1053
+    pub const MAX_LARGEST_ACCOUNTS: u32 = 20;
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        filter: ?Filter = null,
+    };
+
+    pub const Filter = enum { circulating, nonCirculating };
+
+    pub const Response = struct {
+        context: common.Context,
+        value: []const AccountBalance,
+    };
+
+    pub const AccountBalance = struct {
+        address: Pubkey,
+        lamports: u64,
+    };
+};
 
 pub const GetLatestBlockhash = struct {
     config: ?common.CommitmentSlotConfig = null,

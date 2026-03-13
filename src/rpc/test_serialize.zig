@@ -20,6 +20,7 @@ const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
 const GetGenesisHash = methods.GetGenesisHash;
 const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
+const GetLargestAccounts = methods.GetLargestAccounts;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetMultipleAccounts = methods.GetMultipleAccounts;
@@ -333,7 +334,65 @@ test GetHighestSnapshotSlot {
 // TODO: test getInflationGovernor()
 // TODO: test getInflationRate()
 // TODO: test getInflationReward()
-// TODO: test getLargeAccounts()
+
+test GetLargestAccounts {
+    // Request without config
+    try testRequest(
+        .getLargestAccounts,
+        .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[]}
+        ,
+    );
+
+    // Request with commitment config
+    try testRequest(
+        .getLargestAccounts,
+        .{ .config = .{ .commitment = .finalized } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":"finalized","filter":null}]}
+        ,
+    );
+
+    // Request with filter config (circulating)
+    try testRequest(
+        .getLargestAccounts,
+        .{ .config = .{ .filter = .circulating } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":null,"filter":"circulating"}]}
+        ,
+    );
+
+    // Request with both commitment and filter
+    try testRequest(
+        .getLargestAccounts,
+        .{ .config = .{ .commitment = .finalized, .filter = .nonCirculating } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":"finalized","filter":"nonCirculating"}]}
+        ,
+    );
+
+    // Response with accounts
+    try testResponse(
+        GetLargestAccounts,
+        .{ .result = .{
+            .context = .{ .slot = 1114, .apiVersion = "2.0.15" },
+            .value = &.{
+                .{ .address = .parse("FEy8pTbP5fEoqMV1GdTz83byuA86iyvT5GkzZKbXvGkB"), .lamports = 100000000000 },
+                .{ .address = .parse("9huDUZfxoJ7wGMTffUE7vh1xePqef7gyrLJu9NApncqA"), .lamports = 50000000000 },
+            },
+        } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.0.15","slot":1114},"value":[{"address":"FEy8pTbP5fEoqMV1GdTz83byuA86iyvT5GkzZKbXvGkB","lamports":100000000000},{"address":"9huDUZfxoJ7wGMTffUE7vh1xePqef7gyrLJu9NApncqA","lamports":50000000000}]},"id":1}
+        ,
+    );
+
+    // Response with empty value
+    try testResponse(
+        GetLargestAccounts,
+        .{ .result = .{
+            .context = .{ .slot = 1114, .apiVersion = "2.0.15" },
+            .value = &.{},
+        } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.0.15","slot":1114},"value":[]},"id":1}
+        ,
+    );
+}
 
 test GetLatestBlockhash {
     try testRequest(.getLatestBlockhash, .{},
