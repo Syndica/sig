@@ -12,6 +12,7 @@ pub const MapEntry = struct {
     key: SubReqKey,
     sub_id: SubId,
     queue: *NotifQueue,
+    last_notified_modified_slot: ?u64 = null,
 };
 
 /// Subscription map managing active subscriptions and their notification queues.
@@ -61,7 +62,7 @@ pub const RPCSubMap = struct {
     /// deep-copied into the map's allocator.
     ///
     /// Queue commit path policy:
-    /// - `.slot` and `.root` use `.reserved`
+    /// - `.slot`, `.root`, and `.program` use `.reserved` to preserve event order
     /// - all other methods use `.direct`
     pub fn getOrCreate(
         self: *RPCSubMap,
@@ -75,7 +76,7 @@ pub const RPCSubMap = struct {
 
         const queue = try self.allocator.create(NotifQueue);
         const commit_path: NotifQueue.CommitPath = switch (key.method) {
-            .slot, .root => .reserved,
+            .slot, .root, .program => .reserved,
             else => .direct,
         };
         queue.* = try NotifQueue.init(self.allocator, self.queue_capacity, commit_path);

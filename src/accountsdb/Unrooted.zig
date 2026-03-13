@@ -93,12 +93,26 @@ pub fn put(
     entry.is_empty.store(false, .release);
 }
 
+pub const AccountWithModifiedSlot = struct {
+    account: Account,
+    modified_slot: Slot,
+};
+
 /// Gets the latest state of the account keyed by `address` visible to the given ancestor set.
 pub fn get(
     self: *Unrooted,
     address: Pubkey,
     ancestors: *const Ancestors,
 ) ?Account {
+    const result = self.getWithModifiedSlot(address, ancestors) orelse return null;
+    return result.account;
+}
+
+pub fn getWithModifiedSlot(
+    self: *Unrooted,
+    address: Pubkey,
+    ancestors: *const Ancestors,
+) ?AccountWithModifiedSlot {
     const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.get" });
     defer zone.deinit();
 
@@ -106,7 +120,7 @@ pub fn get(
     defer zone.value(n_gets);
 
     var best_slot: Slot = 0;
-    var result: ?Account = null;
+    var result: ?AccountWithModifiedSlot = null;
 
     for (self.slots) |*index| {
         if (index.is_empty.load(.acquire)) continue;
@@ -117,7 +131,7 @@ pub fn get(
         if (index.slot >= best_slot and ancestors.containsSlot(index.slot)) {
             n_gets += 1;
             const data = index.entries.get(address) orelse continue;
-            result = data.asAccount();
+            result = .{ .account = data.asAccount(), .modified_slot = index.slot };
             best_slot = index.slot;
         }
     }

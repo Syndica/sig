@@ -2,10 +2,11 @@ const std = @import("std");
 const ws = @import("webzockets");
 const sig = @import("../../sig.zig");
 
+const methods = @import("methods.zig");
 const types = @import("types.zig");
 const protocol = @import("protocol.zig");
 const NotifQueue = @import("NotifQueue.zig");
-const runtime_mod = @import("runtime.zig");
+const Runtime = @import("Runtime.zig");
 const ws_request = @import("ws_request.zig");
 
 const NotifPayload = sig.sync.RcSlice(u8);
@@ -42,7 +43,7 @@ pub const JRPCHandler = struct {
     allocator: std.mem.Allocator,
     parse_arena_state: std.heap.ArenaAllocator,
 
-    pub const Context = runtime_mod.RuntimeContext;
+    pub const Context = Runtime;
 
     /// Send state machine, events are triggered by methods, false/null returned
     /// for invalid transitions (indicates bug). We log error and reset to safe
@@ -237,6 +238,19 @@ pub const JRPCHandler = struct {
                     "method not implemented",
                 );
                 return;
+            },
+            else => {},
+        }
+
+        switch (request.method) {
+            .programSubscribe => |program_sub| {
+                const config: methods.ProgramSubscribe.Config = program_sub.config orelse .{};
+                if (config.filters) |filters| {
+                    methods.verifyProgramFilters(filters) catch {
+                        self.sendErrorResponse(id, ErrorCode.invalid_params, "invalid params");
+                        return;
+                    };
+                }
             },
             else => {},
         }
@@ -444,13 +458,13 @@ pub const JRPCHandler = struct {
             // 2. Preserve per-queue order.
             // 3. Keep batches full.
             self.send_state.notif_batch_buf.appendSlice(self.allocator, payload_slice) catch {
-                runtime_mod.releasePayload(self.ctx, pick.payload);
+                Runtime.releasePayload(self.ctx, pick.payload);
                 break;
             };
             self.active_subs.items[pick.sub_idx].next_index += 1;
             batch_count += 1;
             batch_bytes += @intCast(payload_slice.len);
-            runtime_mod.releasePayload(self.ctx, pick.payload);
+            Runtime.releasePayload(self.ctx, pick.payload);
 
             if (batch_bytes >= self.ctx.max_batch_bytes) {
                 break;

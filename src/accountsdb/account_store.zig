@@ -71,6 +71,11 @@ pub const AccountStore = union(enum) {
 };
 
 /// Interface for only reading accounts
+pub const AccountWithModifiedSlot = struct {
+    account: Account,
+    modified_slot: Slot,
+};
+
 pub const AccountReader = union(enum) {
     accounts_db: *accounts_db.Db,
     thread_safe_map: *ThreadSafeAccountMap,
@@ -296,6 +301,36 @@ pub const SlotAccountReader = union(enum) {
             .noop => null,
         };
     }
+
+    pub fn getWithModifiedSlot(
+        self: SlotAccountReader,
+        alloc: std.mem.Allocator,
+        address: Pubkey,
+    ) !?AccountWithModifiedSlot {
+        return switch (self) {
+            .accounts_db => |pair| {
+                const result = try pair[0].getWithModifiedSlot(alloc, address, pair[1]) orelse
+                    return null;
+                return .{ .account = result.account, .modified_slot = result.modified_slot };
+            },
+            .thread_safe_map => |pair| pair[0].getWithModifiedSlot(address, pair[1]),
+            .account_map => |map| {
+                const account = map.get(address) orelse return null;
+                return .{ .account = account, .modified_slot = 0 };
+            },
+            .account_shared_data_map => |map| {
+                const asd = map.get(address) orelse return null;
+                return .{ .account = .{
+                    .lamports = asd.lamports,
+                    .data = .{ .unowned_allocation = asd.data },
+                    .owner = asd.owner,
+                    .executable = asd.executable,
+                    .rent_epoch = asd.rent_epoch,
+                }, .modified_slot = 0 };
+            },
+            .noop => null,
+        };
+    }
 };
 
 /// Simple implementation of AccountReader and AccountStore, used for tests
@@ -390,6 +425,30 @@ const ThreadSafeAccountMap = struct {
         const list = self.pubkey_map.get(address) orelse return null;
         if (list.items.len == 0) return null;
         return asAccount(list.items[0][1]);
+    }
+
+    pub fn getWithModifiedSlot(
+        self: *ThreadSafeAccountMap,
+        address: Pubkey,
+        ancestors: *const Ancestors,
+    ) ?AccountWithModifiedSlot {
+        self.rwlock.lockShared();
+        defer self.rwlock.unlockShared();
+
+        const slot_account_pairs = self.pubkey_map.get(address) orelse return null;
+        for (slot_account_pairs.items) |slot_account| {
+            const slot, const account = slot_account;
+            if (ancestors.containsSlot(slot)) {
+                return .{ .account = asAccount(account), .modified_slot = slot };
+            }
+            if (self.largest_rooted_slot) |largest_rooted_slot| {
+                if (slot <= largest_rooted_slot) {
+                    return .{ .account = asAccount(account), .modified_slot = slot };
+                }
+            }
+        }
+
+        return null;
     }
 
     fn asAccount(account: AccountSharedData) Account {
@@ -634,6 +693,37 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
         allocator,
         one_lamport_address,
     )).?.lamports);
+}
+
+test "SlotAccountReader.getWithModifiedSlot preserves zero-lamport tombstones" {
+    const allocator = std.testing.allocator;
+
+    var test_state = try accounts_db.Db.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const address = Pubkey.ZEROES;
+    const account_data = try allocator.dupe(u8, &.{ 1, 2, 3 });
+    defer allocator.free(account_data);
+
+    try db.put(5, address, .{
+        .lamports = 0,
+        .data = account_data,
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 9,
+    });
+
+    var ancestors = try Ancestors.initWithSlots(allocator, &.{5});
+    defer ancestors.deinit(allocator);
+
+    const reader: AccountReader = .{ .accounts_db = db };
+    const result = (try reader.forSlot(&ancestors).getWithModifiedSlot(allocator, address)).?;
+    defer result.account.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u64, 5), result.modified_slot);
+    try std.testing.expectEqual(@as(u64, 0), result.account.lamports);
+    try std.testing.expectEqual(@as(usize, 3), result.account.data.len());
 }
 
 test ThreadSafeAccountMap {

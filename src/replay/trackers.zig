@@ -300,6 +300,39 @@ pub const SlotTracker = struct {
         return try parents_list.toOwnedSlice(allocator);
     }
 
+    pub fn rootedPathForward(
+        self: *SlotTracker,
+        allocator: Allocator,
+        old_root: Slot,
+        new_root: Slot,
+    ) ![]const Slot {
+        // TODO: we don't need to hold the lock while allocating and reversing
+        var slots_lg = self.slots.read();
+        defer slots_lg.unlock();
+        const slots = slots_lg.get();
+
+        var rooted_path = std.ArrayListUnmanaged(Slot).empty;
+        errdefer rooted_path.deinit(allocator);
+
+        try rooted_path.ensureTotalCapacity(allocator, slots.count());
+
+        var current_slot = new_root;
+        while (current_slot != old_root) {
+            const current = slots.get(current_slot) orelse return error.MissingSlot;
+            rooted_path.appendAssumeCapacity(current_slot);
+
+            const parent_slot = current.constants.parent_slot;
+            if (parent_slot == current_slot) {
+                return error.RootNotAncestor;
+            }
+
+            current_slot = parent_slot;
+        }
+
+        std.mem.reverse(Slot, rooted_path.items);
+        return try rooted_path.toOwnedSlice(allocator);
+    }
+
     /// Analogous to [prune_non_rooted](https://github.com/anza-xyz/agave/blob/441258229dfed75e45be8f99c77865f18886d4ba/runtime/src/bank_forks.rs#L591)
     //  TODO Revisit: Currently this removes all slots less than the rooted slot.
     // In Agave, only the slots not in the root path are removed.
@@ -592,6 +625,33 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
         .inflation = .DEFAULT,
         .rent_collector = .DEFAULT,
     };
+}
+
+test "SlotTracker.rootedPathForward returns forward rooted chain" {
+    const allocator = std.testing.allocator;
+    const root_slot: Slot = 1;
+
+    var tracker: SlotTracker = try .init(allocator, root_slot, .{
+        .constants = testDummySlotConstants(root_slot),
+        .state = .GENESIS,
+        .allocator = allocator,
+    });
+    defer tracker.deinit(allocator);
+
+    for (2..5) |slot| {
+        const gop = try tracker.getOrPut(allocator, slot, .{
+            .constants = testDummySlotConstants(slot),
+            .state = .GENESIS,
+            .allocator = allocator,
+        });
+        gop.reference.release();
+        try std.testing.expect(!gop.found_existing);
+    }
+
+    const rooted_path = try tracker.rootedPathForward(allocator, root_slot, 4);
+    defer allocator.free(rooted_path);
+
+    try std.testing.expectEqualSlices(Slot, &.{ 2, 3, 4 }, rooted_path);
 }
 
 test "SlotTracker.prune removes all slots less than root" {
