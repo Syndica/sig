@@ -180,25 +180,17 @@ pub fn get(
         else => self.err(rc),
     }
 
-    const data = blk: {
-        const len: usize = @intCast(sql.sqlite3_column_bytes(stmt, 1));
-        if (len == 0) break :blk &.{}; // sqlite returns null pointers for 0-len data
-        const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 1));
-        break :blk ptr[0..len];
-    };
+    const fields = readAccountFields(stmt);
 
-    const duped = try allocator.dupe(u8, data);
+    const duped = try allocator.dupe(u8, fields.data);
     errdefer allocator.free(duped);
 
-    const owner_ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 2));
-    const owner: Pubkey = .{ .data = owner_ptr[0..32].* };
-
     return .{
-        .lamports = @bitCast(sql.sqlite3_column_int64(stmt, 0)),
+        .lamports = fields.lamports,
         .data = duped,
-        .owner = owner,
-        .executable = sql.sqlite3_column_int(stmt, 3) != 0,
-        .rent_epoch = @bitCast(sql.sqlite3_column_int64(stmt, 4)),
+        .owner = fields.owner,
+        .executable = fields.executable,
+        .rent_epoch = fields.rent_epoch,
     };
 }
 
@@ -215,7 +207,7 @@ pub fn get(
 pub fn getByOwner(self: *Rooted, owner: *const Pubkey) OwnerIterator {
     const stmt: *sql.sqlite3_stmt = if (get_by_owner_stmt) |stmt| stmt else blk: {
         const query =
-            \\ SELECT address, lamports, data, owner, executable, rent_epoch
+            \\ SELECT lamports, data, owner, executable, rent_epoch, address
             \\ FROM entries WHERE owner = ? AND lamports > 0;
         ;
         self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_by_owner_stmt, null));
@@ -244,29 +236,18 @@ pub const OwnerIterator = struct {
             else => self.rooted.err(rc),
         }
 
+        const fields = readAccountFields(self.stmt);
         const pubkey: Pubkey = .{
-            .data = @as([*]const u8, @ptrCast(sql.sqlite3_column_blob(self.stmt, 0)))[0..32].*,
+            .data = @as([*]const u8, @ptrCast(sql.sqlite3_column_blob(self.stmt, 5)))[0..32].*,
         };
-        const lamports: u64 = @bitCast(sql.sqlite3_column_int64(self.stmt, 1));
-        const data = blk: {
-            const len: usize = @intCast(sql.sqlite3_column_bytes(self.stmt, 2));
-            if (len == 0) break :blk &.{};
-            const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(self.stmt, 2));
-            break :blk ptr[0..len];
-        };
-        const owner: Pubkey = .{
-            .data = @as([*]const u8, @ptrCast(sql.sqlite3_column_blob(self.stmt, 3)))[0..32].*,
-        };
-        const executable: bool = sql.sqlite3_column_int(self.stmt, 4) != 0;
-        const rent_epoch: u64 = @bitCast(sql.sqlite3_column_int64(self.stmt, 5));
 
         return .{
             pubkey, .{
-                .lamports = lamports,
-                .data = .{ .unowned_allocation = data },
-                .owner = owner,
-                .executable = executable,
-                .rent_epoch = rent_epoch,
+                .lamports = fields.lamports,
+                .data = .{ .unowned_allocation = fields.data },
+                .owner = fields.owner,
+                .executable = fields.executable,
+                .rent_epoch = fields.rent_epoch,
             },
         };
     }
@@ -275,6 +256,38 @@ pub const OwnerIterator = struct {
         defer std.debug.assert(sql.sqlite3_reset(self.stmt) == OK);
     }
 };
+
+/// Reads the common account fields (lamports, data, owner, executable, rent_epoch)
+/// from a sqlite row starting at column `base`. The returned `data` slice borrows
+/// directly from sqlite's internal buffer and is only valid until the statement is
+/// stepped or reset.
+fn readAccountFields(stmt: *sql.sqlite3_stmt) struct {
+    lamports: u64,
+    data: []const u8,
+    owner: Pubkey,
+    executable: bool,
+    rent_epoch: u64,
+} {
+    const lamports: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 0));
+    const data: []const u8 = blk: {
+        const len: usize = @intCast(sql.sqlite3_column_bytes(stmt, 1));
+        if (len == 0) break :blk &.{};
+        const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 1));
+        break :blk ptr[0..len];
+    };
+    const owner: Pubkey = .{
+        .data = @as([*]const u8, @ptrCast(sql.sqlite3_column_blob(stmt, 2)))[0..32].*,
+    };
+    const executable: bool = sql.sqlite3_column_int(stmt, 3) != 0;
+    const rent_epoch: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 4));
+    return .{
+        .lamports = lamports,
+        .data = data,
+        .owner = owner,
+        .executable = executable,
+        .rent_epoch = rent_epoch,
+    };
+}
 
 pub fn computeLtHash(
     self: *const Rooted,
