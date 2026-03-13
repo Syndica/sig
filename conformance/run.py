@@ -70,6 +70,11 @@ def main():
         help="Run each fixture with a separate invocation of solana-test-suite. "
         "This makes it easier to see which fixture caused a panic, but takes longer.",
     )
+    parser.add_argument(
+        "--use-created",
+        action="store_true",
+        help="Run with the expectation from the generated fixtures instead of vectors.",
+    )
 
     config = parser.parse_args()
 
@@ -117,11 +122,12 @@ def run_test(vectors, config, pad):
         print_noln(f"{vectors:<{pad}}")
 
     vectors_path = path(f"env/test-vectors/{vectors}")
-    fixtures_path = path(f"env/test-fixtures/{vectors}")
+    created_path = path(f"env/created-fixtures/{vectors}")
+    to_run_path = created_path if config.use_created or config.create else vectors_path
     outputs_folder = os.path.dirname(vectors) if vectors.endswith(".fix") else vectors
     outputs_path = path(f"env/test-outputs/{outputs_folder}")
-    if not os.path.exists(vectors_path):
-        os.makedirs(fixtures_path, exist_ok=True)
+    if not os.path.exists(created_path):
+        os.makedirs(created_path, exist_ok=True)
 
 
     if config.create:
@@ -130,7 +136,7 @@ def run_test(vectors, config, pad):
             "create-fixtures",
                 "--num-processes", config.num_processes,
                 "-i", vectors_path,
-                "-o", fixtures_path,
+                "-o", created_path,
                 "-s", config.create_lib,
             ],
             verbose=config.verbose,
@@ -153,11 +159,11 @@ def run_test(vectors, config, pad):
             "skipped": 0,
             "failed_fixtures": [],
         }
-        filenames = sorted(os.listdir(fixtures_path))
+        filenames = sorted(os.listdir(to_run_path))
         pad = max(len(os.path.join(vectors, f)) for f in filenames)
         for fixture in filenames:
             print_noln(f"{os.path.join(vectors, fixture):<{pad}}")
-            fixture_path = os.path.join(fixtures_path, fixture)
+            fixture_path = os.path.join(to_run_path, fixture)
             one_result = exec_fixtures(config, fixture_path, outputs_path)
             result["passed"] += one_result.get("passed", 0)
             result["failed"] += one_result.get("failed", 0)
@@ -165,7 +171,7 @@ def run_test(vectors, config, pad):
             result["failed_fixtures"].extend(one_result.get("failed_fixtures", []))
         return result
     else:
-        result = exec_fixtures(config, fixtures_path, outputs_path)
+        result = exec_fixtures(config, to_run_path, outputs_path)
         result["name"] = vectors
         return result
 
@@ -183,20 +189,23 @@ def exec_fixtures(config, fixtures_path, outputs_path):
     )
     # fmt: on
 
-    if result.exit_code != 0:
-        return {"failed": 1}
-
-    summary = result.stdout.split("\n")[3]
-    passed = int(summary.split(",")[0].split(": ")[1])
-    failed = int(summary.split(",")[1].split(": ")[1])
-    skipped = int(summary.split(",")[2].split(": ")[1])
+    passed = 0
+    failed = 1  # assume failure unless there is a good output
+    skipped = 0
+    failed_fixtures = []
+    if result.exit_code == 0:
+        try:
+            summary = result.stdout.split("\n")[3]
+            passed = int(summary.split(",")[0].split(": ")[1])
+            failed = int(summary.split(",")[1].split(": ")[1])
+            skipped = int(summary.split(",")[2].split(": ")[1])
+            if failed > 0:
+                failed_fixtures = result.stdout.split("\n")[4].strip("Failed tests: ").strip()
+                failed_fixtures = json.loads(failed_fixtures.replace("'", '"'))
+        except IndexError:
+            pass  # reached when the harness panics
 
     print(f" │ Pass{passed:>5} │ Fail{failed:>5} │ Skip{skipped:>5}")
-
-    failed_fixtures = []
-    if failed > 0:
-        failed_fixtures = result.stdout.split("\n")[4].strip("Failed tests: ").strip()
-        failed_fixtures = json.loads(failed_fixtures.replace("'", '"'))
 
     return {
         "passed": passed,

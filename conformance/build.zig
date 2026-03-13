@@ -91,7 +91,6 @@ pub fn build(b: *Build) void {
     const protoc_run = pb.RunProtocStep.create(pb_dep.builder, target, .{
         .destination_directory = b.path("src/proto"),
         .source_files = &.{
-            "protosol/proto/elf.proto",
             "protosol/proto/vm.proto",
             "protosol/proto/shred.proto",
             "protosol/proto/txn.proto",
