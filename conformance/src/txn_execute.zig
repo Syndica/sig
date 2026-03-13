@@ -444,210 +444,208 @@ fn executeTxnContext(
     parent_hash = slot_hash;
     const parent_slots_epoch = epoch;
 
-    slot = loadSlot(&pb_txn_ctx);
-    if (slot > 0) {
-        // Bank::new_from_parent(...)
-        {
-            // Clone epoch schedule
-            // epoch_schedule = epoch_schedule;
+    slot = 10;
+    // Bank::new_from_parent(...)
+    {
+        // Clone epoch schedule
+        // epoch_schedule = epoch_schedule;
 
-            // Get epoch
-            epoch = epoch_schedule.getEpoch(slot);
+        // Get epoch
+        epoch = epoch_schedule.getEpoch(slot);
 
-            // Clone accounts db
-            // let (rc, bank_rc_creation_time_us) = measure_us!({
-            //     let accounts_db = Arc::clone(&parent.rc.accounts.accounts_db);
-            //     BankRc {
-            //         accounts: Arc::new(Accounts::new(accounts_db)),
-            //         parent: RwLock::new(Some(Arc::clone(&parent))),
-            //         bank_id_generator: Arc::clone(&parent.rc.bank_id_generator),
-            //     }
-            // });
+        // Clone accounts db
+        // let (rc, bank_rc_creation_time_us) = measure_us!({
+        //     let accounts_db = Arc::clone(&parent.rc.accounts.accounts_db);
+        //     BankRc {
+        //         accounts: Arc::new(Accounts::new(accounts_db)),
+        //         parent: RwLock::new(Some(Arc::clone(&parent))),
+        //         bank_id_generator: Arc::clone(&parent.rc.bank_id_generator),
+        //     }
+        // });
 
-            // Clone status_cache
-            // const status_cache = parent.status_cache.clone();
+        // Clone status_cache
+        // const status_cache = parent.status_cache.clone();
 
-            // Derive new fee rate governor
-            fee_rate_governor = FeeRateGovernor.initDerived(
-                &fee_rate_governor,
-                0, // parent.signature_count()
+        // Derive new fee rate governor
+        fee_rate_governor = FeeRateGovernor.initDerived(
+            &fee_rate_governor,
+            0, // parent.signature_count()
+        );
+
+        // Get bank id
+        // let bank_id = rc.bank_id_generator.fetch_add(1, Relaxed) + 1;
+
+        // Clone blockhash queue
+        // blockhash_queue = blockhash_queue;
+
+        // Clone stakes cache
+        // const stakes_cache = parent.stakes_cache.clone();
+
+        // Clone epoch stakes
+        // epoch_stakes = epoch_stakes;
+
+        // Create new transaction processor
+        // const transaction_processor = TransactionBatchProcessor::new_from(&parent.transaction_processor, slot, epoch);
+
+        // Clone rewards pool pubkeys
+        // const rewards_pools = parent.rewards_pools.clone();
+
+        // Clone transaction debug keys
+        // const transaction_debug_keys = parent.transaction_debug_keys.clone();
+
+        // Clone transaction log collector config
+        // const transaction_log_collector_config = parent.transaction_log_collector_config.clone();
+
+        // Clone feature set
+        // feature_set = feature_set;
+
+        // Get initial accounts data size
+        // const initial_accounts_data_size = parent.load_accounts_data_size();
+
+        // Init new bank -- lots of copying of fields here
+        // var new = Bank{...}
+
+        // Create ancestors with new slot and all parent slots
+        try ancestors.addSlot(allocator, slot);
+
+        // Update epoch
+        if (parent_slots_epoch < epoch) {
+            // Bank::process_new_epoch(...)
+
+            try bank_methods.applyFeatureActivations(
+                allocator,
+                slot,
+                &feature_set,
+                account_store,
+                true,
             );
 
-            // Get bank id
-            // let bank_id = rc.bank_id_generator.fetch_add(1, Relaxed) + 1;
-
-            // Clone blockhash queue
-            // blockhash_queue = blockhash_queue;
-
-            // Clone stakes cache
-            // const stakes_cache = parent.stakes_cache.clone();
-
-            // Clone epoch stakes
-            // epoch_stakes = epoch_stakes;
-
-            // Create new transaction processor
-            // const transaction_processor = TransactionBatchProcessor::new_from(&parent.transaction_processor, slot, epoch);
-
-            // Clone rewards pool pubkeys
-            // const rewards_pools = parent.rewards_pools.clone();
-
-            // Clone transaction debug keys
-            // const transaction_debug_keys = parent.transaction_debug_keys.clone();
-
-            // Clone transaction log collector config
-            // const transaction_log_collector_config = parent.transaction_log_collector_config.clone();
-
-            // Clone feature set
-            // feature_set = feature_set;
-
-            // Get initial accounts data size
-            // const initial_accounts_data_size = parent.load_accounts_data_size();
-
-            // Init new bank -- lots of copying of fields here
-            // var new = Bank{...}
-
-            // Create ancestors with new slot and all parent slots
-            try ancestors.addSlot(allocator, slot);
-
-            // Update epoch
-            if (parent_slots_epoch < epoch) {
-                // Bank::process_new_epoch(...)
-
-                try bank_methods.applyFeatureActivations(
-                    allocator,
-                    slot,
-                    &feature_set,
-                    account_store,
-                    true,
-                );
-
-                // stakes_cache.activateEpoch();
-                // Since the stakes cache is empty, we don't need to actually do anything here except add
-                // an entry for the parent epoch with zero stakes.
-                // https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/stakes.rs#L297
-                {
-                    const stakes, var stakes_guard = stakes_cache.stakes.writeWithLock();
-                    defer stakes_guard.unlock();
-                    stakes.epoch = epoch;
-                    std.debug.assert(stakes.stake_history.entries.len == 0);
-                    stakes.stake_history.entries.appendAssumeCapacity(.{
-                        .epoch = parent_slots_epoch,
-                        .stake = .{
-                            .effective = 0,
-                            .activating = 0,
-                            .deactivating = 0,
-                        },
-                    });
-                }
-
-                const leader_schedule_epoch = epoch_schedule.getLeaderScheduleEpoch(slot);
-                // Since stakes cache is empty, we just need to insert an empty stakes entry
-                // into the epoch stakes map at the leader schedule epoch stakes map if it is not present
-                // updateEpochStakes(leader_schedule_epoch);
-                if (!epoch_stakes_map.contains(leader_schedule_epoch))
-                    try epoch_stakes_map.put(
-                        allocator,
-                        leader_schedule_epoch,
-                        .EMPTY,
-                    );
-
-                // Bank::begin_partitioned_epoch_rewards(...)
-                // Similar to the above, epoch rewards is set but nothing meaningful is computed
-                // since there are no staked nodes or rewards to distribute.
-                // See: EpochRewards Debug Log: 0a73c09ab08f77e00b0faa8cf0d70408113b0a92_265678.fix
-                const epoch_rewards = EpochRewards{
-                    .distribution_starting_block_height = 2,
-                    .num_partitions = 1,
-                    .parent_blockhash = blockhash_queue.last_hash.?,
-                    .total_points = 0,
-                    .total_rewards = 0,
-                    .distributed_rewards = 0,
-                    .active = true,
-                };
-                try update_sysvar.updateSysvarAccount(EpochRewards, allocator, epoch_rewards, .{
-                    .slot = slot,
-                    .slot_store = account_store.forSlot(slot, &ancestors),
-                    .capitalization = &capitalization,
-                    .rent = &genesis_config.rent,
+            // stakes_cache.activateEpoch();
+            // Since the stakes cache is empty, we don't need to actually do anything here except add
+            // an entry for the parent epoch with zero stakes.
+            // https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/stakes.rs#L297
+            {
+                const stakes, var stakes_guard = stakes_cache.stakes.writeWithLock();
+                defer stakes_guard.unlock();
+                stakes.epoch = epoch;
+                std.debug.assert(stakes.stake_history.entries.len == 0);
+                stakes.stake_history.entries.appendAssumeCapacity(.{
+                    .epoch = parent_slots_epoch,
+                    .stake = .{
+                        .effective = 0,
+                        .activating = 0,
+                        .deactivating = 0,
+                    },
                 });
-            } else {
-                const leader_schedule_epoch = epoch_schedule.getLeaderScheduleEpoch(slot);
-                // Since stakes cache is empty, we just need to insert an empty stakes entry
-                // into the epoch stakes map at the leader schedule epoch stakes map if it is not present
-                // updateEpochStakes(leader_schedule_epoch);
-                if (!epoch_stakes_map.contains(leader_schedule_epoch)) {
-                    try epoch_stakes_map.put(allocator, leader_schedule_epoch, .EMPTY);
-                }
             }
 
-            // Bank::distribute_partitioned_epoch_rewards(...)
-            // Effectively noop for txn fuzzing purposes since height < distribution_starting_block_height
+            const leader_schedule_epoch = epoch_schedule.getLeaderScheduleEpoch(slot);
+            // Since stakes cache is empty, we just need to insert an empty stakes entry
+            // into the epoch stakes map at the leader schedule epoch stakes map if it is not present
+            // updateEpochStakes(leader_schedule_epoch);
+            if (!epoch_stakes_map.contains(leader_schedule_epoch))
+                try epoch_stakes_map.put(
+                    allocator,
+                    leader_schedule_epoch,
+                    .EMPTY,
+                );
+
+            // Bank::begin_partitioned_epoch_rewards(...)
+            // Similar to the above, epoch rewards is set but nothing meaningful is computed
+            // since there are no staked nodes or rewards to distribute.
             // See: EpochRewards Debug Log: 0a73c09ab08f77e00b0faa8cf0d70408113b0a92_265678.fix
-            // try bank_methods.distributePartitionedEpochRewards();
+            const epoch_rewards = EpochRewards{
+                .distribution_starting_block_height = 2,
+                .num_partitions = 1,
+                .parent_blockhash = blockhash_queue.last_hash.?,
+                .total_points = 0,
+                .total_rewards = 0,
+                .distributed_rewards = 0,
+                .active = true,
+            };
+            try update_sysvar.updateSysvarAccount(EpochRewards, allocator, epoch_rewards, .{
+                .slot = slot,
+                .slot_store = account_store.forSlot(slot, &ancestors),
+                .capitalization = &capitalization,
+                .rent = &genesis_config.rent,
+            });
+        } else {
+            const leader_schedule_epoch = epoch_schedule.getLeaderScheduleEpoch(slot);
+            // Since stakes cache is empty, we just need to insert an empty stakes entry
+            // into the epoch stakes map at the leader schedule epoch stakes map if it is not present
+            // updateEpochStakes(leader_schedule_epoch);
+            if (!epoch_stakes_map.contains(leader_schedule_epoch)) {
+                try epoch_stakes_map.put(allocator, leader_schedule_epoch, .EMPTY);
+            }
+        }
 
-            // Prepare program cache for upcoming feature set
+        // Bank::distribute_partitioned_epoch_rewards(...)
+        // Effectively noop for txn fuzzing purposes since height < distribution_starting_block_height
+        // See: EpochRewards Debug Log: 0a73c09ab08f77e00b0faa8cf0d70408113b0a92_265678.fix
+        // try bank_methods.distributePartitionedEpochRewards();
 
-            // Update sysvars
-            {
-                const update_sysvar_deps: update_sysvar.UpdateSysvarAccountDeps = .{
-                    .slot = slot,
-                    .slot_store = account_store.forSlot(slot, &ancestors),
-                    .capitalization = &capitalization,
-                    .rent = &genesis_config.rent,
-                };
+        // Prepare program cache for upcoming feature set
 
-                try update_sysvar.updateSlotHashes(
-                    allocator,
-                    parent_slot,
-                    parent_hash,
-                    update_sysvar_deps,
-                );
-                try update_sysvar.updateStakeHistory(
-                    allocator,
-                    .{
-                        .epoch = epoch,
-                        .parent_slots_epoch = parent_slots_epoch,
-                        .stakes_cache = &stakes_cache,
-                        .update_sysvar_deps = update_sysvar_deps,
-                    },
-                );
-                _ = try update_sysvar.updateClock(allocator, .{
-                    .feature_set = &feature_set,
-                    .epoch_schedule = &epoch_schedule,
-                    .epoch_stakes = epoch_stakes_map.getPtr(epoch),
-                    .stakes_cache = &stakes_cache,
+        // Update sysvars
+        {
+            const update_sysvar_deps: update_sysvar.UpdateSysvarAccountDeps = .{
+                .slot = slot,
+                .slot_store = account_store.forSlot(slot, &ancestors),
+                .capitalization = &capitalization,
+                .rent = &genesis_config.rent,
+            };
+
+            try update_sysvar.updateSlotHashes(
+                allocator,
+                parent_slot,
+                parent_hash,
+                update_sysvar_deps,
+            );
+            try update_sysvar.updateStakeHistory(
+                allocator,
+                .{
                     .epoch = epoch,
                     .parent_slots_epoch = parent_slots_epoch,
-                    .genesis_creation_time = genesis_config.creation_time,
-                    .ns_per_slot = @intCast(genesis_config.nsPerSlot()),
+                    .stakes_cache = &stakes_cache,
                     .update_sysvar_deps = update_sysvar_deps,
-                });
-                try update_sysvar.updateLastRestartSlot(
-                    allocator,
-                    &feature_set,
-                    slot,
-                    &hard_forks,
-                    update_sysvar_deps,
-                );
-            }
-
-            // Get num accounts modified by this slot if accounts lt hash enabled
-
-            // A bunch of stats stuff...
+                },
+            );
+            _ = try update_sysvar.updateClock(allocator, .{
+                .feature_set = &feature_set,
+                .epoch_schedule = &epoch_schedule,
+                .epoch_stakes = epoch_stakes_map.getPtr(epoch),
+                .stakes_cache = &stakes_cache,
+                .epoch = epoch,
+                .parent_slots_epoch = parent_slots_epoch,
+                .genesis_creation_time = genesis_config.creation_time,
+                .ns_per_slot = @intCast(genesis_config.nsPerSlot()),
+                .update_sysvar_deps = update_sysvar_deps,
+            });
+            try update_sysvar.updateLastRestartSlot(
+                allocator,
+                &feature_set,
+                slot,
+                &hard_forks,
+                update_sysvar_deps,
+            );
         }
 
-        // bank = bank_forks.write().unwrap().insert(bank).clone_without_scheduler();
-        {
-            // if (root < highest_slot_at_startup) {
-            //     bank.check_program_modification_slot = true;
-            // }
+        // Get num accounts modified by this slot if accounts lt hash enabled
 
-            // bunch of scheduler and forks stuff...
-        }
-
-        // ProgramCache::prune(slot, epoch)
-        {}
+        // A bunch of stats stuff...
     }
+
+    // bank = bank_forks.write().unwrap().insert(bank).clone_without_scheduler();
+    {
+        // if (root < highest_slot_at_startup) {
+        //     bank.check_program_modification_slot = true;
+        // }
+
+        // bunch of scheduler and forks stuff...
+    }
+
+    // ProgramCache::prune(slot, epoch)
+    {}
 
     // Checkpoint 2 -- End of Bank Transition to TxnContext Slot
     // try writeState(allocator, .{
@@ -911,15 +909,19 @@ fn serializeOutput(
 
     const errors = utils.convertTransactionError(txn.err);
 
-    var acct_states: std.ArrayList(pb.AcctState) = .{};
-    errdefer acct_states.deinit(allocator);
+    var modified_accounts: std.ArrayListUnmanaged(pb.AcctState) = .empty;
+    var rollback_accounts: std.ArrayListUnmanaged(pb.AcctState) = .empty;
+    errdefer modified_accounts.deinit(allocator);
+    errdefer rollback_accounts.deinit(allocator);
+
     if (result.ok.outputs != null and result.ok.err != null) {
         // In the event that the transaction is executed and fails, agave
         // returns *all* the loaded accounts, including all the modifications
         // from the failed transaction, whereas we only return the rollback
         // accounts. Our approach makes more sense in the context of the
         // validator, but for compatibility with solfuzz_agave's outputs, we
-        // need to return the modified loaded accounts.
+        // need to return the "modified" loaded accounts that aren't actually
+        // modified since the transaction failed.
         for (failed_accounts) |account| {
             const was_an_input_and_is_writable = for (
                 sanitized.accounts.items(.pubkey),
@@ -928,23 +930,23 @@ fn serializeOutput(
                 if (account.pubkey.equals(&pubkey)) break is_writable;
             } else false;
 
-            if (was_an_input_and_is_writable) try acct_states.append(
+            if (was_an_input_and_is_writable) try modified_accounts.append(
+                allocator,
+                try sharedAccountToState(allocator, account.pubkey, account.account),
+            );
+        }
+        for (txn.writes.constSlice()) |account| {
+            try rollback_accounts.append(
                 allocator,
                 try sharedAccountToState(allocator, account.pubkey, account.account),
             );
         }
     } else for (txn.writes.constSlice()) |account| {
-        try acct_states.append(
+        try modified_accounts.append(
             allocator,
             try sharedAccountToState(allocator, account.pubkey, account.account),
         );
     }
-
-    const resulting_state: pb.ResultingState = .{
-        .rent_debits = .{},
-        .transaction_rent = txn.rent,
-        .acct_states = acct_states,
-    };
 
     const return_data: []const u8 = if (txn.outputs) |out|
         if (out.return_data) |ret| try allocator.dupe(u8, ret.data.constSlice()) else &.{}
@@ -955,7 +957,6 @@ fn serializeOutput(
         .executed = true,
         .sanitization_error = false,
         .is_ok = txn.err == null,
-        .rent = txn.rent,
 
         .status = errors.err,
         .instruction_error = errors.instruction_error,
@@ -963,7 +964,8 @@ fn serializeOutput(
         .custom_error = errors.custom_error,
 
         .return_data = return_data,
-        .resulting_state = resulting_state,
+        .modified_accounts = modified_accounts,
+        .rollback_accounts = rollback_accounts,
         .fee_details = .{
             .transaction_fee = txn.fees.transaction_fee,
             .prioritization_fee = txn.fees.prioritization_fee,
@@ -1006,19 +1008,13 @@ fn parsePubkey(bytes: []const u8) !Pubkey {
     return .{ .data = bytes[0..Pubkey.SIZE].* };
 }
 
-/// [agave] https://github.com/firedancer-io/solfuzz-agave/blob/agave-v3.1.0-beta.0/src/txn_fuzzer.rs#L319-L323
-fn loadSlot(txn_ctx: *const pb.TxnContext) u64 {
-    const slot = if (txn_ctx.slot_ctx) |ctx| ctx.slot else return 10;
-    return if (slot == 0) 10 else slot;
-}
-
 /// Load blockhashes from the protobuf transaction context.
 /// If no blockhashes are provided, a default blockhash of zeroes is returned.
 fn loadBlockhashes(
     allocator: std.mem.Allocator,
     pb_txn_ctx: *const pb.TxnContext,
 ) ![]Hash {
-    const pb_blockhashes = pb_txn_ctx.blockhash_queue.items;
+    const pb_blockhashes = pb_txn_ctx.bank.?.blockhash_queue.items;
     if (pb_blockhashes.len == 0)
         return try allocator.dupe(Hash, &.{Hash.ZEROES});
 
@@ -1026,7 +1022,7 @@ fn loadBlockhashes(
     errdefer allocator.free(blockhashes);
 
     for (blockhashes, pb_blockhashes) |*blockhash, pb_blockhash|
-        blockhash.* = try parseHash(pb_blockhash);
+        blockhash.* = try parseHash(pb_blockhash.blockhash);
 
     return blockhashes;
 }
