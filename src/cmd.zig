@@ -172,6 +172,7 @@ pub fn main() !void {
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.stop_at_slot = params.stop_at_slot;
+            current_config.rpc_port = params.rpc_port;
             try replayOffline(gpa, current_config);
         },
         .shred_network => |params| {
@@ -1937,6 +1938,11 @@ fn replayOffline(
     );
     defer epoch_tracker.deinit();
 
+    var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
+    defer prioritization_fee_cache.deinit(allocator);
+
+    const rpc_enabled = cfg.rpc_port != null;
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db = &new_db },
@@ -1948,10 +1954,36 @@ fn replayOffline(
         .voting_enabled = false,
         .vote_account_address = null,
         .stop_at_slot = cfg.stop_at_slot,
-        // TODO: thread rpc_port through replayOffline
-        .rpc_enabled = false,
+        .rpc_enabled = rpc_enabled,
     });
     defer replay_service_state.deinit(allocator);
+
+    if (rpc_enabled) {
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .gossip_table_rw = null,
+            .my_shred_version = null,
+            .epoch_tracker = &epoch_tracker,
+        });
+
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
+            .ledger = &ledger,
+            .epoch_tracker = &epoch_tracker,
+            .status_cache = &replay_service_state.replay_state.status_cache,
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .block_commitment_cache = &replay_service_state.replay_state.block_commitment_cache.?,
+        });
+
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .account_reader = replay_service_state.replay_state.account_store.reader(),
+        });
+
+        try app_base.rpc_hooks.set(
+            allocator,
+            sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
+        );
+    }
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
@@ -1960,6 +1992,18 @@ fn replayOffline(
         null,
     );
 
+    const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
+        try std.Thread.spawn(.{}, runRPCServer, .{
+            allocator,
+            app_base.logger,
+            app_base.exit,
+            std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port),
+            &app_base.rpc_hooks,
+        })
+    else
+        null;
+
+    if (rpc_server_thread) |thread| thread.join();
     replay_thread.join();
     ledger_cleanup_service.join();
 }

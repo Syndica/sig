@@ -95,10 +95,13 @@ const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 const CommitmentVisitorCtx = struct {
     acc: sig.replay.trackers.BlockCommitmentCache.Accumulator,
     allocator: Allocator,
+    /// Sorted status-cache root slots; when non-null, restricts commitment
+    /// tracking to only these ancestor slots (matching Agave behaviour).
+    ancestors: ?[]const Slot,
 
     fn visit(ctx_ptr: *anyopaque, tower: *const Tower, stake: u64) void {
         const self: *CommitmentVisitorCtx = @ptrCast(@alignCast(ctx_ptr));
-        self.acc.observeVoteAccount(self.allocator, tower, stake);
+        self.acc.observeVoteAccount(self.allocator, tower, stake, self.ancestors);
     }
 };
 
@@ -478,9 +481,20 @@ pub const TowerConsensus = struct {
         // Build an accumulator for BlockCommitmentCache so we can piggyback on
         // the vote-account iteration inside collectClusterVoteState, avoiding a
         // redundant second loop over every vote account.
+        //
+        // When a StatusCache is available, extract its sorted root slots so that
+        // the accumulator only tracks commitment for recent ancestor slots,
+        // matching Agave's `aggregate_commitment_for_vote_account` semantics.
+        const sorted_roots: ?[]Slot = if (params.status_cache) |sc|
+            sc.getSortedRoots(allocator) catch null
+        else
+            null;
+        defer if (sorted_roots) |r| allocator.free(r);
+
         var commitment_ctx: CommitmentVisitorCtx = .{
             .acc = .{},
             .allocator = allocator,
+            .ancestors = sorted_roots,
         };
         defer commitment_ctx.acc.deinit(allocator);
 
@@ -7874,6 +7888,7 @@ test "CommitmentVisitorCtx visit delegates to accumulator" {
     var ctx: CommitmentVisitorCtx = .{
         .acc = .{},
         .allocator = gpa,
+        .ancestors = null,
     };
     defer ctx.acc.deinit(gpa);
 

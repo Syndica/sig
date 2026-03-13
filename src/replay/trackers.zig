@@ -427,35 +427,104 @@ pub const BlockCommitmentCache = struct {
         total_stake: u64 = 0,
 
         /// Record one vote account's lockout tower into the accumulator.
+        ///
+        /// When `ancestors` is provided (a sorted slice of status-cache root
+        /// slots), the function matches Agave's
+        /// `aggregate_commitment_for_vote_account` semantics:
+        /// - Only ancestor slots are credited (slots outside the window are
+        ///   ignored, bounding memory and producing `null` for old queries).
+        /// - Rooted stake is credited to every ancestor at or below the tower
+        ///   root.
+        /// - Confirmation stake is credited to every ancestor between
+        ///   consecutive votes (not just the vote slot itself).
+        ///
+        /// When `ancestors` is `null` the old (unfiltered) behaviour is used
+        /// so that call-sites without a StatusCache still work.
         pub fn observeVoteAccount(
             self: *Accumulator,
             allocator: Allocator,
             tower: *const Tower,
             stake: u64,
+            ancestors: ?[]const Slot,
         ) void {
             self.total_stake += stake;
 
-            for (tower.votes.constSlice()) |lockout| {
-                if (lockout.confirmation_count == 0) continue;
-                const depth_index: usize = @min(
-                    lockout.confirmation_count - 1,
-                    MAX_LOCKOUT_HISTORY - 1,
-                );
-                const entry = self.new_commitment.getOrPutValue(
-                    allocator,
-                    lockout.slot,
-                    std.mem.zeroes(BlockCommitmentArray),
-                ) catch continue;
-                entry.value_ptr[depth_index] += stake;
-            }
+            if (ancestors) |sorted_ancestors| {
+                // Agave-compatible walk over sorted ancestor slots.
+                var ancestors_index: usize = 0;
 
-            if (tower.root) |root| {
-                const entry = self.new_commitment.getOrPutValue(
-                    allocator,
-                    root,
-                    std.mem.zeroes(BlockCommitmentArray),
-                ) catch return;
-                entry.value_ptr[MAX_LOCKOUT_HISTORY] += stake;
+                // 1. Root handling: credit rooted stake to every ancestor <= root.
+                if (tower.root) |root| {
+                    while (ancestors_index < sorted_ancestors.len) {
+                        const a = sorted_ancestors[ancestors_index];
+                        if (a <= root) {
+                            const entry = self.new_commitment.getOrPutValue(
+                                allocator,
+                                a,
+                                std.mem.zeroes(BlockCommitmentArray),
+                            ) catch {
+                                ancestors_index += 1;
+                                continue;
+                            };
+                            entry.value_ptr[MAX_LOCKOUT_HISTORY] += stake;
+                            ancestors_index += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
+                // 2. Vote handling: credit confirmation stake to all ancestors
+                //    between consecutive votes.
+                for (tower.votes.constSlice()) |lockout| {
+                    if (lockout.confirmation_count == 0) continue;
+                    const depth_index: usize = @min(
+                        lockout.confirmation_count - 1,
+                        MAX_LOCKOUT_HISTORY - 1,
+                    );
+                    while (ancestors_index < sorted_ancestors.len) {
+                        const a = sorted_ancestors[ancestors_index];
+                        if (a <= lockout.slot) {
+                            const entry = self.new_commitment.getOrPutValue(
+                                allocator,
+                                a,
+                                std.mem.zeroes(BlockCommitmentArray),
+                            ) catch {
+                                ancestors_index += 1;
+                                continue;
+                            };
+                            entry.value_ptr[depth_index] += stake;
+                            ancestors_index += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    if (ancestors_index >= sorted_ancestors.len) return;
+                }
+            } else {
+                // Unfiltered fallback: record exact vote slots only.
+                for (tower.votes.constSlice()) |lockout| {
+                    if (lockout.confirmation_count == 0) continue;
+                    const depth_index: usize = @min(
+                        lockout.confirmation_count - 1,
+                        MAX_LOCKOUT_HISTORY - 1,
+                    );
+                    const entry = self.new_commitment.getOrPutValue(
+                        allocator,
+                        lockout.slot,
+                        std.mem.zeroes(BlockCommitmentArray),
+                    ) catch continue;
+                    entry.value_ptr[depth_index] += stake;
+                }
+
+                if (tower.root) |root| {
+                    const entry = self.new_commitment.getOrPutValue(
+                        allocator,
+                        root,
+                        std.mem.zeroes(BlockCommitmentArray),
+                    ) catch return;
+                    entry.value_ptr[MAX_LOCKOUT_HISTORY] += stake;
+                }
             }
         }
 
@@ -1032,7 +1101,7 @@ test "BlockCommitmentCache Accumulator observeVoteAccount records lockouts" {
     var acc: BlockCommitmentCache.Accumulator = .{};
     defer acc.deinit(allocator);
 
-    acc.observeVoteAccount(allocator, &tower, 500);
+    acc.observeVoteAccount(allocator, &tower, 500, null);
 
     try std.testing.expectEqual(@as(u64, 500), acc.total_stake);
 
@@ -1056,7 +1125,7 @@ test "BlockCommitmentCache Accumulator observeVoteAccount records root" {
     var acc: BlockCommitmentCache.Accumulator = .{};
     defer acc.deinit(allocator);
 
-    acc.observeVoteAccount(allocator, &tower, 300);
+    acc.observeVoteAccount(allocator, &tower, 300, null);
 
     // Root slot 50 should have stake at index MAX_LOCKOUT_HISTORY (31)
     const entry50 = acc.new_commitment.get(50).?;
@@ -1073,7 +1142,7 @@ test "BlockCommitmentCache Accumulator observeVoteAccount skips zero confirmatio
     var acc: BlockCommitmentCache.Accumulator = .{};
     defer acc.deinit(allocator);
 
-    acc.observeVoteAccount(allocator, &tower, 1000);
+    acc.observeVoteAccount(allocator, &tower, 1000, null);
 
     // Slot 100 should not be recorded (confirmation_count == 0)
     try std.testing.expectEqual(
@@ -1096,7 +1165,7 @@ test "BlockCommitmentCache Accumulator observeVoteAccount clamps high confirmati
     var acc: BlockCommitmentCache.Accumulator = .{};
     defer acc.deinit(allocator);
 
-    acc.observeVoteAccount(allocator, &tower, 400);
+    acc.observeVoteAccount(allocator, &tower, 400, null);
 
     const entry = acc.new_commitment.get(100).?;
     // depth_index = min(99 - 1, 30) = 30
@@ -1127,7 +1196,7 @@ test "BlockCommitmentCache commitAccumulated swaps data atomically" {
 
     var acc: BlockCommitmentCache.Accumulator = .{};
     defer acc.deinit(allocator);
-    acc.observeVoteAccount(allocator, &tower, 700);
+    acc.observeVoteAccount(allocator, &tower, 700, null);
 
     // Commit: should swap cache contents
     cache.commitAccumulated(&acc);
@@ -1164,15 +1233,103 @@ test "BlockCommitmentCache Accumulator multiple vote accounts accumulate" {
     // First vote account votes on slot 100 at depth 2
     var tower1: Tower = .{ .root = null };
     try tower1.votes.append(.{ .slot = 100, .confirmation_count = 2 });
-    acc.observeVoteAccount(allocator, &tower1, 300);
+    acc.observeVoteAccount(allocator, &tower1, 300, null);
 
     // Second vote account also votes on slot 100 at depth 2
     var tower2: Tower = .{ .root = null };
     try tower2.votes.append(.{ .slot = 100, .confirmation_count = 2 });
-    acc.observeVoteAccount(allocator, &tower2, 500);
+    acc.observeVoteAccount(allocator, &tower2, 500, null);
 
     // Stake should accumulate: 300 + 500 = 800
     try std.testing.expectEqual(@as(u64, 800), acc.total_stake);
     const entry = acc.new_commitment.get(100).?;
     try std.testing.expectEqual(@as(u64, 800), entry[1]); // depth index = min(2-1, 30) = 1
+}
+
+test "BlockCommitmentCache Accumulator ancestor-filtered walk credits intermediate ancestors" {
+    const allocator = std.testing.allocator;
+
+    // Tower: root=80, votes at 100 (conf 5) and 200 (conf 1).
+    // Ancestors (sorted): 70, 80, 90, 95, 100, 150, 200.
+    var tower: Tower = .{ .root = 80 };
+    try tower.votes.append(.{ .slot = 100, .confirmation_count = 5 });
+    try tower.votes.append(.{ .slot = 200, .confirmation_count = 1 });
+
+    const ancestors = [_]Slot{ 70, 80, 90, 95, 100, 150, 200 };
+
+    var acc: BlockCommitmentCache.Accumulator = .{};
+    defer acc.deinit(allocator);
+
+    acc.observeVoteAccount(allocator, &tower, 600, &ancestors);
+
+    try std.testing.expectEqual(@as(u64, 600), acc.total_stake);
+
+    // Ancestors <= root (70, 80): rooted stake at index MAX_LOCKOUT_HISTORY
+    const root_idx = BlockCommitmentCache.MAX_LOCKOUT_HISTORY;
+    try std.testing.expectEqual(@as(u64, 600), acc.new_commitment.get(70).?[root_idx]);
+    try std.testing.expectEqual(@as(u64, 600), acc.new_commitment.get(80).?[root_idx]);
+
+    // Ancestors > root and <= first vote (90, 95, 100): conf 5 → depth index 4
+    try std.testing.expectEqual(@as(u64, 600), acc.new_commitment.get(90).?[4]);
+    try std.testing.expectEqual(@as(u64, 600), acc.new_commitment.get(95).?[4]);
+    try std.testing.expectEqual(@as(u64, 600), acc.new_commitment.get(100).?[4]);
+
+    // Ancestors > first vote and <= second vote (150, 200): conf 1 → depth index 0
+    try std.testing.expectEqual(@as(u64, 600), acc.new_commitment.get(150).?[0]);
+    try std.testing.expectEqual(@as(u64, 600), acc.new_commitment.get(200).?[0]);
+
+    // Only ancestor slots should be present (7 entries total).
+    try std.testing.expectEqual(@as(usize, 7), acc.new_commitment.count());
+}
+
+test "BlockCommitmentCache Accumulator ancestor-filtered walk excludes non-ancestor slots" {
+    const allocator = std.testing.allocator;
+
+    // Tower with vote at slot 500, but ancestors only cover slots up to 300.
+    var tower: Tower = .{ .root = null };
+    try tower.votes.append(.{ .slot = 500, .confirmation_count = 3 });
+
+    const ancestors = [_]Slot{ 100, 200, 300 };
+
+    var acc: BlockCommitmentCache.Accumulator = .{};
+    defer acc.deinit(allocator);
+
+    acc.observeVoteAccount(allocator, &tower, 400, &ancestors);
+
+    // All three ancestors are <= vote slot 500, so they get conf stake.
+    try std.testing.expectEqual(@as(u64, 400), acc.new_commitment.get(100).?[2]);
+    try std.testing.expectEqual(@as(u64, 400), acc.new_commitment.get(200).?[2]);
+    try std.testing.expectEqual(@as(u64, 400), acc.new_commitment.get(300).?[2]);
+
+    // Slot 500 itself is NOT an ancestor, so it should NOT be present.
+    try std.testing.expectEqual(
+        @as(?BlockCommitmentCache.BlockCommitmentArray, null),
+        acc.new_commitment.get(500),
+    );
+}
+
+test "BlockCommitmentCache Accumulator ancestor-filtered root-only tower" {
+    const allocator = std.testing.allocator;
+
+    // Tower with root but no votes.
+    var tower: Tower = .{ .root = 100 };
+
+    const ancestors = [_]Slot{ 50, 75, 100, 150 };
+
+    var acc: BlockCommitmentCache.Accumulator = .{};
+    defer acc.deinit(allocator);
+
+    acc.observeVoteAccount(allocator, &tower, 200, &ancestors);
+
+    // Ancestors <= root (50, 75, 100) get rooted stake.
+    const root_idx = BlockCommitmentCache.MAX_LOCKOUT_HISTORY;
+    try std.testing.expectEqual(@as(u64, 200), acc.new_commitment.get(50).?[root_idx]);
+    try std.testing.expectEqual(@as(u64, 200), acc.new_commitment.get(75).?[root_idx]);
+    try std.testing.expectEqual(@as(u64, 200), acc.new_commitment.get(100).?[root_idx]);
+
+    // Ancestor 150 is > root and there are no votes, so it should not be present.
+    try std.testing.expectEqual(
+        @as(?BlockCommitmentCache.BlockCommitmentArray, null),
+        acc.new_commitment.get(150),
+    );
 }
