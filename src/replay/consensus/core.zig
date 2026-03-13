@@ -81,6 +81,7 @@ const SlotStatus = sig.replay.consensus.cluster_sync.SlotStatus;
 const ReplayResult = replay.execution.ReplayResult;
 const ProcessResultParams = replay.consensus.process_result.ProcessResultParams;
 const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
+const VoteAccountVisitor = sig.consensus.replay_tower.VoteAccountVisitor;
 
 const collectClusterVoteState = sig.consensus.replay_tower.collectClusterVoteState;
 const isDuplicateSlotConfirmed = sig.consensus.replay_tower.isDuplicateSlotConfirmed;
@@ -88,6 +89,21 @@ const check_slot_agrees_with_cluster =
     sig.replay.consensus.cluster_sync.check_slot_agrees_with_cluster;
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
+
+/// Context for the VoteAccountVisitor callback that accumulates
+/// BlockCommitmentCache data during collectClusterVoteState.
+const CommitmentVisitorCtx = struct {
+    acc: sig.replay.trackers.BlockCommitmentCache.Accumulator,
+    allocator: Allocator,
+    /// Sorted status-cache root slots; when non-null, restricts commitment
+    /// tracking to only these ancestor slots (matching Agave behaviour).
+    ancestors: ?[]const Slot,
+
+    fn visit(ctx_ptr: *anyopaque, tower: *const Tower, stake: u64) void {
+        const self: *CommitmentVisitorCtx = @ptrCast(@alignCast(ctx_ptr));
+        self.acc.observeVoteAccount(self.allocator, tower, stake, self.ancestors);
+    }
+};
 
 pub const VoteOp = union(enum) {
     push_vote: struct {
@@ -366,6 +382,7 @@ pub const TowerConsensus = struct {
             /// Same comments on `duplicate_confirmed_slots` apply.
             gossip_verified_vote_hashes: *std.ArrayListUnmanaged(GossipVerifiedVoteHash),
             results: []const ReplayResult,
+            block_commitment_cache: ?*sig.replay.trackers.BlockCommitmentCache = null,
         },
     ) !void {
         var zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.process" });
@@ -461,6 +478,34 @@ pub const TowerConsensus = struct {
             break :cluster_sync_and_ancestors_descendants .{ ancestors, descendants };
         };
 
+        // Build an accumulator for BlockCommitmentCache so we can piggyback on
+        // the vote-account iteration inside collectClusterVoteState, avoiding a
+        // redundant second loop over every vote account.
+        //
+        // When a StatusCache is available, extract its sorted root slots so that
+        // the accumulator only tracks commitment for recent ancestor slots,
+        // matching Agave's `aggregate_commitment_for_vote_account` semantics.
+        const sorted_roots: ?[]Slot = if (params.status_cache) |sc|
+            sc.getSortedRoots(allocator) catch null
+        else
+            null;
+        defer if (sorted_roots) |r| allocator.free(r);
+
+        var commitment_ctx: CommitmentVisitorCtx = .{
+            .acc = .{},
+            .allocator = allocator,
+            .ancestors = sorted_roots,
+        };
+        defer commitment_ctx.acc.deinit(allocator);
+
+        const commitment_visitor: ?VoteAccountVisitor = if (params.block_commitment_cache != null)
+            .{
+                .context = @ptrCast(&commitment_ctx),
+                .visitFn = &CommitmentVisitorCtx.visit,
+            }
+        else
+            null;
+
         try self.executeProtocol(
             allocator,
             params.ledger,
@@ -477,7 +522,13 @@ pub const TowerConsensus = struct {
             self.identity.vote_account,
             params.senders,
             params.maybe_thread_pool,
+            commitment_visitor,
         );
+
+        // Commit accumulated commitment data to the cache in one atomic swap.
+        if (params.block_commitment_cache) |cache| {
+            cache.commitAccumulated(&commitment_ctx.acc);
+        }
     }
 
     fn processResult(
@@ -530,6 +581,7 @@ pub const TowerConsensus = struct {
         vote_account: ?Pubkey,
         senders: Senders,
         maybe_thread_pool: ?*ThreadPool,
+        vote_account_visitor: ?VoteAccountVisitor,
     ) !void {
         const newly_computed_consensus_slots = try computeConsensusInputs(
             allocator,
@@ -542,6 +594,7 @@ pub const TowerConsensus = struct {
             &self.fork_choice,
             &self.replay_tower,
             &self.slot_data.latest_validator_votes,
+            vote_account_visitor,
         );
         defer allocator.free(newly_computed_consensus_slots);
         // For each of the newly computed consensus slots,
@@ -1727,6 +1780,7 @@ fn computeConsensusInputs(
     fork_choice: *ForkChoice,
     replay_tower: *const ReplayTower,
     latest_validator_votes: *LatestValidatorVotes,
+    vote_account_visitor: ?VoteAccountVisitor,
 ) ![]Slot {
     var zone = tracy.Zone.init(@src(), .{ .name = "computeConsensusInputs" });
     defer zone.deinit();
@@ -1762,6 +1816,7 @@ fn computeConsensusInputs(
                     ancestors,
                     progress,
                     latest_validator_votes,
+                    vote_account_visitor,
                 );
             };
             // Update the fork choice tree with new votes discovered during collectClusterVoteState.
@@ -1874,7 +1929,7 @@ test "processResult and handleDuplicateConfirmedFork" {
     var stubs = try replay.service.DependencyStubs.init(allocator, .FOR_TESTS);
     defer stubs.deinit();
 
-    var replay_state = try stubs.stubbedState(allocator, .FOR_TESTS);
+    var replay_state = try stubs.stubbedState(allocator, .FOR_TESTS, .disabled);
     defer {
         replay_state.deinit();
         replay_state.epoch_tracker.deinit();
@@ -2940,6 +2995,7 @@ test "computeBankStats - child bank heavier" {
         &fixture.fork_choice,
         &replay_tower,
         &fixture.latest_validator_votes_for_frozen_banks,
+        null,
     );
     defer gpa.free(newly_computed_consensus_slots);
 
@@ -3038,6 +3094,7 @@ test "computeBankStats - same weight selects lower slot" {
         &fixture.fork_choice,
         &replay_tower,
         &fixture.latest_validator_votes_for_frozen_banks,
+        null,
     );
     defer testing.allocator.free(newly_computed_consensus_slots);
 
@@ -4915,7 +4972,7 @@ test "edge cases - duplicate slot" {
     var dep_stubs: sig.replay.service.DependencyStubs = try .init(gpa, .FOR_TESTS);
     defer dep_stubs.deinit();
 
-    var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
+    var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS, .disabled);
     defer {
         replay_state.deinit();
         replay_state.epoch_tracker.deinit();
@@ -5095,7 +5152,7 @@ test "edge cases - duplicate confirmed slot" {
     var dep_stubs: sig.replay.service.DependencyStubs = try .init(gpa, .FOR_TESTS);
     defer dep_stubs.deinit();
 
-    var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
+    var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS, .disabled);
     defer {
         replay_state.deinit();
         replay_state.epoch_tracker.deinit();
@@ -5276,7 +5333,7 @@ test "edge cases - gossip verified vote hashes" {
     var dep_stubs: sig.replay.service.DependencyStubs = try .init(gpa, .FOR_TESTS);
     defer dep_stubs.deinit();
 
-    var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
+    var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS, .disabled);
     defer {
         replay_state.deinit();
         replay_state.epoch_tracker.deinit();
@@ -7729,4 +7786,119 @@ test "loadTower handles invalid vote state" {
     const result = loadTower(allocator, .noop, .{ .account_map = &account_map }, vote_pubkey);
 
     try std.testing.expectError(error.BincodeError, result);
+}
+
+test "process populates block commitment cache when provided" {
+    const gpa = std.testing.allocator;
+
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(gpa);
+    defer registry.deinit();
+
+    var stubs = try sig.replay.service.DependencyStubs.init(gpa, .noop);
+    defer stubs.deinit();
+
+    const root_slot: Slot = 0;
+    const root_consts = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
+    var root_state: sig.core.SlotState = .GENESIS;
+
+    root_state.hash.set(Hash.ZEROES);
+    {
+        var bhq = root_state.blockhash_queue.write();
+        defer bhq.unlock();
+        try bhq.mut().insertGenesisHash(gpa, root_state.hash.readCopy().?, 0);
+    }
+
+    var slot_tracker = try SlotTracker.init(
+        gpa,
+        root_slot,
+        .{
+            .allocator = gpa,
+            .constants = root_consts,
+            .state = root_state,
+        },
+    );
+    defer slot_tracker.deinit(gpa);
+
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        gpa,
+        &.{.EMPTY_WITH_GENESIS},
+    );
+    defer epoch_tracker.deinit();
+
+    var progress = sig.consensus.ProgressMap.INIT;
+    defer progress.deinit(gpa);
+    {
+        const fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
+        try progress.map.put(gpa, root_slot, fork_progress0);
+    }
+
+    var consensus = try TowerConsensus.init(gpa, .{
+        .logger = .noop,
+        .identity = .{
+            .vote_account = null,
+            .validator = .initRandom(prng),
+        },
+        .signing = .{
+            .node = null,
+            .authorized_voters = &.{},
+        },
+        .account_reader = stubs.accountReader(),
+        .ledger = &stubs.ledger,
+        .slot_tracker = &slot_tracker,
+        .now = .EPOCH_ZERO,
+        .registry = &registry,
+    });
+    defer consensus.deinit(gpa);
+
+    var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
+    defer duplicate_confirmed_slots.deinit(gpa);
+
+    var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
+    defer gossip_verified_vote_hashes.deinit(gpa);
+
+    var block_commitment_cache: sig.replay.trackers.BlockCommitmentCache = .DEFAULT;
+    defer block_commitment_cache.deinit(gpa);
+
+    try consensus.process(gpa, .{
+        .account_store = stubs.accountStore(),
+        .ledger = &stubs.ledger,
+        .gossip_votes = null,
+        .gossip_table = null,
+        .slot_tracker = &slot_tracker,
+        .epoch_tracker = &epoch_tracker,
+        .progress_map = &progress,
+        .status_cache = null,
+        .senders = stubs.senders,
+        .receivers = stubs.receivers,
+        .vote_sockets = null,
+        .slot_leaders = null,
+        .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+        .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+        .results = &.{},
+        .block_commitment_cache = &block_commitment_cache,
+    });
+}
+
+test "CommitmentVisitorCtx visit delegates to accumulator" {
+    const gpa = std.testing.allocator;
+
+    var ctx: CommitmentVisitorCtx = .{
+        .acc = .{},
+        .allocator = gpa,
+        .ancestors = null,
+    };
+    defer ctx.acc.deinit(gpa);
+
+    var tower: Tower = .{ .root = null };
+    try tower.votes.append(.{ .slot = 42, .confirmation_count = 3 });
+
+    CommitmentVisitorCtx.visit(@ptrCast(&ctx), &tower, 500);
+
+    // The accumulator should have recorded the vote.
+    try std.testing.expectEqual(@as(u64, 500), ctx.acc.total_stake);
+    const entry = ctx.acc.new_commitment.get(42).?;
+    try std.testing.expectEqual(@as(u64, 500), entry[2]); // depth index = min(3-1, 30) = 2
 }

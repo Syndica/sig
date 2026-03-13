@@ -36,6 +36,18 @@ const Logger = sig.trace.Logger("replay_tower");
 
 const MAX_LOCKOUT_HISTORY = sig.consensus.tower.MAX_LOCKOUT_HISTORY;
 
+/// Optional callback invoked for each non-zero-stake vote account during
+/// `collectClusterVoteState`. Called with the pre-simulation tower state
+/// (before `processNextVoteSlot`) so the caller sees actual on-chain lockouts.
+pub const VoteAccountVisitor = struct {
+    context: *anyopaque,
+    visitFn: *const fn (*anyopaque, *const Tower, u64) void,
+
+    pub fn visit(self: VoteAccountVisitor, tower: *const Tower, stake: u64) void {
+        self.visitFn(self.context, tower, stake);
+    }
+};
+
 const VOTE_THRESHOLD_DEPTH_SHALLOW: usize = 4;
 const VOTE_THRESHOLD_DEPTH: usize = 8;
 const SWITCH_FORK_THRESHOLD: f64 = 0.38;
@@ -1688,6 +1700,7 @@ pub fn collectClusterVoteState(
     ancestors: *const AutoArrayHashMapUnmanaged(Slot, Ancestors),
     progress_map: *const ProgressMap,
     latest_validator_votes: *LatestValidatorVotes,
+    visitor: ?VoteAccountVisitor,
 ) !ClusterVoteState {
     var zone = tracy.Zone.init(@src(), .{ .name = "collectClusterVoteState" });
     defer zone.deinit();
@@ -1715,6 +1728,10 @@ pub fn collectClusterVoteState(
         );
 
         var vote_state = try Tower.fromAccount(&vote.account.state);
+
+        // Invoke visitor with the pre-simulation tower state so callers
+        // (e.g. BlockCommitmentCache) see actual on-chain lockouts.
+        if (visitor) |v| v.visit(&vote_state, vote.stake);
 
         for (vote_state.votes.constSlice()) |lockout_vote| {
             const interval = try lockout_intervals.map
@@ -2011,6 +2028,7 @@ test "check_vote_threshold_forks" {
             &ancestors,
             &progress_map,
             &latest_votes,
+            null,
         );
         defer computed_banks.deinit(allocator);
         const result = try replay_tower.checkVoteStakeThresholds(
@@ -2042,6 +2060,7 @@ test "check_vote_threshold_forks" {
             &ancestors,
             &progres_map,
             &latest_votes,
+            null,
         );
         defer computed_banks.deinit(allocator);
         const result = try replay_tower.checkVoteStakeThresholds(
@@ -2155,6 +2174,7 @@ test "collect vote lockouts root" {
         &ancestors,
         &progress_map,
         &latest_votes,
+        null,
     );
     defer computed_banks.deinit(allocator);
 
@@ -2251,6 +2271,7 @@ test "collect vote lockouts sums" {
         &ancestors,
         &progres_map,
         &latest_votes,
+        null,
     );
     defer computed_banks.deinit(allocator);
 
@@ -5276,6 +5297,87 @@ test "test VoteTooOld error triggers trackStaleVoteRejected" {
     // Check that stale vote rejected counter was incremented
     const final_stale_votes = tower.metrics.stale_votes_rejected.get();
     try std.testing.expectEqual(initial_stale_votes + 1, final_stale_votes);
+}
+
+test "collectClusterVoteState invokes VoteAccountVisitor" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    // Two accounts each voting for slot 0 with 1 token staked.
+    var votes = [_]u64{0};
+    var accounts = try genStakes(
+        allocator,
+        random,
+        &.{ .{ 1, &votes }, .{ 1, &votes } },
+    );
+    defer {
+        for (accounts.values()) |*value| value.deinit(allocator);
+        accounts.deinit(allocator);
+    }
+
+    var ancestors = std.AutoArrayHashMapUnmanaged(u64, Ancestors).empty;
+    defer {
+        var it = ancestors.iterator();
+        while (it.next()) |entry| entry.value_ptr.*.deinit(allocator);
+        ancestors.deinit(allocator);
+    }
+    const set0: Ancestors = .EMPTY;
+    var set1: Ancestors = .EMPTY;
+    try set1.addSlot(allocator, 0);
+    try ancestors.put(allocator, 0, set0);
+    try ancestors.put(allocator, 1, set1);
+
+    var latest_votes = LatestValidatorVotes.empty;
+    defer latest_votes.deinit(allocator);
+
+    var progress_map = ProgressMap.INIT;
+    defer progress_map.deinit(allocator);
+
+    var fork_progress: sig.consensus.progress_map.ForkProgress = try .zeroes(allocator);
+    errdefer fork_progress.deinit(allocator);
+
+    for (accounts.values()) |account| {
+        try progress_map.map.put(
+            allocator,
+            account.account.state.lastVotedSlot().?,
+            fork_progress,
+        );
+    }
+
+    // Context struct to capture visitor calls.
+    const Ctx = struct {
+        total_stake: u64 = 0,
+        call_count: u64 = 0,
+
+        fn visit(raw: *anyopaque, _: *const Tower, stake: u64) void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.total_stake += stake;
+            self.call_count += 1;
+        }
+    };
+    var ctx: Ctx = .{};
+
+    var computed_banks = try collectClusterVoteState(
+        allocator,
+        .noop,
+        null,
+        1,
+        &accounts,
+        &ancestors,
+        &progress_map,
+        &latest_votes,
+        .{
+            .context = @ptrCast(&ctx),
+            .visitFn = &Ctx.visit,
+        },
+    );
+    defer computed_banks.deinit(allocator);
+
+    // The visitor should have been invoked once per account (2 accounts).
+    try std.testing.expectEqual(@as(u64, 2), ctx.call_count);
+    // Total stake seen by the visitor matches sum of individual stakes.
+    try std.testing.expectEqual(@as(u64, 2), ctx.total_stake);
 }
 
 const builtin = @import("builtin");

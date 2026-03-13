@@ -737,6 +737,7 @@ test GetRecentPrioritizationFees {
 }
 
 test GetSignatureStatuses {
+    // Request without config
     var signatures = try std.testing.allocator.alloc(Signature, 2);
     defer std.testing.allocator.free(signatures);
     signatures[0] = .parse(
@@ -748,11 +749,66 @@ test GetSignatureStatuses {
     try testRequest(.getSignatureStatuses, .{ .signatures = signatures },
         \\{"jsonrpc":"2.0","id":1,"method":"getSignatureStatuses","params":[["56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp","4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz"]]}
     );
+
+    // Request with searchTransactionHistory config
+    try testRequest(.getSignatureStatuses, .{
+        .signatures = signatures,
+        .config = .{ .searchTransactionHistory = true },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getSignatureStatuses","params":[["56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp","4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz"],{"searchTransactionHistory":true}]}
+    );
+
+    // Response with all null statuses (signatures not found)
     try testResponse(GetSignatureStatuses, .{ .result = .{
         .context = .{ .slot = 309275388, .apiVersion = "2.1.6" },
         .value = &.{ null, null },
     } },
         \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275388},"value":[null,null]},"id":1}
+    );
+
+    // Response with a finalized status (confirmations=null means finalized)
+    try testResponse(GetSignatureStatuses, .{ .result = .{
+        .context = .{ .slot = 309275388, .apiVersion = "2.1.6" },
+        .value = &.{.{
+            .slot = 309275300,
+            .status = .{},
+            .confirmations = null,
+            .err = null,
+            .confirmationStatus = .finalized,
+        }},
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275388},"value":[{"confirmationStatus":"finalized","confirmations":null,"err":null,"slot":309275300,"status":{"Ok":null}}]},"id":1}
+    );
+
+    // Response with a confirmed status (confirmations=10)
+    try testResponse(GetSignatureStatuses, .{ .result = .{
+        .context = .{ .slot = 309275388, .apiVersion = "2.1.6" },
+        .value = &.{.{
+            .slot = 309275350,
+            .status = .{},
+            .confirmations = 10,
+            .err = null,
+            .confirmationStatus = .confirmed,
+        }},
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275388},"value":[{"confirmationStatus":"confirmed","confirmations":10,"err":null,"slot":309275350,"status":{"Ok":null}}]},"id":1}
+    );
+
+    // Response with mixed: one found (finalized), one not found (null)
+    try testResponse(GetSignatureStatuses, .{ .result = .{
+        .context = .{ .slot = 309275388, .apiVersion = "2.1.6" },
+        .value = &.{
+            @as(?GetSignatureStatuses.Response.TransactionStatus, .{
+                .slot = 309275300,
+                .status = .{},
+                .confirmations = null,
+                .err = null,
+                .confirmationStatus = .finalized,
+            }),
+            null,
+        },
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275388},"value":[{"confirmationStatus":"finalized","confirmations":null,"err":null,"slot":309275300,"status":{"Ok":null}},null]},"id":1}
     );
 }
 

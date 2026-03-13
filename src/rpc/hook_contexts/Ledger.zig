@@ -10,12 +10,14 @@ const AccountKeys = parse_instruction.AccountKeys;
 const Allocator = std.mem.Allocator;
 const AncestorIterator = sig.ledger.Reader.AncestorIterator;
 const GetBlock = methods.GetBlock;
+const GetBlockCommitment = methods.GetBlockCommitment;
 const GetBlockProduction = methods.GetBlockProduction;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetHealth = methods.GetHealth;
 const GetInflationReward = methods.GetInflationReward;
 const GetRecentPerformanceSamples = methods.GetRecentPerformanceSamples;
+const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetTransaction = methods.GetTransaction;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
@@ -37,9 +39,10 @@ const LedgerHookContext = @This();
 ledger: *sig.ledger.Ledger,
 /// Maximum allowed slot distance before node is considered unhealthy.
 health_check_slot_distance: u64 = DELINQUENT_VALIDATOR_SLOT_DISTANCE,
-epoch_schedule: sig.core.EpochSchedule,
 epoch_tracker: *sig.core.EpochTracker,
-commitments: *const sig.replay.trackers.CommitmentTracker,
+status_cache: *sig.core.StatusCache,
+slot_tracker: *sig.replay.trackers.SlotTracker,
+block_commitment_cache: *sig.replay.trackers.BlockCommitmentCache,
 
 pub fn getBlock(
     self: LedgerHookContext,
@@ -63,7 +66,7 @@ pub fn getBlock(
     // matching Agave's get_rooted_block).
     // Confirmed path uses getCompleteBlock (no cleanup check, slot may not be rooted yet).
     const reader = self.ledger.reader();
-    const latest_confirmed_slot = self.commitments.get(.confirmed);
+    const latest_confirmed_slot = self.slot_tracker.commitments.get(.confirmed);
     const block = if (params.slot <= latest_confirmed_slot) reader.getRootedBlock(
         arena,
         params.slot,
@@ -90,168 +93,27 @@ pub fn getBlock(
     });
 }
 
-/// Check the health of the node.
+/// Returns the commitment data for a given slot along with the total active stake.
 ///
-/// A node is considered healthy if the node's latest optimistically confirmed
-/// slot is within `health_check_slot_distance` of the cluster's latest
-/// optimistically confirmed slot.
-///
-/// Returns `RpcHealthStatus` which is then formatted by the server layer:
-/// - JSON-RPC: "ok" result on success, error with code -32005 on failure
-/// - HTTP GET /health: always 200 OK with "ok", "behind", or "unknown"
-///
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2806-L2818
-pub fn getHealth(
+/// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/rpc/src/rpc.rs#L940
+pub fn getBlockCommitment(
     self: LedgerHookContext,
-    arena: std.mem.Allocator,
-    _: GetHealth,
-) !GetHealth.Response {
-    // Get the node's latest optimistically confirmed slot from replay
-    const latest_optimistically_confirmed_slot = self.commitments.get(.confirmed);
-
-    // Get the cluster's latest optimistically confirmed slot from ledger
-    var optimistic_slots = self.ledger.reader().getLatestOptimisticSlots(arena, 1) catch {
-        return .unknown;
+    arena: Allocator,
+    params: GetBlockCommitment,
+) !GetBlockCommitment.Response {
+    const result = self.block_commitment_cache.getBlockCommitment(params.slot);
+    if (result.commitment) |commitment| {
+        const slice = try arena.alloc(u64, commitment.len);
+        @memcpy(slice, &commitment);
+        return .{
+            .commitment = slice,
+            .totalStake = result.total_stake,
+        };
+    }
+    return .{
+        .commitment = null,
+        .totalStake = result.total_stake,
     };
-    defer optimistic_slots.deinit();
-
-    if (optimistic_slots.items.len == 0) {
-        return .unknown;
-    }
-
-    const cluster_latest_optimistically_confirmed_slot, _, _ = optimistic_slots.items[0];
-
-    if (latest_optimistically_confirmed_slot >=
-        cluster_latest_optimistically_confirmed_slot -| self.health_check_slot_distance)
-    {
-        return .ok;
-    } else {
-        const num_slots_behind = cluster_latest_optimistically_confirmed_slot -|
-            latest_optimistically_confirmed_slot;
-        return .{ .behind = num_slots_behind };
-    }
-}
-
-pub fn getBlocks(
-    self: LedgerHookContext,
-    arena: std.mem.Allocator,
-    params: GetBlocks,
-) !GetBlocks.Response {
-    const commitment = params.commitment();
-    if (commitment == .processed) return error.ProcessedNotSupported;
-
-    const highest_root = self.commitments.get(.finalized);
-    const upper_bound = if (commitment == .finalized)
-        highest_root
-    else
-        self.commitments.get(.confirmed);
-
-    const end_slot = @min(
-        params.endSlot() orelse params.start_slot +| GetBlocks.MAX_GET_CONFIRMED_BLOCKS_RANGE,
-        upper_bound,
-    );
-
-    if (end_slot <= params.start_slot) return &.{};
-    if (end_slot - params.start_slot > GetBlocks.MAX_GET_CONFIRMED_BLOCKS_RANGE) {
-        return error.SlotRangeTooLarge;
-    }
-
-    // Collect rooted (finalized) slots in range.
-    var blocks = try std.ArrayList(Slot).initCapacity(
-        arena,
-        end_slot - params.start_slot +| 1,
-    );
-
-    var rooted_iter = try self.ledger.db.iterator(
-        sig.ledger.schema.schema.rooted_slots,
-        .forward,
-        params.start_slot,
-    );
-    defer rooted_iter.deinit();
-
-    while (try rooted_iter.nextKey()) |slot| {
-        if (slot > end_slot or slot > highest_root) break;
-        try blocks.append(arena, slot);
-    }
-
-    // For confirmed commitment, also include confirmed-but-unrooted slots.
-    if (commitment == .confirmed) {
-        const last_rooted = if (blocks.items.len > 0)
-            blocks.items[blocks.items.len - 1]
-        else
-            params.start_slot -| 1;
-
-        if (last_rooted < end_slot) {
-            const latest_confirmed = self.commitments.get(.confirmed);
-            const confirmed = try self.getConfirmedUnrootedSlots(
-                arena,
-                latest_confirmed,
-                highest_root,
-            );
-
-            for (confirmed) |slot| {
-                if (slot > end_slot) continue;
-                if (slot <= last_rooted) continue;
-                try blocks.append(arena, slot);
-            }
-        }
-    }
-
-    return try blocks.toOwnedSlice(arena);
-}
-
-pub fn getBlocksWithLimit(
-    self: LedgerHookContext,
-    arena: std.mem.Allocator,
-    params: GetBlocksWithLimit,
-) !GetBlocksWithLimit.Response {
-    const commitment = params.commitment();
-    if (commitment == .processed) return error.ProcessedNotSupported;
-
-    if (params.limit > GetBlocks.MAX_GET_CONFIRMED_BLOCKS_RANGE) {
-        return error.SlotRangeTooLarge;
-    }
-
-    const highest_root = self.commitments.get(.finalized);
-
-    // Collect rooted (finalized) slots starting from start_slot, up to limit.
-    var blocks = try std.ArrayList(Slot).initCapacity(arena, params.limit);
-
-    var rooted_iter = try self.ledger.db.iterator(
-        sig.ledger.schema.schema.rooted_slots,
-        .forward,
-        params.start_slot,
-    );
-    defer rooted_iter.deinit();
-
-    while (blocks.items.len < params.limit) {
-        const slot = try rooted_iter.nextKey() orelse break;
-        if (slot > highest_root) break;
-        try blocks.append(arena, slot);
-    }
-
-    // For confirmed commitment, add confirmed-but-unrooted slots up to limit.
-    if (commitment == .confirmed and blocks.items.len < params.limit) {
-        const last_rooted = if (blocks.items.len > 0)
-            blocks.items[blocks.items.len - 1]
-        else
-            params.start_slot -| 1;
-
-        const latest_confirmed = self.commitments.get(.confirmed);
-        const confirmed = try self.getConfirmedUnrootedSlots(
-            arena,
-            latest_confirmed,
-            highest_root,
-        );
-
-        for (confirmed) |slot| {
-            if (blocks.items.len >= params.limit) break;
-            if (slot <= last_rooted) continue;
-            try blocks.append(arena, slot);
-        }
-    }
-
-    return try blocks.toOwnedSlice(arena);
 }
 
 pub fn getBlockProduction(
@@ -270,7 +132,7 @@ pub fn getBlockProduction(
         null;
 
     // Resolve current slot and epoch schedule.
-    const current_slot = self.commitments.get(commitment);
+    const current_slot = self.slot_tracker.commitments.get(commitment);
     const epoch_schedule = &self.epoch_tracker.epoch_schedule;
 
     // Determine slot range (default: current epoch start to current slot).
@@ -296,7 +158,7 @@ pub fn getBlockProduction(
     var slot_set: std.AutoHashMapUnmanaged(Slot, void) = .empty;
 
     // Collect rooted slots in range using forward iterator
-    const highest_root = self.commitments.get(.finalized);
+    const highest_root = self.slot_tracker.commitments.get(.finalized);
     {
         var rooted_iter = try self.ledger.db.iterator(
             sig.ledger.schema.schema.rooted_slots,
@@ -311,7 +173,7 @@ pub fn getBlockProduction(
     }
     // For confirmed commitment, also collect confirmed-but-unrooted slots.
     if (commitment == .confirmed) {
-        const latest_confirmed = self.commitments.get(.confirmed);
+        const latest_confirmed = self.slot_tracker.commitments.get(.confirmed);
         const confirmed_slots = try self.getConfirmedUnrootedSlots(
             arena,
             latest_confirmed,
@@ -353,6 +215,170 @@ pub fn getBlockProduction(
     };
 }
 
+pub fn getBlocks(
+    self: LedgerHookContext,
+    arena: std.mem.Allocator,
+    params: GetBlocks,
+) !GetBlocks.Response {
+    const commitment = params.commitment();
+    if (commitment == .processed) return error.ProcessedNotSupported;
+
+    const highest_root = self.slot_tracker.commitments.get(.finalized);
+    const upper_bound = if (commitment == .finalized)
+        highest_root
+    else
+        self.slot_tracker.commitments.get(.confirmed);
+
+    const end_slot = @min(
+        params.endSlot() orelse params.start_slot +| GetBlocks.MAX_GET_CONFIRMED_BLOCKS_RANGE,
+        upper_bound,
+    );
+
+    if (end_slot <= params.start_slot) return &.{};
+    if (end_slot - params.start_slot > GetBlocks.MAX_GET_CONFIRMED_BLOCKS_RANGE) {
+        return error.SlotRangeTooLarge;
+    }
+
+    // Collect rooted (finalized) slots in range.
+    var blocks = try std.ArrayList(Slot).initCapacity(
+        arena,
+        end_slot - params.start_slot +| 1,
+    );
+
+    var rooted_iter = try self.ledger.db.iterator(
+        sig.ledger.schema.schema.rooted_slots,
+        .forward,
+        params.start_slot,
+    );
+    defer rooted_iter.deinit();
+
+    while (try rooted_iter.nextKey()) |slot| {
+        if (slot > end_slot or slot > highest_root) break;
+        try blocks.append(arena, slot);
+    }
+
+    // For confirmed commitment, also include confirmed-but-unrooted slots.
+    if (commitment == .confirmed) {
+        const last_rooted = if (blocks.items.len > 0)
+            blocks.items[blocks.items.len - 1]
+        else
+            params.start_slot -| 1;
+
+        if (last_rooted < end_slot) {
+            const latest_confirmed = self.slot_tracker.commitments.get(.confirmed);
+            const confirmed = try self.getConfirmedUnrootedSlots(
+                arena,
+                latest_confirmed,
+                highest_root,
+            );
+
+            for (confirmed) |slot| {
+                if (slot > end_slot) continue;
+                if (slot <= last_rooted) continue;
+                try blocks.append(arena, slot);
+            }
+        }
+    }
+
+    return try blocks.toOwnedSlice(arena);
+}
+
+pub fn getBlocksWithLimit(
+    self: LedgerHookContext,
+    arena: std.mem.Allocator,
+    params: GetBlocksWithLimit,
+) !GetBlocksWithLimit.Response {
+    const commitment = params.commitment();
+    if (commitment == .processed) return error.ProcessedNotSupported;
+
+    if (params.limit > GetBlocks.MAX_GET_CONFIRMED_BLOCKS_RANGE) {
+        return error.SlotRangeTooLarge;
+    }
+
+    const highest_root = self.slot_tracker.commitments.get(.finalized);
+
+    // Collect rooted (finalized) slots starting from start_slot, up to limit.
+    var blocks = try std.ArrayList(Slot).initCapacity(arena, params.limit);
+
+    var rooted_iter = try self.ledger.db.iterator(
+        sig.ledger.schema.schema.rooted_slots,
+        .forward,
+        params.start_slot,
+    );
+    defer rooted_iter.deinit();
+
+    while (blocks.items.len < params.limit) {
+        const slot = try rooted_iter.nextKey() orelse break;
+        if (slot > highest_root) break;
+        try blocks.append(arena, slot);
+    }
+
+    // For confirmed commitment, add confirmed-but-unrooted slots up to limit.
+    if (commitment == .confirmed and blocks.items.len < params.limit) {
+        const last_rooted = if (blocks.items.len > 0)
+            blocks.items[blocks.items.len - 1]
+        else
+            params.start_slot -| 1;
+
+        const latest_confirmed = self.slot_tracker.commitments.get(.confirmed);
+        const confirmed = try self.getConfirmedUnrootedSlots(
+            arena,
+            latest_confirmed,
+            highest_root,
+        );
+
+        for (confirmed) |slot| {
+            if (blocks.items.len >= params.limit) break;
+            if (slot <= last_rooted) continue;
+            try blocks.append(arena, slot);
+        }
+    }
+
+    return try blocks.toOwnedSlice(arena);
+}
+
+/// Check the health of the node.
+///
+/// A node is considered healthy if the node's latest optimistically confirmed
+/// slot is within `health_check_slot_distance` of the cluster's latest
+/// optimistically confirmed slot.
+///
+/// Returns `RpcHealthStatus` which is then formatted by the server layer:
+/// - JSON-RPC: "ok" result on success, error with code -32005 on failure
+/// - HTTP GET /health: always 200 OK with "ok", "behind", or "unknown"
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2806-L2818
+pub fn getHealth(
+    self: LedgerHookContext,
+    arena: std.mem.Allocator,
+    _: GetHealth,
+) !GetHealth.Response {
+    // Get the node's latest optimistically confirmed slot from replay
+    const latest_optimistically_confirmed_slot = self.slot_tracker.commitments.get(.confirmed);
+
+    // Get the cluster's latest optimistically confirmed slot from ledger
+    var optimistic_slots = self.ledger.reader().getLatestOptimisticSlots(arena, 1) catch {
+        return .unknown;
+    };
+    defer optimistic_slots.deinit();
+
+    if (optimistic_slots.items.len == 0) {
+        return .unknown;
+    }
+
+    const cluster_latest_optimistically_confirmed_slot, _, _ = optimistic_slots.items[0];
+
+    if (latest_optimistically_confirmed_slot >=
+        cluster_latest_optimistically_confirmed_slot -| self.health_check_slot_distance)
+    {
+        return .ok;
+    } else {
+        const num_slots_behind = cluster_latest_optimistically_confirmed_slot -|
+            latest_optimistically_confirmed_slot;
+        return .{ .behind = num_slots_behind };
+    }
+}
+
 pub fn getInflationReward(
     self: LedgerHookContext,
     arena: Allocator,
@@ -362,7 +388,7 @@ pub fn getInflationReward(
     const commitment = config.commitment orelse .finalized;
 
     // Determine the epoch to query. Default: current_epoch - 1.
-    const current_slot = self.commitments.get(commitment);
+    const current_slot = self.slot_tracker.commitments.get(commitment);
 
     if (config.minContextSlot) |min_slot| {
         if (current_slot < min_slot) return error.RpcMinContextSlotNotMet;
@@ -528,6 +554,92 @@ pub fn getRecentPerformanceSamples(
     return result;
 }
 
+/// Look up the status of one or more transaction signatures.
+///
+/// Tier 1: Check the in-memory StatusCache for recent transactions (covers
+/// processed, confirmed, and finalized that haven't been evicted yet).
+/// Tier 2: If `searchTransactionHistory` is true, fall back to the on-disk
+/// ledger for older finalized transactions.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v2.2.6/rpc/src/rpc.rs#L1641
+pub fn getSignatureStatuses(
+    self: LedgerHookContext,
+    arena: Allocator,
+    params: GetSignatureStatuses,
+) !GetSignatureStatuses.Response {
+    const config: GetSignatureStatuses.Config = params.config orelse .{};
+    const search_history = config.searchTransactionHistory orelse false;
+
+    const processed_slot = self.slot_tracker.commitments.get(.processed);
+    const confirmed_slot = self.slot_tracker.commitments.get(.confirmed);
+    const finalized_slot = self.slot_tracker.commitments.get(.finalized);
+
+    // Build ancestors from the processed tip for fork-aware StatusCache lookups.
+    // Ancestors = processed slot + all its parents on the current fork.
+    var ancestors: sig.core.Ancestors = .{};
+    const parent_slots = try self.slot_tracker.parents(arena, processed_slot);
+    try ancestors.ancestors.ensureTotalCapacity(arena, @intCast(parent_slots.len + 1));
+    ancestors.ancestors.putAssumeCapacity(processed_slot, {});
+    for (parent_slots) |slot| ancestors.ancestors.putAssumeCapacity(
+        slot,
+        {},
+    );
+
+    const results = try arena.alloc(
+        ?GetSignatureStatuses.Response.TransactionStatus,
+        params.signatures.len,
+    );
+    @memset(results, null);
+
+    for (params.signatures, results) |signature, *result| {
+        // Tier 1: StatusCache (recent in-memory transactions)
+        if (self.status_cache.getStatusAnyBlockhash(
+            &signature.toBytes(),
+            &ancestors,
+        )) |fork| {
+            result.* = .{
+                .slot = fork.slot,
+                .status = if (fork.maybe_err) |err| .{ .Err = err } else .{ .Ok = .{} },
+                .confirmations = if (fork.slot <= finalized_slot)
+                    null
+                else
+                    self.block_commitment_cache.getConfirmationCount(fork.slot) orelse 0,
+                .err = fork.maybe_err,
+                .confirmationStatus = if (fork.slot <= finalized_slot)
+                    .finalized
+                else if (fork.slot <= confirmed_slot)
+                    .confirmed
+                else
+                    .processed,
+            };
+            continue;
+        }
+
+        // Tier 2: Blockstore (historical finalized transactions)
+        if (!search_history) continue;
+
+        if (try self.ledger.reader().getRootedTransactionStatus(arena, signature)) |status| {
+            const slot, const status_meta = status;
+            // The blockstore may contain rooted slots beyond our finalized_slot snapshot.
+            // Only report results up to the finalized_slot captured at query start for consistency.
+            if (slot <= finalized_slot) {
+                result.* = .{
+                    .slot = slot,
+                    .status = if (status_meta.status) |err| .{ .Err = err } else .{ .Ok = .{} },
+                    .confirmations = null,
+                    .err = status_meta.status,
+                    .confirmationStatus = .finalized,
+                };
+            }
+        }
+    }
+
+    return .{
+        .context = .{ .slot = processed_slot },
+        .value = results,
+    };
+}
+
 pub fn getSignaturesForAddress(
     self: LedgerHookContext,
     arena: std.mem.Allocator,
@@ -539,9 +651,9 @@ pub fn getSignaturesForAddress(
     // processed is not supported
     if (commitment == .processed) return error.ProcessedNotSupported;
 
-    const highest_finalized_slot = self.commitments.get(.finalized);
+    const highest_finalized_slot = self.slot_tracker.commitments.get(.finalized);
     const highest_slot: Slot = switch (commitment) {
-        .confirmed => self.commitments.get(.confirmed),
+        .confirmed => self.slot_tracker.commitments.get(.confirmed),
         .finalized => highest_finalized_slot,
         .processed => unreachable,
     };
@@ -593,7 +705,7 @@ pub fn getTransaction(
     const max_supported_version = config.maxSupportedTransactionVersion;
 
     const reader = self.ledger.reader();
-    const highest_confirmed_slot = self.commitments.get(.confirmed);
+    const highest_confirmed_slot = self.slot_tracker.commitments.get(.confirmed);
 
     // Get transaction from ledger.
     const confirmed_tx_with_meta = switch (commitment) {
