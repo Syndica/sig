@@ -624,3 +624,128 @@ pub const LargestTracker = struct {
         _ = self.map.swapRemove(keys[min_idx]);
     }
 };
+
+test "LargestTracker: empty snapshot" {
+    var tracker: LargestTracker = .{};
+    try tracker.init(std.testing.allocator);
+    defer tracker.deinit(std.testing.allocator);
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    const n = tracker.snapshot(&buf);
+    try std.testing.expectEqual(@as(u8, 0), n);
+}
+
+test "LargestTracker: basic insert and snapshot" {
+    var tracker: LargestTracker = .{};
+    try tracker.init(std.testing.allocator);
+    defer tracker.deinit(std.testing.allocator);
+
+    const pk_a: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    const pk_b: Pubkey = .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk");
+    const pk_c: Pubkey = .parse("7EqfdGiB5UZgLWc1U9xYbKdy9Ky9NoYcMbEwUq9aAWR6");
+
+    tracker.update(pk_a, 1000);
+    tracker.update(pk_b, 2000);
+    tracker.update(pk_c, 500);
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    const n = tracker.snapshot(&buf);
+    try std.testing.expectEqual(@as(u8, 3), n);
+    try std.testing.expectEqual(@as(u64, 1000), tracker.map.get(pk_a).?);
+    try std.testing.expectEqual(@as(u64, 2000), tracker.map.get(pk_b).?);
+    try std.testing.expectEqual(@as(u64, 500), tracker.map.get(pk_c).?);
+}
+
+test "LargestTracker: update existing entry" {
+    var tracker: LargestTracker = .{};
+    try tracker.init(std.testing.allocator);
+    defer tracker.deinit(std.testing.allocator);
+
+    const pk: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    tracker.update(pk, 1000);
+    tracker.update(pk, 5000);
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    try std.testing.expectEqual(@as(u8, 1), tracker.snapshot(&buf));
+    try std.testing.expectEqual(@as(u64, 5000), tracker.map.get(pk).?);
+}
+
+test "LargestTracker: remove by zero lamports" {
+    var tracker: LargestTracker = .{};
+    try tracker.init(std.testing.allocator);
+    defer tracker.deinit(std.testing.allocator);
+
+    const pk_a: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    const pk_b: Pubkey = .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk");
+
+    tracker.update(pk_a, 1000);
+    tracker.update(pk_b, 2000);
+    tracker.update(pk_a, 0); // remove
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    try std.testing.expectEqual(@as(u8, 1), tracker.snapshot(&buf));
+    try std.testing.expect(!tracker.map.contains(pk_a));
+    try std.testing.expectEqual(@as(u64, 2000), tracker.map.get(pk_b).?);
+}
+
+test "LargestTracker: zero lamports insert is no-op" {
+    var tracker: LargestTracker = .{};
+    try tracker.init(std.testing.allocator);
+    defer tracker.deinit(std.testing.allocator);
+
+    const pk: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    tracker.update(pk, 0);
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    try std.testing.expectEqual(@as(u8, 0), tracker.snapshot(&buf));
+}
+
+test "LargestTracker: displacement when full" {
+    var tracker: LargestTracker = .{};
+    try tracker.init(std.testing.allocator);
+    defer tracker.deinit(std.testing.allocator);
+
+    // Fill to capacity with deterministic random pubkeys
+    var random = std.Random.DefaultPrng.init(0);
+    var pks: [LargestTracker.CAPACITY]Pubkey = undefined;
+    for (0..LargestTracker.CAPACITY) |i| {
+        pks[i] = Pubkey.initRandom(random.random());
+        tracker.update(pks[i], (i + 1) * 100);
+    }
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    try std.testing.expectEqual(@as(u8, LargestTracker.CAPACITY), tracker.snapshot(&buf));
+    try std.testing.expectEqual(@as(u64, 100), tracker.min_lamports);
+
+    // Insert a new entry above the min — should displace the min (lamports=100)
+    const newcomer: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    tracker.update(newcomer, 9999);
+
+    try std.testing.expectEqual(@as(u8, LargestTracker.CAPACITY), tracker.snapshot(&buf));
+    // The old minimum (100) should be gone; new minimum is 200
+    try std.testing.expectEqual(@as(u64, 200), tracker.min_lamports);
+    try std.testing.expect(!tracker.map.contains(pks[0]));
+    try std.testing.expectEqual(@as(u64, 9999), tracker.map.get(newcomer).?);
+}
+
+test "LargestTracker: no displacement below min" {
+    var tracker: LargestTracker = .{};
+    try tracker.init(std.testing.allocator);
+    defer tracker.deinit(std.testing.allocator);
+
+    var random = std.Random.DefaultPrng.init(0);
+    for (0..LargestTracker.CAPACITY) |i| {
+        tracker.update(Pubkey.initRandom(random.random()), (i + 1) * 100);
+    }
+    try std.testing.expectEqual(@as(u64, 100), tracker.min_lamports);
+
+    // Insert below min — should be rejected
+    const newcomer: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    tracker.update(newcomer, 50);
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    try std.testing.expectEqual(@as(u8, LargestTracker.CAPACITY), tracker.snapshot(&buf));
+    // Min unchanged, newcomer not present
+    try std.testing.expectEqual(@as(u64, 100), tracker.min_lamports);
+    try std.testing.expect(!tracker.map.contains(newcomer));
+}
