@@ -189,13 +189,13 @@ const Gossip = struct {
         keys: [MAX_BLOOM_KEYS]u64,
         words: [MAX_BLOOM_BYTES / 8]u64,
 
-        fn init(prng: std.Random) @This() {
+        fn init(prng: std.Random) BlockBloomFilter {
             var keys: [MAX_BLOOM_KEYS]u64 = undefined;
             for (&keys) |*key| key.* = prng.int(u64);
             return .{ .keys = keys, .words = @splat(0) };
         }
 
-        fn asBloomFilter(self: *@This(), num_keys: ?usize, num_bits: ?usize) BloomFilter {
+        fn asBloomFilter(self: *BlockBloomFilter, num_keys: ?usize, num_bits: ?usize) BloomFilter {
             const n_keys = num_keys orelse self.keys.len;
             const n_bits = num_bits orelse self.words.len * 64;
             const num_words = std.math.divCeil(usize, n_bits, 64) catch unreachable;
@@ -1119,11 +1119,13 @@ fn VarInt(comptime T: type) type {
     return struct {
         value: T,
 
-        pub fn bincodeRead(_: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader) !@This() {
+        const Self = @This();
+
+        pub fn bincodeRead(_: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader) !Self {
             return .{ .value = try reader.takeLeb128(T) };
         }
 
-        pub fn bincodeWrite(self: *const @This(), writer: *std.Io.Writer) !void {
+        pub fn bincodeWrite(self: *const Self, writer: *std.Io.Writer) !void {
             try writer.writeLeb128(self.value);
         }
     };
@@ -1133,7 +1135,9 @@ fn Vec(comptime T: type) type {
     return struct {
         items: []const T,
 
-        pub fn bincodeRead(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader) !@This() {
+        const Self = @This();
+
+        pub fn bincodeRead(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader) !Self {
             const n = try reader.takeInt(u64, .little);
             const slice = try fba.allocator().alloc(T, n);
             if (@typeInfo(T) == .int) {
@@ -1144,7 +1148,7 @@ fn Vec(comptime T: type) type {
             return .{ .items = slice };
         }
 
-        pub fn bincodeWrite(self: *const @This(), writer: *std.Io.Writer) !void {
+        pub fn bincodeWrite(self: *const Self, writer: *std.Io.Writer) !void {
             try writer.writeInt(u64, self.items.len, .little);
             if (@typeInfo(T) == .int) {
                 try writer.writeAll(std.mem.sliceAsBytes(self.items));
@@ -1159,7 +1163,9 @@ fn ShortVec(comptime T: type) type {
     return struct {
         items: []const T,
 
-        pub fn bincodeRead(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader) !@This() {
+        const Self = @This();
+
+        pub fn bincodeRead(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader) !Self {
             const n = try bincode.read(fba, reader, VarInt(u16));
             const slice = try fba.allocator().alloc(T, n.value);
             if (@typeInfo(T) == .int) {
@@ -1170,7 +1176,7 @@ fn ShortVec(comptime T: type) type {
             return .{ .items = slice };
         }
 
-        pub fn bincodeWrite(self: *const @This(), writer: *std.Io.Writer) !void {
+        pub fn bincodeWrite(self: *const Self, writer: *std.Io.Writer) !void {
             try bincode.write(writer, VarInt(u16){ .value = @intCast(self.items.len) });
             if (@typeInfo(T) == .int) {
                 try writer.writeAll(std.mem.sliceAsBytes(self.items));
@@ -1186,7 +1192,9 @@ fn BitVec(comptime T: type) type {
         words: []T,
         capacity: u64,
 
-        pub fn bincodeRead(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader) !@This() {
+        const Self = @This();
+
+        pub fn bincodeRead(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader) !Self {
             const maybe_vec = try bincode.read(fba, reader, ?Vec(T));
             const capacity = try reader.takeInt(u64, .little);
 
@@ -1195,18 +1203,18 @@ fn BitVec(comptime T: type) type {
             return .{ .words = words, .capacity = capacity };
         }
 
-        pub fn bincodeWrite(self: *const @This(), writer: *std.Io.Writer) !void {
+        pub fn bincodeWrite(self: *const Self, writer: *std.Io.Writer) !void {
             const maybe_vec: ?Vec(T) =
                 if (self.words.len > 0) Vec(T){ .items = self.words } else null;
             try bincode.write(writer, maybe_vec);
             try writer.writeInt(u64, self.capacity, .little);
         }
 
-        pub fn get(self: *const @This(), bit: usize) u1 {
+        pub fn get(self: *const Self, bit: usize) u1 {
             return @truncate(self.words[bit / @bitSizeOf(T)] >> @intCast(bit % @bitSizeOf(T)));
         }
 
-        pub fn set(self: *@This(), bit: usize) u1 {
+        pub fn set(self: *Self, bit: usize) u1 {
             const mask = @as(T, 1) << @intCast(bit % @bitSizeOf(T));
             const word = &self.words[bit / @bitSizeOf(T)];
             defer word.* |= mask;
